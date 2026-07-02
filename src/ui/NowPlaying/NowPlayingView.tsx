@@ -166,6 +166,12 @@ export function NowPlayingView({
     const updateProgressUI = () => {
       if (audio && !isDragging && progressFillRef.current && currentTimeTextRef.current) {
         const time = audio.currentTime;
+
+        // Prevent UI jump to 0:00 when waiting for track to restore (sync with PlayerBar)
+        if (currentTrack && currentTrack.restoreTime !== undefined && time === 0 && currentTrack.restoreTime > 1) {
+          return;
+        }
+
         const dur = audio.duration || duration;
         if (dur > 0) {
           const progressPercent = (time / dur) * 100;

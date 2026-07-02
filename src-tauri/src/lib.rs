@@ -232,6 +232,7 @@ static SESSION_ID: AtomicUsize = AtomicUsize::new(0);
 static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
 static THUMBNAIL_CONCURRENCY: AtomicUsize = AtomicUsize::new(0);
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
+static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 fn update_minimize_to_tray(minimize: bool) {
@@ -705,6 +706,7 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
+                        IS_QUITTING.store(true, Ordering::SeqCst);
                         app.exit(0);
                     }
                     "show" => {
@@ -735,7 +737,7 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                if MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
+                if !IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) && MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
                     let _ = window.hide();
                     api.prevent_close();
                 }
@@ -752,6 +754,12 @@ pub fn run() {
             update_stream_token,
             update_minimize_to_tray
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                IS_QUITTING.store(true, Ordering::SeqCst);
+            }
+            _ => {}
+        });
 }

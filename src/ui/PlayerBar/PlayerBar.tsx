@@ -358,6 +358,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     
     const updateProgressUI = () => {
       if (audio && !isDraggingRef.current && progressFillRef.current && currentTimeTextRef.current) {
+        // Prevent UI jump to 0:00 when waiting for track to restore
+        if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
+          return;
+        }
+
         const time = audio.currentTime;
         const dur = audio.duration || duration;
         if (dur > 0) {
