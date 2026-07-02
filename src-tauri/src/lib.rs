@@ -317,15 +317,20 @@ impl std::io::Read for CacheReader {
                 buf[..to_copy].copy_from_slice(&data[offset .. offset + to_copy]);
                 self.position += to_copy;
                 
-                // Sliding Window Eviction: keep 20% of capacity behind the read pointer
+                // Sliding Window Eviction
                 let mut base_pos_locked = self.cache.base_pos.lock().unwrap();
                 let capacity = *self.cache.capacity.lock().unwrap();
                 let current_offset = self.position.saturating_sub(*base_pos_locked);
-                let keep_behind = std::cmp::max(1024 * 1024, capacity / 5); // At least 1MB, up to 20% of capacity
+                
+                // Keep behind up to 20% of capacity, but max 1MB
+                let keep_behind = std::cmp::min(1024 * 1024, capacity / 5);
                 
                 if current_offset > keep_behind {
                     let drain_amount = current_offset - keep_behind;
-                    if drain_amount > 1024 * 1024 { // Evict in chunks of at least 1MB
+                    // Evict if drain amount is > 1MB, OR if it's > 10% of capacity (for small capacities)
+                    let min_evict = std::cmp::min(1024 * 1024, capacity / 10);
+                    
+                    if drain_amount >= min_evict && drain_amount > 0 {
                         data.drain(0..drain_amount);
                         *base_pos_locked += drain_amount;
                         self.cache.condvar.notify_all(); // Wake up download thread if it's paused
