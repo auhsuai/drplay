@@ -1,0 +1,38 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# DrPlay custom ignores
+src-tauri/target/
+*.db
+*.db-journal
+.gemini/
+.thumbnails/
+Google_Drive_Music_Scanner.ipynb
+test-gui.js
+test_const.rs
+test_db.py
+test_db_output.txt
+rustup-init.exe
+credentials.json

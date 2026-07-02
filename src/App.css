@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+body {
+  background-color: #ffffff;
+  color: #111827; /* gray-900 */
+  user-select: none;
+  -webkit-user-select: none;
+  --player-bg-solid: #f3f4f6;
+  --player-bg-fade: rgba(243, 244, 246, 0.85);
+}
+
+:is(.dark body) {
+  background-color: #121212;
+  color: #f3f4f6; /* gray-100 */
+  --player-bg-solid: #121212;
+  --player-bg-fade: rgba(18, 18, 18, 0.85);
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+*::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide scrollbar for IE, Edge and Firefox */
+* {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+@keyframes flash-highlight {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: rgba(59, 130, 246, 0.4); }
+}
+.flash-highlight {
+  animation: flash-highlight 1s ease-in-out 4;
+}

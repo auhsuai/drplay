@@ -1,0 +1,187 @@
+
+import { FolderOpen, Globe, Moon, Database, Search } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { LanguageDropdown } from "./components/LanguageDropdown";
+import { ThemeDropdown } from "./components/ThemeDropdown";
+import { ScanModeDropdown } from "./components/ScanModeDropdown";
+import { ThemeType } from "../../hooks/useTheme";
+import { set } from "idb-keyval";
+
+interface SettingsTabProps {
+  theme: ThemeType;
+  setTheme: (t: ThemeType) => void;
+  bufferSeconds: number;
+  setBufferSeconds: (val: number) => void;
+  scanMode: 'fast' | 'full';
+  setScanMode: (mode: 'fast' | 'full') => void;
+  setShowFolderSelection: (val: boolean) => void;
+  setShowTrashScreen: (val: boolean) => void;
+}
+
+export function SettingsTab({
+  theme, setTheme,
+  bufferSeconds, setBufferSeconds,
+  scanMode, setScanMode,
+  setShowFolderSelection,
+  setShowTrashScreen
+}: SettingsTabProps) {
+  const { t } = useTranslation();
+
+  return (
+    <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto px-8 py-10 relative transition-colors duration-300">
+      {/* Signature Top Gradient */}
+      <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-[#4285F4]/10 to-transparent pointer-events-none" />
+
+      <div className="max-w-3xl mx-auto relative z-10">
+        <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-10 tracking-tight">
+          {t('settings.title') || 'Settings'}
+        </h1>
+
+        <div className="space-y-8">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">{t('settings.music_library')}</h2>
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                  <FolderOpen className="w-6 h-6 text-[#4285F4]" />
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.google_drive_folder')}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.select_root_folder')}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowFolderSelection(true)}
+                className="px-5 py-2.5 rounded-xl bg-[#4285F4] hover:bg-[#3367d6] text-white text-sm font-semibold transition-all transform active:scale-[0.97] shadow-[0_4px_12px_rgba(66,133,244,0.3)] hover:shadow-[0_6px_16px_rgba(66,133,244,0.4)] flex items-center gap-2"
+              >
+                <FolderOpen className="w-4 h-4" />
+                {t('settings.change_folder')}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 mt-6">
+            <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">{t('settings.preferences')}</h2>
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                  <Globe className="w-6 h-6 text-[#4285F4]" />
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.language')}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.select_language')}</p>
+                </div>
+              </div>
+              <LanguageDropdown />
+            </div>
+
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                  <Moon className="w-6 h-6 text-[#4285F4]" />
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.theme')}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.select_theme')}</p>
+                </div>
+              </div>
+              <ThemeDropdown currentTheme={theme} onChange={setTheme} />
+            </div>
+
+            {/* Playback Settings */}
+            <div className="flex flex-col gap-2 mt-6">
+              <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">{t('settings.playback')}</h2>
+              <div className="flex items-center justify-between py-4 pb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                    <Database className="w-6 h-6 text-[#4285F4]" />
+                  </div>
+                  <div>
+                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.buffer_size')}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">{t('settings.buffer_desc')}</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-end gap-2 w-48 shrink-0">
+                  <span className="text-sm font-bold text-[#4285F4] bg-[#4285F4]/10 px-3 py-1 rounded-full">
+                    {bufferSeconds >= 60 ? `${(bufferSeconds / 60).toFixed(1)} ${t('settings.minutes')}` : `${bufferSeconds} ${t('settings.seconds')}`}
+                  </span>
+                  <div className="flex items-center gap-4 mt-2 px-1 w-full">
+                    <span className="text-xs font-medium text-gray-400 w-8 text-right">30s</span>
+
+                    <div className="flex-1 relative h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center">
+                      {/* Blue filled track */}
+                      <div
+                        className="absolute left-0 h-full bg-[#4285F4] rounded-full pointer-events-none"
+                        style={{ width: `${(bufferSeconds / 2400) * 100}%` }}
+                      >
+                        {/* White knob */}
+                        <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow border border-gray-200 shrink-0 pointer-events-none"></div>
+                      </div>
+
+                      <input
+                        type="range"
+                        min="30"
+                        max="2400"
+                        value={bufferSeconds}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setBufferSeconds(val);
+                          set('drplay_buffer_seconds', val);
+                        }}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer m-0"
+                      />
+                    </div>
+
+                    <span className="text-xs font-medium text-gray-400 w-8">40m</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scan Mode Setting */}
+              <div className="flex items-center justify-between py-4 pb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                    <Search className="w-6 h-6 text-[#4285F4]" />
+                  </div>
+                  <div>
+                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.scan_mode')}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">{t('settings.scan_mode_desc')}</p>
+                  </div>
+                </div>
+                
+                <ScanModeDropdown currentMode={scanMode} onChange={(m) => {
+                  setScanMode(m);
+                  set('drplay_scan_mode', m);
+                }} />
+              </div>
+            </div>
+          </div>
+
+          {/* Data Management */}
+          <div className="flex flex-col gap-2 mt-6 mb-8">
+            <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">{t('settings.data_management') || 'Data Management'}</h2>
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                  <svg className="w-6 h-6 text-[#4285F4]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                </div>
+                <div className="max-w-[320px]">
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.trash') || 'Trash'}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">{t('settings.trash_desc') || 'Manage and restore deleted files, or permanently empty trash.'}</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowTrashScreen(true)}
+                className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+              >
+                {t('settings.open_trash') || 'Open Trash'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}

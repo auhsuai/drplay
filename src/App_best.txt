@@ -1,0 +1,108 @@
+Created At: 2026-07-02T10:21:18Z
+Completed At: 2026-07-02T10:21:18Z
+File Path: `file:///c:/Users/thinkpad/Desktop/Antigravity/drplay/src/App.tsx`
+Total Lines: 467
+Total Bytes: 17390
+Showing lines 1 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import { useState, useEffect, useRef } from "react";
+2: 
+3: 
+4: import { Sidebar } from "./ui/Sidebar/Sidebar";
+5: import { MainContent } from "./ui/MainContent/MainContent";
+6: import { HomeTab } from "./ui/HomeTab/HomeTab";
+7: import { LikedSongs } from "./ui/LikedSongs/LikedSongs";
+8: import { PlaylistView } from './ui/Playlist/PlaylistView';
+9: import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
+10: import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
+11: import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
+12: import { TrashScreen } from "./ui/Settings/TrashScreen";
+13: import { GlobalContextMenu } from "./ui/components/GlobalContextMenu";
+14: import "./App.css";
+15: import { db } from './db/db';
+16: import { useLiveQuery } from 'dexie-react-hooks';
+17: import { LoginScreen } from "./ui/Login/LoginScreen";
+18: 
+19: import { fetchWithAuth } from "./utils/apiClient";
+20: import { useAuth } from "./hooks/useAuth";
+21: import { usePlayer } from "./hooks/usePlayer";
+22: import { useDrive } from "./hooks/useDrive";
+23: import { useTheme } from "./hooks/useTheme";
+24: import { SettingsTab } from "./ui/Settings/SettingsTab";export type Track = {
+25:   id: string;
+26:   title: string;
+27:   artist: string;
+28:   streamUrl: string;
+29:   size?: number;
+30:   originalName?: string;
+31:   restoreTime?: number;
+32:   restoreDuration?: number;
+33:   parentId?: string;
+34:   parentName?: string;
+35: };
+36: 
+37: export type DriveItem = {
+38:   id: string;
+39:   title: string;
+40:   isFolder: boolean;
+41:   trackInfo?: Track;
+42: };
+43: 
+44: export type BreadcrumbItem = {
+45:   id: string;
+46:   name: string;
+47: };
+48: 
+49: export type UserProfile = {
+50:   name: string;
+51:   email: string;
+52:   picture: string;
+53: };
+54: 
+55: function App() {
+56:   const [activeTab, setActiveTab] = useState("Home");
+57:   const [driveItems, setDriveItems] = useState<DriveItem[]>([]);
+58:   const [isLoadingTracks, setIsLoadingTracks] = useState(false);
+59:   const { theme, setTheme } = useTheme();
+60:   const [showTrashScreen, setShowTrashScreen] = useState(false);
+61: 
+62:   const { isLoggedIn, accessToken, userProfile, handleLoginSuccess, handleLogout } = useAuth(() => {
+63:     localStorage.removeItem("drplay_root_folder");
+64:     localStorage.removeItem("drplay_current_folder_id");
+65:     localStorage.removeItem("drplay_current_folder_name");
+66:     localStorage.removeItem("drplay_folder_history");
+67:     db.syncState.delete("drplay_nav_state").catch(() => {});
+68:     setAppRootFolder(null);
+69:   });
+70: 
+71:   const {
+72:     appRootFolder,
+73:     setAppRootFolder,
+74:     currentFolderId,
+75:     setCurrentFolderId,
+76:     currentFolderName,
+77:     setCurrentFolderName,
+78:     folderHistory,
+79:     setFolderHistory,
+80:     sortOption,
+81:     setSortOption,
+82:     handleOpenFolder,
+83:     handleBack,
+84:     handleBreadcrumbClick,
+85:     handleSelectRootFolder
+86:   } = useDrive(isLoggedIn);
+87: 
+88:   const {
+89:     currentTrack,
+90:     isPlaying,
+91:     isDownloading,
+92:     playMode,
+93:     bufferSeconds,
+94:     setBufferSeconds,
+95:     handlePlayTrack: playerPlayTrack,
+96:     handleNextTrack,
+97:     handlePrevTrack,
+98:     handleTogglePlay,
+99:     handleTogglePlayMode
+100:   } = usePlayer(accessToken);
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
