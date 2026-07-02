@@ -224,13 +224,19 @@ fn get_local_metadata(size: i64, name: String) -> Result<Option<LocalMetadata>, 
     Ok(first_match)
 }
 
-use std::sync::{Arc, Mutex, Condvar, atomic::{AtomicUsize, Ordering}, OnceLock};
+use std::sync::{Arc, Mutex, Condvar, atomic::{AtomicUsize, AtomicBool, Ordering}, OnceLock};
 use std::thread;
 
 static GLOBAL_CACHE: OnceLock<Arc<TrackCache>> = OnceLock::new();
 static SESSION_ID: AtomicUsize = AtomicUsize::new(0);
 static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
 static THUMBNAIL_CONCURRENCY: AtomicUsize = AtomicUsize::new(0);
+static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
+
+#[tauri::command]
+fn update_minimize_to_tray(minimize: bool) {
+    MINIMIZE_TO_TRAY.store(minimize, Ordering::SeqCst);
+}
 
 struct ConcurrencyGuard;
 impl ConcurrencyGuard {
@@ -724,8 +730,10 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                let _ = window.hide();
-                api.prevent_close();
+                if MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
             }
             _ => {}
         })
@@ -736,7 +744,8 @@ pub fn run() {
             get_proxy_cache_status,
             update_buffer_settings,
             get_local_metadata,
-            update_stream_token
+            update_stream_token,
+            update_minimize_to_tray
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,9 +1,10 @@
 
-import { FolderOpen, Globe, Moon, Database, Search } from "lucide-react";
+import { FolderOpen, Globe, Moon, Database, Search, MonitorDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
 import { ThemeDropdown } from "./components/ThemeDropdown";
 import { ScanModeDropdown } from "./components/ScanModeDropdown";
+import { CloseBehaviorDropdown } from "./components/CloseBehaviorDropdown";
 import { ThemeType } from "../../hooks/useTheme";
 import { set } from "idb-keyval";
 
@@ -14,6 +15,8 @@ interface SettingsTabProps {
   setBufferSeconds: (val: number) => void;
   scanMode: 'fast' | 'full';
   setScanMode: (mode: 'fast' | 'full') => void;
+  minimizeToTray: boolean;
+  setMinimizeToTray: (minimize: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
 }
@@ -22,6 +25,7 @@ export function SettingsTab({
   theme, setTheme,
   bufferSeconds, setBufferSeconds,
   scanMode, setScanMode,
+  minimizeToTray, setMinimizeToTray,
   setShowFolderSelection,
   setShowTrashScreen
 }: SettingsTabProps) {
@@ -75,7 +79,7 @@ export function SettingsTab({
               <LanguageDropdown />
             </div>
 
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between py-4">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
                   <Moon className="w-6 h-6 text-[#4285F4]" />
@@ -86,6 +90,20 @@ export function SettingsTab({
                 </div>
               </div>
               <ThemeDropdown currentTheme={theme} onChange={setTheme} />
+            </div>
+
+            {/* Close Behavior Setting */}
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                  <MonitorDown className="w-6 h-6 text-[#4285F4]" />
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.minimize_to_tray') || 'Minimize to System Tray'}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.close_behavior_desc') || 'Action when clicking the close button'}</p>
+                </div>
+              </div>
+              <CloseBehaviorDropdown minimizeToTray={minimizeToTray} onChange={setMinimizeToTray} />
             </div>
 
             {/* Playback Settings */}

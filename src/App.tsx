@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-
+import { invoke } from "@tauri-apps/api/core";
 
 import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { MainContent } from "./ui/MainContent/MainContent";
@@ -111,9 +111,15 @@ function App() {
   const [highlightedFileId, setHighlightedFileId] = useState<{id: string, ts: number} | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
+  const [minimizeToTray, setMinimizeToTray] = useState(() => {
+    const saved = localStorage.getItem("drplay_minimize_to_tray");
+    return saved !== null ? saved === "true" : true;
+  });
 
-
-
+  useEffect(() => {
+    localStorage.setItem("drplay_minimize_to_tray", String(minimizeToTray));
+    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch(console.error);
+  }, [minimizeToTray]);
 
   // Locate File in App logic
   useEffect(() => {
@@ -462,6 +468,8 @@ function App() {
                 setBufferSeconds={setBufferSeconds}
                 scanMode={scanMode}
                 setScanMode={setScanMode}
+                minimizeToTray={minimizeToTray}
+                setMinimizeToTray={setMinimizeToTray}
                 setShowFolderSelection={setShowFolderSelection}
                 setShowTrashScreen={setShowTrashScreen}
               />
