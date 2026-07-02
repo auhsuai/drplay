@@ -414,7 +414,7 @@ pub fn spawn_proxy_server() {
                                 let has_thumb = conn.prepare("SELECT thumbnail FROM tracks LIMIT 1").is_ok();
                                 
                                 let query = if thumb && has_thumb {
-                                    "SELECT COALESCE(thumbnail, cover_art) FROM tracks WHERE size_bytes = ? AND cover_art IS NOT NULL LIMIT 1"
+                                    "SELECT thumbnail, cover_art FROM tracks WHERE size_bytes = ? LIMIT 1"
                                 } else {
                                     "SELECT cover_art FROM tracks WHERE size_bytes = ? AND cover_art IS NOT NULL LIMIT 1"
                                 };
@@ -422,7 +422,18 @@ pub fn spawn_proxy_server() {
                                 if let Ok(mut stmt) = conn.prepare(query) {
                                     if let Ok(mut rows) = stmt.query([s]) {
                                         if let Ok(Some(row)) = rows.next() {
-                                            let cover_art: Vec<u8> = row.get(0).unwrap_or_default();
+                                            let mut cover_art: Vec<u8> = Vec::new();
+                                            if thumb && has_thumb {
+                                                let t: Vec<u8> = row.get(0).unwrap_or_default();
+                                                if !t.is_empty() {
+                                                    cover_art = t;
+                                                } else {
+                                                    cover_art = row.get(1).unwrap_or_default();
+                                                }
+                                            } else {
+                                                cover_art = row.get(0).unwrap_or_default();
+                                            }
+                                            
                                             if !cover_art.is_empty() {
                                                 let response = tiny_http::Response::from_data(cover_art)
                                                     .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap())
