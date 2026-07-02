@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker } from '../utils/proSyncManager';
-import { fetchWithAuth } from "../utils/apiClient";
+import { fetchWithAuth, getValidToken } from "../utils/apiClient";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
 
 export const useAuth = (onLogoutExt?: () => void) => {
@@ -46,12 +47,34 @@ export const useAuth = (onLogoutExt?: () => void) => {
       handleLogout();
     };
     window.addEventListener('auth-logout', handleAuthLogout);
-    return () => window.removeEventListener('auth-logout', handleAuthLogout);
+    
+    // Listen for token expiration from Rust proxy
+    const unlisten = listen("token-expired", async () => {
+      console.warn("Token expired detected by Rust proxy! Attempting silent refresh...");
+      // Try to silently refresh the token instead of kicking the user out immediately (force refresh)
+      const newToken = await getValidToken(true);
+      if (!newToken) {
+        alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục phát nhạc!");
+        handleAuthLogout();
+      } else {
+        console.log("Silent refresh successful. The next play action will succeed.");
+      }
+    });
+    
+    return () => {
+      window.removeEventListener('auth-logout', handleAuthLogout);
+      unlisten.then(f => f());
+    };
   }, []);
 
   useEffect(() => {
     if (isLoggedIn && accessToken) {
       startProSyncWorker(accessToken);
+      
+      // Chạy đồng bộ định kỳ mỗi 2 phút
+      const syncInterval = setInterval(() => {
+        startProSyncWorker(accessToken);
+      }, 2 * 60 * 1000);
 
       // Fetch User Profile
       fetchWithAuth('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -71,6 +94,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
           }
         })
         .catch(err => console.error("Failed to fetch user profile", err));
+        
+      return () => {
+        clearInterval(syncInterval);
+      };
     }
   }, [isLoggedIn, accessToken]);
 

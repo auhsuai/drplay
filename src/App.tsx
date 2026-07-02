@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { Sidebar } from "./ui/Sidebar/Sidebar";
@@ -56,7 +56,6 @@ export type UserProfile = {
 
 function App() {
   const [activeTab, setActiveTab] = useState("Home");
-  const [driveItems, setDriveItems] = useState<DriveItem[]>([]);
   const [isLoadingTracks, setIsLoadingTracks] = useState(false);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
@@ -101,6 +100,73 @@ function App() {
     handleTogglePlayMode
   } = usePlayer(accessToken);
 
+  const dbFiles = useLiveQuery(
+    () => {
+      // Return empty if currentFolderId is not initialized to avoid unnecessary queries
+      if (!currentFolderId) return Promise.resolve<any[]>([]);
+      return db.files.where('parentId').equals(currentFolderId).toArray()
+    },
+    [currentFolderId]
+  );
+
+  const driveItems = useMemo(() => {
+    if (!dbFiles) return [];
+    const items: DriveItem[] = dbFiles.map(file => {
+      const title = file.isFolder ? file.name : file.name.replace(/\.[^/.]+$/, "");
+      return {
+        id: file.id,
+        title,
+        isFolder: file.isFolder,
+        size: file.size,
+        modifiedTime: file.modifiedTime,
+        trackInfo: file.isFolder ? undefined : {
+          id: file.id,
+          title,
+          artist: "",
+          streamUrl: "",
+          size: file.size,
+          originalName: file.name,
+          parentId: file.parentId,
+          parentName: currentFolderName,
+        }
+      };
+    });
+
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    return items.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      
+      switch (sortOption) {
+        case 'name': return collator.compare(a.title, b.title);
+        case 'name desc': return collator.compare(b.title, a.title);
+        case 'modifiedTime': {
+          const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+          const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+          if (timeA === timeB) return collator.compare(a.title, b.title);
+          return timeA - timeB;
+        }
+        case 'modifiedTime desc': {
+          const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+          const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+          if (timeA === timeB) return collator.compare(a.title, b.title);
+          return timeB - timeA;
+        }
+        case 'size': {
+          const diff = (a.size || 0) - (b.size || 0);
+          if (diff === 0) return collator.compare(a.title, b.title);
+          return diff;
+        }
+        case 'size desc': {
+          const diff = (b.size || 0) - (a.size || 0);
+          if (diff === 0) return collator.compare(a.title, b.title);
+          return diff;
+        }
+        default: return collator.compare(a.title, b.title);
+      }
+    });
+  }, [dbFiles, sortOption, currentFolderName]);
+
   const handlePlayTrack = (track: Track, contextQueue?: Track[], isNavigation: boolean = false) => {
     playerPlayTrack(track, contextQueue, isNavigation, driveItems, activeTab);
   };
@@ -136,25 +202,26 @@ function App() {
         try {
           let current = targetFolderId;
           const newHistory: { id: string, name: string }[] = [];
-          let limit = 10;
+          let limit = 20; // safety limit
           while (current !== rootId && current !== 'root' && limit > 0) {
             limit--;
-            const res = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${current}?fields=parents`, {
-              headers: { Authorization: `Bearer ${accessToken}` }
-            });
-            if (!res.ok) break;
-            const data = await res.json();
-            if (!data.parents || data.parents.length === 0) break;
+            // OPTIMIZATION: Query local IndexedDB instantly instead of calling Google Drive API
+            const folderInfo = await db.files.get(current);
+            if (!folderInfo) {
+              console.warn(`Folder ${current} not found in local DB, stopping history rebuild.`);
+              break;
+            }
 
-            const pId = data.parents[0];
+            const pId = folderInfo.parentId;
             if (pId === rootId || pId === 'root') break;
 
-            const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${pId}?fields=id,name`, {
-              headers: { Authorization: `Bearer ${accessToken}` }
-            });
-            if (!pRes.ok) break;
-            const pData = await pRes.json();
-            newHistory.unshift({ id: pData.id, name: pData.name });
+            const parentInfo = await db.files.get(pId);
+            if (!parentInfo) {
+              console.warn(`Parent Folder ${pId} not found in local DB, stopping history rebuild.`);
+              break;
+            }
+
+            newHistory.unshift({ id: parentInfo.id, name: parentInfo.name });
             current = pId;
           }
           setFolderHistory(newHistory);
@@ -177,35 +244,56 @@ function App() {
       setActiveTab("My Drive");
 
       try {
-        const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
-          headers: { Authorization: `Bearer ${accessToken}` }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data.parents && data.parents.length > 0) {
-            const parentId = data.parents[0];
+        // OPTIMIZATION: Use local DB instead of Google Drive API
+        const fileInfo = await db.files.get(fileId);
+        
+        if (fileInfo && fileInfo.parentId) {
+          const parentId = fileInfo.parentId;
+          let folderName = "Đã định vị";
+          
+          const parentInfo = await db.files.get(parentId);
+          if (parentInfo) {
+            folderName = parentInfo.name;
+          }
 
-            // Try to get parent name
-            const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
-              headers: { Authorization: `Bearer ${accessToken}` }
-            });
-            let folderName = "Đã định vị";
-            if (pRes.ok) {
-              const pData = await pRes.json();
-              folderName = pData.name;
+          // Navigate
+          setFolderHistory([]);
+          pendingEnsuredFileId.current = fileId;
+          setCurrentFolderId(parentId);
+          setCurrentFolderName(folderName);
+          setHighlightedFileId({id: fileId, ts: Date.now()});
+
+          // Clear highlight after 5 seconds
+          setTimeout(() => setHighlightedFileId(null), 5000);
+
+          rebuildHistory(parentId);
+        } else {
+          // Fallback to API if not in local DB (e.g., just uploaded from another device and not synced yet)
+          const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.parents && data.parents.length > 0) {
+              const parentId = data.parents[0];
+
+              const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+              });
+              let folderName = "Đã định vị";
+              if (pRes.ok) {
+                const pData = await pRes.json();
+                folderName = pData.name;
+              }
+
+              setFolderHistory([]);
+              pendingEnsuredFileId.current = fileId;
+              setCurrentFolderId(parentId);
+              setCurrentFolderName(folderName);
+              setHighlightedFileId({id: fileId, ts: Date.now()});
+              setTimeout(() => setHighlightedFileId(null), 5000);
+              rebuildHistory(parentId);
             }
-
-            // Navigate
-            setFolderHistory([]);
-            pendingEnsuredFileId.current = fileId;
-            setCurrentFolderId(parentId);
-            setCurrentFolderName(folderName);
-            setHighlightedFileId({id: fileId, ts: Date.now()});
-
-            // Clear highlight after 5 seconds
-            setTimeout(() => setHighlightedFileId(null), 5000);
-
-            rebuildHistory(parentId);
           }
         }
       } catch (err) {
@@ -238,78 +326,6 @@ function App() {
     window.addEventListener('refresh-drive', handleRefreshDrive);
     return () => window.removeEventListener('refresh-drive', handleRefreshDrive);
   }, [isLoggedIn, accessToken, currentFolderId]);
-
-  const dbFiles = useLiveQuery(
-    () => db.files.where('parentId').equals(currentFolderId).toArray(),
-    [currentFolderId]
-  );
-
-  useEffect(() => {
-    if (dbFiles) {
-      const items: DriveItem[] = dbFiles.map(file => {
-        const title = file.isFolder ? file.name : file.name.replace(/\.[^/.]+$/, "");
-        return {
-          id: file.id,
-          title,
-          isFolder: file.isFolder,
-          size: file.size,
-          modifiedTime: file.modifiedTime,
-          trackInfo: file.isFolder ? undefined : {
-            id: file.id,
-            title,
-            artist: "",
-            streamUrl: "",
-            size: file.size,
-            originalName: file.name,
-            parentId: file.parentId,
-            parentName: currentFolderName,
-          }
-        };
-      });
-
-      // Use Intl.Collator for natural sorting (handles numbers correctly and is case-insensitive)
-      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-
-      // Sort items
-      const sortedItems = items.sort((a, b) => {
-        if (a.isFolder && !b.isFolder) return -1;
-        if (!a.isFolder && b.isFolder) return 1;
-        
-        switch (sortOption) {
-          case 'name':
-            return collator.compare(a.title, b.title);
-          case 'name desc':
-            return collator.compare(b.title, a.title);
-          case 'modifiedTime': {
-            const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
-            const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
-            if (timeA === timeB) return collator.compare(a.title, b.title);
-            return timeA - timeB;
-          }
-          case 'modifiedTime desc': {
-            const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
-            const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
-            if (timeA === timeB) return collator.compare(a.title, b.title);
-            return timeB - timeA;
-          }
-          case 'size': {
-            const diff = (a.size || 0) - (b.size || 0);
-            if (diff === 0) return collator.compare(a.title, b.title);
-            return diff;
-          }
-          case 'size desc': {
-            const diff = (b.size || 0) - (a.size || 0);
-            if (diff === 0) return collator.compare(a.title, b.title);
-            return diff;
-          }
-          default:
-            return collator.compare(a.title, b.title);
-        }
-      });
-
-      setDriveItems(sortedItems);
-    }
-  }, [dbFiles, sortOption, currentFolderName]);
 
   const fetchFolderContentsToDexie = async (token: string, folderId: string) => {
     try {
@@ -444,7 +460,7 @@ function App() {
                 token={accessToken}
                 highlightedFileId={highlightedFileId}
                 onRefresh={() => { /* No-op, sync runs in background */ }}
-                onRemoveItem={(id: string) => setDriveItems(prev => prev.filter(item => item.id !== id))}
+                onRemoveItem={() => { /* useLiveQuery handles UI updates automatically now */ }}
                 sortOption={sortOption}
                 onSortChange={(val) => {
                   setSortOption(val);

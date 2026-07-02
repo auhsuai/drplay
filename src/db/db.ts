@@ -20,15 +20,17 @@ export interface SyncState {
 export class DriveDatabase extends Dexie {
   files!: Table<DriveFile, string>; // Primary key is 'id'
   syncState!: Table<SyncState, string>; // Primary key is 'key'
+  favorites!: Table<any, string>; // Primary key is 'id', we store Track objects with an added userEmail index
 
   constructor() {
     super('DrPlayDriveDB');
     
     // Define schema
-    this.version(1).stores({
+    this.version(2).stores({
       // Primary key 'id', indexes on 'parentId', 'name', 'isFolder'
       files: 'id, parentId, name, isFolder',
-      syncState: 'key'
+      syncState: 'key',
+      favorites: 'id, userEmail'
     });
   }
 }

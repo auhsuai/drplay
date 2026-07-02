@@ -17,13 +17,13 @@ const onRefreshed = (token: string) => {
  * Lấy token hiện tại, nếu sắp hết hạn (còn < 10 phút) thì chủ động refresh.
  * Dùng cho các tác vụ không dùng fetch (như gọi xuống Rust qua Tauri).
  */
-export const getValidToken = async (): Promise<string | null> => {
+export const getValidToken = async (forceRefresh: boolean = false): Promise<string | null> => {
   const token = localStorage.getItem("drplay_access_token");
   const issueTime = parseInt(localStorage.getItem("drplay_token_time") || "0");
   // Nếu đã quá 50 phút kể từ lúc cấp (token thường sống 60p)
   const isExpired = Date.now() - issueTime > 50 * 60 * 1000;
 
-  if (isExpired || !token) {
+  if (isExpired || !token || forceRefresh) {
     const refreshToken = localStorage.getItem("drplay_refresh_token");
     if (!refreshToken) {
       window.dispatchEvent(new CustomEvent('auth-logout'));

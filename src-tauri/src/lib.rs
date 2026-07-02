@@ -167,28 +167,33 @@ struct LocalMetadata {
     file_type: String,
 }
 
-fn get_db_path() -> Option<&'static str> {
+fn get_db_path() -> Option<std::path::PathBuf> {
+    if let Ok(mut exe_path) = std::env::current_exe() {
+        exe_path.pop();
+        let path1 = exe_path.join("music_databasev2.db");
+        if path1.exists() { return Some(path1); }
+        let path2 = exe_path.join("music_database.db");
+        if path2.exists() { return Some(path2); }
+    }
+
     if std::path::Path::new("music_databasev2.db").exists() {
-        Some("music_databasev2.db")
+        Some(std::path::PathBuf::from("music_databasev2.db"))
     } else if std::path::Path::new("../music_databasev2.db").exists() {
-        Some("../music_databasev2.db")
+        Some(std::path::PathBuf::from("../music_databasev2.db"))
     } else if std::path::Path::new("music_database.db").exists() {
-        Some("music_database.db")
+        Some(std::path::PathBuf::from("music_database.db"))
     } else if std::path::Path::new("../music_database.db").exists() {
-        Some("../music_database.db")
+        Some(std::path::PathBuf::from("../music_database.db"))
     } else {
         None
     }
 }
 
 #[tauri::command]
-fn get_local_metadata(size: i64, name: String) -> Result<Option<LocalMetadata>, String> {
+fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
     use rusqlite::{Connection, OpenFlags};
-    let db_path = match get_db_path() {
-        Some(path) => path,
-        None => return Ok(None)
-    };
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
+    if let Some(db_path) = get_db_path() {
+        if let Ok(conn) = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
     
     let has_file_type = conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok();
     let query = if has_file_type {
@@ -196,8 +201,8 @@ fn get_local_metadata(size: i64, name: String) -> Result<Option<LocalMetadata>, 
     } else {
         "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '' FROM tracks WHERE size_bytes = ?"
     };
-    let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
-    let mut rows = stmt.query([size]).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(query).ok()?;
+    let mut rows = stmt.query([size]).ok()?;
     
     let mut first_match = None;
     
@@ -213,7 +218,7 @@ fn get_local_metadata(size: i64, name: String) -> Result<Option<LocalMetadata>, 
         };
         
         if file_path.contains(&name) || meta.title.contains(&name) || name.contains(&meta.title) {
-            return Ok(Some(meta)); // Perfect match
+            return Some(meta); // Perfect match
         }
         
         if first_match.is_none() {
@@ -221,7 +226,10 @@ fn get_local_metadata(size: i64, name: String) -> Result<Option<LocalMetadata>, 
         }
     }
     
-    Ok(first_match)
+    return first_match;
+        }
+    }
+    None
 }
 
 use std::sync::{Arc, Mutex, Condvar, atomic::{AtomicUsize, AtomicBool, Ordering}, OnceLock};
@@ -364,8 +372,8 @@ impl std::io::Read for ProxyReader {
     }
 }
 
-pub fn spawn_proxy_server() {
-    std::thread::spawn(|| {
+pub fn spawn_proxy_server(app_handle: tauri::AppHandle) {
+    std::thread::spawn(move || {
         let server = tiny_http::Server::http("127.0.0.1:3457").unwrap();
         let http_client = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -374,6 +382,7 @@ pub fn spawn_proxy_server() {
         
         for request in server.incoming_requests() {
             let client = http_client.clone();
+            let app_handle = app_handle.clone();
             std::thread::spawn(move || {
                 let url = request.url().to_string();
                 
@@ -390,11 +399,10 @@ pub fn spawn_proxy_server() {
                     if let Some(s) = size_val {
                         use rusqlite::{Connection, OpenFlags};
                         if let Some(db_path) = get_db_path() {
-                            let mut thumb_served = false;
                             
                             // Try to serve cached thumbnail first
                             if thumb {
-                                if let Some(parent) = std::path::Path::new(db_path).parent() {
+                                if let Some(parent) = db_path.parent() {
                                     let thumb_dir = parent.join(".thumbnails");
                                     let thumb_path = thumb_dir.join(format!("{}.jpg", s));
                                     if thumb_path.exists() {
@@ -410,7 +418,7 @@ pub fn spawn_proxy_server() {
                                 }
                             }
                             
-                            if let Ok(conn) = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+                            if let Ok(conn) = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
                                 let has_thumb = conn.prepare("SELECT thumbnail FROM tracks LIMIT 1").is_ok();
                                 
                                 let query = if thumb && has_thumb {
@@ -504,6 +512,13 @@ pub fn spawn_proxy_server() {
                         } else if start_pos < *base_pos || start_pos > *base_pos + data_len + 5 * 1024 * 1024 {
                             // Jump outside the cached window (allow up to 5MB ahead without aborting)
                             needs_download = true;
+                        } else if *cache.finished.lock().unwrap() && start_pos >= *base_pos + data_len {
+                            // Thread died prematurely (e.g. timeout during pause), we need to restart download
+                            if let Some(total_len) = *cache.content_length.lock().unwrap() {
+                                if *base_pos + data_len < total_len {
+                                    needs_download = true;
+                                }
+                            }
                         }
                         
                         if needs_download {
@@ -542,6 +557,10 @@ pub fn spawn_proxy_server() {
                                 
                             if let Ok(mut resp) = req.send() {
                                 if !resp.status().is_success() {
+                                    if resp.status().as_u16() == 401 {
+                                        use tauri::Emitter;
+                                        let _ = app_handle.emit("token-expired", ());
+                                    }
                                     *cache_clone.finished.lock().unwrap() = true;
                                     cache_clone.condvar.notify_all();
                                     return;
@@ -702,11 +721,12 @@ pub fn spawn_proxy_server() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    spawn_proxy_server();
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            spawn_proxy_server(app.handle().clone());
+            
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
