@@ -109,8 +109,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       
       if (currentTrack.restoreTime !== undefined) {
          setDuration(currentTrack.restoreDuration || 0);
+         if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(currentTrack.restoreTime);
+         if (progressFillRef.current) progressFillRef.current.style.width = `${(currentTrack.restoreTime / (currentTrack.restoreDuration || 1)) * 100}%`;
       } else {
          setDuration(0);
+         if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = '0:00';
+         if (progressFillRef.current) progressFillRef.current.style.width = '0%';
       }
       if (bufferFillRef.current) bufferFillRef.current.style.width = '0%';
     }
