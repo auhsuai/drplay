@@ -414,7 +414,7 @@ pub fn spawn_proxy_server() {
                                 let has_thumb = conn.prepare("SELECT thumbnail FROM tracks LIMIT 1").is_ok();
                                 
                                 let query = if thumb && has_thumb {
-                                    "SELECT thumbnail FROM tracks WHERE size_bytes = ? AND thumbnail IS NOT NULL LIMIT 1"
+                                    "SELECT COALESCE(thumbnail, cover_art) FROM tracks WHERE size_bytes = ? AND cover_art IS NOT NULL LIMIT 1"
                                 } else {
                                     "SELECT cover_art FROM tracks WHERE size_bytes = ? AND cover_art IS NOT NULL LIMIT 1"
                                 };
