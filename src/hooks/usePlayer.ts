@@ -26,17 +26,32 @@ export const usePlayer = (accessToken: string | null) => {
           lastSession = await get("drplay_last_session");
         }
 
+        const storedBuffer = await get("drplay_buffer_seconds");
+        if (storedBuffer) setBufferSeconds(storedBuffer as number);
+
         if (lastSession && lastSession.track) {
+          let streamUrl = "";
+          const freshToken = await getValidToken();
+          if (freshToken) {
+            try {
+              streamUrl = await invoke<string>("get_stream_url", { 
+                fileId: lastSession.track.id, 
+                token: freshToken, 
+                bitrate: lastSession.track.bitrate, 
+                bufferSeconds: storedBuffer || 1400 
+              });
+            } catch (e) {
+              console.warn("Failed to invoke get_stream_url on session restore", e);
+            }
+          }
+
           setCurrentTrack({
             ...lastSession.track,
-            streamUrl: "",
+            streamUrl,
             restoreTime: lastSession.time,
             restoreDuration: lastSession.duration
           });
         }
-
-        const storedBuffer = await get("drplay_buffer_seconds");
-        if (storedBuffer) setBufferSeconds(storedBuffer as number);
       } catch (e) {
         console.error("Failed to load player session", e);
       }
@@ -82,6 +97,7 @@ export const usePlayer = (accessToken: string | null) => {
 
     try {
       let bitrate = undefined;
+      let accurateMetaDuration = undefined;
       const freshToken = await getValidToken();
       if (!freshToken) {
         setIsDownloading(false);
@@ -91,6 +107,9 @@ export const usePlayer = (accessToken: string | null) => {
       try {
         const metadata = await getTrackMetadata(track.id, freshToken, track.size, track.originalName);
         bitrate = metadata.bitrate;
+        if (metadata.duration) {
+           accurateMetaDuration = metadata.duration;
+        }
       } catch (e) {
         console.warn("Could not get bitrate for buffer calculation", e);
       }
@@ -100,7 +119,7 @@ export const usePlayer = (accessToken: string | null) => {
       setCurrentTrack(prev => {
         if (prev && prev.id === track.id) {
           setIsPlaying(true);
-          return { ...prev, streamUrl };
+          return { ...prev, streamUrl, restoreDuration: accurateMetaDuration || prev.restoreDuration };
         }
         return prev;
       });

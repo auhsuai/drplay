@@ -17,15 +17,27 @@ export interface CachedMetadata {
   mimeType?: string;
 }
 
-async function compressImage(data: Uint8Array, mimeType: string): Promise<{data: Uint8Array, format: string} | null> {
+let _proxyPort: number | null = null;
+async function getProxyPort(): Promise<number> {
+  if (_proxyPort !== null) return _proxyPort;
+  try {
+    _proxyPort = await invoke<number>("get_proxy_port");
+    if (_proxyPort === 0) _proxyPort = 3457;
+  } catch (e) {
+    _proxyPort = 3457;
+  }
+  return _proxyPort;
+}
+
+async function compressImage(data: Uint8Array, mimeType: string): Promise<{ data: Uint8Array, format: string } | null> {
   try {
     const blob = new Blob([new Uint8Array(data)], { type: mimeType });
     const bitmap = await createImageBitmap(blob);
-    
+
     const MAX = 256;
     let width = bitmap.width;
     let height = bitmap.height;
-    
+
     if (width > MAX || height > MAX) {
       if (width > height) {
         height = Math.round(height * MAX / width);
@@ -70,67 +82,119 @@ async function compressImage(data: Uint8Array, mimeType: string): Promise<{data:
 }
 
 // Concurrency queue to prevent IPC/Network flooding when loading 1000 tracks
-const metadataQueue: (() => void)[] = [];
+const metadataQueue: ((acquired: boolean) => void)[] = [];
 let activeMetadataCount = 0;
 const MAX_METADATA_CONCURRENT = 5;
 
-async function acquireMetadataLock() {
+async function acquireMetadataLock(signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return false;
+
   if (activeMetadataCount < MAX_METADATA_CONCURRENT) {
     activeMetadataCount++;
-    return;
+    return true;
   }
-  return new Promise<void>(resolve => {
-    metadataQueue.push(resolve);
+  
+  return new Promise<boolean>(resolve => {
+    let resolveFn: (acquired: boolean) => void;
+    
+    const onAbort = () => {
+      const index = metadataQueue.indexOf(resolveFn);
+      if (index !== -1) {
+        metadataQueue.splice(index, 1);
+      }
+      resolve(false);
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    resolveFn = (acquired: boolean) => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      if (signal?.aborted) {
+        if (acquired) releaseMetadataLock();
+        resolve(false);
+      } else {
+        if (!acquired) activeMetadataCount++;
+        resolve(true);
+      }
+    };
+    
+    metadataQueue.push(resolveFn);
   });
 }
 
 function releaseMetadataLock() {
   if (metadataQueue.length > 0) {
     const next = metadataQueue.shift();
-    if (next) next();
+    if (next) next(true);
   } else {
     activeMetadataCount--;
   }
 }
 
-const metadataCache: Record<string, CachedMetadata> = {};
+export const metadataCache: Record<string, CachedMetadata> = {};
+const metadataCacheKeys: string[] = [];
+const MAX_CACHE_SIZE = 50;
 
+export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string, knownSize?: number, knownName?: string, signal?: AbortSignal): Promise<CachedMetadata> {
+  if (metadataCache[fileId]) {
+    // Move to end (LRU)
+    const idx = metadataCacheKeys.indexOf(fileId);
+    if (idx !== -1) {
+      metadataCacheKeys.splice(idx, 1);
+      metadataCacheKeys.push(fileId);
+    }
+    return metadataCache[fileId];
+  }
 
-export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string, knownSize?: number, knownName?: string): Promise<CachedMetadata> {
-  if (metadataCache[fileId]) return metadataCache[fileId];
-  
   const cacheKey = `metadata_${fileId}`;
-  
+
   try {
     const cached = await get<CachedMetadata>(cacheKey);
-    if (cached && cached.size !== undefined && cached.duration !== undefined && cached.v === 5) {
+    if (cached && cached.size !== undefined && cached.duration !== undefined && cached.v === 9) {
+      if (cached.coverUrl && cached.coverUrl.includes('127.0.0.1')) {
+        const port = await getProxyPort();
+        cached.coverUrl = `http://127.0.0.1:${port}/cover?size=${cached.size}&thumb=true`;
+        cached.fullCoverUrl = `http://127.0.0.1:${port}/cover?size=${cached.size}`;
+      }
       metadataCache[fileId] = cached;
+      metadataCacheKeys.push(fileId);
+      if (metadataCacheKeys.length > MAX_CACHE_SIZE) {
+        const oldestKey = metadataCacheKeys.shift();
+        if (oldestKey) delete metadataCache[oldestKey];
+      }
       return cached;
     }
   } catch (e) {
     console.warn("Cache read error", e);
   }
 
-  await acquireMetadataLock();
-  
+  const acquired = await acquireMetadataLock(signal);
+  if (!acquired) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+
   try {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     if (knownSize && knownName) {
       try {
-        const localMeta = await invoke<{title: string, artist: string, album: string, duration: number, has_cover: boolean, file_type: string} | null>("get_local_metadata", {
+        const localMeta = await invoke<{ title: string, artist: string, album: string, duration: number, has_cover: boolean, file_type: string } | null>("get_local_metadata", {
           size: knownSize,
           name: knownName,
         });
-        
+
         if (localMeta) {
+          const port = await getProxyPort();
           const result: CachedMetadata = {
             title: localMeta.title,
             artist: localMeta.artist,
             duration: localMeta.duration,
             size: knownSize,
             fileType: localMeta.file_type,
-            coverUrl: localMeta.has_cover ? `http://127.0.0.1:3457/cover?size=${knownSize}&thumb=true` : undefined,
-            fullCoverUrl: localMeta.has_cover ? `http://127.0.0.1:3457/cover?size=${knownSize}` : undefined,
-            v: 5
+            coverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?size=${knownSize}&thumb=true` : undefined,
+            fullCoverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?size=${knownSize}` : undefined,
+            v: 9
           };
           await set(cacheKey, result);
           metadataCache[fileId] = result;
@@ -149,12 +213,12 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
 
     let fileSizeExtracted: number | undefined;
     let metadata;
-    
+
     try {
       if (!streamUrlOrToken.startsWith('http')) {
         const scanMode = (await get("drplay_scan_mode")) || 'fast';
         const fetchHeaders: HeadersInit = {};
-        
+
         if (scanMode === 'fast') {
           fetchHeaders['Range'] = 'bytes=0-65535';
         }
@@ -162,21 +226,23 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
         // CRITICAL FIX: Use local proxy instead of direct Google Drive URL.
         // Google Drive CORS strips Range headers in browsers, causing WebView2 to download
         // the ENTIRE 3GB FILE directly into RAM (response.arrayBuffer()) just to read 64KB of ID3 tags!
-        const proxyUrl = `http://127.0.0.1:3457/stream.mp3?id=${fileId}&token=${streamUrlOrToken}`;
-        const response = await fetch(proxyUrl, { headers: fetchHeaders });
+        const port = await getProxyPort();
+        const proxyUrl = `http://127.0.0.1:${port}/stream.mp3?id=${fileId}&token=${streamUrlOrToken}`;
+        const response = await fetch(proxyUrl, { headers: fetchHeaders, signal });
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        
+
         const contentRange = response.headers.get('content-range');
         let fileSize;
         if (contentRange) {
           const match = contentRange.match(/\/(\d+)/);
           if (match) fileSize = parseInt(match[1], 10);
         }
-        
+
         if (!fileSize) {
           try {
             const metaResponse = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=size`, {
-              headers: { 'Authorization': `Bearer ${streamUrlOrToken}` }
+              headers: { 'Authorization': `Bearer ${streamUrlOrToken}` },
+              signal
             });
             if (metaResponse.ok) {
               const metaData = await metaResponse.json();
@@ -186,7 +252,7 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
             console.warn("Failed to fetch size fallback", e);
           }
         }
-        
+
         fileSizeExtracted = fileSize;
         const buffer = await response.arrayBuffer();
         const fileInfo = { mimeType: 'audio/mpeg', size: fileSize };
@@ -194,21 +260,27 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
       } else {
         metadata = await musicMetadata.fetchFromUrl(streamUrlOrToken);
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e.name === 'AbortError') throw e;
       console.warn("Metadata fetch error:", e);
       const defaultResult: CachedMetadata = { title: knownName || "Unknown Track", v: 3 };
       metadataCache[fileId] = defaultResult;
+      metadataCacheKeys.push(fileId);
+      if (metadataCacheKeys.length > MAX_CACHE_SIZE) {
+        const oldestKey = metadataCacheKeys.shift();
+        if (oldestKey) delete metadataCache[oldestKey];
+      }
       return defaultResult;
     }
-    
+
     let finalDuration = metadata?.format?.duration;
     let actualBitrate = metadata?.format?.bitrate;
     let estimatedBitrate = actualBitrate;
-    
+
     if (!estimatedBitrate && fileSizeExtracted) {
       estimatedBitrate = 128000;
     }
-    
+
     if ((!finalDuration || finalDuration < 10) && fileSizeExtracted && estimatedBitrate) {
       finalDuration = (fileSizeExtracted * 8) / estimatedBitrate;
     }
@@ -220,9 +292,9 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
       size: fileSizeExtracted,
       bitrate: actualBitrate,
       mimeType: (metadata?.format as any)?.mimeType,
-      v: 7, // Network fallback gets v: 7 so it can be overwritten if DB becomes available
+      v: 9, // Network fallback gets v: 9
     };
-    
+
     const picture = metadata.common.picture?.[0];
     if (picture) {
       const compressed = await compressImage(picture.data, picture.format);
@@ -234,8 +306,13 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
         finalResult.pictureFormat = picture.format;
       }
     }
-    
+
     metadataCache[fileId] = finalResult;
+    metadataCacheKeys.push(fileId);
+    if (metadataCacheKeys.length > MAX_CACHE_SIZE) {
+      const oldestKey = metadataCacheKeys.shift();
+      if (oldestKey) delete metadataCache[oldestKey];
+    }
     await set(cacheKey, finalResult);
     window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId } }));
     return finalResult;
@@ -249,8 +326,15 @@ export async function updateTrackDuration(fileId: string, accurateDuration: numb
   try {
     const cached = await get<CachedMetadata>(cacheKey);
     if (cached) {
+      const oldDuration = cached.duration || 0;
       // Only update if difference is > 1 second
-      if (Math.abs((cached.duration || 0) - accurateDuration) > 1) {
+      if (Math.abs(oldDuration - accurateDuration) > 1) {
+        // Prevent writing truncated durations caused by network interrupts (e.g. 5 mins for a 3 hr file)
+        if (oldDuration > 0 && accurateDuration < oldDuration * 0.8) {
+          console.warn(`Ignoring suspiciously short duration update for ${fileId}: ${accurateDuration}s vs old ${oldDuration}s`);
+          return;
+        }
+
         cached.duration = accurateDuration;
         await set(cacheKey, cached);
         // Dispatch event to update SongCard immediately

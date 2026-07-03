@@ -9,7 +9,7 @@ use tauri::command;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
-static GLOBAL_STREAM_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+pub static GLOBAL_STREAM_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 #[command]
 async fn update_stream_token(token: String) -> Result<(), String> {
@@ -133,28 +133,125 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 
 #[tauri::command]
 async fn get_stream_url(file_id: String, token: String, bitrate: Option<f64>, buffer_seconds: Option<f64>) -> Result<String, String> {
+    let port = PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
+    let port_str = if port > 0 { port.to_string() } else { "3457".to_string() };
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(180.0);
-        Ok(format!("http://127.0.0.1:3457/stream.mp3?id={}&token={}&bitrate={}&buffer={}", file_id, token, b, buf))
+        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}&token={}&bitrate={}&buffer={}", port_str, file_id, token, b, buf))
     } else {
-        Ok(format!("http://127.0.0.1:3457/stream.mp3?id={}&token={}", file_id, token))
+        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}&token={}", port_str, file_id, token))
     }
 }
 
 #[tauri::command]
+async fn extract_metadata_safe(file_id: String, token: String) -> Result<serde_json::Value, String> {
+    use std::io::Cursor;
+    use lofty::file::{AudioFile, TaggedFileExt};
+    use lofty::probe::Probe;
+    use lofty::tag::Accessor;
+    use base64::Engine;
+
+    let mut final_token = token;
+    if let Ok(global) = GLOBAL_STREAM_TOKEN.lock() {
+        if !global.is_empty() {
+            final_token = global.clone();
+        }
+    }
+
+    let client = reqwest::Client::new();
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", file_id);
+    let resp = client.get(&url)
+        .header("Authorization", format!("Bearer {}", final_token))
+        .header("Range", "bytes=0-131072") // 128KB should cover ID3 and Xing headers
+        .send().await.map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("API Error: {}", resp.status()));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    let mut cursor = Cursor::new(bytes.to_vec());
+    
+    let probe = match Probe::new(&mut cursor).guess_file_type() {
+        Ok(p) => p,
+        Err(_) => return Err("Could not guess file format".to_string()),
+    };
+
+    match probe.read() {
+        Ok(tagged_file) => {
+            let mut title = None;
+            let mut artist = None;
+            let mut duration = None;
+            let mut picture_data = None;
+            let mut picture_format = None;
+
+            let dur = tagged_file.properties().duration().as_secs_f64();
+            if dur > 0.0 {
+                duration = Some(dur);
+            }
+            
+            if let Some(tag) = tagged_file.primary_tag() {
+                title = tag.title().map(|s| s.into_owned());
+                artist = tag.artist().map(|s| s.into_owned());
+                
+                if let Some(pic) = tag.pictures().first() {
+                    picture_data = Some(base64::engine::general_purpose::STANDARD.encode(pic.data()));
+                    picture_format = pic.mime_type().map(|m| m.to_string());
+                }
+            } else if let Some(tag) = tagged_file.first_tag() {
+                title = tag.title().map(|s| s.into_owned());
+                artist = tag.artist().map(|s| s.into_owned());
+            }
+
+            Ok(serde_json::json!({
+                "title": title,
+                "artist": artist,
+                "duration": duration,
+                "pictureData": picture_data,
+                "pictureFormat": picture_format,
+            }))
+        },
+        Err(e) => Err(format!("Parse error: {}", e))
+    }
+}
+
+pub static CURRENT_BUFFER_BASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CURRENT_BUFFER_LEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CURRENT_FILE_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CURRENT_DOWNLOAD_FINISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub struct StreamCache {
+    pub file_id: String,
+    pub base_pos: usize,
+    pub data: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    pub content_type: String,
+    pub total_file_size: usize,
+    pub chunk_size: usize,
+    pub notify: std::sync::Arc<tokio::sync::Notify>,
+    pub error: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+lazy_static::lazy_static! {
+    pub static ref GLOBAL_STREAM_CACHE: std::sync::Mutex<Option<StreamCache>> = std::sync::Mutex::new(None);
+}
+
+#[tauri::command]
 fn get_proxy_cache_status() -> Result<(usize, usize, Option<usize>), String> {
-    let cache = get_cache();
-    let base_pos = *cache.base_pos.lock().unwrap();
-    let data_len = cache.data.lock().unwrap().len();
-    let total_len = *cache.content_length.lock().unwrap();
-    Ok((base_pos, data_len, total_len))
+    let base = CURRENT_BUFFER_BASE.load(Ordering::SeqCst);
+    let len = CURRENT_BUFFER_LEN.load(Ordering::SeqCst);
+    let total = CURRENT_FILE_SIZE.load(Ordering::SeqCst);
+    let total_opt = if total > 0 { Some(total) } else { None };
+    Ok((base, len, total_opt))
+}
+
+#[tauri::command]
+fn get_proxy_port() -> u16 {
+    PROXY_PORT.load(Ordering::SeqCst)
 }
 
 #[tauri::command]
 fn update_buffer_settings(seconds: usize) {
     GLOBAL_BUFFER_SECONDS.store(seconds, Ordering::SeqCst);
-    let cache = get_cache();
-    cache.condvar.notify_all(); // Wake up download thread if it's sleeping
 }
 
 #[derive(serde::Serialize)]
@@ -232,492 +329,24 @@ fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
     None
 }
 
-use std::sync::{Arc, Mutex, Condvar, atomic::{AtomicUsize, AtomicBool, Ordering}, OnceLock};
+use std::sync::{atomic::{AtomicUsize, AtomicBool, Ordering}, OnceLock};
 use std::thread;
 
-static GLOBAL_CACHE: OnceLock<Arc<TrackCache>> = OnceLock::new();
+mod proxy;
+
 static SESSION_ID: AtomicUsize = AtomicUsize::new(0);
 static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
 static THUMBNAIL_CONCURRENCY: AtomicUsize = AtomicUsize::new(0);
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
+pub static PROXY_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
 #[tauri::command]
 fn update_minimize_to_tray(minimize: bool) {
     MINIMIZE_TO_TRAY.store(minimize, Ordering::SeqCst);
 }
 
-struct ConcurrencyGuard;
-impl ConcurrencyGuard {
-    fn acquire() -> Self {
-        while THUMBNAIL_CONCURRENCY.load(Ordering::SeqCst) >= 4 {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        THUMBNAIL_CONCURRENCY.fetch_add(1, Ordering::SeqCst);
-        Self
-    }
-}
-impl Drop for ConcurrencyGuard {
-    fn drop(&mut self) {
-        THUMBNAIL_CONCURRENCY.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-fn get_cache() -> Arc<TrackCache> {
-    GLOBAL_CACHE.get_or_init(|| Arc::new(TrackCache::new())).clone()
-}
-
-struct TrackCache {
-    id: Mutex<String>,
-    base_pos: Mutex<usize>,
-    data: Mutex<Vec<u8>>,
-    content_length: Mutex<Option<usize>>,
-    content_type: Mutex<String>,
-    finished: Mutex<bool>,
-    capacity: Mutex<usize>,
-    condvar: Condvar,
-}
-
-impl TrackCache {
-    fn new() -> Self {
-        Self {
-            id: Mutex::new(String::new()),
-            base_pos: Mutex::new(0),
-            data: Mutex::new(Vec::with_capacity(10 * 1024 * 1024)),
-            content_length: Mutex::new(None),
-            content_type: Mutex::new(String::new()),
-            finished: Mutex::new(false),
-            capacity: Mutex::new(10 * 1024 * 1024),
-            condvar: Condvar::new(),
-        }
-    }
-}
-
-struct CacheReader {
-    expected_id: String,
-    position: usize,
-    cache: Arc<TrackCache>,
-}
-
-impl std::io::Read for CacheReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut data = self.cache.data.lock().unwrap();
-        loop {
-            let base_pos = *self.cache.base_pos.lock().unwrap();
-            let current_id = self.cache.id.lock().unwrap().clone();
-            
-            // If the cache was overwritten by a different track, abort this reader!
-            // Otherwise, we stream garbage data into the wrong response, causing massive memory leaks in WebView2
-            if current_id != self.expected_id {
-                return Ok(0);
-            }
-            
-            // If the reader is somehow behind the base_pos, the cache jumped ahead.
-            // We can't serve this request from cache anymore (return EOF to force browser to retry).
-            if self.position < base_pos {
-                return Ok(0);
-            }
-            
-            let offset = self.position - base_pos;
-            let available = data.len().saturating_sub(offset);
-            
-            if available > 0 {
-                let to_copy = std::cmp::min(buf.len(), available);
-                buf[..to_copy].copy_from_slice(&data[offset .. offset + to_copy]);
-                self.position += to_copy;
-                
-                // Sliding Window Eviction
-                let mut base_pos_locked = self.cache.base_pos.lock().unwrap();
-                let capacity = *self.cache.capacity.lock().unwrap();
-                let current_offset = self.position.saturating_sub(*base_pos_locked);
-                
-                // Keep behind up to 20% of capacity, but max 1MB
-                let keep_behind = std::cmp::min(1024 * 1024, capacity / 5);
-                
-                if current_offset > keep_behind {
-                    let drain_amount = current_offset - keep_behind;
-                    // Evict if drain amount is > 1MB, OR if it's > 10% of capacity (for small capacities)
-                    let min_evict = std::cmp::min(1024 * 1024, capacity / 10);
-                    
-                    if drain_amount >= min_evict && drain_amount > 0 {
-                        data.drain(0..drain_amount);
-                        *base_pos_locked += drain_amount;
-                        self.cache.condvar.notify_all(); // Wake up download thread if it's paused
-                    }
-                }
-                
-                return Ok(to_copy);
-            } else {
-                if *self.cache.finished.lock().unwrap() {
-                    return Ok(0); // EOF
-                }
-                // Wait for more data
-                data = self.cache.condvar.wait(data).unwrap();
-            }
-        }
-    }
-}
-
-enum ProxyReader {
-    Cache(CacheReader),
-    Direct(reqwest::blocking::Response),
-}
-
-impl std::io::Read for ProxyReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            ProxyReader::Cache(r) => r.read(buf),
-            ProxyReader::Direct(r) => r.read(buf),
-        }
-    }
-}
-
-pub fn spawn_proxy_server(app_handle: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        let server = tiny_http::Server::http("127.0.0.1:3457").unwrap();
-        let http_client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        
-        for request in server.incoming_requests() {
-            let client = http_client.clone();
-            let app_handle = app_handle.clone();
-            std::thread::spawn(move || {
-                let url = request.url().to_string();
-                
-                if url.starts_with("/cover") {
-                    let full_url = format!("http://localhost{}", url);
-                    let parsed_url = url::Url::parse(&full_url).unwrap();
-                    let mut size_val: Option<i64> = None;
-                    let mut thumb = false;
-                    for (k, v) in parsed_url.query_pairs() {
-                        if k == "size" { size_val = v.parse().ok(); }
-                        if k == "thumb" { thumb = v == "true"; }
-                    }
-                    
-                    if let Some(s) = size_val {
-                        use rusqlite::{Connection, OpenFlags};
-                        if let Some(db_path) = get_db_path() {
-                            
-                            // Try to serve cached thumbnail first
-                            if thumb {
-                                if let Some(parent) = db_path.parent() {
-                                    let thumb_dir = parent.join(".thumbnails");
-                                    let thumb_path = thumb_dir.join(format!("{}.jpg", s));
-                                    if thumb_path.exists() {
-                                        if let Ok(cached_cover) = std::fs::read(&thumb_path) {
-                                            let response = tiny_http::Response::from_data(cached_cover)
-                                                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap())
-                                                .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
-                                                .with_header(tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=31536000"[..]).unwrap());
-                                            let _ = request.respond(response);
-                                            return;
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            if let Ok(conn) = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-                                let has_thumb = conn.prepare("SELECT thumbnail FROM tracks LIMIT 1").is_ok();
-                                
-                                let query = if thumb && has_thumb {
-                                    "SELECT thumbnail, cover_art FROM tracks WHERE size_bytes = ? LIMIT 1"
-                                } else {
-                                    "SELECT cover_art FROM tracks WHERE size_bytes = ? AND cover_art IS NOT NULL LIMIT 1"
-                                };
-                                
-                                if let Ok(mut stmt) = conn.prepare(query) {
-                                    if let Ok(mut rows) = stmt.query([s]) {
-                                        if let Ok(Some(row)) = rows.next() {
-                                            let mut cover_art: Vec<u8> = Vec::new();
-                                            if thumb && has_thumb {
-                                                let t: Vec<u8> = row.get(0).unwrap_or_default();
-                                                if !t.is_empty() {
-                                                    cover_art = t;
-                                                } else {
-                                                    cover_art = row.get(1).unwrap_or_default();
-                                                }
-                                            } else {
-                                                cover_art = row.get(0).unwrap_or_default();
-                                            }
-                                            
-                                            if !cover_art.is_empty() {
-                                                let response = tiny_http::Response::from_data(cover_art)
-                                                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap())
-                                                    .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
-                                                    .with_header(tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=31536000"[..]).unwrap());
-                                                let _ = request.respond(response);
-                                                return;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    let response = tiny_http::Response::empty(404)
-                        .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-                    let _ = request.respond(response);
-                    return;
-                }
-                
-                if url.starts_with("/stream") {
-                    let full_url = format!("http://localhost{}", url);
-                    let parsed_url = url::Url::parse(&full_url).unwrap();
-                    let mut id = String::new();
-                    let mut token = String::new();
-                    let mut buffer_seconds: Option<f64> = None;
-                    let mut bitrate: Option<f64> = None;
-                    for (k, v) in parsed_url.query_pairs() {
-                        if k == "id" { id = v.into_owned(); }
-                        else if k == "token" { token = v.into_owned(); }
-                        else if k == "buffer" { buffer_seconds = v.parse().ok(); }
-                        else if k == "bitrate" { bitrate = v.parse().ok(); }
-                    }
-                    
-                    let mut start_pos = 0;
-                    let mut end_pos: Option<usize> = None;
-                    let mut has_range = false;
-                    for header in request.headers() {
-                        if header.field.as_str().to_string().eq_ignore_ascii_case("range") {
-                            has_range = true;
-                            let val = header.value.as_str();
-                            if val.starts_with("bytes=") {
-                                let parts: Vec<&str> = val["bytes=".len()..].split('-').collect();
-                                if let Ok(s) = parts[0].parse::<usize>() {
-                                    start_pos = s;
-                                }
-                                if parts.len() > 1 && !parts[1].is_empty() {
-                                    if let Ok(e) = parts[1].parse::<usize>() {
-                                        end_pos = Some(e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    let cache = get_cache();
-                    
-                    let is_new = {
-                        let mut current_id = cache.id.lock().unwrap();
-                        let mut base_pos = cache.base_pos.lock().unwrap();
-                        let data_len = cache.data.lock().unwrap().len();
-                        
-                        let mut needs_download = false;
-                        if *current_id != id {
-                            *current_id = id.clone();
-                            needs_download = true;
-                        } else if start_pos < *base_pos || start_pos > *base_pos + data_len + 5 * 1024 * 1024 {
-                            // Jump outside the cached window (allow up to 5MB ahead without aborting)
-                            needs_download = true;
-                        } else if *cache.finished.lock().unwrap() && start_pos >= *base_pos + data_len {
-                            // Thread died prematurely (e.g. timeout during pause), we need to restart download
-                            if let Some(total_len) = *cache.content_length.lock().unwrap() {
-                                if *base_pos + data_len < total_len {
-                                    needs_download = true;
-                                }
-                            }
-                        }
-                        
-                        if needs_download {
-                            cache.data.lock().unwrap().clear();
-                            *base_pos = start_pos;
-                            *cache.content_length.lock().unwrap() = None;
-                            *cache.content_type.lock().unwrap() = String::new();
-                            *cache.finished.lock().unwrap() = false;
-                            true
-                        } else {
-                            false
-                        }
-                    };
-                    
-                    if is_new {
-                        let session = SESSION_ID.fetch_add(1, Ordering::SeqCst) + 1;
-                        let cache_clone = cache.clone();
-                        let client_clone = client.clone();
-                        let current_url_clone = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", id);
-                        let mut final_token = token.clone();
-                        if let Ok(global) = GLOBAL_STREAM_TOKEN.lock() {
-                            if !global.is_empty() {
-                                final_token = global.clone();
-                            }
-                        }
-                        let token_clone = final_token;
-                        let fetch_start_pos = start_pos; // The position we are fetching from
-                        
-                        thread::spawn(move || {
-                            let mut req = client_clone.request(reqwest::Method::GET, &current_url_clone)
-                                .header("Authorization", format!("Bearer {}", token_clone));
-                                
-                            if fetch_start_pos > 0 {
-                                req = req.header("Range", format!("bytes={}-", fetch_start_pos));
-                            }
-                                
-                            if let Ok(mut resp) = req.send() {
-                                if !resp.status().is_success() {
-                                    if resp.status().as_u16() == 401 {
-                                        use tauri::Emitter;
-                                        let _ = app_handle.emit("token-expired", ());
-                                    }
-                                    *cache_clone.finished.lock().unwrap() = true;
-                                    cache_clone.condvar.notify_all();
-                                    return;
-                                }
-                                // Extract total length from Content-Range if it's a 206
-                                if let Some(cr) = resp.headers().get("content-range") {
-                                    if let Ok(s) = cr.to_str() {
-                                        if let Some(total_str) = s.split('/').last() {
-                                            if let Ok(total) = total_str.parse::<usize>() {
-                                                *cache_clone.content_length.lock().unwrap() = Some(total);
-                                            }
-                                        }
-                                    }
-                                } else if let Some(cl) = resp.content_length() {
-                                    *cache_clone.content_length.lock().unwrap() = Some(cl as usize);
-                                }
-                                
-                                if cache_clone.content_length.lock().unwrap().is_none() {
-                                    *cache_clone.content_length.lock().unwrap() = Some(0); // Unblock main thread
-                                }
-                                
-                                if let Some(ct) = resp.headers().get("content-type") {
-                                    *cache_clone.content_type.lock().unwrap() = ct.to_str().unwrap_or("").to_string();
-                                }
-                                cache_clone.condvar.notify_all();
-                                
-                                let mut buf = vec![0u8; 65536];
-                                loop {
-                                    if SESSION_ID.load(Ordering::SeqCst) != session {
-                                        break; // Abort, new track started
-                                    }
-                                    
-                                    let mut is_aborted = false;
-                                    {
-                                        let mut data = cache_clone.data.lock().unwrap();
-                                        loop {
-                                            if SESSION_ID.load(Ordering::SeqCst) != session {
-                                                is_aborted = true;
-                                                break;
-                                            }
-                                            
-                                            // Re-evaluate capacity inside the loop so we can respond to settings changes immediately!
-                                            let buf_sec = GLOBAL_BUFFER_SECONDS.load(Ordering::SeqCst) as f64;
-                                            let mut capacity = if let Some(b) = bitrate {
-                                                ((b / 8.0) * buf_sec) as usize
-                                            } else {
-                                                100 * 1024 * 1024 // 100MB default max
-                                            };
-                                            capacity = std::cmp::min(capacity, 150 * 1024 * 1024); // Hard cap at 150MB to prevent memory leaks
-                                            *cache_clone.capacity.lock().unwrap() = capacity;
-                                            
-                                            if data.len() < capacity {
-                                                break;
-                                            }
-                                            
-                                            let (new_data, _timeout) = cache_clone.condvar.wait_timeout(data, std::time::Duration::from_millis(500)).unwrap();
-                                            data = new_data;
-                                        }
-                                    }
-                                    if is_aborted {
-                                        break;
-                                    }
-                                    
-                                    match std::io::Read::read(&mut resp, &mut buf) {
-                                        Ok(0) => {
-                                            *cache_clone.finished.lock().unwrap() = true;
-                                            cache_clone.condvar.notify_all();
-                                            break;
-                                        }
-                                        Ok(n) => {
-                                            // DOUBLE CHECK: Did a new seek happen while we were blocked waiting for this chunk?
-                                            if SESSION_ID.load(Ordering::SeqCst) != session {
-                                                break; // Abort without corrupting the newly cleared cache
-                                            }
-                                            cache_clone.data.lock().unwrap().extend_from_slice(&buf[..n]);
-                                            cache_clone.condvar.notify_all();
-                                        }
-                                        Err(_) => {
-                                            *cache_clone.finished.lock().unwrap() = true;
-                                            cache_clone.condvar.notify_all();
-                                            break;
-                                        }
-                                    }
-                                }
-                            } else {
-                                *cache_clone.finished.lock().unwrap() = true;
-                                cache_clone.condvar.notify_all();
-                            }
-                        });
-                    }
-                    
-                    // Wait for headers to be available
-                    let mut total_len = 0;
-                    let mut ct = String::new();
-                    {
-                        let mut data = cache.data.lock().unwrap();
-                        loop {
-                            if *cache.finished.lock().unwrap() || cache.content_length.lock().unwrap().is_some() {
-                                total_len = cache.content_length.lock().unwrap().unwrap_or(0);
-                                ct = cache.content_type.lock().unwrap().clone();
-                                break;
-                            }
-                            data = cache.condvar.wait(data).unwrap();
-                        }
-                    }
-                    
-                    let mut response_headers = Vec::new();
-                    if !ct.is_empty() {
-                        if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Type"[..], ct.as_bytes()) {
-                            response_headers.push(h);
-                        }
-                    }
-                    
-                    response_headers.push(tiny_http::Header::from_bytes(&b"Accept-Ranges"[..], &b"bytes"[..]).unwrap());
-                    response_headers.push(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-                    response_headers.push(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Range"[..]).unwrap());
-                    response_headers.push(tiny_http::Header::from_bytes(&b"Access-Control-Expose-Headers"[..], &b"Content-Length, Content-Range"[..]).unwrap());
-                    
-                    let mut response_len = if total_len > start_pos { Some(total_len - start_pos) } else if total_len == 0 { None } else { Some(0) };
-                    let mut e_pos = if total_len > 0 { total_len - 1 } else { 0 };
-                    
-                    if has_range && total_len > 0 {
-                        if let Some(e) = end_pos {
-                            e_pos = std::cmp::min(e, total_len - 1);
-                        } else {
-                            // CRITICAL FIX: If browser requests bytes=0- (open-ended), FORCE a 2MB chunk!
-                            // Otherwise Chromium will buffer the entire 3GB file into RAM over 5 minutes!
-                            e_pos = std::cmp::min(start_pos + 2 * 1024 * 1024 - 1, total_len - 1);
-                        }
-                        
-                        let chunk_len = e_pos - start_pos + 1;
-                        response_len = Some(chunk_len);
-                        
-                        let cr = format!("bytes {}-{}/{}", start_pos, e_pos, total_len);
-                        if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Range"[..], cr.as_bytes()) {
-                            response_headers.push(h);
-                        }
-                    }
-                    
-                    let status = if has_range { 206 } else { 200 };
-                    let reader = ProxyReader::Cache(CacheReader { expected_id: id.clone(), position: start_pos, cache: cache.clone() });
-                    
-                    let response = tiny_http::Response::new(
-                        tiny_http::StatusCode(status),
-                        response_headers,
-                        reader,
-                        response_len,
-                        None
-                    );
-                    let _ = request.respond(response);
-                } else {
-                    let _ = request.respond(tiny_http::Response::empty(404));
-                }
-            });
-        }
-    });
-}
+// Proxy server is now handled by proxy.rs using axum
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -725,7 +354,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            spawn_proxy_server(app.handle().clone());
+            proxy::spawn_proxy_server(app.handle().clone());
             
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
@@ -778,12 +407,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             login_google_native,
             refresh_google_token,
+            extract_metadata_safe,
             get_stream_url,
             get_proxy_cache_status,
             update_buffer_settings,
             get_local_metadata,
             update_stream_token,
-            update_minimize_to_tray
+            update_minimize_to_tray,
+            get_proxy_port
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

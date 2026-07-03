@@ -118,3 +118,21 @@ export async function permanentlyDeleteFile(token: string, fileId: string): Prom
   }
   return true;
 }
+
+export async function getRecentlyAddedAudioFiles(token: string): Promise<any[]> {
+  const q = "mimeType contains 'audio/' and trashed = false";
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=5`;
+  
+  const response = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch recently added audio files');
+  }
+  
+  const data = await response.json();
+  return data.files || [];
+}

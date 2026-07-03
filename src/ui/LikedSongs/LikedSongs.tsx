@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Play, Heart, Music } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Track } from '../../App';
@@ -35,13 +35,16 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     setFavorites(favs);
   };
 
+  const blobUrlsRef = useRef<string[]>([]);
+
   useEffect(() => {
     if (!token) return;
+    const controller = new AbortController();
     
     // Load metadata/covers for favorites
     favorites.forEach(track => {
       if (!covers[track.id]) {
-        getTrackMetadata(track.id, token, track.size, track.originalName).then(metadata => {
+        getTrackMetadata(track.id, token, track.size, track.originalName, controller.signal).then(metadata => {
           if (metadata.coverUrl) {
             setCovers(prev => ({
               ...prev,
@@ -49,14 +52,22 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
             }));
           } else if (metadata.pictureData && metadata.pictureFormat) {
             const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
+            const url = URL.createObjectURL(blob);
+            blobUrlsRef.current.push(url);
             setCovers(prev => ({
               ...prev,
-              [track.id]: URL.createObjectURL(blob)
+              [track.id]: url
             }));
           }
-        });
+        }).catch(() => {});
       }
     });
+
+    return () => {
+      controller.abort();
+      blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+      blobUrlsRef.current = [];
+    };
   }, [favorites, token]);
 
   const handleUnlike = (e: React.MouseEvent, trackId: string) => {
@@ -139,7 +150,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
                   
                   <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? 'bg-[#4285F4]/10 text-[#4285F4]' : 'bg-gray-200 dark:bg-gray-800'}`}>
                     {covers[track.id] ? (
-                      <img src={covers[track.id].startsWith('http://127') ? covers[track.id] + '&thumb=true' : covers[track.id]} alt="cover" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                      <img src={covers[track.id]} alt="cover" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     ) : (
                       <Music className={`w-5 h-5 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-400'}`} />
                     )}

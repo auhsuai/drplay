@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "../db/db";
+import { recordFolderVisit } from "../utils/history";
 
 export const useDrive = (isLoggedIn: boolean) => {
   // App Root Folder (Music Library Root)
@@ -66,6 +67,7 @@ export const useDrive = (isLoggedIn: boolean) => {
     setFolderHistory(prev => [...prev, { id: currentFolderId, name: currentFolderName }]);
     setCurrentFolderId(folderId);
     setCurrentFolderName(folderName);
+    recordFolderVisit(folderId, folderName);
   };
 
   const handleBack = () => {

@@ -55,8 +55,10 @@ export function NowPlayingView({
   const progressFillRef = useRef<HTMLDivElement>(null);
   const bufferFillRef = useRef<HTMLDivElement>(null);
   const currentTimeTextRef = useRef<HTMLSpanElement>(null);
+  const lastValidBufferPercentRef = useRef(0);
 
   useEffect(() => {
+    lastValidBufferPercentRef.current = 0;
     if (currentTrack) {
       setRealTitle(currentTrack.title);
       setRealArtist(currentTrack.artist || "");
@@ -85,7 +87,7 @@ export function NowPlayingView({
           const targetCoverUrl = metadata.fullCoverUrl || metadata.coverUrl;
           if (targetCoverUrl) {
             setCoverUrl(targetCoverUrl);
-            getPalette(metadata.coverUrl || targetCoverUrl)
+            getPalette(targetCoverUrl)
               .then(colors => {
                 if (isCancelled) return;
                 setBgColor(colors[0]);
@@ -208,9 +210,20 @@ export function NowPlayingView({
       let newBufferedPercent = 0;
       try {
         const [basePos, dataLen, totalLen] = await invoke<[number, number, number | null]>("get_proxy_cache_status");
-        if (totalLen && totalLen > 0) {
-          const maxBufferedPos = basePos + dataLen;
-          newBufferedPercent = Math.min(100, (maxBufferedPos / totalLen) * 100);
+        let proxyBufferedPercent = lastValidBufferPercentRef.current;
+        const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
+        const currentDuration = audio?.duration || duration;
+        
+        if (totalLen && totalLen > 0 && currentDuration > 0) {
+          const currentTime = audio?.currentTime || 0;
+          const currentTimeBytes = (currentTime / currentDuration) * totalLen;
+          
+          if (Math.abs(basePos - currentTimeBytes) < 3 * 1024 * 1024) {
+            const maxBufferedPos = basePos + dataLen;
+            proxyBufferedPercent = Math.min(100, (maxBufferedPos / totalLen) * 100);
+            lastValidBufferPercentRef.current = proxyBufferedPercent;
+          }
+          newBufferedPercent = proxyBufferedPercent;
         } else {
           const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
           if (audio) {
@@ -319,7 +332,12 @@ export function NowPlayingView({
         <div className="flex-1 w-full flex items-center justify-center min-h-[40vh] mt-4 md:mt-8">
           <div className={`w-64 h-64 md:w-80 md:h-80 lg:w-[480px] lg:h-[480px] xl:w-[560px] xl:h-[560px] aspect-square rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden shrink-0 transition-all duration-700 ${!coverUrl ? 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center relative' : 'bg-gray-100 dark:bg-[#202124]'}`}>
           {coverUrl ? (
-            <img src={coverUrl} alt="Cover" className="w-full h-full object-cover" />
+            <img 
+              src={coverUrl} 
+              alt="Cover" 
+              className="w-full h-full object-cover" 
+              onError={() => setCoverUrl(null)}
+            />
           ) : (
             <>
               <Music className="w-20 h-20 text-[#4285F4]/40 drop-shadow-sm" />

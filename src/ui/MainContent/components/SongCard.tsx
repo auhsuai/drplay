@@ -36,6 +36,7 @@ interface SongCardProps {
   isSelected?: boolean;
   onToggleSelection?: () => void;
   onEnableSelectionMode?: () => void;
+  hideMenu?: boolean;
 }
 
 export const SongCard = React.memo(function SongCard({ 
@@ -54,7 +55,8 @@ export const SongCard = React.memo(function SongCard({
   isSelectionMode, 
   isSelected, 
   onToggleSelection, 
-  onEnableSelectionMode 
+  onEnableSelectionMode,
+  hideMenu
 }: SongCardProps) {
   const { t } = useTranslation();
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
@@ -100,12 +102,13 @@ export const SongCard = React.memo(function SongCard({
   React.useEffect(() => {
     if (item.isFolder || !token) return;
     
+    const controller = new AbortController();
     let isMounted = true;
     let objectUrl: string | null = null;
     
     const fetchMetadata = async () => {
       try {
-        const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName);
+        const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
         if (!isMounted) return;
         if (metadata.title) setRealTitle(metadata.title);
         if (metadata.artist) setRealArtist(metadata.artist);
@@ -141,6 +144,7 @@ export const SongCard = React.memo(function SongCard({
       
     return () => { 
       isMounted = false; 
+      controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       window.removeEventListener('metadata-updated', handleMetadataUpdated);
     };
@@ -162,10 +166,8 @@ export const SongCard = React.memo(function SongCard({
           }
         }}
         onContextMenu={(e) => {
+          if (hideMenu) return;
           e.preventDefault();
-          window.dispatchEvent(new CustomEvent('locate-file', {
-            detail: { fileId: item.id, alreadyInCurrentFolder: true }
-          }));
           setContextMenuPos({ x: e.clientX, y: e.clientY });
           setIsContextMenuOpen(true);
         }}
@@ -190,7 +192,7 @@ export const SongCard = React.memo(function SongCard({
       )}
       <div className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-500' : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!bg-[#4285F4]/10 !text-[#4285F4]' : 'text-gray-400'}`}`}>
         {coverUrl && !item.isFolder ? (
-          <img src={coverUrl.startsWith('http://127') ? coverUrl + '&thumb=true' : coverUrl} alt="cover" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+          <img src={coverUrl} alt="cover" loading="lazy" decoding="async" className="w-full h-full object-cover" />
         ) : item.isFolder ? (
           <Folder className="w-6 h-6" fill="currentColor" />
         ) : (
@@ -225,28 +227,30 @@ export const SongCard = React.memo(function SongCard({
           )}
         </div>
       </div>
-      <div className={`transition-opacity ml-2 shrink-0 ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-        <MoreMenu 
-          track={item.trackInfo} 
-          driveItem={item} 
-          token={token}
-          currentFolderId={currentFolderId}
-          currentFolderName={currentFolderName}
-          folderHistory={folderHistory}
-          onRefresh={onRefresh}
-          onRemoveItem={onRemoveItem}
-          forceOpen={isContextMenuOpen}
-          onClose={() => {
-            setIsContextMenuOpen(false);
-            setContextMenuPos(null);
-          }}
-          anchorPoint={contextMenuPos}
-          onOpenChange={setIsThreeDotsMenuOpen}
-          onSelectMultiple={() => {
-            onEnableSelectionMode?.();
-          }}
-        />
-      </div>
+      {!hideMenu && (
+        <div className={`transition-opacity ml-2 shrink-0 ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+          <MoreMenu 
+            track={item.trackInfo} 
+            driveItem={item} 
+            token={token}
+            currentFolderId={currentFolderId}
+            currentFolderName={currentFolderName}
+            folderHistory={folderHistory}
+            onRefresh={onRefresh}
+            onRemoveItem={onRemoveItem}
+            forceOpen={isContextMenuOpen}
+            onClose={() => {
+              setIsContextMenuOpen(false);
+              setContextMenuPos(null);
+            }}
+            anchorPoint={contextMenuPos}
+            onOpenChange={setIsThreeDotsMenuOpen}
+            onSelectMultiple={() => {
+              onEnableSelectionMode?.();
+            }}
+          />
+        </div>
+      )}
     </div>
     </div>
   );

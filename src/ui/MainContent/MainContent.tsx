@@ -20,7 +20,7 @@ interface MainContentProps {
   onBreadcrumbClick: (id: string, name: string, index: number) => void;
   token: string | null;
   currentFolderId: string;
-  highlightedFileId?: {id: string, ts: number} | null;
+  highlightedFileId?: {id: string, ts: number, noScroll?: boolean} | null;
   onRefresh: () => void;
   onRemoveItem?: (id: string) => void;
   currentTrack?: Track | null;
@@ -64,7 +64,17 @@ export function MainContent({
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [isBulkOperating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isEditingPage, setIsEditingPage] = useState(false);
+  const [pageInputValue, setPageInputValue] = useState("");
+  const pageInputRef = React.useRef<HTMLInputElement>(null);
+  const itemsPerPage = 50;
   const mainRef = React.useRef<HTMLElement>(null);
+
+  // Reset page when folder, search, or sort changes
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [currentFolderId, searchQuery, sortOption]);
 
   // Reset highlight on folder change
   React.useEffect(() => {
@@ -98,13 +108,18 @@ export function MainContent({
   }, [currentFolderId]);
 
   React.useEffect(() => {
-    if (highlightedFileId && items.length > 0) {
+    if (highlightedFileId && items.length > 0 && !highlightedFileId.noScroll) {
       const filteredItemsForHighlight = items.filter(item => 
         item.title.toLowerCase().includes(searchQuery.toLowerCase())
       );
       const index = filteredItemsForHighlight.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
-        rowVirtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
+        const targetPage = Math.floor(index / itemsPerPage) + 1;
+        setCurrentPage(targetPage);
+        setTimeout(() => {
+          const indexInPage = index % itemsPerPage;
+          rowVirtualizer.scrollToIndex(indexInPage, { align: 'center', behavior: 'smooth' });
+        }, 50);
       }
     }
   }, [highlightedFileId, items, searchQuery]);
@@ -112,7 +127,9 @@ export function MainContent({
   const filteredItems = items.filter(item => 
     item.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
-  const currentItems = filteredItems;
+  
+  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
+  const currentItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   
   const rowVirtualizer = useVirtualizer({
     count: currentItems.length,
@@ -308,7 +325,7 @@ export function MainContent({
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 shrink-0">
             {/* Search Input */}
             <div className="relative">
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -443,7 +460,90 @@ export function MainContent({
         )}
       </div>
 
-      {/* Pagination removed - using Virtual Scrolling */}
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className={`sticky bottom-0 w-full flex justify-center items-end pb-0 pt-6 pointer-events-none ${isEditingPage ? 'z-50' : 'z-20'}`}>
+          <div className="flex items-center justify-center gap-3 sm:gap-6 pointer-events-auto pb-1 w-full max-w-[400px]">
+            <div className="flex justify-end">
+              <button 
+                disabled={currentPage === 1}
+                onClick={() => {
+                  setCurrentPage(p => p - 1);
+                  mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
+              >
+                {t('playlist.prev', 'Previous')}
+              </button>
+            </div>
+            
+            <div className="flex justify-center relative">
+              {isEditingPage && (
+                <div 
+                  className="fixed inset-0 cursor-default bg-transparent"
+                  style={{ zIndex: -1 }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsEditingPage(false);
+                  }}
+                />
+              )}
+              
+              <div 
+                className={`flex items-center text-sm font-medium text-gray-900 dark:text-white tracking-wider text-center drop-shadow-md transition-colors ${!isEditingPage ? 'cursor-pointer hover:text-[#4285F4]' : ''}`}
+                onClick={() => {
+                  if (!isEditingPage) {
+                    setIsEditingPage(true);
+                    setPageInputValue(currentPage.toString());
+                    setTimeout(() => pageInputRef.current?.focus(), 0);
+                  }
+                }}
+              >
+                <input
+                  ref={pageInputRef}
+                  type="text"
+                  readOnly={!isEditingPage}
+                  value={isEditingPage ? pageInputValue : currentPage}
+                  onChange={(e) => isEditingPage && setPageInputValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const newPage = parseInt(pageInputValue.trim(), 10);
+                      if (!isNaN(newPage) && newPage >= 1 && newPage <= totalPages) {
+                        setCurrentPage(newPage);
+                        mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                      setIsEditingPage(false);
+                    }
+                    if (e.key === 'Escape') {
+                      setIsEditingPage(false);
+                    }
+                  }}
+                  className={`text-right bg-transparent outline-none p-0 m-0 text-inherit font-inherit ${!isEditingPage ? 'cursor-pointer pointer-events-none' : ''}`}
+                  style={{ 
+                    width: `${Math.max(1, (isEditingPage ? pageInputValue : currentPage.toString()).length)}ch`,
+                    caretColor: isEditingPage ? 'inherit' : 'transparent' 
+                  }}
+                />
+                <span className="whitespace-pre"> / {totalPages}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-start">
+              <button 
+                disabled={currentPage === totalPages}
+                onClick={() => {
+                  setCurrentPage(p => p + 1);
+                  mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
+              >
+                {t('playlist.next', 'Next')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <BulkDeleteConfirmModal
         isOpen={showBulkDeleteConfirm}

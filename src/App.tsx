@@ -21,7 +21,10 @@ import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
-import { SettingsTab } from "./ui/Settings/SettingsTab";export type Track = {
+import { metadataCache } from "./utils/metadata";
+import { SettingsTab } from "./ui/Settings/SettingsTab";
+
+export type Track = {
   id: string;
   title: string;
   artist: string;
@@ -86,6 +89,21 @@ function App() {
     handleSelectRootFolder
   } = useDrive(isLoggedIn);
 
+  const [metadataVersion, setMetadataVersion] = useState(0);
+
+  useEffect(() => {
+    let timeout: any;
+    const handler = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => setMetadataVersion(v => v + 1), 500);
+    };
+    window.addEventListener('metadata-updated', handler);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener('metadata-updated', handler);
+    };
+  }, []);
+
   const {
     currentTrack,
     isPlaying,
@@ -138,8 +156,16 @@ function App() {
       if (!a.isFolder && b.isFolder) return 1;
       
       switch (sortOption) {
-        case 'name': return collator.compare(a.title, b.title);
-        case 'name desc': return collator.compare(b.title, a.title);
+        case 'name': {
+          const titleA = metadataCache[a.id]?.title || a.title;
+          const titleB = metadataCache[b.id]?.title || b.title;
+          return collator.compare(titleA, titleB);
+        }
+        case 'name desc': {
+          const titleA = metadataCache[a.id]?.title || a.title;
+          const titleB = metadataCache[b.id]?.title || b.title;
+          return collator.compare(titleB, titleA);
+        }
         case 'modifiedTime': {
           const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
           const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
@@ -162,10 +188,14 @@ function App() {
           if (diff === 0) return collator.compare(a.title, b.title);
           return diff;
         }
-        default: return collator.compare(a.title, b.title);
+        default: {
+          const titleA = metadataCache[a.id]?.title || a.title;
+          const titleB = metadataCache[b.id]?.title || b.title;
+          return collator.compare(titleA, titleB);
+        }
       }
     });
-  }, [dbFiles, sortOption, currentFolderName]);
+  }, [dbFiles, sortOption, currentFolderName, metadataVersion]);
 
   const handlePlayTrack = (track: Track, contextQueue?: Track[], isNavigation: boolean = false) => {
     playerPlayTrack(track, contextQueue, isNavigation, driveItems, activeTab);
@@ -174,7 +204,7 @@ function App() {
   const [showFolderSelection, setShowFolderSelection] = useState(false);
   const [scanMode, setScanMode] = useState<'fast' | 'full'>('fast');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [highlightedFileId, setHighlightedFileId] = useState<{id: string, ts: number} | null>(null);
+  const [highlightedFileId, setHighlightedFileId] = useState<{id: string, ts: number, noScroll?: boolean} | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(() => {
@@ -234,7 +264,7 @@ function App() {
       // If we already know it's in the current folder, skip API entirely!
       if (alreadyInCurrentFolder) {
         setActiveTab("My Drive");
-        setHighlightedFileId({id: fileId, ts: Date.now()});
+        setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
         setTimeout(() => setHighlightedFileId(null), 5000);
         return;
       }
@@ -261,7 +291,7 @@ function App() {
           pendingEnsuredFileId.current = fileId;
           setCurrentFolderId(parentId);
           setCurrentFolderName(folderName);
-          setHighlightedFileId({id: fileId, ts: Date.now()});
+          setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
 
           // Clear highlight after 5 seconds
           setTimeout(() => setHighlightedFileId(null), 5000);
@@ -290,7 +320,7 @@ function App() {
               pendingEnsuredFileId.current = fileId;
               setCurrentFolderId(parentId);
               setCurrentFolderName(folderName);
-              setHighlightedFileId({id: fileId, ts: Date.now()});
+              setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
               setTimeout(() => setHighlightedFileId(null), 5000);
               rebuildHistory(parentId);
             }
@@ -335,14 +365,22 @@ function App() {
       }
       
       const q = `'${folderId}' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or mimeType contains 'audio/')`;
-      const response = await fetchWithAuth(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,modifiedTime,size)&pageSize=1000`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      
+      let pageToken: string | undefined = undefined;
+      let allFiles: any[] = [];
+      let isFirstPage = true;
 
-      if (response.ok) {
+      do {
+        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=1000` + (pageToken ? `&pageToken=${pageToken}` : '');
+        const response = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
+
+        if (!response.ok) {
+          console.error("Failed to fetch page from drive API", response.status);
+          break;
+        }
+
         const data = await response.json();
-        if (data.files) {
+        if (data.files && data.files.length > 0) {
           const filesToInsert = data.files.map((file: any) => ({
             id: file.id,
             name: file.name,
@@ -354,20 +392,31 @@ function App() {
             isFolder: file.mimeType === "application/vnd.google-apps.folder"
           }));
           
-          if (filesToInsert.length > 0) {
-            await db.files.bulkPut(filesToInsert);
-          }
+          await db.files.bulkPut(filesToInsert);
+          allFiles = allFiles.concat(filesToInsert);
+        }
 
-          // Sync deletions: remove local files that are no longer in Google Drive
-          const fetchedIds = new Set(filesToInsert.map((f: any) => f.id));
-          const localFiles = await db.files.where('parentId').equals(folderId).toArray();
-          const idsToDelete = localFiles
-            .filter(f => !fetchedIds.has(f.id))
-            .map(f => f.id);
-            
-          if (idsToDelete.length > 0) {
-            await db.files.bulkDelete(idsToDelete);
-          }
+        pageToken = data.nextPageToken;
+        
+        // Hide loading spinner early if we have something to show
+        if (isFirstPage && pageToken && existingCount === 0) {
+          setIsLoadingTracks(false);
+        }
+        isFirstPage = false;
+        
+      } while (pageToken);
+
+      // Sync deletions: remove local files that are no longer in Google Drive
+      // Only do this if we successfully fetched the entire folder (loop finished without breaking early)
+      if (!pageToken) {
+        const fetchedIds = new Set(allFiles.map((f: any) => f.id));
+        const localFiles = await db.files.where('parentId').equals(folderId).toArray();
+        const idsToDelete = localFiles
+          .filter(f => !fetchedIds.has(f.id))
+          .map(f => f.id);
+          
+        if (idsToDelete.length > 0) {
+          await db.files.bulkDelete(idsToDelete);
         }
       }
     } catch (error) {
@@ -442,7 +491,12 @@ function App() {
 
           <div className="flex-1 relative overflow-hidden flex flex-col">
             {activeTab === "Home" ? (
-              <HomeTab onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} token={accessToken} />
+              <HomeTab 
+                onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} 
+                onOpenFolder={handleOpenFolder}
+                token={accessToken} 
+                userProfile={userProfile} 
+              />
             ) : activeTab === "My Drive" ? (
               <MainContent
                 activeTab={activeTab}
@@ -495,22 +549,21 @@ function App() {
               </main>
             )}
 
+            <div className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? 'h-0 overflow-hidden pointer-events-none opacity-0' : ''}`}>
+              <PlayerBar
+                currentTrack={currentTrack}
+                isPlaying={isPlaying}
+                onTogglePlay={handleTogglePlay}
+                onNextTrack={handleNextTrack}
+                onPrevTrack={handlePrevTrack}
+                isDownloading={isDownloading}
+                playMode={playMode}
+                onTogglePlayMode={handleTogglePlayMode}
+                onExpandNowPlaying={() => setIsNowPlayingOpen(prev => !prev)}
+                bufferSeconds={bufferSeconds}
+              />
+            </div>
           </div>
-        </div>
-
-        <div className={`transition-all duration-700 ease-in-out ${(!isLoggedIn || !appRootFolder) ? 'blur-xl opacity-40 pointer-events-none translate-y-4' : 'blur-0 opacity-100 translate-y-0'} ${isNowPlayingOpen ? 'h-0 overflow-hidden pointer-events-none opacity-0' : ''}`}>
-          <PlayerBar
-            currentTrack={currentTrack}
-            isPlaying={isPlaying}
-            onTogglePlay={handleTogglePlay}
-            onNextTrack={handleNextTrack}
-            onPrevTrack={handlePrevTrack}
-            isDownloading={isDownloading}
-            playMode={playMode}
-            onTogglePlayMode={handleTogglePlayMode}
-            onExpandNowPlaying={() => setIsNowPlayingOpen(true)}
-            bufferSeconds={bufferSeconds}
-          />
         </div>
         
         {/* Now Playing Full Screen Overlay */}

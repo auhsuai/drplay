@@ -8,6 +8,7 @@ import { isFavorite, addFavorite, removeFavorite } from '../../utils/favorites';
 import { MoreMenu } from '../components/MoreMenu';
 import { set as idbSet } from 'idb-keyval';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 
 const formatTime = (time: number) => {
@@ -65,9 +66,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const lastSaveTimeRef = useRef(0);
   const restoredAudioTrackIdRef = useRef<string | null>(null);
   const pendingBufferRestoreTimeRef = useRef<number | null>(null);
+  const lastValidBufferPercentRef = useRef(0);
 
   // Sync like status when track changes
   useEffect(() => {
+    lastValidBufferPercentRef.current = 0;
     if (currentTrack) {
       isFavorite(currentTrack.id).then(setIsLiked);
     }
@@ -132,7 +135,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           if (metadata.artist) setRealArtist(metadata.artist);
           
           if (metadata.coverUrl) {
-            setCoverUrl(metadata.coverUrl.startsWith('http://127') ? metadata.coverUrl + '&thumb=true' : metadata.coverUrl);
+            setCoverUrl(metadata.coverUrl);
           } else if (metadata.pictureData && metadata.pictureFormat) {
             const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
             objectUrl = URL.createObjectURL(blob);
@@ -155,9 +158,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, [currentTrack?.id, currentTrack?.streamUrl]);
 
   const onTogglePlayRef = useRef(onTogglePlay);
+  const onNextTrackRef = useRef(onNextTrack);
+  const onPrevTrackRef = useRef(onPrevTrack);
+  const onTogglePlayModeRef = useRef(onTogglePlayMode);
+  const onToggleNowPlayingRef = useRef(onExpandNowPlaying); // Assuming we change App.tsx to pass a toggle function
+
   useEffect(() => {
     onTogglePlayRef.current = onTogglePlay;
-  }, [onTogglePlay]);
+    onNextTrackRef.current = onNextTrack;
+    onPrevTrackRef.current = onPrevTrack;
+    onTogglePlayModeRef.current = onTogglePlayMode;
+    onToggleNowPlayingRef.current = onExpandNowPlaying;
+  }, [onTogglePlay, onNextTrack, onPrevTrack, onTogglePlayMode, onExpandNowPlaying]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -197,6 +209,31 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           e.preventDefault();
           setIsMuted(prev => !prev);
           break;
+        case 'n':
+        case 'N':
+          e.preventDefault();
+          onNextTrackRef.current();
+          break;
+        case 'p':
+        case 'P':
+          e.preventDefault();
+          onPrevTrackRef.current();
+          break;
+        case 's':
+        case 'S':
+          e.preventDefault();
+          onTogglePlayModeRef.current();
+          break;
+        case 'F11':
+          e.preventDefault();
+          if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(console.error);
+          } else {
+            if (document.exitFullscreen) {
+              document.exitFullscreen().catch(console.error);
+            }
+          }
+          break;
         case ' ':
           e.preventDefault();
           onTogglePlayRef.current();
@@ -215,8 +252,30 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, [volume, isMuted, currentTrack]);
 
   useEffect(() => {
+    const unlisten = listen("drive-quota-exceeded", () => {
+      setErrorText("Google Drive Limit: File temporary blocked (Quota Exceeded 403)");
+    });
+    return () => {
+      unlisten.then((f: () => void) => f());
+    };
+  }, []);
+
+  useEffect(() => {
     if (audioRef.current) {
+      const handleError = () => {
+        const err = audioRef.current?.error;
+        if (err) {
+          // E:4 often means Google Drive banned the user (403) or the network dropped.
+          // The Rust proxy emits "drive-quota-exceeded", so we don't need a diagnostic fetch here anymore.
+          if (err.code !== 4 || !errorText.includes("Google Drive Limit")) {
+             setErrorText(`Error: ${err.code} - ${err.message}`);
+          }
+          console.error("Audio playback error:", err);
+        }
+      };
+      
       if (isPlaying) {
+        audioRef.current.onerror = handleError;
         const playPromise = audioRef.current.play();
         if (playPromise !== undefined) {
           playPromise.catch((e) => console.error("Playback failed", e));
@@ -225,7 +284,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         audioRef.current.pause();
       }
     }
-  }, [isPlaying]);
+  }, [isPlaying, currentTrack]);
 
   const handleTimeUpdate = () => {
     if (audioRef.current && !isDraggingRef.current) {
@@ -250,7 +309,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       if (currentTrack) {
         updateTrackDuration(currentTrack.id, accurateDuration);
       }
+    }
+  };
 
+  const handleCanPlay = () => {
+    if (audioRef.current) {
       if (pendingBufferRestoreTimeRef.current !== null) {
         audioRef.current.currentTime = pendingBufferRestoreTimeRef.current;
         pendingBufferRestoreTimeRef.current = null;
@@ -311,28 +374,38 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       let newBufferedPercent = 0;
       try {
         const [basePos, dataLen, totalLen] = await invoke<[number, number, number | null]>("get_proxy_cache_status");
-        if (totalLen && totalLen > 0 && audioRef.current) {
-          const maxBufferedPos = basePos + dataLen;
-          const bufferedEndRatio = maxBufferedPos / totalLen;
-          const currentDuration = audioRef.current.duration || duration;
+        
+        let proxyBufferedPercent = lastValidBufferPercentRef.current;
+        const currentDuration = audioRef.current?.duration || duration;
+        
+        if (totalLen && totalLen > 0 && currentDuration > 0) {
+          const currentBufferBase = basePos;
+          const currentBufferLen = dataLen;
           
-          if (currentDuration > 0) {
-            const currentTime = audioRef.current.currentTime;
-            const maxAllowedTime = currentTime + bufferSeconds;
-            const maxAllowedRatio = maxAllowedTime / currentDuration;
-            newBufferedPercent = Math.min(100, Math.min(bufferedEndRatio, maxAllowedRatio) * 100);
-          } else {
-            newBufferedPercent = Math.min(100, bufferedEndRatio * 100);
+          const currentTime = audioRef.current?.currentTime || 0;
+          const currentTimeBytes = (currentTime / currentDuration) * totalLen;
+          
+          // Only update UI if the proxy's buffer is actually for our current playback position.
+          // If it's too far away (e.g. >3MB), the proxy is likely serving a background "sniffing" request!
+          if (Math.abs(currentBufferBase - currentTimeBytes) < 3 * 1024 * 1024) {
+            const rawBuffer = currentBufferBase + currentBufferLen;
+            const bufferedEndRatio = rawBuffer / totalLen;
+            proxyBufferedPercent = Math.min(100, Math.max(0, bufferedEndRatio * 100));
+            lastValidBufferPercentRef.current = proxyBufferedPercent;
           }
-        } else if (audioRef.current) {
-          // Fallback to HTML5 audio buffer
+        }
+
+        let html5BufferedPercent = 0;
+        if (audioRef.current) {
           const buffered = audioRef.current.buffered;
           const currentDuration = audioRef.current.duration || duration;
           if (currentDuration > 0 && buffered.length > 0) {
             const furthestBuffer = buffered.end(buffered.length - 1);
-            newBufferedPercent = Math.min(100, (furthestBuffer / currentDuration) * 100);
+            html5BufferedPercent = Math.min(100, (furthestBuffer / currentDuration) * 100);
           }
         }
+        
+        newBufferedPercent = Math.max(proxyBufferedPercent, html5BufferedPercent);
       } catch (e) {
         // Fallback if backend doesn't support command yet
         if (audioRef.current) {
@@ -468,8 +541,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const volumePercent = isMuted ? 0 : volume * 100;
 
   return (
-    <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-6 shrink-0 z-10 transition-colors duration-300 relative">
-      <div className="flex items-center gap-4 w-1/4 max-w-[25%] min-w-0">
+    <div className="h-20 bg-white dark:bg-[#202124] grid grid-cols-[1fr_auto_1fr] items-center px-6 shrink-0 z-10 transition-colors duration-300 relative gap-4">
+      {/* Track Info (Left) */}
+      <div className="flex items-center gap-4 min-w-0 pr-4">
         <div 
           className="flex items-center gap-4 flex-1 cursor-pointer group p-1 -ml-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors min-w-0"
           onClick={() => currentTrack && onExpandNowPlaying()}
@@ -526,53 +600,61 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       </div>
 
       {/* Center controls */}
-      <div className="flex-1 flex flex-col items-center justify-center max-w-[40%] relative z-10">
-        <div className="flex items-center gap-6 mb-1">
-          <button 
-            onClick={onPrevTrack}
-            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent"
-            disabled={!currentTrack}
-          >
-            <SkipBack className="w-5 h-5" />
-          </button>
-          
-          <button 
-            onClick={onTogglePlay}
-            className={`w-10 h-10 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
-            disabled={!currentTrack || isDownloading}
-          >
-            {isDownloading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : isPlaying ? (
-              <Pause className="w-5 h-5" />
-            ) : (
-              <Play className="w-5 h-5 ml-0.5" />
-            )}
-          </button>
+      <div className="flex flex-col items-center justify-center relative z-10 w-[340px] sm:w-[400px]">
+        <div className="grid grid-cols-3 w-full mb-1 items-center">
+          <div className="flex justify-end pr-4">
+            {/* Left spacer for perfect centering */}
+          </div>
 
-          <button 
-            onClick={onNextTrack}
-            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent"
-            disabled={!currentTrack}
-          >
-            <SkipForward className="w-5 h-5" />
-          </button>
-          
-          <div className="relative group flex items-center">
+          <div className="flex items-center justify-center gap-4 sm:gap-6">
             <button 
-              onClick={onTogglePlayMode}
-              className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent ml-2 ${playMode !== 'normal' ? 'text-[#4285F4] hover:bg-[#4285F4]/10' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'}`}
+              onClick={onPrevTrack}
+              className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
               disabled={!currentTrack}
             >
-              {playMode === 'shuffle' && <Shuffle className="w-5 h-5" />}
-              {playMode === 'repeat-all' && <Repeat className="w-5 h-5" />}
-              {playMode === 'repeat-one' && <Repeat1 className="w-5 h-5" />}
-              {playMode === 'normal' && <Repeat className="w-5 h-5 opacity-40" />}
+              <SkipBack className="w-5 h-5" />
             </button>
-            <div className="absolute top-full mt-3 left-1/2 -translate-x-1/2 bg-white dark:bg-[#2a2b2f] text-gray-800 dark:text-gray-200 text-xs py-1.5 px-3 rounded-md shadow-xl opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 font-medium">
-              {playMode === 'shuffle' ? 'Shuffle' : playMode === 'repeat-all' ? 'Repeat All' : playMode === 'repeat-one' ? 'Repeat One' : 'Normal Order'}
-              {/* Tooltip triangle */}
-              <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white dark:bg-[#2a2b2f] rotate-45"></div>
+            
+            <button 
+              onClick={onTogglePlay}
+              className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
+              disabled={!currentTrack || isDownloading}
+            >
+              {isDownloading ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : isPlaying ? (
+                <Pause className="w-5 h-5" />
+              ) : (
+                <Play className="w-5 h-5 ml-0.5" />
+              )}
+            </button>
+
+            <button 
+              onClick={onNextTrack}
+              className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+              disabled={!currentTrack}
+            >
+              <SkipForward className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="flex justify-start pl-2">
+            <div className="relative group flex items-center shrink-0">
+              <button 
+                onClick={onTogglePlayMode}
+                className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== 'normal' ? 'text-[#4285F4] hover:bg-[#4285F4]/10' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'}`}
+                disabled={!currentTrack}
+              >
+                {playMode === 'shuffle' && <Shuffle className="w-5 h-5" />}
+                {playMode === 'repeat-all' && <Repeat className="w-5 h-5" />}
+                {playMode === 'repeat-one' && <Repeat1 className="w-5 h-5" />}
+                {playMode === 'normal' && <Repeat className="w-5 h-5 opacity-40" />}
+              </button>
+              <div className="absolute top-full mt-3 left-1/2 -translate-x-1/2 bg-white dark:bg-[#2a2b2f] text-gray-800 dark:text-gray-200 text-xs py-1.5 px-3 rounded-md shadow-xl opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 font-medium">
+                {playMode === 'shuffle' ? 'Shuffle' : playMode === 'repeat-all' ? 'Repeat All' : playMode === 'repeat-one' ? 'Repeat One' : 'Normal Order'}
+                {/* Tooltip triangle */}
+                <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white dark:bg-[#2a2b2f] rotate-45"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -603,7 +685,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       </div>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-3 w-1/4 justify-end">
+      <div className="flex items-center gap-3 justify-end min-w-0 pl-4">
         {renderVolumeIcon()}
         <div 
           ref={volumeBarRef}
@@ -630,6 +712,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           onTimeUpdate={handleTimeUpdate}
           onProgress={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
+          onCanPlay={handleCanPlay}
           onEnded={() => {
             if (playMode === 'repeat-one') {
               if (audioRef.current) {
