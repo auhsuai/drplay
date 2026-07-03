@@ -51,6 +51,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const [isMuted, setIsMuted] = useState(false);
   const [isVolumeActive, setIsVolumeActive] = useState(false);
   const volumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerVolumeActive = () => {
     setIsVolumeActive(true);
     if (volumeTimeoutRef.current) clearTimeout(volumeTimeoutRef.current);
@@ -161,7 +162,80 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const onNextTrackRef = useRef(onNextTrack);
   const onPrevTrackRef = useRef(onPrevTrack);
   const onTogglePlayModeRef = useRef(onTogglePlayMode);
-  const onToggleNowPlayingRef = useRef(onExpandNowPlaying); // Assuming we change App.tsx to pass a toggle function
+  const onToggleNowPlayingRef = useRef(onExpandNowPlaying);
+  const isPlayingRef = useRef(isPlaying);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  // Media Session API Integration
+  useEffect(() => {
+    if ('mediaSession' in navigator && currentTrack) {
+      const artwork: MediaImage[] = [];
+      if (currentTrack.streamUrl) {
+        try {
+          const proxyUrl = new URL(currentTrack.streamUrl);
+          const thumbUrl = `${proxyUrl.protocol}//${proxyUrl.host}/cover?size=${currentTrack.size}&thumb=true`;
+          artwork.push({ src: thumbUrl, sizes: '512x512', type: 'image/jpeg' });
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: realTitle || currentTrack.title || currentTrack.originalName || 'Unknown Title',
+        artist: realArtist || currentTrack.artist || 'DrPlay',
+        artwork,
+      });
+
+      navigator.mediaSession.setActionHandler('play', () => onTogglePlayRef.current());
+      navigator.mediaSession.setActionHandler('pause', () => onTogglePlayRef.current());
+      navigator.mediaSession.setActionHandler('previoustrack', () => onPrevTrackRef.current());
+      navigator.mediaSession.setActionHandler('nexttrack', () => onNextTrackRef.current());
+    }
+
+    return () => {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.setActionHandler('play', null);
+        navigator.mediaSession.setActionHandler('pause', null);
+        navigator.mediaSession.setActionHandler('previoustrack', null);
+        navigator.mediaSession.setActionHandler('nexttrack', null);
+      }
+    };
+  }, [currentTrack, realTitle, realArtist]);
+
+  // Bluetooth / Device disconnect auto-pause
+  useEffect(() => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    
+    let lastDeviceCount = 0;
+    const checkDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
+        return audioOutputs.length;
+      } catch (e) {
+        return 0;
+      }
+    };
+
+    checkDevices().then(count => { lastDeviceCount = count; });
+
+    const handleDeviceChange = async () => {
+      const newCount = await checkDevices();
+      if (newCount < lastDeviceCount) {
+        // A device was removed (e.g. Bluetooth disconnected)
+        if (isPlayingRef.current) {
+          onTogglePlayRef.current();
+        }
+      }
+      lastDeviceCount = newCount;
+    };
+
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    return () => navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+  }, []);
 
   useEffect(() => {
     onTogglePlayRef.current = onTogglePlay;
@@ -271,20 +345,68 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
              setErrorText(`Error: ${err.code} - ${err.message}`);
           }
           console.error("Audio playback error:", err);
+          
+          // Auto-recover from sleep/network drop if it's a network error (code 2) or PIPELINE_ERROR
+          if (err.code === 2 || err.code === 3 || err.message?.includes("PIPELINE_ERROR")) {
+            setTimeout(() => {
+              if (audioRef.current && isPlaying) {
+                const savedTime = audioRef.current.currentTime;
+                audioRef.current.load();
+                audioRef.current.currentTime = savedTime;
+                setErrorText("");
+                const p = audioRef.current.play();
+                if (p !== undefined) p.catch(() => {});
+              }
+            }, 1500);
+          }
         }
       };
       
       if (isPlaying) {
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        if (audioRef.current.error) {
+          const savedTime = audioRef.current.currentTime;
+          audioRef.current.load();
+          audioRef.current.currentTime = savedTime;
+          setErrorText("");
+        }
         audioRef.current.onerror = handleError;
         const playPromise = audioRef.current.play();
         if (playPromise !== undefined) {
           playPromise.catch((e) => console.error("Playback failed", e));
         }
       } else {
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
         audioRef.current.pause();
       }
     }
   }, [isPlaying, currentTrack]);
+
+  // Sync Audio Focus (OS-level pause/play)
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleSystemPause = () => {
+      if (isPlayingRef.current) {
+        onTogglePlayRef.current(); 
+      }
+    };
+
+    const handleSystemPlay = () => {
+      if (!isPlayingRef.current) {
+        onTogglePlayRef.current();
+      }
+    };
+
+    audio.addEventListener('pause', handleSystemPause);
+    audio.addEventListener('play', handleSystemPlay);
+
+    return () => {
+      audio.removeEventListener('pause', handleSystemPause);
+      audio.removeEventListener('play', handleSystemPlay);
+    };
+  }, []);
 
   const handleTimeUpdate = () => {
     if (audioRef.current && !isDraggingRef.current) {
@@ -368,61 +490,81 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     return () => window.removeEventListener('beforeunload', saveSession);
   }, [currentTrack]);
 
-  // Bulletproof Interval to update buffer percent
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      let newBufferedPercent = 0;
-      try {
-        const [basePos, dataLen, totalLen] = await invoke<[number, number, number | null]>("get_proxy_cache_status");
-        
-        let proxyBufferedPercent = lastValidBufferPercentRef.current;
-        const currentDuration = audioRef.current?.duration || duration;
-        
-        if (totalLen && totalLen > 0 && currentDuration > 0) {
-          const currentBufferBase = basePos;
-          const currentBufferLen = dataLen;
-          
-          const currentTime = audioRef.current?.currentTime || 0;
-          const currentTimeBytes = (currentTime / currentDuration) * totalLen;
-          
-          // Only update UI if the proxy's buffer is actually for our current playback position.
-          // If it's too far away (e.g. >3MB), the proxy is likely serving a background "sniffing" request!
-          if (Math.abs(currentBufferBase - currentTimeBytes) < 3 * 1024 * 1024) {
-            const rawBuffer = currentBufferBase + currentBufferLen;
-            const bufferedEndRatio = rawBuffer / totalLen;
-            proxyBufferedPercent = Math.min(100, Math.max(0, bufferedEndRatio * 100));
-            lastValidBufferPercentRef.current = proxyBufferedPercent;
-          }
-        }
+  const latestBufferPayloadRef = useRef<{song_id: string, ranges: [number, number][], total_size: number} | null>(null);
 
-        let html5BufferedPercent = 0;
-        if (audioRef.current) {
-          const buffered = audioRef.current.buffered;
-          const currentDuration = audioRef.current.duration || duration;
-          if (currentDuration > 0 && buffered.length > 0) {
-            const furthestBuffer = buffered.end(buffered.length - 1);
-            html5BufferedPercent = Math.min(100, (furthestBuffer / currentDuration) * 100);
-          }
-        }
-        
-        newBufferedPercent = Math.max(proxyBufferedPercent, html5BufferedPercent);
-      } catch (e) {
-        // Fallback if backend doesn't support command yet
-        if (audioRef.current) {
-          const buffered = audioRef.current.buffered;
-          const currentDuration = audioRef.current.duration || duration;
-          if (currentDuration > 0 && buffered.length > 0) {
-            const furthestBuffer = buffered.end(buffered.length - 1);
-            newBufferedPercent = Math.min(100, (furthestBuffer / currentDuration) * 100);
-          }
+  const updateBufferUI = () => {
+    const audio = audioRef.current;
+    const currentDuration = audio?.duration || duration;
+    if (currentDuration <= 0) return;
+
+    const payload = latestBufferPayloadRef.current;
+    let proxyBufferedPercent = 0;
+    
+    if (payload && payload.song_id === currentTrackRef.current?.id && payload.total_size > 0) {
+      const currentTime = audio?.currentTime || 0;
+      const currentTimeBytes = (currentTime / currentDuration) * payload.total_size;
+
+      let sortedRanges = [...payload.ranges].sort((a, b) => a[0] - b[0]);
+      let leadingEdge = currentTimeBytes;
+      
+      for (const [start, end] of sortedRanges) {
+        if (start <= leadingEdge && end >= leadingEdge) {
+          leadingEdge = Math.max(leadingEdge, end);
+        } else if (start <= leadingEdge) {
+          leadingEdge = Math.max(leadingEdge, end);
+        } else if (start > leadingEdge) {
+          break; 
         }
       }
-      if (bufferFillRef.current) {
-        bufferFillRef.current.style.width = `${newBufferedPercent}%`;
+      
+      proxyBufferedPercent = (leadingEdge / payload.total_size) * 100;
+    }
+    
+    let html5BufferedPercent = 0;
+    if (audio) {
+      const buffered = audio.buffered;
+      if (buffered.length > 0) {
+        html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / currentDuration) * 100);
       }
-    }, 500);
-    return () => clearInterval(interval);
-  }, [duration, bufferSeconds]);
+    }
+    
+    const newPercent = Math.min(100, Math.max(0, Math.max(proxyBufferedPercent, html5BufferedPercent)));
+    if (bufferFillRef.current) {
+      bufferFillRef.current.style.width = `${newPercent}%`;
+    }
+  };
+
+  // Event-driven Buffer UI Update (No polling!)
+  useEffect(() => {
+    interface BufferPayload {
+      song_id: string;
+      ranges: [number, number][];
+      total_size: number;
+    }
+    
+    let isSubscribed = true;
+
+    // 1. Initial Fetch to handle already cached files
+    invoke<[string, [number, number][], number]>("get_proxy_cache_status")
+      .then(([song_id, ranges, total_size]) => {
+        if (!isSubscribed) return;
+        latestBufferPayloadRef.current = { song_id, ranges, total_size };
+        updateBufferUI();
+      })
+      .catch((e) => console.log("Initial proxy cache:", e));
+
+    // 2. Listen to active download events
+    const unlistenPromise = listen<BufferPayload>('buffer-progress', (event) => {
+      if (!isSubscribed) return;
+      latestBufferPayloadRef.current = event.payload;
+      updateBufferUI();
+    });
+
+    return () => {
+      isSubscribed = false;
+      unlistenPromise.then(f => f());
+    };
+  }, [currentTrack?.id, duration]);
 
   useEffect(() => {
     let lastTimeText = "";
@@ -491,9 +633,17 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       isDraggingRef.current = false;
       setIsDraggingUI(false);
       const finalTime = updateTime(upEvent.clientX);
-      if (audioRef.current) {
-        audioRef.current.currentTime = finalTime;
+      
+      // Debounce seek to prevent spamming network requests if user clicks rapidly
+      if (seekTimeoutRef.current) {
+        clearTimeout(seekTimeoutRef.current);
       }
+      seekTimeoutRef.current = setTimeout(() => {
+        if (audioRef.current) {
+          audioRef.current.currentTime = finalTime;
+        }
+      }, 250);
+
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };

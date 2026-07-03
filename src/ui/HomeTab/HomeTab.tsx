@@ -170,12 +170,19 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
                 <div 
                   key={folder.id}
                   onClick={() => onOpenFolder(folder.id, folder.name)}
-                  className="flex items-center gap-3 p-4 bg-gray-50 dark:bg-[#1a1b1e] hover:bg-gray-100 dark:hover:bg-[#25262a] rounded-xl cursor-pointer transition-colors shadow-sm active:scale-95 duration-200"
+                  className="p-3.5 rounded-2xl transition-all duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full bg-[#F8F9FA] dark:bg-[#202124] hover:bg-white dark:hover:bg-[#2a2b2f] hover:shadow-lg hover:shadow-black/5 hover:-translate-y-1"
                 >
-                  <div className="w-10 h-10 rounded-lg bg-[#4285F4]/10 dark:bg-[#4285F4]/20 flex items-center justify-center shrink-0">
-                    <Folder className="w-5 h-5 text-[#4285F4]" />
+                  <div className="relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
+                    <Folder className="w-6 h-6" fill="currentColor" />
                   </div>
-                  <span className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">{folder.name}</span>
+                  <div className="overflow-hidden flex-1 flex flex-col justify-center">
+                    <h3 className="font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4]">
+                      {folder.name}
+                    </h3>
+                    <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
+                      <span className="truncate">{t('drive.folders', 'Folders')}</span>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -271,7 +278,7 @@ function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onP
             </span>
           </div>
         ) : (
-          <div className="absolute bottom-3 right-3 w-11 h-11 bg-black dark:bg-white text-white dark:text-black rounded-full flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300">
+          <div className="absolute bottom-3 right-3 w-11 h-11 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-full flex items-center justify-center shadow-lg shadow-black/20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 hover:scale-105">
             <Play className="w-5 h-5 ml-1" fill="currentColor" />
           </div>
         )}

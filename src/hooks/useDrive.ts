@@ -64,6 +64,7 @@ export const useDrive = (isLoggedIn: boolean) => {
   }, [currentFolderId, currentFolderName, folderHistory, isLoggedIn, appRootFolder]);
 
   const handleOpenFolder = (folderId: string, folderName: string) => {
+    if (folderId === currentFolderId) return;
     setFolderHistory(prev => [...prev, { id: currentFolderId, name: currentFolderName }]);
     setCurrentFolderId(folderId);
     setCurrentFolderName(folderName);
@@ -87,12 +88,17 @@ export const useDrive = (isLoggedIn: boolean) => {
     setCurrentFolderName(name);
   };
 
-  const handleSelectRootFolder = (folderId: string) => {
+  const handleSelectRootFolder = async (folderId: string) => {
     localStorage.setItem("drplay_root_folder", folderId);
     setAppRootFolder(folderId);
     setCurrentFolderId(folderId);
     setCurrentFolderName("My Drive");
     setFolderHistory([]);
+    try {
+      await db.files.clear();
+    } catch (e) {
+      console.error("Failed to clear db", e);
+    }
   };
 
   return {

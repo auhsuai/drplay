@@ -160,7 +160,10 @@
     "name_asc": "A-Z",
     "name_desc": "Z-A",
     "modified_desc": "Mới nhất",
-    "modified_asc": "Cũ nhất"
+    "modified_asc": "Cũ nhất",
+    "name": "A-Z",
+    "date": "Ngày",
+    "size": "Kích thước"
   },
   "search_placeholder": "Tìm kiếm...",
   "loading": "Đang tải..."

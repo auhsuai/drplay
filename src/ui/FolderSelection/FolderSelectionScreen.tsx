@@ -17,11 +17,16 @@ interface FolderSelectionScreenProps {
   initialFolderHistory?: {id: string, name: string}[];
   title?: string;
   subtitle?: string;
+  appRootFolder?: string | null;
 }
 
-export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = 'root', initialFolderName, initialFolderHistory = [], title, subtitle }: FolderSelectionScreenProps) {
+export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = 'root', initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder }: FolderSelectionScreenProps) {
   const { t } = useTranslation();
-  const [currentFolderId, setCurrentFolderId] = useState(initialFolderId);
+  
+  // Resolve appRootFolder from props or localStorage
+  const resolvedAppRoot = appRootFolder || localStorage.getItem("drplay_root_folder");
+  
+  const [currentFolderId, setCurrentFolderId] = useState(initialFolderId === 'root' && resolvedAppRoot ? resolvedAppRoot : initialFolderId);
   const [currentFolderName, setCurrentFolderName] = useState(initialFolderName || t('drive.my_drive'));
   const [folderHistory, setFolderHistory] = useState<{id: string, name: string}[]>(initialFolderHistory);
   const [folders, setFolders] = useState<FolderItem[]>([]);
@@ -81,7 +86,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
       return;
     }
 
-    if (currentFolderId === 'root') return;
+    if (currentFolderId === 'root' || (resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
 
     setIsLoading(true);
     try {
@@ -119,8 +124,8 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const handleBreadcrumbClick = (index: number) => {
     if (index === -1) {
       setFolderHistory([]);
-      setCurrentFolderId('root');
-      setCurrentFolderName('My Drive');
+      setCurrentFolderId(resolvedAppRoot || 'root');
+      setCurrentFolderName(initialFolderName || t('drive.my_drive'));
       return;
     }
     const target = folderHistory[index];
@@ -164,7 +169,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50 overflow-x-auto whitespace-nowrap hide-scrollbar">
           <button 
             onClick={handleBack}
-            disabled={folderHistory.length === 0 && currentFolderId === 'root'}
+            disabled={folderHistory.length === 0 && (currentFolderId === 'root' || currentFolderId === resolvedAppRoot)}
             className="p-1.5 mr-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4 text-gray-700 dark:text-gray-300" />

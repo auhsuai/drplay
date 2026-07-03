@@ -11,10 +11,21 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use url::Url;
 
+use tokio::sync::{RwLock, Mutex, Notify};
+use crate::{DownloadState, SegmentedCache};
+
 #[derive(Clone)]
 pub struct AppState {
     pub client: Client,
     pub app_handle: AppHandle,
+}
+
+#[derive(Deserialize)]
+#[derive(Clone, serde::Serialize)]
+struct BufferPayload {
+    song_id: String,
+    ranges: Vec<(usize, usize)>,
+    total_size: usize,
 }
 
 #[derive(Deserialize)]
@@ -29,6 +40,26 @@ pub struct StreamQuery {
 pub struct CoverQuery {
     pub size: i64,
     pub thumb: Option<bool>,
+}
+
+fn merge_ranges(ranges: &mut Vec<(usize, usize)>, new_start: usize, new_end: usize) {
+    ranges.push((new_start, new_end));
+    ranges.sort_by_key(|&(s, _)| s);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for range in ranges.drain(..) {
+        if merged.is_empty() {
+            merged.push(range);
+        } else {
+            let last_idx = merged.len() - 1;
+            let last = &mut merged[last_idx];
+            if range.0 <= last.1 + 1 {
+                last.1 = last.1.max(range.1);
+            } else {
+                merged.push(range);
+            }
+        }
+    }
+    *ranges = merged;
 }
 
 pub async fn handle_stream(
@@ -63,303 +94,304 @@ pub async fn handle_stream(
         }
     }
 
-    let mut chunk_size = 2 * 1024 * 1024; // default 2MB chunk
-    if let Some(buf_sec) = query.buffer {
-        let bps = if let Some(b) = query.bitrate { b / 8.0 } else { 320000.0 / 8.0 };
-        chunk_size = (bps * buf_sec) as usize;
-        chunk_size = chunk_size.max(512 * 1024).min(50 * 1024 * 1024);
-    }
-
-    // --- SNIFFING DETECTION ---
-    // A request is considered a metadata "sniff" if it explicitly requests an end_pos,
-    // and the requested size is < 1MB. Chromium usually sniffs very small chunks at the end of the file.
     let is_sniffing = has_range && end_pos.is_some() && (end_pos.unwrap() - start_pos < 1024 * 1024);
 
-    // --- CHECK CACHE ---
-    let mut use_cache = false;
-    let mut cache_clone = None;
-    let mut c_type = String::new();
-    let mut t_size = 0;
-    let mut c_base = 0;
-    let mut c_chunk = 0;
-    let mut c_notify = None;
-    let mut c_error = None;
+    if is_sniffing {
+        let mut req = state
+            .client
+            .get(format!(
+                "https://www.googleapis.com/drive/v3/files/{}?alt=media",
+                query.id
+            ))
+            .header("Authorization", format!("Bearer {}", final_token));
 
-    if !is_sniffing {
-        if let Ok(guard) = crate::GLOBAL_STREAM_CACHE.lock() {
-        if let Some(ref cache) = *guard {
-            if cache.file_id == query.id && start_pos >= cache.base_pos {
-                let cache_len = cache.data.lock().unwrap().len();
-                let finished = crate::CURRENT_DOWNLOAD_FINISHED.load(std::sync::atomic::Ordering::SeqCst);
-                
-                // If download is finished, we can ONLY use the cache if we are strictly within the downloaded bytes.
-                // Otherwise, the cache is exhausted and we MUST fetch a new chunk.
-                // If the download is NOT finished, we can use the cache as long as it's within the expected chunk_size bounds.
-                if (!finished && start_pos <= cache.base_pos + cache.chunk_size) || (finished && start_pos < cache.base_pos + cache_len) {
-                    use_cache = true;
-                    cache_clone = Some(cache.data.clone());
-                    c_type = cache.content_type.clone();
-                    t_size = cache.total_file_size;
-                    c_base = cache.base_pos;
-                    c_chunk = cache.chunk_size;
-                    c_notify = Some(cache.notify.clone());
-                    c_error = Some(cache.error.clone());
-                }
-            }
-        }
-        }
-    }
-
-    if use_cache {
-        let mut builder = Response::builder().status(StatusCode::PARTIAL_CONTENT);
-        builder = builder.header(header::ACCEPT_RANGES, "bytes");
-        builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
-        builder = builder.header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Range");
-        builder = builder.header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "Content-Length, Content-Range");
-        if !c_type.is_empty() {
-            builder = builder.header(header::CONTENT_TYPE, c_type);
-        }
-        
-        // CRITICAL: We MUST cap fetch_end at the MAXIMUM POSSIBLE bytes this cache will ever hold!
-        let actual_cache_len = cache_clone.as_ref().unwrap().lock().unwrap().len();
-        let is_finished = crate::CURRENT_DOWNLOAD_FINISHED.load(std::sync::atomic::Ordering::SeqCst);
-        let cache_max_end = if is_finished {
-            if actual_cache_len > 0 { c_base + actual_cache_len - 1 } else { c_base }
-        } else {
-            c_base + c_chunk - 1
-        };
-        
-        let requested_end = end_pos.unwrap_or(start_pos + chunk_size - 1);
-        
-        let fetch_end = requested_end.min(cache_max_end).min(if t_size > 0 { t_size - 1 } else { usize::MAX });
-        let content_length = fetch_end - start_pos + 1;
-        
-        if t_size > 0 {
-            builder = builder.header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start_pos, fetch_end, t_size));
-        } else {
-            builder = builder.header(header::CONTENT_RANGE, format!("bytes {}-{}/*", start_pos, fetch_end));
-        }
-        builder = builder.header(header::CONTENT_LENGTH, content_length.to_string());
-        
-        let rx_stream = async_stream::stream! {
-            let mut pos = start_pos - c_base;
-            let cache_data = cache_clone.unwrap();
-            let notify = c_notify.unwrap();
-            let error_flag = c_error.unwrap();
-            let mut read_bytes = 0;
-            loop {
-                let mut chunk = None;
-                let mut wait_for_data = false;
-
-                if let Ok(cache) = cache_data.lock() {
-                    if pos < cache.len() {
-                        let available = cache.len() - pos;
-                        let remaining = content_length - read_bytes;
-                        let read_len = available.min(remaining).min(65536);
-                        
-                        if read_len > 0 {
-                            let end = pos + read_len;
-                            chunk = Some(axum::body::Bytes::copy_from_slice(&cache[pos..end]));
-                            pos = end;
-                            read_bytes += read_len;
-                        }
-                    } else {
-                        let finished = crate::CURRENT_DOWNLOAD_FINISHED.load(std::sync::atomic::Ordering::SeqCst);
-                        let error = error_flag.load(std::sync::atomic::Ordering::SeqCst);
-                        if finished || error {
-                            break;
-                        }
-                        wait_for_data = true;
-                    }
-                }
-                
-                if read_bytes >= content_length {
-                    break;
-                }
-                
-                if let Some(c) = chunk {
-                    yield Ok::<_, std::io::Error>(c);
-                } else if wait_for_data {
-                    notify.notified().await;
-                } else {
-                    break;
-                }
-            }
-        };
-        
-        let body = axum::body::Body::from_stream(rx_stream);
-        return builder.body(body).unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response());
-    }
-    // --- END CACHE ---
-
-    let mut req = state
-        .client
-        .get(format!(
-            "https://www.googleapis.com/drive/v3/files/{}?alt=media",
-            query.id
-        ))
-        .header("Authorization", format!("Bearer {}", final_token));
-
-    if has_range {
-        let fetch_end = end_pos.unwrap_or(start_pos + chunk_size - 1);
+        let fetch_end = end_pos.unwrap_or(start_pos + 512 * 1024);
         req = req.header(header::RANGE, format!("bytes={}-{}", start_pos, fetch_end));
+        
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.as_u16() == 401 { let _ = state.app_handle.emit("token-expired", ()); }
+                let mut builder = Response::builder().status(status);
+                for h in &[header::CONTENT_TYPE, header::CONTENT_RANGE, header::CONTENT_LENGTH, header::ACCEPT_RANGES] {
+                    if let Some(v) = resp.headers().get(h) {
+                        builder = builder.header(h, v);
+                    }
+                }
+                return builder.body(axum::body::Body::from_stream(resp.bytes_stream())).unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed").into_response());
+            },
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Proxy error").into_response()
+        }
     }
 
-    match req.send().await {
-        Ok(resp) => {
-            let status = resp.status();
-            
-            if status.as_u16() == 401 {
-                let _ = state.app_handle.emit("token-expired", ());
-            } else if status.as_u16() == 403 || status.as_u16() == 429 {
-                let _ = state.app_handle.emit("drive-quota-exceeded", ());
+    let mut need_new_cache = false;
+    let mut cache_opt: Option<Arc<crate::SegmentedCache>> = None;
+
+    if let Ok(mut global) = crate::GLOBAL_STREAM_CACHE.lock() {
+        if let Some(ref cache) = *global {
+            if cache.file_id == query.id {
+                cache_opt = Some(cache.clone());
+            } else {
+                if let Ok(mut task_guard) = cache.current_task.lock() {
+                    if let Some(task) = task_guard.take() {
+                        task.abort();
+                        println!("drplay: Aborted previous download task for file {}", cache.file_id);
+                    }
+                }
+                need_new_cache = true;
             }
+        } else {
+            need_new_cache = true;
+        }
+    }
 
-            let mut builder = Response::builder().status(status);
-
-            builder = builder.header(header::ACCEPT_RANGES, "bytes");
-            builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
-            builder = builder.header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Range");
-            builder = builder.header(
-                header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                "Content-Length, Content-Range",
-            );
-
-            let mut c_type = String::new();
+    if need_new_cache {
+        let req = state.client.get(format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", query.id))
+            .header("Authorization", format!("Bearer {}", final_token))
+            .header("Range", "bytes=0-0");
+            
+        if let Ok(resp) = req.send().await {
+            if resp.status().as_u16() == 401 { let _ = state.app_handle.emit("token-expired", ()); }
+            let c_type = resp.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
             let mut t_size = 0;
-
-            if let Some(ct) = resp.headers().get(header::CONTENT_TYPE) {
-                builder = builder.header(header::CONTENT_TYPE, ct);
-                if let Ok(ct_str) = ct.to_str() {
-                    c_type = ct_str.to_string();
-                }
-            }
-            if let Some(cr) = resp.headers().get(header::CONTENT_RANGE) {
-                builder = builder.header(header::CONTENT_RANGE, cr);
-                if let Ok(cr_str) = cr.to_str() {
-                    if let Some(slash_idx) = cr_str.find('/') {
-                        if let Ok(total) = cr_str[slash_idx + 1..].parse::<usize>() {
-                            crate::CURRENT_FILE_SIZE.store(total, std::sync::atomic::Ordering::SeqCst);
-                            t_size = total;
-                        }
+            if let Some(cr) = resp.headers().get(header::CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
+                if let Some(slash_idx) = cr.find('/') {
+                    if let Ok(total) = cr[slash_idx + 1..].parse::<usize>() {
+                        t_size = total;
                     }
                 }
             }
-            if let Some(cl) = resp.headers().get(header::CONTENT_LENGTH) {
-                builder = builder.header(header::CONTENT_LENGTH, cl);
-                if t_size == 0 {
-                    if let Ok(cl_str) = cl.to_str() {
-                        if let Ok(total) = cl_str.parse::<usize>() {
-                            crate::CURRENT_FILE_SIZE.store(total, std::sync::atomic::Ordering::SeqCst);
-                            t_size = total;
-                        }
-                    }
-                }
-            }
-
-            if is_sniffing {
-                let body = axum::body::Body::from_stream(resp.bytes_stream());
-                return builder.body(body).unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response());
-            }
-
-            // Create new cache
-            use std::sync::{Arc, Mutex};
-            use std::sync::atomic::AtomicBool;
-            use tokio::sync::Notify;
-
-            let cache_data = Arc::new(Mutex::new(Vec::with_capacity(chunk_size)));
-            let cache_data_clone = cache_data.clone();
+            crate::CURRENT_FILE_SIZE.store(t_size, std::sync::atomic::Ordering::SeqCst);
             
-            let notify = Arc::new(Notify::new());
-            let notify_clone = notify.clone();
-
-            let error_flag = Arc::new(AtomicBool::new(false));
-            let error_flag_clone = error_flag.clone();
-            
-            // Store it globally
-            if let Ok(mut global) = crate::GLOBAL_STREAM_CACHE.lock() {
-                *global = Some(crate::StreamCache {
+            if t_size > 0 {
+                let new_cache = Arc::new(crate::SegmentedCache {
                     file_id: query.id.clone(),
-                    base_pos: start_pos,
-                    data: cache_data.clone(),
                     content_type: c_type,
+                    bitrate: query.bitrate,
                     total_file_size: t_size,
-                    chunk_size: chunk_size,
-                    notify: notify.clone(),
-                    error: error_flag.clone(),
+                    buffer: Arc::new(RwLock::new(std::collections::HashMap::new())),
+                    filled_ranges: Arc::new(RwLock::new(Vec::new())),
+                    download_state: Arc::new(RwLock::new(crate::DownloadState::Idle)),
+                    notify: Arc::new(Notify::new()),
+                    current_task: Arc::new(std::sync::Mutex::new(None)),
                 });
-            }
-
-            crate::CURRENT_BUFFER_BASE.store(start_pos, std::sync::atomic::Ordering::SeqCst);
-            crate::CURRENT_BUFFER_LEN.store(0, std::sync::atomic::Ordering::SeqCst);
-            crate::CURRENT_DOWNLOAD_FINISHED.store(false, std::sync::atomic::Ordering::SeqCst);
-
-            let mut stream = resp.bytes_stream();
-            tokio::spawn(async move {
-                use futures_util::StreamExt;
-                let mut current_len = 0;
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(bytes) => {
-                            let len = bytes.len();
-                            if let Ok(mut cache) = cache_data_clone.lock() {
-                                cache.extend_from_slice(&bytes);
-                            }
-                            current_len += len;
-                            crate::CURRENT_BUFFER_LEN.store(current_len, std::sync::atomic::Ordering::SeqCst);
-                            notify_clone.notify_waiters();
-                        },
-                        Err(_) => {
-                            error_flag_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                            break;
-                        }
-                    }
+                
+                if let Ok(mut global) = crate::GLOBAL_STREAM_CACHE.lock() {
+                    *global = Some(new_cache.clone());
                 }
-                crate::CURRENT_DOWNLOAD_FINISHED.store(true, std::sync::atomic::Ordering::SeqCst);
-                notify_clone.notify_waiters();
-            });
+                cache_opt = Some(new_cache);
+            }
+        }
+    }
 
-            let rx_stream = async_stream::stream! {
-                let mut pos = 0;
-                loop {
-                    let mut chunk = None;
-                    let mut wait_for_data = false;
+    let cache = match cache_opt {
+        Some(c) => c,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to initialize cache").into_response(),
+    };
 
-                    if let Ok(cache) = cache_data.lock() {
-                        if pos < cache.len() {
-                            let end = (pos + 65536).min(cache.len());
-                            chunk = Some(axum::body::Bytes::copy_from_slice(&cache[pos..end]));
-                            pos = end;
-                        } else {
-                            let finished = crate::CURRENT_DOWNLOAD_FINISHED.load(std::sync::atomic::Ordering::SeqCst);
-                            let error = error_flag.load(std::sync::atomic::Ordering::SeqCst);
-                            if finished || error {
-                                break;
-                            }
-                            wait_for_data = true;
-                        }
+    let fetch_end = end_pos.unwrap_or(cache.total_file_size - 1).min(cache.total_file_size - 1);
+    let content_length = fetch_end - start_pos + 1;
+
+    let mut needs_fetch = true;
+    {
+        let ranges = cache.filled_ranges.read().await;
+        for &(r_start, r_end) in ranges.iter() {
+            if start_pos >= r_start && start_pos <= r_end {
+                if fetch_end <= r_end {
+                    needs_fetch = false;
+                }
+            }
+        }
+    }
+
+    if needs_fetch {
+        {
+            if let Ok(mut task_guard) = cache.current_task.lock() {
+                if let Some(task) = task_guard.take() {
+                    task.abort();
+                }
+            }
+        }
+        
+        let client = state.client.clone();
+        let file_id = cache.file_id.clone();
+        let token = final_token.clone();
+        let cache_clone = cache.clone();
+        let app_handle = state.app_handle.clone();
+        let target_start = start_pos;
+        let target_end = cache.total_file_size - 1; // Fetch to the end, abort handles cancellation later
+        
+        *cache.download_state.write().await = crate::DownloadState::Downloading;
+
+        let task = tokio::spawn(async move {
+            let _permit = match crate::DRIVE_API_SEMAPHORE.acquire().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+
+            let req = client.get(format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", file_id))
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Range", format!("bytes={}-{}", target_start, target_end));
+            
+            match req.send().await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    if status == 401 { let _ = app_handle.emit("token-expired", ()); }
+                    if status == 403 || status == 429 { let _ = app_handle.emit("drive-quota-exceeded", ()); }
+                    
+                    if !resp.status().is_success() {
+                        *cache_clone.download_state.write().await = crate::DownloadState::Failed(format!("HTTP {}", status));
+                        cache_clone.notify.notify_waiters();
+                        return;
                     }
                     
-                    if let Some(c) = chunk {
-                        yield Ok::<_, std::io::Error>(c);
-                    } else if wait_for_data {
-                        notify.notified().await;
-                    } else {
+                    if let Some(cr) = resp.headers().get(header::CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
+                        if !cr.starts_with(&format!("bytes {}-", target_start)) {
+                            *cache_clone.download_state.write().await = crate::DownloadState::Failed("Invalid Content-Range".into());
+                            cache_clone.notify.notify_waiters();
+                            return;
+                        }
+                    }
+
+                    use futures_util::StreamExt;
+                    let mut stream = resp.bytes_stream();
+                    let mut current_offset = target_start;
+                    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+                    
+                    while let Some(chunk) = stream.next().await {
+                        match chunk {
+                            Ok(bytes) => {
+                                let mut b_offset = 0;
+                                let mut remaining = bytes.len();
+                                
+                                {
+                                    let mut buf = cache_clone.buffer.write().await;
+                                    while remaining > 0 {
+                                        let page_idx = (current_offset + b_offset) / CHUNK_SIZE;
+                                        let page_offset = (current_offset + b_offset) % CHUNK_SIZE;
+                                        let write_len = remaining.min(CHUNK_SIZE - page_offset);
+                                        
+                                        let page = buf.entry(page_idx).or_insert_with(|| vec![0u8; CHUNK_SIZE]);
+                                        page[page_offset..page_offset + write_len].copy_from_slice(&bytes[b_offset..b_offset + write_len]);
+                                        
+                                        b_offset += write_len;
+                                        remaining -= write_len;
+                                    }
+                                }
+                                
+                                let len = bytes.len();
+                                {
+                                    let mut ranges = cache_clone.filled_ranges.write().await;
+                                    merge_ranges(&mut ranges, current_offset, current_offset + len - 1);
+                                }
+                                current_offset += len;
+                                cache_clone.notify.notify_waiters();
+                            },
+                            Err(e) => {
+                                *cache_clone.download_state.write().await = crate::DownloadState::Failed(e.to_string());
+                                cache_clone.notify.notify_waiters();
+                                return;
+                            }
+                        }
+                    }
+                    let ranges = cache_clone.filled_ranges.read().await.clone();
+                    let _ = app_handle.emit("buffer-progress", BufferPayload {
+                        song_id: cache_clone.file_id.clone(),
+                        ranges,
+                        total_size: cache_clone.total_file_size,
+                    });
+                    *cache_clone.download_state.write().await = crate::DownloadState::Completed;
+                    cache_clone.notify.notify_waiters();
+                },
+                Err(e) => {
+                    *cache_clone.download_state.write().await = crate::DownloadState::Failed(e.to_string());
+                    cache_clone.notify.notify_waiters();
+                }
+            }
+        });
+        
+        if let Ok(mut task_guard) = cache.current_task.lock() {
+            *task_guard = Some(task);
+        }
+    }
+
+    let mut builder = Response::builder().status(StatusCode::PARTIAL_CONTENT);
+    builder = builder.header(header::ACCEPT_RANGES, "bytes");
+    builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+    builder = builder.header(header::CONTENT_TYPE, cache.content_type.clone());
+    builder = builder.header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start_pos, fetch_end, cache.total_file_size));
+    builder = builder.header(header::CONTENT_LENGTH, content_length.to_string());
+
+    let rx_stream = async_stream::stream! {
+        let mut pos = start_pos;
+        const CHUNK_SIZE: usize = 1024 * 1024;
+        
+        loop {
+            if pos > fetch_end { break; }
+            
+            let mut chunk = None;
+            let mut wait_for_data = false;
+            let mut should_abort = false;
+            let mut error_msg = None;
+            
+            {
+                let ranges = cache.filled_ranges.read().await;
+                let mut available_end = pos;
+                for &(r_start, r_end) in ranges.iter() {
+                    if pos >= r_start && pos <= r_end {
+                        available_end = r_end + 1;
                         break;
                     }
                 }
-            };
+                
+                if available_end > pos {
+                    let page_idx = pos / CHUNK_SIZE;
+                    let page_offset = pos % CHUNK_SIZE;
+                    let max_read_in_page = CHUNK_SIZE - page_offset;
+                    let read_len = (available_end - pos).min(65536).min(max_read_in_page).min(fetch_end - pos + 1);
+                    
+                    if read_len > 0 {
+                        let buf = cache.buffer.read().await;
+                        if let Some(page) = buf.get(&page_idx) {
+                            chunk = Some(axum::body::Bytes::copy_from_slice(&page[page_offset..page_offset + read_len]));
+                            pos += read_len;
+                        } else {
+                            should_abort = true;
+                            error_msg = Some("Missing page in cache despite filled_ranges".to_string());
+                        }
+                    }
+                } else {
+                    let state = cache.download_state.read().await;
+                    match *state {
+                        crate::DownloadState::Failed(ref err) => {
+                            should_abort = true;
+                            error_msg = Some(err.clone());
+                        },
+                        crate::DownloadState::Completed => {
+                            should_abort = true;
+                        },
+                        _ => {
+                            wait_for_data = true;
+                        }
+                    }
+                }
+            }
+            
+            if should_abort {
+                println!("Abort stream: {:?}", error_msg);
+                yield Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Stream aborted"));
+                break;
+            }
+            
+            if let Some(c) = chunk {
+                yield Ok::<_, std::io::Error>(c);
+            } else if wait_for_data {
+                cache.notify.notified().await;
+            }
+        }
+    };
 
-            let body = axum::body::Body::from_stream(rx_stream);
-            builder.body(body).unwrap_or_else(|_| {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response()
-            })
-        }
-        Err(e) => {
-            println!("Proxy stream error: {:?}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Proxy error").into_response()
-        }
-    }
+    builder.body(axum::body::Body::from_stream(rx_stream)).unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed").into_response())
 }
 
 pub async fn handle_cover(

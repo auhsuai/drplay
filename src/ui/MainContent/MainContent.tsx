@@ -1,15 +1,16 @@
 import React, { useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Track, DriveItem } from "../../App";
-import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput, ArrowUpDown } from "lucide-react";
+import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput, ArrowUpDown, ArrowUp, ArrowDown, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { deleteFile, moveFile } from "../../utils/driveApi";
+import { useLiveQuery } from 'dexie-react-hooks';
 
 
 interface MainContentProps {
   activeTab: string;
-  onPlay: (track: Track) => void;
+  onPlay: (track: Track, contextQueue?: Track[]) => void;
   items: DriveItem[];
   isLoading: boolean;
   onOpenFolder: (id: string, name: string) => void;
@@ -55,6 +56,10 @@ export function MainContent({
   onSortChange
 }: MainContentProps) {
   const { t } = useTranslation();
+  const isInitialMount = React.useRef(true);
+  React.useEffect(() => {
+    isInitialMount.current = false;
+  }, []);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [showSortMenu, setShowSortMenu] = useState(false);
@@ -76,9 +81,9 @@ export function MainContent({
     setCurrentPage(1);
   }, [currentFolderId, searchQuery, sortOption]);
 
-  // Reset highlight on folder change
+  // Reset highlight and search on folder change
   React.useEffect(() => {
-    // any extra folder change logic can go here
+    setSearchQuery("");
   }, [currentFolderId]);
 
   React.useEffect(() => {
@@ -107,11 +112,46 @@ export function MainContent({
     }
   }, [currentFolderId]);
 
+  const globalSearchItemsRaw = useLiveQuery(() => {
+    if (!searchQuery) return [];
+    const query = searchQuery.toLowerCase();
+    return db.files.filter(f => f.name.toLowerCase().includes(query)).toArray();
+  }, [searchQuery]);
+
+  const globalSearchItems = React.useMemo(() => {
+    if (!globalSearchItemsRaw) return [];
+    
+    const mapped = globalSearchItemsRaw.map(file => {
+      const title = file.isFolder ? file.name : file.name.replace(/\.[^/.]+$/, "");
+      return {
+        id: file.id,
+        title,
+        isFolder: file.isFolder,
+        size: file.size,
+        modifiedTime: file.modifiedTime,
+        trackInfo: file.isFolder ? undefined : {
+          id: file.id,
+          title,
+          artist: "",
+          streamUrl: "",
+          size: file.size,
+          originalName: file.name,
+          parentId: file.parentId,
+          parentName: "Search Result",
+        }
+      };
+    });
+    
+    return mapped.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      return a.title.localeCompare(b.title, undefined, { numeric: true });
+    });
+  }, [globalSearchItemsRaw]);
+
   React.useEffect(() => {
     if (highlightedFileId && items.length > 0 && !highlightedFileId.noScroll) {
-      const filteredItemsForHighlight = items.filter(item => 
-        item.title.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+      const filteredItemsForHighlight = searchQuery ? (globalSearchItems || []) : items;
       const index = filteredItemsForHighlight.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
         const targetPage = Math.floor(index / itemsPerPage) + 1;
@@ -122,12 +162,9 @@ export function MainContent({
         }, 50);
       }
     }
-  }, [highlightedFileId, items, searchQuery]);
+  }, [highlightedFileId, items, searchQuery, globalSearchItems]);
 
-  const filteredItems = items.filter(item => 
-    item.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  
+  const filteredItems = searchQuery ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
   const currentItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   
@@ -220,13 +257,13 @@ export function MainContent({
     }
   };
 
+  const baseSortOption = sortOption.replace(' desc', '');
   const sortOptions = [
-    { id: 'name', label: t('sort.name_asc', 'Tên File (A-Z)') },
-    { id: 'name desc', label: t('sort.name_desc', 'Tên File (Z-A)') },
-    { id: 'modifiedTime desc', label: t('sort.modified_desc', 'Mới nhất') },
-    { id: 'modifiedTime', label: t('sort.modified_asc', 'Cũ nhất') },
+    { id: 'name', label: t('sort.name', 'A-Z') },
+    { id: 'modifiedTime', label: t('sort.date', 'Ngày') },
+    { id: 'size', label: t('sort.size', 'Kích thước') },
   ];
-  const currentSortLabel = sortOptions.find(opt => opt.id === sortOption)?.label || t('drive.sort', 'Sort');
+  const currentSortLabel = sortOptions.find(opt => opt.id === baseSortOption)?.label || t('drive.sort', 'Sort');
 
   return (
     <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300">
@@ -349,29 +386,104 @@ export function MainContent({
             {/* Sort Dropdown */}
             {token && (
               <div className="relative">
-                <button
+                <div
                   onClick={() => setShowSortMenu(!showSortMenu)}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm [&:active:not(:has(.arrow-btn:active))]:scale-95 cursor-pointer select-none"
                 >
-                  <ArrowUpDown className="w-4 h-4" />
-                  <span className="hidden sm:inline">{currentSortLabel}</span>
-                </button>
+                  <div 
+                    className="arrow-btn p-1 -ml-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (sortOption.endsWith(' desc')) {
+                        onSortChange?.(sortOption.replace(' desc', ''));
+                      } else {
+                        onSortChange?.(sortOption + ' desc');
+                      }
+                    }}
+                    title="Toggle Order"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 relative">
+                      <style>
+                        {`
+                          @keyframes fillUp { 
+                            from { clip-path: inset(100% 0 0 0); } 
+                            to { clip-path: inset(0 0 0 0); } 
+                          }
+                          @keyframes drainUp { 
+                            from { clip-path: inset(0 0 0 0); } 
+                            to { clip-path: inset(0 0 100% 0); } 
+                          }
+                          @keyframes fillDown { 
+                            from { clip-path: inset(0 0 100% 0); } 
+                            to { clip-path: inset(0 0 0 0); } 
+                          }
+                          @keyframes drainDown { 
+                            from { clip-path: inset(0 0 0 0); } 
+                            to { clip-path: inset(100% 0 0 0); } 
+                          }
+                          
+                          .anim-fill-up { animation: fillUp 300ms ease-in-out forwards; }
+                          .anim-drain-up { animation: drainUp 300ms ease-in-out forwards; }
+                          .anim-fill-down { animation: fillDown 300ms ease-in-out forwards; }
+                          .anim-drain-down { animation: drainDown 300ms ease-in-out forwards; }
+                        `}
+                      </style>
+                      
+                      {/* White UP Arrow (Inverse animated) */}
+                      <g className={`stroke-white ${isInitialMount.current ? (!sortOption.endsWith(' desc') ? 'opacity-0' : '') : (!sortOption.endsWith(' desc') ? 'anim-drain-up' : 'anim-fill-up')}`}>
+                        <path d="m3 8 4-4 4 4"/>
+                        <path d="M7 4v16"/>
+                      </g>
+
+                      {/* Blue UP Arrow */}
+                      <g className={`stroke-[#4285F4] ${isInitialMount.current ? (!sortOption.endsWith(' desc') ? '' : 'opacity-0') : (!sortOption.endsWith(' desc') ? 'anim-fill-up' : 'anim-drain-up')}`}>
+                        <path d="m3 8 4-4 4 4"/>
+                        <path d="M7 4v16"/>
+                      </g>
+                      
+                      {/* White DOWN Arrow (Inverse animated) */}
+                      <g className={`stroke-white ${isInitialMount.current ? (sortOption.endsWith(' desc') ? 'opacity-0' : '') : (sortOption.endsWith(' desc') ? 'anim-drain-down' : 'anim-fill-down')}`}>
+                        <path d="m21 16-4 4-4-4"/>
+                        <path d="M17 20V4"/>
+                      </g>
+
+                      {/* Blue DOWN Arrow */}
+                      <g className={`stroke-[#4285F4] ${isInitialMount.current ? (sortOption.endsWith(' desc') ? '' : 'opacity-0') : (sortOption.endsWith(' desc') ? 'anim-fill-down' : 'anim-drain-down')}`}>
+                        <path d="m21 16-4 4-4-4"/>
+                        <path d="M17 20V4"/>
+                      </g>
+                    </svg>
+                  </div>
+                  <div className="hidden sm:grid text-center pr-1">
+                    <span className="col-start-1 row-start-1 visible place-self-center">{currentSortLabel}</span>
+                    {sortOptions.map(opt => (
+                      <span key={opt.id} className="col-start-1 row-start-1 invisible pointer-events-none select-none" aria-hidden="true">
+                        {opt.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
 
                 {showSortMenu && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)}></div>
-                    <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="absolute right-0 mt-2 w-32 bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
                       {sortOptions.map((opt) => (
                         <button
                           key={opt.id}
                           onClick={() => {
-                            onSortChange?.(opt.id);
+                            // If they select a new field, default to the sensible direction
+                            // Date defaults to Newest (desc), others to Ascending
+                            let newOpt = opt.id;
+                            if (opt.id === 'modifiedTime') newOpt = 'modifiedTime desc';
+                            
+                            onSortChange?.(newOpt);
                             setShowSortMenu(false);
                           }}
-                          className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-[#4285F4] dark:hover:text-[#4285F4] ${sortOption === opt.id ? 'text-[#4285F4] font-medium' : 'text-gray-700 dark:text-gray-300'}`}
+                          className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-[#4285F4] dark:hover:text-[#4285F4] ${baseSortOption === opt.id ? 'text-[#4285F4] font-medium' : 'text-gray-700 dark:text-gray-300'}`}
                         >
                           {opt.label}
-                          {sortOption === opt.id && <Check className="w-4 h-4" />}
+                          {baseSortOption === opt.id && <Check className="w-4 h-4" />}
                         </button>
                       ))}
                     </div>
@@ -426,7 +538,10 @@ export function MainContent({
                 <SongCard 
                   key={item.id}
                   item={item} 
-                  onPlay={onPlay} 
+                  onPlay={(t) => {
+                    const queue = filteredItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
+                    onPlay(t, queue);
+                  }}
                   onOpenFolder={onOpenFolder} 
                   token={token}
                   currentFolderId={currentFolderId}

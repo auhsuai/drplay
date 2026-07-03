@@ -160,7 +160,10 @@
     "name_asc": "A-Z",
     "name_desc": "Z-A",
     "modified_desc": "Newest",
-    "modified_asc": "Oldest"
+    "modified_asc": "Oldest",
+    "name": "A-Z",
+    "date": "Date",
+    "size": "Size"
   },
   "search_placeholder": "Search...",
   "loading": "Loading..."

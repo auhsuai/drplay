@@ -215,33 +215,43 @@ async fn extract_metadata_safe(file_id: String, token: String) -> Result<serde_j
     }
 }
 
-pub static CURRENT_BUFFER_BASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static CURRENT_BUFFER_LEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CURRENT_FILE_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static CURRENT_DOWNLOAD_FINISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub struct StreamCache {
+#[derive(Clone, Debug, PartialEq)]
+pub enum DownloadState {
+    Idle,
+    Downloading,
+    Completed,
+    Failed(String),
+}
+
+pub struct SegmentedCache {
     pub file_id: String,
-    pub base_pos: usize,
-    pub data: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     pub content_type: String,
+    pub bitrate: Option<f64>,
     pub total_file_size: usize,
-    pub chunk_size: usize,
+    pub buffer: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<usize, Vec<u8>>>>,
+    pub filled_ranges: std::sync::Arc<tokio::sync::RwLock<Vec<(usize, usize)>>>,
+    pub download_state: std::sync::Arc<tokio::sync::RwLock<DownloadState>>,
     pub notify: std::sync::Arc<tokio::sync::Notify>,
-    pub error: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub current_task: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 lazy_static::lazy_static! {
-    pub static ref GLOBAL_STREAM_CACHE: std::sync::Mutex<Option<StreamCache>> = std::sync::Mutex::new(None);
+    pub static ref GLOBAL_STREAM_CACHE: std::sync::Mutex<Option<std::sync::Arc<SegmentedCache>>> = std::sync::Mutex::new(None);
+    pub static ref DRIVE_API_SEMAPHORE: std::sync::Arc<tokio::sync::Semaphore> = std::sync::Arc::new(tokio::sync::Semaphore::new(3));
 }
 
 #[tauri::command]
-fn get_proxy_cache_status() -> Result<(usize, usize, Option<usize>), String> {
-    let base = CURRENT_BUFFER_BASE.load(Ordering::SeqCst);
-    let len = CURRENT_BUFFER_LEN.load(Ordering::SeqCst);
-    let total = CURRENT_FILE_SIZE.load(Ordering::SeqCst);
-    let total_opt = if total > 0 { Some(total) } else { None };
-    Ok((base, len, total_opt))
+fn get_proxy_cache_status() -> Result<(String, Vec<(usize, usize)>, usize), String> {
+    if let Ok(global) = GLOBAL_STREAM_CACHE.lock() {
+        if let Some(cache) = &*global {
+            if let Ok(ranges) = cache.filled_ranges.try_read() {
+                return Ok((cache.file_id.clone(), ranges.clone(), cache.total_file_size));
+            }
+        }
+    }
+    Err("No active cache".to_string())
 }
 
 #[tauri::command]

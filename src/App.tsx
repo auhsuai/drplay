@@ -493,14 +493,17 @@ function App() {
             {activeTab === "Home" ? (
               <HomeTab 
                 onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} 
-                onOpenFolder={handleOpenFolder}
+                onOpenFolder={(id, name) => {
+                  handleOpenFolder(id, name);
+                  handleTabChange("My Drive");
+                }}
                 token={accessToken} 
                 userProfile={userProfile} 
               />
             ) : activeTab === "My Drive" ? (
               <MainContent
                 activeTab={activeTab}
-                onPlay={(t: Track) => { handlePlayTrack(t); }}
+                onPlay={(t: Track, c?: Track[]) => { handlePlayTrack(t, c); }}
                 currentTrack={currentTrack}
                 items={driveItems}
                 isLoading={isLoadingTracks}

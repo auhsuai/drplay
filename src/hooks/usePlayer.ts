@@ -62,6 +62,13 @@ export const usePlayer = (accessToken: string | null) => {
   const handlePlayTrack = async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: any[], activeTab?: string) => {
     if (!accessToken) return;
 
+    if (currentTrack?.id === track.id && !isNavigation) {
+      if (!isPlaying) {
+        setIsPlaying(true);
+      }
+      return;
+    }
+
     // Update playback queue based on context
     if (!isNavigation) {
       let newOriginalQueue: Track[] = [];
