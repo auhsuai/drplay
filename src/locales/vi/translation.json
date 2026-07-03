@@ -166,5 +166,9 @@
     "size": "Kích thước"
   },
   "search_placeholder": "Tìm kiếm...",
-  "loading": "Đang tải..."
+  "loading": "Đang tải...",
+  "rate_limit_title": "Nghỉ ngơi chút nhé!",
+  "rate_limit_greeting": "Hôm nay bạn đã hoạt động nhiều rồi, hãy nghỉ ngơi một chút nhé!",
+  "cancel": "Hủy",
+  "ok": "OK"
 }

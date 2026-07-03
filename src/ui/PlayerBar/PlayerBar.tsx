@@ -33,10 +33,9 @@ interface PlayerBarProps {
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   onTogglePlayMode: () => void;
   onExpandNowPlaying: () => void;
-  bufferSeconds: number;
 }
 
-export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, playMode, onTogglePlayMode, onExpandNowPlaying, bufferSeconds }: PlayerBarProps) {
+export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
   const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -173,14 +172,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
       const artwork: MediaImage[] = [];
-      if (currentTrack.streamUrl) {
-        try {
-          const proxyUrl = new URL(currentTrack.streamUrl);
-          const thumbUrl = `${proxyUrl.protocol}//${proxyUrl.host}/cover?size=${currentTrack.size}&thumb=true`;
-          artwork.push({ src: thumbUrl, sizes: '512x512', type: 'image/jpeg' });
-        } catch (e) {
-          // ignore
-        }
+      if (currentTrack.coverUrl) {
+        artwork.push({ src: currentTrack.coverUrl, sizes: '512x512', type: 'image/jpeg' });
       }
 
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -329,10 +322,24 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     const unlisten = listen("drive-quota-exceeded", () => {
       setErrorText("Google Drive Limit: File temporary blocked (Quota Exceeded 403)");
     });
+    
+    // DIAGNOSTIC LOOP
+    const interval = setInterval(() => {
+      if (audioRef.current && isPlaying) {
+        const a = audioRef.current;
+        let buf = "";
+        for (let i = 0; i < a.buffered.length; i++) {
+          buf += `[${a.buffered.start(i).toFixed(1)}-${a.buffered.end(i).toFixed(1)}] `;
+        }
+        console.log(`AUDIO STATE: ready=${a.readyState}, net=${a.networkState}, time=${a.currentTime}, buf=${buf}`);
+      }
+    }, 2000);
+
     return () => {
+      clearInterval(interval);
       unlisten.then((f: () => void) => f());
     };
-  }, []);
+  }, [isPlaying]);
 
   useEffect(() => {
     if (audioRef.current) {
@@ -373,7 +380,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         audioRef.current.onerror = handleError;
         const playPromise = audioRef.current.play();
         if (playPromise !== undefined) {
-          playPromise.catch((e) => console.error("Playback failed", e));
+          playPromise.catch((e) => {
+            if (e.name !== 'AbortError') {
+              console.error("Playback failed", e);
+            }
+          });
         }
       } else {
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
@@ -448,16 +459,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     }
   };
 
-  // Handle immediate buffer changes continuously
-  const prevBufferSecondsRef = useRef(bufferSeconds);
-  useEffect(() => {
-    if (bufferSeconds !== prevBufferSecondsRef.current) {
-      prevBufferSecondsRef.current = bufferSeconds;
-      
-      // Update global buffer capacity in backend immediately without interrupting stream
-      invoke("update_buffer_settings", { seconds: bufferSeconds }).catch(console.error);
-    }
-  }, [bufferSeconds]);
+  // Removed bufferSeconds effect
 
   // Save session immediately on track change and on exit
   useEffect(() => {
@@ -500,7 +502,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     const payload = latestBufferPayloadRef.current;
     let proxyBufferedPercent = 0;
     
-    if (payload && payload.song_id === currentTrackRef.current?.id && payload.total_size > 0) {
+    if (payload && payload.song_id === currentTrack?.id && payload.total_size > 0) {
       const currentTime = audio?.currentTime || 0;
       const currentTimeBytes = (currentTime / currentDuration) * payload.total_size;
 

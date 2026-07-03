@@ -103,7 +103,7 @@ export const usePlayer = (accessToken: string | null) => {
     setIsDownloading(true);
 
     try {
-      let bitrate = undefined;
+
       let accurateMetaDuration = undefined;
       const freshToken = await getValidToken();
       if (!freshToken) {
@@ -113,7 +113,6 @@ export const usePlayer = (accessToken: string | null) => {
       
       try {
         const metadata = await getTrackMetadata(track.id, freshToken, track.size, track.originalName);
-        bitrate = metadata.bitrate;
         if (metadata.duration) {
            accurateMetaDuration = metadata.duration;
         }
@@ -121,7 +120,7 @@ export const usePlayer = (accessToken: string | null) => {
         console.warn("Could not get bitrate for buffer calculation", e);
       }
 
-      const streamUrl = await invoke<string>("get_stream_url", { fileId: track.id, token: freshToken, bitrate, bufferSeconds });
+      const streamUrl = await invoke<string>("get_stream_url", { fileId: track.id, token: freshToken, duration: accurateMetaDuration, bufferSeconds });
 
       setCurrentTrack(prev => {
         if (prev && prev.id === track.id) {

@@ -166,5 +166,9 @@
     "size": "Size"
   },
   "search_placeholder": "Search...",
-  "loading": "Loading..."
+  "loading": "Loading...",
+  "rate_limit_title": "Time for a break!",
+  "rate_limit_greeting": "You've been very active today, take a rest for a bit!",
+  "cancel": "Cancel",
+  "ok": "OK"
 }

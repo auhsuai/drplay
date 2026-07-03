@@ -1,5 +1,4 @@
-
-import { FolderOpen, Globe, Moon, Database, Search, MonitorDown } from "lucide-react";
+import { FolderOpen, Globe, Moon, Search, MonitorDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
 import { ThemeDropdown } from "./components/ThemeDropdown";
@@ -11,8 +10,6 @@ import { set } from "idb-keyval";
 interface SettingsTabProps {
   theme: ThemeType;
   setTheme: (t: ThemeType) => void;
-  bufferSeconds: number;
-  setBufferSeconds: (val: number) => void;
   scanMode: 'fast' | 'full';
   setScanMode: (mode: 'fast' | 'full') => void;
   minimizeToTray: boolean;
@@ -23,7 +20,6 @@ interface SettingsTabProps {
 
 export function SettingsTab({
   theme, setTheme,
-  bufferSeconds, setBufferSeconds,
   scanMode, setScanMode,
   minimizeToTray, setMinimizeToTray,
   setShowFolderSelection,
@@ -109,52 +105,6 @@ export function SettingsTab({
             {/* Playback Settings */}
             <div className="flex flex-col gap-2 mt-6">
               <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">{t('settings.playback')}</h2>
-              <div className="flex items-center justify-between py-4 pb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                    <Database className="w-6 h-6 text-[#4285F4]" />
-                  </div>
-                  <div>
-                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.buffer_size')}</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">{t('settings.buffer_desc')}</p>
-                  </div>
-                </div>
-
-                <div className="flex flex-col items-end gap-2 w-48 shrink-0">
-                  <span className="text-sm font-bold text-[#4285F4] bg-[#4285F4]/10 px-3 py-1 rounded-full">
-                    {bufferSeconds >= 60 ? `${(bufferSeconds / 60).toFixed(1)} ${t('settings.minutes')}` : `${bufferSeconds} ${t('settings.seconds')}`}
-                  </span>
-                  <div className="flex items-center gap-4 mt-2 px-1 w-full">
-                    <span className="text-xs font-medium text-gray-400 w-8 text-right">30s</span>
-
-                    <div className="flex-1 relative h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center">
-                      {/* Blue filled track */}
-                      <div
-                        className="absolute left-0 h-full bg-[#4285F4] rounded-full pointer-events-none"
-                        style={{ width: `${(bufferSeconds / 2400) * 100}%` }}
-                      >
-                        {/* White knob */}
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow border border-gray-200 shrink-0 pointer-events-none"></div>
-                      </div>
-
-                      <input
-                        type="range"
-                        min="30"
-                        max="2400"
-                        value={bufferSeconds}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          setBufferSeconds(val);
-                          set('drplay_buffer_seconds', val);
-                        }}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer m-0"
-                      />
-                    </div>
-
-                    <span className="text-xs font-medium text-gray-400 w-8">40m</span>
-                  </div>
-                </div>
-              </div>
 
               {/* Scan Mode Setting */}
               <div className="flex items-center justify-between py-4 pb-6">

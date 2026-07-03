@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { useTranslation } from "react-i18next";
 
 import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { MainContent } from "./ui/MainContent/MainContent";
@@ -35,6 +37,8 @@ export type Track = {
   restoreDuration?: number;
   parentId?: string;
   parentName?: string;
+  coverUrl?: string;
+  dbId?: string;
 };
 
 export type DriveItem = {
@@ -58,6 +62,7 @@ export type UserProfile = {
 };
 
 function App() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("Home");
   const [isLoadingTracks, setIsLoadingTracks] = useState(false);
   const { theme, setTheme } = useTheme();
@@ -90,6 +95,16 @@ function App() {
   } = useDrive(isLoggedIn);
 
   const [metadataVersion, setMetadataVersion] = useState(0);
+  const [showRateLimitModal, setShowRateLimitModal] = useState(false);
+
+  useEffect(() => {
+    const unlisten = listen('drive-quota-exceeded', () => {
+      setShowRateLimitModal(true);
+    });
+    return () => {
+      unlisten.then((f: () => void) => f());
+    };
+  }, []);
 
   useEffect(() => {
     let timeout: any;
@@ -109,8 +124,6 @@ function App() {
     isPlaying,
     isDownloading,
     playMode,
-    bufferSeconds,
-    setBufferSeconds,
     handlePlayTrack: playerPlayTrack,
     handleNextTrack,
     handlePrevTrack,
@@ -537,8 +550,6 @@ function App() {
               <SettingsTab
                 theme={theme}
                 setTheme={setTheme}
-                bufferSeconds={bufferSeconds}
-                setBufferSeconds={setBufferSeconds}
                 scanMode={scanMode}
                 setScanMode={setScanMode}
                 minimizeToTray={minimizeToTray}
@@ -563,7 +574,6 @@ function App() {
                 playMode={playMode}
                 onTogglePlayMode={handleTogglePlayMode}
                 onExpandNowPlaying={() => setIsNowPlayingOpen(prev => !prev)}
-                bufferSeconds={bufferSeconds}
               />
             </div>
           </div>
@@ -588,6 +598,37 @@ function App() {
         </div>
         
         <GlobalContextMenu />
+
+        {showRateLimitModal && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-md bg-black/30 dark:bg-black/50 transition-all duration-300">
+            <div className="bg-white dark:bg-[#1f2024] p-6 sm:p-8 rounded-2xl shadow-2xl max-w-sm w-full mx-4 border border-gray-100 dark:border-gray-800 animate-in fade-in zoom-in-95">
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4 text-center">
+                {t('rate_limit_title', 'Nghỉ ngơi chút nhé!')}
+              </h3>
+              <p className="text-gray-600 dark:text-gray-300 text-center mb-6 leading-relaxed">
+                {t('rate_limit_greeting', 'Hôm nay bạn đã hoạt động nhiều rồi, hãy nghỉ ngơi 1 chút nhé!')}
+              </p>
+              <div className="flex justify-center gap-3">
+                <button
+                  onClick={() => setShowRateLimitModal(false)}
+                  className="px-5 py-2.5 rounded-full text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 font-medium transition-colors"
+                >
+                  {t('cancel', 'Hủy')}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowRateLimitModal(false);
+                    handleTabChange("Home");
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  className="px-5 py-2.5 rounded-full text-white bg-[#4285F4] hover:bg-blue-600 font-medium transition-colors shadow-md shadow-blue-500/20"
+                >
+                  {t('ok', 'OK')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

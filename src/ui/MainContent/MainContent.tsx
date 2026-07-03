@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Track, DriveItem } from "../../App";
-import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput, ArrowUpDown, ArrowUp, ArrowDown, ChevronDown } from "lucide-react";
+import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput,  } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { deleteFile, moveFile } from "../../utils/driveApi";
@@ -327,11 +327,13 @@ export function MainContent({
             <div className="flex items-center gap-3 animate-in fade-in slide-in-from-right-4 duration-300">
               <button
                 onClick={() => {
-                  if (selectedIds.size === currentItems.length) {
-                    setSelectedIds(new Set());
-                  } else {
-                    setSelectedIds(new Set(currentItems.map(i => i.id)));
-                  }
+                  setSelectedIds(prev => {
+                    if (prev.size === currentItems.length) {
+                      return new Set();
+                    } else {
+                      return new Set(currentItems.map(i => i.id));
+                    }
+                  });
                 }}
                 className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
               >
@@ -555,13 +557,15 @@ export function MainContent({
                   isSelectionMode={isSelectionMode}
                   isSelected={selectedIds.has(item.id)}
                   onToggleSelection={() => {
-                    const next = new Set(selectedIds);
-                    if (next.has(item.id)) {
-                      next.delete(item.id);
-                    } else {
-                      next.add(item.id);
-                    }
-                    setSelectedIds(next);
+                    setSelectedIds(prev => {
+                      const next = new Set(prev);
+                      if (next.has(item.id)) {
+                        next.delete(item.id);
+                      } else {
+                        next.add(item.id);
+                      }
+                      return next;
+                    });
                   }}
                   onEnableSelectionMode={() => {
                     setIsSelectionMode(true);

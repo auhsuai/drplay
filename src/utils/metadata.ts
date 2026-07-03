@@ -15,6 +15,7 @@ export interface CachedMetadata {
   size?: number;
   v?: number;
   mimeType?: string;
+  dbId?: string;
 }
 
 let _proxyPort: number | null = null;
@@ -152,11 +153,11 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
 
   try {
     const cached = await get<CachedMetadata>(cacheKey);
-    if (cached && cached.size !== undefined && cached.duration !== undefined && cached.v === 9) {
+    if (cached && cached.size !== undefined && cached.duration !== undefined && cached.v === 10) {
       if (cached.coverUrl && cached.coverUrl.includes('127.0.0.1')) {
         const port = await getProxyPort();
-        cached.coverUrl = `http://127.0.0.1:${port}/cover?size=${cached.size}&thumb=true`;
-        cached.fullCoverUrl = `http://127.0.0.1:${port}/cover?size=${cached.size}`;
+        cached.coverUrl = `http://127.0.0.1:${port}/cover?id=${cached.dbId || fileId}&thumb=true`;
+        cached.fullCoverUrl = `http://127.0.0.1:${port}/cover?id=${cached.dbId || fileId}`;
       }
       metadataCache[fileId] = cached;
       metadataCacheKeys.push(fileId);
@@ -177,11 +178,11 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
 
   try {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (knownSize && knownName) {
+    if (knownSize) {
       try {
-        const localMeta = await invoke<{ title: string, artist: string, album: string, duration: number, has_cover: boolean, file_type: string } | null>("get_local_metadata", {
+        const localMeta = await invoke<{ id: string, title: string, artist: string, album: string, duration: number, has_cover: boolean, file_type: string } | null>("get_local_metadata", {
           size: knownSize,
-          name: knownName,
+          name: knownName || "",
         });
 
         if (localMeta) {
@@ -192,9 +193,10 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
             duration: localMeta.duration,
             size: knownSize,
             fileType: localMeta.file_type,
-            coverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?size=${knownSize}&thumb=true` : undefined,
-            fullCoverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?size=${knownSize}` : undefined,
-            v: 9
+            dbId: localMeta.id,
+            coverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?id=${localMeta.id}&thumb=true` : undefined,
+            fullCoverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?id=${localMeta.id}` : undefined,
+            v: 10
           };
           await set(cacheKey, result);
           metadataCache[fileId] = result;

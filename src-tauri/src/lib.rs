@@ -228,23 +228,25 @@ pub enum DownloadState {
 pub struct SegmentedCache {
     pub file_id: String,
     pub content_type: String,
-    pub bitrate: Option<f64>,
+    pub duration: Option<f64>,
     pub total_file_size: usize,
     pub buffer: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<usize, Vec<u8>>>>,
     pub filled_ranges: std::sync::Arc<tokio::sync::RwLock<Vec<(usize, usize)>>>,
     pub download_state: std::sync::Arc<tokio::sync::RwLock<DownloadState>>,
-    pub notify: std::sync::Arc<tokio::sync::Notify>,
-    pub current_task: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub current_task: std::sync::Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub active_download_pos: std::sync::Arc<tokio::sync::RwLock<usize>>,
+    pub max_read_pos: std::sync::Arc<tokio::sync::RwLock<usize>>,
+    pub data_ready: std::sync::Arc<tokio::sync::Notify>,
 }
 
 lazy_static::lazy_static! {
-    pub static ref GLOBAL_STREAM_CACHE: std::sync::Mutex<Option<std::sync::Arc<SegmentedCache>>> = std::sync::Mutex::new(None);
+    pub static ref GLOBAL_STREAM_CACHE: tokio::sync::Mutex<Option<std::sync::Arc<SegmentedCache>>> = tokio::sync::Mutex::new(None);
     pub static ref DRIVE_API_SEMAPHORE: std::sync::Arc<tokio::sync::Semaphore> = std::sync::Arc::new(tokio::sync::Semaphore::new(3));
 }
 
 #[tauri::command]
-fn get_proxy_cache_status() -> Result<(String, Vec<(usize, usize)>, usize), String> {
-    if let Ok(global) = GLOBAL_STREAM_CACHE.lock() {
+async fn get_proxy_cache_status() -> Result<(String, Vec<(usize, usize)>, usize), String> {
+    let global = GLOBAL_STREAM_CACHE.lock().await; if true {
         if let Some(cache) = &*global {
             if let Ok(ranges) = cache.filled_ranges.try_read() {
                 return Ok((cache.file_id.clone(), ranges.clone(), cache.total_file_size));
@@ -266,6 +268,7 @@ fn update_buffer_settings(seconds: usize) {
 
 #[derive(serde::Serialize)]
 struct LocalMetadata {
+    id: String,
     title: String,
     artist: String,
     album: String,
@@ -299,49 +302,81 @@ fn get_db_path() -> Option<std::path::PathBuf> {
 #[tauri::command]
 fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
     use rusqlite::{Connection, OpenFlags};
-    if let Some(db_path) = get_db_path() {
-        if let Ok(conn) = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+    let mut log = String::new();
+    log.push_str(&format!("get_local_metadata called with size={}, name={}\n", size, name));
     
-    let has_file_type = conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok();
-    let query = if has_file_type {
-        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type FROM tracks WHERE size_bytes = ?"
-    } else {
-        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '' FROM tracks WHERE size_bytes = ?"
-    };
-    let mut stmt = conn.prepare(query).ok()?;
-    let mut rows = stmt.query([size]).ok()?;
+    let db_path = get_db_path();
+    log.push_str(&format!("db_path: {:?}\n", db_path));
     
-    let mut first_match = None;
-    
-    while let Ok(Some(row)) = rows.next() {
-        let file_path: String = row.get(4).unwrap_or_default();
-        let meta = LocalMetadata {
-            title: row.get(0).unwrap_or_default(),
-            artist: row.get(1).unwrap_or_default(),
-            album: row.get(2).unwrap_or_default(),
-            duration: row.get(3).unwrap_or_default(),
-            has_cover: row.get(5).unwrap_or(false),
-            file_type: row.get(6).unwrap_or_default(),
-        };
-        
-        if file_path.contains(&name) || meta.title.contains(&name) || name.contains(&meta.title) {
-            return Some(meta); // Perfect match
-        }
-        
-        if first_match.is_none() {
-            first_match = Some(meta);
+    if let Some(db_path) = db_path {
+        match Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(conn) => {
+                let has_file_type = conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok();
+                log.push_str(&format!("has_file_type: {}\n", has_file_type));
+                
+                let query = if has_file_type {
+                    "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id FROM tracks WHERE size_bytes = ?"
+                } else {
+                    "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '', id FROM tracks WHERE size_bytes = ?"
+                };
+                
+                match conn.prepare(query) {
+                    Ok(mut stmt) => {
+                        match stmt.query([size]) {
+                            Ok(mut rows) => {
+                                let mut first_match = None;
+                                let mut row_count = 0;
+                                
+                                while let Ok(Some(row)) = rows.next() {
+                                    row_count += 1;
+                                    let file_path: String = row.get(4).unwrap_or_default();
+                                    let meta = LocalMetadata {
+                                        title: row.get(0).unwrap_or_default(),
+                                        artist: row.get(1).unwrap_or_default(),
+                                        album: row.get(2).unwrap_or_default(),
+                                        duration: row.get(3).unwrap_or_default(),
+                                        has_cover: row.get(5).unwrap_or(false),
+                                        file_type: row.get(6).unwrap_or_default(),
+                                        id: row.get(7).unwrap_or_default(),
+                                    };
+                                    
+                                    if file_path.contains(&name) || meta.title.contains(&name) || name.contains(&meta.title) {
+                                        log.push_str(&format!("Found perfect match: {}\n", meta.title));
+                                        std::fs::write("metadata_debug.log", log).unwrap_or_default();
+                                        return Some(meta); // Perfect match
+                                    }
+                                    
+                                    if first_match.is_none() {
+                                        log.push_str(&format!("Saved first match: {}\n", meta.title));
+                                        first_match = Some(meta);
+                                    }
+                                }
+                                log.push_str(&format!("Rows returned: {}\n", row_count));
+                                
+                                std::fs::write("metadata_debug.log", log).unwrap_or_default();
+                                return first_match;
+                            },
+                            Err(e) => {
+                                log.push_str(&format!("Query execution failed: {}\n", e));
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        log.push_str(&format!("Prepare failed: {}\n", e));
+                    }
+                }
+            },
+            Err(e) => {
+                log.push_str(&format!("Failed to open DB: {}\n", e));
+            }
         }
     }
     
-    return first_match;
-        }
-    }
+    std::fs::write("metadata_debug.log", log).unwrap_or_default();
     None
 }
 
-use std::sync::{atomic::{AtomicUsize, AtomicBool, Ordering}, OnceLock};
-use std::thread;
-
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 mod proxy;
 
 static SESSION_ID: AtomicUsize = AtomicUsize::new(0);
@@ -364,6 +399,14 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            use r2d2_sqlite::SqliteConnectionManager;
+            use r2d2::Pool;
+            if let Some(db_path) = get_db_path() {
+                let manager = SqliteConnectionManager::file(&db_path);
+                if let Ok(pool) = Pool::new(manager) {
+                    app.manage(pool);
+                }
+            }
             proxy::spawn_proxy_server(app.handle().clone());
             
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

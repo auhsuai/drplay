@@ -229,10 +229,12 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                     }`}
                     onClick={() => {
                       if (isSelectionMode) {
-                        const newSet = new Set(selectedIds);
-                        if (newSet.has(item.id)) newSet.delete(item.id);
-                        else newSet.add(item.id);
-                        setSelectedIds(newSet);
+                        setSelectedIds(prev => {
+                          const newSet = new Set(prev);
+                          if (newSet.has(item.id)) newSet.delete(item.id);
+                          else newSet.add(item.id);
+                          return newSet;
+                        });
                       }
                     }}
                   >
