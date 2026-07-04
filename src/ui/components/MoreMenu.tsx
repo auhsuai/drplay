@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
-import { MoreHorizontal, Download, FolderOutput, Trash2, Loader2, Search, CheckCircle2, Music, ChevronRight, CheckSquare, ChevronLeft, X } from "lucide-react";
+import { MoreHorizontal, Download, FolderOutput, Trash2, Loader2, Search, CheckCircle2, Music, ChevronRight, CheckSquare, ChevronLeft, X, MapPin } from "lucide-react";
 import { Track, DriveItem } from "../../App";
 import { getPlaylists, addTrackToPlaylist, Playlist } from "../../utils/playlists";
 import { deleteFile, moveFile } from "../../utils/driveApi";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
+import { getValidToken } from "../../utils/apiClient";
 import { downloadDir } from "@tauri-apps/api/path";
 import { db } from "../../db/db";
 
@@ -24,9 +24,10 @@ interface MoreMenuProps {
   anchorPoint?: { x: number, y: number } | null;
   onOpenChange?: (isOpen: boolean) => void;
   onSelectMultiple?: () => void;
+  isPlayerBarMode?: boolean;
 }
 
-export function MoreMenu({ track, driveItem, token, currentFolderId, currentFolderName, folderHistory, onRefresh, onRemoveItem, forceOpen, onClose, anchorPoint, onOpenChange, onSelectMultiple }: MoreMenuProps) {
+export function MoreMenu({ track, driveItem, token, currentFolderId, currentFolderName, folderHistory, onRefresh, onRemoveItem, forceOpen, onClose, anchorPoint, onOpenChange, onSelectMultiple, isPlayerBarMode }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [showPlaylistsSubmenu, setShowPlaylistsSubmenu] = useState(false);
@@ -212,14 +213,18 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
     setShowDownloadDialog(false);
     
     try {
-      let currentStreamUrl = track?.streamUrl;
-      if (!currentStreamUrl && track) {
-        currentStreamUrl = await invoke<string>("get_stream_url", { id: track.id });
-      }
-      
-      if (!currentStreamUrl) return;
+      const freshToken = await getValidToken();
+      if (!freshToken) throw new Error("No valid token");
 
-      const response = await fetch(currentStreamUrl);
+      const downloadUrl = `https://www.googleapis.com/drive/v3/files/${track?.id}?alt=media`;
+      const response = await fetch(downloadUrl, {
+        headers: {
+          Authorization: `Bearer ${freshToken}`
+        }
+      });
+      
+      if (!response.ok) throw new Error("Fetch failed");
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -249,7 +254,45 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
 
   const renderMenuContent = () => (
     <>
-      {driveItem && token && (
+      {isPlayerBarMode ? (
+        <>
+          {track && (
+            <>
+              <button
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  handleDownloadClick(e);
+                }}
+                className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+                <span className="truncate">{t('menu.download_song', 'Download Song')}</span>
+              </button>
+              
+              <button
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  window.dispatchEvent(new CustomEvent('locate-file', { 
+                    detail: { 
+                      fileId: track.id,
+                      parentId: track.parentId,
+                      parentName: track.parentName
+                    } 
+                  }));
+                  setIsOpen(false); 
+                  onClose?.();
+                }}
+                className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1"
+              >
+                <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+                <span className="truncate">{t('menu.navigate', 'Navigate')}</span>
+              </button>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          {driveItem && token && (
             <>
               <button
                 onClick={(e) => { 
@@ -277,7 +320,6 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('drive.delete') || 'Delete'}</span>
               </button>
-              {track && <div className="h-px bg-gray-100 dark:bg-gray-800/60 my-1"></div>}
             </>
           )}
 
@@ -290,6 +332,8 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
               <span className="truncate">{t('menu.download')}</span>
             </button>
           )}
+        </>
+      )}
           
           {track && (
             <div className="relative">
@@ -311,7 +355,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 const currentPlaylists = filteredPlaylists.slice((playlistCurrentPage - 1) * playlistsPerPage, playlistCurrentPage * playlistsPerPage);
 
                 return (
-                  <div className="absolute bottom-0 left-full ml-3 w-64 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 z-50 flex flex-col animate-in fade-in zoom-in-95 duration-200">
+                  <div className="absolute bottom-0 left-full ml-3 w-64 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 z-50 flex flex-col animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none">
                     <div className="px-3 py-2 flex items-center justify-between gap-2">
                       <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider whitespace-nowrap">
                         {t('sidebar.playlists', 'Playlists')}
@@ -408,7 +452,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       {isMenuOpen && createPortal(
         <div 
           ref={dropdownRef}
-          className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 ${anchorPoint ? '' : (openUpwards ? 'origin-bottom-right' : 'origin-top-right')}`}
+          className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none ${anchorPoint ? '' : (openUpwards ? 'origin-bottom-right' : 'origin-top-right')}`}
           style={getContextMenuStyle()}
           onClick={e => e.stopPropagation()}
           onContextMenu={e => e.preventDefault()}

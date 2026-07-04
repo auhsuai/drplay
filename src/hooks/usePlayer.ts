@@ -5,6 +5,17 @@ import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 
+
+const playRequestIdRef = { current: 0 };
+
+function beginPlaybackIntent(): number {
+  return ++playRequestIdRef.current;
+}
+
+function isIntentStale(myId: number): boolean {
+  return myId !== playRequestIdRef.current;
+}
+
 export const usePlayer = (accessToken: string | null) => {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -17,6 +28,7 @@ export const usePlayer = (accessToken: string | null) => {
   // Load last session and buffer
   useEffect(() => {
     const loadSession = async () => {
+      const myId = beginPlaybackIntent();
       try {
         const lastSessionStr = localStorage.getItem("drplay_last_session");
         let lastSession;
@@ -30,13 +42,18 @@ export const usePlayer = (accessToken: string | null) => {
         if (storedBuffer) setBufferSeconds(storedBuffer as number);
 
         if (lastSession && lastSession.track) {
+          if (isIntentStale(myId)) {
+            console.debug('[Session] Restore cancelled because user pressed Play');
+            return;
+          }
           let streamUrl = "";
           const freshToken = await getValidToken();
+          if (isIntentStale(myId)) return;
+          
           if (freshToken) {
             try {
               streamUrl = await invoke<string>("get_stream_url", { 
                 fileId: lastSession.track.id, 
-                token: freshToken, 
                 bitrate: lastSession.track.bitrate, 
                 bufferSeconds: storedBuffer || 1400 
               });
@@ -44,6 +61,7 @@ export const usePlayer = (accessToken: string | null) => {
               console.warn("Failed to invoke get_stream_url on session restore", e);
             }
           }
+          if (isIntentStale(myId)) return;
 
           setCurrentTrack({
             ...lastSession.track,
@@ -70,12 +88,13 @@ export const usePlayer = (accessToken: string | null) => {
     }
 
     // Update playback queue based on context
+    let targetTrack = { ...track };
     if (!isNavigation) {
       let newOriginalQueue: Track[] = [];
       if (contextQueue && contextQueue.length > 0) {
-        newOriginalQueue = contextQueue;
+        newOriginalQueue = contextQueue.map(t => ({...t, queueItemId: t.queueItemId || crypto.randomUUID()}));
       } else if (activeTab === "My Drive" && driveItems) {
-        newOriginalQueue = driveItems.filter(item => !item.isFolder && item.trackInfo).map(item => item.trackInfo!);
+        newOriginalQueue = driveItems.filter(item => !item.isFolder && item.trackInfo).map(item => ({...item.trackInfo!, queueItemId: item.trackInfo!.queueItemId || crypto.randomUUID()}));
       }
 
       if (newOriginalQueue.length > 0) {
@@ -83,36 +102,55 @@ export const usePlayer = (accessToken: string | null) => {
         if (playMode === 'shuffle') {
           const shuffled = [...newOriginalQueue];
           const trackIndex = shuffled.findIndex(t => t.id === track.id);
-          if (trackIndex !== -1) shuffled.splice(trackIndex, 1);
+          let currentTrackInQueue = shuffled[0];
+          if (trackIndex !== -1) {
+            currentTrackInQueue = shuffled[trackIndex];
+            shuffled.splice(trackIndex, 1);
+          } else {
+             currentTrackInQueue = {...track, queueItemId: crypto.randomUUID()};
+          }
 
           for (let i = shuffled.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
           }
-          shuffled.unshift(track);
+          shuffled.unshift(currentTrackInQueue);
           setPlaybackQueue(shuffled);
+          targetTrack = currentTrackInQueue;
         } else {
           setPlaybackQueue(newOriginalQueue);
+          const trackIndex = newOriginalQueue.findIndex(t => t.id === track.id);
+          if (trackIndex !== -1) {
+            targetTrack = newOriginalQueue[trackIndex];
+          } else {
+            targetTrack = {...track, queueItemId: crypto.randomUUID()};
+          }
+        }
+      } else {
+        if (!targetTrack.queueItemId) {
+          targetTrack = {...targetTrack, queueItemId: crypto.randomUUID()};
         }
       }
     }
 
+    const myId = beginPlaybackIntent();
+
     console.log("=== START DOWNLOADING AUDIO ===");
-    setCurrentTrack({ ...track, streamUrl: "" });
     setIsPlaying(false);
     setIsDownloading(true);
 
     try {
-
       let accurateMetaDuration = undefined;
       const freshToken = await getValidToken();
+      if (isIntentStale(myId)) return;
       if (!freshToken) {
         setIsDownloading(false);
         return;
       }
       
       try {
-        const metadata = await getTrackMetadata(track.id, freshToken, track.size, track.originalName);
+        const metadata = await getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName);
+        if (isIntentStale(myId)) return;
         if (metadata.duration) {
            accurateMetaDuration = metadata.duration;
         }
@@ -120,27 +158,33 @@ export const usePlayer = (accessToken: string | null) => {
         console.warn("Could not get bitrate for buffer calculation", e);
       }
 
-      const streamUrl = await invoke<string>("get_stream_url", { fileId: track.id, token: freshToken, duration: accurateMetaDuration, bufferSeconds });
+      const streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds });
+      if (isIntentStale(myId)) {
+        console.debug(`[Player] Discard stale result for ${targetTrack.id}`);
+        return;
+      }
 
-      setCurrentTrack(prev => {
-        if (prev && prev.id === track.id) {
-          setIsPlaying(true);
-          return { ...prev, streamUrl, restoreDuration: accurateMetaDuration || prev.restoreDuration };
-        }
-        return prev;
+      setCurrentTrack({ 
+        ...targetTrack, 
+        streamUrl, 
+        restoreDuration: accurateMetaDuration || targetTrack.restoreDuration 
       });
+      setIsPlaying(true);
     } catch (e) {
+      if (isIntentStale(myId)) return;
       console.error("Network error during playback:", e);
       alert("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
     } finally {
-      setIsDownloading(false);
+      if (!isIntentStale(myId)) {
+        setIsDownloading(false);
+      }
     }
   };
 
   const handleNextTrack = () => {
     if (!currentTrack || playbackQueue.length === 0) return;
 
-    const currentIndex = playbackQueue.findIndex(item => item.id === currentTrack.id);
+    const currentIndex = playbackQueue.findIndex(item => item.queueItemId ? (item.queueItemId === currentTrack.queueItemId) : (item.id === currentTrack.id));
     if (currentIndex === -1) return;
 
     if (currentIndex < playbackQueue.length - 1) {
@@ -155,7 +199,7 @@ export const usePlayer = (accessToken: string | null) => {
   const handlePrevTrack = () => {
     if (!currentTrack || playbackQueue.length === 0) return;
 
-    const currentIndex = playbackQueue.findIndex(item => item.id === currentTrack.id);
+    const currentIndex = playbackQueue.findIndex(item => item.queueItemId ? (item.queueItemId === currentTrack.queueItemId) : (item.id === currentTrack.id));
     if (currentIndex === -1) return;
 
     if (currentIndex > 0) {
@@ -170,27 +214,34 @@ export const usePlayer = (accessToken: string | null) => {
   const handleTogglePlay = async () => {
     if (currentTrack) {
       if (!currentTrack.streamUrl && !isPlaying) {
+        const myId = beginPlaybackIntent();
         setIsDownloading(true);
         try {
           let bitrate = undefined;
           const freshToken = await getValidToken();
+          if (isIntentStale(myId)) return;
+          
           if (!freshToken) {
             setIsDownloading(false);
             return;
           }
           try {
             const metadata = await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName);
+            if (isIntentStale(myId)) return;
             bitrate = metadata.bitrate;
           } catch (e) { }
 
-          const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, token: freshToken, bitrate, bufferSeconds });
+          const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, bitrate, bufferSeconds });
+          if (isIntentStale(myId)) return;
+          
           setCurrentTrack(prev => prev ? { ...prev, streamUrl: url } : prev);
           setIsPlaying(true);
         } catch (e) {
+          if (isIntentStale(myId)) return;
           console.error("Failed to get stream url on resume", e);
           alert("Could not start playback. Please try another track.");
         } finally {
-          setIsDownloading(false);
+          if (!isIntentStale(myId)) setIsDownloading(false);
         }
       } else {
         setIsPlaying(!isPlaying);
@@ -205,14 +256,18 @@ export const usePlayer = (accessToken: string | null) => {
       if (nextMode === 'shuffle') {
         if (originalQueue.length > 0 && currentTrack) {
           const shuffled = [...originalQueue];
-          const trackIndex = shuffled.findIndex(t => t.id === currentTrack.id);
-          if (trackIndex !== -1) shuffled.splice(trackIndex, 1);
+          const trackIndex = shuffled.findIndex(t => t.queueItemId ? (t.queueItemId === currentTrack.queueItemId) : (t.id === currentTrack.id));
+          let currentTrackInQueue = currentTrack;
+          if (trackIndex !== -1) {
+            currentTrackInQueue = shuffled[trackIndex];
+            shuffled.splice(trackIndex, 1);
+          }
 
           for (let i = shuffled.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
           }
-          shuffled.unshift(currentTrack);
+          shuffled.unshift(currentTrackInQueue);
           setPlaybackQueue(shuffled);
         }
       } else if (prev === 'shuffle') {

@@ -39,6 +39,7 @@ export type Track = {
   parentName?: string;
   coverUrl?: string;
   dbId?: string;
+  queueItemId?: string;
 };
 
 export type DriveItem = {
@@ -629,6 +630,7 @@ function App() {
             </div>
           </div>
         )}
+        <div id="toast-root" />
       </div>
     );
   }

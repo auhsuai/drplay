@@ -1,3 +1,5 @@
+import { fetchWithAuth } from './apiClient';
+
 export async function createFolder(token: string, name: string, parentId: string): Promise<any> {
   const metadata = {
     name: name,
@@ -5,7 +7,7 @@ export async function createFolder(token: string, name: string, parentId: string
     parents: [parentId]
   };
 
-  const response = await fetch('https://www.googleapis.com/drive/v3/files', {
+  const response = await fetchWithAuth('https://www.googleapis.com/drive/v3/files', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -29,7 +31,7 @@ export async function deleteFile(token: string, fileId: string): Promise<any> {
     }
   };
 
-  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+  const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -46,7 +48,7 @@ export async function deleteFile(token: string, fileId: string): Promise<any> {
 
 export async function moveFile(token: string, fileId: string, currentParentId: string, newParentId: string): Promise<any> {
   // First, get the actual parents of the file to ensure we remove it from all of them
-  const getResponse = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
+  const getResponse = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
     headers: {
       'Authorization': `Bearer ${token}`
     }
@@ -65,7 +67,7 @@ export async function moveFile(token: string, fileId: string, currentParentId: s
     }
   }
 
-  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?addParents=${newParentId}&removeParents=${removeParents}`, {
+  const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?addParents=${newParentId}&removeParents=${removeParents}`, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -90,7 +92,7 @@ export async function restoreFile(token: string, fileId: string): Promise<any> {
     }
   };
 
-  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+  const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -106,7 +108,7 @@ export async function restoreFile(token: string, fileId: string): Promise<any> {
 }
 
 export async function permanentlyDeleteFile(token: string, fileId: string): Promise<any> {
-  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+  const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
     method: 'DELETE',
     headers: {
       'Authorization': `Bearer ${token}`
@@ -123,7 +125,7 @@ export async function getRecentlyAddedAudioFiles(token: string): Promise<any[]> 
   const q = "mimeType contains 'audio/' and trashed = false";
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=5`;
   
-  const response = await fetch(url, {
+  const response = await fetchWithAuth(url, {
     headers: {
       'Authorization': `Bearer ${token}`
     }

@@ -181,7 +181,7 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
     if (knownSize) {
       try {
         const localMeta = await invoke<{ id: string, title: string, artist: string, album: string, duration: number, has_cover: boolean, file_type: string } | null>("get_local_metadata", {
-          size: knownSize,
+          size: Number(knownSize),
           name: knownName || "",
         });
 
@@ -215,6 +215,7 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
 
     let fileSizeExtracted: number | undefined;
     let metadata;
+    let buffer: ArrayBuffer | null = null;
 
     try {
       if (!streamUrlOrToken.startsWith('http')) {
@@ -229,7 +230,7 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
         // Google Drive CORS strips Range headers in browsers, causing WebView2 to download
         // the ENTIRE 3GB FILE directly into RAM (response.arrayBuffer()) just to read 64KB of ID3 tags!
         const port = await getProxyPort();
-        const proxyUrl = `http://127.0.0.1:${port}/stream.mp3?id=${fileId}&token=${streamUrlOrToken}`;
+        const proxyUrl = `http://127.0.0.1:${port}/stream.mp3?id=${fileId}`;
         const response = await fetch(proxyUrl, { headers: fetchHeaders, signal });
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
@@ -256,7 +257,7 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
         }
 
         fileSizeExtracted = fileSize;
-        const buffer = await response.arrayBuffer();
+        buffer = await response.arrayBuffer();
         const fileInfo = { mimeType: 'audio/mpeg', size: fileSize };
         metadata = await musicMetadata.parseBuffer(new Uint8Array(buffer), fileInfo, { duration: true });
       } else {
@@ -304,7 +305,8 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
         finalResult.pictureData = compressed.data;
         finalResult.pictureFormat = compressed.format;
       } else {
-        finalResult.pictureData = picture.data;
+        // Must make a hard copy because we might detach the original buffer!
+        finalResult.pictureData = new Uint8Array(picture.data);
         finalResult.pictureFormat = picture.format;
       }
     }
@@ -315,8 +317,21 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
       const oldestKey = metadataCacheKeys.shift();
       if (oldestKey) delete metadataCache[oldestKey];
     }
+    
     await set(cacheKey, finalResult);
     window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId } }));
+    
+    // Detach ArrayBuffer and cleanup metadata right before returning
+    if (buffer) {
+      try {
+        const { port1 } = new MessageChannel();
+        port1.postMessage(buffer, [buffer]);
+      } catch (err) {}
+    }
+    buffer = null;
+    if (metadata?.common?.picture) metadata.common.picture = [];
+    metadata = null;
+    
     return finalResult;
   } finally {
     releaseMetadataLock();

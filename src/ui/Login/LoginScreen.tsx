@@ -2,6 +2,8 @@ import { useState } from "react";
 import { HardDrive, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { showErrorToast } from "../../utils/simpleToast";
+
 
 interface LoginScreenProps {
   onLogin: (accessToken: string) => void;
@@ -12,6 +14,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLoginClick = async () => {
+    if (isLoading) return;
+    
     try {
       setIsLoading(true);
       // Call Rust backend directly
@@ -20,6 +24,14 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       onLogin(token);
     } catch (error) {
       setIsLoading(false);
+      const errStr = String(error);
+      if (errStr.includes('User denied access')) {
+        console.info('[Auth] User cancelled login');
+      } else if (errStr.includes('timeout') || errStr.includes('timed out')) {
+        showErrorToast('Đăng nhập quá thời gian chờ, vui lòng thử lại.');
+      } else {
+        showErrorToast('Đăng nhập thất bại, vui lòng thử lại.');
+      }
       console.error("Login Failed:", error);
     }
   };

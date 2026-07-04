@@ -11,11 +11,16 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Manager;
 pub static GLOBAL_STREAM_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
+lazy_static::lazy_static! {
+    pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
+}
+
 #[command]
 async fn update_stream_token(token: String) -> Result<(), String> {
     if let Ok(mut t) = GLOBAL_STREAM_TOKEN.lock() {
         *t = token;
     }
+    GLOBAL_TOKEN_NOTIFY.notify_waiters();
     Ok(())
 }
 
@@ -132,14 +137,14 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn get_stream_url(file_id: String, token: String, bitrate: Option<f64>, buffer_seconds: Option<f64>) -> Result<String, String> {
+async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>) -> Result<String, String> {
     let port = PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
     let port_str = if port > 0 { port.to_string() } else { "3457".to_string() };
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(180.0);
-        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}&token={}&bitrate={}&buffer={}", port_str, file_id, token, b, buf))
+        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}&bitrate={}&buffer={}", port_str, file_id, b, buf))
     } else {
-        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}&token={}", port_str, file_id, token))
+        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}", port_str, file_id))
     }
 }
 
@@ -225,36 +230,10 @@ pub enum DownloadState {
     Failed(String),
 }
 
-pub struct SegmentedCache {
-    pub file_id: String,
-    pub content_type: String,
-    pub duration: Option<f64>,
-    pub total_file_size: usize,
-    pub buffer: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<usize, Vec<u8>>>>,
-    pub filled_ranges: std::sync::Arc<tokio::sync::RwLock<Vec<(usize, usize)>>>,
-    pub download_state: std::sync::Arc<tokio::sync::RwLock<DownloadState>>,
-    pub current_task: std::sync::Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    pub active_download_pos: std::sync::Arc<tokio::sync::RwLock<usize>>,
-    pub max_read_pos: std::sync::Arc<tokio::sync::RwLock<usize>>,
-    pub data_ready: std::sync::Arc<tokio::sync::Notify>,
-}
 
-lazy_static::lazy_static! {
-    pub static ref GLOBAL_STREAM_CACHE: tokio::sync::Mutex<Option<std::sync::Arc<SegmentedCache>>> = tokio::sync::Mutex::new(None);
-    pub static ref DRIVE_API_SEMAPHORE: std::sync::Arc<tokio::sync::Semaphore> = std::sync::Arc::new(tokio::sync::Semaphore::new(3));
-}
 
-#[tauri::command]
-async fn get_proxy_cache_status() -> Result<(String, Vec<(usize, usize)>, usize), String> {
-    let global = GLOBAL_STREAM_CACHE.lock().await; if true {
-        if let Some(cache) = &*global {
-            if let Ok(ranges) = cache.filled_ranges.try_read() {
-                return Ok((cache.file_id.clone(), ranges.clone(), cache.total_file_size));
-            }
-        }
-    }
-    Err("No active cache".to_string())
-}
+
+
 
 #[tauri::command]
 fn get_proxy_port() -> u16 {
@@ -386,8 +365,18 @@ static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 pub static PROXY_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
+
+#[tauri::command]
+async fn clear_stream_token() -> Result<(), String> {
+    if let Ok(mut global) = crate::GLOBAL_STREAM_TOKEN.lock() {
+        global.clear();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn update_minimize_to_tray(minimize: bool) {
+
     MINIMIZE_TO_TRAY.store(minimize, Ordering::SeqCst);
 }
 
@@ -462,10 +451,9 @@ pub fn run() {
             refresh_google_token,
             extract_metadata_safe,
             get_stream_url,
-            get_proxy_cache_status,
             update_buffer_settings,
             get_local_metadata,
-            update_stream_token,
+            update_stream_token, clear_stream_token,
             update_minimize_to_tray,
             get_proxy_port
         ])

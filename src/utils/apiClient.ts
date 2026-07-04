@@ -1,26 +1,72 @@
 import { invoke } from "@tauri-apps/api/core";
 
-// Biến lock để tránh gọi refresh token nhiều lần cùng lúc khi có nhiều request thất bại
+import { getCurrentSessionId } from "./sessionGuard";
+
+export class TokenRefreshError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: 'network' | 'invalid_grant' | 'unknown'
+  ) {
+    super(message);
+    this.name = 'TokenRefreshError';
+  }
+}
+
 let isRefreshing = false;
-let refreshSubscribers: ((token: string) => void)[] = [];
+let refreshSubscribers: Array<{
+  resolve: (token: string) => void;
+  reject: (err: Error) => void;
+}> = [];
+let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
 
-const subscribeTokenRefresh = (cb: (token: string) => void) => {
-  refreshSubscribers.push(cb);
+export const stopProactiveRefresh = () => {
+  if (refreshTimerId) {
+    clearTimeout(refreshTimerId);
+    refreshTimerId = null;
+  }
 };
 
-const onRefreshed = (token: string) => {
-  refreshSubscribers.forEach((cb) => cb(token));
-  refreshSubscribers = [];
+export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
+  stopProactiveRefresh();
+  const refreshInMs = Math.max((expiresInSeconds - 180) * 1000, 5000);
+  refreshTimerId = setTimeout(async () => {
+    await getValidToken(true);
+  }, refreshInMs);
 };
 
-/**
- * Lấy token hiện tại, nếu sắp hết hạn (còn < 10 phút) thì chủ động refresh.
- * Dùng cho các tác vụ không dùng fetch (như gọi xuống Rust qua Tauri).
- */
+export async function revokeGoogleToken(token: string): Promise<void> {
+  try {
+    await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+  } catch (err) {
+    console.warn('[Auth] Revoke token failed (non-blocking)', err);
+  }
+}
+
+function getStoredTokenTime(): number {
+  const raw = localStorage.getItem('drplay_token_time');
+  const parsed = parseInt(raw || '', 10);
+  
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > Date.now() + 86_400_000) {
+    console.warn('[Auth] Invalid token_time detected, forcing refresh');
+    return 0;
+  }
+  
+  return parsed;
+}
+
+function scheduleRetryRefresh() {
+  const RETRY_DELAY = 30_000;
+  setTimeout(() => {
+    getValidToken(true).catch(e => console.warn("Retry refresh failed", e));
+  }, RETRY_DELAY);
+}
+
 export const getValidToken = async (forceRefresh: boolean = false): Promise<string | null> => {
   const token = localStorage.getItem("drplay_access_token");
-  const issueTime = parseInt(localStorage.getItem("drplay_token_time") || "0");
-  // Nếu đã quá 50 phút kể từ lúc cấp (token thường sống 60p)
+  const issueTime = getStoredTokenTime();
   const isExpired = Date.now() - issueTime > 50 * 60 * 1000;
 
   if (isExpired || !token || forceRefresh) {
@@ -30,38 +76,67 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
       return null;
     }
 
-    if (!isRefreshing) {
-      isRefreshing = true;
-      try {
-        const tokenData = await invoke<any>("refresh_google_token", { refreshToken });
-        
-        localStorage.setItem("drplay_access_token", tokenData.access_token);
-        localStorage.setItem("drplay_token_time", Date.now().toString());
-        if (tokenData.refresh_token) {
-          localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
-        }
-
-        invoke("update_stream_token", { token: tokenData.access_token }).catch(e => console.error("Rust stream token update fail", e));
-
-        isRefreshing = false;
-        onRefreshed(tokenData.access_token);
-        window.dispatchEvent(new CustomEvent('token-updated', { detail: { token: tokenData.access_token } }));
-        return tokenData.access_token;
-      } catch (err) {
-        isRefreshing = false;
-        refreshSubscribers = [];
-        console.error("Failed to proactive refresh token", err);
-        window.dispatchEvent(new CustomEvent('auth-logout'));
-        return null;
-      }
+    if (isRefreshing) {
+      return new Promise((resolve, reject) => {
+        refreshSubscribers.push({ resolve, reject });
+      });
     }
 
-    // Nếu đang refresh, đợi token mới
-    return new Promise((resolve) => {
-      subscribeTokenRefresh((newToken: string) => {
-        resolve(newToken);
-      });
-    });
+    isRefreshing = true;
+    const mySessionId = getCurrentSessionId();
+
+    try {
+      let tokenData;
+      try {
+        tokenData = await invoke<any>("refresh_google_token", { refreshToken });
+      } catch (err: any) {
+        const errStr = String(err);
+        if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {
+          throw new TokenRefreshError('Network unreachable', 'network');
+        } else if (errStr.includes("invalid_grant")) {
+          throw new TokenRefreshError('Refresh token revoked/expired', 'invalid_grant');
+        } else {
+          throw new TokenRefreshError(`Unexpected error: ${errStr}`, 'unknown');
+        }
+      }
+
+      if (mySessionId !== getCurrentSessionId()) {
+        console.debug('[Auth] Refresh result discarded - session changed');
+        refreshSubscribers.forEach(sub => sub.resolve(''));
+        return '';
+      }
+      
+      localStorage.setItem("drplay_access_token", tokenData.access_token);
+      localStorage.setItem("drplay_token_time", Date.now().toString());
+      if (tokenData.refresh_token) {
+        localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
+      }
+
+      invoke("update_stream_token", { token: tokenData.access_token }).catch(e => console.error("Rust stream token update fail", e));
+
+      scheduleProactiveRefresh(tokenData.expires_in || 3600);
+      window.dispatchEvent(new CustomEvent('token-updated', { detail: { token: tokenData.access_token } }));
+      
+      refreshSubscribers.forEach(sub => sub.resolve(tokenData.access_token));
+      return tokenData.access_token;
+    } catch (err: any) {
+      refreshSubscribers.forEach(sub => sub.reject(err));
+      
+      if (err instanceof TokenRefreshError) {
+        if (err.kind === 'invalid_grant') {
+          window.dispatchEvent(new CustomEvent('auth-logout'));
+        } else {
+          console.warn('[Auth] Refresh tạm thời thất bại, sẽ thử lại', err.kind);
+          scheduleRetryRefresh();
+        }
+      } else {
+         window.dispatchEvent(new CustomEvent('auth-logout'));
+      }
+      return null;
+    } finally {
+      isRefreshing = false;
+      refreshSubscribers = [];
+    }
   }
 
   return token;

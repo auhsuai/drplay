@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker } from '../utils/proSyncManager';
-import { fetchWithAuth, getValidToken } from "../utils/apiClient";
+import { invalidateCurrentSession } from "../utils/sessionGuard";
+import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
 
 export const useAuth = (onLogoutExt?: () => void) => {
@@ -17,6 +18,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
       setAccessToken(savedToken);
       setIsLoggedIn(true);
       invoke("update_stream_token", { token: savedToken }).catch(e => console.error("Rust stream token init fail", e));
+      const issueTime = parseInt(localStorage.getItem("drplay_token_time") || "0");
+      const elapsedSec = (Date.now() - issueTime) / 1000;
+      const remainingSec = 3600 - elapsedSec;
+      scheduleProactiveRefresh(remainingSec > 0 ? remainingSec : 0);
     }
   }, []);
 
@@ -28,9 +33,14 @@ export const useAuth = (onLogoutExt?: () => void) => {
     }
     setAccessToken(tokenData.access_token);
     setIsLoggedIn(true);
+    scheduleProactiveRefresh(tokenData.expires_in || 3600);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    invalidateCurrentSession();
+
+    const tokenToRevoke = localStorage.getItem("drplay_access_token");
+
     localStorage.removeItem("drplay_access_token");
     localStorage.removeItem("drplay_refresh_token");
     localStorage.removeItem("drplay_token_time");
@@ -38,6 +48,18 @@ export const useAuth = (onLogoutExt?: () => void) => {
     setIsLoggedIn(false);
     setAccessToken(null);
     setUserProfile(null);
+    stopProactiveRefresh();
+
+    try {
+      await invoke("clear_stream_token");
+    } catch (e) {
+      console.warn("[Auth] Failed to clear backend token state", e);
+    }
+
+    if (tokenToRevoke) {
+      revokeGoogleToken(tokenToRevoke);
+    }
+
     if (onLogoutExt) onLogoutExt();
   };
 

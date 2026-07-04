@@ -112,11 +112,37 @@ export function MainContent({
     }
   }, [currentFolderId]);
 
-  const globalSearchItemsRaw = useLiveQuery(() => {
+  const globalSearchItemsRaw = useLiveQuery(async () => {
     if (!searchQuery) return [];
     const query = searchQuery.toLowerCase();
-    return db.files.filter(f => f.name.toLowerCase().includes(query)).toArray();
-  }, [searchQuery]);
+    
+    // First, find all matches
+    const matches = await db.files.filter(f => f.name.toLowerCase().includes(query)).toArray();
+    
+    // If we are at the root, everything is included
+    if (!currentFolderId || currentFolderId === 'root' || currentFolderId === '') {
+      return matches;
+    }
+
+    // To check if a match is inside currentFolderId, we build a parentMap
+    const allFiles = await db.files.toArray();
+    const parentMap = new Map<string, string>();
+    allFiles.forEach(f => parentMap.set(f.id, f.parentId));
+
+    // Filter matches to only those whose lineage includes currentFolderId
+    return matches.filter(f => {
+      // If the file itself is the current folder (rare, but possible if searching its name), exclude or include?
+      // Usually we want items INSIDE the folder, so we check parents.
+      let current: string | undefined = f.parentId;
+      let depth = 0;
+      while (current && depth < 50) { // Limit depth to prevent infinite loops from circular refs
+        if (current === currentFolderId) return true;
+        current = parentMap.get(current);
+        depth++;
+      }
+      return false;
+    });
+  }, [searchQuery, currentFolderId]);
 
   const globalSearchItems = React.useMemo(() => {
     if (!globalSearchItemsRaw) return [];

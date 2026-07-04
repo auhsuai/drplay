@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Track } from "../../App";
+import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1, Shuffle } from "lucide-react";
 import { getTrackMetadata } from "../../utils/metadata";
 import { getPalette } from '../../utils/color';
@@ -18,17 +19,6 @@ interface NowPlayingViewProps {
   isOpen: boolean;
 }
 
-const formatTime = (time: number) => {
-  if (isNaN(time)) return "0:00";
-  const hours = Math.floor(time / 3600);
-  const minutes = Math.floor((time % 3600) / 60);
-  const seconds = Math.floor(time % 60);
-  
-  if (hours > 0) {
-    return `${hours}:${minutes < 10 ? "0" : ""}${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
-  }
-  return `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
-};
 
 export function NowPlayingView({ 
   currentTrack, 

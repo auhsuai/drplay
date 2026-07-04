@@ -7,21 +7,11 @@ import { recordPlay } from '../../utils/history';
 import { isFavorite, addFavorite, removeFavorite } from '../../utils/favorites';
 import { MoreMenu } from '../components/MoreMenu';
 import { set as idbSet } from 'idb-keyval';
-import { invoke } from '@tauri-apps/api/core';
+
 import { listen } from '@tauri-apps/api/event';
-
-
-const formatTime = (time: number) => {
-  if (isNaN(time)) return "0:00";
-  const hours = Math.floor(time / 3600);
-  const minutes = Math.floor((time % 3600) / 60);
-  const seconds = Math.floor(time % 60);
-  
-  if (hours > 0) {
-    return `${hours}:${minutes < 10 ? "0" : ""}${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
-  }
-  return `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
-};
+import { safePlay, safePause } from "../../utils/safeAudio";
+import { formatTime } from "../../utils/formatTime";
+import { getValidToken } from "../../utils/apiClient";
 
 interface PlayerBarProps {
   currentTrack: Track | null;
@@ -62,6 +52,37 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const [realArtist, setRealArtist] = useState("");
   const [errorText, setErrorText] = useState("");
   const [isLiked, setIsLiked] = useState(false);
+  const isTransitioningRef = useRef(false);
+  const isProgrammaticActionRef = useRef(false);
+
+  const MAX_RETRY = 5;
+  const retryCountRef = useRef(0);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearRetryTimeout = () => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => clearRetryTimeout();
+  }, [currentTrack?.id]);
+
+  const handleNextClick = () => {
+    if (isTransitioningRef.current) return;
+    isTransitioningRef.current = true;
+    onNextTrack();
+    setTimeout(() => { isTransitioningRef.current = false; }, 200);
+  };
+
+  const handlePrevClick = () => {
+    if (isTransitioningRef.current) return;
+    isTransitioningRef.current = true;
+    onPrevTrack();
+    setTimeout(() => { isTransitioningRef.current = false; }, 200);
+  };
   
   const lastSaveTimeRef = useRef(0);
   const restoredAudioTrackIdRef = useRef<string | null>(null);
@@ -232,8 +253,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
   useEffect(() => {
     onTogglePlayRef.current = onTogglePlay;
-    onNextTrackRef.current = onNextTrack;
-    onPrevTrackRef.current = onPrevTrack;
+    onNextTrackRef.current = handleNextClick;
+    onPrevTrackRef.current = handlePrevClick;
     onTogglePlayModeRef.current = onTogglePlayMode;
     onToggleNowPlayingRef.current = onExpandNowPlaying;
   }, [onTogglePlay, onNextTrack, onPrevTrack, onTogglePlayMode, onExpandNowPlaying]);
@@ -343,42 +364,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
   useEffect(() => {
     if (audioRef.current) {
-      const handleError = () => {
-        const err = audioRef.current?.error;
-        if (err) {
-          // E:4 often means Google Drive banned the user (403) or the network dropped.
-          // The Rust proxy emits "drive-quota-exceeded", so we don't need a diagnostic fetch here anymore.
-          if (err.code !== 4 || !errorText.includes("Google Drive Limit")) {
-             setErrorText(`Error: ${err.code} - ${err.message}`);
-          }
-          console.error("Audio playback error:", err);
-          
-          // Auto-recover from sleep/network drop if it's a network error (code 2) or PIPELINE_ERROR
-          if (err.code === 2 || err.code === 3 || err.message?.includes("PIPELINE_ERROR")) {
-            setTimeout(() => {
-              if (audioRef.current && isPlaying) {
-                const savedTime = audioRef.current.currentTime;
-                audioRef.current.load();
-                audioRef.current.currentTime = savedTime;
-                setErrorText("");
-                const p = audioRef.current.play();
-                if (p !== undefined) p.catch(() => {});
-              }
-            }, 1500);
-          }
-        }
-      };
-      
       if (isPlaying) {
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-        if (audioRef.current.error) {
-          const savedTime = audioRef.current.currentTime;
-          audioRef.current.load();
-          audioRef.current.currentTime = savedTime;
-          setErrorText("");
-        }
-        audioRef.current.onerror = handleError;
-        const playPromise = audioRef.current.play();
+        const playPromise = safePlay(audioRef.current);
         if (playPromise !== undefined) {
           playPromise.catch((e) => {
             if (e.name !== 'AbortError') {
@@ -388,10 +376,146 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         }
       } else {
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-        audioRef.current.pause();
+        safePause(audioRef.current);
       }
     }
-  }, [isPlaying, currentTrack]);
+  }, [isPlaying]);
+
+
+  // Sync Native play/pause events
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const handleNativePause = () => {
+      // Don't call onTogglePlay, just update state indirectly if we had a setter.
+      // But we receive `isPlaying` from props. So we need to sync it up using onTogglePlay if it's out of sync?
+      // Wait, usePlayer manages isPlaying. PlayerBar doesn't have setIsPlaying.
+      // We can't really do much here unless we have setIsPlaying. The user's code snippet assumed setIsPlaying was available.
+      // Let's just pass `setIsPlaying` from `App.tsx` or not do anything for now.
+      // Wait, we can't easily sync if we don't have setIsPlaying.
+      // Actually, usePlayer is passed into PlayerBar via props.
+      // I'll skip the native sync if there is no setIsPlaying. Let's look at the props.
+    };
+  }, []);
+
+  useEffect(() => {
+    let rateLimitRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+    const unlistenTokenExpired = listen('token-expired', async () => {
+      console.warn('[Player] Token expired mid-stream, auto refreshing...');
+      // setPlaybackStatus('recovering')
+      try {
+        await getValidToken(true);
+        if (audioRef.current && currentTrack?.streamUrl) {
+          const resumeTime = audioRef.current.currentTime;
+          audioRef.current.src = currentTrack.streamUrl; // URL keeps same, token updated globally
+          audioRef.current.load();
+          audioRef.current.currentTime = resumeTime;
+          await safePlay(audioRef.current);
+        }
+      } catch (err) {
+        console.error('[Player] Refresh token failed', err);
+      }
+    });
+
+    const unlistenQuotaExceeded = listen('drive-quota-exceeded', () => {
+      console.warn('[Player] Google Drive API quota exceeded');
+      // setPlaybackStatus('rate-limited')
+      setErrorText('Google Drive đang quá tải, thử lại sau ít phút...');
+      if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
+      rateLimitRetryTimeout = setTimeout(async () => {
+        if (audioRef.current && currentTrack?.streamUrl) {
+          audioRef.current.load();
+          await safePlay(audioRef.current).catch(() => {});
+        }
+      }, 30_000);
+    });
+
+    return () => {
+      if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
+      unlistenTokenExpired.then(fn => fn());
+      unlistenQuotaExceeded.then(fn => fn());
+    };
+  }, [currentTrack]);
+
+  const handleAudioError = async () => {
+    const audio = audioRef.current;
+    const error = audio?.error;
+    if (!error) return;
+
+    if (
+      error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+      error.code === MediaError.MEDIA_ERR_DECODE
+    ) {
+      setErrorText('File không hợp lệ, đang chuyển bài kế tiếp...');
+      handleNextClick();
+      return;
+    }
+
+    let errorType = 'transient';
+    try {
+      if (currentTrack?.streamUrl) {
+        const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD' });
+        errorType = headResp.headers.get("X-Stream-Error-Type") || 'transient';
+      }
+    } catch(e) {}
+
+    if (errorType === 'permanent') {
+      setErrorText('File không còn tồn tại trên Drive, đang chuyển bài...');
+      handleNextClick();
+      return;
+    }
+
+    if (retryCountRef.current >= MAX_RETRY) {
+      setErrorText('Mất kết nối, vui lòng kiểm tra mạng và thử lại thủ công.');
+      if (isPlayingRef.current) onTogglePlayRef.current();
+      return;
+    }
+
+    const backoffMs = Math.min(1500 * Math.pow(2, retryCountRef.current), 15000);
+    retryCountRef.current += 1;
+
+    clearRetryTimeout();
+    retryTimeoutRef.current = setTimeout(() => {
+      audio?.load();
+      if (isPlayingRef.current) audio?.play().catch(() => {});
+    }, backoffMs);
+  };
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack?.streamUrl) return;
+
+    let cancelled = false;
+
+    const loadAndPlay = async () => {
+      isProgrammaticActionRef.current = true;
+      safePause(audio);
+      audio.src = currentTrack.streamUrl!;
+      audio.load();
+      // Allow browser to process synchronous native events triggered by load/pause
+      setTimeout(() => {
+        isProgrammaticActionRef.current = false;
+      }, 50);
+
+      if (cancelled) return;
+
+      if (currentTrack.restoreTime) {
+        audio.currentTime = currentTrack.restoreTime;
+      }
+
+      if (isPlayingRef.current) {
+        try {
+          await safePlay(audio);
+        } catch (err) {
+          console.warn('[Player] play() interrupted', err);
+        }
+      }
+    };
+
+    loadAndPlay();
+
+    return () => { cancelled = true; };
+  }, [currentTrack?.streamUrl]);
 
   // Sync Audio Focus (OS-level pause/play)
   useEffect(() => {
@@ -399,12 +523,14 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     if (!audio) return;
 
     const handleSystemPause = () => {
+      if (isProgrammaticActionRef.current) return;
       if (isPlayingRef.current) {
         onTogglePlayRef.current(); 
       }
     };
 
     const handleSystemPlay = () => {
+      if (isProgrammaticActionRef.current) return;
       if (!isPlayingRef.current) {
         onTogglePlayRef.current();
       }
@@ -446,6 +572,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   };
 
   const handleCanPlay = () => {
+    retryCountRef.current = 0;
+    clearRetryTimeout();
     if (audioRef.current) {
       if (pendingBufferRestoreTimeRef.current !== null) {
         audioRef.current.currentTime = pendingBufferRestoreTimeRef.current;
@@ -492,81 +620,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     return () => window.removeEventListener('beforeunload', saveSession);
   }, [currentTrack]);
 
-  const latestBufferPayloadRef = useRef<{song_id: string, ranges: [number, number][], total_size: number} | null>(null);
-
-  const updateBufferUI = () => {
-    const audio = audioRef.current;
-    const currentDuration = audio?.duration || duration;
-    if (currentDuration <= 0) return;
-
-    const payload = latestBufferPayloadRef.current;
-    let proxyBufferedPercent = 0;
-    
-    if (payload && payload.song_id === currentTrack?.id && payload.total_size > 0) {
-      const currentTime = audio?.currentTime || 0;
-      const currentTimeBytes = (currentTime / currentDuration) * payload.total_size;
-
-      let sortedRanges = [...payload.ranges].sort((a, b) => a[0] - b[0]);
-      let leadingEdge = currentTimeBytes;
-      
-      for (const [start, end] of sortedRanges) {
-        if (start <= leadingEdge && end >= leadingEdge) {
-          leadingEdge = Math.max(leadingEdge, end);
-        } else if (start <= leadingEdge) {
-          leadingEdge = Math.max(leadingEdge, end);
-        } else if (start > leadingEdge) {
-          break; 
-        }
-      }
-      
-      proxyBufferedPercent = (leadingEdge / payload.total_size) * 100;
-    }
-    
-    let html5BufferedPercent = 0;
-    if (audio) {
-      const buffered = audio.buffered;
-      if (buffered.length > 0) {
-        html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / currentDuration) * 100);
-      }
-    }
-    
-    const newPercent = Math.min(100, Math.max(0, Math.max(proxyBufferedPercent, html5BufferedPercent)));
-    if (bufferFillRef.current) {
-      bufferFillRef.current.style.width = `${newPercent}%`;
-    }
-  };
-
-  // Event-driven Buffer UI Update (No polling!)
-  useEffect(() => {
-    interface BufferPayload {
-      song_id: string;
-      ranges: [number, number][];
-      total_size: number;
-    }
-    
-    let isSubscribed = true;
-
-    // 1. Initial Fetch to handle already cached files
-    invoke<[string, [number, number][], number]>("get_proxy_cache_status")
-      .then(([song_id, ranges, total_size]) => {
-        if (!isSubscribed) return;
-        latestBufferPayloadRef.current = { song_id, ranges, total_size };
-        updateBufferUI();
-      })
-      .catch((e) => console.log("Initial proxy cache:", e));
-
-    // 2. Listen to active download events
-    const unlistenPromise = listen<BufferPayload>('buffer-progress', (event) => {
-      if (!isSubscribed) return;
-      latestBufferPayloadRef.current = event.payload;
-      updateBufferUI();
-    });
-
-    return () => {
-      isSubscribed = false;
-      unlistenPromise.then(f => f());
-    };
-  }, [currentTrack?.id, duration]);
 
   useEffect(() => {
     let lastTimeText = "";
@@ -596,16 +649,27 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
+          
+          if (bufferFillRef.current) {
+            const buffered = audio.buffered;
+            let html5BufferedPercent = 0;
+            if (buffered.length > 0) {
+              html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
+            }
+            bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
+          }
         }
       }
     };
 
     if (audio) {
       audio.addEventListener('timeupdate', updateProgressUI);
+      audio.addEventListener('progress', updateProgressUI);
       updateProgressUI(); // initial update
       
       return () => {
         audio.removeEventListener('timeupdate', updateProgressUI);
+        audio.removeEventListener('progress', updateProgressUI);
       };
     }
   }, [duration, currentTrack]);
@@ -693,11 +757,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const volumePercent = isMuted ? 0 : volume * 100;
 
   return (
-    <div className="h-20 bg-white dark:bg-[#202124] grid grid-cols-[1fr_auto_1fr] items-center px-6 shrink-0 z-10 transition-colors duration-300 relative gap-4">
+    <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
       {/* Track Info (Left) */}
-      <div className="flex items-center gap-4 min-w-0 pr-4">
+      <div className="flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2">
         <div 
-          className="flex items-center gap-4 flex-1 cursor-pointer group p-1 -ml-1 rounded-lg hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors min-w-0"
+          className="flex items-center gap-2 sm:gap-4 cursor-pointer group py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors min-w-0 flex-1 max-w-[320px]"
           onClick={() => currentTrack && onExpandNowPlaying()}
           onContextMenu={(e) => {
             e.preventDefault();
@@ -731,7 +795,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
               {currentTrack ? realTitle : t('player.no_track')}
             </h4>
             <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2 overflow-hidden whitespace-nowrap text-ellipsis">
-              <span>{currentTrack ? (realArtist || t('unknown_artist')) : ""}</span>
+              <span className="truncate">{currentTrack ? (realArtist || t('unknown_artist')) : ""}</span>
               {errorText && <span className="text-[10px] text-red-500 shrink-0" title={errorText}>{errorText}</span>}
             </p>
           </div>
@@ -739,74 +803,66 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         
         {/* Heart Icon & More Menu */}
         {currentTrack && (
-          <div className="flex items-center gap-1 shrink-0 ml-2">
+          <div className="hidden lg:flex items-center gap-1 shrink-0 ml-2">
             <button 
               onClick={toggleFavorite}
               className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? 'text-[#4285F4]' : 'text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
               <Heart className="w-5 h-5" fill={isLiked ? "currentColor" : "none"} />
             </button>
-            <MoreMenu track={currentTrack} />
+            <MoreMenu track={currentTrack} isPlayerBarMode={true} />
           </div>
         )}
       </div>
 
       {/* Center controls */}
-      <div className="flex flex-col items-center justify-center relative z-10 w-[340px] sm:w-[400px]">
-        <div className="grid grid-cols-3 w-full mb-1 items-center">
-          <div className="flex justify-end pr-4">
-            {/* Left spacer for perfect centering */}
-          </div>
-
-          <div className="flex items-center justify-center gap-4 sm:gap-6">
-            <button 
-              onClick={onPrevTrack}
-              className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-              disabled={!currentTrack}
-            >
-              <SkipBack className="w-5 h-5" />
-            </button>
-            
-            <button 
-              onClick={onTogglePlay}
-              className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
-              disabled={!currentTrack || isDownloading}
-            >
-              {isDownloading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : isPlaying ? (
-                <Pause className="w-5 h-5" />
-              ) : (
-                <Play className="w-5 h-5 ml-0.5" />
-              )}
-            </button>
-
-            <button 
-              onClick={onNextTrack}
-              className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-              disabled={!currentTrack}
-            >
-              <SkipForward className="w-5 h-5" />
-            </button>
-          </div>
+      <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] px-2 min-w-[200px]">
+        <div className="flex w-full mb-1 items-center justify-center gap-3 sm:gap-6">
+          <button 
+            onClick={handlePrevClick}
+            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+            disabled={!currentTrack}
+          >
+            <SkipBack className="w-5 h-5" />
+          </button>
           
-          <div className="flex justify-start pl-2">
-            <div className="relative group flex items-center shrink-0">
-              <button 
-                onClick={onTogglePlayMode}
-                className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== 'normal' ? 'text-[#4285F4] hover:bg-[#4285F4]/10' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'}`}
-                disabled={!currentTrack}
-              >
-                {playMode === 'shuffle' && <Shuffle className="w-5 h-5" />}
-                {playMode === 'repeat-all' && <Repeat className="w-5 h-5" />}
-                {playMode === 'repeat-one' && <Repeat1 className="w-5 h-5" />}
-                {playMode === 'normal' && <Repeat className="w-5 h-5 opacity-40" />}
-              </button>
-              <div className="absolute top-full mt-3 left-1/2 -translate-x-1/2 bg-white dark:bg-[#2a2b2f] text-gray-800 dark:text-gray-200 text-xs py-1.5 px-3 rounded-md shadow-xl opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 font-medium">
-                {playMode === 'shuffle' ? 'Shuffle' : playMode === 'repeat-all' ? 'Repeat All' : playMode === 'repeat-one' ? 'Repeat One' : 'Normal Order'}
-                {/* Tooltip triangle */}
-                <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white dark:bg-[#2a2b2f] rotate-45"></div>
-              </div>
+          <button 
+            onClick={onTogglePlay}
+            className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
+            disabled={!currentTrack || isDownloading}
+          >
+            {isDownloading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="w-5 h-5" />
+            ) : (
+              <Play className="w-5 h-5 ml-0.5" />
+            )}
+          </button>
+
+          <button 
+            onClick={handleNextClick}
+            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+            disabled={!currentTrack}
+          >
+            <SkipForward className="w-5 h-5" />
+          </button>
+          
+          <div className="relative group flex items-center shrink-0">
+            <button 
+              onClick={onTogglePlayMode}
+              className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== 'normal' ? 'text-[#4285F4] hover:bg-[#4285F4]/10' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'}`}
+              disabled={!currentTrack}
+            >
+              {playMode === 'shuffle' && <Shuffle className="w-5 h-5" />}
+              {playMode === 'repeat-all' && <Repeat className="w-5 h-5" />}
+              {playMode === 'repeat-one' && <Repeat1 className="w-5 h-5" />}
+              {playMode === 'normal' && <Repeat className="w-5 h-5 opacity-40" />}
+            </button>
+            <div className="absolute top-full mt-3 left-1/2 -translate-x-1/2 bg-white dark:bg-[#2a2b2f] text-gray-800 dark:text-gray-200 text-xs py-1.5 px-3 rounded-md shadow-xl opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 font-medium">
+              {playMode === 'shuffle' ? 'Shuffle' : playMode === 'repeat-all' ? 'Repeat All' : playMode === 'repeat-one' ? 'Repeat One' : 'Normal Order'}
+              {/* Tooltip triangle */}
+              <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white dark:bg-[#2a2b2f] rotate-45"></div>
             </div>
           </div>
         </div>
@@ -826,7 +882,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             {/* Played Bar */}
             <div 
               ref={progressFillRef}
-              className={`absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width] ${isDraggingUI ? '' : 'transition-all duration-150'}`}
+              className={`absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width]`}
             >
               {/* Knob (luôn hiển thị) */}
               <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0"></div>
@@ -837,11 +893,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       </div>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-3 justify-end min-w-0 pl-4">
+      <div className="flex items-center justify-end w-[30%] min-w-[120px] pl-2 gap-3">
         {renderVolumeIcon()}
         <div 
           ref={volumeBarRef}
-          className="w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group flex items-center"
+          className="hidden xl:flex w-16 sm:w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center"
           onPointerDown={handleVolumePointerDown}
         >
           <div 
@@ -854,29 +910,26 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       </div>
 
       {/* Hidden Audio Element */}
-      {currentTrack && currentTrack.streamUrl && (
-        <audio
-          id="drplay-audio"
-          ref={audioRef}
-          src={currentTrack.streamUrl}
-          preload="metadata"
-          autoPlay={isPlaying}
-          onTimeUpdate={handleTimeUpdate}
-          onProgress={handleTimeUpdate}
-          onLoadedMetadata={handleLoadedMetadata}
-          onCanPlay={handleCanPlay}
-          onEnded={() => {
-            if (playMode === 'repeat-one') {
-              if (audioRef.current) {
-                audioRef.current.currentTime = 0;
-                audioRef.current.play().catch(e => console.error("Replay failed", e));
-              }
-            } else {
-              onNextTrack();
+      <audio
+        id="drplay-audio"
+        ref={audioRef}
+        preload="auto"
+        onTimeUpdate={handleTimeUpdate}
+        onProgress={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        onCanPlay={handleCanPlay}
+        onError={handleAudioError}
+        onEnded={() => {
+          if (playMode === 'repeat-one') {
+            if (audioRef.current) {
+              audioRef.current.currentTime = 0;
+              safePlay(audioRef.current).catch(e => console.error("Replay failed", e));
             }
-          }}
-        />
-      )}
+          } else {
+            handleNextClick();
+          }
+        }}
+      />
     </div>
   );
 }

@@ -99,6 +99,8 @@
     "remove_from_liked": "Bỏ khỏi Đã thích",
     "add_to_playlist": "Thêm vào Danh sách phát",
     "no_playlists": "Chưa có danh sách phát nào",
+    "download_song": "Tải bài hát xuống",
+    "navigate": "Định vị file",
     "download": "Tải bài hát xuống",
     "downloading": "Đang tải...",
     "download_title": "Tải bài hát",
@@ -168,7 +170,7 @@
   "search_placeholder": "Tìm kiếm...",
   "loading": "Đang tải...",
   "rate_limit_title": "Nghỉ ngơi chút nhé!",
-  "rate_limit_greeting": "Hôm nay bạn đã hoạt động nhiều rồi, hãy nghỉ ngơi một chút nhé!",
+  "rate_limit_greeting": "Bạn đã hoạt động chăm chỉ ngày hôm nay, hãy thư giãn cơ thể nào!",
   "cancel": "Hủy",
   "ok": "OK"
 }
