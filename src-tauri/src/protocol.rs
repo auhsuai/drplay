@@ -1,5 +1,4 @@
-use tauri::http::{Request, Response, StatusCode};
-use crate::GLOBAL_STREAM_TOKEN;
+use tauri::http::{Response, StatusCode};
 
 pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.register_asynchronous_uri_scheme_protocol("drplay", move |_app, request, responder| {
