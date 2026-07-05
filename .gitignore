@@ -36,3 +36,17 @@ test_db.py
 test_db_output.txt
 rustup-init.exe
 credentials.json
+scratch.py
+scratch_proxy.rs
+test_rate.cjs
+test_rate.js
+update_proxy.py
+update_stampede.py
+tsconfig.node.tsbuildinfo
+temp.txt
+check_size.py
+extract_covers.py
+test_server.py
+cover_art_test.jpg
+thumbnail_test.jpg
+sample.png

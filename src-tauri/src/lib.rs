@@ -11,6 +11,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Manager;
 pub static GLOBAL_STREAM_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
+mod protocol;
+
 lazy_static::lazy_static! {
     pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
 }
@@ -138,17 +140,14 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 
 #[tauri::command]
 async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
-    let port = PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
-    let port_str = if port > 0 { port.to_string() } else { "3457".to_string() };
-    
     let ext_str = ext.unwrap_or_default();
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
     
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(180.0);
-        Ok(format!("http://127.0.0.1:{}/stream?id={}&bitrate={}&buffer={}{}", port_str, file_id, b, buf, ext_param))
+        Ok(format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}", file_id, b, buf, ext_param))
     } else {
-        Ok(format!("http://127.0.0.1:{}/stream?id={}{}", port_str, file_id, ext_param))
+        Ok(format!("http://drplay.localhost/stream?id={}{}", file_id, ext_param))
     }
 }
 
@@ -238,11 +237,6 @@ pub enum DownloadState {
 
 
 
-
-#[tauri::command]
-fn get_proxy_port() -> u16 {
-    PROXY_PORT.load(Ordering::SeqCst)
-}
 
 #[tauri::command]
 fn update_buffer_settings(seconds: usize) {
@@ -359,13 +353,20 @@ fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
     None
 }
 
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16};
+use std::sync::Mutex;
+use lazy_static::lazy_static;
+
 mod proxy;
 
+lazy_static! {
+    pub static ref PROXY_SECRET: Mutex<String> = Mutex::new(uuid::Uuid::new_v4().to_string());
+}
+pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
-pub static PROXY_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
 
 
 #[tauri::command]
@@ -386,7 +387,8 @@ fn update_minimize_to_tray(minimize: bool) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    proxy::start_proxy();
+    protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -397,7 +399,6 @@ pub fn run() {
             if let Ok(pool) = Pool::new(manager) {
                 app.manage(pool);
             }
-            proxy::spawn_proxy_server(app.handle().clone());
             
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
@@ -455,8 +456,7 @@ pub fn run() {
             update_buffer_settings,
             get_local_metadata,
             update_stream_token, clear_stream_token,
-            update_minimize_to_tray,
-            get_proxy_port
+            update_minimize_to_tray
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

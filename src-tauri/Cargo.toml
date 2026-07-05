@@ -31,14 +31,16 @@ open = "5.1.2"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 image = "0.25.10"
 tokio = { version = "1", features = ["full"] }
-axum = "0.7.5"
 futures-util = "0.3.30"
 symphonia = { version = "0.5.4", features = ["all"] }
 lofty = "0.24.0"
 tiny_http = "0.12.0"
-tokio-stream = "0.1.18"
-async-stream = "0.3.6"
 lazy_static = "1.5.0"
 md5 = "0.7.0"
 r2d2 = "0.8"
 r2d2_sqlite = "0.24.0"
+axum = "0.7.5"
+tokio-stream = "0.1.15"
+async-stream = "0.3.5"
+bytes = "1.6.0"
+uuid = { version = "1.8.0", features = ["v4"] }

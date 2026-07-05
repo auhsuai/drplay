@@ -1137,6 +1137,7 @@ dependencies = [
  "async-stream",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "futures-util",
  "image",
  "lazy_static",
@@ -1159,6 +1160,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "url",
+ "uuid",
 ]
 
 [[package]]

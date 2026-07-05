@@ -18,17 +18,7 @@ export interface CachedMetadata {
   dbId?: string;
 }
 
-let _proxyPort: number | null = null;
-async function getProxyPort(): Promise<number> {
-  if (_proxyPort !== null) return _proxyPort;
-  try {
-    _proxyPort = await invoke<number>("get_proxy_port");
-    if (_proxyPort === 0) _proxyPort = 3457;
-  } catch (e) {
-    _proxyPort = 3457;
-  }
-  return _proxyPort;
-}
+
 
 async function compressImage(data: Uint8Array, mimeType: string): Promise<{ data: Uint8Array, format: string } | null> {
   try {
@@ -155,9 +145,8 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
     const cached = await get<CachedMetadata>(cacheKey);
     if (cached && cached.size !== undefined && cached.duration !== undefined && cached.v === 10) {
       if (cached.coverUrl && cached.coverUrl.includes('127.0.0.1')) {
-        const port = await getProxyPort();
-        cached.coverUrl = `http://127.0.0.1:${port}/cover?id=${cached.dbId || fileId}&thumb=true`;
-        cached.fullCoverUrl = `http://127.0.0.1:${port}/cover?id=${cached.dbId || fileId}`;
+        cached.coverUrl = `http://drplay.localhost/cover?id=${cached.dbId || fileId}&thumb=true`;
+        cached.fullCoverUrl = `http://drplay.localhost/cover?id=${cached.dbId || fileId}`;
       }
       metadataCache[fileId] = cached;
       metadataCacheKeys.push(fileId);
@@ -186,7 +175,6 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
         });
 
         if (localMeta) {
-          const port = await getProxyPort();
           const result: CachedMetadata = {
             title: localMeta.title,
             artist: localMeta.artist,
@@ -194,8 +182,8 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
             size: knownSize,
             fileType: localMeta.file_type,
             dbId: localMeta.id,
-            coverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?id=${localMeta.id}&thumb=true` : undefined,
-            fullCoverUrl: localMeta.has_cover ? `http://127.0.0.1:${port}/cover?id=${localMeta.id}` : undefined,
+            coverUrl: localMeta.has_cover ? `http://drplay.localhost/cover?id=${localMeta.id}&thumb=true` : undefined,
+            fullCoverUrl: localMeta.has_cover ? `http://drplay.localhost/cover?id=${localMeta.id}` : undefined,
             v: 10
           };
           await set(cacheKey, result);
@@ -226,11 +214,8 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
           fetchHeaders['Range'] = 'bytes=0-65535';
         }
 
-        // CRITICAL FIX: Use local proxy instead of direct Google Drive URL.
-        // Google Drive CORS strips Range headers in browsers, causing WebView2 to download
-        // the ENTIRE 3GB FILE directly into RAM (response.arrayBuffer()) just to read 64KB of ID3 tags!
-        const port = await getProxyPort();
-        const proxyUrl = `http://127.0.0.1:${port}/stream?id=${fileId}`;
+        // CRITICAL FIX: Use local custom protocol instead of direct Google Drive URL.
+        const proxyUrl = `http://drplay.localhost/stream?id=${fileId}`;
         const response = await fetch(proxyUrl, { headers: fetchHeaders, signal });
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
