@@ -87,7 +87,9 @@
   "delete": "Delete",
   "remove_from_playlist": "Remove from Playlist",
   "player": {
-    "no_track": "No track playing"
+    "no_track": "No track playing",
+    "network_interrupted": "Network unstable or connection lost, please check again",
+    "network_disconnected": "Network unstable or connection lost, please check again"
   },
   "song_card": {
     "unknown_title": "Unknown Title",

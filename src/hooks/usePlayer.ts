@@ -18,6 +18,8 @@ function isIntentStale(myId: number): boolean {
 
 export const usePlayer = (accessToken: string | null) => {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
+  const [loadNonce, setLoadNonce] = useState(0);
+  const triggerReload = () => setLoadNonce(n => n + 1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [playMode, setPlayMode] = useState<'normal' | 'shuffle' | 'repeat-all' | 'repeat-one'>('normal');
@@ -52,10 +54,12 @@ export const usePlayer = (accessToken: string | null) => {
           
           if (freshToken) {
             try {
+              const ext = lastSession.track.originalName?.split('.').pop()?.toLowerCase();
               streamUrl = await invoke<string>("get_stream_url", { 
                 fileId: lastSession.track.id, 
                 bitrate: lastSession.track.bitrate, 
-                bufferSeconds: storedBuffer || 1400 
+                bufferSeconds: storedBuffer || 1400,
+                ext
               });
             } catch (e) {
               console.warn("Failed to invoke get_stream_url on session restore", e);
@@ -69,6 +73,7 @@ export const usePlayer = (accessToken: string | null) => {
             restoreTime: lastSession.time,
             restoreDuration: lastSession.duration
           });
+          triggerReload();
         }
       } catch (e) {
         console.error("Failed to load player session", e);
@@ -78,6 +83,7 @@ export const usePlayer = (accessToken: string | null) => {
   }, []);
 
   const handlePlayTrack = async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: any[], activeTab?: string) => {
+
     if (!accessToken) return;
 
     if (currentTrack?.id === track.id && !isNavigation) {
@@ -135,7 +141,7 @@ export const usePlayer = (accessToken: string | null) => {
 
     const myId = beginPlaybackIntent();
 
-    console.log("=== START DOWNLOADING AUDIO ===");
+
     setIsPlaying(false);
     setIsDownloading(true);
 
@@ -158,7 +164,8 @@ export const usePlayer = (accessToken: string | null) => {
         console.warn("Could not get bitrate for buffer calculation", e);
       }
 
-      const streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds });
+      const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
+      const streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds, ext });
       if (isIntentStale(myId)) {
         console.debug(`[Player] Discard stale result for ${targetTrack.id}`);
         return;
@@ -169,6 +176,7 @@ export const usePlayer = (accessToken: string | null) => {
         streamUrl, 
         restoreDuration: accurateMetaDuration || targetTrack.restoreDuration 
       });
+      triggerReload();
       setIsPlaying(true);
     } catch (e) {
       if (isIntentStale(myId)) return;
@@ -231,10 +239,12 @@ export const usePlayer = (accessToken: string | null) => {
             bitrate = metadata.bitrate;
           } catch (e) { }
 
-          const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, bitrate, bufferSeconds });
+          const ext = currentTrack.originalName?.split('.').pop()?.toLowerCase();
+          const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, bitrate, bufferSeconds, ext });
           if (isIntentStale(myId)) return;
           
           setCurrentTrack(prev => prev ? { ...prev, streamUrl: url } : prev);
+          triggerReload();
           setIsPlaying(true);
         } catch (e) {
           if (isIntentStale(myId)) return;
@@ -281,6 +291,8 @@ export const usePlayer = (accessToken: string | null) => {
   return {
     currentTrack,
     setCurrentTrack,
+    loadNonce,
+    triggerReload,
     isPlaying,
     setIsPlaying,
     isDownloading,

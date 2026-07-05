@@ -230,7 +230,7 @@ export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string
         // Google Drive CORS strips Range headers in browsers, causing WebView2 to download
         // the ENTIRE 3GB FILE directly into RAM (response.arrayBuffer()) just to read 64KB of ID3 tags!
         const port = await getProxyPort();
-        const proxyUrl = `http://127.0.0.1:${port}/stream.mp3?id=${fileId}`;
+        const proxyUrl = `http://127.0.0.1:${port}/stream?id=${fileId}`;
         const response = await fetch(proxyUrl, { headers: fetchHeaders, signal });
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 

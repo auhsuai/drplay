@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from "react";
-import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2 } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, WifiOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Track } from "../../App";
 import { getTrackMetadata, updateTrackDuration } from '../../utils/metadata';
@@ -20,12 +21,13 @@ interface PlayerBarProps {
   onNextTrack: () => void;
   onPrevTrack: () => void;
   isDownloading?: boolean;
+  loadNonce?: number;
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   onTogglePlayMode: () => void;
   onExpandNowPlaying: () => void;
 }
 
-export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
+export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
   const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -35,10 +37,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const volumeBarRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
   const [duration, setDuration] = useState(0);
-  const [isDraggingUI, setIsDraggingUI] = useState(false);
+  const [_isDraggingUI, setIsDraggingUI] = useState(false);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isVolumeActive, setIsVolumeActive] = useState(false);
+  const [playbackStatus, setPlaybackStatus] = useState<'playing' | 'error-needs-manual-resume' | 'normal'>('normal');
+  const [pendingResumeTime, setPendingResumeTime] = useState<number | null>(null);
   const volumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerVolumeActive = () => {
@@ -344,20 +348,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       setErrorText("Google Drive Limit: File temporary blocked (Quota Exceeded 403)");
     });
     
-    // DIAGNOSTIC LOOP
-    const interval = setInterval(() => {
-      if (audioRef.current && isPlaying) {
-        const a = audioRef.current;
-        let buf = "";
-        for (let i = 0; i < a.buffered.length; i++) {
-          buf += `[${a.buffered.start(i).toFixed(1)}-${a.buffered.end(i).toFixed(1)}] `;
-        }
-        console.log(`AUDIO STATE: ready=${a.readyState}, net=${a.networkState}, time=${a.currentTime}, buf=${buf}`);
-      }
-    }, 2000);
-
     return () => {
-      clearInterval(interval);
       unlisten.then((f: () => void) => f());
     };
   }, [isPlaying]);
@@ -382,21 +373,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, [isPlaying]);
 
 
-  // Sync Native play/pause events
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const handleNativePause = () => {
-      // Don't call onTogglePlay, just update state indirectly if we had a setter.
-      // But we receive `isPlaying` from props. So we need to sync it up using onTogglePlay if it's out of sync?
-      // Wait, usePlayer manages isPlaying. PlayerBar doesn't have setIsPlaying.
-      // We can't really do much here unless we have setIsPlaying. The user's code snippet assumed setIsPlaying was available.
-      // Let's just pass `setIsPlaying` from `App.tsx` or not do anything for now.
-      // Wait, we can't easily sync if we don't have setIsPlaying.
-      // Actually, usePlayer is passed into PlayerBar via props.
-      // I'll skip the native sync if there is no setIsPlaying. Let's look at the props.
-    };
-  }, []);
 
   useEffect(() => {
     let rateLimitRetryTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -440,24 +416,34 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const handleAudioError = async () => {
     const audio = audioRef.current;
     const error = audio?.error;
-    if (!error) return;
+    if (!audio || !error) return;
 
-    if (
-      error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
-      error.code === MediaError.MEDIA_ERR_DECODE
-    ) {
-      setErrorText('File không hợp lệ, đang chuyển bài kế tiếp...');
-      handleNextClick();
+    const isOffline = !navigator.onLine;
+
+    if (isOffline) {
+      setErrorText(t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại'));
+      const RETREAT_OFFSET_SEC = 0.5;
+      const positionBeforeError = Math.max(0, audio.currentTime - RETREAT_OFFSET_SEC);
+      setPlaybackStatus('error-needs-manual-resume');
+      setPendingResumeTime(positionBeforeError);
       return;
     }
 
+    let isRealFormatError = false;
     let errorType = 'transient';
+
     try {
       if (currentTrack?.streamUrl) {
         const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD' });
-        errorType = headResp.headers.get("X-Stream-Error-Type") || 'transient';
+        if (headResp.ok) {
+          isRealFormatError = true;
+        } else {
+          errorType = headResp.headers.get("X-Stream-Error-Type") || 'transient';
+        }
       }
-    } catch(e) {}
+    } catch (e) {
+      errorType = 'transient'; // Network error or proxy unreachable
+    }
 
     if (errorType === 'permanent') {
       setErrorText('File không còn tồn tại trên Drive, đang chuyển bài...');
@@ -465,9 +451,19 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       return;
     }
 
+    if (isRealFormatError && (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || error.code === MediaError.MEDIA_ERR_DECODE)) {
+      setErrorText('File lỗi định dạng, đang chuyển bài kế tiếp...');
+      handleNextClick();
+      return;
+    }
+
+    setErrorText(t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại'));
+    const RETREAT_OFFSET_SEC = 0.5;
+    const positionBeforeError = Math.max(0, audio.currentTime - RETREAT_OFFSET_SEC);
+
     if (retryCountRef.current >= MAX_RETRY) {
-      setErrorText('Mất kết nối, vui lòng kiểm tra mạng và thử lại thủ công.');
-      if (isPlayingRef.current) onTogglePlayRef.current();
+      setPlaybackStatus('error-needs-manual-resume');
+      setPendingResumeTime(positionBeforeError);
       return;
     }
 
@@ -476,8 +472,24 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
     clearRetryTimeout();
     retryTimeoutRef.current = setTimeout(() => {
-      audio?.load();
-      if (isPlayingRef.current) audio?.play().catch(() => {});
+      const handleMetadataReady = async () => {
+        audio.removeEventListener('loadedmetadata', handleMetadataReady);
+        audio.currentTime = positionBeforeError;
+        
+        try {
+          await safePlay(audio);
+          setPlaybackStatus('playing');
+        } catch (err: any) {
+          if (err.name === 'NotAllowedError') {
+            console.warn('[Player] Autoplay blocked, cần user gesture để resume');
+            setPlaybackStatus('error-needs-manual-resume');
+            setPendingResumeTime(positionBeforeError);
+          }
+        }
+      };
+      
+      audio.addEventListener('loadedmetadata', handleMetadataReady);
+      audio.load();
     }, backoffMs);
   };
 
@@ -500,22 +512,103 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       if (cancelled) return;
 
       if (currentTrack.restoreTime) {
+        await new Promise<void>(resolve => {
+          const handler = () => {
+            audio.removeEventListener('loadedmetadata', handler);
+            resolve();
+          };
+          audio.addEventListener('loadedmetadata', handler);
+        });
+        
+        if (cancelled) return;
         audio.currentTime = currentTrack.restoreTime;
       }
+
+      // CRITICAL FIX: Wait for Chromium's decoder to be fully ready before calling play().
+      // Calling play() synchronously after load() or seek on large files causes Chromium's media pipeline to deadlock at time=0.
+      await new Promise<void>(resolve => {
+        if (audio.readyState >= 3) {
+          resolve();
+          return;
+        }
+        const handler = () => {
+          audio.removeEventListener('canplay', handler);
+          resolve();
+        };
+        audio.addEventListener('canplay', handler);
+      });
+
+      if (cancelled) return;
 
       if (isPlayingRef.current) {
         try {
           await safePlay(audio);
-        } catch (err) {
+          setPlaybackStatus('playing');
+        } catch (err: any) {
           console.warn('[Player] play() interrupted', err);
+          if (err.name === 'NotAllowedError') {
+            setPlaybackStatus('error-needs-manual-resume');
+            setPendingResumeTime(audio.currentTime);
+          }
         }
       }
     };
 
     loadAndPlay();
 
-    return () => { cancelled = true; };
-  }, [currentTrack?.streamUrl]);
+    return () => { 
+      cancelled = true; 
+      // Ép trình duyệt huỷ ngay lập tức HTTP request cũ, giải phóng TCP socket
+      if (audio) {
+        audio.removeAttribute('src');
+        audio.load();
+      }
+    };
+  }, [loadNonce]);
+
+  const handleManualResume = async () => {
+    const audio = audioRef.current;
+    if (!audio || pendingResumeTime === null) return;
+
+    // Force reload the stream to recover broken sockets from network drops
+    audio.removeAttribute('src');
+    audio.load();
+    audio.src = currentTrack?.streamUrl || '';
+    audio.load();
+
+    const resumeHandler = async () => {
+      audio.removeEventListener('loadedmetadata', resumeHandler);
+      audio.currentTime = pendingResumeTime;
+      try {
+        await safePlay(audio);
+        setPlaybackStatus('playing');
+        setPendingResumeTime(null);
+        retryCountRef.current = 0;
+        setErrorText('');
+      } catch (err) {
+        console.error("Manual resume failed", err);
+      }
+    };
+    
+    audio.addEventListener('loadedmetadata', resumeHandler);
+  };
+
+  // Auto-recovery when network reconnects
+  useEffect(() => {
+    const handleOnline = async () => {
+      if (playbackStatus === 'error-needs-manual-resume' && pendingResumeTime !== null) {
+        if (
+          errorText === t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') ||
+          errorText === t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại')
+        ) {
+          await handleManualResume();
+        }
+      }
+    };
+    
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [playbackStatus, pendingResumeTime, errorText, currentTrack]);
 
   // Sync Audio Focus (OS-level pause/play)
   useEffect(() => {
@@ -706,7 +799,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       }
       seekTimeoutRef.current = setTimeout(() => {
         if (audioRef.current) {
-          audioRef.current.currentTime = finalTime;
+          if (playbackStatus === 'error-needs-manual-resume') {
+            setPendingResumeTime(finalTime);
+          } else {
+            audioRef.current.currentTime = finalTime;
+          }
         }
       }, 250);
 
@@ -827,13 +924,19 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           </button>
           
           <button 
-            onClick={onTogglePlay}
+            onClick={() => {
+              if (playbackStatus === 'error-needs-manual-resume') {
+                handleManualResume();
+              } else {
+                onTogglePlay();
+              }
+            }}
             className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
             disabled={!currentTrack || isDownloading}
           >
             {isDownloading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
-            ) : isPlaying ? (
+            ) : isPlaying && playbackStatus !== 'error-needs-manual-resume' ? (
               <Pause className="w-5 h-5" />
             ) : (
               <Play className="w-5 h-5 ml-0.5" />
@@ -930,6 +1033,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           }
         }}
       />
+
+      {/* Network Error Toast Portal */}
+      {errorText && (
+        errorText === t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') || 
+        errorText === t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại')
+      ) && createPortal(
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-gray-900/90 backdrop-blur-md text-white text-sm px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 w-max max-w-[90vw]">
+          <WifiOff className="w-5 h-5 text-yellow-400 shrink-0" />
+          <span className="font-medium text-center">{errorText}</span>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

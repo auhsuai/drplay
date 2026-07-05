@@ -47,7 +47,6 @@ export function SettingsTab({
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.google_drive_folder')}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.select_root_folder')}</p>
                 </div>
               </div>
               <button
@@ -69,7 +68,6 @@ export function SettingsTab({
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.language')}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.select_language')}</p>
                 </div>
               </div>
               <LanguageDropdown />
@@ -82,7 +80,6 @@ export function SettingsTab({
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.theme')}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.select_theme')}</p>
                 </div>
               </div>
               <ThemeDropdown currentTheme={theme} onChange={setTheme} />
@@ -96,7 +93,6 @@ export function SettingsTab({
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.minimize_to_tray') || 'Minimize to System Tray'}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.close_behavior_desc') || 'Action when clicking the close button'}</p>
                 </div>
               </div>
               <CloseBehaviorDropdown minimizeToTray={minimizeToTray} onChange={setMinimizeToTray} />
@@ -114,7 +110,6 @@ export function SettingsTab({
                   </div>
                   <div>
                     <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.scan_mode')}</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">{t('settings.scan_mode_desc')}</p>
                   </div>
                 </div>
                 
@@ -136,7 +131,6 @@ export function SettingsTab({
                 </div>
                 <div className="max-w-[320px]">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.trash') || 'Trash'}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">{t('settings.trash_desc') || 'Manage and restore deleted files, or permanently empty trash.'}</p>
                 </div>
               </div>
 

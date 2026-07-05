@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Folder, ArrowLeft, HardDrive, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { db } from '../../db/db';
@@ -31,6 +31,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const [folderHistory, setFolderHistory] = useState<{id: string, name: string}[]>(initialFolderHistory);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const isLoadingRef = useRef(false);
 
   useEffect(() => {
     fetchFolders(currentFolderId);
@@ -41,6 +42,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   }, [currentFolderId, token]);
 
   const fetchFolders = async (folderId: string) => {
+    isLoadingRef.current = true;
     setIsLoading(true);
     try {
       const dbFolders = await db.files.where('parentId').equals(folderId).filter(f => f.isFolder).toArray();
@@ -66,11 +68,15 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     } catch (e) {
       console.error("Failed to fetch folders", e);
     } finally {
+      isLoadingRef.current = false;
       setIsLoading(false);
     }
   };
 
   const handleOpenFolder = (folderId: string, folderName: string) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+    setIsLoading(true);
     setFolderHistory(prev => [...prev, { id: currentFolderId, name: currentFolderName }]);
     setCurrentFolderId(folderId);
     setCurrentFolderName(folderName);
@@ -88,6 +94,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
 
     if (currentFolderId === 'root' || (resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
 
+    isLoadingRef.current = true;
     setIsLoading(true);
     try {
       const response = await fetch(`https://www.googleapis.com/drive/v3/files/${currentFolderId}?fields=parents`, {

@@ -137,14 +137,18 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>) -> Result<String, String> {
+async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
     let port = PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
     let port_str = if port > 0 { port.to_string() } else { "3457".to_string() };
+    
+    let ext_str = ext.unwrap_or_default();
+    let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
+    
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(180.0);
-        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}&bitrate={}&buffer={}", port_str, file_id, b, buf))
+        Ok(format!("http://127.0.0.1:{}/stream?id={}&bitrate={}&buffer={}{}", port_str, file_id, b, buf, ext_param))
     } else {
-        Ok(format!("http://127.0.0.1:{}/stream.mp3?id={}", port_str, file_id))
+        Ok(format!("http://127.0.0.1:{}/stream?id={}{}", port_str, file_id, ext_param))
     }
 }
 
@@ -358,9 +362,7 @@ fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 mod proxy;
 
-static SESSION_ID: AtomicUsize = AtomicUsize::new(0);
 static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
-static THUMBNAIL_CONCURRENCY: AtomicUsize = AtomicUsize::new(0);
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 pub static PROXY_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
@@ -390,11 +392,10 @@ pub fn run() {
         .setup(|app| {
             use r2d2_sqlite::SqliteConnectionManager;
             use r2d2::Pool;
-            if let Some(db_path) = get_db_path() {
-                let manager = SqliteConnectionManager::file(&db_path);
-                if let Ok(pool) = Pool::new(manager) {
-                    app.manage(pool);
-                }
+            let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
+            let manager = SqliteConnectionManager::file(&db_path);
+            if let Ok(pool) = Pool::new(manager) {
+                app.manage(pool);
             }
             proxy::spawn_proxy_server(app.handle().clone());
             

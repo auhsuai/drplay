@@ -129,8 +129,11 @@ function App() {
     handleNextTrack,
     handlePrevTrack,
     handleTogglePlay,
-    handleTogglePlayMode
+    handleTogglePlayMode,
+    loadNonce
   } = usePlayer(accessToken);
+
+
 
   const dbFiles = useLiveQuery(
     () => {
@@ -567,6 +570,7 @@ function App() {
             <div className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? 'h-0 overflow-hidden pointer-events-none opacity-0' : ''}`}>
               <PlayerBar
                 currentTrack={currentTrack}
+                loadNonce={loadNonce}
                 isPlaying={isPlaying}
                 onTogglePlay={handleTogglePlay}
                 onNextTrack={handleNextTrack}

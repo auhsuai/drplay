@@ -5,7 +5,7 @@ import react from "@vitejs/plugin-react";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig(async ({ command }) => ({
   plugins: [react()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -28,5 +28,10 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+  },
+  
+  // BEST PRACTICE: Xóa hoàn toàn console trong bản Production từ khâu Build (tiết kiệm dung lượng và bảo mật tuyệt đối)
+  esbuild: {
+    drop: command === 'build' ? (['console', 'debugger'] as any) : undefined,
   },
 }));

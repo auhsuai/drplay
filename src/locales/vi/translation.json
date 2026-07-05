@@ -87,7 +87,9 @@
   "delete": "Xóa",
   "remove_from_playlist": "Bỏ khỏi danh sách",
   "player": {
-    "no_track": "Chưa có bài hát nào"
+    "no_track": "Chưa có bài hát nào",
+    "network_interrupted": "Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại",
+    "network_disconnected": "Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại"
   },
   "song_card": {
     "unknown_title": "Không rõ tên",

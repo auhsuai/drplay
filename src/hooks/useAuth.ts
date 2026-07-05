@@ -33,6 +33,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
     }
     setAccessToken(tokenData.access_token);
     setIsLoggedIn(true);
+    
+    // CRITICAL: Send token to Rust backend proxy immediately
+    invoke("update_stream_token", { token: tokenData.access_token }).catch(e => console.error("Rust stream token update fail", e));
+    
     scheduleProactiveRefresh(tokenData.expires_in || 3600);
   };
 

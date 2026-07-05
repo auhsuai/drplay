@@ -8,6 +8,82 @@ use axum::{
 use reqwest::Client;
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager};
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref FILE_SIZE_LOCKS: tokio::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::OnceCell<Result<u64, String>>>>> = tokio::sync::Mutex::new(std::collections::HashMap::new());
+}
+
+async fn fetch_size_from_drive(
+    file_id: &str,
+    token: &str,
+    client: &reqwest::Client,
+) -> Result<u64, String> {
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}?fields=size", file_id);
+    let resp = client.get(&url).header("Authorization", format!("Bearer {}", token)).send().await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Metadata API failed with status {}", resp.status()));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FileMeta { size: Option<String> }
+
+    let meta: FileMeta = resp.json().await.map_err(|_| "Invalid metadata JSON")?;
+    if let Some(size_str) = meta.size {
+        size_str.parse().map_err(|_| "Failed to parse size".to_string())
+    } else {
+        Err("File size not found in metadata".to_string())
+    }
+}
+
+async fn get_authoritative_file_size(
+    file_id: &str,
+    token: &str,
+    client: &reqwest::Client,
+) -> Result<u64, String> {
+    let cell = {
+        let mut locks = FILE_SIZE_LOCKS.lock().await;
+        locks.entry(file_id.to_string())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::OnceCell::new()))
+            .clone()
+    };
+
+    let file_id_owned = file_id.to_string();
+    let token_owned = token.to_string();
+    let client_owned = client.clone();
+    
+    let result = cell.get_or_init(|| async move {
+        fetch_size_from_drive(&file_id_owned, &token_owned, &client_owned).await
+    }).await.clone();
+
+    if result.is_err() {
+        let mut locks = FILE_SIZE_LOCKS.lock().await;
+        locks.remove(file_id);
+    }
+
+    result
+}
+
+fn parse_range_header(range_str: &str, total_size: u64) -> (u64, u64) {
+    let range_part = range_str.trim_start_matches("bytes=");
+    let mut parts = range_part.splitn(2, '-');
+    
+    let start: u64 = parts.next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+        .min(total_size.saturating_sub(1));
+
+    let end: u64 = parts.next()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(total_size.saturating_sub(1))
+        .min(total_size.saturating_sub(1))
+        .max(start);
+
+    (start, end)
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,7 +95,7 @@ pub struct AppState {
 #[derive(Deserialize)]
 pub struct StreamQuery {
     pub id: String,
-    pub duration: Option<f64>,
+    pub ext: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -30,9 +106,13 @@ pub struct CoverQuery {
 
 pub async fn handle_stream(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<StreamQuery>,
-) -> Response {
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<StreamQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::StatusCode;
+    use axum::http::header;
+
     let mut final_token = String::new();
     if let Ok(global) = crate::GLOBAL_STREAM_TOKEN.lock() {
         if !global.is_empty() {
@@ -41,18 +121,44 @@ pub async fn handle_stream(
     }
     
     if final_token.is_empty() {
-        return Response::builder()
+        return axum::response::Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .body(axum::body::Body::empty())
             .unwrap();
     }
 
-    let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media&acknowledgeAbuse=true", query.id);
-    let mut req_builder = state.client.get(&url).header("Authorization", format!("Bearer {}", final_token));
+    let total_size = match get_authoritative_file_size(&query.id, &final_token, &state.client).await {
+        Ok(s) => s,
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("Cannot determine file size: {}", e)).into_response();
+        }
+    };
 
-    // Forward the Range header if provided by the client (browser)
-    if let Some(range) = headers.get(header::RANGE) {
-        req_builder = req_builder.header(header::RANGE, range.clone());
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let (start, end, is_partial) = match range {
+        Some(r) => {
+            let (s, e) = parse_range_header(r, total_size);
+            (s, e, true)
+        }
+        None => (0, total_size.saturating_sub(1), false),
+    };
+
+    if start >= total_size && total_size > 0 {
+        return axum::response::Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, format!("bytes */{}", total_size))
+            .body(axum::body::Body::empty())
+            .unwrap();
+    }
+
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media&acknowledgeAbuse=true", query.id);
+    
+    let mut req_builder = state.client.get(&url)
+        .header("Authorization", format!("Bearer {}", final_token));
+        
+    if is_partial {
+        let drive_range_header = format!("bytes={}-{}", start, end);
+        req_builder = req_builder.header(header::RANGE, drive_range_header);
     }
 
     let resp_res = req_builder.send().await;
@@ -66,7 +172,6 @@ pub async fn handle_stream(
 
     let status = resp.status();
     
-    // Handle specific Google Drive API Errors transparently
     if status.as_u16() == 401 { 
         let _ = state.app_handle.emit("token-expired", ()); 
         
@@ -81,45 +186,39 @@ pub async fn handle_stream(
                 fresh_token = global.clone();
             }
             
-            let mut retry_req_builder = state.client.get(&url).header("Authorization", format!("Bearer {}", fresh_token));
-            if let Some(range) = headers.get(header::RANGE) {
-                retry_req_builder = retry_req_builder.header(header::RANGE, range.clone());
+            let mut retry_req_builder = state.client.get(&url)
+                .header("Authorization", format!("Bearer {}", fresh_token));
+                
+            if is_partial {
+                let drive_range_header = format!("bytes={}-{}", start, end);
+                retry_req_builder = retry_req_builder.header(header::RANGE, drive_range_header);
             }
             
             if let Ok(retry_resp) = retry_req_builder.send().await {
                 let retry_status = retry_resp.status();
                 if retry_status.is_success() || retry_status == StatusCode::PARTIAL_CONTENT {
-                    let mut builder = Response::builder().status(retry_status);
-                    
-                    if let Some(ct) = retry_resp.headers().get(header::CONTENT_TYPE) {
-                        let mut ct_str = ct.to_str().unwrap_or("").to_string();
-                        if ct_str.is_empty() || ct_str == "application/json" {
-                            ct_str = "audio/mpeg".to_string();
-                        }
-                        builder = builder.header(header::CONTENT_TYPE, ct_str);
+                    let content_length = end - start + 1;
+                    let mut builder = axum::response::Response::builder();
+                    if is_partial {
+                        builder = builder.status(StatusCode::PARTIAL_CONTENT)
+                            .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, end, total_size));
                     } else {
-                        builder = builder.header(header::CONTENT_TYPE, "audio/mpeg");
+                        builder = builder.status(StatusCode::OK);
                     }
-
-                    if let Some(cl) = retry_resp.headers().get(header::CONTENT_LENGTH) {
-                        builder = builder.header(header::CONTENT_LENGTH, cl.clone());
-                    }
-                    if let Some(cr) = retry_resp.headers().get(header::CONTENT_RANGE) {
-                        builder = builder.header(header::CONTENT_RANGE, cr.clone());
-                    }
-                    
-                    builder = builder.header(header::ACCEPT_RANGES, "bytes");
-                    builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+                    builder = builder
+                        .header(header::CONTENT_LENGTH, content_length.to_string())
+                        .header(header::ACCEPT_RANGES, "bytes")
+                        .header(header::CONTENT_TYPE, "audio/mpeg")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
 
                     let stream = retry_resp.bytes_stream();
                     let body = axum::body::Body::from_stream(stream);
-
                     return builder.body(body).unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build retry body").into_response());
                 }
             }
         }
         
-        return Response::builder()
+        return axum::response::Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header("X-Stream-Error-Type", "token_expired")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
@@ -128,7 +227,7 @@ pub async fn handle_stream(
     }
     
     if status == StatusCode::NOT_FOUND || status == StatusCode::FORBIDDEN {
-        return Response::builder()
+        return axum::response::Response::builder()
             .status(status)
             .header("X-Stream-Error-Type", "permanent")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
@@ -138,7 +237,7 @@ pub async fn handle_stream(
     
     if status == StatusCode::TOO_MANY_REQUESTS {
         let _ = state.app_handle.emit("drive-quota-exceeded", ());
-        return Response::builder()
+        return axum::response::Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .header("X-Stream-Error-Type", "rate_limited")
             .header("Retry-After", "5")
@@ -148,7 +247,7 @@ pub async fn handle_stream(
     }
     
     if !status.is_success() && status != StatusCode::PARTIAL_CONTENT {
-        return Response::builder()
+        return axum::response::Response::builder()
             .status(StatusCode::BAD_GATEWAY)
             .header("X-Stream-Error-Type", "transient")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
@@ -156,31 +255,46 @@ pub async fn handle_stream(
             .unwrap();
     }
 
-    // Build the Axum response, copying necessary headers from Google Drive's response
-    let mut builder = Response::builder().status(status);
+    let drive_ct = resp.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok());
+
+    let final_cl = (end - start + 1).to_string();
     
-    if let Some(ct) = resp.headers().get(header::CONTENT_TYPE) {
-        let mut ct_str = ct.to_str().unwrap_or("").to_string();
-        if ct_str.is_empty() || ct_str == "application/json" {
-            ct_str = "audio/mpeg".to_string();
+    let mut final_ct = drive_ct.unwrap_or("audio/mpeg").to_string();
+    if let Some(ref e) = query.ext {
+        let e_lower = e.to_lowercase();
+        if e_lower == "m4a" || e_lower == "mp4" {
+            final_ct = "audio/mp4".to_string();
+        } else if e_lower == "flac" {
+            final_ct = "audio/flac".to_string();
+        } else if e_lower == "wav" {
+            final_ct = "audio/wav".to_string();
+        } else if e_lower == "mp3" {
+            final_ct = "audio/mpeg".to_string();
+        } else if e_lower == "opus" {
+            final_ct = "audio/opus".to_string();
+        } else if e_lower == "ogg" || e_lower == "oga" {
+            final_ct = "audio/ogg".to_string();
+        } else if e_lower == "webm" {
+            final_ct = "audio/webm".to_string();
+        } else if e_lower == "aac" {
+            final_ct = "audio/aac".to_string();
         }
-        builder = builder.header(header::CONTENT_TYPE, ct_str);
+    }
+
+    let mut builder = axum::response::Response::builder();
+    if status == StatusCode::PARTIAL_CONTENT || is_partial {
+        builder = builder.status(StatusCode::PARTIAL_CONTENT);
+        builder = builder.header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, end, total_size));
     } else {
-        builder = builder.header(header::CONTENT_TYPE, "audio/mpeg");
-    }
-
-    if let Some(cl) = resp.headers().get(header::CONTENT_LENGTH) {
-        builder = builder.header(header::CONTENT_LENGTH, cl.clone());
+        builder = builder.status(StatusCode::OK);
     }
     
-    if let Some(cr) = resp.headers().get(header::CONTENT_RANGE) {
-        builder = builder.header(header::CONTENT_RANGE, cr.clone());
-    }
-    
-    builder = builder.header(header::ACCEPT_RANGES, "bytes");
-    builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+    builder = builder
+        .header(header::CONTENT_LENGTH, final_cl)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_TYPE, final_ct)
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
 
-    // Convert Reqwest Stream into Axum Body
     let stream = resp.bytes_stream();
     let body = axum::body::Body::from_stream(stream);
 
@@ -293,6 +407,9 @@ pub fn spawn_proxy_server(app_handle: AppHandle) {
         pool,
         client: Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
+            .pool_max_idle_per_host(2) // Chỉ giữ tối đa 2 connection rảnh rỗi cho mỗi host
+            .pool_idle_timeout(std::time::Duration::from_secs(15)) // Đóng connection nếu rảnh quá 15s
+            .tcp_keepalive(std::time::Duration::from_secs(30)) // Dọn dẹp ở tầng OS TCP
             .build()
             .unwrap(),
         app_handle,
@@ -300,7 +417,7 @@ pub fn spawn_proxy_server(app_handle: AppHandle) {
 
     tauri::async_runtime::spawn(async move {
         let app = Router::new()
-            .route("/stream.mp3", get(handle_stream).head(handle_stream))
+            .route("/stream", get(handle_stream).head(handle_stream))
             .route("/cover", get(handle_cover))
             .with_state(state);
 
