@@ -50,3 +50,8 @@ test_server.py
 cover_art_test.jpg
 thumbnail_test.jpg
 sample.png
+*.bat
+src-tauri/fix_*.py
+src-tauri/update_rust.py
+src-tauri/scratch/
+src/test_invoke.ts
