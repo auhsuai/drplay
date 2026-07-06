@@ -1,18 +1,20 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useTranslation } from "react-i18next";
-
 import { Sidebar } from "./ui/Sidebar/Sidebar";
-import { MainContent } from "./ui/MainContent/MainContent";
-import { HomeTab } from "./ui/HomeTab/HomeTab";
-import { LikedSongs } from "./ui/LikedSongs/LikedSongs";
-import { PlaylistView } from './ui/Playlist/PlaylistView';
 import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
 import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
 import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
 import { TrashScreen } from "./ui/Settings/TrashScreen";
 import { GlobalContextMenu } from "./ui/components/GlobalContextMenu";
+import React, { Suspense } from "react";
+
+const MainContent = React.lazy(() => import('./ui/MainContent/MainContent').then(module => ({ default: module.MainContent })));
+const HomeTab = React.lazy(() => import('./ui/HomeTab/HomeTab').then(module => ({ default: module.HomeTab })));
+const LikedSongs = React.lazy(() => import('./ui/LikedSongs/LikedSongs').then(module => ({ default: module.LikedSongs })));
+const PlaylistView = React.lazy(() => import('./ui/Playlist/PlaylistView').then(module => ({ default: module.PlaylistView })));
+const SettingsTab = React.lazy(() => import('./ui/Settings/SettingsTab').then(module => ({ default: module.SettingsTab })));
 import "./App.css";
 import { db } from './db/db';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -24,7 +26,6 @@ import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
 import { metadataCache } from "./utils/metadata";
-import { SettingsTab } from "./ui/Settings/SettingsTab";
 
 export type Track = {
   id: string;
@@ -93,7 +94,7 @@ function App() {
     handleBack,
     handleBreadcrumbClick,
     handleSelectRootFolder
-  } = useDrive(isLoggedIn);
+  } = useDrive(isLoggedIn, accessToken);
 
   const [metadataVersion, setMetadataVersion] = useState(0);
   const [showRateLimitModal, setShowRateLimitModal] = useState(false);
@@ -324,13 +325,17 @@ function App() {
             if (data.parents && data.parents.length > 0) {
               const parentId = data.parents[0];
 
-              const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-              });
               let folderName = "Đã định vị";
-              if (pRes.ok) {
-                const pData = await pRes.json();
-                folderName = pData.name;
+              if (parentId === 'root') {
+                folderName = "My Drive";
+              } else {
+                const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
+                  headers: { Authorization: `Bearer ${accessToken}` }
+                });
+                if (pRes.ok) {
+                  const pData = await pRes.json();
+                  folderName = pData.name;
+                }
               }
 
               setFolderHistory([]);
@@ -488,7 +493,9 @@ function App() {
               setShowFolderSelection(false);
             }}
             onCancel={appRootFolder ? () => setShowFolderSelection(false) : undefined}
-            initialFolderId={appRootFolder || 'root'}
+            initialFolderId={'root'}
+            initialFolderHistory={[]}
+            allowEscapeRoot={true}
           />
         )}
 
@@ -507,65 +514,67 @@ function App() {
           />
 
           <div className="flex-1 relative overflow-hidden flex flex-col">
-            {activeTab === "Home" ? (
-              <HomeTab 
-                onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} 
-                onOpenFolder={(id, name) => {
-                  handleOpenFolder(id, name);
-                  handleTabChange("My Drive");
-                }}
-                token={accessToken} 
-                userProfile={userProfile} 
-              />
-            ) : activeTab === "My Drive" ? (
-              <MainContent
-                activeTab={activeTab}
-                onPlay={(t: Track, c?: Track[]) => { handlePlayTrack(t, c); }}
-                currentTrack={currentTrack}
-                items={driveItems}
-                isLoading={isLoadingTracks}
-                onOpenFolder={handleOpenFolder}
-                onBack={handleBack}
-                hasHistory={folderHistory.length > 0}
-                folderHistory={folderHistory}
-                currentFolderName={currentFolderName}
-                currentFolderId={currentFolderId}
-                onBreadcrumbClick={handleBreadcrumbClick}
-                token={accessToken}
-                highlightedFileId={highlightedFileId}
-                onRefresh={() => { /* No-op, sync runs in background */ }}
-                onRemoveItem={() => { /* useLiveQuery handles UI updates automatically now */ }}
-                sortOption={sortOption}
-                onSortChange={(val) => {
-                  setSortOption(val);
-                  localStorage.setItem("drplay_sort_option", val);
-                }}
-              />
-            ) : activeTab === "Liked Songs" ? (
-              <LikedSongs onPlay={(t: Track, c: Track[]) => { handlePlayTrack(t, c); }} token={accessToken} currentTrack={currentTrack} />
-            ) : activeTab.startsWith("playlist_") ? (
-              <PlaylistView
-                playlistId={activeTab.replace("playlist_", "")}
-                onPlay={(t: Track, c?: Track[]) => { handlePlayTrack(t, c); }}
-                onDelete={() => handleTabChange("Home")}
-                currentTrack={currentTrack}
-              />
-            ) : activeTab === "Settings" ? (
-              <SettingsTab
-                theme={theme}
-                setTheme={setTheme}
-                scanMode={scanMode}
-                setScanMode={setScanMode}
-                minimizeToTray={minimizeToTray}
-                setMinimizeToTray={setMinimizeToTray}
-                setShowFolderSelection={setShowFolderSelection}
-                setShowTrashScreen={setShowTrashScreen}
-              />
-            ) : (
-              <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">
-                <h1 className="text-2xl text-gray-500">Coming Soon: {activeTab}</h1>
-              </main>
-            )}
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500">Loading...</div>}>
+              {activeTab === "Home" ? (
+                <HomeTab 
+                  onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} 
+                  onOpenFolder={(id, name) => {
+                    handleOpenFolder(id, name);
+                    handleTabChange("My Drive");
+                  }}
+                  token={accessToken} 
+                  userProfile={userProfile} 
+                />
+              ) : activeTab === "My Drive" ? (
+                <MainContent
+                  activeTab={activeTab}
+                  onPlay={(t: Track, c?: Track[]) => { handlePlayTrack(t, c); }}
+                  currentTrack={currentTrack}
+                  items={driveItems}
+                  isLoading={isLoadingTracks}
+                  onOpenFolder={handleOpenFolder}
+                  onBack={handleBack}
+                  hasHistory={folderHistory.length > 0}
+                  folderHistory={folderHistory}
+                  currentFolderName={currentFolderName}
+                  currentFolderId={currentFolderId}
+                  onBreadcrumbClick={handleBreadcrumbClick}
+                  token={accessToken}
+                  highlightedFileId={highlightedFileId}
+                  onRefresh={() => { /* No-op, sync runs in background */ }}
+                  onRemoveItem={() => { /* useLiveQuery handles UI updates automatically now */ }}
+                  sortOption={sortOption}
+                  onSortChange={(val) => {
+                    setSortOption(val);
+                    localStorage.setItem("drplay_sort_option", val);
+                  }}
+                />
+              ) : activeTab === "Liked Songs" ? (
+                <LikedSongs onPlay={(t: Track, c: Track[]) => { handlePlayTrack(t, c); }} token={accessToken} currentTrack={currentTrack} />
+              ) : activeTab.startsWith("playlist_") ? (
+                <PlaylistView
+                  playlistId={activeTab.replace("playlist_", "")}
+                  onPlay={(t: Track, c?: Track[]) => { handlePlayTrack(t, c); }}
+                  onDelete={() => handleTabChange("Home")}
+                  currentTrack={currentTrack}
+                />
+              ) : activeTab === "Settings" ? (
+                <SettingsTab
+                  theme={theme}
+                  setTheme={setTheme}
+                  scanMode={scanMode}
+                  setScanMode={setScanMode}
+                  minimizeToTray={minimizeToTray}
+                  setMinimizeToTray={setMinimizeToTray}
+                  setShowFolderSelection={setShowFolderSelection}
+                  setShowTrashScreen={setShowTrashScreen}
+                />
+              ) : (
+                <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">
+                  <h1 className="text-2xl text-gray-500">Coming Soon: {activeTab}</h1>
+                </main>
+              )}
+            </Suspense>
 
             <div className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? 'h-0 overflow-hidden pointer-events-none opacity-0' : ''}`}>
               <PlayerBar

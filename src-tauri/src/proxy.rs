@@ -28,12 +28,12 @@ async fn handle_stream(
         return (StatusCode::BAD_REQUEST, "Missing ID").into_response();
     }
 
-    if let Ok(expected_secret) = crate::PROXY_SECRET.lock() {
+    if let Some(expected_secret) = crate::PROXY_SECRET.get() {
         if query.secret != *expected_secret {
             return (StatusCode::UNAUTHORIZED, "Invalid secret").into_response();
         }
     } else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Lock error").into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Not initialized").into_response();
     }
 
     let final_token = if let Ok(t) = crate::GLOBAL_STREAM_TOKEN.lock() {

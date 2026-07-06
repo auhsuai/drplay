@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "drplay"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -44,3 +45,11 @@ tokio-stream = "0.1.15"
 async-stream = "0.3.5"
 bytes = "1.6.0"
 uuid = { version = "1.8.0", features = ["v4"] }
+moka = { version = "0.12.15", features = ["future"] }
+once_cell = "1.21.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3

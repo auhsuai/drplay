@@ -34,4 +34,14 @@ export default defineConfig(async ({ command }) => ({
   esbuild: {
     drop: command === 'build' ? (['console', 'debugger'] as any) : undefined,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-i18next', 'i18next', 'dexie', 'dexie-react-hooks', '@tauri-apps/api'],
+          utils: ['music-metadata-browser'] // if there's any other large deps
+        }
+      }
+    }
+  }
 }));

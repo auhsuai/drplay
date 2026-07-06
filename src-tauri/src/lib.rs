@@ -11,7 +11,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Manager;
 pub static GLOBAL_STREAM_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
-mod protocol;
+pub mod protocol;
 
 lazy_static::lazy_static! {
     pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -277,18 +277,19 @@ fn get_db_path() -> Option<std::path::PathBuf> {
 }
 
 #[tauri::command]
-fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
-    use rusqlite::{Connection, OpenFlags};
+fn get_local_metadata(
+    size: i64, 
+    name: String, 
+    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>
+) -> Option<LocalMetadata> {
     let mut log = String::new();
     log.push_str(&format!("get_local_metadata called with size={}, name={}\n", size, name));
     
-    let db_path = get_db_path();
-    log.push_str(&format!("db_path: {:?}\n", db_path));
-    
-    if let Some(db_path) = db_path {
-        match Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            Ok(conn) => {
-                let has_file_type = conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok();
+    match pool.get() {
+        Ok(conn) => {
+                let has_file_type = *HAS_FILE_TYPE.get_or_init(|| {
+                    conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok()
+                });
                 log.push_str(&format!("has_file_type: {}\n", has_file_type));
                 
                 let query = if has_file_type {
@@ -343,9 +344,8 @@ fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
                     }
                 }
             },
-            Err(e) => {
-                log.push_str(&format!("Failed to open DB: {}\n", e));
-            }
+        Err(e) => {
+            log.push_str(&format!("Failed to get connection from pool: {}\n", e));
         }
     }
     
@@ -354,14 +354,11 @@ fn get_local_metadata(size: i64, name: String) -> Option<LocalMetadata> {
 }
 
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16};
-use std::sync::Mutex;
-use lazy_static::lazy_static;
+
 
 mod proxy;
 
-lazy_static! {
-    pub static ref PROXY_SECRET: Mutex<String> = Mutex::new(uuid::Uuid::new_v4().to_string());
-}
+pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
@@ -385,6 +382,11 @@ fn update_minimize_to_tray(minimize: bool) {
 
 // Proxy server is now handled by proxy.rs using axum
 
+use std::sync::OnceLock;
+
+pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
+pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     proxy::start_proxy();
@@ -392,6 +394,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
             use r2d2_sqlite::SqliteConnectionManager;
             use r2d2::Pool;
             let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
