@@ -1,17 +1,17 @@
-import { FolderOpen, Globe, Moon, Search, MonitorDown } from "lucide-react";
+import { FolderOpen, Globe, Moon, MonitorDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
 import { ThemeDropdown } from "./components/ThemeDropdown";
-import { ScanModeDropdown } from "./components/ScanModeDropdown";
 import { CloseBehaviorDropdown } from "./components/CloseBehaviorDropdown";
 import { ThemeType } from "../../hooks/useTheme";
-import { set } from "idb-keyval";
+import { clear as clearIdb } from "idb-keyval";
+import { invoke } from "@tauri-apps/api/core";
+import { HardDrive } from "lucide-react";
+import { showErrorToast } from "../../utils/simpleToast";
 
 interface SettingsTabProps {
   theme: ThemeType;
   setTheme: (t: ThemeType) => void;
-  scanMode: 'fast' | 'full';
-  setScanMode: (mode: 'fast' | 'full') => void;
   minimizeToTray: boolean;
   setMinimizeToTray: (minimize: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
@@ -20,7 +20,6 @@ interface SettingsTabProps {
 
 export function SettingsTab({
   theme, setTheme,
-  scanMode, setScanMode,
   minimizeToTray, setMinimizeToTray,
   setShowFolderSelection,
   setShowTrashScreen
@@ -97,28 +96,6 @@ export function SettingsTab({
               </div>
               <CloseBehaviorDropdown minimizeToTray={minimizeToTray} onChange={setMinimizeToTray} />
             </div>
-
-            {/* Playback Settings */}
-            <div className="flex flex-col gap-2 mt-6">
-              <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">{t('settings.playback')}</h2>
-
-              {/* Scan Mode Setting */}
-              <div className="flex items-center justify-between py-4 pb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                    <Search className="w-6 h-6 text-[#4285F4]" />
-                  </div>
-                  <div>
-                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.scan_mode')}</p>
-                  </div>
-                </div>
-                
-                <ScanModeDropdown currentMode={scanMode} onChange={(m) => {
-                  setScanMode(m);
-                  set('drplay_scan_mode', m);
-                }} />
-              </div>
-            </div>
           </div>
 
           {/* Data Management */}
@@ -139,6 +116,33 @@ export function SettingsTab({
                 className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t('settings.open_trash') || 'Open Trash'}
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                  <HardDrive className="w-6 h-6 text-[#4285F4]" />
+                </div>
+                <div className="max-w-[320px]">
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.clear_cache', 'Clear App Cache')}</p>
+                </div>
+              </div>
+
+              <button
+                onClick={async () => {
+                  try {
+                    await clearIdb();
+                    localStorage.removeItem('__drplay_metadata_lru');
+                    await invoke("clear_local_cache");
+                    showErrorToast(t('settings.clear_cache_success', 'Cache cleared successfully!'));
+                  } catch (e) {
+                    showErrorToast(t('settings.clear_cache_error', 'Failed to clear cache.'));
+                  }
+                }}
+                className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+              >
+                {t('settings.clear_cache_btn', 'Clear Now')}
               </button>
             </div>
           </div>

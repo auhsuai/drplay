@@ -2,7 +2,10 @@
   "login": {
     "welcome": "Welcome to DrPlay",
     "description": "Connect your Google Drive account to seamlessly stream your personal music collection.",
-    "connect_button": "Connect to Google Drive"
+    "connect_button": "Connect to Google Drive",
+    "error_question": "Error?",
+    "cancel_here": "Cancel here",
+    "cancelled_by_user": "Connection cancelled."
   },
   "common": {
     "cancel": "Cancel",
@@ -144,7 +147,12 @@
     "minutes": "minutes",
     "data_management": "Data Management",
     "trash": "Trash",
-    "trash_desc": "Restore or empty deleted files.",
+    "trash_desc": "Manage and permanently delete items.",
+    "clear_cache": "Clear App Cache",
+    "clear_cache_desc": "Free up storage by clearing image cache. You may need to restart the app.",
+    "clear_cache_success": "Cache cleared successfully!",
+    "clear_cache_error": "Failed to clear cache.",
+    "clear_cache_btn": "Clear Now",
     "open_trash": "Open Trash",
     "trash_empty": "Trash is empty",
     "trash_warning": "Items in trash are automatically deleted forever after 30 days.",
@@ -154,11 +162,7 @@
     "confirm_empty_trash": "Are you sure you want to permanently delete all trashed items? This cannot be undone.",
     "empty_trash_success": "Trash emptied successfully!",
     "empty_trash_error": "Failed to empty trash",
-    "restore_error": "Failed to restore file",
-    "scan_mode": "Metadata Scan Mode",
-    "scan_mode_desc": "Adjust metadata scan time.",
-    "scan_fast": "Fast",
-    "scan_full": "Full"
+    "restore_error": "Failed to restore file"
   },
   "sort": {
     "name_asc": "A-Z",

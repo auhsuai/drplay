@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { recordFolderVisit } from "../utils/history";
 import { getAppConfig, saveAppConfig } from "../utils/driveApi";
@@ -33,6 +34,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               }
               try {
                 await db.files.clear();
+                await invoke("clear_local_cache");
               } catch (e) {}
             }
           } else if (!localRoot) {
@@ -128,6 +130,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     setFolderHistory([]);
     try {
       await db.files.clear();
+      await invoke("clear_local_cache");
       if (accessToken) {
         saveAppConfig(accessToken, { rootFolderId: folderId, rootFolderName: "My Drive", updatedAt: Date.now() });
       }

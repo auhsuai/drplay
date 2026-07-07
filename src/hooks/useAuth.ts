@@ -56,8 +56,9 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
     try {
       await invoke("clear_stream_token");
+      await invoke("clear_local_cache");
     } catch (e) {
-      console.warn("[Auth] Failed to clear backend token state", e);
+      console.warn("[Auth] Failed to clear backend token or cache", e);
     }
 
     if (tokenToRevoke) {

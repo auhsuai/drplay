@@ -250,7 +250,6 @@ function App() {
   };
 
   const [showFolderSelection, setShowFolderSelection] = useState(false);
-  const [scanMode, setScanMode] = useState<'fast' | 'full'>('fast');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [highlightedFileId, setHighlightedFileId] = useState<{id: string, ts: number, noScroll?: boolean} | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
@@ -612,8 +611,6 @@ function App() {
                 <SettingsTab
                   theme={theme}
                   setTheme={setTheme}
-                  scanMode={scanMode}
-                  setScanMode={setScanMode}
                   minimizeToTray={minimizeToTray}
                   setMinimizeToTray={setMinimizeToTray}
                   setShowFolderSelection={setShowFolderSelection}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { HardDrive, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
@@ -12,6 +12,25 @@ interface LoginScreenProps {
 export function LoginScreen({ onLogin }: LoginScreenProps) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
+  const [showCancel, setShowCancel] = useState(false);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    if (isLoading) {
+      timer = setTimeout(() => {
+        setShowCancel(true);
+      }, 5000);
+    } else {
+      setShowCancel(false);
+    }
+    return () => clearTimeout(timer);
+  }, [isLoading]);
+
+  const handleCancel = () => {
+    setIsLoading(false);
+    setShowCancel(false);
+    showErrorToast(t('login.cancelled_by_user', 'Đã hủy thao tác kết nối.'));
+  };
 
   const handleLoginClick = async () => {
     if (isLoading) return;
@@ -73,6 +92,12 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             </>
           )}
         </button>
+
+        {showCancel && (
+          <p className="mt-4 text-sm text-gray-500 dark:text-gray-400 animate-in fade-in duration-300">
+            {t('login.error_question', 'Có lỗi?')} <span onClick={handleCancel} className="text-[#4285F4] underline cursor-pointer hover:text-blue-600 transition-colors">{t('login.cancel_here', 'Hủy ở đây')}</span>
+          </p>
+        )}
       </div>
     </div>
   );

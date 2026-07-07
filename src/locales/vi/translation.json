@@ -2,7 +2,10 @@
   "login": {
     "welcome": "Chào mừng đến với DrPlay",
     "description": "Kết nối tài khoản Google Drive để nghe kho nhạc cá nhân của bạn một cách mượt mà.",
-    "connect_button": "Kết nối với Google Drive"
+    "connect_button": "Kết nối với Google Drive",
+    "error_question": "Có lỗi?",
+    "cancel_here": "Hủy ở đây",
+    "cancelled_by_user": "Đã hủy thao tác kết nối."
   },
   "common": {
     "cancel": "Hủy",
@@ -144,7 +147,12 @@
     "minutes": "phút",
     "data_management": "Quản lý dữ liệu",
     "trash": "Thùng rác",
-    "trash_desc": "Khôi phục hoặc dọn sạch file đã xóa.",
+    "trash_desc": "Quản lý và xóa vĩnh viễn các tệp.",
+    "clear_cache": "Xóa bộ nhớ đệm",
+    "clear_cache_desc": "Giải phóng dung lượng bằng cách xóa cache ảnh. Bạn có thể cần khởi động lại ứng dụng.",
+    "clear_cache_success": "Đã xóa bộ nhớ đệm thành công!",
+    "clear_cache_error": "Lỗi khi xóa bộ nhớ đệm.",
+    "clear_cache_btn": "Xóa ngay",
     "open_trash": "Mở Thùng rác",
     "trash_empty": "Thùng rác trống",
     "trash_warning": "Các mục trong thùng rác sẽ tự động bị xóa vĩnh viễn sau 30 ngày.",
@@ -154,11 +162,7 @@
     "confirm_empty_trash": "Bạn có chắc chắn muốn xóa vĩnh viễn toàn bộ mục trong thùng rác không? Hành động này không thể hoàn tác.",
     "empty_trash_success": "Đã dọn sạch thùng rác thành công!",
     "empty_trash_error": "Lỗi khi dọn thùng rác",
-    "restore_error": "Lỗi khi khôi phục",
-    "scan_mode": "Chế độ quét dữ liệu bài hát",
-    "scan_mode_desc": "Điều chỉnh thời gian quét dữ liệu.",
-    "scan_fast": "Nhanh",
-    "scan_full": "Đầy đủ"
+    "restore_error": "Lỗi khi khôi phục"
   },
   "sort": {
     "name_asc": "A-Z",

@@ -1,5 +1,28 @@
-import { get, set } from 'idb-keyval';
+import { get, set, del } from 'idb-keyval';
 import { invoke } from "@tauri-apps/api/core";
+
+const MAX_LRU_CACHE = 100;
+let lruKeys: string[] = [];
+try {
+  const stored = localStorage.getItem('__drplay_metadata_lru');
+  if (stored) lruKeys = JSON.parse(stored);
+} catch {}
+
+function updateLRU(key: string) {
+  lruKeys = lruKeys.filter(k => k !== key);
+  lruKeys.push(key);
+  
+  while (lruKeys.length > MAX_LRU_CACHE) {
+    const oldest = lruKeys.shift();
+    if (oldest) {
+      del(oldest).catch(e => console.error("LRU delete failed:", e));
+    }
+  }
+  
+  try {
+    localStorage.setItem('__drplay_metadata_lru', JSON.stringify(lruKeys));
+  } catch {}
+}
 
 class ConcurrencyQueue {
   private queue: (() => void)[] = [];
@@ -176,6 +199,7 @@ async function setCache(
   if (existing && oldScore === newScore && existing.ts > Date.now() - 5000) return;
 
   await set(key, { version: CACHE_VERSION, data: newEntry, ts: Date.now() });
+  updateLRU(key);
 }
 
 async function compressImage(
