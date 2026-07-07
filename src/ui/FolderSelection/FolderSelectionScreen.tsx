@@ -18,9 +18,10 @@ interface FolderSelectionScreenProps {
   title?: string;
   subtitle?: string;
   appRootFolder?: string | null;
+  allowEscapeRoot?: boolean;
 }
 
-export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = 'root', initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder }: FolderSelectionScreenProps) {
+export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = 'root', initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder, allowEscapeRoot = false }: FolderSelectionScreenProps) {
   const { t } = useTranslation();
   
   // Resolve appRootFolder from props or localStorage
@@ -92,7 +93,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
       return;
     }
 
-    if (currentFolderId === 'root' || (resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
+    if (currentFolderId === 'root' || (!allowEscapeRoot && resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
 
     isLoadingRef.current = true;
     setIsLoading(true);
@@ -105,15 +106,19 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         if (data.parents && data.parents.length > 0) {
           const fetchedParentId = data.parents[0];
           setCurrentFolderId(fetchedParentId);
-          try {
-            const pRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fetchedParentId}?fields=name`, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            if (pRes.ok) {
-              const pData = await pRes.json();
-              setCurrentFolderName(pData.name);
-            }
-          } catch (e) {}
+          if (fetchedParentId === 'root') {
+            setCurrentFolderName('My Drive');
+          } else {
+            try {
+              const pRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fetchedParentId}?fields=name`, {
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              if (pRes.ok) {
+                const pData = await pRes.json();
+                setCurrentFolderName(pData.name);
+              }
+            } catch (e) {}
+          }
         } else {
           setCurrentFolderId('root');
         }
@@ -176,7 +181,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50 overflow-x-auto whitespace-nowrap hide-scrollbar">
           <button 
             onClick={handleBack}
-            disabled={folderHistory.length === 0 && (currentFolderId === 'root' || currentFolderId === resolvedAppRoot)}
+            disabled={folderHistory.length === 0 && (currentFolderId === 'root' || (!allowEscapeRoot && currentFolderId === resolvedAppRoot))}
             className="p-1.5 mr-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4 text-gray-700 dark:text-gray-300" />

@@ -68,7 +68,7 @@ export function NowPlayingView({
       let isCancelled = false;
       let objectUrl: string | null = null;
 
-      getTrackMetadata(currentTrack.id, currentTrack.streamUrl || undefined)
+      getTrackMetadata(currentTrack.id, currentTrack.streamUrl || undefined, currentTrack.size, currentTrack.originalName)
         .then(metadata => {
           if (isCancelled) return;
           if (metadata.title) setRealTitle(metadata.title);
@@ -89,8 +89,9 @@ export function NowPlayingView({
                   setBgPalette([]);
                 }
               });
-          } else if (metadata.pictureData && metadata.pictureFormat) {
-            const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
+          } else if ((metadata.pictureDataFull || metadata.pictureData) && metadata.pictureFormat) {
+            const data = metadata.pictureDataFull || metadata.pictureData;
+            const blob = new Blob([new Uint8Array(data!)], { type: metadata.pictureFormat });
             objectUrl = URL.createObjectURL(blob);
             setCoverUrl(objectUrl);
             

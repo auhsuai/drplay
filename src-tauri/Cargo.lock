@@ -1163,6 +1163,7 @@ dependencies = [
  "tokio-stream",
  "url",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

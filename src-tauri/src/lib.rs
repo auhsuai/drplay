@@ -12,6 +12,7 @@ use tauri::Manager;
 pub static GLOBAL_STREAM_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 pub mod protocol;
+mod thumbnail;
 
 lazy_static::lazy_static! {
     pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -29,7 +30,6 @@ async fn update_stream_token(token: String) -> Result<(), String> {
 #[command]
 async fn login_google_native() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        // 1. Setup OAuth2 Client
         let client_id = ClientId::new("72581565914-qk5usrv31rmlfdn6lq03urm8fsto6do3.apps.googleusercontent.com".to_string());
         let client_secret = ClientSecret::new("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".to_string());
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap();
@@ -43,7 +43,6 @@ async fn login_google_native() -> Result<Value, String> {
         )
         .set_redirect_uri(RedirectUrl::new("http://localhost:3456".to_string()).unwrap());
 
-        // 2. Generate authorization URL
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
         let (auth_url, csrf_token) = client
             .authorize_url(CsrfToken::new_random)
@@ -55,10 +54,8 @@ async fn login_google_native() -> Result<Value, String> {
             .set_pkce_challenge(pkce_challenge)
             .url();
 
-        // 3. Open system browser
         open::that(auth_url.as_str()).map_err(|e| format!("Failed to open browser: {}", e))?;
 
-        // 4. Start local server to wait for callback
         let server = tiny_http::Server::http("127.0.0.1:3456").map_err(|e| format!("Failed to start server: {}", e))?;
 
         for request in server.incoming_requests() {
@@ -142,7 +139,7 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
     let ext_str = ext.unwrap_or_default();
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
-    
+
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(180.0);
         Ok(format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}", file_id, b, buf, ext_param))
@@ -170,7 +167,7 @@ async fn extract_metadata_safe(file_id: String, token: String) -> Result<serde_j
     let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", file_id);
     let resp = client.get(&url)
         .header("Authorization", format!("Bearer {}", final_token))
-        .header("Range", "bytes=0-131072") // 128KB should cover ID3 and Xing headers
+        .header("Range", "bytes=0-131072")
         .send().await.map_err(|e| e.to_string())?;
 
     if !resp.status().is_success() {
@@ -179,7 +176,7 @@ async fn extract_metadata_safe(file_id: String, token: String) -> Result<serde_j
 
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
     let mut cursor = Cursor::new(bytes.to_vec());
-    
+
     let probe = match Probe::new(&mut cursor).guess_file_type() {
         Ok(p) => p,
         Err(_) => return Err("Could not guess file format".to_string()),
@@ -197,11 +194,11 @@ async fn extract_metadata_safe(file_id: String, token: String) -> Result<serde_j
             if dur > 0.0 {
                 duration = Some(dur);
             }
-            
+
             if let Some(tag) = tagged_file.primary_tag() {
                 title = tag.title().map(|s| s.into_owned());
                 artist = tag.artist().map(|s| s.into_owned());
-                
+
                 if let Some(pic) = tag.pictures().first() {
                     picture_data = Some(base64::engine::general_purpose::STANDARD.encode(pic.data()));
                     picture_format = pic.mime_type().map(|m| m.to_string());
@@ -233,17 +230,12 @@ pub enum DownloadState {
     Failed(String),
 }
 
-
-
-
-
-
 #[tauri::command]
 fn update_buffer_settings(seconds: usize) {
     GLOBAL_BUFFER_SECONDS.store(seconds, Ordering::SeqCst);
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 struct LocalMetadata {
     id: String,
     title: String,
@@ -254,7 +246,7 @@ struct LocalMetadata {
     file_type: String,
 }
 
-fn get_db_path() -> Option<std::path::PathBuf> {
+pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
     if let Ok(mut exe_path) = std::env::current_exe() {
         exe_path.pop();
         let path1 = exe_path.join("music_databasev2.db");
@@ -276,85 +268,180 @@ fn get_db_path() -> Option<std::path::PathBuf> {
     }
 }
 
+fn get_local_metadata_internal(
+    size: i64,
+    name: &str,
+    conn: &rusqlite::Connection,
+) -> Option<LocalMetadata> {
+    let has_file_type = HAS_FILE_TYPE.get_or_init(|| {
+        conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok()
+    });
+
+    let query = if *has_file_type {
+        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id FROM tracks WHERE size_bytes = ?"
+    } else {
+        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '', id FROM tracks WHERE size_bytes = ?"
+    };
+
+    let mut stmt = conn.prepare(query).ok()?;
+    let mut rows = stmt.query([size]).ok()?;
+
+    let mut first_match = None;
+    while let Ok(Some(row)) = rows.next() {
+        let file_path: String = row.get(4).unwrap_or_default();
+        let meta = LocalMetadata {
+            title: row.get(0).unwrap_or_default(),
+            artist: row.get(1).unwrap_or_default(),
+            album: row.get(2).unwrap_or_default(),
+            duration: row.get(3).unwrap_or_default(),
+            has_cover: row.get(5).unwrap_or(false),
+            file_type: row.get(6).unwrap_or_default(),
+            id: row.get(7).unwrap_or_default(),
+        };
+
+        if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
+            return Some(meta);
+        }
+
+        if first_match.is_none() {
+            first_match = Some(meta);
+        }
+    }
+
+    first_match
+}
+
 #[tauri::command]
 fn get_local_metadata(
-    size: i64, 
-    name: String, 
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>
+    size: i64,
+    name: String,
+    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+    app_handle: tauri::AppHandle,
 ) -> Option<LocalMetadata> {
-    let mut log = String::new();
-    log.push_str(&format!("get_local_metadata called with size={}, name={}\n", size, name));
+    let conn = pool.get().ok()?;
+    let mut meta = get_local_metadata_internal(size, &name, &conn)?;
     
-    match pool.get() {
-        Ok(conn) => {
-                let has_file_type = *HAS_FILE_TYPE.get_or_init(|| {
-                    conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok()
-                });
-                log.push_str(&format!("has_file_type: {}\n", has_file_type));
-                
-                let query = if has_file_type {
-                    "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id FROM tracks WHERE size_bytes = ?"
-                } else {
-                    "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '', id FROM tracks WHERE size_bytes = ?"
-                };
-                
-                match conn.prepare(query) {
-                    Ok(mut stmt) => {
-                        match stmt.query([size]) {
-                            Ok(mut rows) => {
-                                let mut first_match = None;
-                                let mut row_count = 0;
-                                
-                                while let Ok(Some(row)) = rows.next() {
-                                    row_count += 1;
-                                    let file_path: String = row.get(4).unwrap_or_default();
-                                    let meta = LocalMetadata {
-                                        title: row.get(0).unwrap_or_default(),
-                                        artist: row.get(1).unwrap_or_default(),
-                                        album: row.get(2).unwrap_or_default(),
-                                        duration: row.get(3).unwrap_or_default(),
-                                        has_cover: row.get(5).unwrap_or(false),
-                                        file_type: row.get(6).unwrap_or_default(),
-                                        id: row.get(7).unwrap_or_default(),
-                                    };
-                                    
-                                    if file_path.contains(&name) || meta.title.contains(&name) || name.contains(&meta.title) {
-                                        log.push_str(&format!("Found perfect match: {}\n", meta.title));
-                                        std::fs::write("metadata_debug.log", log).unwrap_or_default();
-                                        return Some(meta); // Perfect match
-                                    }
-                                    
-                                    if first_match.is_none() {
-                                        log.push_str(&format!("Saved first match: {}\n", meta.title));
-                                        first_match = Some(meta);
-                                    }
-                                }
-                                log.push_str(&format!("Rows returned: {}\n", row_count));
-                                
-                                std::fs::write("metadata_debug.log", log).unwrap_or_default();
-                                return first_match;
-                            },
-                            Err(e) => {
-                                log.push_str(&format!("Query execution failed: {}\n", e));
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        log.push_str(&format!("Prepare failed: {}\n", e));
-                    }
-                }
-            },
-        Err(e) => {
-            log.push_str(&format!("Failed to get connection from pool: {}\n", e));
+    // Check if thumbnail exists on disk since we don't save to DB anymore
+    use tauri::Manager;
+    if !meta.has_cover {
+        if let Ok(dir) = app_handle.path().app_cache_dir() {
+            let thumb_path = crate::thumbnail::thumbnail_path(&dir, &meta.id, true);
+            let full_path = crate::thumbnail::thumbnail_path(&dir, &meta.id, false);
+            if thumb_path.exists() || full_path.exists() {
+                meta.has_cover = true;
+            }
         }
     }
     
-    std::fs::write("metadata_debug.log", log).unwrap_or_default();
-    None
+    Some(meta)
+}
+
+#[tauri::command]
+async fn add_drive_track_to_db(
+    file_id: String,
+    size: i64,
+    name: String,
+    title: Option<String>,
+    artist: Option<String>,
+    duration: Option<f64>,
+    duration_estimated: Option<bool>,
+    picture_data: Option<Vec<u8>>,
+    picture_data_full: Option<Vec<u8>>,
+    app: tauri::AppHandle,
+    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+) -> Result<String, String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+
+    // 1. Dedup — migrate thumbnail, return existing id
+    if let Some(existing) = get_local_metadata_internal(size, &name, &conn) {
+        if let Ok(cache_dir) = app.path().app_cache_dir() {
+            let _ = thumbnail::migrate_thumbnail(&cache_dir, &file_id, &existing.id);
+        }
+        return Ok(existing.id);
+    }
+
+    // 2. INSERT — this is the source of truth, must be committed first
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let final_title = title.unwrap_or_else(|| name.clone());
+    let final_artist = artist.unwrap_or_default();
+
+    conn.execute(
+        "INSERT INTO tracks (id, title, artist, duration, duration_estimated, size_bytes, file_path)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            new_id, final_title, final_artist, duration,
+            duration_estimated.unwrap_or(false), size,
+            format!("drive://{}", file_id),
+        ],
+    ).map_err(|e| e.to_string())?;
+    drop(conn);
+
+    // 3. Save thumbnail(s) to filesystem
+    if let Ok(cache_dir) = app.path().app_cache_dir() {
+        if let Some(pic) = picture_data {
+            let path = thumbnail::thumbnail_path(&cache_dir, &new_id, true);
+            if let Err(e) = thumbnail::atomic_write(&path, &pic) {
+                eprintln!("Warning: failed to write thumbnail for {}: {}", new_id, e);
+            }
+        }
+        if let Some(pic_full) = picture_data_full {
+            let path = thumbnail::thumbnail_path(&cache_dir, &new_id, false);
+            if let Err(e) = thumbnail::atomic_write(&path, &pic_full) {
+                eprintln!("Warning: failed to write full thumbnail for {}: {}", new_id, e);
+            }
+        }
+    }
+
+    Ok(new_id)
+}
+
+#[tauri::command]
+fn verify_track_exists(db_id: String, pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>) -> bool {
+    let conn = match pool.get() {
+        Ok(c) => c,
+        Err(_) => return true,
+    };
+    conn.query_row("SELECT 1 FROM tracks WHERE id = ?", [&db_id], |_| Ok(()))
+        .is_ok()
+}
+
+#[tauri::command]
+async fn update_track_duration_in_db(
+    db_id: String,
+    duration: f64,
+    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+) -> Result<(), String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE tracks SET duration = ?1, duration_estimated = 0 WHERE id = ?2",
+        rusqlite::params![duration, db_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_track_from_db(
+    db_id: String,
+    app: tauri::AppHandle,
+    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+) -> Result<(), String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM tracks WHERE id = ?", [&db_id])
+        .map_err(|e| e.to_string())?;
+
+    if let Ok(cache_dir) = app.path().app_cache_dir() {
+        for thumb in &[true, false] {
+            let path = thumbnail::thumbnail_path(&cache_dir, &db_id, *thumb);
+            if path.exists() {
+                std::fs::remove_file(&path).ok();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16};
-
 
 mod proxy;
 
@@ -363,8 +450,6 @@ pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
-
-
 
 #[tauri::command]
 async fn clear_stream_token() -> Result<(), String> {
@@ -376,16 +461,43 @@ async fn clear_stream_token() -> Result<(), String> {
 
 #[tauri::command]
 fn update_minimize_to_tray(minimize: bool) {
-
     MINIMIZE_TO_TRAY.store(minimize, Ordering::SeqCst);
 }
-
-// Proxy server is now handled by proxy.rs using axum
 
 use std::sync::OnceLock;
 
 pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
 pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
+
+fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    let mut cols: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(tracks)") {
+        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) {
+            for row in rows.flatten() {
+                cols.push(row);
+            }
+        }
+    }
+    if !cols.contains(&"cover_art".to_string()) {
+        conn.execute("ALTER TABLE tracks ADD COLUMN cover_art BLOB", []).map_err(|e| e.to_string())?;
+    }
+    if !cols.contains(&"thumbnail".to_string()) {
+        conn.execute("ALTER TABLE tracks ADD COLUMN thumbnail BLOB", []).map_err(|e| e.to_string())?;
+    }
+    if !cols.contains(&"size_bytes".to_string()) {
+        conn.execute("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER", []).map_err(|e| e.to_string())?;
+    }
+    if !cols.contains(&"duration_estimated".to_string()) {
+        conn.execute("ALTER TABLE tracks ADD COLUMN duration_estimated INTEGER DEFAULT 0", []).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute_batch("PRAGMA journal_mode=WAL;").map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA synchronous=NORMAL;").map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -400,9 +512,17 @@ pub fn run() {
             let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
             let manager = SqliteConnectionManager::file(&db_path);
             if let Ok(pool) = Pool::new(manager) {
+                // Clone before manage so we can use for schema migration
+                let migration_pool = pool.clone();
                 app.manage(pool);
+
+                // Schema migration
+                if let Ok(conn) = migration_pool.get() {
+                    configure_sqlite_durability(&conn).ok();
+                    ensure_schema(&conn).ok();
+                }
             }
-            
+
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
@@ -439,7 +559,7 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-                
+
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -459,7 +579,11 @@ pub fn run() {
             update_buffer_settings,
             get_local_metadata,
             update_stream_token, clear_stream_token,
-            update_minimize_to_tray
+            update_minimize_to_tray,
+            add_drive_track_to_db,
+            verify_track_exists,
+            remove_track_from_db,
+            update_track_duration_in_db,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

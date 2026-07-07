@@ -138,3 +138,86 @@ export async function getRecentlyAddedAudioFiles(token: string): Promise<any[]> 
   const data = await response.json();
   return data.files || [];
 }
+
+// App Configuration in appDataFolder
+export async function getAppConfig(token: string): Promise<any> {
+  const q = "name = 'drplay_config.json' and 'appDataFolder' in parents";
+  const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
+  
+  try {
+    const searchRes = await fetchWithAuth(url, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    if (!searchRes.ok) return null;
+    const searchData = await searchRes.json();
+    
+    if (searchData.files && searchData.files.length > 0) {
+      const fileId = searchData.files[0].id;
+      const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+      const downloadRes = await fetchWithAuth(downloadUrl, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (downloadRes.ok) {
+        return await downloadRes.json();
+      }
+    }
+  } catch (e) {
+    console.error("Failed to get app config", e);
+  }
+  return null;
+}
+
+export async function saveAppConfig(token: string, config: any): Promise<void> {
+  const q = "name = 'drplay_config.json' and 'appDataFolder' in parents";
+  const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
+  
+  try {
+    const searchRes = await fetchWithAuth(url, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    let fileId = null;
+    if (searchRes.ok) {
+      const searchData = await searchRes.json();
+      if (searchData.files && searchData.files.length > 0) {
+        fileId = searchData.files[0].id;
+      }
+    }
+
+    const boundary = '-------314159265358979323846';
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const close_delim = `\r\n--${boundary}--`;
+
+    const metadata = {
+      name: 'drplay_config.json',
+      mimeType: 'application/json',
+      ...(fileId ? {} : { parents: ['appDataFolder'] })
+    };
+
+    const multipartRequestBody =
+      delimiter +
+      'Content-Type: application/json\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      'Content-Type: application/json\r\n\r\n' +
+      JSON.stringify(config) +
+      close_delim;
+
+    const uploadUrl = fileId 
+      ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`
+      : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+
+    await fetchWithAuth(uploadUrl, {
+      method: fileId ? 'PATCH' : 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`
+      },
+      body: multipartRequestBody
+    });
+  } catch (e) {
+    console.error("Failed to save app config", e);
+  }
+}

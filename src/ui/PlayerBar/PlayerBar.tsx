@@ -153,7 +153,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       let isCancelled = false;
       let objectUrl: string | null = null;
       
-      getTrackMetadata(currentTrack.id, currentTrack.streamUrl || undefined)
+      getTrackMetadata(currentTrack.id, currentTrack.streamUrl || undefined, currentTrack.size, currentTrack.originalName)
         .then(metadata => {
           if (isCancelled) return;
           if (metadata.title) setRealTitle(metadata.title);

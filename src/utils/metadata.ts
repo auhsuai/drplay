@@ -1,349 +1,536 @@
-import * as musicMetadata from 'music-metadata-browser';
 import { get, set } from 'idb-keyval';
 import { invoke } from "@tauri-apps/api/core";
 
+class ConcurrencyQueue {
+  private queue: (() => void)[] = [];
+  private activeCount = 0;
+  constructor(private concurrency: number) {}
+  async enqueue<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return new Promise((resolve, reject) => {
+      const run = async () => {
+        if (signal?.aborted) {
+          this.activeCount--;
+          this.dequeue();
+          return reject(new DOMException("Aborted", "AbortError"));
+        }
+        try {
+          resolve(await task());
+        } catch (e) {
+          reject(e);
+        } finally {
+          this.activeCount--;
+          this.dequeue();
+        }
+      };
+      if (this.activeCount < this.concurrency) {
+        this.activeCount++;
+        run();
+      } else {
+        this.queue.push(run);
+      }
+    });
+  }
+  private dequeue() {
+    if (this.queue.length > 0 && this.activeCount < this.concurrency) {
+      const next = this.queue.shift();
+      if (next) {
+        this.activeCount++;
+        next();
+      }
+    }
+  }
+}
+const metadataQueue = new ConcurrencyQueue(3);
+
+const HEAD_BYTES = 262144;
+const TAIL_BYTES = 131072;
+const MAX_COVER_FETCH = 50 * 1024 * 1024;
+const CACHE_VERSION = 2;
+
 export interface CachedMetadata {
-  title?: string;
-  artist?: string;
-  pictureData?: Uint8Array;
+  title: string;
+  artist: string;
+  album?: string;
+  duration: number;
+  durationEstimated: boolean;
+  pictureData: Uint8Array | null;
+  pictureDataFull: Uint8Array | null;
   pictureFormat?: string;
+  dbId?: string;
   coverUrl?: string;
   fullCoverUrl?: string;
-  fileType?: string;
   bitrate?: number;
-  duration?: number;
   size?: number;
-  v?: number;
-  mimeType?: string;
-  dbId?: string;
+  v: number;
 }
 
-
-
-async function compressImage(data: Uint8Array, mimeType: string): Promise<{ data: Uint8Array, format: string } | null> {
-  try {
-    const blob = new Blob([new Uint8Array(data)], { type: mimeType });
-    const bitmap = await createImageBitmap(blob);
-
-    const MAX = 256;
-    let width = bitmap.width;
-    let height = bitmap.height;
-
-    if (width > MAX || height > MAX) {
-      if (width > height) {
-        height = Math.round(height * MAX / width);
-        width = MAX;
-      } else {
-        width = Math.round(width * MAX / height);
-        height = MAX;
-      }
-    }
-
-    if (typeof OffscreenCanvas !== 'undefined') {
-      const canvas = new OffscreenCanvas(width, height);
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(bitmap, 0, 0, width, height);
-        const compressedBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
-        const buffer = await compressedBlob.arrayBuffer();
-        return { data: new Uint8Array(buffer), format: 'image/jpeg' };
-      }
-    } else if (typeof document !== 'undefined') {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(bitmap, 0, 0, width, height);
-        return new Promise((resolve) => {
-          canvas.toBlob((compressedBlob) => {
-            if (compressedBlob) {
-              compressedBlob.arrayBuffer().then(buffer => {
-                resolve({ data: new Uint8Array(buffer), format: 'image/jpeg' });
-              });
-            } else resolve(null);
-          }, 'image/jpeg', 0.7);
-        });
-      }
-    }
-  } catch (e) {
-    console.warn("Image compression failed", e);
-  }
-  return null;
-}
-
-// Concurrency queue to prevent IPC/Network flooding when loading 1000 tracks
-const metadataQueue: ((acquired: boolean) => void)[] = [];
-let activeMetadataCount = 0;
-const MAX_METADATA_CONCURRENT = 5;
-
-async function acquireMetadataLock(signal?: AbortSignal): Promise<boolean> {
-  if (signal?.aborted) return false;
-
-  if (activeMetadataCount < MAX_METADATA_CONCURRENT) {
-    activeMetadataCount++;
-    return true;
-  }
-  
-  return new Promise<boolean>(resolve => {
-    let resolveFn: (acquired: boolean) => void;
-    
-    const onAbort = () => {
-      const index = metadataQueue.indexOf(resolveFn);
-      if (index !== -1) {
-        metadataQueue.splice(index, 1);
-      }
-      resolve(false);
-    };
-
-    if (signal) {
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    resolveFn = (acquired: boolean) => {
-      if (signal) signal.removeEventListener('abort', onAbort);
-      if (signal?.aborted) {
-        if (acquired) releaseMetadataLock();
-        resolve(false);
-      } else {
-        if (!acquired) activeMetadataCount++;
-        resolve(true);
-      }
-    };
-    
-    metadataQueue.push(resolveFn);
-  });
-}
-
-function releaseMetadataLock() {
-  if (metadataQueue.length > 0) {
-    const next = metadataQueue.shift();
-    if (next) next(true);
-  } else {
-    activeMetadataCount--;
-  }
+interface CacheEntry {
+  version: number;
+  data: CachedMetadata;
+  ts: number;
 }
 
 export const metadataCache: Record<string, CachedMetadata> = {};
-const metadataCacheKeys: string[] = [];
-const MAX_CACHE_SIZE = 50;
 
-export async function getTrackMetadata(fileId: string, streamUrlOrToken?: string, knownSize?: number, knownName?: string, signal?: AbortSignal): Promise<CachedMetadata> {
-  if (metadataCache[fileId]) {
-    // Move to end (LRU)
-    const idx = metadataCacheKeys.indexOf(fileId);
-    if (idx !== -1) {
-      metadataCacheKeys.splice(idx, 1);
-      metadataCacheKeys.push(fileId);
+function guessMime(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase() || '';
+  const map: Record<string, string> = {
+    mp3: 'audio/mpeg', flac: 'audio/flac', ogg: 'audio/ogg',
+    wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac',
+    wma: 'audio/x-ms-wma', opus: 'audio/opus',
+  };
+  return map[ext] || 'audio/mpeg';
+}
+
+function isImageTruncated(data: Uint8Array): boolean {
+  if (data.length < 8) return true;
+  if (data[0] === 0xFF && data[1] === 0xD8) {
+    return !(data[data.length - 2] === 0xFF && data[data.length - 1] === 0xD9);
+  }
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) {
+    const iend = new Uint8Array([0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]);
+    const tail = data.slice(-8);
+    return !iend.every((b, i) => tail[i] === b);
+  }
+  return false;
+}
+
+function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, from: number): number {
+  outer: for (let i = from; i <= haystack.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
     }
+    return i;
+  }
+  return -1;
+}
+
+async function parseMultipartByteRanges(response: Response): Promise<Uint8Array[]> {
+  const contentType = response.headers.get('Content-Type') || '';
+  const boundaryMatch = contentType.match(/boundary=([^;]+)/);
+  const buf = new Uint8Array(await response.arrayBuffer());
+
+  if (!boundaryMatch) {
+    return [buf];
+  }
+
+  const boundary = `--${boundaryMatch[1]}`;
+  const boundaryBytes = new TextEncoder().encode(boundary);
+  const parts: Uint8Array[] = [];
+
+  let searchStart = 0;
+  const indices: number[] = [];
+  while (true) {
+    const idx = indexOfBytes(buf, boundaryBytes, searchStart);
+    if (idx === -1) break;
+    indices.push(idx);
+    searchStart = idx + boundaryBytes.length;
+  }
+
+  for (let i = 0; i < indices.length - 1; i++) {
+    const sectionStart = indices[i] + boundaryBytes.length;
+    const sectionEnd = indices[i + 1];
+    const section = buf.slice(sectionStart, sectionEnd);
+    const headerEnd = indexOfBytes(section, new TextEncoder().encode('\r\n\r\n'), 0);
+    if (headerEnd === -1) continue;
+    let body = section.slice(headerEnd + 4);
+    if (body.length >= 2 && body[body.length - 1] === 0x0A && body[body.length - 2] === 0x0D) {
+      body = body.slice(0, body.length - 2);
+    }
+    parts.push(body);
+  }
+
+  return parts;
+}
+
+async function setCache(
+  key: string,
+  newEntry: CachedMetadata,
+  skipVerify: boolean = false,
+): Promise<void> {
+  if (newEntry.dbId && !skipVerify) {
+    try {
+      const exists = await invoke<boolean>('verify_track_exists', { dbId: newEntry.dbId });
+      if (!exists) {
+        newEntry.dbId = undefined;
+        newEntry.v = Math.min(newEntry.v ?? 0, 9);
+        newEntry.coverUrl = undefined;
+        newEntry.fullCoverUrl = undefined;
+      }
+    } catch {
+      // IPC error — keep entry, don't block user
+    }
+  }
+
+  const existing = await get<CacheEntry>(key);
+  const newHasDbId = !!newEntry.dbId;
+  const oldHasDbId = !!existing?.data?.dbId;
+
+  if (oldHasDbId && !newHasDbId) return;
+
+  const newScore = newHasDbId ? 100 : (newEntry.v ?? 0);
+  const oldScore = oldHasDbId ? 100 : (existing?.data?.v ?? 0);
+
+  if (existing && oldScore > newScore) return;
+  if (existing && oldScore === newScore && existing.ts > Date.now() - 5000) return;
+
+  await set(key, { version: CACHE_VERSION, data: newEntry, ts: Date.now() });
+}
+
+async function compressImage(
+  data: Uint8Array,
+  format: string,
+  maxSize: number = 256,
+  quality: number = 0.7,
+): Promise<Uint8Array> {
+  const blob = new Blob([data as any], { type: format });
+  const img = await createImageBitmap(blob);
+
+  if (img.width <= maxSize && img.height <= maxSize) {
+    return data;
+  }
+
+  const scale = Math.min(maxSize / img.width, maxSize / img.height);
+  const w = Math.floor(img.width * scale);
+  const h = Math.floor(img.height * scale);
+
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, w, h);
+    const compressed = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+    return new Uint8Array(await compressed.arrayBuffer());
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0, w, h);
+  return new Promise((resolve) => {
+    canvas.toBlob(async (blob) => {
+      if (blob) {
+        resolve(new Uint8Array(await blob.arrayBuffer()));
+      } else {
+        resolve(data);
+      }
+    }, 'image/jpeg', quality);
+  });
+}
+
+export async function getTrackMetadata(
+  fileId: string,
+  token?: string,
+  size?: number,
+  name?: string,
+  _signal?: AbortSignal,
+  forceNetwork: boolean = false,
+): Promise<CachedMetadata> {
+  if (!forceNetwork && metadataCache[fileId] && metadataCache[fileId].v >= 9) {
     return metadataCache[fileId];
   }
 
-  const cacheKey = `metadata_${fileId}`;
+  const safeSize = size ?? 0;
+  const safeName = name ?? 'audio.mp3';
 
-  try {
-    const cached = await get<CachedMetadata>(cacheKey);
-    if (cached && cached.size !== undefined && cached.duration !== undefined && cached.v === 10) {
-      if (cached.coverUrl && cached.coverUrl.includes('127.0.0.1')) {
-        cached.coverUrl = `http://drplay.localhost/cover?id=${cached.dbId || fileId}&thumb=true`;
-        cached.fullCoverUrl = `http://drplay.localhost/cover?id=${cached.dbId || fileId}`;
-      }
-      metadataCache[fileId] = cached;
-      metadataCacheKeys.push(fileId);
-      if (metadataCacheKeys.length > MAX_CACHE_SIZE) {
-        const oldestKey = metadataCacheKeys.shift();
-        if (oldestKey) delete metadataCache[oldestKey];
-      }
-      return cached;
-    }
-  } catch (e) {
-    console.warn("Cache read error", e);
-  }
-
-  const acquired = await acquireMetadataLock(signal);
-  if (!acquired) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
-
-  try {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (knownSize) {
-      try {
-        const localMeta = await invoke<{ id: string, title: string, artist: string, album: string, duration: number, has_cover: boolean, file_type: string } | null>("get_local_metadata", {
-          size: Number(knownSize),
-          name: knownName || "",
-        });
-
-        if (localMeta) {
-          const result: CachedMetadata = {
-            title: localMeta.title,
-            artist: localMeta.artist,
-            duration: localMeta.duration,
-            size: knownSize,
-            fileType: localMeta.file_type,
-            dbId: localMeta.id,
-            coverUrl: localMeta.has_cover ? `http://drplay.localhost/cover?id=${localMeta.id}&thumb=true` : undefined,
-            fullCoverUrl: localMeta.has_cover ? `http://drplay.localhost/cover?id=${localMeta.id}` : undefined,
-            v: 10
-          };
-          await set(cacheKey, result);
-          metadataCache[fileId] = result;
-          return result;
-        }
-      } catch (e) {
-        console.error("Local metadata fetch error:", e);
-      }
-    }
-
-    if (!streamUrlOrToken) {
-      const defaultResult: CachedMetadata = { title: knownName || "Unknown Track", v: 3 };
-      metadataCache[fileId] = defaultResult;
-      return defaultResult;
-    }
-
-    let fileSizeExtracted: number | undefined;
-    let metadata;
-    let buffer: ArrayBuffer | null = null;
-
+  // 0. IDB Check
+  if (!forceNetwork) {
     try {
-      if (!streamUrlOrToken.startsWith('http')) {
-        const scanMode = (await get("drplay_scan_mode")) || 'fast';
-        const fetchHeaders: HeadersInit = {};
+      const cached = await get<CacheEntry>(`metadata_${fileId}`);
+      if (cached && cached.data && cached.data.v >= 9) {
+        metadataCache[fileId] = cached.data;
+        return cached.data;
+      }
+    } catch {
+      // ignore IDB error
+    }
+  }
 
-        if (scanMode === 'fast') {
-          fetchHeaders['Range'] = 'bytes=0-65535';
+  // 1. Dedup check
+  if (!forceNetwork) {
+    try {
+      const local = await invoke<{ id: string; title: string; artist: string; album: string; duration: number; has_cover: boolean; file_type: string } | null>('get_local_metadata', {
+        size: Number(safeSize),
+        name: safeName,
+      });
+      if (local?.id) {
+        const entry = {
+          title: local.title || safeName.replace(/\.[^.]+$/, ''),
+          artist: local.artist || 'Unknown Artist',
+          album: local.album,
+          duration: local.duration,
+          durationEstimated: false,
+          pictureData: null,
+          pictureDataFull: null,
+          dbId: local.id,
+          coverUrl: local.has_cover ? `http://drplay.localhost/cover?id=${local.id}&thumb=true&v=2` : undefined,
+          fullCoverUrl: local.has_cover ? `http://drplay.localhost/cover?id=${local.id}&thumb=false&v=2` : undefined,
+          size: safeSize,
+          v: 10,
+        };
+        metadataCache[fileId] = entry;
+        return entry;
+      }
+    } catch {
+      // continue to network fetch
+    }
+  }
+
+  // If no token, return empty metadata (cache-only path for UI components)
+  if (!token) {
+    const entry = {
+      title: safeName.replace(/\.[^.]+$/, ''),
+      artist: 'Unknown Artist',
+      duration: 0,
+      durationEstimated: true,
+      pictureData: null,
+      pictureDataFull: null,
+      v: 0,
+    };
+    metadataCache[fileId] = entry;
+    return entry;
+  }
+
+  // 2. Fetch HEAD + TAIL in one multipart request
+  return metadataQueue.enqueue(async () => {
+    const tailStart = Math.max(0, safeSize - TAIL_BYTES);
+    const rangeHeader = `bytes=0-${HEAD_BYTES - 1},${tailStart}-${Math.max(0, safeSize - 1)}`;
+
+    const response = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+      headers: { Range: rangeHeader },
+      signal: _signal,
+    });
+
+  if (!response.ok && response.status !== 206) {
+    throw new Error(`Failed to fetch metadata range: ${response.status}`);
+  }
+
+  const parts = await parseMultipartByteRanges(response);
+  const headBuffer = parts[0] || new Uint8Array();
+  const tailBuffer = parts[1] || new Uint8Array();
+
+  if (headBuffer.length === 0) {
+    throw new Error('Empty head buffer — file may be corrupt');
+  }
+
+  // 3. Dynamic Header Expansion
+  let finalHeadBuffer = headBuffer;
+
+  if (headBuffer.length >= 10 && headBuffer[0] === 0x49 && headBuffer[1] === 0x44 && headBuffer[2] === 0x33) {
+    // ID3v2 tag detected
+    const tagSize = ((headBuffer[6] & 0x7f) << 21) | ((headBuffer[7] & 0x7f) << 14) | ((headBuffer[8] & 0x7f) << 7) | (headBuffer[9] & 0x7f);
+    const totalTagSize = tagSize + 10;
+    
+    if (totalTagSize > headBuffer.length) {
+      const fetchUpTo = Math.min(totalTagSize, 20 * 1024 * 1024); // Cap at 20MB
+      if (fetchUpTo > headBuffer.length) {
+        try {
+          const extraResp = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+            headers: { Range: `bytes=${headBuffer.length}-${fetchUpTo - 1}` },
+            signal: _signal,
+          });
+          if (extraResp.ok || extraResp.status === 206) {
+            const extraBuffer = new Uint8Array(await extraResp.arrayBuffer());
+            const combined = new Uint8Array(headBuffer.length + extraBuffer.length);
+            combined.set(headBuffer, 0);
+            combined.set(extraBuffer, headBuffer.length);
+            finalHeadBuffer = combined;
+          }
+        } catch (e) {
+          console.warn("Failed to dynamically expand ID3 buffer:", e);
         }
-
-        // CRITICAL FIX: Use local custom protocol instead of direct Google Drive URL.
-        const proxyUrl = `http://drplay.localhost/stream?id=${fileId}`;
-        const response = await fetch(proxyUrl, { headers: fetchHeaders, signal });
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-        const contentRange = response.headers.get('content-range');
-        let fileSize;
-        if (contentRange) {
-          const match = contentRange.match(/\/(\d+)/);
-          if (match) fileSize = parseInt(match[1], 10);
-        }
-
-        if (!fileSize) {
+      }
+    }
+  } else if (headBuffer.length >= 8 && headBuffer[4] === 0x66 && headBuffer[5] === 0x74 && headBuffer[6] === 0x79 && headBuffer[7] === 0x70) {
+    // M4A / MP4 'ftyp' box detected
+    let moovOffset = -1;
+    let moovSize = 0;
+    for (let i = 0; i < headBuffer.length - 8; i++) {
+      if (headBuffer[i+4] === 0x6D && headBuffer[i+5] === 0x6F && headBuffer[i+6] === 0x6F && headBuffer[i+7] === 0x76) { // 'moov'
+        moovSize = (headBuffer[i] << 24) | (headBuffer[i+1] << 16) | (headBuffer[i+2] << 8) | headBuffer[i+3];
+        moovOffset = i;
+        break;
+      }
+    }
+    if (moovOffset !== -1) {
+      const requiredBytes = moovOffset + moovSize;
+      if (requiredBytes > headBuffer.length) {
+        const fetchUpTo = Math.min(requiredBytes, 20 * 1024 * 1024);
+        if (fetchUpTo > headBuffer.length) {
           try {
-            const metaResponse = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=size`, {
-              headers: { 'Authorization': `Bearer ${streamUrlOrToken}` },
-              signal
+            const extraResp = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+              headers: { Range: `bytes=${headBuffer.length}-${fetchUpTo - 1}` },
+              signal: _signal,
             });
-            if (metaResponse.ok) {
-              const metaData = await metaResponse.json();
-              if (metaData.size) fileSize = parseInt(metaData.size, 10);
+            if (extraResp.ok || extraResp.status === 206) {
+              const extraBuffer = new Uint8Array(await extraResp.arrayBuffer());
+              const combined = new Uint8Array(headBuffer.length + extraBuffer.length);
+              combined.set(headBuffer, 0);
+              combined.set(extraBuffer, headBuffer.length);
+              finalHeadBuffer = combined;
             }
           } catch (e) {
-            console.warn("Failed to fetch size fallback", e);
+            console.warn("Failed to dynamically expand MOOV buffer:", e);
           }
         }
-
-        fileSizeExtracted = fileSize;
-        buffer = await response.arrayBuffer();
-        const fileInfo = { mimeType: 'audio/mpeg', size: fileSize };
-        metadata = await musicMetadata.parseBuffer(new Uint8Array(buffer), fileInfo, { duration: true });
-      } else {
-        metadata = await musicMetadata.fetchFromUrl(streamUrlOrToken);
-      }
-    } catch (e: any) {
-      if (e.name === 'AbortError') throw e;
-      console.warn("Metadata fetch error:", e);
-      const defaultResult: CachedMetadata = { title: knownName || "Unknown Track", v: 3 };
-      metadataCache[fileId] = defaultResult;
-      metadataCacheKeys.push(fileId);
-      if (metadataCacheKeys.length > MAX_CACHE_SIZE) {
-        const oldestKey = metadataCacheKeys.shift();
-        if (oldestKey) delete metadataCache[oldestKey];
-      }
-      return defaultResult;
-    }
-
-    let finalDuration = metadata?.format?.duration;
-    let actualBitrate = metadata?.format?.bitrate;
-    let estimatedBitrate = actualBitrate;
-
-    if (!estimatedBitrate && fileSizeExtracted) {
-      estimatedBitrate = 128000;
-    }
-
-    if ((!finalDuration || finalDuration < 10) && fileSizeExtracted && estimatedBitrate) {
-      finalDuration = (fileSizeExtracted * 8) / estimatedBitrate;
-    }
-
-    const finalResult: CachedMetadata = {
-      title: metadata?.common?.title,
-      artist: metadata?.common?.artist,
-      duration: finalDuration,
-      size: fileSizeExtracted,
-      bitrate: actualBitrate,
-      mimeType: (metadata?.format as any)?.mimeType,
-      v: 9, // Network fallback gets v: 9
-    };
-
-    const picture = metadata.common.picture?.[0];
-    if (picture) {
-      const compressed = await compressImage(picture.data, picture.format);
-      if (compressed) {
-        finalResult.pictureData = compressed.data;
-        finalResult.pictureFormat = compressed.format;
-      } else {
-        // Must make a hard copy because we might detach the original buffer!
-        finalResult.pictureData = new Uint8Array(picture.data);
-        finalResult.pictureFormat = picture.format;
       }
     }
+  }
 
-    metadataCache[fileId] = finalResult;
-    metadataCacheKeys.push(fileId);
-    if (metadataCacheKeys.length > MAX_CACHE_SIZE) {
-      const oldestKey = metadataCacheKeys.shift();
-      if (oldestKey) delete metadataCache[oldestKey];
+  // 4. Parse HEAD
+  const mm = await import('music-metadata-browser');
+  let parsed = await mm.parseBuffer(finalHeadBuffer, { mimeType: guessMime(safeName), size: safeSize });
+
+  // 4. Duration: try TAIL if HEAD has none
+  let duration = parsed.format.duration;
+  let durationEstimated = false;
+  if (!duration && tailBuffer.length > 0) {
+    try {
+      const tailParsed = await mm.parseBuffer(tailBuffer, { mimeType: guessMime(safeName), size: safeSize });
+      duration = tailParsed.format.duration;
+    } catch {
+      // continue to estimation
     }
-    
-    await set(cacheKey, finalResult);
-    window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId } }));
-    
-    // Detach ArrayBuffer and cleanup metadata right before returning
-    if (buffer) {
+  }
+
+  // 5. Set duration to 0 if missing (will be updated dynamically by UI Player)
+  if (!duration) {
+    duration = 0;
+    durationEstimated = true;
+  }
+
+  // 6. Cover: fetch full image, create thumbnail
+  let pictureData: Uint8Array | null = null;
+  let pictureDataFull: Uint8Array | null = null;
+  let pictureFormat: string | undefined;
+
+  const pic = parsed.common.picture?.[0];
+  if (pic) {
+    pictureFormat = pic.format;
+
+    const declaredSize = (pic as any).declaredSize ?? pic.data.length;
+    if (declaredSize > MAX_COVER_FETCH) {
+      console.warn(`Cover art extremely large (${declaredSize} bytes > ${MAX_COVER_FETCH}), skipping to avoid memory issues`);
+    } else if (isImageTruncated(pic.data)) {
+      const offset = (pic as any).offset ?? 0;
+      if (declaredSize > 0 && offset + declaredSize <= safeSize) {
+        try {
+          const picResp = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+            headers: { Range: `bytes=${offset}-${offset + declaredSize - 1}` },
+            signal: _signal,
+          });
+          if (picResp.ok || picResp.status === 206) {
+            const fullPic = new Uint8Array(await picResp.arrayBuffer());
+            if (!isImageTruncated(fullPic)) {
+              pictureDataFull = fullPic;
+              pictureData = await compressImage(fullPic, pic.format, 256, 0.7);
+            }
+          }
+        } catch {
+          // truncated image that can't be fetched — skip cover
+        }
+      }
+    } else {
+      pictureDataFull = pic.data;
+      pictureData = await compressImage(pic.data, pic.format, 256, 0.7);
+    }
+  }
+
+  const entry: CachedMetadata = {
+    title: parsed.common.title || safeName.replace(/\.[^.]+$/, ''),
+    artist: parsed.common.artist || 'Unknown Artist',
+    album: parsed.common.album,
+    duration,
+    durationEstimated,
+    pictureData,
+    pictureDataFull,
+    pictureFormat,
+    bitrate: parsed.format.bitrate ?? undefined,
+    size: safeSize,
+    v: 9,
+  };
+
+  metadataCache[fileId] = entry;
+  setCache(`metadata_${fileId}`, entry, true).catch(console.warn);
+  return entry;
+  }, _signal);
+}
+
+export async function updateTrackDuration(fileId: string, accurateDuration: number): Promise<void> {
+  if (metadataCache[fileId]) {
+    metadataCache[fileId].duration = accurateDuration;
+    metadataCache[fileId].durationEstimated = false;
+  }
+  const key = `metadata_${fileId}`;
+  const entry = await get<CacheEntry>(key);
+  if (entry?.data) {
+    entry.data.duration = accurateDuration;
+    entry.data.durationEstimated = false;
+    entry.ts = Date.now();
+    await set(key, entry);
+
+    if (entry.data.dbId) {
       try {
-        const { port1 } = new MessageChannel();
-        port1.postMessage(buffer, [buffer]);
-      } catch (err) {}
+        await invoke('update_track_duration_in_db', { dbId: entry.data.dbId, duration: accurateDuration });
+      } catch (e) {
+        console.error("Failed to sync duration to db:", e);
+      }
     }
-    buffer = null;
-    if (metadata?.common?.picture) metadata.common.picture = [];
-    metadata = null;
-    
-    return finalResult;
-  } finally {
-    releaseMetadataLock();
+    window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId } }));
   }
 }
 
-export async function updateTrackDuration(fileId: string, accurateDuration: number) {
-  const cacheKey = `metadata_${fileId}`;
-  try {
-    const cached = await get<CachedMetadata>(cacheKey);
-    if (cached) {
-      const oldDuration = cached.duration || 0;
-      // Only update if difference is > 1 second
-      if (Math.abs(oldDuration - accurateDuration) > 1) {
-        // Prevent writing truncated durations caused by network interrupts (e.g. 5 mins for a 3 hr file)
-        if (oldDuration > 0 && accurateDuration < oldDuration * 0.8) {
-          console.warn(`Ignoring suspiciously short duration update for ${fileId}: ${accurateDuration}s vs old ${oldDuration}s`);
-          return;
-        }
+export async function addToLibrary(driveFileId: string, size: number, name: string, token: string): Promise<string | null> {
+  const meta = await getTrackMetadata(driveFileId, token, size, name);
 
-        cached.duration = accurateDuration;
-        await set(cacheKey, cached);
-        // Dispatch event to update SongCard immediately
-        window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId } }));
-      }
-    }
+  if (!meta.title && !meta.artist && meta.duration === 0) {
+    throw new Error('Cannot parse metadata — file may be corrupt');
+  }
+
+  try {
+    const dbId = await invoke<string>('add_drive_track_to_db', {
+      fileId: driveFileId,
+      size: Number(size),
+      name,
+      title: meta.title,
+      artist: meta.artist,
+      duration: meta.duration,
+      durationEstimated: meta.durationEstimated,
+      pictureData: meta.pictureData ? Array.from(meta.pictureData) : null,
+      pictureDataFull: meta.pictureDataFull ? Array.from(meta.pictureDataFull) : null,
+    });
+
+    await setCache(`metadata_${driveFileId}`, {
+      ...meta,
+      dbId,
+      coverUrl: meta.pictureData ? `http://drplay.localhost/cover?id=${dbId}&thumb=true` : undefined,
+      fullCoverUrl: meta.pictureDataFull ? `http://drplay.localhost/cover?id=${dbId}&thumb=false` : undefined,
+      v: 10,
+    }, true);
+
+    return dbId;
   } catch (e) {
-    console.warn("Failed to update accurate track duration", e);
+    console.error("Failed to add track to library:", e);
+    return null;
+  }
+}
+
+export async function removeFromLibrary(driveFileId: string, dbId: string): Promise<void> {
+  try {
+    await invoke('remove_track_from_db', { dbId });
+  } catch (e) {
+    console.error("Failed to remove track from DB:", e);
+  }
+
+  const cacheKey = `metadata_${driveFileId}`;
+  const cached = await get<CacheEntry>(cacheKey);
+  if (cached?.data) {
+    cached.data.dbId = undefined;
+    cached.data.v = Math.max(cached.data.v ?? 0, 9);
+    cached.data.coverUrl = undefined;
+    cached.data.fullCoverUrl = undefined;
+    cached.ts = Date.now();
+    await set(cacheKey, cached);
   }
 }

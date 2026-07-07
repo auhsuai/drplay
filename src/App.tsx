@@ -103,8 +103,38 @@ function App() {
     const unlisten = listen('drive-quota-exceeded', () => {
       setShowRateLimitModal(true);
     });
+    
+    const unlistenRepair = listen<{ driveFileId: string, dbId: string }>('repair-missing-thumbnail', async (event) => {
+      try {
+        const { getValidToken } = await import('./utils/apiClient');
+        const token = await getValidToken();
+        if (!token) return;
+        
+        const { getTrackMetadata } = await import('./utils/metadata');
+        const meta = await getTrackMetadata(event.payload.driveFileId, token, undefined, undefined, undefined, true);
+        
+        if (meta.pictureData) {
+          await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=true`, {
+            method: 'POST',
+            body: meta.pictureData as any,
+          });
+        }
+        if (meta.pictureDataFull) {
+          await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=false`, {
+            method: 'POST',
+            body: meta.pictureDataFull as any,
+          });
+        }
+        
+        window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: event.payload.driveFileId } }));
+      } catch (e) {
+        console.warn('Failed to repair thumbnail:', e);
+      }
+    });
+
     return () => {
       unlisten.then((f: () => void) => f());
+      unlistenRepair.then((f: () => void) => f());
     };
   }, []);
 
@@ -238,48 +268,75 @@ function App() {
   // Locate File in App logic
   useEffect(() => {
     const handleLocateFile = async (e: any) => {
-      const { fileId, alreadyInCurrentFolder } = e.detail || {};
+      let { fileId, alreadyInCurrentFolder } = e.detail || {};
       if (!fileId || !accessToken) return;
+      
+      // Strip 'drive_' prefix if present so that local DB and Google Drive API can resolve it
+      if (fileId.startsWith('drive_')) {
+        fileId = fileId.replace('drive_', '');
+      }
 
-      const rebuildHistory = async (targetFolderId: string) => {
+      const rebuildHistory = async (targetFolderId: string): Promise<{ id: string, name: string }[]> => {
         const rootRaw = localStorage.getItem("drplay_root_folder");
-        let rootId = 'root';
-        if (rootRaw) {
-          try { rootId = JSON.parse(rootRaw).id; } catch (e) { }
-        }
-        try {
-          let current = targetFolderId;
-          const newHistory: { id: string, name: string }[] = [];
-          let limit = 20; // safety limit
-          while (current !== rootId && current !== 'root' && limit > 0) {
-            limit--;
-            // OPTIMIZATION: Query local IndexedDB instantly instead of calling Google Drive API
-            const folderInfo = await db.files.get(current);
-            if (!folderInfo) {
-              console.warn(`Folder ${current} not found in local DB, stopping history rebuild.`);
-              break;
+        const rootId = rootRaw || 'root';
+        
+        let current = targetFolderId;
+        const newHistory: { id: string, name: string }[] = [];
+        let limit = 20; 
+        
+        while (current !== rootId && current !== 'root' && limit > 0) {
+          limit--;
+          
+          let pId: string | undefined;
+          const folderInfo = await db.files.get(current);
+          
+          if (!folderInfo || !folderInfo.parentId) {
+            try {
+              const res = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${current}?fields=parents`, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (data.parents && data.parents.length > 0) {
+                  pId = data.parents[0];
+                }
+              }
+            } catch (e) {
+              console.warn("Failed to get parents via API", e);
             }
-
-            const pId = folderInfo.parentId;
-            if (pId === rootId || pId === 'root') break;
-
-            const parentInfo = await db.files.get(pId);
-            if (!parentInfo) {
-              console.warn(`Parent Folder ${pId} not found in local DB, stopping history rebuild.`);
-              break;
-            }
-
-            newHistory.unshift({ id: parentInfo.id, name: parentInfo.name });
-            current = pId;
+            if (!pId) break;
+          } else {
+            pId = folderInfo.parentId;
           }
-          setFolderHistory(newHistory);
-        } catch (e) {
-          console.error("Rebuild history failed", e);
+
+          if (pId === rootId || pId === 'root') {
+            newHistory.unshift({ id: pId, name: "My Drive" });
+            break;
+          }
+
+          const parentInfo = await db.files.get(pId);
+          if (!parentInfo) {
+            try {
+              const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${pId}?fields=name`, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+              });
+              if (pRes.ok) {
+                const pData = await pRes.json();
+                newHistory.unshift({ id: pId, name: pData.name });
+              } else {
+                newHistory.unshift({ id: pId, name: "Unknown Folder" });
+              }
+            } catch (e) {
+              newHistory.unshift({ id: pId, name: "Unknown Folder" });
+            }
+          } else {
+            newHistory.unshift({ id: parentInfo.id, name: parentInfo.name });
+          }
+          current = pId;
         }
+        return newHistory;
       };
 
-
-      // If we already know it's in the current folder, skip API entirely!
       if (alreadyInCurrentFolder) {
         setActiveTab("My Drive");
         setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
@@ -287,67 +344,60 @@ function App() {
         return;
       }
 
-
       setIsLoadingTracks(true);
       setActiveTab("My Drive");
 
       try {
-        // OPTIMIZATION: Use local DB instead of Google Drive API
+        let parentId: string | null = null;
+        let folderName = "Unknown Folder";
+        
         const fileInfo = await db.files.get(fileId);
         
         if (fileInfo && fileInfo.parentId) {
-          const parentId = fileInfo.parentId;
-          let folderName = "Đã định vị";
-          
-          const parentInfo = await db.files.get(parentId);
-          if (parentInfo) {
-            folderName = parentInfo.name;
-          }
-
-          // Navigate
-          setFolderHistory([]);
-          pendingEnsuredFileId.current = fileId;
-          setCurrentFolderId(parentId);
-          setCurrentFolderName(folderName);
-          setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
-
-          // Clear highlight after 5 seconds
-          setTimeout(() => setHighlightedFileId(null), 5000);
-
-          rebuildHistory(parentId);
+          parentId = fileInfo.parentId;
         } else {
-          // Fallback to API if not in local DB (e.g., just uploaded from another device and not synced yet)
           const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
             headers: { Authorization: `Bearer ${accessToken}` }
           });
           if (response.ok) {
             const data = await response.json();
             if (data.parents && data.parents.length > 0) {
-              const parentId = data.parents[0];
-
-              let folderName = "Đã định vị";
-              if (parentId === 'root') {
-                folderName = "My Drive";
-              } else {
-                const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
-                  headers: { Authorization: `Bearer ${accessToken}` }
-                });
-                if (pRes.ok) {
-                  const pData = await pRes.json();
-                  folderName = pData.name;
-                }
-              }
-
-              setFolderHistory([]);
-              pendingEnsuredFileId.current = fileId;
-              setCurrentFolderId(parentId);
-              setCurrentFolderName(folderName);
-              setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
-              setTimeout(() => setHighlightedFileId(null), 5000);
-              rebuildHistory(parentId);
+              parentId = data.parents[0];
             }
           }
         }
+        
+        if (!parentId) throw new Error("Could not determine parent folder");
+        
+        const rootRaw = localStorage.getItem("drplay_root_folder");
+        const rootId = rootRaw || 'root';
+        
+        if (parentId === rootId || parentId === 'root') {
+          folderName = "My Drive";
+        } else {
+          const parentInfo = await db.files.get(parentId);
+          if (parentInfo) {
+            folderName = parentInfo.name;
+          } else {
+             const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
+               headers: { Authorization: `Bearer ${accessToken}` }
+             });
+             if (pRes.ok) {
+               const pData = await pRes.json();
+               folderName = pData.name;
+             }
+          }
+        }
+
+        const newHistory = await rebuildHistory(parentId);
+        
+        setFolderHistory(newHistory);
+        pendingEnsuredFileId.current = fileId;
+        setCurrentFolderId(parentId);
+        setCurrentFolderName(folderName);
+        setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
+
+        setTimeout(() => setHighlightedFileId(null), 5000);
       } catch (err) {
         console.error("Locate file failed", err);
       } finally {
