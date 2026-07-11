@@ -95,6 +95,21 @@ interface CacheEntry {
 }
 
 export const metadataCache: Record<string, CachedMetadata> = {};
+const MAX_MEM_CACHE = 300;
+const memCacheKeys: string[] = [];
+
+function setMetadataCache(fileId: string, entry: CachedMetadata) {
+  if (metadataCache[fileId]) {
+    const idx = memCacheKeys.indexOf(fileId);
+    if (idx !== -1) memCacheKeys.splice(idx, 1);
+  }
+  memCacheKeys.push(fileId);
+  metadataCache[fileId] = entry;
+  while (memCacheKeys.length > MAX_MEM_CACHE) {
+    const oldest = memCacheKeys.shift();
+    if (oldest) delete metadataCache[oldest];
+  }
+}
 
 function guessMime(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() || '';
@@ -263,7 +278,7 @@ export async function getTrackMetadata(
     try {
       const cached = await get<CacheEntry>(`metadata_${fileId}`);
       if (cached && cached.data && cached.data.v >= 9) {
-        metadataCache[fileId] = cached.data;
+        setMetadataCache(fileId, cached.data);
         return cached.data;
       }
     } catch {
@@ -277,6 +292,7 @@ export async function getTrackMetadata(
       const local = await invoke<{ id: string; title: string; artist: string; album: string; duration: number; has_cover: boolean; file_type: string } | null>('get_local_metadata', {
         size: Number(safeSize),
         name: safeName,
+        drive_id: fileId,
       });
       if (local?.id) {
         const entry = {
@@ -293,7 +309,7 @@ export async function getTrackMetadata(
           size: safeSize,
           v: 10,
         };
-        metadataCache[fileId] = entry;
+        setMetadataCache(fileId, entry);
         return entry;
       }
     } catch {
@@ -312,14 +328,17 @@ export async function getTrackMetadata(
       pictureDataFull: null,
       v: 0,
     };
-    metadataCache[fileId] = entry;
+    setMetadataCache(fileId, entry);
     return entry;
   }
 
   // 2. Fetch HEAD + TAIL in one multipart request
   return metadataQueue.enqueue(async () => {
-    const tailStart = Math.max(0, safeSize - TAIL_BYTES);
-    const rangeHeader = `bytes=0-${HEAD_BYTES - 1},${tailStart}-${Math.max(0, safeSize - 1)}`;
+    const tailStart = Math.max(HEAD_BYTES, safeSize - TAIL_BYTES);
+    const tailEnd = Math.max(0, safeSize - 1);
+    const rangeHeader = tailEnd < tailStart
+      ? `bytes=0-${HEAD_BYTES - 1}`
+      : `bytes=0-${HEAD_BYTES - 1},${tailStart}-${tailEnd}`;
 
     const response = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
       headers: { Range: rangeHeader },
@@ -475,7 +494,13 @@ export async function getTrackMetadata(
     v: 9,
   };
 
-  metadataCache[fileId] = entry;
+  const existingMem = metadataCache[fileId];
+  if (existingMem) {
+    entry.dbId = entry.dbId ?? existingMem.dbId;
+    entry.coverUrl = entry.coverUrl ?? existingMem.coverUrl;
+    entry.fullCoverUrl = entry.fullCoverUrl ?? existingMem.fullCoverUrl;
+  }
+  setMetadataCache(fileId, entry);
   setCache(`metadata_${fileId}`, entry, true).catch(console.warn);
   return entry;
   }, _signal);
