@@ -492,7 +492,7 @@ mod proxy;
 
 pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
-static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
+pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 

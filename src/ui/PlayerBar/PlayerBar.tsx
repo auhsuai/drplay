@@ -92,6 +92,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const restoredAudioTrackIdRef = useRef<string | null>(null);
   const pendingBufferRestoreTimeRef = useRef<number | null>(null);
   const lastValidBufferPercentRef = useRef(0);
+  const lastSeekTargetRef = useRef<number | null>(null);
+  const lastSeekTimestampRef = useRef(0);
+  const isSeekCorrectionRef = useRef(false);
+  const arrowSeekBaseRef = useRef<number | null>(null);
+  const isArrowSeekingRef = useRef(false);
+  const arrowTargetTimeRef = useRef(0);
 
   // Sync like status when track changes
   useEffect(() => {
@@ -330,13 +336,49 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         case 'ArrowLeft':
           e.preventDefault();
           if (audioRef.current) {
-            audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 5);
+            const now = Date.now();
+            if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
+              arrowSeekBaseRef.current = audioRef.current.currentTime;
+            }
+            lastSeekTimestampRef.current = now;
+            const newTime = Math.max(0, arrowSeekBaseRef.current - 5);
+            arrowSeekBaseRef.current = newTime;
+            audioRef.current.currentTime = newTime;
+            lastSeekTargetRef.current = newTime;
+            isArrowSeekingRef.current = false;
           }
           break;
         case 'ArrowRight':
           e.preventDefault();
           if (audioRef.current) {
-            audioRef.current.currentTime = Math.min(audioRef.current.duration || 0, audioRef.current.currentTime + 5);
+            const now = Date.now();
+            if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
+              arrowSeekBaseRef.current = audioRef.current.currentTime;
+            }
+            lastSeekTimestampRef.current = now;
+            const dur = audioRef.current.duration || 0;
+            const newTime = Math.min(dur, arrowSeekBaseRef.current + 5);
+            arrowSeekBaseRef.current = newTime;
+
+            // Trong buffer → seek ngay trên audio element
+            const isInBuffer = tauriBufferEndRef.current === null || dur <= 0 ||
+              newTime <= (tauriBufferEndRef.current / 100) * dur;
+
+            if (isInBuffer) {
+              audioRef.current.currentTime = newTime;
+              lastSeekTargetRef.current = newTime;
+              isArrowSeekingRef.current = false;
+            } else {
+              // Ngoài buffer → chỉ cập nhật UI, KHÔNG đụng audio.currentTime
+              isArrowSeekingRef.current = true;
+              arrowTargetTimeRef.current = newTime;
+              if (currentTimeTextRef.current) {
+                currentTimeTextRef.current.textContent = formatTime(newTime);
+              }
+              if (progressFillRef.current && dur > 0) {
+                progressFillRef.current.style.width = `${(newTime / dur) * 100}%`;
+              }
+            }
           }
           break;
         case 'ArrowUp':
@@ -388,6 +430,26 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Keyup: kết thúc arrow seeking → seek audio element một lần duy nhất
+  useEffect(() => {
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' && isArrowSeekingRef.current && audioRef.current) {
+        isArrowSeekingRef.current = false;
+        const target = arrowTargetTimeRef.current;
+        if (target > 0) {
+          audioRef.current.currentTime = target;
+          lastSeekTargetRef.current = target;
+        }
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        arrowSeekBaseRef.current = null;
+      }
+    };
+
+    window.addEventListener('keyup', handleKeyUp);
+    return () => window.removeEventListener('keyup', handleKeyUp);
   }, []);
 
   useEffect(() => {
@@ -747,6 +809,30 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     }
   };
 
+  // Verify seek accuracy after browser finishes seeking
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleSeeked = () => {
+      if (isSeekCorrectionRef.current) {
+        isSeekCorrectionRef.current = false;
+        return;
+      }
+      if (lastSeekTargetRef.current !== null && audioRef.current) {
+        const diff = Math.abs(audioRef.current.currentTime - lastSeekTargetRef.current);
+        if (diff > 1) {
+          isSeekCorrectionRef.current = true;
+          audioRef.current.currentTime = lastSeekTargetRef.current;
+        }
+        lastSeekTargetRef.current = null;
+      }
+    };
+
+    audio.addEventListener('seeked', handleSeeked);
+    return () => audio.removeEventListener('seeked', handleSeeked);
+  }, []);
+
   // Removed bufferSeconds effect
 
   // Save session immediately on track change and on exit
@@ -787,7 +873,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     const audio = audioRef.current;
     
     const updateProgressUI = () => {
-      if (audio && !isDraggingRef.current && progressFillRef.current && currentTimeTextRef.current) {
+      if (audio && !isDraggingRef.current && !isArrowSeekingRef.current && progressFillRef.current && currentTimeTextRef.current) {
         // Prevent UI jump to 0:00 when waiting for track to restore
         if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
           return;
@@ -809,15 +895,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
-          if (bufferFillRef.current && tauriBufferEndRef.current === null) {
-            const buffered = audio.buffered;
-            let html5BufferedPercent = 0;
-            if (buffered.length > 0) {
-              html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
-            }
-            bufferFillRef.current.style.left = '0%';
-            bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
-          }
+          // Buffer bar is driven by Tauri buffer-status events only
         }
       }
     };

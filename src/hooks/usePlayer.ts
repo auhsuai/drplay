@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { get } from "idb-keyval";
+import { get, set as idbSet } from "idb-keyval";
 import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
@@ -26,6 +26,19 @@ export const usePlayer = (accessToken: string | null) => {
   const [originalQueue, setOriginalQueue] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [bufferSeconds, setBufferSeconds] = useState(1400);
+  const initialBufferRef = useRef(true);
+
+  // Persist buffer setting changes to IndexedDB and Rust backend
+  useEffect(() => {
+    if (initialBufferRef.current) {
+      initialBufferRef.current = false;
+      return;
+    }
+    idbSet("drplay_buffer_seconds", bufferSeconds);
+    invoke("update_buffer_settings", { seconds: bufferSeconds }).catch(e =>
+      console.warn("Failed to update buffer settings", e)
+    );
+  }, [bufferSeconds]);
 
   // Cleanup on logout
   useEffect(() => {

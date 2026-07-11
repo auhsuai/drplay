@@ -212,14 +212,7 @@ export function NowPlayingView({
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
-          if (bufferFillRef.current && tauriBufferEndRef.current === null) {
-            const buffered = audio.buffered;
-            let html5BufferedPercent = 0;
-            if (buffered.length > 0) {
-              html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
-            }
-            bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
-          }
+          // Buffer bar is driven by Tauri buffer-status events only
         }
       }
     };

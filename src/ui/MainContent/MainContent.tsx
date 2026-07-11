@@ -112,37 +112,34 @@ export function MainContent({
     }
   }, [currentFolderId]);
 
-  const globalSearchItemsRaw = useLiveQuery(async () => {
-    if (!searchQuery) return [];
+  const allFiles = useLiveQuery(() => db.files.toArray());
+
+  const parentMap = React.useMemo(() => {
+    if (!allFiles) return new Map<string, string>();
+    const map = new Map<string, string>();
+    allFiles.forEach(f => map.set(f.id, f.parentId));
+    return map;
+  }, [allFiles]);
+
+  const globalSearchItemsRaw = React.useMemo(() => {
+    if (!searchQuery || !allFiles) return [];
     const query = searchQuery.toLowerCase();
-    
-    // First, find all matches
-    const matches = await db.files.filter(f => f.name.toLowerCase().includes(query)).toArray();
-    
-    // If we are at the root, everything is included
+
+    const matches = allFiles.filter(f => f.name.toLowerCase().includes(query));
+
     if (!currentFolderId || currentFolderId === 'root' || currentFolderId === '') {
       return matches;
     }
 
-    // To check if a match is inside currentFolderId, we build a parentMap
-    const allFiles = await db.files.toArray();
-    const parentMap = new Map<string, string>();
-    allFiles.forEach(f => parentMap.set(f.id, f.parentId));
-
-    // Filter matches to only those whose lineage includes currentFolderId
     return matches.filter(f => {
-      // If the file itself is the current folder (rare, but possible if searching its name), exclude or include?
-      // Usually we want items INSIDE the folder, so we check parents.
       let current: string | undefined = f.parentId;
-      let depth = 0;
-      while (current && depth < 50) { // Limit depth to prevent infinite loops from circular refs
+      while (current) {
         if (current === currentFolderId) return true;
         current = parentMap.get(current);
-        depth++;
       }
       return false;
     });
-  }, [searchQuery, currentFolderId]);
+  }, [searchQuery, allFiles, currentFolderId, parentMap]);
 
   const globalSearchItems = React.useMemo(() => {
     if (!globalSearchItemsRaw) return [];

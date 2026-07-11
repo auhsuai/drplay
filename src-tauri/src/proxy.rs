@@ -17,7 +17,14 @@ use tokio::sync::Mutex;
 use std::collections::HashMap;
 use tokio::task::JoinHandle;
 
-const BUFFER_SIZE_LIMIT: u64 = 100 * 1024 * 1024; // 100MB
+// Maximum buffer size allowed across all tracks (prevents unbounded memory use)
+const ABSOLUTE_MAX_BUFFER: u64 = 500 * 1024 * 1024; // 500MB
+
+fn buffer_size_limit() -> u64 {
+    let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
+    let bytes = seconds * 320_000 / 8; // 320kbps → bytes
+    bytes.clamp(5 * 1024 * 1024, ABSOLUTE_MAX_BUFFER)
+}
 
 #[derive(serde::Serialize, Clone)]
 struct BufferState {
@@ -379,8 +386,9 @@ async fn handle_stream(
             let track_id_bg = query.id.clone();
             let task = tokio::spawn(async move {
                 let mut current = background_start;
-                while current < bg_total && current < start + BUFFER_SIZE_LIMIT {
-                    let next_end = (current + 2 * 1024 * 1024 - 1).min(bg_total.saturating_sub(1)).min(start + BUFFER_SIZE_LIMIT - 1);
+                let limit = buffer_size_limit();
+                while current < bg_total && current < start + limit {
+                    let next_end = (current + 2 * 1024 * 1024 - 1).min(bg_total.saturating_sub(1)).min(start + limit - 1);
                     if let Ok(data) = fetch_range_from_drive(&bg_client, &bg_url, &bg_token, current, next_end).await {
                         let mut tc = bg_arc.lock().await;
                         // verify window hasn't changed
