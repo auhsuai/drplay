@@ -26,6 +26,7 @@ import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
 import { metadataCache } from "./utils/metadata";
+import { createFolderFetchGuard } from "./utils/folderFetchGuard";
 
 export type Track = {
   id: string;
@@ -63,6 +64,8 @@ export type UserProfile = {
   picture: string;
 };
 
+const folderFetchGuard = createFolderFetchGuard();
+
 function App() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("Home");
@@ -74,16 +77,18 @@ function App() {
   useEffect(() => {
     const handleFocus = () => setIsFocused(true);
     const handleBlur = () => setIsFocused(false);
+    const preventContextMenu = (e: MouseEvent) => e.preventDefault();
     
     window.addEventListener("focus", handleFocus);
     window.addEventListener("blur", handleBlur);
+    document.addEventListener('contextmenu', preventContextMenu);
     
-    // Check initial state
     setIsFocused(document.hasFocus());
     
     return () => {
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("blur", handleBlur);
+      document.removeEventListener('contextmenu', preventContextMenu);
     };
   }, []);
 
@@ -283,7 +288,7 @@ function App() {
 
   const [showFolderSelection, setShowFolderSelection] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [highlightedFileId, setHighlightedFileId] = useState<{id: string, ts: number, noScroll?: boolean} | null>(null);
+  const [highlightedFileId, setHighlightedFileId] = useState<{id: string, ts: number} | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(() => {
@@ -299,12 +304,18 @@ function App() {
   // Locate File in App logic
   useEffect(() => {
     const handleLocateFile = async (e: any) => {
-      let { fileId, alreadyInCurrentFolder } = e.detail || {};
+      let { fileId, parentId: detailParentId } = e.detail || {};
       if (!fileId || !accessToken) return;
       
-      // Strip 'drive_' prefix if present so that local DB and Google Drive API can resolve it
       if (fileId.startsWith('drive_')) {
         fileId = fileId.replace('drive_', '');
+      }
+
+      if (detailParentId && detailParentId === currentFolderId) {
+        setActiveTab("My Drive");
+        setHighlightedFileId({ id: fileId, ts: Date.now() });
+        setTimeout(() => setHighlightedFileId(null), 5000);
+        return;
       }
 
       const rebuildHistory = async (targetFolderId: string): Promise<{ id: string, name: string }[]> => {
@@ -368,13 +379,6 @@ function App() {
         return newHistory;
       };
 
-      if (alreadyInCurrentFolder) {
-        setActiveTab("My Drive");
-        setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
-        setTimeout(() => setHighlightedFileId(null), 5000);
-        return;
-      }
-
       setIsLoadingTracks(true);
       setActiveTab("My Drive");
 
@@ -411,12 +415,12 @@ function App() {
             folderName = parentInfo.name;
           } else {
              const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
-               headers: { Authorization: `Bearer ${accessToken}` }
-             });
-             if (pRes.ok) {
-               const pData = await pRes.json();
-               folderName = pData.name;
-             }
+                headers: { Authorization: `Bearer ${accessToken}` }
+              });
+              if (pRes.ok) {
+                const pData = await pRes.json();
+                folderName = pData.name;
+              }
           }
         }
 
@@ -426,7 +430,7 @@ function App() {
         pendingEnsuredFileId.current = fileId;
         setCurrentFolderId(parentId);
         setCurrentFolderName(folderName);
-        setHighlightedFileId({id: fileId, ts: Date.now(), noScroll: alreadyInCurrentFolder});
+        setHighlightedFileId({id: fileId, ts: Date.now()});
 
         setTimeout(() => setHighlightedFileId(null), 5000);
       } catch (err) {
@@ -449,7 +453,9 @@ function App() {
     return () => window.removeEventListener('auth-logout', handleAuthLogout);
   }, []);
 
-  // Lắng nghe event refresh-drive để tải lại thư mục hiện tại
+  // Lắng nghe event refresh-drive để tải lại thư mục hiện tại.
+  // Dùng chung fetchFolderContentsToDexie (khai báo ở dưới) để không bị lệch
+  // logic — bản nội bộ cũ thiếu bước xoá các file không còn trên Drive.
   useEffect(() => {
     const handleRefreshDrive = () => {
       if (isLoggedIn && accessToken && currentFolderId) {
@@ -460,7 +466,9 @@ function App() {
     return () => window.removeEventListener('refresh-drive', handleRefreshDrive);
   }, [isLoggedIn, accessToken, currentFolderId]);
 
-  const fetchFolderContentsToDexie = async (token: string, folderId: string) => {
+  async function fetchFolderContentsToDexie(token: string, folderId: string) {
+    const myId = folderFetchGuard.start();
+    let fetchCompleted = true;
     try {
       const existingCount = await db.files.where('parentId').equals(folderId).count();
       if (existingCount === 0) {
@@ -479,6 +487,7 @@ function App() {
 
         if (!response.ok) {
           console.error("Failed to fetch page from drive API", response.status);
+          fetchCompleted = false;
           break;
         }
 
@@ -501,17 +510,18 @@ function App() {
 
         pageToken = data.nextPageToken;
         
-        // Hide loading spinner early if we have something to show
-        if (isFirstPage && pageToken && existingCount === 0) {
+        // Hide loading spinner early only if THIS request is still the latest one
+        if (isFirstPage && pageToken && existingCount === 0 && folderFetchGuard.isLatest(myId)) {
           setIsLoadingTracks(false);
         }
         isFirstPage = false;
         
       } while (pageToken);
 
-      // Sync deletions: remove local files that are no longer in Google Drive
-      // Only do this if we successfully fetched the entire folder (loop finished without breaking early)
-      if (!pageToken) {
+      // Sync deletions: remove local files that are no longer in Google Drive.
+      // Only run when the folder was fully and successfully fetched — never
+      // after a failed page, otherwise we would wipe the whole folder.
+      if (fetchCompleted && !pageToken && folderFetchGuard.isLatest(myId)) {
         const fetchedIds = new Set(allFiles.map((f: any) => f.id));
         const localFiles = await db.files.where('parentId').equals(folderId).toArray();
         const idsToDelete = localFiles
@@ -524,10 +534,13 @@ function App() {
       }
     } catch (error) {
       console.error("Failed to fetch folder contents on demand:", error);
+      fetchCompleted = false;
     } finally {
-      setIsLoadingTracks(false);
+      if (folderFetchGuard.isLatest(myId)) {
+        setIsLoadingTracks(false);
+      }
     }
-  };
+  }
 
   useEffect(() => {
     if (isLoggedIn && accessToken && currentFolderId) {
@@ -536,14 +549,11 @@ function App() {
   }, [isLoggedIn, accessToken, currentFolderId]);
 
   useEffect(() => {
-    const handleSyncProgress = () => { /* can show partial loaded items */ };
     const handleSyncComplete = () => setIsLoadingTracks(false);
 
-    window.addEventListener('pro-sync-progress', handleSyncProgress);
     window.addEventListener('pro-sync-complete', handleSyncComplete);
 
     return () => {
-      window.removeEventListener('pro-sync-progress', handleSyncProgress);
       window.removeEventListener('pro-sync-complete', handleSyncComplete);
     };
   }, []);
