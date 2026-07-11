@@ -345,8 +345,15 @@ fn get_local_metadata_internal(
             id: row.get(7).unwrap_or_default(),
         };
 
-        // Exact identity: Drive tracks store their id in file_path as drive://{id}.
-        if !drive_id.is_empty() && file_path == format!("drive://{}", drive_id) {
+        // Exact identity: Drive tracks store their id in file_path. Match both the
+        // modern `drive://{id}` form and the legacy `/content/drive/v1/files/{id}`
+        // download-path form, otherwise the 9797 pre-existing rows would never
+        // match and every cached cover/metadata would be lost.
+        let path_without_query: &str = file_path.split('?').next().unwrap_or(file_path.as_str());
+        if !drive_id.is_empty()
+            && (file_path == format!("drive://{}", drive_id)
+                || path_without_query.ends_with(&format!("/{}", drive_id)))
+        {
             return Some(meta);
         }
 
@@ -717,5 +724,20 @@ mod tests {
 
         let m = get_local_metadata_internal(1000, "My Song", "", &conn).unwrap();
         assert_eq!(m.id, "XXX");
+    }
+
+    #[test]
+    fn legacy_drive_path_still_matches() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["ZZZ", "Old Song", "Old Artist", 200.0, "/content/drive/v1/files/ZZZ?alt=media", 1000i64],
+        )
+        .unwrap();
+
+        // The pre-existing DB rows used the legacy download-path form, not
+        // drive://{id}. A lookup by plain drive id must still find them.
+        let m = get_local_metadata_internal(1000, "", "ZZZ", &conn).unwrap();
+        assert_eq!(m.id, "ZZZ");
     }
 }
