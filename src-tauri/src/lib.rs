@@ -316,7 +316,6 @@ pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
 fn get_local_metadata_internal(
     size: i64,
     name: &str,
-    drive_id: &str,
     conn: &rusqlite::Connection,
 ) -> Option<LocalMetadata> {
     let has_file_type = HAS_FILE_TYPE.get_or_init(|| {
@@ -332,7 +331,7 @@ fn get_local_metadata_internal(
     let mut stmt = conn.prepare(query).ok()?;
     let mut rows = stmt.query([size]).ok()?;
 
-    let mut name_match = None;
+    let mut first_match = None;
     while let Ok(Some(row)) = rows.next() {
         let file_path: String = row.get(4).unwrap_or_default();
         let meta = LocalMetadata {
@@ -340,43 +339,32 @@ fn get_local_metadata_internal(
             artist: row.get(1).unwrap_or_default(),
             album: row.get(2).unwrap_or_default(),
             duration: row.get(3).unwrap_or_default(),
-            has_cover: row.get(5).unwrap_or(false),
+            has_cover: row.get(5).unwrap_or_default(),
             file_type: row.get(6).unwrap_or_default(),
             id: row.get(7).unwrap_or_default(),
         };
 
-        // Exact identity: Drive tracks store their id in file_path. Match both the
-        // modern `drive://{id}` form and the legacy `/content/drive/v1/files/{id}`
-        // download-path form, otherwise the 9797 pre-existing rows would never
-        // match and every cached cover/metadata would be lost.
-        let path_without_query: &str = file_path.split('?').next().unwrap_or(file_path.as_str());
-        if !drive_id.is_empty()
-            && (file_path == format!("drive://{}", drive_id)
-                || path_without_query.ends_with(&format!("/{}", drive_id)))
-        {
+        if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
             return Some(meta);
         }
 
-        if name_match.is_none()
-            && (file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title))
-        {
-            name_match = Some(meta);
+        if first_match.is_none() {
+            first_match = Some(meta);
         }
     }
 
-    name_match
+    first_match
 }
 
 #[tauri::command]
 fn get_local_metadata(
     size: i64,
     name: String,
-    drive_id: String,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
     app_handle: tauri::AppHandle,
 ) -> Option<LocalMetadata> {
     let conn = pool.get().ok()?;
-    let mut meta = get_local_metadata_internal(size, &name, &drive_id, &conn)?;
+    let mut meta = get_local_metadata_internal(size, &name, &conn)?;
     
     // Check if thumbnail exists on disk since we don't save to DB anymore
     use tauri::Manager;
@@ -410,7 +398,7 @@ async fn add_drive_track_to_db(
     let conn = pool.get().map_err(|e| e.to_string())?;
 
     // 1. Dedup — migrate thumbnail, return existing id
-    if let Some(existing) = get_local_metadata_internal(size, &name, &file_id, &conn) {
+    if let Some(existing) = get_local_metadata_internal(size, &name, &conn) {
         if let Ok(cache_dir) = app.path().app_cache_dir() {
             let _ = thumbnail::migrate_thumbnail(&cache_dir, &file_id, &existing.id);
         }
@@ -692,52 +680,36 @@ mod tests {
         conn
     }
 
+    // Old size-based dedup: a track of the same byte size is matched,
+    // preferring a name/title match, else the first row.
     #[test]
-    fn dedup_by_drive_id_not_size() {
+    fn dedup_by_size_prefers_name() {
         let conn = setup();
         conn.execute(
             "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params!["AAA", "Song A", "Artist A", 200.0, "drive://AAA", 1000i64],
+            rusqlite::params!["AAA", "Song A", "Artist A", 200.0, "/content/drive/v1/files/AAA", 1000i64],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params!["BBB", "Song B", "Artist B", 200.0, "drive://BBB", 1000i64],
+            rusqlite::params!["BBB", "Song B", "Artist B", 200.0, "/content/drive/v1/files/BBB", 1000i64],
         )
         .unwrap();
 
-        let m = get_local_metadata_internal(1000, "", "AAA", &conn).unwrap();
+        let m = get_local_metadata_internal(1000, "Song A", &conn).unwrap();
         assert_eq!(m.id, "AAA");
-
-        let m = get_local_metadata_internal(1000, "", "BBB", &conn).unwrap();
-        assert_eq!(m.id, "BBB");
     }
 
     #[test]
-    fn empty_drive_id_falls_back_to_name_match() {
+    fn legacy_drive_path_still_reads() {
         let conn = setup();
         conn.execute(
             "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params!["XXX", "My Song", "Someone", 200.0, "drive://XXX", 1000i64],
+            rusqlite::params!["ZZZ", "My Song", "Someone", 200.0, "/content/drive/v1/files/ZZZ?alt=media", 1000i64],
         )
         .unwrap();
 
-        let m = get_local_metadata_internal(1000, "My Song", "", &conn).unwrap();
-        assert_eq!(m.id, "XXX");
-    }
-
-    #[test]
-    fn legacy_drive_path_still_matches() {
-        let conn = setup();
-        conn.execute(
-            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params!["ZZZ", "Old Song", "Old Artist", 200.0, "/content/drive/v1/files/ZZZ?alt=media", 1000i64],
-        )
-        .unwrap();
-
-        // The pre-existing DB rows used the legacy download-path form, not
-        // drive://{id}. A lookup by plain drive id must still find them.
-        let m = get_local_metadata_internal(1000, "", "ZZZ", &conn).unwrap();
+        let m = get_local_metadata_internal(1000, "My Song", &conn).unwrap();
         assert_eq!(m.id, "ZZZ");
     }
 }

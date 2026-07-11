@@ -292,7 +292,6 @@ export async function getTrackMetadata(
       const local = await invoke<{ id: string; title: string; artist: string; album: string; duration: number; has_cover: boolean; file_type: string } | null>('get_local_metadata', {
         size: Number(safeSize),
         name: safeName,
-        drive_id: fileId,
       });
       if (local?.id) {
         const entry = {
