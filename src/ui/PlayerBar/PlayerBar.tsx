@@ -148,6 +148,36 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     }
   }, [currentTrack?.id]);
 
+  const tauriBufferStartRef = useRef<number | null>(null);
+  const tauriBufferEndRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    tauriBufferStartRef.current = null;
+    tauriBufferEndRef.current = null;
+    const unlistenBuffer = listen<{
+      track_id: string;
+      buffer_start_byte: number;
+      buffer_end_byte: number;
+      total_size_byte: number;
+    }>('buffer-status', (event) => {
+      if (currentTrack && event.payload.track_id === currentTrack.id) {
+        if (event.payload.total_size_byte > 0) {
+          tauriBufferStartRef.current = (event.payload.buffer_start_byte / event.payload.total_size_byte) * 100;
+          tauriBufferEndRef.current = (event.payload.buffer_end_byte / event.payload.total_size_byte) * 100;
+          
+          if (bufferFillRef.current) {
+            bufferFillRef.current.style.left = `${tauriBufferStartRef.current}%`;
+            bufferFillRef.current.style.width = `${tauriBufferEndRef.current - tauriBufferStartRef.current}%`;
+          }
+        }
+      }
+    });
+
+    return () => {
+      unlistenBuffer.then(f => f());
+    };
+  }, [currentTrack?.id]);
+
   useEffect(() => {
     if (currentTrack) {
       let isCancelled = false;
@@ -744,12 +774,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           }
           
           if (bufferFillRef.current) {
-            const buffered = audio.buffered;
-            let html5BufferedPercent = 0;
-            if (buffered.length > 0) {
-              html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
+            if (tauriBufferStartRef.current !== null && tauriBufferEndRef.current !== null) {
+              bufferFillRef.current.style.left = `${tauriBufferStartRef.current}%`;
+              bufferFillRef.current.style.width = `${tauriBufferEndRef.current - tauriBufferStartRef.current}%`;
+            } else {
+              const buffered = audio.buffered;
+              let html5BufferedPercent = 0;
+              if (buffered.length > 0) {
+                html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
+              }
+              bufferFillRef.current.style.left = '0%';
+              bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
             }
-            bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
           }
         }
       }

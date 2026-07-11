@@ -530,6 +530,7 @@ use std::sync::OnceLock;
 
 pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
 pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
+pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     let mut cols: Vec<String> = Vec::new();
@@ -568,6 +569,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            APP_HANDLE.set(app.handle().clone()).ok();
             crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
             use r2d2_sqlite::SqliteConnectionManager;
             use r2d2::Pool;
