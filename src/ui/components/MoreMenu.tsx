@@ -7,7 +7,7 @@ import { deleteFile, moveFile } from "../../utils/driveApi";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
 import { getValidToken } from "../../utils/apiClient";
-import { downloadDir } from "@tauri-apps/api/path";
+import { getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
 
 interface MoreMenuProps {
@@ -241,8 +241,8 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       document.body.removeChild(a);
       
       try {
-        const dir = await downloadDir();
-        setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${dir}${finalFileName}`);
+        const dir = await getEffectiveDownloadPath();
+        setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${dir}\\${finalFileName}`);
       } catch (e) {
         setDownloadMessage(t('menu.download_complete', 'Tải xuống hoàn tất!'));
       }
@@ -348,7 +348,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
             </>
           )}
 
-          {track && !!track.streamUrl && (
+          {track && (
             <button
               onClick={handleDownloadClick}
               className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1 disabled:opacity-50 disabled:cursor-not-allowed"

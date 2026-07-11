@@ -8,7 +8,7 @@ import { getPlaylists, addTrackToPlaylist, Playlist } from "../../utils/playlist
 import { deleteFile, moveFile } from "../../utils/driveApi";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
-import { downloadDir } from "@tauri-apps/api/path";
+import { getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
 
 export interface ContextMenuData {
@@ -87,7 +87,7 @@ export function GlobalContextMenu() {
       const blob = await response.blob();
       const buffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(buffer);
-      const downloadDirPath = await downloadDir();
+      const downloadDirPath = await getEffectiveDownloadPath();
       const savePath = `${downloadDirPath}\\${driveItem.title}`;
       
       await invoke("plugin:fs|write_file", { path: savePath, data: Array.from(uint8Array) });

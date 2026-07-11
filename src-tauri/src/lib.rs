@@ -565,6 +565,7 @@ pub fn run() {
     protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
             use r2d2_sqlite::SqliteConnectionManager;
