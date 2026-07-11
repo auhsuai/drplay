@@ -10,6 +10,7 @@ import { MoreMenu } from '../components/MoreMenu';
 import { set as idbSet } from 'idb-keyval';
 
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { safePlay, safePause } from "../../utils/safeAudio";
 import { formatTime } from "../../utils/formatTime";
 import { getValidToken } from "../../utils/apiClient";
@@ -148,11 +149,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     }
   }, [currentTrack?.id]);
 
-  const tauriBufferStartRef = useRef<number | null>(null);
   const tauriBufferEndRef = useRef<number | null>(null);
 
   useEffect(() => {
-    tauriBufferStartRef.current = null;
     tauriBufferEndRef.current = null;
     const unlistenBuffer = listen<{
       track_id: string;
@@ -162,12 +161,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     }>('buffer-status', (event) => {
       if (currentTrack && event.payload.track_id === currentTrack.id) {
         if (event.payload.total_size_byte > 0) {
-          tauriBufferStartRef.current = (event.payload.buffer_start_byte / event.payload.total_size_byte) * 100;
           tauriBufferEndRef.current = (event.payload.buffer_end_byte / event.payload.total_size_byte) * 100;
           
           if (bufferFillRef.current) {
-            bufferFillRef.current.style.left = `${tauriBufferStartRef.current}%`;
-            bufferFillRef.current.style.width = `${tauriBufferEndRef.current - tauriBufferStartRef.current}%`;
+            bufferFillRef.current.style.left = '0%';
+            bufferFillRef.current.style.width = `${tauriBufferEndRef.current}%`;
           }
         }
       }
@@ -772,20 +770,14 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
-          
-          if (bufferFillRef.current) {
-            if (tauriBufferStartRef.current !== null && tauriBufferEndRef.current !== null) {
-              bufferFillRef.current.style.left = `${tauriBufferStartRef.current}%`;
-              bufferFillRef.current.style.width = `${tauriBufferEndRef.current - tauriBufferStartRef.current}%`;
-            } else {
-              const buffered = audio.buffered;
-              let html5BufferedPercent = 0;
-              if (buffered.length > 0) {
-                html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
-              }
-              bufferFillRef.current.style.left = '0%';
-              bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
+          if (bufferFillRef.current && tauriBufferEndRef.current === null) {
+            const buffered = audio.buffered;
+            let html5BufferedPercent = 0;
+            if (buffered.length > 0) {
+              html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
             }
+            bufferFillRef.current.style.left = '0%';
+            bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
           }
         }
       }
@@ -1006,7 +998,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           </div>
         </div>
         <div className="w-full flex items-center gap-3">
-          <span ref={currentTimeTextRef} className="text-xs text-gray-500 w-10 text-right">0:00</span>
+          <span ref={currentTimeTextRef} className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums">0:00</span>
           <div 
             ref={progressBarRef}
             className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
@@ -1015,7 +1007,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             {/* Buffered Bar */}
             <div 
               ref={bufferFillRef}
-              className="absolute left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-full transition-all duration-300 transform-gpu will-change-[width]"
+              className="absolute left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-full transform-gpu will-change-[width]"
             ></div>
             
             {/* Played Bar */}
@@ -1027,7 +1019,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
               <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0"></div>
             </div>
           </div>
-          <span className="text-xs text-gray-500 w-10">{formatTime(duration)}</span>
+          <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">{formatTime(duration)}</span>
         </div>
       </div>
 

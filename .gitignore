@@ -27,6 +27,9 @@ dist-ssr
 src-tauri/target/
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+.opencode/
 .gemini/
 .thumbnails/
 Google_Drive_Music_Scanner.ipynb
@@ -55,3 +58,10 @@ src-tauri/fix_*.py
 src-tauri/update_rust.py
 src-tauri/scratch/
 src/test_invoke.ts
+wa_credential.json
+test.mp3
+*.bak
+diff.*
+scratch_*
+pj_rules.md
+refactor_*.cjs

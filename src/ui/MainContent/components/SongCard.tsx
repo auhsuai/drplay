@@ -37,6 +37,8 @@ interface SongCardProps {
   onToggleSelection?: () => void;
   onEnableSelectionMode?: () => void;
   hideMenu?: boolean;
+  onBulkMoveClick?: () => void;
+  onBulkDeleteClick?: () => void;
 }
 
 export const SongCard = React.memo(function SongCard({ 
@@ -56,7 +58,9 @@ export const SongCard = React.memo(function SongCard({
   isSelected, 
   onToggleSelection, 
   onEnableSelectionMode,
-  hideMenu
+  hideMenu,
+  onBulkMoveClick,
+  onBulkDeleteClick
 }: SongCardProps) {
   const { t } = useTranslation();
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
@@ -248,6 +252,9 @@ export const SongCard = React.memo(function SongCard({
             onSelectMultiple={() => {
               onEnableSelectionMode?.();
             }}
+            isBulkSelected={isSelectionMode && isSelected}
+            onBulkMoveClick={onBulkMoveClick}
+            onBulkDeleteClick={onBulkDeleteClick}
           />
         </div>
       )}

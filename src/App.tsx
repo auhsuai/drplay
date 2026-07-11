@@ -69,6 +69,23 @@ function App() {
   const [isLoadingTracks, setIsLoadingTracks] = useState(false);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
+  const [isFocused, setIsFocused] = useState(true);
+
+  useEffect(() => {
+    const handleFocus = () => setIsFocused(true);
+    const handleBlur = () => setIsFocused(false);
+    
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("blur", handleBlur);
+    
+    // Check initial state
+    setIsFocused(document.hasFocus());
+    
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, []);
 
   const { isLoggedIn, accessToken, userProfile, handleLoginSuccess, handleLogout } = useAuth(() => {
     localStorage.removeItem("drplay_root_folder");
@@ -690,6 +707,12 @@ function App() {
             </div>
           </div>
         )}
+        
+        {/* Unfocused Overlay */}
+        {!isFocused && (
+          <div className="fixed inset-0 z-[10001] bg-black/10 dark:bg-black/30 pointer-events-none transition-opacity duration-300" />
+        )}
+
         <div id="toast-root" />
       </div>
     );

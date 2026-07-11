@@ -25,9 +25,12 @@ interface MoreMenuProps {
   onOpenChange?: (isOpen: boolean) => void;
   onSelectMultiple?: () => void;
   isPlayerBarMode?: boolean;
+  isBulkSelected?: boolean;
+  onBulkMoveClick?: () => void;
+  onBulkDeleteClick?: () => void;
 }
 
-export function MoreMenu({ track, driveItem, token, currentFolderId, currentFolderName, folderHistory, onRefresh, onRemoveItem, forceOpen, onClose, anchorPoint, onOpenChange, onSelectMultiple, isPlayerBarMode }: MoreMenuProps) {
+export function MoreMenu({ track, driveItem, token, currentFolderId, currentFolderName, folderHistory, onRefresh, onRemoveItem, forceOpen, onClose, anchorPoint, onOpenChange, onSelectMultiple, isPlayerBarMode, isBulkSelected, onBulkMoveClick, onBulkDeleteClick }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [showPlaylistsSubmenu, setShowPlaylistsSubmenu] = useState(false);
@@ -307,14 +310,36 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 {t('menu.select_multiple', 'Đa chọn')}
               </button>
               <button
-                onClick={(e) => { e.stopPropagation(); setShowMoveScreen(true); setIsOpen(false); onClose?.(); }}
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  if (isBulkSelected && onBulkMoveClick) {
+                    setIsOpen(false);
+                    onClose?.();
+                    onBulkMoveClick();
+                  } else {
+                    setShowMoveScreen(true); 
+                    setIsOpen(false); 
+                    onClose?.(); 
+                  }
+                }}
                 className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1"
               >
                 <FolderOutput className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('drive.move_to') || 'Move to...'}</span>
               </button>
               <button
-                onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); setIsOpen(false); onClose?.(); }}
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  if (isBulkSelected && onBulkDeleteClick) {
+                    setIsOpen(false);
+                    onClose?.();
+                    onBulkDeleteClick();
+                  } else {
+                    setShowDeleteConfirm(true); 
+                    setIsOpen(false); 
+                    onClose?.(); 
+                  }
+                }}
                 className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-all flex items-center gap-2 group mb-1"
               >
                 <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />

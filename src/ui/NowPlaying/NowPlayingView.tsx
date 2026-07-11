@@ -6,6 +6,7 @@ import { getTrackMetadata } from "../../utils/metadata";
 import { getPalette } from '../../utils/color';
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from '@tauri-apps/api/event';
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -149,6 +150,32 @@ export function NowPlayingView({
       audio.removeEventListener('loadedmetadata', updateDuration);
     };
   }, [currentTrack]);
+
+  const tauriBufferEndRef = useRef<number | null>(null);
+  
+  useEffect(() => {
+    tauriBufferEndRef.current = null;
+    const unlistenBuffer = listen<{
+      track_id: string;
+      buffer_start_byte: number;
+      buffer_end_byte: number;
+      total_size_byte: number;
+    }>('buffer-status', (event) => {
+      if (currentTrack && event.payload.track_id === currentTrack.id) {
+        if (event.payload.total_size_byte > 0) {
+          tauriBufferEndRef.current = (event.payload.buffer_end_byte / event.payload.total_size_byte) * 100;
+          
+          if (bufferFillRef.current) {
+            bufferFillRef.current.style.width = `${tauriBufferEndRef.current}%`;
+          }
+        }
+      }
+    });
+
+    return () => {
+      unlistenBuffer.then(f => f());
+    };
+  }, [currentTrack?.id]);
   
   useEffect(() => {
     if (!isOpen) return;
@@ -180,6 +207,14 @@ export function NowPlayingView({
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
+          if (bufferFillRef.current && tauriBufferEndRef.current === null) {
+            const buffered = audio.buffered;
+            let html5BufferedPercent = 0;
+            if (buffered.length > 0) {
+              html5BufferedPercent = Math.min(100, (buffered.end(buffered.length - 1) / dur) * 100);
+            }
+            bufferFillRef.current.style.width = `${html5BufferedPercent}%`;
+          }
         }
       }
     };
@@ -194,56 +229,7 @@ export function NowPlayingView({
     }
   }, [isOpen, isDragging, duration, currentTrack]);
 
-  // Bulletproof Interval to update buffer percent
-  useEffect(() => {
-    if (!isOpen) return;
-    const interval = setInterval(async () => {
-      let newBufferedPercent = 0;
-      try {
-        const [basePos, dataLen, totalLen] = await invoke<[number, number, number | null]>("get_proxy_cache_status");
-        let proxyBufferedPercent = lastValidBufferPercentRef.current;
-        const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
-        const currentDuration = audio?.duration || duration;
-        
-        if (totalLen && totalLen > 0 && currentDuration > 0) {
-          const currentTime = audio?.currentTime || 0;
-          const currentTimeBytes = (currentTime / currentDuration) * totalLen;
-          
-          if (Math.abs(basePos - currentTimeBytes) < 3 * 1024 * 1024) {
-            const maxBufferedPos = basePos + dataLen;
-            proxyBufferedPercent = Math.min(100, (maxBufferedPos / totalLen) * 100);
-            lastValidBufferPercentRef.current = proxyBufferedPercent;
-          }
-          newBufferedPercent = proxyBufferedPercent;
-        } else {
-          const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
-          if (audio) {
-            const buffered = audio.buffered;
-            const currentDuration = audio.duration || duration;
-            if (currentDuration > 0 && buffered.length > 0) {
-              const furthestBuffer = buffered.end(buffered.length - 1);
-              newBufferedPercent = Math.min(100, (furthestBuffer / currentDuration) * 100);
-            }
-          }
-        }
-      } catch (e) {
-        const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
-        if (audio) {
-          const buffered = audio.buffered;
-          const currentDuration = audio.duration || duration;
-          if (currentDuration > 0 && buffered.length > 0) {
-            const furthestBuffer = buffered.end(buffered.length - 1);
-            newBufferedPercent = Math.min(100, (furthestBuffer / currentDuration) * 100);
-          }
-        }
-      }
-      
-      if (bufferFillRef.current) {
-        bufferFillRef.current.style.width = `${newBufferedPercent}%`;
-      }
-    }, 500);
-    return () => clearInterval(interval);
-  }, [isOpen, duration]);
+  // (Buffer logic is now handled by listen('buffer-status') and updateProgressUI)
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!progressBarRef.current) return;
@@ -398,7 +384,7 @@ export function NowPlayingView({
             </div>
             
             <div className="w-full flex items-center gap-3">
-              <span ref={currentTimeTextRef} className="text-xs text-gray-500 w-10 text-right">0:00</span>
+              <span ref={currentTimeTextRef} className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums">0:00</span>
               <div 
                 ref={progressBarRef}
                 className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
@@ -406,7 +392,7 @@ export function NowPlayingView({
               >
                 <div 
                   ref={bufferFillRef}
-                  className="absolute left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-full transition-all duration-300 pointer-events-none transform-gpu will-change-[width]"
+                  className="absolute left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-full pointer-events-none transform-gpu will-change-[width]"
                 ></div>
                 
                 <div 
@@ -416,7 +402,7 @@ export function NowPlayingView({
                   <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0"></div>
                 </div>
               </div>
-              <span className="text-xs text-gray-500 w-10">{formatTime(duration)}</span>
+              <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">{formatTime(duration)}</span>
             </div>
           </div>
         </div>

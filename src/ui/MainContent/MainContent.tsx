@@ -354,16 +354,16 @@ export function MainContent({
               <button
                 onClick={() => {
                   setSelectedIds(prev => {
-                    if (prev.size === currentItems.length) {
+                    if (prev.size === filteredItems.length) {
                       return new Set();
                     } else {
-                      return new Set(currentItems.map(i => i.id));
+                      return new Set(filteredItems.map(i => i.id));
                     }
                   });
                 }}
                 className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
               >
-                {selectedIds.size === currentItems.length ? <Square className="w-4 h-4" /> : <CheckSquare className="w-4 h-4" />}
+                {selectedIds.size === filteredItems.length ? <Square className="w-4 h-4" /> : <CheckSquare className="w-4 h-4" />}
                 <span className="hidden sm:inline">{t('drive.select_all', 'Chọn tất cả')}</span>
               </button>
               
@@ -597,6 +597,8 @@ export function MainContent({
                     setIsSelectionMode(true);
                     setSelectedIds(new Set([item.id]));
                   }}
+                  onBulkMoveClick={() => setShowBulkMoveScreen(true)}
+                  onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
                 />
                 </div>
               );
