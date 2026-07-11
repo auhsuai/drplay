@@ -316,6 +316,7 @@ pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
 fn get_local_metadata_internal(
     size: i64,
     name: &str,
+    drive_id: &str,
     conn: &rusqlite::Connection,
 ) -> Option<LocalMetadata> {
     let has_file_type = HAS_FILE_TYPE.get_or_init(|| {
@@ -331,7 +332,7 @@ fn get_local_metadata_internal(
     let mut stmt = conn.prepare(query).ok()?;
     let mut rows = stmt.query([size]).ok()?;
 
-    let mut first_match = None;
+    let mut name_match = None;
     while let Ok(Some(row)) = rows.next() {
         let file_path: String = row.get(4).unwrap_or_default();
         let meta = LocalMetadata {
@@ -344,27 +345,31 @@ fn get_local_metadata_internal(
             id: row.get(7).unwrap_or_default(),
         };
 
-        if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
+        // Exact identity: Drive tracks store their id in file_path as drive://{id}.
+        if !drive_id.is_empty() && file_path == format!("drive://{}", drive_id) {
             return Some(meta);
         }
 
-        if first_match.is_none() {
-            first_match = Some(meta);
+        if name_match.is_none()
+            && (file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title))
+        {
+            name_match = Some(meta);
         }
     }
 
-    first_match
+    name_match
 }
 
 #[tauri::command]
 fn get_local_metadata(
     size: i64,
     name: String,
+    drive_id: String,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
     app_handle: tauri::AppHandle,
 ) -> Option<LocalMetadata> {
     let conn = pool.get().ok()?;
-    let mut meta = get_local_metadata_internal(size, &name, &conn)?;
+    let mut meta = get_local_metadata_internal(size, &name, &drive_id, &conn)?;
     
     // Check if thumbnail exists on disk since we don't save to DB anymore
     use tauri::Manager;
@@ -398,7 +403,7 @@ async fn add_drive_track_to_db(
     let conn = pool.get().map_err(|e| e.to_string())?;
 
     // 1. Dedup — migrate thumbnail, return existing id
-    if let Some(existing) = get_local_metadata_internal(size, &name, &conn) {
+    if let Some(existing) = get_local_metadata_internal(size, &name, &file_id, &conn) {
         if let Ok(cache_dir) = app.path().app_cache_dir() {
             let _ = thumbnail::migrate_thumbnail(&cache_dir, &file_id, &existing.id);
         }
