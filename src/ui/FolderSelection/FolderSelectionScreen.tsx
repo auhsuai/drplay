@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Folder, ArrowLeft, HardDrive, Check } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Folder, ArrowLeft, HardDrive, Check, Search, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { db } from '../../db/db';
 
@@ -32,14 +32,56 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const [folderHistory, setFolderHistory] = useState<{id: string, name: string}[]>(initialFolderHistory);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [apiSearchResults, setApiSearchResults] = useState<FolderItem[]>([]);
+  const [isSearchingApi, setIsSearchingApi] = useState(false);
   const isLoadingRef = useRef(false);
+  const apiSearchAbortRef = useRef<AbortController | null>(null);
+
+  const filteredFolders = useMemo(() => {
+    if (!searchQuery.trim()) return folders;
+    const q = searchQuery.toLowerCase().trim();
+    return folders.filter(f => f.name.toLowerCase().includes(q));
+  }, [folders, searchQuery]);
+
+  const searchSubfolders = useCallback(async (query: string) => {
+    apiSearchAbortRef.current?.abort();
+    if (query.trim().length < 2) { setApiSearchResults([]); return; }
+    const controller = new AbortController();
+    apiSearchAbortRef.current = controller;
+    setIsSearchingApi(true);
+    try {
+      const q = `name contains '${query.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name&pageSize=30`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setApiSearchResults(data.files?.filter((f: FolderItem) => f.id !== currentFolderId) || []);
+      }
+    } catch (e: any) {
+      if (e.name !== 'AbortError') setApiSearchResults([]);
+    } finally {
+      setIsSearchingApi(false);
+    }
+  }, [token, currentFolderId]);
+
+  useEffect(() => {
+    if (!searchQuery.trim() || filteredFolders.length > 0) {
+      setApiSearchResults([]);
+      setIsSearchingApi(false);
+      return;
+    }
+    setIsSearchingApi(true);
+    const timer = setTimeout(() => searchSubfolders(searchQuery.trim()), 300);
+    return () => { clearTimeout(timer); apiSearchAbortRef.current?.abort(); };
+  }, [searchQuery, filteredFolders.length, searchSubfolders]);
 
   useEffect(() => {
     fetchFolders(currentFolderId);
-    
-    
-    
-    
+    setSearchQuery('');
+    setApiSearchResults([]);
   }, [currentFolderId, token]);
 
   const fetchFolders = async (folderId: string) => {
@@ -177,17 +219,17 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
           )}
         </div>
 
-        {/* Toolbar / Breadcrumb */}
-        <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50 overflow-x-auto whitespace-nowrap hide-scrollbar">
+        {/* Toolbar / Breadcrumb / Search */}
+        <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
           <button 
             onClick={handleBack}
             disabled={folderHistory.length === 0 && (currentFolderId === 'root' || (!allowEscapeRoot && currentFolderId === resolvedAppRoot))}
-            className="p-1.5 mr-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 transition-colors shrink-0"
+            className="p-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4 text-gray-700 dark:text-gray-300" />
           </button>
-          
-          <div className="flex items-center text-sm font-medium">
+
+          <div className="flex items-center text-sm font-medium overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0 mr-2">
             {folderHistory.map((item, index) => (
               <React.Fragment key={index}>
                 <span 
@@ -199,27 +241,89 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
                 <span className="mx-2 text-gray-400 dark:text-gray-600">/</span>
               </React.Fragment>
             ))}
-
-            <span className="text-gray-900 dark:text-white">
+            <span className="text-gray-900 dark:text-white truncate">
               {currentFolderName}
             </span>
+          </div>
+
+          <div className="relative shrink-0 w-56">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder={t('search_placeholder', 'Search...')}
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-sm bg-gray-100 dark:bg-[#1c1d21] hover:bg-gray-200 dark:hover:bg-[#25262a] focus:bg-white dark:focus:bg-[#1c1d21] text-gray-900 dark:text-gray-100 rounded-xl border border-transparent focus:border-[#4285F4]/50 outline-none transition-all placeholder:text-gray-500"
+            />
           </div>
         </div>
 
         {/* Folder List */}
         <div className="flex-1 overflow-y-auto p-6 bg-white dark:bg-[#121212]">
-          {isLoading ? (
+          {isLoading && !isSearchingApi ? (
             <div className="flex justify-center py-20">
               <div className="w-8 h-8 border-3 border-[#4285F4] border-t-transparent rounded-full animate-spin"></div>
             </div>
-          ) : folders.length === 0 ? (
+          ) : searchQuery.trim() && filteredFolders.length === 0 && apiSearchResults.length === 0 && !isSearchingApi ? (
             <div className="text-center py-20 text-gray-500">
-              <Folder className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <Search className="w-12 h-12 mx-auto mb-3 opacity-30" />
               <h3 className="text-lg font-medium mb-1 text-gray-900 dark:text-gray-200">{t('drive.no_folders')}</h3>
+            </div>
+          ) : searchQuery.trim() && (apiSearchResults.length > 0 || isSearchingApi) ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {filteredFolders.map(folder => (
+                <div 
+                  key={folder.id}
+                  onClick={() => handleOpenFolder(folder.id, folder.name)}
+                  className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
+                >
+                  <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
+                    <Folder className="w-6 h-6" fill="currentColor" />
+                  </div>
+                  <div className="overflow-hidden flex-1">
+                    <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4] transition-colors truncate">
+                      {folder.name}
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      {t('drive.folders')}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {filteredFolders.length > 0 && (
+                <div className="col-span-full text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-2 pb-1">
+                  From subfolders
+                </div>
+              )}
+              {apiSearchResults.map(folder => (
+                <div 
+                  key={folder.id}
+                  onClick={() => handleOpenFolder(folder.id, folder.name)}
+                  className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
+                >
+                  <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-purple-100 dark:bg-purple-900/30 text-purple-500">
+                    <Folder className="w-6 h-6" fill="currentColor" />
+                  </div>
+                  <div className="overflow-hidden flex-1">
+                    <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4] transition-colors truncate">
+                      {folder.name}
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      {t('drive.folders')}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {isSearchingApi && (
+                <div className="col-span-full flex items-center justify-center gap-2 py-4 text-sm text-gray-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Searching deeper...
+                </div>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {folders.map(folder => (
+              {filteredFolders.map(folder => (
                 <div 
                   key={folder.id}
                   onClick={() => handleOpenFolder(folder.id, folder.name)}

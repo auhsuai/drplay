@@ -36,6 +36,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
   const [showPlaylistsSubmenu, setShowPlaylistsSubmenu] = useState(false);
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState('');
   const [playlistCurrentPage, setPlaylistCurrentPage] = useState(1);
+  const [playlistSubmenuOpenLeft, setPlaylistSubmenuOpenLeft] = useState(false);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -363,7 +364,13 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
           {track && (
             <div className="relative">
               <button
-                onClick={(e) => { e.stopPropagation(); setShowPlaylistsSubmenu(!showPlaylistsSubmenu); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const btn = e.currentTarget;
+                  const rect = btn.getBoundingClientRect();
+                  setPlaylistSubmenuOpenLeft(rect.right + 270 > window.innerWidth);
+                  setShowPlaylistsSubmenu(!showPlaylistsSubmenu);
+                }}
                 className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center justify-between group mb-1"
               >
                 <div className="flex items-center gap-2">
@@ -380,7 +387,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 const currentPlaylists = filteredPlaylists.slice((playlistCurrentPage - 1) * playlistsPerPage, playlistCurrentPage * playlistsPerPage);
 
                 return (
-                  <div className="absolute bottom-0 left-full ml-3 w-64 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 z-50 flex flex-col animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none">
+                  <div className={`absolute bottom-0 ${playlistSubmenuOpenLeft ? 'right-full mr-3' : 'left-full ml-3'} w-64 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 z-50 flex flex-col animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none`}>
                     <div className="px-3 py-2 flex items-center justify-between gap-2">
                       <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider whitespace-nowrap">
                         {t('sidebar.playlists', 'Playlists')}
@@ -480,7 +487,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
           className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none ${anchorPoint ? '' : (openUpwards ? 'origin-bottom-right' : 'origin-top-right')}`}
           style={getContextMenuStyle()}
           onClick={e => e.stopPropagation()}
-          onContextMenu={e => e.preventDefault()}
+          onContextMenu={e => { e.stopPropagation(); e.preventDefault(); }}
         >
           {renderMenuContent()}
         </div>,
