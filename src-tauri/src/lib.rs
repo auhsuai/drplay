@@ -665,3 +665,57 @@ pub fn run() {
             _ => {}
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE tracks (
+                id TEXT, title TEXT, artist TEXT, album TEXT,
+                duration REAL, file_path TEXT, cover_art BLOB,
+                file_type TEXT, size_bytes INTEGER
+            )",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn dedup_by_drive_id_not_size() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["AAA", "Song A", "Artist A", 200.0, "drive://AAA", 1000i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["BBB", "Song B", "Artist B", 200.0, "drive://BBB", 1000i64],
+        )
+        .unwrap();
+
+        let m = get_local_metadata_internal(1000, "", "AAA", &conn).unwrap();
+        assert_eq!(m.id, "AAA");
+
+        let m = get_local_metadata_internal(1000, "", "BBB", &conn).unwrap();
+        assert_eq!(m.id, "BBB");
+    }
+
+    #[test]
+    fn empty_drive_id_falls_back_to_name_match() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["XXX", "My Song", "Someone", 200.0, "drive://XXX", 1000i64],
+        )
+        .unwrap();
+
+        let m = get_local_metadata_internal(1000, "My Song", "", &conn).unwrap();
+        assert_eq!(m.id, "XXX");
+    }
+}
