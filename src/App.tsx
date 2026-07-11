@@ -189,7 +189,11 @@ function App() {
     handlePrevTrack,
     handleTogglePlay,
     handleTogglePlayMode,
-    loadNonce
+    loadNonce,
+    crossfadeEnabled,
+    setCrossfadeEnabled,
+    crossfadeDuration,
+    setCrossfadeDuration
   } = usePlayer(accessToken);
 
 
@@ -643,6 +647,10 @@ function App() {
                   setMinimizeToTray={setMinimizeToTray}
                   setShowFolderSelection={setShowFolderSelection}
                   setShowTrashScreen={setShowTrashScreen}
+                  crossfadeEnabled={crossfadeEnabled}
+                  setCrossfadeEnabled={setCrossfadeEnabled}
+                  crossfadeDuration={crossfadeDuration}
+                  setCrossfadeDuration={setCrossfadeDuration}
                 />
               ) : (
                 <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">
@@ -663,6 +671,8 @@ function App() {
                 playMode={playMode}
                 onTogglePlayMode={handleTogglePlayMode}
                 onExpandNowPlaying={() => setIsNowPlayingOpen(prev => !prev)}
+                crossfadeEnabled={crossfadeEnabled}
+                crossfadeDuration={crossfadeDuration}
               />
             </div>
           </div>

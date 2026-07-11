@@ -26,7 +26,10 @@ export const usePlayer = (accessToken: string | null) => {
   const [originalQueue, setOriginalQueue] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [bufferSeconds, setBufferSeconds] = useState(1400);
+  const [crossfadeEnabled, setCrossfadeEnabled] = useState(false);
+  const [crossfadeDuration, setCrossfadeDuration] = useState(3000);
   const initialBufferRef = useRef(true);
+  const initialCrossfadeRef = useRef(true);
 
   // Persist buffer setting changes to IndexedDB and Rust backend
   useEffect(() => {
@@ -39,6 +42,16 @@ export const usePlayer = (accessToken: string | null) => {
       console.warn("Failed to update buffer settings", e)
     );
   }, [bufferSeconds]);
+
+  // Persist crossfade settings to IndexedDB
+  useEffect(() => {
+    if (initialCrossfadeRef.current) {
+      initialCrossfadeRef.current = false;
+      return;
+    }
+    idbSet("drplay_crossfade_enabled", crossfadeEnabled);
+    idbSet("drplay_crossfade_duration", crossfadeDuration);
+  }, [crossfadeEnabled, crossfadeDuration]);
 
   // Cleanup on logout
   useEffect(() => {
@@ -67,6 +80,11 @@ export const usePlayer = (accessToken: string | null) => {
 
         const storedBuffer = await get("drplay_buffer_seconds");
         if (storedBuffer) setBufferSeconds(storedBuffer as number);
+
+        const storedCrossfadeEnabled = await get("drplay_crossfade_enabled");
+        if (storedCrossfadeEnabled !== undefined) setCrossfadeEnabled(storedCrossfadeEnabled as boolean);
+        const storedCrossfadeDuration = await get("drplay_crossfade_duration");
+        if (storedCrossfadeDuration !== undefined) setCrossfadeDuration(storedCrossfadeDuration as number);
 
         if (lastSession && lastSession.track) {
           if (isIntentStale(myId)) {
@@ -324,6 +342,10 @@ export const usePlayer = (accessToken: string | null) => {
     playMode,
     bufferSeconds,
     setBufferSeconds,
+    crossfadeEnabled,
+    setCrossfadeEnabled,
+    crossfadeDuration,
+    setCrossfadeDuration,
     handlePlayTrack,
     handleNextTrack,
     handlePrevTrack,

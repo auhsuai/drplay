@@ -1,4 +1,5 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
+import { CrossfadeEngine } from "../../utils/crossfade";
 import { createPortal } from "react-dom";
 import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, WifiOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -25,11 +26,16 @@ interface PlayerBarProps {
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   onTogglePlayMode: () => void;
   onExpandNowPlaying: () => void;
+  crossfadeEnabled: boolean;
+  crossfadeDuration: number;
 }
 
-export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
+export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying, crossfadeEnabled, crossfadeDuration }: PlayerBarProps) {
   const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement>(null);
+  const audioRef2 = useRef<HTMLAudioElement>(null);
+  const activeAudioIndexRef = useRef<0 | 1>(0);
+  const crossfadeEngineRef = useRef<CrossfadeEngine | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressFillRef = useRef<HTMLDivElement>(null);
   const bufferFillRef = useRef<HTMLDivElement>(null);
@@ -56,6 +62,25 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const [realArtist, setRealArtist] = useState("");
   const [errorText, setErrorText] = useState("");
   const [isLiked, setIsLiked] = useState(false);
+  const getActiveAudio = useCallback(() => {
+    return activeAudioIndexRef.current === 0 ? audioRef.current : audioRef2.current;
+  }, []);
+
+  // Init CrossfadeEngine
+  useEffect(() => {
+    const engine = new CrossfadeEngine();
+    crossfadeEngineRef.current = engine;
+    return () => {
+      engine.destroy();
+      crossfadeEngineRef.current = null;
+    };
+  }, []);
+
+  const crossfadeEnabledRef = useRef(crossfadeEnabled);
+  const crossfadeDurationRef = useRef(crossfadeDuration);
+  useEffect(() => { crossfadeEnabledRef.current = crossfadeEnabled; }, [crossfadeEnabled]);
+  useEffect(() => { crossfadeDurationRef.current = crossfadeDuration; }, [crossfadeDuration]);
+
   const isTransitioningRef = useRef(false);
   const isProgrammaticActionRef = useRef(false);
 
@@ -267,16 +292,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   // Stop audio on logout
   useEffect(() => {
     const handlePlayerStop = () => {
-      const audio = audioRef.current;
-      if (audio) {
-        safePause(audio);
-        audio.removeAttribute('src');
-        audio.load();
-        if ('mediaSession' in navigator) {
-          navigator.mediaSession.playbackState = 'paused';
-          navigator.mediaSession.metadata = null;
+      for (const el of [audioRef.current, audioRef2.current]) {
+        if (el) {
+          safePause(el);
+          el.removeAttribute('src');
+          el.load();
         }
       }
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+        navigator.mediaSession.metadata = null;
+      }
+      activeAudioIndexRef.current = 0;
     };
     window.addEventListener('player-stop', handlePlayerStop);
     return () => window.removeEventListener('player-stop', handlePlayerStop);
@@ -335,41 +362,41 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       switch (e.key) {
         case 'ArrowLeft':
           e.preventDefault();
-          if (audioRef.current) {
+          const arrowLeftActive = getActiveAudio();
+          if (arrowLeftActive) {
             const now = Date.now();
             if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
-              arrowSeekBaseRef.current = audioRef.current.currentTime;
+              arrowSeekBaseRef.current = arrowLeftActive.currentTime;
             }
             lastSeekTimestampRef.current = now;
             const newTime = Math.max(0, arrowSeekBaseRef.current - 5);
             arrowSeekBaseRef.current = newTime;
-            audioRef.current.currentTime = newTime;
+            arrowLeftActive.currentTime = newTime;
             lastSeekTargetRef.current = newTime;
             isArrowSeekingRef.current = false;
           }
           break;
         case 'ArrowRight':
           e.preventDefault();
-          if (audioRef.current) {
+          const arrowRightActive = getActiveAudio();
+          if (arrowRightActive) {
             const now = Date.now();
             if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
-              arrowSeekBaseRef.current = audioRef.current.currentTime;
+              arrowSeekBaseRef.current = arrowRightActive.currentTime;
             }
             lastSeekTimestampRef.current = now;
-            const dur = audioRef.current.duration || 0;
+            const dur = arrowRightActive.duration || 0;
             const newTime = Math.min(dur, arrowSeekBaseRef.current + 5);
             arrowSeekBaseRef.current = newTime;
 
-            // Trong buffer → seek ngay trên audio element
             const isInBuffer = tauriBufferEndRef.current === null || dur <= 0 ||
               newTime <= (tauriBufferEndRef.current / 100) * dur;
 
             if (isInBuffer) {
-              audioRef.current.currentTime = newTime;
+              arrowRightActive.currentTime = newTime;
               lastSeekTargetRef.current = newTime;
               isArrowSeekingRef.current = false;
             } else {
-              // Ngoài buffer → chỉ cập nhật UI, KHÔNG đụng audio.currentTime
               isArrowSeekingRef.current = true;
               arrowTargetTimeRef.current = newTime;
               if (currentTimeTextRef.current) {
@@ -435,12 +462,15 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   // Keyup: kết thúc arrow seeking → seek audio element một lần duy nhất
   useEffect(() => {
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' && isArrowSeekingRef.current && audioRef.current) {
-        isArrowSeekingRef.current = false;
-        const target = arrowTargetTimeRef.current;
-        if (target > 0) {
-          audioRef.current.currentTime = target;
-          lastSeekTargetRef.current = target;
+      if (e.key === 'ArrowRight' && isArrowSeekingRef.current) {
+        const active = getActiveAudio();
+        if (active) {
+          isArrowSeekingRef.current = false;
+          const target = arrowTargetTimeRef.current;
+          if (target > 0) {
+            active.currentTime = target;
+            lastSeekTargetRef.current = target;
+          }
         }
       }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -453,8 +483,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, []);
 
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume;
+    for (const el of [audioRef.current, audioRef2.current]) {
+      if (el) el.volume = isMuted ? 0 : volume;
     }
   }, [volume, isMuted, currentTrack]);
 
@@ -475,10 +505,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, [isPlaying]);
 
   useEffect(() => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-        const playPromise = safePlay(audioRef.current);
+    if (isPlaying) {
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      const active = getActiveAudio();
+      if (active) {
+        const playPromise = safePlay(active);
         if (playPromise !== undefined) {
           playPromise.catch((e) => {
             if (e.name !== 'AbortError') {
@@ -486,10 +517,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             }
           });
         }
-      } else {
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-        safePause(audioRef.current);
       }
+    } else {
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+      const active = getActiveAudio();
+      if (active) safePause(active);
     }
   }, [isPlaying]);
 
@@ -504,12 +536,13 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       console.warn('[Player] Token expired mid-stream, auto refreshing...');
       try {
         await getValidToken(true);
-        if (audioRef.current && currentTrack?.streamUrl) {
-          const resumeTime = audioRef.current.currentTime;
-          audioRef.current.src = currentTrack.streamUrl; // URL keeps same, token updated globally
-          audioRef.current.load();
-          audioRef.current.currentTime = resumeTime;
-          await safePlay(audioRef.current);
+        const active = getActiveAudio();
+        if (active && currentTrack?.streamUrl) {
+          const resumeTime = active.currentTime;
+          active.src = currentTrack.streamUrl;
+          active.load();
+          active.currentTime = resumeTime;
+          await safePlay(active);
         }
       } catch (err) {
         console.error('[Player] Refresh token failed', err);
@@ -524,9 +557,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       setErrorText('Google Drive đang quá tải, thử lại sau ít phút...');
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
       rateLimitRetryTimeout = setTimeout(async () => {
-        if (audioRef.current && currentTrack?.streamUrl) {
-          audioRef.current.load();
-          await safePlay(audioRef.current).catch(() => {});
+        const active = getActiveAudio();
+        if (active && currentTrack?.streamUrl) {
+          active.load();
+          await safePlay(active).catch(() => {});
         }
       }, 30_000);
     }).then(fn => {
@@ -542,8 +576,20 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     };
   }, [currentTrack]);
 
+  const handleEnded = () => {
+    if (playMode === 'repeat-one') {
+      const active = getActiveAudio();
+      if (active) {
+        active.currentTime = 0;
+        safePlay(active).catch(e => console.error("Replay failed", e));
+      }
+    } else {
+      handleNextClick();
+    }
+  };
+
   const handleAudioError = async () => {
-    const audio = audioRef.current;
+    const audio = getActiveAudio();
     const error = audio?.error;
     if (!audio || !error) return;
 
@@ -624,82 +670,139 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !currentTrack?.streamUrl) return;
+    const audio2 = audioRef2.current;
+    if (!audio || !audio2 || !currentTrack?.streamUrl) return;
 
     let cancelled = false;
 
     const loadAndPlay = async () => {
-      isProgrammaticActionRef.current = true;
-      safePause(audio);
-      audio.src = currentTrack.streamUrl!;
-      audio.load();
-      // Allow browser to process synchronous native events triggered by load/pause
-      setTimeout(() => {
-        isProgrammaticActionRef.current = false;
-      }, 50);
+      const hasActiveSrc = (activeAudioIndexRef.current === 0 ? audio.src : audio2.src) !== '';
+      const shouldCrossfade = crossfadeEnabledRef.current && isPlaying && hasActiveSrc;
 
-      if (cancelled) return;
+      if (shouldCrossfade) {
+        const fromIndex = activeAudioIndexRef.current;
+        const toIndex = (fromIndex === 0 ? 1 : 0) as 0 | 1;
+        const fromEl = fromIndex === 0 ? audio : audio2;
+        const toEl = toIndex === 0 ? audio : audio2;
 
-      if (currentTrack.restoreTime) {
+        isProgrammaticActionRef.current = true;
+        toEl.src = currentTrack.streamUrl;
+        toEl.load();
+        setTimeout(() => { isProgrammaticActionRef.current = false; }, 50);
+
+        if (cancelled) return;
+
         await new Promise<void>(resolve => {
           const handler = () => {
-            audio.removeEventListener('loadedmetadata', handler);
+            toEl.removeEventListener('canplay', handler);
             resolve();
           };
-          audio.addEventListener('loadedmetadata', handler);
+          toEl.addEventListener('canplay', handler);
         });
-        
+
         if (cancelled) return;
-        audio.currentTime = currentTrack.restoreTime;
-      }
 
-      // CRITICAL FIX: Wait for Chromium's decoder to be fully ready before calling play().
-      // Calling play() synchronously after load() or seek on large files causes Chromium's media pipeline to deadlock at time=0.
-      await new Promise<void>(resolve => {
-        if (audio.readyState >= 3) {
-          resolve();
-          return;
-        }
-        const handler = () => {
-          audio.removeEventListener('canplay', handler);
-          resolve();
-        };
-        audio.addEventListener('canplay', handler);
-      });
+        const engine = crossfadeEngineRef.current;
+        if (engine) {
+          await engine.ensureContext();
+          engine.connect(fromEl, fromIndex);
+          engine.connect(toEl, toIndex);
+          engine.setGain(fromIndex, 1);
+          engine.setGain(toIndex, 0);
 
-      if (cancelled) return;
+          try {
+            await safePlay(toEl);
+          } catch (err: any) {
+            if (err.name === 'NotAllowedError') {
+              setPlaybackStatus('error-needs-manual-resume');
+              return;
+            }
+          }
 
-      if (isPlayingRef.current) {
-        try {
-          await safePlay(audio);
+          if (cancelled) return;
+          const fadeMs = crossfadeDurationRef.current;
+          await engine.crossfade(fromIndex, toIndex, fadeMs);
+          isProgrammaticActionRef.current = true;
+          safePause(fromEl);
+          fromEl.removeAttribute('src');
+          fromEl.load();
+          setTimeout(() => { isProgrammaticActionRef.current = false; }, 50);
+          activeAudioIndexRef.current = toIndex;
           setPlaybackStatus('playing');
-        } catch (err: any) {
-          console.warn('[Player] play() interrupted', err);
-          if (err.name === 'NotAllowedError') {
-            setPlaybackStatus('error-needs-manual-resume');
-            setPendingResumeTime(audio.currentTime);
+        }
+      } else {
+        // Normal mode — load into primary audio (index 0)
+        isProgrammaticActionRef.current = true;
+        safePause(audio);
+        audio.src = currentTrack.streamUrl;
+        audio.load();
+        setTimeout(() => { isProgrammaticActionRef.current = false; }, 50);
+
+        if (cancelled) return;
+
+        if (currentTrack.restoreTime) {
+          await new Promise<void>(resolve => {
+            const handler = () => {
+              audio.removeEventListener('loadedmetadata', handler);
+              resolve();
+            };
+            audio.addEventListener('loadedmetadata', handler);
+          });
+
+          if (cancelled) return;
+          audio.currentTime = currentTrack.restoreTime;
+        }
+
+        await new Promise<void>(resolve => {
+          if (audio.readyState >= 3) {
+            resolve();
+            return;
+          }
+          const handler = () => {
+            audio.removeEventListener('canplay', handler);
+            resolve();
+          };
+          audio.addEventListener('canplay', handler);
+        });
+
+        if (cancelled) return;
+
+        if (isPlayingRef.current) {
+          try {
+            await safePlay(audio);
+            setPlaybackStatus('playing');
+          } catch (err: any) {
+            console.warn('[Player] play() interrupted', err);
+            if (err.name === 'NotAllowedError') {
+              setPlaybackStatus('error-needs-manual-resume');
+              setPendingResumeTime(audio.currentTime);
+            }
           }
         }
+
+        activeAudioIndexRef.current = 0;
       }
     };
 
     loadAndPlay();
 
-    return () => { 
-      cancelled = true; 
-      // Ép trình duyệt huỷ ngay lập tức HTTP request cũ, giải phóng TCP socket
+    return () => {
+      cancelled = true;
       if (audio) {
         audio.removeAttribute('src');
         audio.load();
+      }
+      if (audio2) {
+        audio2.removeAttribute('src');
+        audio2.load();
       }
     };
   }, [loadNonce]);
 
   const handleManualResume = async () => {
-    const audio = audioRef.current;
+    const audio = getActiveAudio();
     if (!audio || pendingResumeTime === null) return;
 
-    // Force reload the stream to recover broken sockets from network drops
     audio.removeAttribute('src');
     audio.load();
     audio.src = currentTrack?.streamUrl || '';
@@ -768,15 +871,16 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, []);
 
   const handleTimeUpdate = () => {
-    if (audioRef.current && !isDraggingRef.current) {
-      const time = audioRef.current.currentTime;
+    const audio = getActiveAudio();
+    if (audio && !isDraggingRef.current) {
+      const time = audio.currentTime;
       
       const now = Date.now();
       if (now - lastSaveTimeRef.current > 2000 && currentTrack) {
         idbSet('drplay_last_session', {
           track: currentTrack,
           time,
-          duration: audioRef.current.duration || duration
+          duration: audio.duration || duration
         });
         lastSaveTimeRef.current = now;
       }
@@ -784,8 +888,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   };
 
   const handleLoadedMetadata = () => {
-    if (audioRef.current) {
-      const accurateDuration = audioRef.current.duration;
+    const audio = getActiveAudio();
+    if (audio) {
+      const accurateDuration = audio.duration;
       setDuration(accurateDuration);
       if (currentTrack) {
         updateTrackDuration(currentTrack.id, accurateDuration);
@@ -794,16 +899,17 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   };
 
   const handleCanPlay = () => {
+    const audio = getActiveAudio();
     retryCountRef.current = 0;
     clearRetryTimeout();
-    if (audioRef.current) {
+    if (audio) {
       if (pendingBufferRestoreTimeRef.current !== null) {
-        audioRef.current.currentTime = pendingBufferRestoreTimeRef.current;
+        audio.currentTime = pendingBufferRestoreTimeRef.current;
         pendingBufferRestoreTimeRef.current = null;
       }
 
       if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
-        audioRef.current.currentTime = currentTrack.restoreTime;
+        audio.currentTime = currentTrack.restoreTime;
         restoredAudioTrackIdRef.current = currentTrack.id;
       }
     }
@@ -819,11 +925,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         isSeekCorrectionRef.current = false;
         return;
       }
-      if (lastSeekTargetRef.current !== null && audioRef.current) {
-        const diff = Math.abs(audioRef.current.currentTime - lastSeekTargetRef.current);
+      const active = getActiveAudio();
+      if (lastSeekTargetRef.current !== null && active) {
+        const diff = Math.abs(active.currentTime - lastSeekTargetRef.current);
         if (diff > 1) {
           isSeekCorrectionRef.current = true;
-          audioRef.current.currentTime = lastSeekTargetRef.current;
+          active.currentTime = lastSeekTargetRef.current;
         }
         lastSeekTargetRef.current = null;
       }
@@ -840,12 +947,13 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     const saveSession = () => {
       if (!currentTrack) return;
       
-      let timeToSave = audioRef.current?.currentTime || 0;
+      const active = getActiveAudio();
+      let timeToSave = active?.currentTime || 0;
       let durationToSave = duration;
       
-      if (audioRef.current && currentTrack.streamUrl) {
-         timeToSave = audioRef.current.currentTime || timeToSave;
-         durationToSave = audioRef.current.duration || durationToSave;
+      if (active && currentTrack.streamUrl) {
+         timeToSave = active.currentTime || timeToSave;
+         durationToSave = active.duration || durationToSave;
       } else if (currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
          timeToSave = currentTrack.restoreTime;
          durationToSave = currentTrack.restoreDuration || durationToSave;
@@ -870,9 +978,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   useEffect(() => {
     let lastTimeText = "";
     let lastProgressWidth = "";
-    const audio = audioRef.current;
+    const activeAudio = getActiveAudio();
     
     const updateProgressUI = () => {
+      const audio = getActiveAudio();
       if (audio && !isDraggingRef.current && !isArrowSeekingRef.current && progressFillRef.current && currentTimeTextRef.current) {
         // Prevent UI jump to 0:00 when waiting for track to restore
         if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
@@ -895,25 +1004,24 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
-          // Buffer bar is driven by Tauri buffer-status events only
         }
       }
     };
 
-    if (audio) {
-      audio.addEventListener('timeupdate', updateProgressUI);
-      audio.addEventListener('progress', updateProgressUI);
-      updateProgressUI(); // initial update
+    if (activeAudio) {
+      activeAudio.addEventListener('timeupdate', updateProgressUI);
+      activeAudio.addEventListener('progress', updateProgressUI);
+      updateProgressUI();
       
       return () => {
-        audio.removeEventListener('timeupdate', updateProgressUI);
-        audio.removeEventListener('progress', updateProgressUI);
+        activeAudio.removeEventListener('timeupdate', updateProgressUI);
+        activeAudio.removeEventListener('progress', updateProgressUI);
       };
     }
   }, [duration, currentTrack]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!audioRef.current || duration === 0 || !progressBarRef.current) return;
+    if (!getActiveAudio() || duration === 0 || !progressBarRef.current) return;
     
     isDraggingRef.current = true;
     setIsDraggingUI(true);
@@ -943,11 +1051,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         clearTimeout(seekTimeoutRef.current);
       }
       seekTimeoutRef.current = setTimeout(() => {
-        if (audioRef.current) {
+        const active = getActiveAudio();
+        if (active) {
           if (playbackStatus === 'error-needs-manual-resume') {
             setPendingResumeTime(finalTime);
           } else {
-            audioRef.current.currentTime = finalTime;
+            active.currentTime = finalTime;
           }
         }
       }, 250);
@@ -1157,7 +1266,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         </div>
       </div>
 
-      {/* Hidden Audio Element */}
+      {/* Hidden Audio Elements */}
       <audio
         id="drplay-audio"
         ref={audioRef}
@@ -1167,16 +1276,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={handleCanPlay}
         onError={handleAudioError}
-        onEnded={() => {
-          if (playMode === 'repeat-one') {
-            if (audioRef.current) {
-              audioRef.current.currentTime = 0;
-              safePlay(audioRef.current).catch(e => console.error("Replay failed", e));
-            }
-          } else {
-            handleNextClick();
-          }
-        }}
+        onEnded={handleEnded}
+      />
+      <audio
+        id="drplay-audio-2"
+        ref={audioRef2}
+        preload="auto"
+        onTimeUpdate={handleTimeUpdate}
+        onProgress={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        onCanPlay={handleCanPlay}
+        onError={handleAudioError}
+        onEnded={handleEnded}
       />
 
       {/* Network Error Toast Portal */}
