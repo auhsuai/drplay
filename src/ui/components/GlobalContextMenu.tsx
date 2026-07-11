@@ -56,7 +56,7 @@ export function GlobalContextMenu() {
 
   useEffect(() => {
     if (data) {
-      getPlaylists().then(setPlaylists);
+      getPlaylists().then(setPlaylists).catch(console.error);
     }
   }, [data]);
 

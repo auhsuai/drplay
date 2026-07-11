@@ -53,6 +53,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
     setAccessToken(null);
     setUserProfile(null);
     stopProactiveRefresh();
+    window.dispatchEvent(new CustomEvent('player-stop'));
 
     try {
       await invoke("clear_stream_token");
@@ -76,21 +77,30 @@ export const useAuth = (onLogoutExt?: () => void) => {
     window.addEventListener('auth-logout', handleAuthLogout);
     
     // Listen for token expiration from Rust proxy
-    const unlisten = listen("token-expired", async () => {
+    let unlistenFn: (() => void) | null = null;
+    let listenerCancelled = false;
+    listen("token-expired", async () => {
       console.warn("Token expired detected by Rust proxy! Attempting silent refresh...");
-      // Try to silently refresh the token instead of kicking the user out immediately (force refresh)
-      const newToken = await getValidToken(true);
-      if (!newToken) {
-        alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục phát nhạc!");
-        handleAuthLogout();
-      } else {
-        console.log("Silent refresh successful. The next play action will succeed.");
+      try {
+        const newToken = await getValidToken(true);
+        if (!newToken) {
+          alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục phát nhạc!");
+          handleAuthLogout();
+        } else {
+          console.log("Silent refresh successful. The next play action will succeed.");
+        }
+      } catch (e) {
+        console.warn("Silent refresh failed", e);
       }
+    }).then(fn => {
+      if (listenerCancelled) { fn(); return; }
+      unlistenFn = fn;
     });
     
     return () => {
+      listenerCancelled = true;
       window.removeEventListener('auth-logout', handleAuthLogout);
-      unlisten.then(f => f());
+      unlistenFn?.();
     };
   }, []);
 

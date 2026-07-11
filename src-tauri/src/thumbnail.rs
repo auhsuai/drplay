@@ -34,7 +34,7 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
 }
 
 pub fn current_epoch() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub fn normalize_id(raw: &str) -> String {

@@ -51,7 +51,7 @@ pub struct StreamQuery {
 }
 
 fn now_epoch_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
@@ -183,11 +183,7 @@ async fn handle_stream(
         return (StatusCode::SERVICE_UNAVAILABLE, "Rate limited — cooldown active").into_response();
     }
 
-    let final_token = if let Ok(t) = crate::GLOBAL_STREAM_TOKEN.lock() {
-        t.clone()
-    } else {
-        String::new()
-    };
+    let final_token = crate::GLOBAL_STREAM_TOKEN.lock().await.clone();
 
     if final_token.is_empty() {
         return (StatusCode::UNAUTHORIZED, "No token").into_response();
@@ -478,7 +474,9 @@ pub fn start_proxy() {
                 crate::PROXY_PORT.store(addr.port(), std::sync::atomic::Ordering::SeqCst);
                 println!("Proxy server bound to port {}", addr.port());
             }
-            let _ = axum::serve(listener, app).await;
+            if let Err(e) = axum::serve(listener, app).await {
+                eprintln!("Proxy server error: {}", e);
+            }
         }
     });
 }

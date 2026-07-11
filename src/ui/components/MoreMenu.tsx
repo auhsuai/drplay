@@ -81,7 +81,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
 
   useEffect(() => {
     if (isMenuOpen) {
-      getPlaylists().then(setPlaylists);
+      getPlaylists().then(setPlaylists).catch(console.error);
     } else {
       setShowPlaylistsSubmenu(false);
     }

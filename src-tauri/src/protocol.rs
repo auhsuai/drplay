@@ -325,7 +325,13 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     }
                 };
                 let port = crate::PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
-                let secret = crate::PROXY_SECRET.get().unwrap().clone();
+                let secret = match crate::PROXY_SECRET.get() {
+                    Some(s) => s.clone(),
+                    None => {
+                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(b"Proxy not ready".to_vec()).unwrap());
+                        return;
+                    }
+                };
                 let redirect_url = format!("http://127.0.0.1:{}/stream?id={}&secret={}", port, file_id, secret);
 
                 responder.respond(

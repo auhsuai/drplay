@@ -93,6 +93,7 @@ function App() {
     localStorage.removeItem("drplay_current_folder_name");
     localStorage.removeItem("drplay_folder_history");
     db.syncState.delete("drplay_nav_state").catch(() => {});
+    import('idb-keyval').then(({ del }) => del('drplay_last_session')).catch(() => {});
     setAppRootFolder(null);
   });
 
@@ -117,11 +118,17 @@ function App() {
   const [showRateLimitModal, setShowRateLimitModal] = useState(false);
 
   useEffect(() => {
-    const unlisten = listen('drive-quota-exceeded', () => {
+    let quotaFn: (() => void) | null = null;
+    let repairFn: (() => void) | null = null;
+    let cancelled = false;
+    listen('drive-quota-exceeded', () => {
       setShowRateLimitModal(true);
+    }).then(fn => {
+      if (cancelled) { fn(); return; }
+      quotaFn = fn;
     });
     
-    const unlistenRepair = listen<{ driveFileId: string, dbId: string }>('repair-missing-thumbnail', async (event) => {
+    listen<{ driveFileId: string, dbId: string }>('repair-missing-thumbnail', async (event) => {
       try {
         const { getValidToken } = await import('./utils/apiClient');
         const token = await getValidToken();
@@ -147,11 +154,15 @@ function App() {
       } catch (e) {
         console.warn('Failed to repair thumbnail:', e);
       }
+    }).then(fn => {
+      if (cancelled) { fn(); return; }
+      repairFn = fn;
     });
 
     return () => {
-      unlisten.then((f: () => void) => f());
-      unlistenRepair.then((f: () => void) => f());
+      cancelled = true;
+      quotaFn?.();
+      repairFn?.();
     };
   }, []);
 

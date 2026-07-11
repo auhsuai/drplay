@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { recordFolderVisit } from "../utils/history";
 import { getAppConfig, saveAppConfig } from "../utils/driveApi";
+import { getValidToken } from "../utils/apiClient";
 
 export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   // App Root Folder (Music Library Root)
@@ -25,23 +26,48 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
       if (isLoggedIn && accessToken) {
         try {
-          const remoteConfig = await getAppConfig(accessToken);
-          if (remoteConfig && remoteConfig.rootFolderId) {
-            if (remoteConfig.rootFolderId !== localRoot) {
-              localRoot = remoteConfig.rootFolderId;
-              if (localRoot) {
-                localStorage.setItem("drplay_root_folder", localRoot);
+          const freshToken = await getValidToken();
+          if (freshToken) {
+            const remoteConfig = await getAppConfig(freshToken);
+            if (remoteConfig && remoteConfig.rootFolderId) {
+              if (remoteConfig.rootFolderId !== localRoot) {
+                localRoot = remoteConfig.rootFolderId;
               }
-              try {
-                await db.files.clear();
-                await invoke("clear_local_cache");
-              } catch (e) {}
+              const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
+              const verifyRes = await fetch(verifyUrl, {
+                headers: { Authorization: `Bearer ${freshToken}` }
+              });
+              if (!verifyRes.ok) {
+                console.warn("Saved root folder no longer accessible, need re-select");
+                localRoot = null;
+              } else {
+                const verifyData = await verifyRes.json();
+                if (verifyData.mimeType !== 'application/vnd.google-apps.folder') {
+                  console.warn("Saved root is not a folder, need re-select");
+                  localRoot = null;
+                } else if (verifyData.driveId) {
+                  console.warn("Saved root is a Shared Drive folder, falling back to My Drive");
+                  localRoot = null;
+                }
+              }
+              if (localRoot) {
+                if (remoteConfig.rootFolderId !== localStorage.getItem("drplay_root_folder")) {
+                  localStorage.setItem("drplay_root_folder", localRoot);
+                }
+                try {
+                  await db.files.clear();
+                  await invoke("clear_local_cache");
+                } catch (e) {}
+              }
+            } else if (!localRoot) {
+              localRoot = null;
             }
-          } else if (!localRoot) {
+          } else {
             localRoot = null;
           }
         } catch (e) {
           console.error("Failed to sync config", e);
+          localRoot = null;
         }
       }
 
@@ -131,8 +157,9 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     try {
       await db.files.clear();
       await invoke("clear_local_cache");
-      if (accessToken) {
-        saveAppConfig(accessToken, { rootFolderId: folderId, rootFolderName: "My Drive", updatedAt: Date.now() });
+      const freshToken = await getValidToken();
+      if (freshToken) {
+        saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: "My Drive", updatedAt: Date.now() });
       }
     } catch (e) {
       console.error("Failed to clear db or save config", e);

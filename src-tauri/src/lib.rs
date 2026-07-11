@@ -9,20 +9,17 @@ use tauri::command;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
-pub static GLOBAL_STREAM_TOKEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+lazy_static::lazy_static! {
+    pub static ref GLOBAL_STREAM_TOKEN: tokio::sync::Mutex<String> = tokio::sync::Mutex::new(String::new());
+    pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
+}
 
 pub mod protocol;
 mod thumbnail;
 
-lazy_static::lazy_static! {
-    pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
-}
-
 #[command]
 async fn update_stream_token(token: String) -> Result<(), String> {
-    if let Ok(mut t) = GLOBAL_STREAM_TOKEN.lock() {
-        *t = token;
-    }
+    *GLOBAL_STREAM_TOKEN.lock().await = token;
     GLOBAL_TOKEN_NOTIFY.notify_waiters();
     Ok(())
 }
@@ -31,9 +28,9 @@ async fn update_stream_token(token: String) -> Result<(), String> {
 async fn login_google_native() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         const CREDENTIALS_JSON: &str = include_str!("../../wa_credential.json");
-        let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).expect("Invalid wa_credential.json");
-        let client_id = ClientId::new(creds["installed"]["client_id"].as_str().unwrap().to_string());
-        let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().unwrap().to_string());
+        let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).map_err(|e| format!("Invalid wa_credential.json: {}", e))?;
+        let client_id = ClientId::new(creds["installed"]["client_id"].as_str().ok_or("Missing client_id in wa_credential.json")?.to_string());
+        let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().ok_or("Missing client_secret in wa_credential.json")?.to_string());
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap();
         let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
 
@@ -71,7 +68,7 @@ async fn login_google_native() -> Result<Value, String> {
             // Check for requests every 500ms
             if let Ok(Some(request)) = server.recv_timeout(std::time::Duration::from_millis(500)) {
                 let url = format!("{}{}", redirect_uri, request.url());
-                let parsed_url = url::Url::parse(&url).unwrap();
+                let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid redirect URL: {}", e))?;
 
                 let code = parsed_url.query_pairs().find(|(key, _)| key == "code");
                 let state = parsed_url.query_pairs().find(|(key, _)| key == "state");
@@ -155,9 +152,9 @@ async fn login_google_native() -> Result<Value, String> {
 #[command]
 async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
     const CREDENTIALS_JSON: &str = include_str!("../../wa_credential.json");
-    let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).expect("Invalid wa_credential.json");
-    let client_id = ClientId::new(creds["installed"]["client_id"].as_str().unwrap().to_string());
-    let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().unwrap().to_string());
+    let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).map_err(|e| format!("Invalid wa_credential.json: {}", e))?;
+    let client_id = ClientId::new(creds["installed"]["client_id"].as_str().ok_or("Missing client_id in wa_credential.json")?.to_string());
+    let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().ok_or("Missing client_secret in wa_credential.json")?.to_string());
     let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
 
     let client = BasicClient::new(
@@ -204,7 +201,8 @@ async fn extract_metadata_safe(file_id: String, token: String) -> Result<serde_j
     use base64::Engine;
 
     let mut final_token = token;
-    if let Ok(global) = GLOBAL_STREAM_TOKEN.lock() {
+    {
+        let global = GLOBAL_STREAM_TOKEN.lock().await;
         if !global.is_empty() {
             final_token = global.clone();
         }
@@ -500,9 +498,7 @@ static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 async fn clear_stream_token() -> Result<(), String> {
-    if let Ok(mut global) = crate::GLOBAL_STREAM_TOKEN.lock() {
-        global.clear();
-    }
+    crate::GLOBAL_STREAM_TOKEN.lock().await.clear();
     Ok(())
 }
 
@@ -564,13 +560,13 @@ fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
     proxy::start_proxy();
     protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
-            crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
             use r2d2_sqlite::SqliteConnectionManager;
             use r2d2::Pool;
             let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
@@ -591,10 +587,14 @@ pub fn run() {
             let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let icon = app.default_window_icon().map(|i| i.clone());
+            let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
-                .show_menu_on_left_click(false)
-                .icon(app.default_window_icon().unwrap().clone())
+                .show_menu_on_left_click(false);
+            if let Some(icon) = icon {
+                tray = tray.icon(icon);
+            }
+            let _tray = tray
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         IS_QUITTING.store(true, Ordering::SeqCst);

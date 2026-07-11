@@ -19,8 +19,8 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
   const [newPlaylistName, setNewPlaylistName] = useState("");
 
   useEffect(() => {
-    getPlaylists().then(setPlaylists);
-    const handleUpdate = () => getPlaylists().then(setPlaylists);
+    getPlaylists().then(setPlaylists).catch(console.error);
+    const handleUpdate = () => getPlaylists().then(setPlaylists).catch(console.error);
     window.addEventListener('playlists-updated', handleUpdate);
     window.addEventListener('user-changed', handleUpdate);
     return () => {

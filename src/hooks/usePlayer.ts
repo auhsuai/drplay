@@ -27,6 +27,18 @@ export const usePlayer = (accessToken: string | null) => {
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [bufferSeconds, setBufferSeconds] = useState(1400);
 
+  // Cleanup on logout
+  useEffect(() => {
+    const handleStop = () => {
+      setCurrentTrack(null);
+      setIsPlaying(false);
+      setOriginalQueue([]);
+      setPlaybackQueue([]);
+    };
+    window.addEventListener('player-stop', handleStop);
+    return () => window.removeEventListener('player-stop', handleStop);
+  }, []);
+
   // Load last session and buffer
   useEffect(() => {
     const loadSession = async () => {

@@ -21,12 +21,16 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const loadPlaylist = async () => {
-    const data = await getPlaylistById(playlistId);
-    setPlaylist(data);
+    try {
+      const data = await getPlaylistById(playlistId);
+      setPlaylist(data);
+    } catch (e) {
+      console.error("Failed to load playlist", e);
+    }
   };
 
   useEffect(() => {
-    loadPlaylist();
+    loadPlaylist().catch(console.error);
     window.addEventListener('playlists-updated', loadPlaylist);
     window.addEventListener('user-changed', loadPlaylist);
     return () => {

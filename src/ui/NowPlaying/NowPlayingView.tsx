@@ -5,7 +5,6 @@ import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1
 import { getTrackMetadata } from "../../utils/metadata";
 import { getPalette } from '../../utils/color';
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 
 interface NowPlayingViewProps {
@@ -155,7 +154,9 @@ export function NowPlayingView({
   
   useEffect(() => {
     tauriBufferEndRef.current = null;
-    const unlistenBuffer = listen<{
+    let bufferFn: (() => void) | null = null;
+    let bufferCancelled = false;
+    listen<{
       track_id: string;
       buffer_start_byte: number;
       buffer_end_byte: number;
@@ -170,10 +171,14 @@ export function NowPlayingView({
           }
         }
       }
+    }).then(fn => {
+      if (bufferCancelled) { fn(); return; }
+      bufferFn = fn;
     });
 
     return () => {
-      unlistenBuffer.then(f => f());
+      bufferCancelled = true;
+      bufferFn?.();
     };
   }, [currentTrack?.id]);
   

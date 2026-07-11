@@ -91,10 +91,11 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
         }).catch(() => {});
       }
     };
-    loadData();
+    loadData().catch(console.error);
 
-    window.addEventListener('recent-updated', loadData);
-    return () => window.removeEventListener('recent-updated', loadData);
+    const handleUpdate = () => { loadData().catch(console.error); };
+    window.addEventListener('recent-updated', handleUpdate);
+    return () => window.removeEventListener('recent-updated', handleUpdate);
   }, []);
 
   if (showFullRecent) {

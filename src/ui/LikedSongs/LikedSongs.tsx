@@ -19,9 +19,9 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
   const [covers, setCovers] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    loadFavorites();
+    loadFavorites().catch(console.error);
     
-    const handleUpdate = () => loadFavorites();
+    const handleUpdate = () => { loadFavorites().catch(console.error); };
     window.addEventListener('favorites-updated', handleUpdate);
     window.addEventListener('user-changed', handleUpdate);
     return () => {
@@ -31,8 +31,12 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
   }, []);
 
   const loadFavorites = async () => {
-    const favs = await getFavorites();
-    setFavorites(favs);
+    try {
+      const favs = await getFavorites();
+      setFavorites(favs);
+    } catch (e) {
+      console.error("Failed to load favorites", e);
+    }
   };
 
   const blobUrlsRef = useRef<string[]>([]);

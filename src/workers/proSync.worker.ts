@@ -1,9 +1,16 @@
 import { db } from '../db/db';
 
+let isBusy = false;
+
 self.onmessage = async (e: MessageEvent) => {
   const { token } = e.data;
-  if (!token) return;
-  await startProSync(token);
+  if (!token || isBusy) return;
+  isBusy = true;
+  try {
+    await startProSync(token);
+  } finally {
+    isBusy = false;
+  }
 };
 
 async function startProSync(token: string) {

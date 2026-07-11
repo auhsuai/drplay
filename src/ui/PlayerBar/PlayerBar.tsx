@@ -10,7 +10,6 @@ import { MoreMenu } from '../components/MoreMenu';
 import { set as idbSet } from 'idb-keyval';
 
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
 import { safePlay, safePause } from "../../utils/safeAudio";
 import { formatTime } from "../../utils/formatTime";
 import { getValidToken } from "../../utils/apiClient";
@@ -98,7 +97,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   useEffect(() => {
     lastValidBufferPercentRef.current = 0;
     if (currentTrack) {
-      isFavorite(currentTrack.id).then(setIsLiked);
+      isFavorite(currentTrack.id).then(setIsLiked).catch(() => setIsLiked(false));
     }
   }, [currentTrack?.id]);
 
@@ -106,7 +105,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   useEffect(() => {
     const handleFavoritesUpdated = () => {
       if (currentTrack) {
-        isFavorite(currentTrack.id).then(setIsLiked);
+        isFavorite(currentTrack.id).then(setIsLiked).catch(() => setIsLiked(false));
       }
     };
     handleFavoritesUpdated();
@@ -153,7 +152,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
   useEffect(() => {
     tauriBufferEndRef.current = null;
-    const unlistenBuffer = listen<{
+    let unlistenBufferFn: (() => void) | null = null;
+    let bufferCancelled = false;
+    listen<{
       track_id: string;
       buffer_start_byte: number;
       buffer_end_byte: number;
@@ -169,10 +170,14 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           }
         }
       }
+    }).then(fn => {
+      if (bufferCancelled) { fn(); return; }
+      unlistenBufferFn = fn;
     });
 
     return () => {
-      unlistenBuffer.then(f => f());
+      bufferCancelled = true;
+      unlistenBufferFn?.();
     };
   }, [currentTrack?.id]);
 
@@ -181,20 +186,22 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       let isCancelled = false;
       let objectUrl: string | null = null;
       
-      getTrackMetadata(currentTrack.id, currentTrack.streamUrl || undefined, currentTrack.size, currentTrack.originalName)
-        .then(metadata => {
-          if (isCancelled) return;
-          if (metadata.title) setRealTitle(metadata.title);
-          if (metadata.artist) setRealArtist(metadata.artist);
-          
-          if (metadata.coverUrl) {
-            setCoverUrl(metadata.coverUrl);
-          } else if (metadata.pictureData && metadata.pictureFormat) {
-            const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
-            objectUrl = URL.createObjectURL(blob);
-            setCoverUrl(objectUrl);
-          }
-        })
+      getValidToken().then(token => {
+        if (isCancelled) return null;
+        return getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName);
+      }).then(metadata => {
+        if (!metadata || isCancelled) return;
+        if (metadata.title) setRealTitle(metadata.title);
+        if (metadata.artist) setRealArtist(metadata.artist);
+        
+        if (metadata.coverUrl) {
+          setCoverUrl(metadata.coverUrl);
+        } else if (metadata.pictureData && metadata.pictureFormat) {
+          const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
+          objectUrl = URL.createObjectURL(blob);
+          setCoverUrl(objectUrl);
+        }
+      })
         .catch(err => {
           if (!isCancelled) setErrorText(err.message);
         });
@@ -251,6 +258,24 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     };
   }, [currentTrack, realTitle, realArtist]);
 
+  // Stop audio on logout
+  useEffect(() => {
+    const handlePlayerStop = () => {
+      const audio = audioRef.current;
+      if (audio) {
+        safePause(audio);
+        audio.removeAttribute('src');
+        audio.load();
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'paused';
+          navigator.mediaSession.metadata = null;
+        }
+      }
+    };
+    window.addEventListener('player-stop', handlePlayerStop);
+    return () => window.removeEventListener('player-stop', handlePlayerStop);
+  }, []);
+
   // Bluetooth / Device disconnect auto-pause
   useEffect(() => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
@@ -266,7 +291,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       }
     };
 
-    checkDevices().then(count => { lastDeviceCount = count; });
+    checkDevices().then(count => { lastDeviceCount = count; }).catch(() => {});
 
     const handleDeviceChange = async () => {
       const newCount = await checkDevices();
@@ -372,12 +397,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, [volume, isMuted, currentTrack]);
 
   useEffect(() => {
-    const unlisten = listen("drive-quota-exceeded", () => {
+    let quotaFn: (() => void) | null = null;
+    let quotaCancelled = false;
+    listen("drive-quota-exceeded", () => {
       setErrorText("Google Drive Limit: File temporary blocked (Quota Exceeded 403)");
+    }).then(fn => {
+      if (quotaCancelled) { fn(); return; }
+      quotaFn = fn;
     });
     
     return () => {
-      unlisten.then((f: () => void) => f());
+      quotaCancelled = true;
+      quotaFn?.();
     };
   }, [isPlaying]);
 
@@ -404,9 +435,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
   useEffect(() => {
     let rateLimitRetryTimeout: ReturnType<typeof setTimeout> | null = null;
-    const unlistenTokenExpired = listen('token-expired', async () => {
+    let tokenExpiredFn: (() => void) | null = null;
+    let quotaExceededFn: (() => void) | null = null;
+    let streamCancelled = false;
+    listen('token-expired', async () => {
       console.warn('[Player] Token expired mid-stream, auto refreshing...');
-      // setPlaybackStatus('recovering')
       try {
         await getValidToken(true);
         if (audioRef.current && currentTrack?.streamUrl) {
@@ -419,11 +452,13 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       } catch (err) {
         console.error('[Player] Refresh token failed', err);
       }
+    }).then(fn => {
+      if (streamCancelled) { fn(); return; }
+      tokenExpiredFn = fn;
     });
 
-    const unlistenQuotaExceeded = listen('drive-quota-exceeded', () => {
+    listen('drive-quota-exceeded', () => {
       console.warn('[Player] Google Drive API quota exceeded');
-      // setPlaybackStatus('rate-limited')
       setErrorText('Google Drive đang quá tải, thử lại sau ít phút...');
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
       rateLimitRetryTimeout = setTimeout(async () => {
@@ -432,12 +467,16 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           await safePlay(audioRef.current).catch(() => {});
         }
       }, 30_000);
+    }).then(fn => {
+      if (streamCancelled) { fn(); return; }
+      quotaExceededFn = fn;
     });
 
     return () => {
+      streamCancelled = true;
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
-      unlistenTokenExpired.then(fn => fn());
-      unlistenQuotaExceeded.then(fn => fn());
+      tokenExpiredFn?.();
+      quotaExceededFn?.();
     };
   }, [currentTrack]);
 
