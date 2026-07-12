@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { deleteFile, moveFile } from "../../utils/driveApi";
 import { useLiveQuery } from 'dexie-react-hooks';
+import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 
 
 interface MainContentProps {
@@ -21,7 +22,7 @@ interface MainContentProps {
   onBreadcrumbClick: (id: string, name: string, index: number) => void;
   token: string | null;
   currentFolderId: string;
-  highlightedFileId?: {id: string, ts: number, noScroll?: boolean} | null;
+  highlightedFileId?: {id: string, ts: number} | null;
   onRefresh: () => void;
   onRemoveItem?: (id: string) => void;
   currentTrack?: Track | null;
@@ -69,6 +70,7 @@ export function MainContent({
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [isBulkOperating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isEditingPage, setIsEditingPage] = useState(false);
   const [pageInputValue, setPageInputValue] = useState("");
@@ -96,6 +98,26 @@ export function MainContent({
     };
     window.addEventListener('enable-selection-mode', handleEnableSelection);
     return () => window.removeEventListener('enable-selection-mode', handleEnableSelection);
+  }, []);
+
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        if (document.activeElement === searchInputRef.current) {
+          searchInputRef.current?.blur();
+          setSearchQuery("");
+        } else {
+          searchInputRef.current?.focus();
+        }
+      }
+      if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
+        searchInputRef.current?.blur();
+        setSearchQuery("");
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const prevFolderRef = React.useRef(currentFolderId);
@@ -173,7 +195,7 @@ export function MainContent({
   }, [globalSearchItemsRaw]);
 
   React.useEffect(() => {
-    if (highlightedFileId && items.length > 0 && !highlightedFileId.noScroll) {
+    if (highlightedFileId && items.length > 0) {
       const filteredItemsForHighlight = searchQuery ? (globalSearchItems || []) : items;
       const index = filteredItemsForHighlight.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
@@ -181,7 +203,19 @@ export function MainContent({
         setCurrentPage(targetPage);
         setTimeout(() => {
           const indexInPage = index % itemsPerPage;
-          rowVirtualizer.scrollToIndex(indexInPage, { align: 'center', behavior: 'smooth' });
+          const scrollEl = mainRef.current;
+          const el = scrollEl?.querySelector(`[data-hl-index="${indexInPage}"]`) as HTMLElement | null;
+          if (el && scrollEl) {
+            const cont = scrollEl.getBoundingClientRect();
+            const rect = el.getBoundingClientRect();
+            const itemCenter = rect.top - cont.top + rect.height / 2;
+            const viewCenter = cont.height / 2;
+            // Đã nằm giữa màn hình (vùng giữa ±20%) -> không cuộn
+            if (Math.abs(itemCenter - viewCenter) < cont.height * 0.2) return;
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+            rowVirtualizer.scrollToIndex(indexInPage, { align: 'center', behavior: 'smooth' });
+          }
         }, 50);
       }
     }
@@ -190,6 +224,15 @@ export function MainContent({
   const filteredItems = searchQuery ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
   const currentItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  React.useEffect(() => {
+    clearPrefetchedStreams();
+  }, [currentFolderId]);
+
+  React.useEffect(() => {
+    const trackIds = currentItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
+    prefetchVisibleTracks(trackIds);
+  }, [currentItems]);
   
   const rowVirtualizer = useVirtualizer({
     count: currentItems.length,
@@ -392,6 +435,7 @@ export function MainContent({
             <div className="relative">
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
+                ref={searchInputRef}
                 type="text"
                 placeholder={t('search_placeholder', 'Tìm kiếm...')}
                 value={searchQuery}
@@ -550,6 +594,7 @@ export function MainContent({
               return (
                 <div
                   key={virtualRow.key}
+                  data-hl-index={virtualRow.index}
                   style={{
                     position: 'absolute',
                     top: 0,

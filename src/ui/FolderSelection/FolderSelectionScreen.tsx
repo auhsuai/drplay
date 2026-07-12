@@ -33,6 +33,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [apiSearchResults, setApiSearchResults] = useState<FolderItem[]>([]);
   const [isSearchingApi, setIsSearchingApi] = useState(false);
   const isLoadingRef = useRef(false);
@@ -83,6 +84,26 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     setSearchQuery('');
     setApiSearchResults([]);
   }, [currentFolderId, token]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        if (document.activeElement === searchInputRef.current) {
+          searchInputRef.current?.blur();
+          setSearchQuery("");
+        } else {
+          searchInputRef.current?.focus();
+        }
+      }
+      if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
+        searchInputRef.current?.blur();
+        setSearchQuery("");
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const fetchFolders = async (folderId: string) => {
     isLoadingRef.current = true;
@@ -249,6 +270,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
           <div className="relative shrink-0 w-56">
             <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
+              ref={searchInputRef}
               type="text"
               placeholder={t('search_placeholder', 'Search...')}
               value={searchQuery}
@@ -301,7 +323,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
                   onClick={() => handleOpenFolder(folder.id, folder.name)}
                   className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
                 >
-                  <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-purple-100 dark:bg-purple-900/30 text-purple-500">
+                  <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
                     <Folder className="w-6 h-6" fill="currentColor" />
                   </div>
                   <div className="overflow-hidden flex-1">
@@ -320,6 +342,11 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
                   Searching deeper...
                 </div>
               )}
+            </div>
+          ) : !searchQuery.trim() && filteredFolders.length === 0 && !isLoading ? (
+            <div className="text-center py-20 text-gray-500">
+              <Folder className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <h3 className="text-lg font-medium mb-1 text-gray-900 dark:text-gray-200">{t('drive.no_folders')}</h3>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
