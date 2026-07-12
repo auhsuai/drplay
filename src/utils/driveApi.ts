@@ -1,4 +1,5 @@
 import { fetchWithAuth } from './apiClient';
+import { getAudioFilesQuery } from './audioQuery';
 
 export async function createFolder(token: string, name: string, parentId: string): Promise<any> {
   const metadata = {
@@ -122,7 +123,7 @@ export async function permanentlyDeleteFile(token: string, fileId: string): Prom
 }
 
 export async function getRecentlyAddedAudioFiles(token: string): Promise<any[]> {
-  const q = "mimeType contains 'audio/' and trashed = false";
+  const q = getAudioFilesQuery();
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=5`;
   
   const response = await fetchWithAuth(url, {
