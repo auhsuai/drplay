@@ -11,9 +11,6 @@ if (typeof window !== "undefined") {
   (window as any).Buffer = Buffer;
 }
 
-// Disable right click (context menu) to prevent copy/inspect
-document.addEventListener('contextmenu', e => e.preventDefault());
-
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

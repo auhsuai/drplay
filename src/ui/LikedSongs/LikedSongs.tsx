@@ -5,6 +5,7 @@ import { Track } from '../../App';
 import { getFavorites, removeFavorite } from '../../utils/favorites';
 import { getTrackMetadata } from '../../utils/metadata';
 import { MoreMenu } from '../components/MoreMenu';
+import { prefetchVisibleTracks } from '../../utils/streamPrefetcher';
 
 
 interface LikedSongsProps {
@@ -39,16 +40,23 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     }
   };
 
+  useEffect(() => {
+    const ids = favorites.map(t => t.id).filter(Boolean);
+    if (ids.length > 0) prefetchVisibleTracks(ids);
+  }, [favorites]);
+
   const blobUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
     const controller = new AbortController();
     
     // Load metadata/covers for favorites
     favorites.forEach(track => {
       if (!covers[track.id]) {
         getTrackMetadata(track.id, token, track.size, track.originalName, controller.signal).then(metadata => {
+          if (cancelled) return;
           if (metadata.coverUrl) {
             setCovers(prev => ({
               ...prev,
@@ -57,6 +65,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
           } else if (metadata.pictureData && metadata.pictureFormat) {
             const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
             const url = URL.createObjectURL(blob);
+            if (cancelled) { URL.revokeObjectURL(url); return; }
             blobUrlsRef.current.push(url);
             setCovers(prev => ({
               ...prev,
@@ -68,6 +77,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     });
 
     return () => {
+      cancelled = true;
       controller.abort();
       blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
       blobUrlsRef.current = [];

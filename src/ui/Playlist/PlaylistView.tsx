@@ -4,6 +4,7 @@ import { Music, Play, X, Trash2, Camera } from "lucide-react";
 import { getPlaylistById, removeTrackFromPlaylist, deletePlaylist, updatePlaylist, Playlist } from "../../utils/playlists";
 import { ImageCropperModal } from "../components/ImageCropperModal";
 import { useTranslation } from "react-i18next";
+import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 
 
 interface PlaylistViewProps {
@@ -38,6 +39,12 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
       window.removeEventListener('user-changed', loadPlaylist);
     };
   }, [playlistId]);
+
+  useEffect(() => {
+    if (!playlist) return;
+    const ids = playlist.tracks.map(t => t.id).filter(Boolean);
+    if (ids.length > 0) prefetchVisibleTracks(ids);
+  }, [playlist?.tracks]);
 
   if (!playlist) return null;
 

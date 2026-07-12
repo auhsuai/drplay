@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { get, set as idbSet } from "idb-keyval";
+import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
 import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
@@ -53,6 +54,19 @@ export const usePlayer = (accessToken: string | null) => {
     idbSet("drplay_crossfade_enabled", crossfadeEnabled);
     idbSet("drplay_crossfade_duration", crossfadeDuration);
   }, [crossfadeEnabled, crossfadeDuration]);
+
+  // Keep system awake while playing
+  useEffect(() => {
+    if (isPlaying) {
+      keepAwakeStart({ display: false, idle: false, sleep: true }).catch(e =>
+        console.warn("Failed to keep system awake", e)
+      );
+    } else {
+      keepAwakeStop().catch(e =>
+        console.warn("Failed to release keep-awake", e)
+      );
+    }
+  }, [isPlaying]);
 
   // Cleanup on logout
   useEffect(() => {

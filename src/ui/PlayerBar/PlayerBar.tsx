@@ -15,6 +15,13 @@ import { safePlay, safePause } from "../../utils/safeAudio";
 import { formatTime } from "../../utils/formatTime";
 import { getValidToken } from "../../utils/apiClient";
 
+const isTrustedStreamUrl = (url: string): boolean => {
+  try {
+    const u = new URL(url);
+    return u.hostname === 'drplay.localhost' && u.pathname === '/stream';
+  } catch { return false; }
+};
+
 interface PlayerBarProps {
   currentTrack: Track | null;
   isPlaying: boolean;
@@ -238,7 +245,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           if (!isCancelled) setErrorText(err.message);
         });
         
-      if (currentTrack.streamUrl) {
+      if (currentTrack.streamUrl && isTrustedStreamUrl(currentTrack.streamUrl)) {
         recordPlay(currentTrack).catch(e => console.error("Failed to record play", e));
       }
       
@@ -549,7 +556,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         await getValidToken(true);
         const active = getActiveAudio();
         const track = currentTrackRef.current;
-        if (active && track?.streamUrl) {
+        if (active && track?.streamUrl && isTrustedStreamUrl(track.streamUrl)) {
           const resumeTime = active.currentTime;
           active.src = track.streamUrl;
           active.load();
@@ -621,7 +628,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     let errorType = 'transient';
 
     try {
-      if (currentTrack?.streamUrl) {
+      if (currentTrack?.streamUrl && isTrustedStreamUrl(currentTrack.streamUrl)) {
         const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD' });
         if (headResp.ok) {
           isRealFormatError = true;
@@ -684,7 +691,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   useEffect(() => {
     const audio = audioRef.current;
     const audio2 = audioRef2.current;
-    if (!audio || !audio2 || !currentTrack?.streamUrl) return;
+    if (!audio || !audio2 || !currentTrack?.streamUrl || !isTrustedStreamUrl(currentTrack.streamUrl)) return;
 
     let cancelled = false;
 
@@ -826,7 +833,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
     audio.removeAttribute('src');
     audio.load();
-    audio.src = currentTrack?.streamUrl || '';
+    audio.src = (currentTrack?.streamUrl && isTrustedStreamUrl(currentTrack.streamUrl)) ? currentTrack.streamUrl : '';
     audio.load();
 
     const resumeHandler = () => {

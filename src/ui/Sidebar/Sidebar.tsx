@@ -19,11 +19,13 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
   const [newPlaylistName, setNewPlaylistName] = useState("");
 
   useEffect(() => {
-    getPlaylists().then(setPlaylists).catch(console.error);
-    const handleUpdate = () => getPlaylists().then(setPlaylists).catch(console.error);
+    let cancelled = false;
+    getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(console.error);
+    const handleUpdate = () => getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(console.error);
     window.addEventListener('playlists-updated', handleUpdate);
     window.addEventListener('user-changed', handleUpdate);
     return () => {
+      cancelled = true;
       window.removeEventListener('playlists-updated', handleUpdate);
       window.removeEventListener('user-changed', handleUpdate);
     };

@@ -17,3 +17,10 @@ export function startProSyncWorker(token: string) {
   
   globalWorker.postMessage({ token });
 }
+
+export function stopProSyncWorker() {
+  if (globalWorker) {
+    globalWorker.terminate();
+    globalWorker = null;
+  }
+}

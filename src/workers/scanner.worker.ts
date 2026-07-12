@@ -1,5 +1,5 @@
 import { get } from 'idb-keyval';
-import { getTrackMetadata, CachedMetadata } from '../utils/metadata';
+import { getTrackMetadata } from '../utils/metadata';
 
 // Listen for messages from the main thread
 self.onmessage = async (e: MessageEvent) => {
@@ -20,9 +20,9 @@ async function startScanner(token: string) {
     const fileId = file.id;
     const cacheKey = `metadata_${fileId}`;
     try {
-      // Skip if file is already scanned and saved in local storage with version 2
-      const cached = await get<CachedMetadata>(cacheKey);
-      if (cached && cached.v === 2) return;
+      // Skip if file metadata is already fully parsed and cached.
+      const cached = await get<{ version: number; data?: { v?: number }; ts: number }>(cacheKey);
+      if (cached && cached.data && (cached.data.v ?? 0) >= 9) return;
     } catch (e) {}
 
     const knownSize = file.size ? parseInt(file.size, 10) : undefined;

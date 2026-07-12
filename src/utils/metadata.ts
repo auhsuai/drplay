@@ -339,7 +339,7 @@ export async function getTrackMetadata(
       ? `bytes=0-${HEAD_BYTES - 1}`
       : `bytes=0-${HEAD_BYTES - 1},${tailStart}-${tailEnd}`;
 
-    const response = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+    const response = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
       headers: { Range: rangeHeader },
       signal: _signal,
     });
@@ -368,7 +368,7 @@ export async function getTrackMetadata(
       const fetchUpTo = Math.min(totalTagSize, 20 * 1024 * 1024); // Cap at 20MB
       if (fetchUpTo > headBuffer.length) {
         try {
-          const extraResp = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+          const extraResp = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
             headers: { Range: `bytes=${headBuffer.length}-${fetchUpTo - 1}` },
             signal: _signal,
           });
@@ -401,7 +401,7 @@ export async function getTrackMetadata(
         const fetchUpTo = Math.min(requiredBytes, 20 * 1024 * 1024);
         if (fetchUpTo > headBuffer.length) {
           try {
-            const extraResp = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+            const extraResp = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
               headers: { Range: `bytes=${headBuffer.length}-${fetchUpTo - 1}` },
               signal: _signal,
             });
@@ -458,7 +458,7 @@ export async function getTrackMetadata(
       const offset = (pic as any).offset ?? 0;
       if (declaredSize > 0 && offset + declaredSize <= safeSize) {
         try {
-          const picResp = await fetch(`http://drplay.localhost/stream?id=${fileId}`, {
+          const picResp = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
             headers: { Range: `bytes=${offset}-${offset + declaredSize - 1}` },
             signal: _signal,
           });

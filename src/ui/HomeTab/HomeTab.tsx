@@ -3,6 +3,7 @@ import { Track } from "../../App";
 import { getTrackMetadata } from "../../utils/metadata";
 import { getRecentlyPlayed, getHeavyRotation, getRandomDiscoveries, getMostVisitedFolders, FolderVisitEntry } from "../../utils/history";
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
+import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { Play, Music, Clock, Sparkles, ArrowLeft, MoreHorizontal, Search, ArrowUpDown, X, Check, Folder, Repeat, PlusCircle } from "lucide-react";
 import greetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
@@ -97,6 +98,12 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
     window.addEventListener('recent-updated', handleUpdate);
     return () => window.removeEventListener('recent-updated', handleUpdate);
   }, []);
+
+  useEffect(() => {
+    const tracks = [...recent, ...heavy, ...discover, ...recentlyAdded];
+    const ids = tracks.map(t => t.id).filter(Boolean);
+    if (ids.length > 0) prefetchVisibleTracks(ids);
+  }, [recent, heavy, discover, recentlyAdded]);
 
   if (showFullRecent) {
     return <FullRecentView recent={recent} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} />;
@@ -300,6 +307,11 @@ function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], on
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOption, setSortOption] = useState('recent');
   const [showSortMenu, setShowSortMenu] = useState(false);
+
+  useEffect(() => {
+    const ids = recent.map(t => t.id).filter(Boolean);
+    if (ids.length > 0) prefetchVisibleTracks(ids);
+  }, [recent]);
   
   const filteredItems = useMemo(() => {
     let items = [...recent].filter(item => 
