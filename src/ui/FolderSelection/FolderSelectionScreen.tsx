@@ -52,7 +52,8 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     apiSearchAbortRef.current = controller;
     setIsSearchingApi(true);
     try {
-      const q = `name contains '${query.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      const safeQuery = query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const q = `name contains '${safeQuery}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
       const response = await fetch(
         `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name&pageSize=30`,
         { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }

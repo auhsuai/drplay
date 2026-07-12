@@ -11,14 +11,6 @@
     {
       "identifier": "http:default",
       "allow": [{ "url": "https://*.googleapis.com/*" }, { "url": "https://*.googleusercontent.com/*" }]
-    },
-    "fs:default",
-    {
-      "identifier": "fs:scope",
-      "allow": [
-        { "path": "$DOWNLOAD/**" },
-        { "path": "$DESKTOP/**" }
-      ]
     }
   ]
 }
