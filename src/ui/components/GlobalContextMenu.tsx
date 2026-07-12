@@ -9,8 +9,16 @@ import { deleteFile, moveFile } from "../../utils/driveApi";
 import { fetchWithAuth } from "../../utils/apiClient";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
-import { getEffectiveDownloadPath } from "../../utils/downloadPath";
+import { getEffectiveDownloadPath, isSafeDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
+
+const sanitizeFilename = (name: string): string => {
+  let s = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_');
+  s = s.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i, '_$1$2');
+  s = s.replace(/[\s.]+$/g, '');
+  s = s.slice(0, 255);
+  return s || 'untitled';
+};
 
 export interface ContextMenuData {
   x: number;
@@ -86,7 +94,13 @@ export function GlobalContextMenu() {
       const buffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(buffer);
       const downloadDirPath = await getEffectiveDownloadPath();
-      const originalName = driveItem.trackInfo?.originalName || `${driveItem.title}.mp3`;
+      if (!(await isSafeDownloadPath(downloadDirPath))) {
+        console.error("Unsafe download path:", downloadDirPath);
+        setDownloadingState('error');
+        setTimeout(() => setDownloadingState('idle'), 3000);
+        return;
+      }
+      const originalName = sanitizeFilename(driveItem.trackInfo?.originalName || `${driveItem.title}.mp3`);
       const savePath = `${downloadDirPath}\\${originalName}`;
       
       await invoke("plugin:fs|write_file", { path: savePath, data: Array.from(uint8Array) });
