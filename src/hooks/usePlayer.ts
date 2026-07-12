@@ -336,14 +336,16 @@ export const usePlayer = (accessToken: string | null) => {
   };
 
   const handleTogglePlayMode = () => {
+    const queue = originalQueue;
+    const track = currentTrack;
     setPlayMode(prev => {
       const nextMode = prev === 'normal' ? 'shuffle' : (prev === 'shuffle' ? 'repeat-all' : (prev === 'repeat-all' ? 'repeat-one' : 'normal'));
 
       if (nextMode === 'shuffle') {
-        if (originalQueue.length > 0 && currentTrack) {
-          const shuffled = [...originalQueue];
-          const trackIndex = shuffled.findIndex(t => t.queueItemId ? (t.queueItemId === currentTrack.queueItemId) : (t.id === currentTrack.id));
-          let currentTrackInQueue = currentTrack;
+        if (queue.length > 0 && track) {
+          const shuffled = [...queue];
+          const trackIndex = shuffled.findIndex(t => t.queueItemId ? (t.queueItemId === track.queueItemId) : (t.id === track.id));
+          let currentTrackInQueue = track;
           if (trackIndex !== -1) {
             currentTrackInQueue = shuffled[trackIndex];
             shuffled.splice(trackIndex, 1);
@@ -357,7 +359,7 @@ export const usePlayer = (accessToken: string | null) => {
           setPlaybackQueue(shuffled);
         }
       } else if (prev === 'shuffle') {
-        setPlaybackQueue([...originalQueue]);
+        setPlaybackQueue([...queue]);
       }
 
       return nextMode;

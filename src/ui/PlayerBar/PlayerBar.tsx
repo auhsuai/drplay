@@ -793,6 +793,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           }
         }
 
+        if (crossfadeEngineRef.current) {
+          crossfadeEngineRef.current.setGain(0, 1);
+          crossfadeEngineRef.current.setGain(1, 1);
+        }
         activeAudioIndexRef.current = 0;
       }
     };

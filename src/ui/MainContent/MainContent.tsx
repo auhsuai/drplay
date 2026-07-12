@@ -271,55 +271,48 @@ export function MainContent({
   const handleBulkDelete = async () => {
     if (!token || selectedIds.size === 0) return;
     
-    // Optimistic UI
     const itemsToDelete = Array.from(selectedIds);
-    if (onRemoveItem) {
-      itemsToDelete.forEach(id => onRemoveItem(id));
-    }
     
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setShowBulkDeleteConfirm(false);
-    
+
     try {
-      const deletePromises = itemsToDelete.map(async id => {
-        await db.files.delete(id);
-        return deleteFile(token, id);
-      });
-      await Promise.all(deletePromises);
+      await Promise.all(itemsToDelete.map(id => deleteFile(token, id)));
+      await db.files.bulkDelete(itemsToDelete);
+      if (onRemoveItem) itemsToDelete.forEach(id => onRemoveItem(id));
     } catch (e) {
       console.error("Failed to delete items", e);
       alert(t('drive.delete_error') || "Failed to delete one or more items.");
-      onRefresh();
     }
   };
 
   const handleBulkMove = async (destinationFolderId: string) => {
     if (!token || selectedIds.size === 0) return;
     
-    // Optimistic UI
     const itemsToMove = Array.from(selectedIds);
-    if (onRemoveItem) {
-      itemsToMove.forEach(id => onRemoveItem(id));
+    const originalParents = new Map<string, string>();
+    for (const id of itemsToMove) {
+      const item = await db.files.get(id);
+      if (item) originalParents.set(id, item.parentId);
     }
     
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setShowBulkMoveScreen(false);
-    
+
     try {
-      const movePromises = itemsToMove.map(async id => {
-        const item = await db.files.get(id);
-        if (item) {
-          await db.files.update(id, { parentId: destinationFolderId });
-        }
-        return moveFile(token, id, currentFolderId, destinationFolderId);
-      });
-      await Promise.all(movePromises);
+      await Promise.all(itemsToMove.map(id => moveFile(token, id, currentFolderId, destinationFolderId)));
+      for (const id of itemsToMove) {
+        await db.files.update(id, { parentId: destinationFolderId });
+      }
+      if (onRemoveItem) itemsToMove.forEach(id => onRemoveItem(id));
     } catch (e) {
       console.error("Failed to move items", e);
+      for (const [id, parentId] of originalParents) {
+        await db.files.update(id, { parentId }).catch(() => {});
+      }
       alert("Failed to move one or more items.");
-      onRefresh();
     }
   };
 

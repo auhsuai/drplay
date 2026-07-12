@@ -161,7 +161,6 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
   const handleMove = async (newParentId: string) => {
     if (!driveItem || !token || !currentFolderId) return;
     
-    // Prevent moving to the exact same folder (Google Drive API will throw 400 error)
     if (newParentId === currentFolderId) {
       setShowMoveScreen(false);
       setIsOpen(false);
@@ -169,26 +168,22 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       return;
     }
 
-    // Optimistic UI: Close the move screen, hide menu, and instantly remove item from view
+    const itemId = driveItem.id;
+    const oldParentId = currentFolderId;
+
     setShowMoveScreen(false);
     setIsOpen(false);
     onClose?.();
-    if (onRemoveItem) onRemoveItem(driveItem.id);
 
-    // Optimistic UI update for local DB
-    db.files.update(driveItem.id, { parentId: newParentId }).catch(() => {});
-
-    // Run the API call in the background
-    moveFile(token, driveItem.id, currentFolderId, newParentId)
-      .then(() => {
-        // We already optimistically removed it, so we don't necessarily need to refresh 
-        // unless onRemoveItem wasn't provided.
-        if (!onRemoveItem && onRefresh) onRefresh();
-      })
-      .catch((e) => {
-        console.error("Failed to move", e);
-        alert(t('drive.move_error') || "Failed to move item");
-      });
+    try {
+      await moveFile(token, itemId, oldParentId, newParentId);
+      await db.files.update(itemId, { parentId: newParentId });
+      if (onRemoveItem) onRemoveItem(itemId);
+    } catch (e) {
+      console.error("Failed to move", e);
+      alert(t('drive.move_error') || "Failed to move item");
+      if (onRefresh) onRefresh();
+    }
   };
 
   const [isDownloadingFile, setIsDownloadingFile] = useState(false);
@@ -234,7 +229,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      const finalFileName = `${downloadFileName.trim() || 'audio'}.mp3`;
+      const base = downloadFileName.trim() || 'audio';
+      const ext = track?.originalName?.includes('.') ? track.originalName.slice(track.originalName.lastIndexOf('.')) : '.mp3';
+      const finalFileName = `${base}${ext}`;
       a.download = finalFileName;
       document.body.appendChild(a);
       a.click();
