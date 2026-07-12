@@ -181,14 +181,25 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 
 #[tauri::command]
 async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     let ext_str = ext.unwrap_or_default();
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
 
+    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 300;
+    let payload = format!("{}:{}", file_id, exp);
+    let secret = crate::PROXY_SECRET.get().ok_or("Proxy not initialized")?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;
+    mac.update(payload.as_bytes());
+    let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(180.0);
-        Ok(format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}", file_id, b, buf, ext_param))
+        Ok(format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig))
     } else {
-        Ok(format!("http://drplay.localhost/stream?id={}{}", file_id, ext_param))
+        Ok(format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig))
     }
 }
 

@@ -5,6 +5,8 @@ use axum::{
     Router,
     http::{HeaderMap, StatusCode, header},
 };
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use reqwest::Client;
 use serde::Deserialize;
 use tauri::Emitter;
@@ -54,24 +56,12 @@ struct AppState {
 #[derive(Deserialize)]
 pub struct StreamQuery {
     pub id: String,
-    pub secret: String,
+    pub exp: u64,
+    pub sig: String,
 }
 
 fn now_epoch_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
-}
-
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    if a_bytes.len() != b_bytes.len() {
-        return false;
-    }
-    let mut result = 0;
-    for (byte_a, byte_b) in a_bytes.iter().zip(b_bytes.iter()) {
-        result |= byte_a ^ byte_b;
-    }
-    result == 0
 }
 
 static GLOBAL_BACKOFF_UNTIL: AtomicU64 = AtomicU64::new(0);
@@ -175,9 +165,31 @@ async fn handle_stream(
         return (StatusCode::BAD_REQUEST, "Invalid file ID").into_response();
     }
 
+    // HMAC signature verification
     if let Some(expected_secret) = crate::PROXY_SECRET.get() {
-        if !constant_time_eq(&query.secret, expected_secret) {
-            return (StatusCode::UNAUTHORIZED, "Invalid secret").into_response();
+        let now = now_epoch_secs();
+        if now > query.exp {
+            return (StatusCode::FORBIDDEN, "URL expired").into_response();
+        }
+
+        let payload = format!("{}:{}", query.id, query.exp);
+        let mut mac = match Hmac::<Sha256>::new_from_slice(expected_secret.as_bytes()) {
+            Ok(m) => m,
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "HMAC init error").into_response(),
+        };
+        mac.update(payload.as_bytes());
+        let expected_sig = mac.finalize().into_bytes()
+            .iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+        if expected_sig.len() != query.sig.len() {
+            return (StatusCode::UNAUTHORIZED, "Invalid signature").into_response();
+        }
+        let mut diff = 0u8;
+        for (a, b) in expected_sig.bytes().zip(query.sig.bytes()) {
+            diff |= a ^ b;
+        }
+        if diff != 0 {
+            return (StatusCode::UNAUTHORIZED, "Invalid signature").into_response();
         }
     } else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "Not initialized").into_response();

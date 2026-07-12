@@ -2,6 +2,7 @@ use tauri::http::{Response, StatusCode};
 use moka::future::Cache;
 use bytes::Bytes;
 use once_cell::sync::Lazy;
+use hmac::Mac;
 
 use std::path::Path;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -325,6 +326,9 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     }
                 };
                 let port = crate::PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
+
+                let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() + 300;
+                let payload = format!("{}:{}", file_id, exp);
                 let secret = match crate::PROXY_SECRET.get() {
                     Some(s) => s.clone(),
                     None => {
@@ -332,7 +336,11 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                         return;
                     }
                 };
-                let redirect_url = format!("http://127.0.0.1:{}/stream?id={}&secret={}", port, file_id, secret);
+                let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(secret.as_bytes()).unwrap();
+                mac.update(payload.as_bytes());
+                let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+                let redirect_url = format!("http://127.0.0.1:{}/stream?id={}&exp={}&sig={}", port, file_id, exp, sig);
 
                 responder.respond(
                     Response::builder()
