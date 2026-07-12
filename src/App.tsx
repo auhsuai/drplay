@@ -304,18 +304,11 @@ function App() {
   // Locate File in App logic
   useEffect(() => {
     const handleLocateFile = async (e: any) => {
-      let { fileId, parentId: detailParentId } = e.detail || {};
+      let { fileId } = e.detail || {};
       if (!fileId || !accessToken) return;
       
       if (fileId.startsWith('drive_')) {
         fileId = fileId.replace('drive_', '');
-      }
-
-      if (detailParentId && detailParentId === currentFolderId) {
-        setActiveTab("My Drive");
-        setHighlightedFileId({ id: fileId, ts: Date.now() });
-        setTimeout(() => setHighlightedFileId(null), 5000);
-        return;
       }
 
       const rebuildHistory = async (targetFolderId: string): Promise<{ id: string, name: string }[]> => {
@@ -386,11 +379,12 @@ function App() {
         let parentId: string | null = null;
         let folderName = "Unknown Folder";
         
-        const fileInfo = await db.files.get(fileId);
-        
-        if (fileInfo && fileInfo.parentId) {
-          parentId = fileInfo.parentId;
-        } else {
+        // Resolve the file's CURRENT parent straight from Drive. The local
+        // Dexie cache (db.files.parentId) can be stale after the file is
+        // moved in Drive, which made "Locate" open the old folder until a
+        // full restart re-fetched everything. Prefer the live API result and
+        // only fall back to the cache if the API call fails.
+        try {
           const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
             headers: { Authorization: `Bearer ${accessToken}` }
           });
@@ -399,6 +393,14 @@ function App() {
             if (data.parents && data.parents.length > 0) {
               parentId = data.parents[0];
             }
+          }
+        } catch {
+          // ignore — fall back to cache below
+        }
+        if (!parentId) {
+          const fileInfo = await db.files.get(fileId);
+          if (fileInfo && fileInfo.parentId) {
+            parentId = fileInfo.parentId;
           }
         }
         
@@ -422,6 +424,14 @@ function App() {
                 folderName = pData.name;
               }
           }
+        }
+
+        // If the file already lives in the folder we're viewing, just
+        // highlight it — no navigation needed.
+        if (parentId === currentFolderId) {
+          setHighlightedFileId({ id: fileId, ts: Date.now() });
+          setTimeout(() => setHighlightedFileId(null), 5000);
+          return;
         }
 
         const newHistory = await rebuildHistory(parentId);
