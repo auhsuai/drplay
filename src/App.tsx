@@ -17,6 +17,7 @@ const PlaylistView = React.lazy(() => import('./ui/Playlist/PlaylistView').then(
 const SettingsTab = React.lazy(() => import('./ui/Settings/SettingsTab').then(module => ({ default: module.SettingsTab })));
 import "./App.css";
 import { db } from './db/db';
+import { getFolderAudioQuery } from './utils/audioQuery';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { LoginScreen } from "./ui/Login/LoginScreen";
 
@@ -485,7 +486,7 @@ function App() {
         setIsLoadingTracks(true);
       }
       
-      const q = `'${folderId}' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or mimeType contains 'audio/')`;
+      const q = getFolderAudioQuery(folderId);
       
       let pageToken: string | undefined = undefined;
       let allFiles: any[] = [];
