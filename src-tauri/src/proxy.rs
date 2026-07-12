@@ -58,6 +58,7 @@ pub struct StreamQuery {
     pub id: String,
     pub exp: u64,
     pub sig: String,
+    pub ext: Option<String>,
 }
 
 fn now_epoch_secs() -> u64 {
@@ -172,7 +173,8 @@ async fn handle_stream(
             return (StatusCode::FORBIDDEN, "URL expired").into_response();
         }
 
-        let payload = format!("{}:{}", query.id, query.exp);
+        let ext_str = query.ext.clone().unwrap_or_default();
+        let payload = format!("{}:{}:{}", query.id, ext_str, query.exp);
         let mut mac = match Hmac::<Sha256>::new_from_slice(expected_secret.as_bytes()) {
             Ok(m) => m,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "HMAC init error").into_response(),

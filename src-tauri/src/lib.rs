@@ -189,7 +189,7 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
 
     let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 300;
-    let payload = format!("{}:{}", file_id, exp);
+    let payload = format!("{}:{}:{}", file_id, ext_str, exp);
     let secret = crate::PROXY_SECRET.get().ok_or("Proxy not initialized")?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;
     mac.update(payload.as_bytes());
