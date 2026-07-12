@@ -30,7 +30,11 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
   stopProactiveRefresh();
   const refreshInMs = Math.max((expiresInSeconds - 180) * 1000, 5000);
   refreshTimerId = setTimeout(async () => {
-    await getValidToken(true);
+    try {
+      await getValidToken(true);
+    } catch (e) {
+      console.warn("[Auth] Proactive refresh failed", e);
+    }
   }, refreshInMs);
 };
 
@@ -58,8 +62,9 @@ function getStoredTokenTime(): number {
 }
 
 function scheduleRetryRefresh() {
+  if (refreshTimerId) clearTimeout(refreshTimerId);
   const RETRY_DELAY = 30_000;
-  setTimeout(() => {
+  refreshTimerId = setTimeout(() => {
     getValidToken(true).catch(e => console.warn("Retry refresh failed", e));
   }, RETRY_DELAY);
 }
@@ -157,7 +162,7 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
 
   // Nếu gặp lỗi 401 Unauthorized
   if (response.status === 401) {
-    const newToken = await getValidToken();
+    const newToken = await getValidToken(true);
     if (newToken) {
       const retryHeaders = new Headers(options.headers);
       retryHeaders.set("Authorization", `Bearer ${newToken}`);

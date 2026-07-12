@@ -6,6 +6,7 @@ import { Music, Download, X, CheckCircle2, Trash2, FolderOutput, CheckSquare } f
 import { Track, DriveItem } from "../../App";
 import { getPlaylists, addTrackToPlaylist, Playlist } from "../../utils/playlists";
 import { deleteFile, moveFile } from "../../utils/driveApi";
+import { fetchWithAuth } from "../../utils/apiClient";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
 import { getEffectiveDownloadPath } from "../../utils/downloadPath";
@@ -74,21 +75,19 @@ export function GlobalContextMenu() {
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const token = localStorage.getItem("drplay_access_token");
-    if (!driveItem || !token) return;
+    if (!driveItem) return;
     
     setDownloadingState('downloading');
     try {
-      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${driveItem.id}?alt=media`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${driveItem.id}?alt=media`);
       if (!response.ok) throw new Error("Download failed");
       
       const blob = await response.blob();
       const buffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(buffer);
       const downloadDirPath = await getEffectiveDownloadPath();
-      const savePath = `${downloadDirPath}\\${driveItem.title}`;
+      const originalName = driveItem.trackInfo?.originalName || `${driveItem.title}.mp3`;
+      const savePath = `${downloadDirPath}\\${originalName}`;
       
       await invoke("plugin:fs|write_file", { path: savePath, data: Array.from(uint8Array) });
       setDownloadingState('success');

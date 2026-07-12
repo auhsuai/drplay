@@ -223,7 +223,7 @@ async function compressImage(
   maxSize: number = 256,
   quality: number = 0.7,
 ): Promise<Uint8Array> {
-  const blob = new Blob([data as any], { type: format });
+  const blob = new Blob([data], { type: format });
   const img = await createImageBitmap(blob);
 
   if (img.width <= maxSize && img.height <= maxSize) {

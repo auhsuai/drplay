@@ -4,6 +4,7 @@ import { get, set as idbSet } from "idb-keyval";
 import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
+import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
 
 
 const playRequestIdRef = { current: 0 };
@@ -97,13 +98,16 @@ export const usePlayer = (accessToken: string | null) => {
           
           if (freshToken) {
             try {
-              const ext = lastSession.track.originalName?.split('.').pop()?.toLowerCase();
-              streamUrl = await invoke<string>("get_stream_url", { 
-                fileId: lastSession.track.id, 
-                bitrate: lastSession.track.bitrate, 
-                bufferSeconds: storedBuffer || 1400,
-                ext
-              });
+              streamUrl = getPrefetchedStreamUrl(lastSession.track.id) || '';
+              if (!streamUrl) {
+                const ext = lastSession.track.originalName?.split('.').pop()?.toLowerCase();
+                streamUrl = await invoke<string>("get_stream_url", { 
+                  fileId: lastSession.track.id, 
+                  bitrate: lastSession.track.bitrate, 
+                  bufferSeconds: storedBuffer || 1400,
+                  ext
+                });
+              }
             } catch (e) {
               console.warn("Failed to invoke get_stream_url on session restore", e);
             }
@@ -184,9 +188,27 @@ export const usePlayer = (accessToken: string | null) => {
 
     const myId = beginPlaybackIntent();
 
-
     setIsPlaying(false);
     setIsDownloading(true);
+
+    const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
+
+    if (prefetchedUrl) {
+      setCurrentTrack({ ...targetTrack, streamUrl: prefetchedUrl });
+      triggerReload();
+      setIsPlaying(true);
+      setIsDownloading(false);
+
+      getValidToken().then(freshToken => {
+        if (!freshToken || isIntentStale(myId)) return;
+        getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
+          if (metadata.duration && !isIntentStale(myId)) {
+            setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
+          }
+        }).catch(e => console.warn("Could not fetch metadata for prefetched track", e));
+      }).catch(e => console.warn("Token refresh failed for prefetched track metadata", e));
+      return;
+    }
 
     try {
       let accurateMetaDuration = undefined;
@@ -208,7 +230,7 @@ export const usePlayer = (accessToken: string | null) => {
       }
 
       const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
-      const streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds, ext });
+      let streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds, ext });
       if (isIntentStale(myId)) {
         console.debug(`[Player] Discard stale result for ${targetTrack.id}`);
         return;
@@ -266,6 +288,15 @@ export const usePlayer = (accessToken: string | null) => {
     if (currentTrack) {
       if (!currentTrack.streamUrl && !isPlaying) {
         const myId = beginPlaybackIntent();
+
+        const prefetchedUrl = getPrefetchedStreamUrl(currentTrack.id);
+        if (prefetchedUrl) {
+          setCurrentTrack(prev => prev ? { ...prev, streamUrl: prefetchedUrl } : prev);
+          triggerReload();
+          setIsPlaying(true);
+          return;
+        }
+
         setIsDownloading(true);
         try {
           let bitrate = undefined;
@@ -280,7 +311,9 @@ export const usePlayer = (accessToken: string | null) => {
             const metadata = await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName);
             if (isIntentStale(myId)) return;
             bitrate = metadata.bitrate;
-          } catch (e) { }
+          } catch (e) {
+            console.warn("Could not get metadata for bitrate on resume", e);
+          }
 
           const ext = currentTrack.originalName?.split('.').pop()?.toLowerCase();
           const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, bitrate, bufferSeconds, ext });

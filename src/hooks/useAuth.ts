@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { startProSyncWorker } from '../utils/proSyncManager';
+import { startProSyncWorker, stopProSyncWorker } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
@@ -42,6 +42,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
   const handleLogout = async () => {
     invalidateCurrentSession();
+    stopProSyncWorker();
 
     const tokenToRevoke = localStorage.getItem("drplay_access_token");
 
@@ -63,7 +64,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
     }
 
     if (tokenToRevoke) {
-      revokeGoogleToken(tokenToRevoke);
+      await revokeGoogleToken(tokenToRevoke);
     }
 
     if (onLogoutExt) onLogoutExt();
@@ -114,8 +115,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
       }, 2 * 60 * 1000);
 
       // Fetch User Profile
+      const controller = new AbortController();
       fetchWithAuth('https://www.googleapis.com/oauth2/v2/userinfo', {
-        headers: { Authorization: `Bearer ${accessToken}` }
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: controller.signal,
       })
         .then(res => res.json())
         .then(data => {
@@ -126,14 +129,17 @@ export const useAuth = (onLogoutExt?: () => void) => {
               picture: data.picture
             });
             localStorage.setItem('drplay_current_user_email', data.email);
-            // Dispatch event so utils know the user changed and can reload
             window.dispatchEvent(new CustomEvent('user-changed'));
           }
         })
-        .catch(err => console.error("Failed to fetch user profile", err));
+        .catch(err => {
+          if (err.name !== 'AbortError') console.error("Failed to fetch user profile", err);
+        });
         
       return () => {
         clearInterval(syncInterval);
+        stopProSyncWorker();
+        controller.abort();
       };
     }
   }, [isLoggedIn, accessToken]);

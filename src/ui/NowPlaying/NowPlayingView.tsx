@@ -17,6 +17,7 @@ interface NowPlayingViewProps {
   onTogglePlayMode: () => void;
   onBack: () => void;
   isOpen: boolean;
+  token: string | null;
 }
 
 
@@ -29,7 +30,8 @@ export function NowPlayingView({
   playMode, 
   onTogglePlayMode,
   onBack,
-  isOpen
+  isOpen,
+  token
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
@@ -68,7 +70,7 @@ export function NowPlayingView({
       let isCancelled = false;
       let objectUrl: string | null = null;
 
-      getTrackMetadata(currentTrack.id, currentTrack.streamUrl || undefined, currentTrack.size, currentTrack.originalName)
+      getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName)
         .then(metadata => {
           if (isCancelled) return;
           if (metadata.title) setRealTitle(metadata.title);
@@ -225,7 +227,7 @@ export function NowPlayingView({
         audio.removeEventListener('timeupdate', updateProgressUI);
       };
     }
-  }, [isOpen, isDragging, duration, currentTrack]);
+  }, [isOpen, duration, currentTrack]);
 
   // (Buffer logic is now handled by listen('buffer-status') and updateProgressUI)
 

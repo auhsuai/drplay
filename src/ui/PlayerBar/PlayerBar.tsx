@@ -51,6 +51,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const [pendingResumeTime, setPendingResumeTime] = useState<number | null>(null);
   const volumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumeHandlerRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
   const triggerVolumeActive = () => {
     setIsVolumeActive(true);
     if (volumeTimeoutRef.current) clearTimeout(volumeTimeoutRef.current);
@@ -246,7 +247,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         if (objectUrl) URL.revokeObjectURL(objectUrl);
       };
     }
-  }, [currentTrack?.id, currentTrack?.streamUrl]);
+  }, [currentTrack?.id]);
 
   const onTogglePlayRef = useRef(onTogglePlay);
   const onNextTrackRef = useRef(onNextTrack);
@@ -254,10 +255,20 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const onTogglePlayModeRef = useRef(onTogglePlayMode);
   const onToggleNowPlayingRef = useRef(onExpandNowPlaying);
   const isPlayingRef = useRef(isPlaying);
+  const playbackStatusRef = useRef(playbackStatus);
+  const handleManualResumeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    playbackStatusRef.current = playbackStatus;
+  }, [playbackStatus]);
+
+  useEffect(() => {
+    handleManualResumeRef.current = handleManualResume;
+  }, [handleManualResume]);
 
   // Media Session API Integration
   useEffect(() => {
@@ -450,7 +461,11 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           break;
         case ' ':
           e.preventDefault();
-          onTogglePlayRef.current();
+          if (playbackStatusRef.current === 'error-needs-manual-resume') {
+            handleManualResumeRef.current?.();
+          } else {
+            onTogglePlayRef.current();
+          }
           break;
       }
     };
@@ -483,26 +498,19 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (resumeHandlerRef.current) {
+        resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
+        resumeHandlerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     for (const el of [audioRef.current, audioRef2.current]) {
       if (el) el.volume = isMuted ? 0 : volume;
     }
   }, [volume, isMuted, currentTrack]);
-
-  useEffect(() => {
-    let quotaFn: (() => void) | null = null;
-    let quotaCancelled = false;
-    listen("drive-quota-exceeded", () => {
-      setErrorText("Google Drive Limit: File temporary blocked (Quota Exceeded 403)");
-    }).then(fn => {
-      if (quotaCancelled) { fn(); return; }
-      quotaFn = fn;
-    });
-    
-    return () => {
-      quotaCancelled = true;
-      quotaFn?.();
-    };
-  }, [isPlaying]);
 
   useEffect(() => {
     if (isPlaying) {
@@ -527,6 +535,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
 
 
+  const currentTrackRef = useRef(currentTrack);
+  currentTrackRef.current = currentTrack;
+
   useEffect(() => {
     let rateLimitRetryTimeout: ReturnType<typeof setTimeout> | null = null;
     let tokenExpiredFn: (() => void) | null = null;
@@ -537,9 +548,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       try {
         await getValidToken(true);
         const active = getActiveAudio();
-        if (active && currentTrack?.streamUrl) {
+        const track = currentTrackRef.current;
+        if (active && track?.streamUrl) {
           const resumeTime = active.currentTime;
-          active.src = currentTrack.streamUrl;
+          active.src = track.streamUrl;
           active.load();
           active.currentTime = resumeTime;
           await safePlay(active);
@@ -558,7 +570,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
       rateLimitRetryTimeout = setTimeout(async () => {
         const active = getActiveAudio();
-        if (active && currentTrack?.streamUrl) {
+        const track = currentTrackRef.current;
+        if (active && track?.streamUrl) {
           active.load();
           await safePlay(active).catch(() => {});
         }
@@ -574,7 +587,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       tokenExpiredFn?.();
       quotaExceededFn?.();
     };
-  }, [currentTrack]);
+  }, []);
 
   const handleEnded = () => {
     if (playMode === 'repeat-one') {
@@ -799,31 +812,38 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     };
   }, [loadNonce]);
 
-  const handleManualResume = async () => {
+  async function handleManualResume() {
     const audio = getActiveAudio();
     if (!audio || pendingResumeTime === null) return;
+
+    if (resumeHandlerRef.current) {
+      resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
+    }
 
     audio.removeAttribute('src');
     audio.load();
     audio.src = currentTrack?.streamUrl || '';
     audio.load();
 
-    const resumeHandler = async () => {
+    const resumeHandler = () => {
+      if (resumeHandlerRef.current?.audio === audio) {
+        resumeHandlerRef.current = null;
+      }
       audio.removeEventListener('loadedmetadata', resumeHandler);
       audio.currentTime = pendingResumeTime;
-      try {
-        await safePlay(audio);
+      safePlay(audio).then(() => {
         setPlaybackStatus('playing');
         setPendingResumeTime(null);
         retryCountRef.current = 0;
         setErrorText('');
-      } catch (err) {
+      }).catch((err) => {
         console.error("Manual resume failed", err);
-      }
+      });
     };
     
     audio.addEventListener('loadedmetadata', resumeHandler);
-  };
+    resumeHandlerRef.current = { audio, handler: resumeHandler };
+  }
 
   // Auto-recovery when network reconnects
   useEffect(() => {
@@ -951,7 +971,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       let timeToSave = active?.currentTime || 0;
       let durationToSave = duration;
       
-      if (active && currentTrack.streamUrl) {
+      if (active && currentTrack.streamUrl && active.readyState >= 1) {
          timeToSave = active.currentTime || timeToSave;
          durationToSave = active.duration || durationToSave;
       } else if (currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {

@@ -68,9 +68,10 @@ export const initLogger = () => {
   }
 };
 
-// Đính kèm vào window để Dev thử nghiệm gọi ngầm
-(window as any).testLeak = () => {
-  console.log("Đây là link bí mật của tôi: http://127.0.0.1:62216/stream?id=1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp&ext=mp3");
-  console.error("Lỗi fetch API: https://www.googleapis.com/drive/v3/files/1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp?alt=media");
-  console.log({ user: "admin", fileId: "?id=1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp" });
-};
+if (import.meta.env.DEV) {
+  (window as any).testLeak = () => {
+    console.log("Đây là link bí mật của tôi: http://127.0.0.1:62216/stream?id=1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp&ext=mp3");
+    console.error("Lỗi fetch API: https://www.googleapis.com/drive/v3/files/1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp?alt=media");
+    console.log({ user: "admin", fileId: "?id=1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp" });
+  };
+}

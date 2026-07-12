@@ -16,6 +16,9 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   const [sortOption, setSortOption] = useState<string>('name');
 
   useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
     const initApp = async () => {
       const savedSort = localStorage.getItem("drplay_sort_option");
       if (savedSort) {
@@ -27,16 +30,20 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       if (isLoggedIn && accessToken) {
         try {
           const freshToken = await getValidToken();
+          if (cancelled) return;
           if (freshToken) {
             const remoteConfig = await getAppConfig(freshToken);
+            if (cancelled) return;
             if (remoteConfig && remoteConfig.rootFolderId) {
               if (remoteConfig.rootFolderId !== localRoot) {
                 localRoot = remoteConfig.rootFolderId;
               }
               const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
               const verifyRes = await fetch(verifyUrl, {
-                headers: { Authorization: `Bearer ${freshToken}` }
+                headers: { Authorization: `Bearer ${freshToken}` },
+                signal: controller.signal,
               });
+              if (cancelled) return;
               if (!verifyRes.ok) {
                 console.warn("Saved root folder no longer accessible, need re-select");
                 localRoot = null;
@@ -57,7 +64,9 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                 try {
                   await db.files.clear();
                   await invoke("clear_local_cache");
-                } catch (e) {}
+                } catch (e) {
+                  console.warn("Failed to clear local cache on root folder change", e);
+                }
               }
             } else if (!localRoot) {
               localRoot = null;
@@ -66,15 +75,20 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
             localRoot = null;
           }
         } catch (e) {
+          if (cancelled) return;
           console.error("Failed to sync config", e);
           localRoot = null;
         }
       }
 
+      if (cancelled) return;
+
       if (localRoot) {
         setAppRootFolder(localRoot);
 
-        db.syncState.get("drplay_nav_state").then(state => {
+        try {
+          const state = await db.syncState.get("drplay_nav_state");
+          if (cancelled) return;
           if (state && state.value) {
             setCurrentFolderId(state.value.id);
             setCurrentFolderName(state.value.id === 'root' ? "My Drive" : state.value.name);
@@ -97,16 +111,23 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               setCurrentFolderName("My Drive");
             }
           }
-        }).catch(() => {
+        } catch (e) {
+          if (cancelled) return;
+          console.warn("Failed to fetch remote config, falling back to local root", e);
           setCurrentFolderId(localRoot!);
           setCurrentFolderName("My Drive");
-        });
+        }
       } else {
         setAppRootFolder(null);
       }
     };
     
-    initApp();
+    initApp().catch(e => console.error("initApp failed", e));
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [isLoggedIn, accessToken]);
 
   // Save folder navigation state whenever it changes
@@ -159,7 +180,11 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       await invoke("clear_local_cache");
       const freshToken = await getValidToken();
       if (freshToken) {
-        saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: "My Drive", updatedAt: Date.now() });
+        try {
+          await saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: "My Drive", updatedAt: Date.now() });
+        } catch (err) {
+          console.error("Failed to save app config", err);
+        }
       }
     } catch (e) {
       console.error("Failed to clear db or save config", e);

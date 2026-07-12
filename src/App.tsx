@@ -172,7 +172,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    let timeout: any;
+    let timeout: ReturnType<typeof setTimeout>;
     const handler = () => {
       clearTimeout(timeout);
       timeout = setTimeout(() => setMetadataVersion(v => v + 1), 500);
@@ -713,6 +713,7 @@ function App() {
             onTogglePlayMode={handleTogglePlayMode}
             onBack={() => setIsNowPlayingOpen(false)}
             isOpen={isNowPlayingOpen}
+            token={accessToken}
           />
         </div>
         
