@@ -19,6 +19,19 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      - name: Create Google OAuth credentials file
+        run: |
+          if (-not (Test-Path wa_credential.json)) {
+            $json = @'
+          ${{ secrets.GOOGLE_OAUTH_CREDENTIALS }}
+        '@
+            if ($json.Trim() -eq '') {
+              echo "::warning::GOOGLE_OAUTH_CREDENTIALS secret not set, using placeholder"
+              $json = '{"installed":{"client_id":"placeholder","project_id":"placeholder","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_secret":"placeholder","redirect_uris":["http://localhost"]}}'
+            }
+            Set-Content -Path wa_credential.json -Value $json
+          }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
