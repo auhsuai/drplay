@@ -9,7 +9,7 @@ import { deleteFile, moveFile } from "../../utils/driveApi";
 import { fetchWithAuth } from "../../utils/apiClient";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
-import { getEffectiveDownloadPath, isSafeDownloadPath } from "../../utils/downloadPath";
+import { getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
 
 const sanitizeFilename = (name: string): string => {
@@ -94,12 +94,6 @@ export function GlobalContextMenu() {
       const buffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(buffer);
       const downloadDirPath = await getEffectiveDownloadPath();
-      if (!(await isSafeDownloadPath(downloadDirPath))) {
-        console.error("Unsafe download path:", downloadDirPath);
-        setDownloadingState('error');
-        setTimeout(() => setDownloadingState('idle'), 3000);
-        return;
-      }
       const originalName = sanitizeFilename(driveItem.trackInfo?.originalName || `${driveItem.title}.mp3`);
       const savePath = `${downloadDirPath}\\${originalName}`;
       
