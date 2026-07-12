@@ -43,6 +43,7 @@ export function NowPlayingView({
   // Progress state
   const [duration, setDuration] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const isDraggingRef = useRef(false);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressFillRef = useRef<HTMLDivElement>(null);
   const bufferFillRef = useRef<HTMLDivElement>(null);
@@ -191,7 +192,7 @@ export function NowPlayingView({
     const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
     
     const updateProgressUI = () => {
-      if (audio && !isDragging && progressFillRef.current && currentTimeTextRef.current) {
+      if (audio && !isDraggingRef.current && progressFillRef.current && currentTimeTextRef.current) {
         const time = audio.currentTime;
 
         // Prevent UI jump to 0:00 when waiting for track to restore (sync with PlayerBar)
@@ -234,6 +235,7 @@ export function NowPlayingView({
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!progressBarRef.current) return;
     setIsDragging(true);
+    isDraggingRef.current = true;
     const bounds = progressBarRef.current.getBoundingClientRect();
     
     const updateTimeUI = (clientX: number) => {
@@ -252,6 +254,7 @@ export function NowPlayingView({
     
     const onPointerUp = (upEvent: PointerEvent) => {
       setIsDragging(false);
+      isDraggingRef.current = false;
       const finalTime = updateTimeUI(upEvent.clientX);
       const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
       if (audio) {
