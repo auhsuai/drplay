@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { startProSyncWorker, stopProSyncWorker } from '../utils/proSyncManager';
+import { startProSyncWorker, stopProSyncWorker, setTokenRefreshHandler, updateWorkerToken } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
@@ -107,12 +107,29 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
   useEffect(() => {
     if (isLoggedIn && accessToken) {
+      setTokenRefreshHandler(async () => {
+        try {
+          return await getValidToken(true);
+        } catch {
+          return null;
+        }
+      });
+
       startProSyncWorker(accessToken);
       
       // Chạy đồng bộ định kỳ mỗi 2 phút
       const syncInterval = setInterval(() => {
-        startProSyncWorker(accessToken);
+        const latestToken = localStorage.getItem("drplay_access_token");
+        if (latestToken) startProSyncWorker(latestToken);
       }, 2 * 60 * 1000);
+
+      const handleTokenUpdated = (e: Event) => {
+        const detail = (e as CustomEvent).detail;
+        if (detail?.token) {
+          updateWorkerToken(detail.token);
+        }
+      };
+      window.addEventListener('token-updated', handleTokenUpdated);
 
       // Fetch User Profile
       const controller = new AbortController();
@@ -140,6 +157,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         clearInterval(syncInterval);
         stopProSyncWorker();
         controller.abort();
+        window.removeEventListener('token-updated', handleTokenUpdated);
       };
     }
   }, [isLoggedIn, accessToken]);
