@@ -1,5 +1,6 @@
 import { get } from 'idb-keyval';
 import { getTrackMetadata } from '../utils/metadata';
+import { getAudioFilesQuery } from '../utils/audioQuery';
 
 // Listen for messages from the main thread
 self.onmessage = async (e: MessageEvent) => {
@@ -32,7 +33,7 @@ async function startScanner(token: string) {
   do {
     try {
       const url = new URL("https://www.googleapis.com/drive/v3/files");
-      url.searchParams.append("q", "mimeType contains 'audio/' and trashed=false");
+      url.searchParams.append("q", getAudioFilesQuery());
       url.searchParams.append("fields", "nextPageToken,files(id, size, name)");
       url.searchParams.append("pageSize", "1000"); // Fetch max 1000 files per page
       if (pageToken) url.searchParams.append("pageToken", pageToken);
