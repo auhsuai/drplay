@@ -579,6 +579,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
+
+            // DevTools only enabled in debug builds
+            #[cfg(not(debug_assertions))]
+            if let Some(webview) = app.get_webview_window("main") {
+                webview.set_devtools_enabled(false).ok();
+            }
+
             use r2d2_sqlite::SqliteConnectionManager;
             use r2d2::Pool;
             let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
