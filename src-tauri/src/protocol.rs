@@ -327,7 +327,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 };
                 let port = crate::PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
 
-                let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() + 300;
+                let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() + 86400;
                 let payload = format!("{}:{}:{}", file_id, "", exp);
                 let secret = match crate::PROXY_SECRET.get() {
                     Some(s) => s.clone(),

@@ -1,30 +1,32 @@
 // Cơ chế mã hóa và ẩn Console (Anti-Leak)
-const SENSITIVE_PATTERNS = [
+// Mỗi entry gồm regex (global) và hàm redact tương ứng. Gắn type rõ ràng để
+// tránh nhầm lẫn: link pattern luôn → [REDACTED_LINK] (kể cả khi url chứa
+// "?id="), còn id/access_token/bearer được redact riêng biệt.
+const SENSITIVE_PATTERNS: { re: RegExp; redact: (match: string, prefix: string) => string }[] = [
   // Ẩn toàn bộ link proxy local chứa token/id
-  /http:\/\/127\.0\.0\.1:\d+\/[^\s"']*/g, 
+  { re: /http:\/\/127\.0\.0\.1:\d+\/[^\s"']*/g, redact: () => '[REDACTED_LINK]' },
   // Ẩn API Google Drive
-  /https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[^\s"']*/g, 
-  // Ẩn mọi string có chứa id= (id của bài hát trên drive)
-  /([?&])id=[a-zA-Z0-9_-]+/g, 
-  // Ẩn Access Token nếu lỡ bị log ra
-  /([?&])access_token=[a-zA-Z0-9._-]+/g
+  { re: /https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[^\s"']*/g, redact: () => '[REDACTED_LINK]' },
+  // Ẩn mọi string có chứa id= (id của bài hát trên drive); prefix ?/& tuỳ chọn
+  { re: /([?&]?)id=[a-zA-Z0-9_-]+/g, redact: (_m, p) => `${p}id=[REDACTED_ID]` },
+  // Ẩn Access Token nếu lỡ bị log ra (giữ nguyên pattern tiền tố tuỳ chọn)
+  { re: /([?&]?)access_token=[a-zA-Z0-9._-]+/g, redact: () => '[REDACTED_TOKEN]' },
+  // Ẩn Bearer token (defense-in-depth, đồng bộ với workerError.ts)
+  { re: /Bearer\s+[a-zA-Z0-9._-]+/g, redact: () => 'Bearer [REDACTED_TOKEN]' }
 ];
 
-const sanitizeString = (str: string) => {
+export const sanitizeString = (str: string): string => {
   let sanitized = str;
-  SENSITIVE_PATTERNS.forEach(pattern => {
-    sanitized = sanitized.replace(pattern, (match, group1) => {
-      // Nếu là match từ các regex có group1 (?id= hoặc &id=)
-      if (group1 === '?' || group1 === '&') {
-        return match.includes('id=') ? `${group1}id=[REDACTED_ID]` : `${group1}access_token=[REDACTED_TOKEN]`;
-      }
-      return '[REDACTED_LINK]';
-    });
+  SENSITIVE_PATTERNS.forEach(({ re, redact }) => {
+    // Reset lastIndex: global regex advances lastIndex on .test()/.exec(), nên
+    // một pattern dùng chung có thể trả false negative ở lần gọi sau và leak.
+    re.lastIndex = 0;
+    sanitized = sanitized.replace(re, (match, group1) => redact(match, group1 || ''));
   });
   return sanitized;
 };
 
-const sanitizeArg = (arg: any): any => {
+export const sanitizeArg = (arg: any): any => {
   if (typeof arg === 'string') {
     return sanitizeString(arg);
   }
@@ -37,7 +39,10 @@ const sanitizeArg = (arg: any): any => {
   if (typeof arg === 'object' && arg !== null) {
     try {
       const str = JSON.stringify(arg);
-      if (SENSITIVE_PATTERNS.some(p => p.test(str))) {
+      // Reset lastIndex first: these patterns carry the `g` flag, and .test() on
+      // a global regex advances lastIndex, so a shared module-level pattern can
+      // return a false negative on a later call and leak sensitive data.
+      if (SENSITIVE_PATTERNS.some(({ re }) => { re.lastIndex = 0; return re.test(str); })) {
          return JSON.parse(sanitizeString(str));
       }
     } catch(e) {
@@ -52,13 +57,20 @@ export const initLogger = () => {
   const originalWarn = console.warn;
   const originalError = console.error;
   const originalInfo = console.info;
+  const originalDebug = console.debug;
 
-  // 1. Chế độ Môi trường Dev (Mã hóa đường link nhạy cảm)
-  console.log = (...args) => originalLog(...args.map(sanitizeArg));
+  // warn/error luôn được mã hóa link nhạy cảm (cả DEV lẫn PROD) để debug an toàn
   console.warn = (...args) => originalWarn(...args.map(sanitizeArg));
   console.error = (...args) => originalError(...args.map(sanitizeArg));
-  console.info = (...args) => originalInfo(...args.map(sanitizeArg));
-  
+
+  // 1. Chế độ Môi trường Dev (Mã hóa đường link nhạy cảm)
+  // console.debug cũng route qua sanitizeArg để không lộ link/secret ở dev.
+  if (import.meta.env.DEV) {
+    console.log = (...args) => originalLog(...args.map(sanitizeArg));
+    console.info = (...args) => originalInfo(...args.map(sanitizeArg));
+    console.debug = (...args) => originalDebug(...args.map(sanitizeArg));
+  }
+
   // 2. Chế độ Sản phẩm - Production (Khóa mõm hoàn toàn Console)
   if (import.meta.env.PROD) {
     console.log = () => {};
@@ -68,7 +80,7 @@ export const initLogger = () => {
   }
 };
 
-if (import.meta.env.DEV) {
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
   (window as any).testLeak = () => {
     console.log("Đây là link bí mật của tôi: http://127.0.0.1:62216/stream?id=1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp&ext=mp3");
     console.error("Lỗi fetch API: https://www.googleapis.com/drive/v3/files/1RoFd1kOvoIn_0C8vmcuUHZ4DdZEx01pp?alt=media");

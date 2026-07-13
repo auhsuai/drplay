@@ -11,13 +11,15 @@
     "cancel": "Cancel",
     "selected": "selected",
     "delete": "Delete",
-    "move_to": "Move to..."
+    "move_to": "Move to...",
+    "download_error": "Download failed"
   },
   "sidebar": {
     "home": "Home",
     "my_drive": "My Drive",
     "liked_songs": "Liked Songs",
     "create_playlist": "Create Playlist",
+    "create_playlist_error": "Failed to create playlist",
     "settings": "Settings",
     "guest": "Guest",
     "not_authenticated": "Not authenticated",
@@ -46,6 +48,7 @@
     "my_drive": "My Drive",
     "no_folders": "No folders found in this directory.",
     "no_audio": "No audio files found in this directory.",
+    "no_search_results": "No matching songs found.",
     "folders": "Folders",
     "tracks": "Tracks",
     "new_folder": "New Folder",
@@ -76,14 +79,17 @@
   "unknown_artist": "Unknown Artist",
   "playlist": {
     "delete": "Delete Playlist",
+    "delete_error": "Failed to delete playlist",
     "empty": "No tracks in this playlist.",
     "empty_state_title": "It's a bit empty here...",
     "empty_state_subtitle": "Add some songs to your playlist!",
     "change_cover": "Change Cover",
+    "cover_save_error": "Failed to save cover image",
     "adjust_cover": "Adjust Image",
     "zoom": "Zoom",
     "prev": "Previous",
     "next": "Next",
+    "remove_error": "Failed to remove track",
     "jump_page": "Click to jump to page"
   },
   "confirm_delete_playlist": "Are you sure you want to delete this playlist?",
@@ -96,7 +102,9 @@
     "rate_limited": "Google Drive temporarily rate-limited, retrying...",
     "file_deleted": "File no longer available on Drive, skipping...",
     "format_error": "Audio format not supported, skipping to next track...",
-    "drive_quota_exceeded": "Google Drive quota exceeded, retrying later..."
+    "drive_quota_exceeded": "Google Drive quota exceeded, retrying later...",
+    "access_denied": "You no longer have access to this file, skipping...",
+    "download_quota": "This file exceeded Google's download quota, skipping..."
   },
   "song_card": {
     "unknown_title": "Unknown Title",
@@ -107,6 +115,7 @@
     "add_to_liked": "Add to Liked Songs",
     "remove_from_liked": "Remove from Liked Songs",
     "add_to_playlist": "Add to Playlist",
+    "add_to_playlist_error": "Failed to add to playlist",
     "no_playlists": "No playlists yet",
     "download_song": "Download Song",
     "navigate": "Navigate",

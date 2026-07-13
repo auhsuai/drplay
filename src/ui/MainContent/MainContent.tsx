@@ -7,6 +7,7 @@ import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen"
 import { deleteFile, moveFile } from "../../utils/driveApi";
 import { useLiveQuery } from 'dexie-react-hooks';
 import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
+import { normalizeText } from "../../utils/normalizeText";
 
 
 interface MainContentProps {
@@ -35,6 +36,7 @@ import { db } from '../../db/db';
 import { SongCard } from './components/SongCard';
 import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
+import { showErrorToast } from '../../utils/simpleToast';
 
 export function MainContent({ 
   activeTab, 
@@ -145,9 +147,9 @@ export function MainContent({
 
   const globalSearchItemsRaw = React.useMemo(() => {
     if (!searchQuery || !allFiles) return [];
-    const query = searchQuery.toLowerCase();
+    const query = normalizeText(searchQuery);
 
-    const matches = allFiles.filter(f => f.name.toLowerCase().includes(query));
+    const matches = allFiles.filter(f => normalizeText(f.name).includes(query));
 
     if (!currentFolderId || currentFolderId === 'root' || currentFolderId === '') {
       return matches;
@@ -260,8 +262,8 @@ export function MainContent({
       setShowNewFolderModal(false);
       onRefresh();
     } catch (e) {
-      console.error("Failed to create folder", e);
-      alert(t('drive.create_folder_error') || "Failed to create folder");
+      console.error("[MainContent] create-folder: Failed to create folder", e);
+      showErrorToast(t('drive.create_folder_error') || "Failed to create folder");
       throw e;
     } finally {
       setIsCreating(false);
@@ -282,8 +284,8 @@ export function MainContent({
       await db.files.bulkDelete(itemsToDelete);
       if (onRemoveItem) itemsToDelete.forEach(id => onRemoveItem(id));
     } catch (e) {
-      console.error("Failed to delete items", e);
-      alert(t('drive.delete_error') || "Failed to delete one or more items.");
+      console.error("[MainContent] bulk-delete: Failed to delete items", e);
+      showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
     }
   };
 
@@ -308,11 +310,11 @@ export function MainContent({
       }
       if (onRemoveItem) itemsToMove.forEach(id => onRemoveItem(id));
     } catch (e) {
-      console.error("Failed to move items", e);
+      console.error("[MainContent] bulk-move: Failed to move items", e);
       for (const [id, parentId] of originalParents) {
-        await db.files.update(id, { parentId }).catch(() => {});
+        await db.files.update(id, { parentId }).catch((err) => console.warn("[MainContent] bulk-move: Failed to restore original parent during rollback", id, err));
       }
-      alert("Failed to move one or more items.");
+      showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
     }
   };
 
@@ -576,9 +578,9 @@ export function MainContent({
             <Loader2 className="animate-spin h-10 w-10 mb-4 stroke-[1.5]" />
             <span className="text-base font-medium">{t('loading', 'Loading...')}</span>
           </div>
-        ) : items.length === 0 ? (
+        ) : filteredItems.length === 0 ? (
           <div className="text-gray-500 py-10 text-center">
-            {t('drive.no_audio')}
+            {searchQuery ? t('drive.no_search_results') : t('drive.no_audio')}
           </div>
         ) : (
           <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>

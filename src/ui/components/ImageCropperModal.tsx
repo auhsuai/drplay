@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import Cropper, { Area } from 'react-easy-crop';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
+import { showErrorToast } from '../../utils/simpleToast';
 
 interface ImageCropperModalProps {
   imageSrc: string;
@@ -28,7 +29,8 @@ export function ImageCropperModal({ imageSrc, onClose, onSave }: ImageCropperMod
       const croppedImage = await getCroppedImg(imageSrc, croppedAreaPixels);
       onSave(croppedImage);
     } catch (e) {
-      console.error(e);
+      console.error("[ImageCropper] save-cover: Failed to crop/save image", e);
+      showErrorToast(t('playlist.cover_save_error') || "Failed to save cover image");
     } finally {
       setIsProcessing(false);
     }

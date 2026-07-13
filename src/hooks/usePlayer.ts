@@ -18,6 +18,14 @@ function isIntentStale(myId: number): boolean {
   return myId !== playRequestIdRef.current;
 }
 
+function classifyPlayerError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || err.name || "Unknown error";
+  }
+  if (typeof err === "string") return err;
+  return "Unknown error";
+}
+
 export const usePlayer = (accessToken: string | null) => {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [loadNonce, setLoadNonce] = useState(0);
@@ -41,7 +49,7 @@ export const usePlayer = (accessToken: string | null) => {
     }
     idbSet("drplay_buffer_seconds", bufferSeconds);
     invoke("update_buffer_settings", { seconds: bufferSeconds }).catch(e =>
-      console.warn("Failed to update buffer settings", e)
+      console.warn(`[usePlayer] buffer-settings-failed`, classifyPlayerError(e))
     );
   }, [bufferSeconds]);
 
@@ -59,11 +67,11 @@ export const usePlayer = (accessToken: string | null) => {
   useEffect(() => {
     if (isPlaying) {
       keepAwakeStart({ display: false, idle: false, sleep: true }).catch(e =>
-        console.warn("Failed to keep system awake", e)
+        console.warn(`[usePlayer] keep-awake-failed`, classifyPlayerError(e))
       );
     } else {
       keepAwakeStop().catch(e =>
-        console.warn("Failed to release keep-awake", e)
+        console.warn(`[usePlayer] keep-awake-release-failed`, classifyPlayerError(e))
       );
     }
   }, [isPlaying]);
@@ -88,22 +96,31 @@ export const usePlayer = (accessToken: string | null) => {
         const lastSessionStr = localStorage.getItem("drplay_last_session");
         let lastSession;
         if (lastSessionStr) {
-          lastSession = JSON.parse(lastSessionStr);
+          try {
+            lastSession = JSON.parse(lastSessionStr);
+          } catch (e) {
+            console.warn(`[usePlayer] session-corrupt`, classifyPlayerError(e));
+            lastSession = await get("drplay_last_session");
+          }
         } else {
           lastSession = await get("drplay_last_session");
         }
 
-        const storedBuffer = await get("drplay_buffer_seconds");
-        if (storedBuffer) setBufferSeconds(storedBuffer as number);
+        const rawBuffer = await get("drplay_buffer_seconds");
+        const validBuffer = (typeof rawBuffer === "number" && Number.isFinite(rawBuffer) && rawBuffer > 0)
+          ? rawBuffer
+          : undefined;
+        if (validBuffer !== undefined) setBufferSeconds(validBuffer);
 
         const storedCrossfadeEnabled = await get("drplay_crossfade_enabled");
-        if (storedCrossfadeEnabled !== undefined) setCrossfadeEnabled(storedCrossfadeEnabled as boolean);
-        const storedCrossfadeDuration = await get("drplay_crossfade_duration");
-        if (storedCrossfadeDuration !== undefined) setCrossfadeDuration(storedCrossfadeDuration as number);
+        if (typeof storedCrossfadeEnabled === "boolean") setCrossfadeEnabled(storedCrossfadeEnabled);
+        const rawCrossfadeDuration = await get("drplay_crossfade_duration");
+        if (typeof rawCrossfadeDuration === "number" && Number.isFinite(rawCrossfadeDuration) && rawCrossfadeDuration > 0) {
+          setCrossfadeDuration(rawCrossfadeDuration);
+        }
 
         if (lastSession && lastSession.track) {
           if (isIntentStale(myId)) {
-            console.debug('[Session] Restore cancelled because user pressed Play');
             return;
           }
           let streamUrl = "";
@@ -118,12 +135,12 @@ export const usePlayer = (accessToken: string | null) => {
                 streamUrl = await invoke<string>("get_stream_url", { 
                   fileId: lastSession.track.id, 
                   bitrate: lastSession.track.bitrate, 
-                  bufferSeconds: storedBuffer || 1400,
+                  bufferSeconds: validBuffer ?? 1400,
                   ext
                 });
               }
             } catch (e) {
-              console.warn("Failed to invoke get_stream_url on session restore", e);
+              console.warn(`[usePlayer] session-restore-stream-fail`, classifyPlayerError(e));
             }
           }
           if (isIntentStale(myId)) return;
@@ -137,7 +154,7 @@ export const usePlayer = (accessToken: string | null) => {
           triggerReload();
         }
       } catch (e) {
-        console.error("Failed to load player session", e);
+        console.error(`[usePlayer] session-load-failed`, classifyPlayerError(e));
       }
     };
     loadSession();
@@ -208,19 +225,31 @@ export const usePlayer = (accessToken: string | null) => {
     const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
     if (prefetchedUrl) {
+      // Ensure the Rust proxy has a valid (non-expired) token BEFORE the <audio>
+      // element starts loading the stream. Otherwise a token that expired while
+      // idle/paused causes the proxy to 401 -> the audio errors -> a spurious
+      // network banner. getValidToken() is cheap when not expired and refreshes
+      // (awaiting update_stream_token) when it is.
+      const freshToken = await getValidToken().catch(e => {
+        console.warn(`[usePlayer] token-refresh-prefetch-fail`, classifyPlayerError(e));
+        return null;
+      });
+      if (isIntentStale(myId)) return;
+      if (!freshToken) {
+        setIsDownloading(false);
+        return;
+      }
+
       setCurrentTrack({ ...targetTrack, streamUrl: prefetchedUrl });
       triggerReload();
       setIsPlaying(true);
       setIsDownloading(false);
 
-      getValidToken().then(freshToken => {
-        if (!freshToken || isIntentStale(myId)) return;
-        getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
-          if (metadata.duration && !isIntentStale(myId)) {
-            setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
-          }
-        }).catch(e => console.warn("Could not fetch metadata for prefetched track", e));
-      }).catch(e => console.warn("Token refresh failed for prefetched track metadata", e));
+      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
+        if (metadata.duration && !isIntentStale(myId)) {
+          setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
+        }
+      }).catch(e => console.warn(`[usePlayer] metadata-prefetch-fail`, classifyPlayerError(e)));
       return;
     }
 
@@ -240,13 +269,12 @@ export const usePlayer = (accessToken: string | null) => {
            accurateMetaDuration = metadata.duration;
         }
       } catch (e) {
-        console.warn("Could not get bitrate for buffer calculation", e);
+        console.warn(`[usePlayer] bitrate-buffer-fail`, classifyPlayerError(e));
       }
 
       const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
       let streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds, ext });
       if (isIntentStale(myId)) {
-        console.debug(`[Player] Discard stale result for ${targetTrack.id}`);
         return;
       }
 
@@ -259,7 +287,7 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(true);
     } catch (e) {
       if (isIntentStale(myId)) return;
-      console.error("Network error during playback:", e);
+      console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
       alert("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
     } finally {
       if (!isIntentStale(myId)) {
@@ -326,7 +354,7 @@ export const usePlayer = (accessToken: string | null) => {
             if (isIntentStale(myId)) return;
             bitrate = metadata.bitrate;
           } catch (e) {
-            console.warn("Could not get metadata for bitrate on resume", e);
+            console.warn(`[usePlayer] bitrate-resume-fail`, classifyPlayerError(e));
           }
 
           const ext = currentTrack.originalName?.split('.').pop()?.toLowerCase();
@@ -338,7 +366,7 @@ export const usePlayer = (accessToken: string | null) => {
           setIsPlaying(true);
         } catch (e) {
           if (isIntentStale(myId)) return;
-          console.error("Failed to get stream url on resume", e);
+          console.error(`[usePlayer] stream-url-resume-fail`, classifyPlayerError(e));
           alert("Could not start playback. Please try another track.");
         } finally {
           if (!isIntentStale(myId)) setIsDownloading(false);

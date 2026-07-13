@@ -20,9 +20,9 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
   const [covers, setCovers] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    loadFavorites().catch(console.error);
+    loadFavorites().catch(err => console.error('[LikedSongs] Failed to load favorites', err));
     
-    const handleUpdate = () => { loadFavorites().catch(console.error); };
+    const handleUpdate = () => { loadFavorites().catch(err => console.error('[LikedSongs] Failed to load favorites', err)); };
     window.addEventListener('favorites-updated', handleUpdate);
     window.addEventListener('user-changed', handleUpdate);
     return () => {
@@ -36,7 +36,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
       const favs = await getFavorites();
       setFavorites(favs);
     } catch (e) {
-      console.error("Failed to load favorites", e);
+      console.error("[LikedSongs] Failed to load favorites", e);
     }
   };
 
@@ -72,7 +72,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
               [track.id]: url
             }));
           }
-        }).catch(() => {});
+        }).catch(err => console.warn('[LikedSongs] Failed to load cover metadata for track', track.id, err));
       }
     });
 

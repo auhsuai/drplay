@@ -4,6 +4,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { showErrorToast } from "../../utils/simpleToast";
 
+const LOGIN_MODULE = "LoginScreen";
+
+// Classify a login error for observability. Returns name + message only.
+function classifyLoginError(err: unknown): string {
+  const name = err instanceof Error ? err.name : typeof err;
+  const message = err instanceof Error ? err.message : String(err);
+  return `${name}: ${message}`;
+}
 
 interface LoginScreenProps {
   onLogin: (accessToken: string) => void;
@@ -51,7 +59,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       } else {
         showErrorToast('Đăng nhập thất bại, vui lòng thử lại.');
       }
-      console.error("Login Failed:", error);
+      console.error(`[${LOGIN_MODULE}] login-failed`, classifyLoginError(error));
     }
   };
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Home, HardDrive, Settings, Heart, Plus, ListMusic, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getPlaylists, createPlaylist, Playlist } from "../../utils/playlists";
+import { showErrorToast } from "../../utils/simpleToast";
 
 interface SidebarProps {
   activeTab: string;
@@ -20,8 +21,8 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
 
   useEffect(() => {
     let cancelled = false;
-    getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(console.error);
-    const handleUpdate = () => getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(console.error);
+    getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(err => console.error('[Sidebar] Failed to load playlists', err));
+    const handleUpdate = () => getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(err => console.error('[Sidebar] Failed to load playlists', err));
     window.addEventListener('playlists-updated', handleUpdate);
     window.addEventListener('user-changed', handleUpdate);
     return () => {
@@ -37,12 +38,18 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
       setIsCreating(false);
       return;
     }
-    const newPlaylist = await createPlaylist(newPlaylistName.trim());
-    if (newPlaylist) {
-      onTabChange(`playlist_${newPlaylist.id}`);
+    try {
+      const newPlaylist = await createPlaylist(newPlaylistName.trim());
+      if (newPlaylist) {
+        onTabChange(`playlist_${newPlaylist.id}`);
+      }
+    } catch (err) {
+      console.error("[Sidebar] create-playlist: Failed to create playlist", err);
+      showErrorToast(t('sidebar.create_playlist_error') || "Failed to create playlist");
+    } finally {
+      setNewPlaylistName("");
+      setIsCreating(false);
     }
-    setNewPlaylistName("");
-    setIsCreating(false);
   };
 
   return (

@@ -1,12 +1,23 @@
 import { get, set, del } from 'idb-keyval';
 import { invoke } from "@tauri-apps/api/core";
 
+const META_MODULE = "metadata";
+
+function classifyMetaError(err: unknown): { name: string; message: string } {
+  if (err instanceof Error) {
+    return { name: err.name, message: err.message };
+  }
+  return { name: "UnknownError", message: String(err) };
+}
+
 const MAX_LRU_CACHE = 100;
 let lruKeys: string[] = [];
 try {
   const stored = localStorage.getItem('__drplay_metadata_lru');
   if (stored) lruKeys = JSON.parse(stored);
-} catch {}
+} catch (e) {
+  console.warn(`[${META_MODULE}] lru-load-failed`, classifyMetaError(e));
+}
 
 function updateLRU(key: string) {
   lruKeys = lruKeys.filter(k => k !== key);
@@ -15,13 +26,15 @@ function updateLRU(key: string) {
   while (lruKeys.length > MAX_LRU_CACHE) {
     const oldest = lruKeys.shift();
     if (oldest) {
-      del(oldest).catch(e => console.error("LRU delete failed:", e));
+      del(oldest).catch(e => console.error(`[${META_MODULE}] lru-delete-failed`, classifyMetaError(e)));
     }
   }
   
   try {
     localStorage.setItem('__drplay_metadata_lru', JSON.stringify(lruKeys));
-  } catch {}
+  } catch (e) {
+    console.warn(`[${META_MODULE}] lru-save-failed`, classifyMetaError(e));
+  }
 }
 
 class ConcurrencyQueue {
@@ -339,9 +352,12 @@ export async function getTrackMetadata(
       ? `bytes=0-${HEAD_BYTES - 1}`
       : `bytes=0-${HEAD_BYTES - 1},${tailStart}-${tailEnd}`;
 
+    const rangeSignal = _signal
+      ? AbortSignal.any([_signal, AbortSignal.timeout(30000)])
+      : AbortSignal.timeout(30000);
     const response = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
       headers: { Range: rangeHeader },
-      signal: _signal,
+      signal: rangeSignal,
     });
 
   if (!response.ok && response.status !== 206) {
@@ -380,7 +396,7 @@ export async function getTrackMetadata(
             finalHeadBuffer = combined;
           }
         } catch (e) {
-          console.warn("Failed to dynamically expand ID3 buffer:", e);
+          console.warn(`[${META_MODULE}] expand-id3-failed`, classifyMetaError(e));
         }
       }
     }
@@ -413,7 +429,7 @@ export async function getTrackMetadata(
               finalHeadBuffer = combined;
             }
           } catch (e) {
-            console.warn("Failed to dynamically expand MOOV buffer:", e);
+            console.warn(`[${META_MODULE}] expand-moov-failed`, classifyMetaError(e));
           }
         }
       }
@@ -432,7 +448,7 @@ export async function getTrackMetadata(
       const tailParsed = await mm.parseBuffer(tailBuffer, { mimeType: guessMime(safeName), size: safeSize });
       duration = tailParsed.format.duration;
     } catch {
-      // continue to estimation
+      // intentional fallback: TAIL parse failing is normal (no trailing metadata); fall through to estimation. Do NOT warn — would spam on every track.
     }
   }
 
@@ -453,7 +469,7 @@ export async function getTrackMetadata(
 
     const declaredSize = (pic as any).declaredSize ?? pic.data.length;
     if (declaredSize > MAX_COVER_FETCH) {
-      console.warn(`Cover art extremely large (${declaredSize} bytes > ${MAX_COVER_FETCH}), skipping to avoid memory issues`);
+      console.warn(`[${META_MODULE}] cover-too-large (${declaredSize} bytes > ${MAX_COVER_FETCH}), skipping to avoid memory issues`);
     } else if (isImageTruncated(pic.data)) {
       const offset = (pic as any).offset ?? 0;
       if (declaredSize > 0 && offset + declaredSize <= safeSize) {
@@ -470,7 +486,7 @@ export async function getTrackMetadata(
             }
           }
         } catch {
-          // truncated image that can't be fetched — skip cover
+          // intentional fallback: truncated cover that can't be fetched via range is common; skip cover silently. Do NOT warn — would spam.
         }
       }
     } else {
@@ -500,7 +516,7 @@ export async function getTrackMetadata(
     entry.fullCoverUrl = entry.fullCoverUrl ?? existingMem.fullCoverUrl;
   }
   setMetadataCache(fileId, entry);
-  setCache(`metadata_${fileId}`, entry, true).catch(console.warn);
+  setCache(`metadata_${fileId}`, entry, true).catch(e => console.warn(`[${META_MODULE}] cache-set-failed`, classifyMetaError(e)));
   return entry;
   }, _signal);
 }
@@ -522,7 +538,7 @@ export async function updateTrackDuration(fileId: string, accurateDuration: numb
       try {
         await invoke('update_track_duration_in_db', { dbId: entry.data.dbId, duration: accurateDuration });
       } catch (e) {
-        console.error("Failed to sync duration to db:", e);
+        console.error(`[${META_MODULE}] duration-sync-failed`, classifyMetaError(e));
       }
     }
     window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId } }));
@@ -559,7 +575,7 @@ export async function addToLibrary(driveFileId: string, size: number, name: stri
 
     return dbId;
   } catch (e) {
-    console.error("Failed to add track to library:", e);
+    console.error(`[${META_MODULE}] add-to-library-failed`, classifyMetaError(e));
     return null;
   }
 }
@@ -568,7 +584,7 @@ export async function removeFromLibrary(driveFileId: string, dbId: string): Prom
   try {
     await invoke('remove_track_from_db', { dbId });
   } catch (e) {
-    console.error("Failed to remove track from DB:", e);
+    console.error(`[${META_MODULE}] remove-from-db-failed`, classifyMetaError(e));
   }
 
   const cacheKey = `metadata_${driveFileId}`;

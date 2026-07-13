@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { restoreFile, permanentlyDeleteFile } from '../../utils/driveApi';
+import { showErrorToast } from '../../utils/simpleToast';
 
 interface TrashScreenProps {
   token: string;
@@ -56,7 +57,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         setItems(data.files || []);
       }
     } catch (e) {
-      console.error("Failed to fetch trashed items", e);
+      console.error("[Trash] Failed to fetch trashed items", e);
     } finally {
       setIsLoading(false);
     }
@@ -73,8 +74,8 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setItems(prev => prev.filter(item => item.id !== id));
       window.dispatchEvent(new CustomEvent('refresh-drive'));
     } catch (e) {
-      console.error("Failed to restore file", e);
-      alert(t('settings.restore_error') || "Failed to restore file");
+      console.error("[Trash] restore: Failed to restore file", e);
+      showErrorToast(t('settings.restore_error') || "Failed to restore file");
     } finally {
       setRestoringId(null);
     }
@@ -92,8 +93,8 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       alert(t('settings.empty_trash_success') || "Trash emptied successfully!");
       onClose();
     } catch (e) {
-      console.error("Failed to empty trash", e);
-      alert(t('settings.empty_trash_error') || "Failed to empty trash");
+      console.error("[Trash] empty-trash: Failed to empty trash", e);
+      showErrorToast(t('settings.empty_trash_error') || "Failed to empty trash");
     } finally {
       setIsEmptying(false);
     }
@@ -110,8 +111,8 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     } catch (e) {
-      console.error("Bulk restore failed", e);
-      alert(t('settings.restore_error') || "Failed to restore items");
+      console.error("[Trash] bulk-restore: Failed to restore items", e);
+      showErrorToast(t('settings.restore_error') || "Failed to restore items");
     } finally {
       setIsBulkActioning(false);
     }
@@ -127,8 +128,8 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     } catch (e) {
-      console.error("Bulk delete failed", e);
-      alert(t('settings.empty_trash_error') || "Failed to delete items");
+      console.error("[Trash] bulk-delete: Failed to delete items", e);
+      showErrorToast(t('settings.empty_trash_error') || "Failed to delete items");
     } finally {
       setIsBulkActioning(false);
     }

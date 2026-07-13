@@ -21,7 +21,7 @@ import { getFolderAudioQuery } from './utils/audioQuery';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { LoginScreen } from "./ui/Login/LoginScreen";
 
-import { fetchWithAuth } from "./utils/apiClient";
+import { fetchWithAuth, getValidToken } from "./utils/apiClient";
 import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
@@ -67,6 +67,28 @@ export type UserProfile = {
 
 const folderFetchGuard = createFolderFetchGuard();
 
+const APP_MODULE = "App";
+
+// Derive a short, safe classification tag from an error's message ONLY.
+// We never log the error object or its stack — those can leak file ids, user
+// data, or (in theory) auth material into logs. Mirrors classifyDriveError
+// in driveApi.ts.
+function classifyAppError(err: unknown): string {
+  const msg =
+    err instanceof Error
+      ? err.message
+      : typeof err === "string"
+        ? err
+        : "unknown-error";
+  const m = msg.toLowerCase();
+  if (m.includes("timeout") || m.includes("aborterror")) return "timeout";
+  if (m.includes("network") || m.includes("failed to fetch") || m.includes("unreachable"))
+    return "network";
+  const statusMatch = m.match(/\((\d{3})\)/);
+  if (statusMatch) return `http-${statusMatch[1]}`;
+  return "unknown";
+}
+
 function App() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("Home");
@@ -76,7 +98,16 @@ function App() {
   const [isFocused, setIsFocused] = useState(true);
 
   useEffect(() => {
-    const handleFocus = () => setIsFocused(true);
+    const handleFocus = () => {
+      setIsFocused(true);
+      // The proactive-refresh setTimeout is frozen while the OS sleeps / the app
+      // is suspended. On regaining focus, refresh if the token is stale so the
+      // next play doesn't hit the proxy with an expired token. Guard on
+      // refresh_token presence to avoid triggering the logout path when signed out.
+      if (localStorage.getItem("drplay_access_token") && localStorage.getItem("drplay_refresh_token")) {
+        getValidToken().catch(e => console.warn("[Auth] Focus refresh failed", e));
+      }
+    };
     const handleBlur = () => setIsFocused(false);
     const preventContextMenu = (e: MouseEvent) => e.preventDefault();
     
@@ -98,8 +129,8 @@ function App() {
     localStorage.removeItem("drplay_current_folder_id");
     localStorage.removeItem("drplay_current_folder_name");
     localStorage.removeItem("drplay_folder_history");
-    db.syncState.delete("drplay_nav_state").catch(() => {});
-    import('idb-keyval').then(({ del }) => del('drplay_last_session')).catch(() => {});
+    db.syncState.delete("drplay_nav_state").catch((e) => console.warn(`[${APP_MODULE}] logout-cleanup-failed`, classifyAppError(e)));
+    import('idb-keyval').then(({ del }) => del('drplay_last_session')).catch((e) => console.warn(`[${APP_MODULE}] logout-cleanup-failed`, classifyAppError(e)));
     setAppRootFolder(null);
   });
 
@@ -158,7 +189,7 @@ function App() {
         
         window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: event.payload.driveFileId } }));
       } catch (e) {
-        console.warn('Failed to repair thumbnail:', e);
+        console.warn(`[${APP_MODULE}] Failed to repair thumbnail:`, classifyAppError(e));
       }
     }).then(fn => {
       if (cancelled) { fn(); return; }
@@ -299,7 +330,7 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem("drplay_minimize_to_tray", String(minimizeToTray));
-    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch(console.error);
+    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch((e) => console.warn(`[${APP_MODULE}] minimize-to-tray-failed`, classifyAppError(e)));
   }, [minimizeToTray]);
 
   // Locate File in App logic
@@ -338,7 +369,7 @@ function App() {
                 }
               }
             } catch (e) {
-              console.warn("Failed to get parents via API", e);
+              console.warn(`[${APP_MODULE}] Failed to get parents via API`, classifyAppError(e));
             }
             if (!pId) break;
           } else {
@@ -363,6 +394,7 @@ function App() {
                 newHistory.unshift({ id: pId, name: "Unknown Folder" });
               }
             } catch (e) {
+              console.warn(`[${APP_MODULE}] parent-name-fetch-failed`, classifyAppError(e));
               newHistory.unshift({ id: pId, name: "Unknown Folder" });
             }
           } else {
@@ -395,7 +427,8 @@ function App() {
               parentId = data.parents[0];
             }
           }
-        } catch {
+        } catch (e) {
+          console.warn(`[${APP_MODULE}] locate-parent-api-failed`, classifyAppError(e));
           // ignore — fall back to cache below
         }
         if (!parentId) {
@@ -445,7 +478,7 @@ function App() {
 
         setTimeout(() => setHighlightedFileId(null), 5000);
       } catch (err) {
-        console.error("Locate file failed", err);
+        console.error(`[${APP_MODULE}] Locate file failed`, classifyAppError(err));
       } finally {
         setIsLoadingTracks(false);
       }
@@ -497,7 +530,7 @@ function App() {
         const response = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
 
         if (!response.ok) {
-          console.error("Failed to fetch page from drive API", response.status);
+          console.error(`[${APP_MODULE}] Failed to fetch page from drive API`, response.status);
           fetchCompleted = false;
           break;
         }
@@ -509,7 +542,10 @@ function App() {
             name: file.name,
             mimeType: file.mimeType,
             parentId: folderId,
-            size: file.size ? parseInt(file.size, 10) : undefined,
+            size: (() => {
+              const parsed = file.size ? parseInt(file.size, 10) : NaN;
+              return Number.isFinite(parsed) ? parsed : undefined;
+            })(),
             modifiedTime: file.modifiedTime,
             trashed: false,
             isFolder: file.mimeType === "application/vnd.google-apps.folder"
@@ -544,7 +580,7 @@ function App() {
         }
       }
     } catch (error) {
-      console.error("Failed to fetch folder contents on demand:", error);
+      console.error(`[${APP_MODULE}] Failed to fetch folder contents on demand:`, classifyAppError(error));
       fetchCompleted = false;
     } finally {
       if (folderFetchGuard.isLatest(myId)) {

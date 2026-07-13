@@ -2,6 +2,16 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { Folder, ArrowLeft, HardDrive, Check, Search, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { db } from '../../db/db';
+import { getValidToken } from '../../utils/apiClient';
+
+const FOLDER_MODULE = "FolderSelection";
+
+// Classify a Drive fetch error for observability. Returns name + message only.
+function classifyFolderError(err: unknown): string {
+  const name = err instanceof Error ? err.name : typeof err;
+  const message = err instanceof Error ? err.message : String(err);
+  return `${name}: ${message}`;
+}
 
 interface FolderItem {
   id: string;
@@ -63,7 +73,10 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         setApiSearchResults(data.files?.filter((f: FolderItem) => f.id !== currentFolderId) || []);
       }
     } catch (e: any) {
-      if (e.name !== 'AbortError') setApiSearchResults([]);
+      if (e.name !== 'AbortError') {
+        setApiSearchResults([]);
+        console.warn(`[${FOLDER_MODULE}] api-search-failed`, classifyFolderError(e));
+      }
     } finally {
       setIsSearchingApi(false);
     }
@@ -109,29 +122,29 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const fetchFolders = async (folderId: string) => {
     isLoadingRef.current = true;
     setIsLoading(true);
+    setFolders([]);
     try {
       const dbFolders = await db.files.where('parentId').equals(folderId).filter(f => f.isFolder).toArray();
       if (dbFolders.length > 0) {
         setFolders(dbFolders.map(c => ({ id: c.id, name: c.name })));
       } else {
         const q = `'${folderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder'`;
+        const freshToken = (await getValidToken()) || token;
         const response = await fetch(
           `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name`,
-          { headers: { Authorization: `Bearer ${token}` } }
+          { headers: { Authorization: `Bearer ${freshToken}` } }
         );
-        
-        if (response.status === 401) {
-          // Simple retry logic could go here, but App.tsx handles main token refresh.
-          // For simplicity, we assume token is valid here.
-        }
 
         if (response.ok) {
           const data = await response.json();
           setFolders(data.files || []);
+        } else {
+          setFolders([]);
         }
       }
     } catch (e) {
-      console.error("Failed to fetch folders", e);
+      console.error("[FolderSelection] Failed to fetch folders", e);
+      setFolders([]);
     } finally {
       isLoadingRef.current = false;
       setIsLoading(false);
@@ -181,7 +194,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
                 const pData = await pRes.json();
                 setCurrentFolderName(pData.name);
               }
-            } catch (e) {}
+              } catch (e) { console.warn('[FolderSelection] Failed to fetch parent folder name', e); }
           }
         } else {
           setCurrentFolderId('root');
@@ -191,7 +204,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         setCurrentFolderName('My Drive');
       }
     } catch (e) {
-      console.error("Failed to fetch parent", e);
+      console.error(`[${FOLDER_MODULE}] fetch-parent-failed`, classifyFolderError(e));
       setCurrentFolderId('root');
       setCurrentFolderName('My Drive');
     }

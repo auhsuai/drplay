@@ -80,43 +80,45 @@ export function NowPlayingView({
           const targetCoverUrl = metadata.fullCoverUrl || metadata.coverUrl;
           if (targetCoverUrl) {
             setCoverUrl(targetCoverUrl);
-            getPalette(targetCoverUrl)
-              .then(colors => {
-                if (isCancelled) return;
-                setBgColor(colors[0]);
-                setBgPalette(colors);
-              })
-              .catch(() => {
-                if (!isCancelled) {
-                  setBgColor('');
-                  setBgPalette([]);
-                }
-              });
+              getPalette(targetCoverUrl)
+                .then(colors => {
+                  if (isCancelled) return;
+                  setBgColor(colors[0]);
+                  setBgPalette(colors);
+                })
+                .catch((err) => {
+                  if (!isCancelled) {
+                    setBgColor('');
+                    setBgPalette([]);
+                  }
+                  console.warn('[NowPlaying] Failed to extract color palette from cover', err);
+                });
           } else if ((metadata.pictureDataFull || metadata.pictureData) && metadata.pictureFormat) {
             const data = metadata.pictureDataFull || metadata.pictureData;
             const blob = new Blob([new Uint8Array(data!)], { type: metadata.pictureFormat });
             objectUrl = URL.createObjectURL(blob);
             setCoverUrl(objectUrl);
             
-            getPalette(objectUrl)
-              .then(colors => {
-                if (isCancelled) return;
-                setBgColor(colors[0]);
-                setBgPalette(colors);
-              })
-              .catch(() => {
-                if (!isCancelled) {
-                  setBgColor('');
-                  setBgPalette([]);
-                }
-              });
+              getPalette(objectUrl)
+                .then(colors => {
+                  if (isCancelled) return;
+                  setBgColor(colors[0]);
+                  setBgPalette(colors);
+                })
+                .catch((err) => {
+                  if (!isCancelled) {
+                    setBgColor('');
+                    setBgPalette([]);
+                  }
+                  console.warn('[NowPlaying] Failed to extract color palette from cover', err);
+                });
           } else {
             setBgColor('');
             setBgPalette([]);
           }
         })
         .catch((e) => {
-          console.error(e);
+          console.error('[NowPlaying] Failed to load track metadata', e);
           if (!isCancelled) {
             setBgColor('');
             setBgPalette([]);
@@ -236,6 +238,7 @@ export function NowPlayingView({
     if (!progressBarRef.current) return;
     setIsDragging(true);
     isDraggingRef.current = true;
+      try { progressBarRef.current.setPointerCapture(e.pointerId); } catch (err) { console.warn('[NowPlaying] setPointerCapture failed', err); }
     const bounds = progressBarRef.current.getBoundingClientRect();
     
     const updateTimeUI = (clientX: number) => {
@@ -252,20 +255,30 @@ export function NowPlayingView({
       updateTimeUI(moveEvent.clientX);
     };
     
-    const onPointerUp = (upEvent: PointerEvent) => {
+    const commit = (clientX: number) => {
       setIsDragging(false);
       isDraggingRef.current = false;
-      const finalTime = updateTimeUI(upEvent.clientX);
+      const finalTime = updateTimeUI(clientX);
       const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
       if (audio) {
         audio.currentTime = finalTime;
       }
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+    };
+
+    const onPointerUp = (upEvent: PointerEvent) => {
+      commit(upEvent.clientX);
+    };
+
+    const onPointerCancel = (cancelEvent: PointerEvent) => {
+      commit(cancelEvent.clientX);
     };
     
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
   };
 
   if (!currentTrack) {

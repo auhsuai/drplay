@@ -1,0 +1,667 @@
+import { useEffect, useRef, useCallback } from 'react';
+import { Track } from '../../App';
+import { CrossfadeEngine } from '../../utils/crossfade';
+import { safePlay, safePause } from '../../utils/safeAudio';
+import { updateTrackDuration } from '../../utils/metadata';
+import { getValidToken } from '../../utils/apiClient';
+import { invoke } from '@tauri-apps/api/core';
+import { set as idbSet } from 'idb-keyval';
+import { PlayerAction, AudioRefs } from './types';
+import type { TFunction } from 'i18next';
+
+const AUDIO_MODULE = 'useAudioEngine';
+const AUDIO_LOG = '[Player]';
+
+// Classify an audio-engine error for observability. Only surface the
+// message/name — never log tokens, URLs, or signed stream credentials.
+function classifyAudioError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || err.name || 'Unknown audio error';
+  }
+  if (typeof err === 'string') return err;
+  return 'Unknown audio error';
+}
+
+export interface AudioEngineAPI {
+  audioRefs: AudioRefs;
+  getActiveAudio: () => HTMLAudioElement | null;
+  loadNormalAudio: (track: Track, position: number | null, cancellationCheck?: () => boolean) => Promise<HTMLAudioElement>;
+  performRetry: (track: Track) => Promise<void>;
+  handleEnded: () => void;
+  handleAudioError: () => Promise<void>;
+  handleTimeUpdate: () => void;
+  handleLoadedMetadata: () => void;
+  handleCanPlay: () => void;
+  handleWaiting: () => void;
+  handlePlaying: () => void;
+  lastKnownPositionRef: React.MutableRefObject<number>;
+  errorPositionRef: React.MutableRefObject<number | null>;
+  pendingBufferRestoreTimeRef: React.MutableRefObject<number | null>;
+  restoredAudioTrackIdRef: React.MutableRefObject<string | null>;
+  retryCountRef: React.MutableRefObject<number>;
+  retryTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
+}
+
+interface UseAudioEngineParams {
+  currentTrack: Track | null;
+  isPlaying: boolean;
+  playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
+  loadNonce: number | undefined;
+  crossfadeEnabled: boolean;
+  crossfadeDuration: number;
+  dispatch: React.Dispatch<PlayerAction>;
+  t: TFunction;
+  isPlayingRef: React.MutableRefObject<boolean>;
+  errorInfoRef: React.MutableRefObject<{ type: string; text: string } | null>;
+  onNextTrackRefForEnded: React.MutableRefObject<(isAutoSkip?: boolean) => void>;
+  manualResume: boolean;
+  rateLimitUntilRef: React.MutableRefObject<number>;
+  setDuration: React.Dispatch<React.SetStateAction<number>>;
+  setIsBuffering: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
+  const { currentTrack, isPlaying, playMode, loadNonce, crossfadeEnabled, crossfadeDuration, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering } = params;
+
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const audioRef2 = useRef<HTMLAudioElement>(null);
+  const activeAudioIndexRef = useRef<0 | 1>(0);
+  const crossfadeEngineRef = useRef<CrossfadeEngine | null>(null);
+
+  const resumeHandlerRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
+  const resumeSeekRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
+  const isProgrammaticActionRef = useRef(false);
+  const retryCountRef = useRef(0);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastKnownPositionRef = useRef(0);
+  const errorPositionRef = useRef<number | null>(null);
+  const lastSaveTimeRef = useRef(0);
+  const pendingBufferRestoreTimeRef = useRef<number | null>(null);
+  const restoredAudioTrackIdRef = useRef<string | null>(null);
+  const currentTrackRef = useRef(currentTrack);
+  currentTrackRef.current = currentTrack;
+
+  // --- Buffering indicator (mạng yếu) ---
+  // Chống nhấp nháy: chỉ hiện spinner sau 500ms `waiting`; ẩn ngay khi có data.
+  // Watchdog qua `timeupdate` bắt các stall mà `waiting` không phát (MDN/hls.js).
+  const isBufferingRef = useRef(false);
+  const bufferingDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stallWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyBuffering = (v: boolean) => {
+    if (isBufferingRef.current === v) return;
+    isBufferingRef.current = v;
+    setIsBuffering(v);
+  };
+  const clearBufferingTimers = () => {
+    if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
+    if (stallWatchdogRef.current) { clearTimeout(stallWatchdogRef.current); stallWatchdogRef.current = null; }
+  };
+
+  const audioRefs: AudioRefs = { audioRef, audioRef2, activeAudioIndexRef, crossfadeEngineRef };
+
+  const getActiveAudio = useCallback(() => {
+    return activeAudioIndexRef.current === 0 ? audioRef.current : audioRef2.current;
+  }, []);
+
+  // Crossfade engine init
+  useEffect(() => {
+    const engine = new CrossfadeEngine();
+    crossfadeEngineRef.current = engine;
+    return () => {
+      engine.destroy();
+      crossfadeEngineRef.current = null;
+    };
+  }, []);
+
+  const crossfadeEnabledRef = useRef(crossfadeEnabled);
+  const crossfadeDurationRef = useRef(crossfadeDuration);
+  useEffect(() => { crossfadeEnabledRef.current = crossfadeEnabled; }, [crossfadeEnabled]);
+  useEffect(() => { crossfadeDurationRef.current = crossfadeDuration; }, [crossfadeDuration]);
+
+  const clearRetryTimeout = () => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  };
+
+  function cleanupResumeHandlers() {
+    if (resumeHandlerRef.current) {
+      resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
+      resumeHandlerRef.current = null;
+    }
+    if (resumeSeekRef.current) {
+      resumeSeekRef.current.audio.removeEventListener('loadedmetadata', resumeSeekRef.current.handler);
+      resumeSeekRef.current = null;
+    }
+  }
+
+  function waitForAudioEvent(audio: HTMLAudioElement, event: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+    return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const handler = () => {
+        if (timer) clearTimeout(timer);
+        audio.removeEventListener(event, handler);
+        resolve();
+      };
+      const onAbort = () => {
+        if (timer) clearTimeout(timer);
+        audio.removeEventListener(event, handler);
+        reject(signal?.reason || new DOMException('Aborted', 'AbortError'));
+      };
+      if (signal) {
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+      timer = setTimeout(() => {
+        audio.removeEventListener(event, handler);
+        reject(new Error(`Timeout waiting for ${event} after ${timeoutMs}ms`));
+      }, timeoutMs);
+      audio.addEventListener(event, handler);
+    });
+  }
+
+  async function loadNormalAudio(track: Track, position: number | null, cancellationCheck?: () => boolean): Promise<HTMLAudioElement> {
+    const audio = audioRef.current;
+    if (!audio || !track.streamUrl) throw new Error('No audio or stream URL');
+
+    cleanupResumeHandlers();
+    isProgrammaticActionRef.current = true;
+
+    try {
+      safePause(audio);
+      audio.removeAttribute('src');
+      audio.src = track.streamUrl;
+      audio.load();
+
+      if (cancellationCheck?.()) throw new Error('Cancelled');
+
+      if (position !== null) {
+        if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+          await waitForAudioEvent(audio, 'loadedmetadata', 10000);
+        }
+        if (cancellationCheck?.()) throw new Error('Cancelled');
+        audio.currentTime = position;
+      }
+
+      if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+        await waitForAudioEvent(audio, 'canplay', 30000);
+      }
+
+      if (cancellationCheck?.()) throw new Error('Cancelled');
+
+      if (isPlayingRef.current) {
+        await safePlay(audio);
+      }
+
+      if (crossfadeEngineRef.current) {
+        crossfadeEngineRef.current.setGain(0, 1);
+        crossfadeEngineRef.current.setGain(1, 1);
+      }
+      activeAudioIndexRef.current = 0;
+      return audio;
+    } finally {
+      isProgrammaticActionRef.current = false;
+    }
+  }
+
+  async function performRetry(track: Track): Promise<void> {
+    clearRetryTimeout();
+    const pos = errorPositionRef.current;
+    errorPositionRef.current = null;
+    dispatch({ type: 'CLEAR_ERROR' });
+    try {
+      await loadNormalAudio(track, pos);
+      retryCountRef.current = 0;
+    } catch (err) {
+      retryCountRef.current += 1;
+      console.error('[Player] Retry failed', err);
+      if (retryCountRef.current < 3) {
+        dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
+      } else {
+        dispatch({ type: 'ERROR', error: { type: 'format_error', text: t('player.format_error', 'File lỗi định dạng, đang chuyển bài kế tiếp...') } });
+        onNextTrackRefForEnded.current(true);
+      }
+    }
+  }
+
+  const handleEnded = () => {
+    if (manualResume) return;
+    if (playMode === 'repeat-one') {
+      const active = getActiveAudio();
+      if (active) {
+        active.currentTime = 0;
+        safePlay(active).catch(e => console.error(`${AUDIO_LOG} replay-failed`, classifyAudioError(e)));
+      }
+    } else {
+      onNextTrackRefForEnded.current();
+    }
+  };
+
+  const handleAudioError = async () => {
+    const audio = getActiveAudio();
+    const error = audio?.error;
+    if (!audio || !error) return;
+    if (error.code === MediaError.MEDIA_ERR_ABORTED) return;
+
+    if (lastKnownPositionRef.current > 0) {
+      errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
+    }
+
+    const isOffline = !navigator.onLine;
+
+    if (isOffline) {
+      if (errorInfoRef.current?.type !== 'network_disconnected') {
+        dispatch({ type: 'ERROR', error: { type: 'network_disconnected', text: t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
+      }
+      return;
+    }
+
+    if (error.code === MediaError.MEDIA_ERR_NETWORK) {
+      // We're online here (offline handled above). A network-class error on our
+      // own signed proxy stream is almost always the resolved proxy URL expiring
+      // while paused (the app's HMAC exp window), not a real connectivity loss.
+      // Mint a fresh signed URL (busts the cached redirect) and resume from the
+      // last position instead of showing a misleading network banner.
+      const track = currentTrackRef.current;
+      let isProxyStream = false;
+      try {
+        const u = new URL(track?.streamUrl ?? '');
+        isProxyStream = u.hostname === 'drplay.localhost' && u.pathname === '/stream';
+      } catch { isProxyStream = false; }
+
+      if (track && isProxyStream && retryCountRef.current < 3) {
+        try {
+          const freshUrl = await invoke<string>('get_stream_url', { fileId: track.id });
+          const freshTrack = { ...track, streamUrl: freshUrl };
+          currentTrackRef.current = freshTrack;
+          performRetry(freshTrack).catch(() => {});
+          return;
+        } catch (e) {
+          console.warn('[Player] Failed to refresh stream URL after network error', e);
+        }
+      }
+
+      if (errorInfoRef.current?.type !== 'network_interrupted') {
+        dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
+      }
+      return;
+    }
+
+    let isRealFormatError = false;
+    let errorType = 'transient';
+
+    if (currentTrack?.streamUrl) {
+      try {
+        const u = new URL(currentTrack.streamUrl);
+        if (u.hostname === 'drplay.localhost' && u.pathname === '/stream') {
+          const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+          if (headResp.ok) {
+            isRealFormatError = true;
+          } else {
+            errorType = headResp.headers.get('X-Stream-Error-Type') || 'transient';
+            if (errorType === 'rate-limited') {
+              rateLimitUntilRef.current = Date.now() + 300_000;
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          errorType = 'transient';
+        } else if (err instanceof TypeError) {
+          errorType = 'transient';
+        } else {
+          errorType = 'transient';
+        }
+      }
+    }
+
+    if (errorType === 'permanent') {
+      dispatch({ type: 'ERROR', error: { type: 'file_deleted', text: t('player.file_deleted', 'File không còn tồn tại trên Drive, đang chuyển bài...') } });
+      onNextTrackRefForEnded.current(true);
+      return;
+    }
+
+    if (errorType === 'access-denied') {
+      // Share revoked / permission removed. Retrying is futile — inform and skip.
+      dispatch({ type: 'ERROR', error: { type: 'access_denied', text: t('player.access_denied', 'Bạn không còn quyền truy cập file này, đang chuyển bài...') } });
+      onNextTrackRefForEnded.current(true);
+      return;
+    }
+
+    if (errorType === 'download-quota') {
+      // This file's Drive download quota is exhausted (resets in ~24h). No point
+      // retrying now — inform and skip to the next track.
+      dispatch({ type: 'ERROR', error: { type: 'download_quota', text: t('player.download_quota', 'File đã vượt giới hạn tải xuống của Google, đang chuyển bài...') } });
+      onNextTrackRefForEnded.current(true);
+      return;
+    }
+
+    if (errorType === 'rate-limited') {
+      dispatch({ type: 'ERROR', error: { type: 'rate_limited', text: t('player.rate_limited', 'Google Drive tạm thời quá tải, đang thử lại...') } });
+      const waitMs = Math.max(5000, Math.min(rateLimitUntilRef.current - Date.now(), 60000));
+      clearRetryTimeout();
+      retryTimeoutRef.current = setTimeout(() => {
+        const track = currentTrackRef.current;
+        if (track?.streamUrl) {
+          performRetry(track).catch(() => {});
+        }
+      }, waitMs);
+      return;
+    }
+
+    if (errorType === 'url-expired') {
+      // The signed stream URL expired (e.g. paused past the exp window). Mint a
+      // fresh signed URL and retry silently instead of showing a network banner.
+      const track = currentTrackRef.current;
+      if (track) {
+        try {
+          const freshUrl = await invoke<string>('get_stream_url', { fileId: track.id });
+          const freshTrack = { ...track, streamUrl: freshUrl };
+          currentTrackRef.current = freshTrack;
+          performRetry(freshTrack).catch(() => {});
+          return;
+        } catch (e) {
+          console.warn('[Player] Failed to regenerate expired stream URL', e);
+        }
+      }
+      dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
+      return;
+    }
+
+    if (errorType === 'auth-expired') {
+      // Proxy-side token recovery timed out. Refresh the token then retry the
+      // same track rather than showing a network banner or skipping.
+      try {
+        await getValidToken(true);
+      } catch (e) {
+        console.warn('[Player] Token refresh after auth-expired failed', e);
+      }
+      const track = currentTrackRef.current;
+      if (track?.streamUrl) {
+        performRetry(track).catch(() => {});
+      }
+      return;
+    }
+
+    if (isRealFormatError && (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || error.code === MediaError.MEDIA_ERR_DECODE)) {
+      // A very recent token refresh strongly implies this "unsupported source"
+      // was actually a 401 from an expired token (the proxy recovered and the
+      // HEAD probe now succeeds), not a genuine format problem. Retry instead of
+      // skipping the track.
+      const tokenTime = Number(localStorage.getItem('drplay_token_time'));
+      if (Number.isFinite(tokenTime) && Date.now() - tokenTime < 15000) {
+        const track = currentTrackRef.current;
+        if (track?.streamUrl) {
+          performRetry(track).catch(() => {});
+          return;
+        }
+      }
+      dispatch({ type: 'ERROR', error: { type: 'format_error', text: t('player.format_error', 'File lỗi định dạng, đang chuyển bài kế tiếp...') } });
+      onNextTrackRefForEnded.current(true);
+      return;
+    }
+
+    if (errorInfoRef.current?.type !== 'network_interrupted') {
+      dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
+    }
+  };
+
+  const handleWaiting = () => {
+    // Không hiện spinner khi đang pause hoặc đang ở trạng thái lỗi (đã có banner).
+    if (!isPlayingRef.current || errorInfoRef.current) return;
+    if (bufferingDelayRef.current || isBufferingRef.current) return;
+    bufferingDelayRef.current = setTimeout(() => {
+      bufferingDelayRef.current = null;
+      if (isPlayingRef.current && !errorInfoRef.current) applyBuffering(true);
+    }, 500);
+  };
+
+  const handlePlaying = () => {
+    clearBufferingTimers();
+    applyBuffering(false);
+  };
+
+  const handleTimeUpdate = () => {
+    const audio = getActiveAudio();
+    if (!audio) return;
+    const time = audio.currentTime;
+    if (time > 0 && isFinite(time)) lastKnownPositionRef.current = time;
+
+    // Data đang chảy → chắc chắn không buffering; huỷ debounce đang chờ.
+    if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
+    if (isBufferingRef.current) applyBuffering(false);
+    // Watchdog: nếu 2s không có timeupdate nào nữa khi vẫn đang phát → coi là stall.
+    if (stallWatchdogRef.current) clearTimeout(stallWatchdogRef.current);
+    if (isPlayingRef.current) {
+      stallWatchdogRef.current = setTimeout(() => {
+        const a = getActiveAudio();
+        if (a && !a.paused && !a.ended && isPlayingRef.current && !errorInfoRef.current) {
+          applyBuffering(true);
+        }
+      }, 2000);
+    }
+
+    const now = Date.now();
+    if (now - lastSaveTimeRef.current > 2000 && currentTrack) {
+      idbSet('drplay_last_session', {
+        track: currentTrack,
+        time,
+        duration: audio.duration || 0
+      }).catch(e => console.warn(`[${AUDIO_MODULE}] session-save-failed`, classifyAudioError(e)));
+      lastSaveTimeRef.current = now;
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    const audio = getActiveAudio();
+    if (audio) {
+      const accurateDuration = audio.duration;
+      setDuration(accurateDuration);
+      if (currentTrack) {
+        updateTrackDuration(currentTrack.id, accurateDuration);
+      }
+    }
+  };
+
+  const handleCanPlay = () => {
+    const audio = getActiveAudio();
+    retryCountRef.current = 0;
+    clearRetryTimeout();
+    clearBufferingTimers();
+    applyBuffering(false);
+    if (errorInfoRef.current) {
+      dispatch({ type: 'CLEAR_ERROR' });
+    }
+    if (!audio) return;
+    if (pendingBufferRestoreTimeRef.current !== null) {
+      const t = pendingBufferRestoreTimeRef.current;
+      pendingBufferRestoreTimeRef.current = null;
+      if (isFinite(t)) {
+        audio.currentTime = t;
+      }
+      return;
+    }
+    if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
+      const t = currentTrack.restoreTime;
+      if (isFinite(t)) {
+        audio.currentTime = t;
+      }
+      restoredAudioTrackIdRef.current = currentTrack.id;
+    }
+  };
+
+  // Volume sync
+  useEffect(() => {
+    const refs = [audioRef.current, audioRef2.current];
+    for (const el of refs) {
+      if (el) el.volume = 0.5; // placeholder — real volume comes from PlayerBar
+    }
+  }, []);
+
+  // Main crossfade effect
+  useEffect(() => {
+    const audio = audioRef.current;
+    const audio2 = audioRef2.current;
+    if (!audio || !audio2 || !currentTrack?.streamUrl) return;
+
+    let cancelled = false;
+
+    const loadAndPlay = async () => {
+      const hasActiveSrc = (activeAudioIndexRef.current === 0 ? audio.src : audio2.src) !== '';
+      const shouldCrossfade = crossfadeEnabledRef.current && isPlaying && hasActiveSrc;
+
+      if (shouldCrossfade) {
+        const fromIndex = activeAudioIndexRef.current;
+        const toIndex = (fromIndex === 0 ? 1 : 0) as 0 | 1;
+        const fromEl = fromIndex === 0 ? audio : audio2;
+        const toEl = toIndex === 0 ? audio : audio2;
+
+        isProgrammaticActionRef.current = true;
+        try {
+          toEl.src = currentTrack.streamUrl;
+          let toElFailed = false;
+
+          const onToElError = () => {
+            if (toElFailed) return;
+            toElFailed = true;
+            console.warn('[Player] Crossfade target error, keeping current track');
+            if (!errorInfoRef.current) {
+              dispatch({ type: 'ERROR', error: { type: 'rate_limited', text: t('player.playback_error', 'Không thể phát bài hát này, vui lòng thử lại sau') } });
+            }
+          };
+
+          const cleanupToEl = () => {
+            toEl.removeEventListener('error', onToElError);
+          };
+
+          toEl.addEventListener('error', onToElError);
+          toEl.load();
+
+          if (cancelled) return;
+
+          if (toEl.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+            await waitForAudioEvent(toEl, 'canplay', 30000);
+          }
+
+          if (cancelled || toElFailed) { cleanupToEl(); return; }
+          cleanupToEl();
+
+          const engine = crossfadeEngineRef.current;
+          if (engine) {
+            await engine.ensureContext();
+            engine.connect(fromEl, fromIndex);
+            engine.connect(toEl, toIndex);
+            engine.setGain(fromIndex, 1);
+            engine.setGain(toIndex, 0);
+
+            try {
+              await safePlay(toEl);
+            } catch (err: any) {
+              if (err.name === 'NotAllowedError') {
+                dispatch({ type: 'BLOCKED', time: null });
+                return;
+              }
+            }
+
+            if (cancelled) return;
+            const fadeMs = crossfadeDurationRef.current;
+            const toDurMs = Number.isFinite(toEl.duration) ? toEl.duration * 1000 : fadeMs;
+            const fromRemainMs = Number.isFinite(fromEl.duration)
+              ? Math.max(0, (fromEl.duration - fromEl.currentTime) * 1000)
+              : fadeMs;
+            const cappedMs = Math.min(fadeMs, toDurMs, fromRemainMs);
+            const effectiveFadeMs = cappedMs <= 0 ? 0 : Math.max(150, cappedMs);
+            await engine.crossfade(fromIndex, toIndex, effectiveFadeMs);
+            safePause(fromEl);
+            fromEl.removeAttribute('src');
+            fromEl.load();
+            activeAudioIndexRef.current = toIndex;
+            dispatch({ type: 'PLAY_SUCCESS' });
+          }
+        } finally {
+          isProgrammaticActionRef.current = false;
+        }
+      } else {
+        if (cancelled) return;
+        try {
+          const position = currentTrack.restoreTime ?? null;
+          await loadNormalAudio(currentTrack, position, () => cancelled);
+          if (cancelled) return;
+          dispatch({ type: 'PLAY_SUCCESS' });
+        } catch (err: any) {
+          if (err.message === 'Cancelled') return;
+          console.warn('[Player] play() interrupted', err);
+          if (err.name === 'NotAllowedError') {
+            dispatch({ type: 'BLOCKED', time: getActiveAudio()?.currentTime ?? 0 });
+          }
+        }
+      }
+    };
+
+    loadAndPlay().catch(err => {
+      if (err.message !== 'Cancelled') {
+        console.warn('[Player] loadAndPlay unhandled error', err);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (audio) {
+        audio.removeAttribute('src');
+        audio.load();
+      }
+      if (audio2) {
+        audio2.removeAttribute('src');
+        audio2.load();
+      }
+    };
+  }, [loadNonce]);
+
+  // Resume handler cleanup
+  useEffect(() => {
+    return () => {
+      if (resumeHandlerRef.current) {
+        resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
+        resumeHandlerRef.current = null;
+      }
+      if (resumeSeekRef.current) {
+        resumeSeekRef.current.audio.removeEventListener('loadedmetadata', resumeSeekRef.current.handler);
+        resumeSeekRef.current = null;
+      }
+    };
+  }, []);
+
+  // Pause / track change: không còn phát → xoá spinner buffering và mọi timer.
+  useEffect(() => {
+    if (!isPlaying) {
+      clearBufferingTimers();
+      applyBuffering(false);
+    }
+  }, [isPlaying, currentTrack?.id]);
+
+  // Unmount cleanup for buffering timers.
+  useEffect(() => clearBufferingTimers, []);
+
+  return {
+    audioRefs,
+    getActiveAudio,
+    loadNormalAudio,
+    performRetry,
+    handleEnded,
+    handleAudioError,
+    handleTimeUpdate,
+    handleLoadedMetadata,
+    handleCanPlay,
+    handleWaiting,
+    handlePlaying,
+    lastKnownPositionRef,
+    errorPositionRef,
+    pendingBufferRestoreTimeRef,
+    restoredAudioTrackIdRef,
+    retryCountRef,
+    retryTimeoutRef,
+  };
+}

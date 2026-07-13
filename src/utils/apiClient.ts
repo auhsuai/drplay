@@ -5,11 +5,39 @@ import { getCurrentSessionId } from "./sessionGuard";
 export class TokenRefreshError extends Error {
   constructor(
     message: string,
-    public readonly kind: 'network' | 'invalid_grant' | 'unknown'
+    public readonly kind: 'network' | 'invalid_grant' | 'timeout' | 'unknown'
   ) {
     super(message);
     this.name = 'TokenRefreshError';
   }
+}
+
+const CLIENT_MODULE = "Auth";
+
+const MAX_SAFE_TIMEOUT = 2_147_483_647; // 32-bit signed int limit (~24.8 days); larger values overflow and fire immediately
+
+// Every outbound network call must be bounded so a stalled server cannot hang
+// the caller indefinitely (checklist: "no timeout on network calls").
+const FETCH_TIMEOUT_MS = 15_000;
+
+// Classify a failed Request/fetch rejection. Per spec a timeout via
+// AbortSignal.timeout() rejects with a DOMException named 'TimeoutError';
+// older Chromium surfaced it as 'AbortError', so treat AbortError as a
+// timeout too. Anything else (DNS, TLS, connection refused) is a real
+// network failure. (Sources: MDN AbortSignal.timeout, authon.dev 2026.)
+function classifyRequestError(err: unknown): 'network' | 'timeout' {
+  if (err instanceof Error) {
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') return 'timeout';
+  }
+  return 'network';
+}
+
+// Classify a Tauri invoke() rejection for observability (no secrets logged).
+function classifyInvokeError(err: unknown): 'network' | 'timeout' | 'unknown' {
+  const errStr = err instanceof Error ? err.message : String(err);
+  if (/timeout/i.test(errStr)) return 'timeout';
+  if (/failed to fetch|unreachable|network/i.test(errStr)) return 'network';
+  return 'unknown';
 }
 
 let isRefreshing = false;
@@ -28,7 +56,13 @@ export const stopProactiveRefresh = () => {
 
 export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
   stopProactiveRefresh();
-  const refreshInMs = Math.max((expiresInSeconds - 180) * 1000, 5000);
+  const safeExpires = Number.isFinite(expiresInSeconds) ? expiresInSeconds : 3600;
+  // Refresh 5 min before expiry so the timer always fires before getValidToken's
+  // 50-min "isExpired" threshold treats the token as stale on a play attempt.
+  const refreshInMs = Math.min(
+    Math.max((safeExpires - 300) * 1000, 5000),
+    MAX_SAFE_TIMEOUT
+  );
   refreshTimerId = setTimeout(async () => {
     try {
       await getValidToken(true);
@@ -39,10 +73,13 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
 };
 
 export async function revokeGoogleToken(token: string): Promise<void> {
+  if (!token) return;
   try {
-    await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
+    await fetch('https://oauth2.googleapis.com/revoke', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `token=${encodeURIComponent(token)}`,
+      signal: AbortSignal.timeout(5000),
     });
   } catch (err) {
     console.warn('[Auth] Revoke token failed (non-blocking)', err);
@@ -65,7 +102,7 @@ function scheduleRetryRefresh() {
   if (refreshTimerId) clearTimeout(refreshTimerId);
   const RETRY_DELAY = 30_000;
   refreshTimerId = setTimeout(() => {
-    getValidToken(true).catch(e => console.warn("Retry refresh failed", e));
+    getValidToken(true).catch(e => console.warn(`[${CLIENT_MODULE}] retry-refresh-failed`, classifyRequestError(e)));
   }, RETRY_DELAY);
 }
 
@@ -105,8 +142,11 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
         }
       }
 
+      if (!tokenData || typeof tokenData.access_token !== 'string' || tokenData.access_token.length === 0) {
+        throw new TokenRefreshError('Malformed refresh response: missing access_token', 'unknown');
+      }
+
       if (mySessionId !== getCurrentSessionId()) {
-        console.debug('[Auth] Refresh result discarded - session changed');
         refreshSubscribers.forEach(sub => sub.resolve(''));
         return '';
       }
@@ -117,7 +157,18 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
         localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
       }
 
-      invoke("update_stream_token", { token: tokenData.access_token }).catch(e => console.error("Rust stream token update fail", e));
+      // Await so the Rust proxy has the fresh token BEFORE we resolve waiters /
+      // trigger any reload. Otherwise the next stream request can race an
+      // un-updated proxy token and 401. Also wakes proxy waiters via notify.
+      try {
+        await invoke("update_stream_token", { token: tokenData.access_token });
+      } catch (e) {
+        // Best-effort: the fresh token is already persisted to localStorage, so a
+        // proxy update failure must NOT block playback or reject waiters. Classify
+        // for observability and continue.
+        const kind = classifyInvokeError(e);
+        console.warn("[Auth] Stream proxy token update failed (best-effort, continuing)", kind);
+      }
 
       scheduleProactiveRefresh(tokenData.expires_in || 3600);
       window.dispatchEvent(new CustomEvent('token-updated', { detail: { token: tokenData.access_token } }));
@@ -156,9 +207,20 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const newOptions = { ...options, headers };
+  // Every outbound fetch must be bounded by a timeout so a stalled server
+  // cannot hang the caller forever. Merge with any caller-supplied signal
+  // (e.g. a component-unmount cancel) via AbortSignal.any so neither wins,
+  // falling back to the timeout alone on runtimes lacking AbortSignal.any.
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const signal = options.signal && typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([options.signal, timeoutSignal])
+    : timeoutSignal;
 
-  let response = await fetch(url, newOptions);
+  const requestOptions: RequestInit = { ...options, headers, signal };
+
+  // Main request (timeout-bounded). Network/timeout here reject naturally so
+  // callers can decide retry vs. surface; we never swallow a hang.
+  const response = await fetch(url, requestOptions);
 
   // Nếu gặp lỗi 401 Unauthorized
   if (response.status === 401) {
@@ -166,7 +228,15 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
     if (newToken) {
       const retryHeaders = new Headers(options.headers);
       retryHeaders.set("Authorization", `Bearer ${newToken}`);
-      return fetch(url, { ...options, headers: retryHeaders });
+      try {
+        // Retry also uses the same bounded signal so it cannot hang either.
+        return await fetch(url, { ...options, headers: retryHeaders, signal });
+      } catch (err) {
+        // Retry failed: classify and throw a clear, typed error. We do NOT
+        // swallow it (caller must know) and we do NOT hang.
+        const kind = classifyRequestError(err);
+        throw new TokenRefreshError(`Retry after 401 failed (${kind})`, kind);
+      }
     }
   }
 

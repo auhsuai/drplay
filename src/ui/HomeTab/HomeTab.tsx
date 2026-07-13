@@ -89,12 +89,12 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
             size: f.size
           }));
           setRecentlyAdded(tracks);
-        }).catch(() => {});
+        }).catch(err => console.warn('[HomeTab] Failed to load recently-added files from Drive', err));
       }
     };
-    loadData().catch(console.error);
+    loadData().catch(err => console.error('[HomeTab] Failed to load home tab data', err));
 
-    const handleUpdate = () => { loadData().catch(console.error); };
+    const handleUpdate = () => { loadData().catch(err => console.error('[HomeTab] Failed to load home tab data', err)); };
     window.addEventListener('recent-updated', handleUpdate);
     return () => window.removeEventListener('recent-updated', handleUpdate);
   }, []);
@@ -256,7 +256,7 @@ function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onP
         objectUrl = URL.createObjectURL(blob);
         setCoverUrl(objectUrl);
       }
-    }).catch(() => {});
+    }).catch(err => console.warn('[HomeTab] Failed to load cover metadata for track', track.id, err));
     return () => { 
       isMounted = false; 
       controller.abort();

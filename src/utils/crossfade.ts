@@ -9,6 +9,8 @@ export class CrossfadeEngine {
       this.ctx = new AudioContext();
     }
     if (this.ctx.state === 'suspended') {
+      // NOTE: caller (useAudioEngine) wraps ensureContext() in try/catch, so any
+      // resume() rejection is handled there. Left unhandled here to avoid double-handling.
       await this.ctx.resume();
     }
     return this.ctx;
@@ -53,6 +55,17 @@ export class CrossfadeEngine {
     const toGain = this.gains[toIndex];
     if (!ctx || !fromGain || !toGain) return;
 
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+      // Invalid/instant duration: switch gains immediately and skip the ramp.
+      // Avoids a RangeError from a non-finite endTime and an infinite RAF loop
+      // (elapsed >= NaN is never true).
+      fromGain.gain.cancelScheduledValues(ctx.currentTime);
+      toGain.gain.cancelScheduledValues(ctx.currentTime);
+      fromGain.gain.value = 0;
+      toGain.gain.value = 1;
+      return;
+    }
+
     const startTime = ctx.currentTime;
 
     fromGain.gain.cancelScheduledValues(startTime);
@@ -85,7 +98,7 @@ export class CrossfadeEngine {
   destroy(): void {
     this.abort();
     for (const gain of this.gains) {
-      try { gain?.disconnect(); } catch { }
+      try { gain?.disconnect(); } catch (e) { console.warn(`[crossfade] gain-disconnect-failed`, e); }
     }
     this.gains[0] = null;
     this.gains[1] = null;

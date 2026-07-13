@@ -11,13 +11,15 @@
     "cancel": "Hủy",
     "selected": "đã chọn",
     "delete": "Xóa",
-    "move_to": "Chuyển đến..."
+    "move_to": "Chuyển đến...",
+    "download_error": "Tải xuống thất bại"
   },
   "sidebar": {
     "home": "Trang chủ",
     "my_drive": "Kho nhạc",
     "liked_songs": "Đã thích",
     "create_playlist": "Tạo Danh sách phát",
+    "create_playlist_error": "Lỗi khi tạo playlist",
     "settings": "Cài đặt",
     "guest": "Khách",
     "not_authenticated": "Chưa đăng nhập",
@@ -46,6 +48,7 @@
     "my_drive": "Kho nhạc",
     "no_folders": "Không có thư mục con nào.",
     "no_audio": "Không có bài hát nào trong thư mục này.",
+    "no_search_results": "Không tìm thấy bài hát phù hợp.",
     "folders": "Thư mục",
     "tracks": "Bài hát",
     "new_folder": "Thư mục mới",
@@ -76,14 +79,17 @@
   "unknown_artist": "Không rõ ca sĩ",
   "playlist": {
     "delete": "Xóa Danh sách phát",
+    "delete_error": "Lỗi khi xoá playlist",
     "empty": "Không có bài hát nào trong danh sách này.",
     "empty_state_title": "Ở đây hơi trống vắng...",
     "empty_state_subtitle": "Hãy thêm một vài bài hát vào danh sách phát nhé!",
     "change_cover": "Đổi ảnh bìa",
+    "cover_save_error": "Lỗi khi lưu ảnh bìa",
     "adjust_cover": "Điều chỉnh ảnh",
     "zoom": "Phóng to",
     "prev": "Trang trước",
     "next": "Trang sau",
+    "remove_error": "Lỗi khi xoá bài hát khỏi playlist",
     "jump_page": "Nhấn để nhảy trang"
   },
   "confirm_delete_playlist": "Bạn có chắc chắn muốn xóa danh sách phát này?",
@@ -96,7 +102,9 @@
     "rate_limited": "Google Drive tạm thời quá tải, đang thử lại...",
     "file_deleted": "File không còn tồn tại trên Drive, đang chuyển bài...",
     "format_error": "File lỗi định dạng, đang chuyển bài kế tiếp...",
-    "drive_quota_exceeded": "Google Drive đã vượt quá giới hạn, đang thử lại..."
+    "drive_quota_exceeded": "Google Drive đã vượt quá giới hạn, đang thử lại...",
+    "access_denied": "Bạn không còn quyền truy cập file này, đang chuyển bài...",
+    "download_quota": "File đã vượt giới hạn tải xuống của Google, đang chuyển bài..."
   },
   "song_card": {
     "unknown_title": "Không rõ tên",
@@ -107,6 +115,7 @@
     "add_to_liked": "Thêm vào Đã thích",
     "remove_from_liked": "Bỏ khỏi Đã thích",
     "add_to_playlist": "Thêm vào Danh sách phát",
+    "add_to_playlist_error": "Lỗi khi thêm vào playlist",
     "no_playlists": "Chưa có danh sách phát nào",
     "download_song": "Tải bài hát xuống",
     "navigate": "Định vị file",

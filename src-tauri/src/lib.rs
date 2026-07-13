@@ -51,6 +51,7 @@ async fn login_google_native() -> Result<Value, String> {
         let (auth_url, csrf_token) = client
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new("https://www.googleapis.com/auth/drive".to_string()))
+            .add_scope(Scope::new("https://www.googleapis.com/auth/drive.appdata".to_string()))
             .add_scope(Scope::new("email".to_string()))
             .add_scope(Scope::new("profile".to_string()))
             .add_extra_param("access_type", "offline")
@@ -172,10 +173,12 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 
     let access_token = token_result.access_token().secret().to_string();
     let new_refresh_token = token_result.refresh_token().map(|t| t.secret().to_string());
+    let expires_in = token_result.expires_in().map(|d| d.as_secs());
 
     Ok(serde_json::json!({
         "access_token": access_token,
-        "refresh_token": new_refresh_token
+        "refresh_token": new_refresh_token,
+        "expires_in": expires_in
     }))
 }
 
@@ -188,7 +191,7 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
     let ext_str = ext.unwrap_or_default();
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
 
-    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 300;
+    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 86400;
     let payload = format!("{}:{}:{}", file_id, ext_str, exp);
     let secret = crate::PROXY_SECRET.get().ok_or("Proxy not initialized")?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;

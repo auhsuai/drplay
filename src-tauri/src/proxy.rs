@@ -89,34 +89,109 @@ fn parse_multi_range(range_str: &str, total_size: u64) -> Vec<(u64, u64)> {
     ranges
 }
 
+/// Classified upstream failure. Distinguishing these lets the frontend react
+/// correctly instead of treating every 403 as a transient rate limit.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum DriveErr {
+    /// 429 / *rateLimitExceeded / dailyLimitExceeded — retry with backoff.
+    Rate,
+    /// 403 downloadQuotaExceeded — this file's download cap is exhausted.
+    DownloadQuota,
+    /// 403 insufficientFilePermissions / fileNotDownloadable — no access.
+    AccessDenied,
+    /// 404 notFound — file deleted or no longer visible.
+    NotFound,
+    /// 401 — OAuth token expired.
+    Auth,
+    /// 5xx / transport / malformed — retry a few times then give up.
+    Upstream,
+}
+
+/// Extract Drive's machine-readable `error.errors[0].reason`, lowercased.
+fn extract_drive_reason(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    v.get("error")?
+        .get("errors")?
+        .as_array()?
+        .first()?
+        .get("reason")?
+        .as_str()
+        .map(|s| s.to_ascii_lowercase())
+}
+
+/// Map an upstream HTTP status + JSON body to a `DriveErr`.
+/// The reason string is authoritative; status code is the fallback.
+fn classify_drive_error(status: u16, body: &str) -> DriveErr {
+    if let Some(reason) = extract_drive_reason(body) {
+        // Exact matches first so downloadQuotaExceeded is not swallowed by the
+        // generic "quotaexceeded" contains-check below.
+        match reason.as_str() {
+            "downloadquotaexceeded" => return DriveErr::DownloadQuota,
+            "insufficientfilepermissions"
+            | "filenotdownloadable"
+            | "appnotauthorizedtofile"
+            | "domainpolicy"
+            | "cannotdownloadfile" => return DriveErr::AccessDenied,
+            _ => {}
+        }
+        if reason.contains("notfound") {
+            return DriveErr::NotFound;
+        }
+        if reason.contains("ratelimitexceeded")
+            || reason.contains("dailylimitexceeded")
+            || reason.contains("quotaexceeded")
+        {
+            return DriveErr::Rate;
+        }
+    }
+    match status {
+        401 => DriveErr::Auth,
+        404 => DriveErr::NotFound,
+        // Unknown 403/429 without a reason: stay conservative and back off
+        // rather than skip a track that might just be throttled.
+        403 | 429 => DriveErr::Rate,
+        _ => DriveErr::Upstream,
+    }
+}
+
+/// Build the terminal HTTP response for a non-retryable `DriveErr`.
+fn drive_err_response(e: DriveErr) -> Response {
+    match e {
+        DriveErr::NotFound => (StatusCode::FORBIDDEN, [("X-Stream-Error-Type", "permanent")], "File not found").into_response(),
+        DriveErr::AccessDenied => (StatusCode::FORBIDDEN, [("X-Stream-Error-Type", "access-denied")], "Access denied").into_response(),
+        DriveErr::DownloadQuota => (StatusCode::FORBIDDEN, [("X-Stream-Error-Type", "download-quota")], "Download quota exceeded").into_response(),
+        DriveErr::Auth => (StatusCode::UNAUTHORIZED, [("X-Stream-Error-Type", "auth-expired")], "Auth expired").into_response(),
+        _ => (StatusCode::BAD_GATEWAY, "Upstream error").into_response(),
+    }
+}
+
 async fn fetch_range_from_drive(
     client: &Client,
     api_url: &str,
     token: &str,
     start: u64,
     end: u64,
-) -> Result<Vec<u8>, u16> {
+) -> Result<Vec<u8>, DriveErr> {
     let range = format!("bytes={}-{}", start, end);
     let resp = client.get(api_url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Range", &range)
         .send()
         .await
-          .map_err(|_| 502u16)?;
+          .map_err(|_| DriveErr::Upstream)?;
 
     let status = resp.status();
-    if status == 429 || status == 403 {
-        return Err(429);
-    }
     if !status.is_success() && status != 206 {
-        return Err(status.as_u16());
+        let code = status.as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(classify_drive_error(code, &body));
     }
     
     let expected_len = (end - start + 1) as usize;
-    let bytes = resp.bytes().await.map_err(|_| 502u16)?;
+    let bytes = resp.bytes().await.map_err(|_| DriveErr::Upstream)?;
     
     if bytes.len() != expected_len && end != u64::MAX {
-        return Err(502);
+        return Err(DriveErr::Upstream);
     }
     
     Ok(bytes.to_vec())
@@ -128,7 +203,7 @@ async fn forward_multipart_range(
     token: &str,
     ranges: &[(u64, u64)],
     total_size: u64,
-) -> Result<Response, u16> {
+) -> Result<Response, DriveErr> {
     let boundary = format!("drplay_{}", uuid::Uuid::new_v4());
     let mut body = Vec::new();
 
@@ -152,6 +227,37 @@ async fn forward_multipart_range(
         .unwrap())
 }
 
+/// Called when a Drive request fails with 401 (expired OAuth token). Signals the
+/// frontend to refresh the token, then waits (bounded) for `update_stream_token`
+/// to publish a new one and returns it. Returns None on timeout / no change so
+/// the caller can surface an explicit auth error instead of a generic 502.
+async fn recover_stream_token(old_token: &str) -> Option<String> {
+    // Register interest on the notify BEFORE emitting, otherwise a fast frontend
+    // refresh could call notify_waiters() before we start waiting -> lost wakeup.
+    let notify = crate::GLOBAL_TOKEN_NOTIFY.clone();
+    let notified = notify.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+
+    if let Some(app) = crate::APP_HANDLE.get() {
+        let _ = app.emit("token-expired", ());
+    }
+
+    tokio::select! {
+        _ = &mut notified => {}
+        _ = tokio::time::sleep(std::time::Duration::from_secs(8)) => {
+            return None;
+        }
+    }
+
+    let new_token = crate::GLOBAL_STREAM_TOKEN.lock().await.clone();
+    if new_token.is_empty() || new_token == old_token {
+        None
+    } else {
+        Some(new_token)
+    }
+}
+
 async fn handle_stream(
     State(state): State<AppState>,
     Query(query): Query<StreamQuery>,
@@ -170,7 +276,7 @@ async fn handle_stream(
     if let Some(expected_secret) = crate::PROXY_SECRET.get() {
         let now = now_epoch_secs();
         if now > query.exp {
-            return (StatusCode::FORBIDDEN, "URL expired").into_response();
+            return (StatusCode::FORBIDDEN, [("X-Stream-Error-Type", "url-expired")], "URL expired").into_response();
         }
 
         let ext_str = query.ext.clone().unwrap_or_default();
@@ -204,10 +310,15 @@ async fn handle_stream(
         return (StatusCode::SERVICE_UNAVAILABLE, [("X-Stream-Error-Type", "rate-limited")], "Rate limited — cooldown active").into_response();
     }
 
-    let final_token = crate::GLOBAL_STREAM_TOKEN.lock().await.clone();
+    let mut final_token = crate::GLOBAL_STREAM_TOKEN.lock().await.clone();
 
     if final_token.is_empty() {
-        return (StatusCode::UNAUTHORIZED, "No token").into_response();
+        // No token yet (e.g. play attempted before the frontend seeded it, or it
+        // was cleared). Ask the frontend to (re)publish a token before giving up.
+        match recover_stream_token(&final_token).await {
+            Some(t) => { final_token = t; }
+            None => return (StatusCode::UNAUTHORIZED, [("X-Stream-Error-Type", "auth-expired")], "No token").into_response(),
+        }
     }
 
     let api_url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media&acknowledgeAbuse=true", query.id);
@@ -222,10 +333,31 @@ async fn handle_stream(
         }
     };
 
-    let (total_size, content_type) = if total_size == 0 {
-        get_total_size(&state.client, &api_url, &final_token)
-            .await
-            .unwrap_or((10_000_000, "audio/mpeg".to_string()))
+    // For HEAD (the frontend's classification probe) always re-validate against
+    // Drive so a file deleted / access-revoked *after* its size was cached is
+    // still surfaced with the correct X-Stream-Error-Type header.
+    let (total_size, content_type) = if total_size == 0 || method == axum::http::Method::HEAD {
+        match get_total_size(&state.client, &api_url, &final_token).await {
+            Ok(v) => v,
+            Err(DriveErr::Auth) => {
+                // Expired token on the probe. Recover once before deciding.
+                match recover_stream_token(&final_token).await {
+                    Some(t) => {
+                        final_token = t;
+                        match get_total_size(&state.client, &api_url, &final_token).await {
+                            Ok(v) => v,
+                            Err(DriveErr::Rate) => return handle_rate_limit(now).await,
+                            Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota | DriveErr::Auth)) => return drive_err_response(e),
+                            Err(_) => (10_000_000, "audio/mpeg".to_string()),
+                        }
+                    }
+                    None => return drive_err_response(DriveErr::Auth),
+                }
+            }
+            Err(DriveErr::Rate) => return handle_rate_limit(now).await,
+            Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => return drive_err_response(e),
+            Err(_) => (10_000_000, "audio/mpeg".to_string()),
+        }
     } else {
         (total_size, content_type)
     };
@@ -250,18 +382,30 @@ async fn handle_stream(
     }
 
     if ranges.len() > 1 {
-        match forward_multipart_range(&state.client, &api_url, &final_token, &ranges, total_size).await {
-            Ok(r) => {
-                FAIL_COUNT.store(0, Ordering::Relaxed);
-                return r;
-            }
-            Err(429) => {
-                return handle_rate_limit(now).await;
-            }
-            Err(_) => {
-                return (StatusCode::BAD_GATEWAY, "Upstream error").into_response();
+        for attempt in 0..2 {
+            match forward_multipart_range(&state.client, &api_url, &final_token, &ranges, total_size).await {
+                Ok(r) => {
+                    FAIL_COUNT.store(0, Ordering::Relaxed);
+                    return r;
+                }
+                Err(DriveErr::Rate) => {
+                    return handle_rate_limit(now).await;
+                }
+                Err(DriveErr::Auth) if attempt == 0 => {
+                    match recover_stream_token(&final_token).await {
+                        Some(t) => { final_token = t; continue; }
+                        None => return drive_err_response(DriveErr::Auth),
+                    }
+                }
+                Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
+                    return drive_err_response(e);
+                }
+                Err(_) => {
+                    return (StatusCode::BAD_GATEWAY, "Upstream error").into_response();
+                }
             }
         }
+        return (StatusCode::BAD_GATEWAY, "Upstream error").into_response();
     }
 
     // Single-range or no-range path
@@ -361,11 +505,23 @@ async fn handle_stream(
                     FAIL_COUNT.store(0, Ordering::Relaxed);
                     break;
                 }
-                Err(429) => {
+                Err(DriveErr::Rate) => {
                     if attempt == max_retries - 1 {
                         return handle_rate_limit(now).await;
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                }
+                Err(DriveErr::Auth) => {
+                    // Expired token mid-stream. Signal the frontend, wait for a
+                    // fresh token, then retry with it (no fixed backoff needed).
+                    match recover_stream_token(&final_token).await {
+                        Some(t) => { final_token = t; continue; }
+                        None => return drive_err_response(DriveErr::Auth),
+                    }
+                }
+                Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
+                    // Non-retryable: file gone / no access / per-file quota spent.
+                    return drive_err_response(e);
                 }
                 Err(_) => {
                     if attempt == max_retries - 1 {
@@ -374,6 +530,11 @@ async fn handle_stream(
                     tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
                 }
             }
+        }
+
+        if chunk.is_empty() {
+            // Exhausted retries (e.g. repeated token expiry) without any data.
+            return (StatusCode::BAD_GATEWAY, "Gateway Error").into_response();
         }
 
         track_cache.window_start = start;
@@ -444,20 +605,36 @@ async fn handle_stream(
     }
 }
 
-async fn get_total_size(client: &Client, api_url: &str, token: &str) -> Option<(u64, String)> {
-    let resp = client.head(api_url)
+/// Probe a file's total size + content type. Uses a 1-byte ranged GET (not HEAD)
+/// so that on failure we can read Drive's JSON error body and classify the
+/// reason (deleted vs. access revoked vs. quota vs. throttled).
+async fn get_total_size(client: &Client, api_url: &str, token: &str) -> Result<(u64, String), DriveErr> {
+    let resp = client.get(api_url)
         .header("Authorization", format!("Bearer {}", token))
+        .header("Range", "bytes=0-0")
         .send()
         .await
-        .ok()?;
-    let len = resp.headers().get(reqwest::header::CONTENT_LENGTH)?
-        .to_str().ok()?
-        .parse::<u64>().ok()?;
+        .map_err(|_| DriveErr::Upstream)?;
+    let status = resp.status();
+    if !status.is_success() && status != 206 {
+        let code = status.as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(classify_drive_error(code, &body));
+    }
     let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("audio/mpeg")
         .to_string();
-    Some((len, ctype))
+    // A 206 response carries the true total in Content-Range: "bytes 0-0/<TOTAL>".
+    let total = resp.headers().get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.rsplit('/').next())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .or_else(|| resp.headers().get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok()))
+        .ok_or(DriveErr::Upstream)?;
+    Ok((total, ctype))
 }
 
 async fn handle_rate_limit(now: u64) -> Response {

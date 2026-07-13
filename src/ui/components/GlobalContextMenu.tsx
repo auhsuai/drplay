@@ -11,6 +11,7 @@ import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen"
 import { useTranslation } from "react-i18next";
 import { getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
+import { showErrorToast } from "../../utils/simpleToast";
 
 const sanitizeFilename = (name: string): string => {
   let s = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_');
@@ -65,7 +66,7 @@ export function GlobalContextMenu() {
 
   useEffect(() => {
     if (data) {
-      getPlaylists().then(setPlaylists).catch(console.error);
+      getPlaylists().then(setPlaylists).catch(err => console.error('[GlobalContextMenu] Failed to load playlists', err));
     }
   }, [data]);
 
@@ -76,8 +77,13 @@ export function GlobalContextMenu() {
   const handleAddToPlaylist = async (e: React.MouseEvent, playlistId: string) => {
     e.stopPropagation();
     if (track) {
-      await addTrackToPlaylist(playlistId, track);
-      setData(null);
+      try {
+        await addTrackToPlaylist(playlistId, track);
+        setData(null);
+      } catch (error) {
+        console.error("[GlobalContextMenu] add-to-playlist: Failed to add track to playlist", error);
+        showErrorToast(t('menu.add_to_playlist_error') || "Failed to add to playlist");
+      }
     }
   };
 
@@ -102,8 +108,9 @@ export function GlobalContextMenu() {
       setTimeout(() => setDownloadingState('idle'), 3000);
       setData(null);
     } catch (error) {
-      console.error("Download error:", error);
+      console.error("[GlobalContextMenu] download: Failed to download file", error);
       setDownloadingState('error');
+      showErrorToast(t('common.download_error') || "Tải xuống thất bại");
       setTimeout(() => setDownloadingState('idle'), 3000);
     }
   };
@@ -119,7 +126,8 @@ export function GlobalContextMenu() {
       if (onRemoveItem) onRemoveItem(driveItem.id);
       setData(null);
     } catch (error) {
-      console.error("Delete failed", error);
+      console.error("[GlobalContextMenu] delete: Failed to delete item", error);
+      showErrorToast(t('drive.delete_error') || "Failed to delete item");
     } finally {
       setIsDeleting(false);
     }
@@ -134,7 +142,8 @@ export function GlobalContextMenu() {
       if (onRemoveItem) onRemoveItem(driveItem.id);
       setData(null);
     } catch (error) {
-      console.error("Move failed", error);
+      console.error("[GlobalContextMenu] move: Failed to move item", error);
+      showErrorToast(t('drive.move_error') || "Failed to move item");
     }
   };
 

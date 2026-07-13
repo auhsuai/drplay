@@ -1,22 +1,39 @@
+const IMAGE_LOAD_TIMEOUT_MS = 10000;
+
 export const getAverageColor = (imgUrl: string): Promise<string> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = "Anonymous";
-    img.onload = () => {
+
+    // An <img> load has no built-in timeout: a stalled URL (blob/network hang)
+    // would leave this Promise pending forever and hang the caller. Settle once
+    // via a guarded timer and detach handlers to avoid leaks.
+    let settled = false;
+    const timer = setTimeout(() => finish(() => reject(new Error("Image load timeout"))), IMAGE_LOAD_TIMEOUT_MS);
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      action();
+    };
+
+    img.onload = () => finish(() => {
       const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return reject("No canvas context");
-      
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return reject(new Error("No canvas context"));
+
       canvas.width = img.width;
       canvas.height = img.height;
       ctx.drawImage(img, 0, 0);
-      
+
       try {
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
         let r = 0, g = 0, b = 0;
         let count = 0;
-        
+
         // Sample every 16th pixel to be fast and get a good average
         for (let i = 0; i < data.length; i += 64) {
           r += data[i];
@@ -24,24 +41,26 @@ export const getAverageColor = (imgUrl: string): Promise<string> => {
           b += data[i + 2];
           count++;
         }
-        
+
+        if (count === 0) return resolve("rgb(0, 0, 0)"); // avoid NaN from divide-by-zero
+
         r = Math.floor(r / count);
         g = Math.floor(g / count);
         b = Math.floor(b / count);
-        
+
         // Darken the color slightly so text remains readable
         // A simple way is to blend it with black
         const darkenFactor = 0.6;
         r = Math.floor(r * darkenFactor);
         g = Math.floor(g * darkenFactor);
         b = Math.floor(b * darkenFactor);
-        
+
         resolve(`rgb(${r}, ${g}, ${b})`);
       } catch (e) {
         reject(e);
       }
-    };
-    img.onerror = reject;
+    });
+    img.onerror = () => finish(() => reject(new Error("Image load error")));
     img.src = imgUrl;
   });
 };
@@ -50,11 +69,23 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = "Anonymous";
-    img.onload = () => {
+
+    let settled = false;
+    const timer = setTimeout(() => finish(() => reject(new Error("Image load timeout"))), IMAGE_LOAD_TIMEOUT_MS);
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      action();
+    };
+
+    img.onload = () => finish(() => {
       const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return reject("No canvas context");
-      
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return reject(new Error("No canvas context"));
+
       const size = 64;
       canvas.width = size;
       canvas.height = size;
@@ -90,8 +121,8 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
       } catch (e) {
         reject(e);
       }
-    };
-    img.onerror = reject;
+    });
+    img.onerror = () => finish(() => reject(new Error("Image load error")));
     img.src = imgUrl;
   });
 };

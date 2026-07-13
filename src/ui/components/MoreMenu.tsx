@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { getValidToken } from "../../utils/apiClient";
 import { getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
+import { showErrorToast } from "../../utils/simpleToast";
 
 interface MoreMenuProps {
   track?: Track;
@@ -82,7 +83,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
 
   useEffect(() => {
     if (isMenuOpen) {
-      getPlaylists().then(setPlaylists).catch(console.error);
+      getPlaylists().then(setPlaylists).catch(err => console.error('[MoreMenu] Failed to load playlists', err));
     } else {
       setShowPlaylistsSubmenu(false);
     }
@@ -129,9 +130,14 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
   const handleAddToPlaylist = async (e: React.MouseEvent, playlistId: string) => {
     e.stopPropagation();
     if (track) {
-      await addTrackToPlaylist(playlistId, track);
-      setIsOpen(false);
-      onClose?.();
+      try {
+        await addTrackToPlaylist(playlistId, track);
+        setIsOpen(false);
+        onClose?.();
+      } catch (err) {
+        console.error("[MoreMenu] add-to-playlist: Failed to add track to playlist", err);
+        showErrorToast(t('menu.add_to_playlist_error') || "Failed to add to playlist");
+      }
     }
   };
 
@@ -151,8 +157,8 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       if (onRemoveItem) onRemoveItem(driveItem.id);
       else if (onRefresh) onRefresh();
     } catch (e) {
-      console.error("Failed to delete", e);
-      alert(t('drive.delete_error') || "Failed to delete item");
+      console.error("[MoreMenu] delete: Failed to delete item", e);
+      showErrorToast(t('drive.delete_error') || "Failed to delete item");
     } finally {
       setIsDeleting(false);
     }
@@ -180,8 +186,8 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       await db.files.update(itemId, { parentId: newParentId });
       if (onRemoveItem) onRemoveItem(itemId);
     } catch (e) {
-      console.error("Failed to move", e);
-      alert(t('drive.move_error') || "Failed to move item");
+      console.error("[MoreMenu] move: Failed to move item", e);
+      showErrorToast(t('drive.move_error') || "Failed to move item");
       if (onRefresh) onRefresh();
     }
   };
@@ -245,7 +251,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
         setDownloadMessage(t('menu.download_complete', 'Tải xuống hoàn tất!'));
       }
     } catch (err) {
-      console.error('Download failed', err);
+      console.error('[MoreMenu] download: Failed to download file', err);
       setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
     } finally {
       setIsDownloadingFile(false);

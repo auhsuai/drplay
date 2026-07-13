@@ -38,8 +38,10 @@ export async function prefetchVisibleTracks(trackIds: string[]) {
   await runWithConcurrencyLimit(uncached, 6, async (id) => {
     try {
       const url = await invoke<string>("get_stream_url", { fileId: id });
-      evictIfNeeded();
-      prefetchedStreams.set(id, url);
+      if (typeof url === "string" && url.length > 0) {
+        evictIfNeeded();
+        prefetchedStreams.set(id, url);
+      }
     } catch {
       // Silently fail; will fetch on demand
     }

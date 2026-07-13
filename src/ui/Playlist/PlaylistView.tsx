@@ -4,6 +4,7 @@ import { Music, Play, X, Trash2, Camera } from "lucide-react";
 import { getPlaylistById, removeTrackFromPlaylist, deletePlaylist, updatePlaylist, Playlist } from "../../utils/playlists";
 import { ImageCropperModal } from "../components/ImageCropperModal";
 import { useTranslation } from "react-i18next";
+import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 
 
@@ -26,12 +27,12 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
       const data = await getPlaylistById(playlistId);
       setPlaylist(data);
     } catch (e) {
-      console.error("Failed to load playlist", e);
+      console.error("[PlaylistView] Failed to load playlist", e);
     }
   };
 
   useEffect(() => {
-    loadPlaylist().catch(console.error);
+    loadPlaylist().catch(err => console.error("[PlaylistView] Failed to load playlist", err));
     window.addEventListener('playlists-updated', loadPlaylist);
     window.addEventListener('user-changed', loadPlaylist);
     return () => {
@@ -50,13 +51,23 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
 
   const handleRemove = async (e: React.MouseEvent, trackId: string) => {
     e.stopPropagation();
-    await removeTrackFromPlaylist(playlistId, trackId);
+    try {
+      await removeTrackFromPlaylist(playlistId, trackId);
+    } catch (err) {
+      console.error("[PlaylistView] remove: Failed to remove track from playlist", err);
+      showErrorToast(t('playlist.remove_error') || "Failed to remove track");
+    }
   };
 
   const handleDelete = async () => {
     if (window.confirm(t("confirm_delete_playlist"))) {
-      await deletePlaylist(playlistId);
-      onDelete(); // Triggers tab change in App
+      try {
+        await deletePlaylist(playlistId);
+        onDelete(); // Triggers tab change in App
+      } catch (err) {
+        console.error("[PlaylistView] delete: Failed to delete playlist", err);
+        showErrorToast(t('playlist.delete_error') || "Failed to delete playlist");
+      }
     }
   };
 
@@ -78,9 +89,14 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
   const handleSaveCover = async (base64Img: string) => {
     setIsCropperOpen(false);
     setSelectedImage(null);
-    const updated = await updatePlaylist(playlistId, { coverImage: base64Img });
-    if (updated) {
-      setPlaylist(updated);
+    try {
+      const updated = await updatePlaylist(playlistId, { coverImage: base64Img });
+      if (updated) {
+        setPlaylist(updated);
+      }
+    } catch (err) {
+      console.error("[PlaylistView] save-cover: Failed to update playlist cover", err);
+      showErrorToast(t('playlist.cover_save_error') || "Failed to save cover image");
     }
   };
 

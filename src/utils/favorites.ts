@@ -1,9 +1,19 @@
 import { get } from 'idb-keyval';
 import { Track } from '../App';
 import { db } from '../db/db';
+import { showErrorToast } from './simpleToast';
 
+const FAV_MODULE = "favorites";
 const BASE_FAVORITES_KEY = 'drplay_favorites';
 let migrationDone = false;
+
+// Classify a favorites persistence error for observability. Returns name +
+// message only — never the error object/stack, which can leak track data.
+function classifyFavoriteError(err: unknown): string {
+  const name = err instanceof Error ? err.name : typeof err;
+  const message = err instanceof Error ? err.message : String(err);
+  return `${name}: ${message}`;
+}
 
 function getCurrentUserEmail() {
   return localStorage.getItem('drplay_current_user_email') || 'default';
@@ -30,12 +40,12 @@ async function migrateOldFavorites() {
           createdAt: Date.now() - index // preserve order roughly
         }));
         await db.favorites.bulkPut(items);
-        console.log(`Migrated ${items.length} favorites to Dexie.`);
+        console.warn(`[favorites] Migrated ${items.length} favorites to Dexie.`);
       }
       localStorage.setItem('drplay_favorites_migrated', 'true');
     }
   } catch (e) {
-    console.error("Failed to migrate favorites", e);
+    console.error(`[${FAV_MODULE}] migrate-failed`, classifyFavoriteError(e));
   } finally {
     migrationDone = true;
   }
@@ -49,7 +59,7 @@ export async function getFavorites(): Promise<Track[]> {
     // Sort descending by createdAt to simulate unshift
     return favs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   } catch (e) {
-    console.error("Failed to get favorites", e);
+    console.error(`[${FAV_MODULE}] get-failed`, classifyFavoriteError(e));
     return [];
   }
 }
@@ -68,7 +78,8 @@ export async function addFavorite(track: Track): Promise<void> {
       window.dispatchEvent(new CustomEvent('favorites-updated'));
     }
   } catch (e) {
-    console.error("Failed to add favorite", e);
+    console.error(`[${FAV_MODULE}] add-failed`, classifyFavoriteError(e));
+    showErrorToast('Không thể thêm vào yêu thích, vui lòng thử lại.');
   }
 }
 
@@ -78,7 +89,8 @@ export async function removeFavorite(trackId: string): Promise<void> {
     await db.favorites.delete(trackId);
     window.dispatchEvent(new CustomEvent('favorites-updated'));
   } catch (e) {
-    console.error("Failed to remove favorite", e);
+    console.error(`[${FAV_MODULE}] remove-failed`, classifyFavoriteError(e));
+    showErrorToast('Không thể xóa khỏi yêu thích, vui lòng thử lại.');
   }
 }
 
