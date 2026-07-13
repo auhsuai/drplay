@@ -258,6 +258,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         resumeSeekRef.current.audio.removeEventListener('loadedmetadata', resumeSeekRef.current.handler);
         resumeSeekRef.current = null;
       }
+      if (resumeHandlerRef.current) {
+        resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
+        resumeHandlerRef.current = null;
+      }
       errorPositionRef.current = null;
       setRealTitle(currentTrack.title);
       setRealArtist(currentTrack.artist || "");
