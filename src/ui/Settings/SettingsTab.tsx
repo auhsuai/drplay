@@ -2,6 +2,7 @@ import { FolderOpen, Globe, Moon, MonitorDown, Download, HardDrive } from "lucid
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
 import { ThemeDropdown } from "./components/ThemeDropdown";
+import { CreditsSection } from "./components/CreditsSection";
 
 import { ThemeType } from "../../hooks/useTheme";
 import { clear as clearIdb } from "idb-keyval";
@@ -254,6 +255,8 @@ export function SettingsTab({
               </button>
             </div>
           </div>
+
+          <CreditsSection />
         </div>
       </div>
     </main>
