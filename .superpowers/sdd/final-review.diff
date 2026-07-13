@@ -1,0 +1,199 @@
+﻿diff --git a/src/ui/PlayerBar/PlayerBar.tsx b/src/ui/PlayerBar/PlayerBar.tsx
+index cc4d807..c1bbd7f 100644
+--- a/src/ui/PlayerBar/PlayerBar.tsx
++++ b/src/ui/PlayerBar/PlayerBar.tsx
+@@ -90,6 +90,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+   useEffect(() => { crossfadeDurationRef.current = crossfadeDuration; }, [crossfadeDuration]);
+ 
+   const isTransitioningRef = useRef(false);
++  const isAutoTransitioningRef = useRef(false);
++  const consecutiveAutoSkipRef = useRef(0);
++  const MAX_CONSECUTIVE_AUTO_SKIP = 3;
+   const isProgrammaticActionRef = useRef(false);
+ 
+   const MAX_RETRY = 5;
+@@ -191,11 +194,31 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+     return () => clearRetryTimeout();
+   }, [currentTrack?.id]);
+ 
+-  const handleNextClick = () => {
+-    if (isTransitioningRef.current) return;
+-    isTransitioningRef.current = true;
++  const handleNextClick = (isAutoSkip = false) => {
++    if (isAutoSkip) {
++      if (isAutoTransitioningRef.current) return;
++      isAutoTransitioningRef.current = true;
++      consecutiveAutoSkipRef.current += 1;
++      if (consecutiveAutoSkipRef.current >= MAX_CONSECUTIVE_AUTO_SKIP) {
++        consecutiveAutoSkipRef.current = 0;
++        isAutoTransitioningRef.current = false;
++        setErrorInfo({ type: 'network_interrupted', text: t('player.playlist_error', 'Nhiß╗üu b├ái li├¬n tiß║┐p bß╗ï lß╗ùi, ─æ├ú dß╗½ng ph├ít') });
++        scheduleAutoPause();
++        return;
++      }
++    } else {
++      consecutiveAutoSkipRef.current = 0;
++      if (isTransitioningRef.current) return;
++      isTransitioningRef.current = true;
++    }
+     onNextTrack();
+-    setTimeout(() => { isTransitioningRef.current = false; }, 200);
++    setTimeout(() => {
++      if (isAutoSkip) {
++        isAutoTransitioningRef.current = false;
++      } else {
++        isTransitioningRef.current = false;
++      }
++    }, 200);
+   };
+ 
+   const handlePrevClick = () => {
+@@ -258,6 +281,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+         resumeSeekRef.current.audio.removeEventListener('loadedmetadata', resumeSeekRef.current.handler);
+         resumeSeekRef.current = null;
+       }
++      if (resumeHandlerRef.current) {
++        resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
++        resumeHandlerRef.current = null;
++      }
+       errorPositionRef.current = null;
+       setRealTitle(currentTrack.title);
+       setRealArtist(currentTrack.artist || "");
+@@ -616,6 +643,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+ 
+   useEffect(() => {
+     let cancelled = false;
++    if (rateLimitUntilRef.current && Date.now() < rateLimitUntilRef.current) {
++      if (!errorInfo || errorInfo.type !== 'rate_limited') {
++        setErrorInfo({ type: 'rate_limited', text: t('player.rate_limited', 'Google Drive tß║ím thß╗¥i qu├í tß║úi, ─æang thß╗¡ lß║íi...') });
++      }
++      return;
++    }
+     if (isPlaying) {
+       clearAutoPauseTimeout();
+       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+@@ -634,7 +667,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+               active.currentTime = hadErrorPos;
+             }
+             safePlay(active).then(() => { retryCountRef.current = 0; }).catch(e => {
+-              if (e.name !== 'AbortError') console.error("Playback failed", e);
++              if (e.name === 'NotAllowedError') {
++                setPendingResumeTime(active.currentTime);
++                setPlaybackStatus('error-needs-manual-resume');
++              } else if (e.name !== 'AbortError') {
++                console.error("Playback failed", e);
++              }
+             });
+           };
+           active.addEventListener('canplay', onCanPlay);
+@@ -677,6 +715,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+         }
+       } catch (err) {
+         console.error('[Player] Refresh token failed', err);
++        setErrorInfo({ type: 'network_interrupted', text: t('player.auth_expired', 'Phi├¬n ─æ─âng nhß║¡p hß║┐t hß║ín, vui l├▓ng ─æ─âng nhß║¡p lß║íi') });
++        scheduleAutoPause();
+       }
+     }).then(fn => {
+       if (streamCancelled) { fn(); return; }
+@@ -716,6 +756,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+   }, []);
+ 
+   const handleEnded = () => {
++    if (playbackStatus === 'error-needs-manual-resume') return;
+     if (playMode === 'repeat-one') {
+       const active = getActiveAudio();
+       if (active) {
+@@ -788,7 +829,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+ 
+       if (errorType === 'permanent') {
+         setErrorInfo({ type: 'file_deleted', text: t('player.file_deleted', 'File kh├┤ng c├▓n tß╗ôn tß║íi tr├¬n Drive, ─æang chuyß╗ân b├ái...') });
+-        handleNextClick();
++        handleNextClick(true);
+         return;
+       }
+ 
+@@ -807,7 +848,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+ 
+       if (isRealFormatError && (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || error.code === MediaError.MEDIA_ERR_DECODE)) {
+         setErrorInfo({ type: 'format_error', text: t('player.format_error', 'File lß╗ùi ─æß╗ïnh dß║íng, ─æang chuyß╗ân b├ái kß║┐ tiß║┐p...') });
+-        handleNextClick();
++        handleNextClick(true);
+         return;
+       }
+ 
+@@ -864,6 +905,15 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+ 
+         isProgrammaticActionRef.current = true;
+         toEl.src = currentTrack.streamUrl;
++        let toElFailed = false;
++        const onToElError = () => {
++          if (toElFailed) return;
++          toElFailed = true;
++          toEl.removeEventListener('error', onToElError);
++          console.warn('[Player] Crossfade target error, keeping current track');
++          setTimeout(() => { isProgrammaticActionRef.current = false; }, 50);
++        };
++        toEl.addEventListener('error', onToElError);
+         toEl.load();
+         setTimeout(() => { isProgrammaticActionRef.current = false; }, 50);
+ 
+@@ -872,12 +922,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+         await new Promise<void>(resolve => {
+           const handler = () => {
+             toEl.removeEventListener('canplay', handler);
++            toEl.removeEventListener('error', onToElError);
+             resolve();
+           };
+           toEl.addEventListener('canplay', handler);
++          toEl.addEventListener('error', () => {
++            toEl.removeEventListener('canplay', handler);
++            onToElError();
++            resolve();
++          });
+         });
+ 
+-        if (cancelled) return;
++        if (cancelled || toElFailed) return;
+ 
+         const engine = crossfadeEngineRef.current;
+         if (engine) {
+@@ -1040,6 +1096,19 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+     return () => window.removeEventListener('online', handleOnline);
+   }, [errorInfo, currentTrack]);
+ 
++  // Auto-pause on network offline
++  useEffect(() => {
++    const handleOffline = () => {
++      if (isPlayingRef.current && currentTrackRef.current) {
++        errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
++        setErrorInfo({ type: 'network_disconnected', text: t('player.network_disconnected', 'Mß║íng kh├┤ng ß╗òn ─æß╗ïnh hoß║╖c mß║Ñt kß║┐t nß╗æi, vui l├▓ng kiß╗âm tra lß║íi') });
++        scheduleAutoPause();
++      }
++    };
++    window.addEventListener('offline', handleOffline);
++    return () => window.removeEventListener('offline', handleOffline);
++  }, []);
++
+   // Sync Audio Focus (OS-level pause/play)
+   useEffect(() => {
+     const audio = audioRef.current;
+@@ -1101,6 +1170,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+     const audio = getActiveAudio();
+     retryCountRef.current = 0;
+     clearRetryTimeout();
++    clearAutoPauseTimeout();
++    if (errorInfoRef.current) {
++      setErrorInfo(null);
++    }
+     if (audio) {
+       if (pendingBufferRestoreTimeRef.current !== null) {
+         audio.currentTime = pendingBufferRestoreTimeRef.current;
+@@ -1386,7 +1459,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack,
+           </button>
+ 
+           <button 
+-            onClick={handleNextClick}
++            onClick={() => handleNextClick()}
+             className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+             disabled={!currentTrack}
+           >

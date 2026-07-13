@@ -125,7 +125,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   };
 
   const [toastSlideIn, setToastSlideIn] = useState(false);
-  const toastableTypes = ['network_interrupted', 'network_disconnected', 'rate_limited', 'drive_quota_exceeded'];
+  const toastTypes = ['rate_limited', 'drive_quota_exceeded'];
+  const bannerTypes = ['network_disconnected', 'network_interrupted', 'auth_expired'];
 
   const clearRetryTimeout = () => {
     if (retryTimeoutRef.current) {
@@ -155,7 +156,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const toastDismissRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    if (errorInfo && toastableTypes.includes(errorInfo.type)) {
+    if (errorInfo && toastTypes.includes(errorInfo.type)) {
       setTimeout(() => setToastSlideIn(true), 10);
       toastDismissRef.current = dismissToast;
 
@@ -798,12 +799,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       return;
     }
 
-    // MEDIA_ERR_NETWORK → toast + auto-pause immediately, skip HEAD
     if (error.code === MediaError.MEDIA_ERR_NETWORK) {
       if (errorInfoRef.current?.type !== 'network_interrupted') {
         setErrorInfo({ type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
       }
       scheduleAutoPause();
+      return;
     } else {
       // Other errors → HEAD request to classify
       let isRealFormatError = false;
@@ -856,6 +857,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         setErrorInfo({ type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
       }
       scheduleAutoPause();
+      return;
     }
 
     if (retryCountRef.current >= MAX_RETRY) {
@@ -1069,26 +1071,27 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     resumeHandlerRef.current = { audio, handler: resumeHandler };
   }
 
-  // Auto-recovery when network reconnects
   useEffect(() => {
     const handleOnline = async () => {
-      if (errorInfo?.type === 'network_disconnected' || errorInfo?.type === 'network_interrupted') {
-        setErrorInfo(null);
-        clearAutoPauseTimeout();
-        const audio = getActiveAudio();
-        const pos = errorPositionRef.current;
-        if (audio && currentTrack?.streamUrl) {
-          const doPlay = () => {
-            audio.removeEventListener('loadedmetadata', doPlay);
-            if (pos !== null) {
-              audio.currentTime = pos;
-              errorPositionRef.current = null;
-            }
-            safePlay(audio).catch(() => {});
-          };
-          audio.addEventListener('loadedmetadata', doPlay);
-          audio.load();
-        }
+      if (errorInfo?.type !== 'network_disconnected' && errorInfo?.type !== 'network_interrupted') return;
+      if (!isPlayingRef.current) return;
+      clearRetryTimeout();
+      retryCountRef.current = 0;
+      clearAutoPauseTimeout();
+      setErrorInfo(null);
+      const audio = getActiveAudio();
+      const pos = errorPositionRef.current;
+      if (audio && currentTrack?.streamUrl) {
+        const doPlay = () => {
+          audio.removeEventListener('loadedmetadata', doPlay);
+          if (pos !== null && pos > 0) {
+            audio.currentTime = pos;
+            errorPositionRef.current = null;
+          }
+          safePlay(audio).catch(() => {});
+        };
+        audio.addEventListener('loadedmetadata', doPlay);
+        audio.load();
       }
     };
     
@@ -1451,7 +1454,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           >
             {isDownloading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
-            ) : isPlaying && !(errorInfo && toastableTypes.includes(errorInfo.type)) ? (
+            ) : isPlaying && !(errorInfo && bannerTypes.includes(errorInfo.type)) ? (
               <Pause className="w-5 h-5" />
             ) : (
               <Play className="w-5 h-5 ml-0.5" />
@@ -1552,7 +1555,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       />
 
       {/* Network Error Toast Portal */}
-      {errorInfo && toastableTypes.includes(errorInfo.type) && createPortal(
+      {errorInfo && (toastTypes.includes(errorInfo.type) || bannerTypes.includes(errorInfo.type)) && createPortal(
         <div className={`absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 cursor-pointer select-none transition-transform duration-300 ease-out ${toastSlideIn ? 'translate-x-0' : '-translate-x-full pointer-events-none'}`} onClick={dismissToast}>
           <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
             <ErrorIcon type={errorInfo.type} />
