@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { CrossfadeEngine } from "../../utils/crossfade";
 import { createPortal } from "react-dom";
-import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, WifiOff, CloudOff, FileWarning } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, RefreshCw, WifiOff, CloudOff, FileWarning } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Track } from "../../App";
 import { getTrackMetadata, updateTrackDuration } from '../../utils/metadata';
@@ -1190,6 +1190,26 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     }
   };
 
+  const handleRetry = useCallback(async () => {
+    const active = getActiveAudio();
+    if (!active || !currentTrack?.streamUrl) return;
+    clearRetryTimeout();
+    retryCountRef.current = 0;
+    clearAutoPauseTimeout();
+    const pos = errorPositionRef.current;
+    setErrorInfo(null);
+    const doPlay = () => {
+      active.removeEventListener('loadedmetadata', doPlay);
+      if (pos !== null && pos > 0) {
+        active.currentTime = pos;
+        errorPositionRef.current = null;
+      }
+      safePlay(active).catch(() => {});
+    };
+    active.addEventListener('loadedmetadata', doPlay);
+    active.load();
+  }, [currentTrack]);
+
   // Verify seek accuracy after browser finishes seeking
   useEffect(() => {
     const audio = audioRef.current;
@@ -1448,13 +1468,15 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           </button>
           
           <button 
-            onClick={onTogglePlay}
+            onClick={errorInfo && bannerTypes.includes(errorInfo.type) ? handleRetry : onTogglePlay}
             className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
             disabled={!currentTrack || isDownloading}
           >
             {isDownloading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
-            ) : isPlaying && !(errorInfo && bannerTypes.includes(errorInfo.type)) ? (
+            ) : errorInfo && bannerTypes.includes(errorInfo.type) ? (
+              <RefreshCw className="w-5 h-5" />
+            ) : isPlaying ? (
               <Pause className="w-5 h-5" />
             ) : (
               <Play className="w-5 h-5 ml-0.5" />
