@@ -638,7 +638,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
               active.currentTime = hadErrorPos;
             }
             safePlay(active).then(() => { retryCountRef.current = 0; }).catch(e => {
-              if (e.name !== 'AbortError') console.error("Playback failed", e);
+              if (e.name === 'NotAllowedError') {
+                setPendingResumeTime(active.currentTime);
+                setPlaybackStatus('error-needs-manual-resume');
+              } else if (e.name !== 'AbortError') {
+                console.error("Playback failed", e);
+              }
             });
           };
           active.addEventListener('canplay', onCanPlay);
