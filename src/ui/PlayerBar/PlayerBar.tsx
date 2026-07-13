@@ -715,6 +715,8 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         }
       } catch (err) {
         console.error('[Player] Refresh token failed', err);
+        setErrorInfo({ type: 'network_interrupted', text: t('player.auth_expired', 'Phiên đăng nhập hết hạn, vui lòng đăng nhập lại') });
+        scheduleAutoPause();
       }
     }).then(fn => {
       if (streamCancelled) { fn(); return; }
