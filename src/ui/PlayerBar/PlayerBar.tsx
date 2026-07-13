@@ -1094,6 +1094,19 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     return () => window.removeEventListener('online', handleOnline);
   }, [errorInfo, currentTrack]);
 
+  // Auto-pause on network offline
+  useEffect(() => {
+    const handleOffline = () => {
+      if (isPlayingRef.current && currentTrackRef.current) {
+        errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
+        setErrorInfo({ type: 'network_disconnected', text: t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
+        scheduleAutoPause();
+      }
+    };
+    window.addEventListener('offline', handleOffline);
+    return () => window.removeEventListener('offline', handleOffline);
+  }, []);
+
   // Sync Audio Focus (OS-level pause/play)
   useEffect(() => {
     const audio = audioRef.current;
