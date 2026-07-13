@@ -95,7 +95,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const MAX_CONSECUTIVE_AUTO_SKIP = 3;
   const isProgrammaticActionRef = useRef(false);
 
-  const MAX_RETRY = 5;
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoPauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -643,7 +642,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, [volume, isMuted, currentTrack]);
 
   useEffect(() => {
-    let cancelled = false;
     if (rateLimitUntilRef.current && Date.now() < rateLimitUntilRef.current) {
       if (!errorInfo || errorInfo.type !== 'rate_limited') {
         setErrorInfo({ type: 'rate_limited', text: t('player.rate_limited', 'Google Drive tạm thời quá tải, đang thử lại...') });
@@ -654,41 +652,16 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       clearAutoPauseTimeout();
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       const active = getActiveAudio();
-      if (active) {
-        if (active.error) {
-          clearRetryTimeout();
-          retryCountRef.current = 0;
-          const hadErrorPos = errorPositionRef.current;
-          setErrorInfo(null);
-          active.load();
-          const onCanPlay = () => {
-            if (cancelled) return;
-            active.removeEventListener('canplay', onCanPlay);
-            if (hadErrorPos !== null && hadErrorPos > 0) {
-              active.currentTime = hadErrorPos;
-            }
-            safePlay(active).then(() => { retryCountRef.current = 0; }).catch(e => {
-              if (e.name === 'NotAllowedError') {
-                setPendingResumeTime(active.currentTime);
-                setPlaybackStatus('error-needs-manual-resume');
-              } else if (e.name !== 'AbortError') {
-                console.error("Playback failed", e);
-              }
-            });
-          };
-          active.addEventListener('canplay', onCanPlay);
-        } else {
-          safePlay(active).then(() => { retryCountRef.current = 0; }).catch(e => {
-            if (e.name !== 'AbortError') console.error("Playback failed", e);
-          });
-        }
+      if (active && !active.error) {
+        safePlay(active).then(() => { retryCountRef.current = 0; }).catch(e => {
+          if (e.name !== 'AbortError') console.error("Playback failed", e);
+        });
       }
     } else {
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
       const active = getActiveAudio();
       if (active) safePause(active);
     }
-    return () => { cancelled = true; };
   }, [isPlaying]);
 
 
@@ -857,32 +830,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       return;
     }
 
-    if (retryCountRef.current >= MAX_RETRY) {
-      return;
-    }
-
-    const backoffMs = Math.min(1500 * Math.pow(2, retryCountRef.current), 15000);
-    retryCountRef.current += 1;
-
-    clearRetryTimeout();
-    retryTimeoutRef.current = setTimeout(() => {
-      const retryPos = errorPositionRef.current;
-      const handleMetadataReady = async () => {
-        audio.removeEventListener('loadedmetadata', handleMetadataReady);
-        if (retryPos !== null) audio.currentTime = retryPos;
-        
-        try {
-          await safePlay(audio);
-        } catch (err: any) {
-          if (err.name === 'NotAllowedError') {
-            console.warn('[Player] Autoplay blocked');
-          }
-        }
-      };
-      
-      audio.addEventListener('loadedmetadata', handleMetadataReady);
-      audio.load();
-    }, backoffMs);
   };
 
   useEffect(() => {
