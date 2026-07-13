@@ -731,6 +731,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, []);
 
   const handleEnded = () => {
+    if (playbackStatus === 'error-needs-manual-resume') return;
     if (playMode === 'repeat-one') {
       const active = getActiveAudio();
       if (active) {
