@@ -620,6 +620,12 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
   useEffect(() => {
     let cancelled = false;
+    if (rateLimitUntilRef.current && Date.now() < rateLimitUntilRef.current) {
+      if (!errorInfo || errorInfo.type !== 'rate_limited') {
+        setErrorInfo({ type: 'rate_limited', text: t('player.rate_limited', 'Google Drive tạm thời quá tải, đang thử lại...') });
+      }
+      return;
+    }
     if (isPlaying) {
       clearAutoPauseTimeout();
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
