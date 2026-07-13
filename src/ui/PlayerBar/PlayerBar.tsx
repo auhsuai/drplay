@@ -1576,15 +1576,31 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         onEnded={handleEnded}
       />
 
-      {/* Network Error Toast Portal */}
+      {/* Error UI Portal */}
       {errorInfo && (toastTypes.includes(errorInfo.type) || bannerTypes.includes(errorInfo.type)) && createPortal(
-        <div className={`absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 cursor-pointer select-none transition-transform duration-300 ease-out ${toastSlideIn ? 'translate-x-0' : '-translate-x-full pointer-events-none'}`} onClick={dismissToast}>
-          <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
-            <ErrorIcon type={errorInfo.type} />
-            <span className="font-medium truncate">{errorInfo.text}</span>
+        bannerTypes.includes(errorInfo.type) ? (
+          <div className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 select-none">
+            <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
+              <ErrorIcon type={errorInfo.type} />
+              <span className="font-medium truncate">{errorInfo.text}</span>
+            </div>
+            <button
+              onClick={handleRetry}
+              className="flex items-center gap-1.5 px-3 h-full bg-[#4285F4]/20 hover:bg-[#4285F4]/30 transition-colors shrink-0"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span className="text-xs font-medium">Thử lại</span>
+            </button>
           </div>
-          <div className="w-1.5 self-stretch bg-[#4285F4]" />
-        </div>,
+        ) : (
+          <div className={`absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 cursor-pointer select-none transition-transform duration-300 ease-out ${toastSlideIn ? 'translate-x-0' : '-translate-x-full pointer-events-none'}`} onClick={dismissToast}>
+            <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
+              <ErrorIcon type={errorInfo.type} />
+              <span className="font-medium truncate">{errorInfo.text}</span>
+            </div>
+            <div className="w-1.5 self-stretch bg-[#4285F4]" />
+          </div>
+        ),
         document.getElementById('content-area')!
       )}
     </div>
