@@ -1101,6 +1101,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     const audio = getActiveAudio();
     retryCountRef.current = 0;
     clearRetryTimeout();
+    clearAutoPauseTimeout();
+    if (errorInfoRef.current) {
+      setErrorInfo(null);
+    }
     if (audio) {
       if (pendingBufferRestoreTimeRef.current !== null) {
         audio.currentTime = pendingBufferRestoreTimeRef.current;
