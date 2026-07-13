@@ -615,7 +615,7 @@ function App() {
             onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
           />
 
-          <div className="flex-1 relative overflow-hidden flex flex-col">
+          <div id="content-area" className="flex-1 relative overflow-hidden flex flex-col">
             <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500">Loading...</div>}>
               {activeTab === "Home" ? (
                 <HomeTab 

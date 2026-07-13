@@ -92,7 +92,11 @@
   "player": {
     "no_track": "No track playing",
     "network_interrupted": "Network unstable or connection lost, please check again",
-    "network_disconnected": "Network unstable or connection lost, please check again"
+    "network_disconnected": "Network unstable or connection lost, please check again",
+    "rate_limited": "Google Drive temporarily rate-limited, retrying...",
+    "file_deleted": "File no longer available on Drive, skipping...",
+    "format_error": "Audio format not supported, skipping to next track...",
+    "drive_quota_exceeded": "Google Drive quota exceeded, retrying later..."
   },
   "song_card": {
     "unknown_title": "Unknown Title",

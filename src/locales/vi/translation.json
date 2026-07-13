@@ -92,7 +92,11 @@
   "player": {
     "no_track": "Chưa có bài hát nào",
     "network_interrupted": "Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại",
-    "network_disconnected": "Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại"
+    "network_disconnected": "Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại",
+    "rate_limited": "Google Drive tạm thời quá tải, đang thử lại...",
+    "file_deleted": "File không còn tồn tại trên Drive, đang chuyển bài...",
+    "format_error": "File lỗi định dạng, đang chuyển bài kế tiếp...",
+    "drive_quota_exceeded": "Google Drive đã vượt quá giới hạn, đang thử lại..."
   },
   "song_card": {
     "unknown_title": "Không rõ tên",

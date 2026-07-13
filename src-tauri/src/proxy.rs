@@ -201,7 +201,7 @@ async fn handle_stream(
     let now = now_epoch_secs();
     let backoff_until = GLOBAL_BACKOFF_UNTIL.load(Ordering::Acquire);
     if now < backoff_until {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Rate limited — cooldown active").into_response();
+        return (StatusCode::SERVICE_UNAVAILABLE, [("X-Stream-Error-Type", "rate-limited")], "Rate limited — cooldown active").into_response();
     }
 
     let final_token = crate::GLOBAL_STREAM_TOKEN.lock().await.clone();
@@ -467,7 +467,7 @@ async fn handle_rate_limit(now: u64) -> Response {
         base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
     };
     GLOBAL_BACKOFF_UNTIL.store(now + cooldown, Ordering::Release);
-    (StatusCode::SERVICE_UNAVAILABLE, "Rate limited — backing off").into_response()
+    (StatusCode::SERVICE_UNAVAILABLE, [("X-Stream-Error-Type", "rate-limited")], "Rate limited — backing off").into_response()
 }
 
 async fn handle_options() -> Response {

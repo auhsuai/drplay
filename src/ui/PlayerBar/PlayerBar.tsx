@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { CrossfadeEngine } from "../../utils/crossfade";
 import { createPortal } from "react-dom";
-import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, WifiOff } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, WifiOff, CloudOff, FileWarning } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Track } from "../../App";
 import { getTrackMetadata, updateTrackDuration } from '../../utils/metadata';
@@ -68,7 +68,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [realTitle, setRealTitle] = useState("");
   const [realArtist, setRealArtist] = useState("");
-  const [errorText, setErrorText] = useState("");
+  const [errorInfo, setErrorInfo] = useState<{ type: string; text: string } | null>(null);
   const [isLiked, setIsLiked] = useState(false);
   const getActiveAudio = useCallback(() => {
     return activeAudioIndexRef.current === 0 ? audioRef.current : audioRef2.current;
@@ -95,6 +95,34 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const MAX_RETRY = 5;
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoPauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastKnownPositionRef = useRef(0);
+  const errorPositionRef = useRef<number | null>(null);
+  const resumeSeekRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
+  const rateLimitUntilRef = useRef(0);
+  const TOAST_DURATION = 10;
+  const toastIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearToastTimer = () => {
+    if (toastIntervalRef.current) {
+      clearInterval(toastIntervalRef.current);
+      toastIntervalRef.current = null;
+    }
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = null;
+    }
+  };
+
+  const startToastTimer = (dismiss: () => void) => {
+    clearToastTimer();
+    toastTimeoutRef.current = setTimeout(dismiss, TOAST_DURATION * 1000);
+  };
+
+  const [toastSlideIn, setToastSlideIn] = useState(false);
+  const toastableTypes = ['network_interrupted', 'network_disconnected', 'rate_limited', 'drive_quota_exceeded'];
 
   const clearRetryTimeout = () => {
     if (retryTimeoutRef.current) {
@@ -102,6 +130,62 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       retryTimeoutRef.current = null;
     }
   };
+
+  const clearAutoPauseTimeout = () => {
+    if (autoPauseTimeoutRef.current) {
+      clearTimeout(autoPauseTimeoutRef.current);
+      autoPauseTimeoutRef.current = null;
+    }
+  };
+
+  function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; className?: string }) {
+    const Icon = type === 'rate_limited' || type === 'drive_quota_exceeded' ? CloudOff : type === 'file_deleted' || type === 'format_error' ? FileWarning : WifiOff;
+    return <Icon className={`${className} text-[#4285F4]`} />;
+  }
+
+  const dismissToast = useCallback(() => {
+    clearToastTimer();
+    setToastSlideIn(false);
+    setTimeout(() => setErrorInfo(null), 300);
+  }, []);
+
+  const toastDismissRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (errorInfo && toastableTypes.includes(errorInfo.type)) {
+      setTimeout(() => setToastSlideIn(true), 10);
+      toastDismissRef.current = dismissToast;
+
+      if (document.visibilityState === 'visible') {
+        startToastTimer(dismissToast);
+      }
+
+      const onVisibility = () => {
+        if (document.visibilityState === 'visible') {
+          const stillRelevant = (
+            errorInfo.type === 'drive_quota_exceeded' ||
+            (errorInfo.type === 'rate_limited' && Date.now() < rateLimitUntilRef.current) ||
+            (errorInfo.type !== 'rate_limited' && errorInfo.type !== 'drive_quota_exceeded' && !navigator.onLine)
+          );
+          if (stillRelevant) {
+            startToastTimer(dismissToast);
+          } else {
+            clearToastTimer();
+            dismissToast();
+          }
+        } else {
+          clearToastTimer();
+        }
+      };
+      document.addEventListener('visibilitychange', onVisibility);
+      return () => {
+        clearToastTimer();
+        document.removeEventListener('visibilitychange', onVisibility);
+        toastDismissRef.current = null;
+      };
+    }
+    toastDismissRef.current = null;
+  }, [errorInfo?.type, errorInfo?.text]);
 
   useEffect(() => {
     return () => clearRetryTimeout();
@@ -169,10 +253,16 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
   useEffect(() => {
     if (currentTrack) {
+      clearAutoPauseTimeout();
+      if (resumeSeekRef.current) {
+        resumeSeekRef.current.audio.removeEventListener('loadedmetadata', resumeSeekRef.current.handler);
+        resumeSeekRef.current = null;
+      }
+      errorPositionRef.current = null;
       setRealTitle(currentTrack.title);
       setRealArtist(currentTrack.artist || "");
       setCoverUrl(null);
-      setErrorText("");
+      setErrorInfo(null);
       
       if (currentTrack.restoreTime !== undefined) {
          setDuration(currentTrack.restoreDuration || 0);
@@ -242,7 +332,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         }
       })
         .catch(err => {
-          if (!isCancelled) setErrorText(err.message);
+          if (!isCancelled) setErrorInfo({ type: 'metadata', text: err.message });
         });
         
       if (currentTrack.streamUrl && isTrustedStreamUrl(currentTrack.streamUrl)) {
@@ -262,12 +352,17 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   const onTogglePlayModeRef = useRef(onTogglePlayMode);
   const onToggleNowPlayingRef = useRef(onExpandNowPlaying);
   const isPlayingRef = useRef(isPlaying);
+  const errorInfoRef = useRef(errorInfo);
   const playbackStatusRef = useRef(playbackStatus);
   const handleManualResumeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    errorInfoRef.current = errorInfo;
+  }, [errorInfo]);
 
   useEffect(() => {
     playbackStatusRef.current = playbackStatus;
@@ -468,11 +563,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           break;
         case ' ':
           e.preventDefault();
-          if (playbackStatusRef.current === 'error-needs-manual-resume') {
-            handleManualResumeRef.current?.();
-          } else {
-            onTogglePlayRef.current();
-          }
+          onTogglePlayRef.current();
           break;
       }
     };
@@ -510,6 +601,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
         resumeHandlerRef.current = null;
       }
+      if (resumeSeekRef.current) {
+        resumeSeekRef.current.audio.removeEventListener('loadedmetadata', resumeSeekRef.current.handler);
+        resumeSeekRef.current = null;
+      }
     };
   }, []);
 
@@ -520,16 +615,32 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   }, [volume, isMuted, currentTrack]);
 
   useEffect(() => {
+    let cancelled = false;
     if (isPlaying) {
+      clearAutoPauseTimeout();
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       const active = getActiveAudio();
       if (active) {
-        const playPromise = safePlay(active);
-        if (playPromise !== undefined) {
-          playPromise.catch((e) => {
-            if (e.name !== 'AbortError') {
-              console.error("Playback failed", e);
+        if (active.error) {
+          clearRetryTimeout();
+          retryCountRef.current = 0;
+          const hadErrorPos = errorPositionRef.current;
+          setErrorInfo(null);
+          active.load();
+          const onCanPlay = () => {
+            if (cancelled) return;
+            active.removeEventListener('canplay', onCanPlay);
+            if (hadErrorPos !== null && hadErrorPos > 0) {
+              active.currentTime = hadErrorPos;
             }
+            safePlay(active).then(() => { retryCountRef.current = 0; }).catch(e => {
+              if (e.name !== 'AbortError') console.error("Playback failed", e);
+            });
+          };
+          active.addEventListener('canplay', onCanPlay);
+        } else {
+          safePlay(active).then(() => { retryCountRef.current = 0; }).catch(e => {
+            if (e.name !== 'AbortError') console.error("Playback failed", e);
           });
         }
       }
@@ -538,6 +649,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       const active = getActiveAudio();
       if (active) safePause(active);
     }
+    return () => { cancelled = true; };
   }, [isPlaying]);
 
 
@@ -573,14 +685,21 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
     listen('drive-quota-exceeded', () => {
       console.warn('[Player] Google Drive API quota exceeded');
-      setErrorText('Google Drive đang quá tải, thử lại sau ít phút...');
+      errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
+      setErrorInfo({ type: 'drive_quota_exceeded', text: t('player.drive_quota_exceeded', 'Google Drive đã vượt quá giới hạn, đang thử lại...') });
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
       rateLimitRetryTimeout = setTimeout(async () => {
         const active = getActiveAudio();
         const track = currentTrackRef.current;
+        const pos = errorPositionRef.current;
         if (active && track?.streamUrl) {
+          const doPlay = () => {
+            active.removeEventListener('loadedmetadata', doPlay);
+            if (pos !== null) { active.currentTime = pos; errorPositionRef.current = null; }
+            safePlay(active).catch(() => {});
+          };
+          active.addEventListener('loadedmetadata', doPlay);
           active.load();
-          await safePlay(active).catch(() => {});
         }
       }, 30_000);
     }).then(fn => {
@@ -608,57 +727,97 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     }
   };
 
+  const scheduleAutoPause = () => {
+    clearAutoPauseTimeout();
+    autoPauseTimeoutRef.current = setTimeout(() => {
+      if (isPlayingRef.current && errorInfoRef.current !== null) {
+        onTogglePlayRef.current();
+      }
+      autoPauseTimeoutRef.current = null;
+    }, 2000);
+  };
+
   const handleAudioError = async () => {
     const audio = getActiveAudio();
     const error = audio?.error;
     if (!audio || !error) return;
+    if (error.code === MediaError.MEDIA_ERR_ABORTED) return;
+
+    if (lastKnownPositionRef.current > 0) {
+      errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
+    }
 
     const isOffline = !navigator.onLine;
 
     if (isOffline) {
-      setErrorText(t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại'));
-      const RETREAT_OFFSET_SEC = 0.5;
-      const positionBeforeError = Math.max(0, audio.currentTime - RETREAT_OFFSET_SEC);
-      setPlaybackStatus('error-needs-manual-resume');
-      setPendingResumeTime(positionBeforeError);
-      return;
-    }
-
-    let isRealFormatError = false;
-    let errorType = 'transient';
-
-    try {
-      if (currentTrack?.streamUrl && isTrustedStreamUrl(currentTrack.streamUrl)) {
-        const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD' });
-        if (headResp.ok) {
-          isRealFormatError = true;
-        } else {
-          errorType = headResp.headers.get("X-Stream-Error-Type") || 'transient';
-        }
+      if (errorInfoRef.current?.type !== 'network_disconnected') {
+        setErrorInfo({ type: 'network_disconnected', text: t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
       }
-    } catch (e) {
-      errorType = 'transient'; // Network error or proxy unreachable
-    }
-
-    if (errorType === 'permanent') {
-      setErrorText('File không còn tồn tại trên Drive, đang chuyển bài...');
-      handleNextClick();
+      scheduleAutoPause();
       return;
     }
 
-    if (isRealFormatError && (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || error.code === MediaError.MEDIA_ERR_DECODE)) {
-      setErrorText('File lỗi định dạng, đang chuyển bài kế tiếp...');
-      handleNextClick();
-      return;
-    }
+    // MEDIA_ERR_NETWORK → toast + auto-pause immediately, skip HEAD
+    if (error.code === MediaError.MEDIA_ERR_NETWORK) {
+      if (errorInfoRef.current?.type !== 'network_interrupted') {
+        setErrorInfo({ type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
+      }
+      scheduleAutoPause();
+    } else {
+      // Other errors → HEAD request to classify
+      let isRealFormatError = false;
+      let errorType = 'transient';
 
-    setErrorText(t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại'));
-    const RETREAT_OFFSET_SEC = 0.5;
-    const positionBeforeError = Math.max(0, audio.currentTime - RETREAT_OFFSET_SEC);
+      try {
+        if (currentTrack?.streamUrl && isTrustedStreamUrl(currentTrack.streamUrl)) {
+          const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD' });
+          if (headResp.ok) {
+            isRealFormatError = true;
+          } else {
+            errorType = headResp.headers.get("X-Stream-Error-Type") || 'transient';
+            if (errorType === 'rate-limited') {
+              rateLimitUntilRef.current = Date.now() + 300_000;
+            }
+          }
+        } else {
+          errorType = 'transient';
+        }
+      } catch (e) {
+        errorType = 'transient';
+      }
+
+      if (errorType === 'permanent') {
+        setErrorInfo({ type: 'file_deleted', text: t('player.file_deleted', 'File không còn tồn tại trên Drive, đang chuyển bài...') });
+        handleNextClick();
+        return;
+      }
+
+      if (errorType === 'rate-limited') {
+        setErrorInfo({ type: 'rate_limited', text: t('player.rate_limited', 'Google Drive tạm thời quá tải, đang thử lại...') });
+        const waitMs = Math.max(5000, Math.min(rateLimitUntilRef.current - Date.now(), 60000));
+        clearRetryTimeout();
+        retryTimeoutRef.current = setTimeout(() => {
+          const active = getActiveAudio();
+          if (active && currentTrackRef.current?.streamUrl) {
+            active.load();
+          }
+        }, waitMs);
+        return;
+      }
+
+      if (isRealFormatError && (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || error.code === MediaError.MEDIA_ERR_DECODE)) {
+        setErrorInfo({ type: 'format_error', text: t('player.format_error', 'File lỗi định dạng, đang chuyển bài kế tiếp...') });
+        handleNextClick();
+        return;
+      }
+
+      if (errorInfoRef.current?.type !== 'network_interrupted') {
+        setErrorInfo({ type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
+      }
+      scheduleAutoPause();
+    }
 
     if (retryCountRef.current >= MAX_RETRY) {
-      setPlaybackStatus('error-needs-manual-resume');
-      setPendingResumeTime(positionBeforeError);
       return;
     }
 
@@ -667,18 +826,16 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
     clearRetryTimeout();
     retryTimeoutRef.current = setTimeout(() => {
+      const retryPos = errorPositionRef.current;
       const handleMetadataReady = async () => {
         audio.removeEventListener('loadedmetadata', handleMetadataReady);
-        audio.currentTime = positionBeforeError;
+        if (retryPos !== null) audio.currentTime = retryPos;
         
         try {
           await safePlay(audio);
-          setPlaybackStatus('playing');
         } catch (err: any) {
           if (err.name === 'NotAllowedError') {
-            console.warn('[Player] Autoplay blocked, cần user gesture để resume');
-            setPlaybackStatus('error-needs-manual-resume');
-            setPendingResumeTime(positionBeforeError);
+            console.warn('[Player] Autoplay blocked');
           }
         }
       };
@@ -846,7 +1003,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         setPlaybackStatus('playing');
         setPendingResumeTime(null);
         retryCountRef.current = 0;
-        setErrorText('');
+        setErrorInfo(null);
       }).catch((err) => {
         console.error("Manual resume failed", err);
       });
@@ -859,19 +1016,29 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   // Auto-recovery when network reconnects
   useEffect(() => {
     const handleOnline = async () => {
-      if (playbackStatus === 'error-needs-manual-resume' && pendingResumeTime !== null) {
-        if (
-          errorText === t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') ||
-          errorText === t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại')
-        ) {
-          await handleManualResume();
+      if (errorInfo?.type === 'network_disconnected' || errorInfo?.type === 'network_interrupted') {
+        setErrorInfo(null);
+        clearAutoPauseTimeout();
+        const audio = getActiveAudio();
+        const pos = errorPositionRef.current;
+        if (audio && currentTrack?.streamUrl) {
+          const doPlay = () => {
+            audio.removeEventListener('loadedmetadata', doPlay);
+            if (pos !== null) {
+              audio.currentTime = pos;
+              errorPositionRef.current = null;
+            }
+            safePlay(audio).catch(() => {});
+          };
+          audio.addEventListener('loadedmetadata', doPlay);
+          audio.load();
         }
       }
     };
     
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
-  }, [playbackStatus, pendingResumeTime, errorText, currentTrack]);
+  }, [errorInfo, currentTrack]);
 
   // Sync Audio Focus (OS-level pause/play)
   useEffect(() => {
@@ -905,6 +1072,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     const audio = getActiveAudio();
     if (audio && !isDraggingRef.current) {
       const time = audio.currentTime;
+      if (time > 0) lastKnownPositionRef.current = time;
       
       const now = Date.now();
       if (now - lastSaveTimeRef.current > 2000 && currentTrack) {
@@ -1084,11 +1252,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       seekTimeoutRef.current = setTimeout(() => {
         const active = getActiveAudio();
         if (active) {
-          if (playbackStatus === 'error-needs-manual-resume') {
-            setPendingResumeTime(finalTime);
-          } else {
-            active.currentTime = finalTime;
-          }
+          active.currentTime = finalTime;
         }
       }, 250);
 
@@ -1178,7 +1342,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
             </h4>
             <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2 overflow-hidden whitespace-nowrap text-ellipsis">
               <span className="truncate">{currentTrack ? (realArtist || t('unknown_artist')) : ""}</span>
-              {errorText && <span className="text-[10px] text-red-500 shrink-0" title={errorText}>{errorText}</span>}
             </p>
           </div>
         </div>
@@ -1209,19 +1372,13 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           </button>
           
           <button 
-            onClick={() => {
-              if (playbackStatus === 'error-needs-manual-resume') {
-                handleManualResume();
-              } else {
-                onTogglePlay();
-              }
-            }}
+            onClick={onTogglePlay}
             className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
             disabled={!currentTrack || isDownloading}
           >
             {isDownloading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
-            ) : isPlaying && playbackStatus !== 'error-needs-manual-resume' ? (
+            ) : isPlaying && !(errorInfo && toastableTypes.includes(errorInfo.type)) ? (
               <Pause className="w-5 h-5" />
             ) : (
               <Play className="w-5 h-5 ml-0.5" />
@@ -1322,15 +1479,15 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       />
 
       {/* Network Error Toast Portal */}
-      {errorText && (
-        errorText === t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') || 
-        errorText === t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại')
-      ) && createPortal(
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-gray-900/90 backdrop-blur-md text-white text-sm px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300 w-max max-w-[90vw]">
-          <WifiOff className="w-5 h-5 text-yellow-400 shrink-0" />
-          <span className="font-medium text-center">{errorText}</span>
+      {errorInfo && toastableTypes.includes(errorInfo.type) && createPortal(
+        <div className={`absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 cursor-pointer select-none transition-transform duration-300 ease-out ${toastSlideIn ? 'translate-x-0' : '-translate-x-full pointer-events-none'}`} onClick={dismissToast}>
+          <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
+            <ErrorIcon type={errorInfo.type} />
+            <span className="font-medium truncate">{errorInfo.text}</span>
+          </div>
+          <div className="w-1.5 self-stretch bg-[#4285F4]" />
         </div>,
-        document.body
+        document.getElementById('content-area')!
       )}
     </div>
   );
