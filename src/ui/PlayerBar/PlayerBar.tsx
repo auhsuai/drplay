@@ -880,6 +880,15 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
         isProgrammaticActionRef.current = true;
         toEl.src = currentTrack.streamUrl;
+        let toElFailed = false;
+        const onToElError = () => {
+          if (toElFailed) return;
+          toElFailed = true;
+          toEl.removeEventListener('error', onToElError);
+          console.warn('[Player] Crossfade target error, keeping current track');
+          setTimeout(() => { isProgrammaticActionRef.current = false; }, 50);
+        };
+        toEl.addEventListener('error', onToElError);
         toEl.load();
         setTimeout(() => { isProgrammaticActionRef.current = false; }, 50);
 
@@ -888,12 +897,18 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
         await new Promise<void>(resolve => {
           const handler = () => {
             toEl.removeEventListener('canplay', handler);
+            toEl.removeEventListener('error', onToElError);
             resolve();
           };
           toEl.addEventListener('canplay', handler);
+          toEl.addEventListener('error', () => {
+            toEl.removeEventListener('canplay', handler);
+            onToElError();
+            resolve();
+          });
         });
 
-        if (cancelled) return;
+        if (cancelled || toElFailed) return;
 
         const engine = crossfadeEngineRef.current;
         if (engine) {
