@@ -186,7 +186,9 @@
     "confirm_empty_trash": "Are you sure you want to permanently delete all trashed items? This cannot be undone.",
     "empty_trash_success": "Trash emptied successfully!",
     "empty_trash_error": "Failed to empty trash",
-    "restore_error": "Failed to restore file"
+    "restore_error": "Failed to restore file",
+    "contact": "Contact",
+    "open_link_error": "Failed to open link"
   },
   "sort": {
     "name_asc": "A-Z",

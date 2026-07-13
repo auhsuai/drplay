@@ -186,7 +186,9 @@
     "confirm_empty_trash": "Bạn có chắc chắn muốn xóa vĩnh viễn toàn bộ mục trong thùng rác không? Hành động này không thể hoàn tác.",
     "empty_trash_success": "Đã dọn sạch thùng rác thành công!",
     "empty_trash_error": "Lỗi khi dọn thùng rác",
-    "restore_error": "Lỗi khi khôi phục"
+    "restore_error": "Lỗi khi khôi phục",
+    "contact": "Liên hệ",
+    "open_link_error": "Không thể mở liên kết"
   },
   "sort": {
     "name_asc": "A-Z",
