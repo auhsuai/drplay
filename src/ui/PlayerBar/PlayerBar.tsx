@@ -795,7 +795,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       if (errorInfoRef.current?.type !== 'network_disconnected') {
         setErrorInfo({ type: 'network_disconnected', text: t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
       }
-      scheduleAutoPause();
       return;
     }
 
@@ -803,7 +802,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       if (errorInfoRef.current?.type !== 'network_interrupted') {
         setErrorInfo({ type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
       }
-      scheduleAutoPause();
       return;
     } else {
       // Other errors → HEAD request to classify
@@ -856,7 +854,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
       if (errorInfoRef.current?.type !== 'network_interrupted') {
         setErrorInfo({ type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
       }
-      scheduleAutoPause();
       return;
     }
 
@@ -1099,13 +1096,10 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     return () => window.removeEventListener('online', handleOnline);
   }, [errorInfo, currentTrack]);
 
-  // Auto-pause on network offline
   useEffect(() => {
     const handleOffline = () => {
       if (isPlayingRef.current && currentTrackRef.current) {
         errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
-        setErrorInfo({ type: 'network_disconnected', text: t('player.network_disconnected', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') });
-        scheduleAutoPause();
       }
     };
     window.addEventListener('offline', handleOffline);
@@ -1584,13 +1578,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
               <ErrorIcon type={errorInfo.type} />
               <span className="font-medium truncate">{errorInfo.text}</span>
             </div>
-            <button
-              onClick={handleRetry}
-              className="flex items-center gap-1.5 px-3 h-full bg-[#4285F4]/20 hover:bg-[#4285F4]/30 transition-colors shrink-0"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span className="text-xs font-medium">Thử lại</span>
-            </button>
+            <div className="w-1.5 self-stretch bg-[#4285F4]" />
           </div>
         ) : (
           <div className={`absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 cursor-pointer select-none transition-transform duration-300 ease-out ${toastSlideIn ? 'translate-x-0' : '-translate-x-full pointer-events-none'}`} onClick={dismissToast}>
