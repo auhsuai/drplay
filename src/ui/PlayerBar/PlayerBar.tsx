@@ -90,6 +90,9 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   useEffect(() => { crossfadeDurationRef.current = crossfadeDuration; }, [crossfadeDuration]);
 
   const isTransitioningRef = useRef(false);
+  const isAutoTransitioningRef = useRef(false);
+  const consecutiveAutoSkipRef = useRef(0);
+  const MAX_CONSECUTIVE_AUTO_SKIP = 3;
   const isProgrammaticActionRef = useRef(false);
 
   const MAX_RETRY = 5;
@@ -191,11 +194,31 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     return () => clearRetryTimeout();
   }, [currentTrack?.id]);
 
-  const handleNextClick = () => {
-    if (isTransitioningRef.current) return;
-    isTransitioningRef.current = true;
+  const handleNextClick = (isAutoSkip = false) => {
+    if (isAutoSkip) {
+      if (isAutoTransitioningRef.current) return;
+      isAutoTransitioningRef.current = true;
+      consecutiveAutoSkipRef.current += 1;
+      if (consecutiveAutoSkipRef.current >= MAX_CONSECUTIVE_AUTO_SKIP) {
+        consecutiveAutoSkipRef.current = 0;
+        isAutoTransitioningRef.current = false;
+        setErrorInfo({ type: 'network_interrupted', text: t('player.playlist_error', 'Nhiều bài liên tiếp bị lỗi, đã dừng phát') });
+        scheduleAutoPause();
+        return;
+      }
+    } else {
+      consecutiveAutoSkipRef.current = 0;
+      if (isTransitioningRef.current) return;
+      isTransitioningRef.current = true;
+    }
     onNextTrack();
-    setTimeout(() => { isTransitioningRef.current = false; }, 200);
+    setTimeout(() => {
+      if (isAutoSkip) {
+        isAutoTransitioningRef.current = false;
+      } else {
+        isTransitioningRef.current = false;
+      }
+    }, 200);
   };
 
   const handlePrevClick = () => {
@@ -804,7 +827,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
       if (errorType === 'permanent') {
         setErrorInfo({ type: 'file_deleted', text: t('player.file_deleted', 'File không còn tồn tại trên Drive, đang chuyển bài...') });
-        handleNextClick();
+        handleNextClick(true);
         return;
       }
 
@@ -823,7 +846,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
 
       if (isRealFormatError && (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || error.code === MediaError.MEDIA_ERR_DECODE)) {
         setErrorInfo({ type: 'format_error', text: t('player.format_error', 'File lỗi định dạng, đang chuyển bài kế tiếp...') });
-        handleNextClick();
+        handleNextClick(true);
         return;
       }
 
@@ -1421,7 +1444,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
           </button>
 
           <button 
-            onClick={handleNextClick}
+            onClick={() => handleNextClick()}
             className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
             disabled={!currentTrack}
           >
