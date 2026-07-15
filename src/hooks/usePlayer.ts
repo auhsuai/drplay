@@ -227,6 +227,24 @@ export const usePlayer = (accessToken: string | null) => {
     setIsPlaying(false);
     setIsDownloading(true);
 
+    const maybePrefetchNextTrack = (queue: Track[] | undefined, current: Track) => {
+      if (!queue || queue.length < 2) return;
+      const idx = queue.findIndex(
+        item => item.queueItemId ? item.queueItemId === current.queueItemId : item.id === current.id
+      );
+      if (idx === -1 || idx >= queue.length - 1) return;
+      const next = queue[idx + 1];
+      const url = getPrefetchedStreamUrl(next.id);
+      if (url) {
+        prefetchNextTrackAudio(url);
+      } else {
+        const ext = next.originalName?.split('.').pop()?.toLowerCase();
+        invoke<string>("get_stream_url", { fileId: next.id, ext })
+          .then(url => { if (url) prefetchNextTrackAudio(url); })
+          .catch(err => { console.warn('[usePlayer] next-track-prefetch-fail', err); });
+      }
+    };
+
     const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
     if (prefetchedUrl) {
@@ -250,22 +268,7 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(true);
       setIsDownloading(false);
 
-      // Prefetch next track in queue
-      if (contextQueue && contextQueue.length > 1) {
-        const currentIdx = contextQueue.findIndex(item => item.queueItemId ? item.queueItemId === targetTrack.queueItemId : item.id === targetTrack.id);
-        if (currentIdx !== -1 && currentIdx < contextQueue.length - 1) {
-          const nextTrack = contextQueue[currentIdx + 1];
-          const nextUrl = getPrefetchedStreamUrl(nextTrack.id);
-          if (nextUrl) {
-            prefetchNextTrackAudio(nextUrl);
-          } else {
-            const ext = nextTrack.originalName?.split('.').pop()?.toLowerCase();
-            invoke<string>("get_stream_url", { fileId: nextTrack.id, ext })
-              .then(url => { if (url) prefetchNextTrackAudio(url); })
-              .catch((err) => { console.warn('[usePlayer] next-track-prefetch-fail', err); });
-          }
-        }
-      }
+      maybePrefetchNextTrack(contextQueue, targetTrack);
 
       getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
         if (metadata.duration && !isIntentStale(myId)) {
@@ -284,21 +287,27 @@ export const usePlayer = (accessToken: string | null) => {
         return;
       }
       
-      try {
-        const metadata = await getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName);
-        if (isIntentStale(myId)) return;
-        if (metadata.duration) {
-           accurateMetaDuration = metadata.duration;
-        }
-      } catch (e) {
-        console.warn(`[usePlayer] bitrate-buffer-fail`, classifyPlayerError(e));
-      }
+      const [metadata, streamUrl] = await Promise.all([
+        getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName)
+          .then(m => m)
+          .catch(e => {
+            console.warn(`[usePlayer] bitrate-buffer-fail`, classifyPlayerError(e));
+            return null;
+          }),
+        (async () => {
+          const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
+          return invoke<string>("get_stream_url", {
+            fileId: targetTrack.id,
+            duration: undefined,
+            bufferSeconds,
+            ext,
+          });
+        })(),
+      ]);
 
-      const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
-      let streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds, ext });
-      if (isIntentStale(myId)) {
-        return;
-      }
+      if (isIntentStale(myId)) return;
+
+      const accurateMetaDuration = metadata?.duration ?? undefined;
 
       setCurrentTrack({ 
         ...targetTrack, 
@@ -308,17 +317,7 @@ export const usePlayer = (accessToken: string | null) => {
       triggerReload();
       setIsPlaying(true);
 
-      // Prefetch next track in queue
-      if (contextQueue && contextQueue.length > 1) {
-        const currentIdx = contextQueue.findIndex(item => item.queueItemId ? item.queueItemId === targetTrack.queueItemId : item.id === targetTrack.id);
-        if (currentIdx !== -1 && currentIdx < contextQueue.length - 1) {
-          const nextTrack = contextQueue[currentIdx + 1];
-          const ext = nextTrack.originalName?.split('.').pop()?.toLowerCase();
-          invoke<string>("get_stream_url", { fileId: nextTrack.id, ext })
-            .then(url => { if (url) prefetchNextTrackAudio(url); })
-            .catch((err) => { console.warn('[usePlayer] next-track-prefetch-fail', err); });
-        }
-      }
+      maybePrefetchNextTrack(contextQueue, targetTrack);
     } catch (e) {
       if (isIntentStale(myId)) return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));

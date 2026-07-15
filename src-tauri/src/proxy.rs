@@ -502,22 +502,28 @@ async fn handle_stream(
                 }
                 drop(tc);
             }
-            // Timeout — re-acquire lock and check once more
+            // Timeout — re-acquire lock and try to re-claim the fetching flag
             track_cache = track_cache_arc.lock().await;
             track_cache.accessed_at = now_epoch_secs();
             let window_end = track_cache.window_start + track_cache.buffer.len() as u64;
             if start >= track_cache.window_start && start < window_end {
                 return respond_from_cache(&track_cache.buffer, track_cache.window_start, start, end, total_size, &track_cache.content_type);
             }
+            if track_cache.fetching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                // Another thread already claimed it — retry cache hit check one more time
+                let window_end = track_cache.window_start + track_cache.buffer.len() as u64;
+                if start >= track_cache.window_start && start < window_end {
+                    return respond_from_cache(&track_cache.buffer, track_cache.window_start, start, end, total_size, &track_cache.content_type);
+                }
+                drop(track_cache);
+                return (StatusCode::SERVICE_UNAVAILABLE, "Buffer not ready").into_response();
+            }
         }
 
-        // We own the fetching flag (or timed out) — abort previous task
+        // We own the fetching flag — abort previous task
         if let Some(task) = track_cache.fetch_task.take() {
             task.abort();
         }
-
-        // Ensure flag is set (fresh claim or after timeout)
-        track_cache.fetching.store(true, Ordering::Release);
 
         // Release per-track lock so metadata requests don't block during network I/O
         drop(track_cache);
