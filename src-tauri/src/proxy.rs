@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
 use tokio::task::JoinHandle;
+use futures_util::future::join_all;
 
 // Maximum buffer size allowed across all tracks (prevents unbounded memory use)
 const ABSOLUTE_MAX_BUFFER: u64 = 500 * 1024 * 1024; // 500MB
@@ -561,27 +562,46 @@ async fn handle_stream(
 
             let track_id_bg = query.id.clone();
             let task = tokio::spawn(async move {
-                let mut current = background_start;
                 let limit = buffer_size_limit();
-                while current < bg_total && current < start + limit {
-                    let next_end = (current + 2 * 1024 * 1024 - 1).min(bg_total.saturating_sub(1)).min(start + limit - 1);
-                    let data = match bg_fetch_with_retry(
-                        |s, e| fetch_range_from_drive(&bg_client, &bg_url, &bg_token, s, e),
-                        current, next_end, MAX_BG_RETRIES,
-                    ).await {
-                        Ok(d) => d,
-                        Err(DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota) => break,
-                        Err(_) => break,
-                    };
+                let max_fetch = (start + limit).min(bg_total);
+                let mut pending: Vec<(u64, u64)> = Vec::new();
+                let mut current = background_start;
+
+                while current < max_fetch {
+                    let chunk_end = (current + 2 * 1024 * 1024 - 1).min(max_fetch.saturating_sub(1));
+                    pending.push((current, chunk_end));
+                    current = chunk_end + 1;
+                }
+
+                for batch in pending.chunks(4) {
+                    let futures: Vec<_> = batch
+                        .iter()
+                        .map(|&(cs, ce)| bg_fetch_with_retry(
+                            |s, e| fetch_range_from_drive(&bg_client, &bg_url, &bg_token, s, e),
+                            cs, ce, MAX_BG_RETRIES,
+                        ))
+                        .collect();
+                    let results = join_all(futures).await;
+
                     let mut tc = bg_arc.lock().await;
-                    // verify window hasn't changed
                     if tc.window_start != start {
-                        break; // User seeked, this task is obsolete
+                        break;
                     }
-                    tc.buffer.extend_from_slice(&data);
-                    current += data.len() as u64;
-                    
-                    // Emit event via Tauri IPC
+
+                    let mut any_fail = false;
+                    for result in results {
+                        match result {
+                            Ok(data) => {
+                                tc.buffer.extend_from_slice(&data);
+                            }
+                            Err(e) => {
+                                any_fail = true;
+                                eprintln!("[proxy] bg-prefetch-chunk-fail: {:?}", e);
+                                break;
+                            }
+                        }
+                    }
+
                     if let Some(app) = crate::APP_HANDLE.get() {
                         let _ = app.emit("buffer-status", BufferState {
                             track_id: track_id_bg.clone(),
@@ -589,6 +609,10 @@ async fn handle_stream(
                             buffer_end_byte: tc.window_start + tc.buffer.len() as u64,
                             total_size_byte: bg_total,
                         });
+                    }
+
+                    if any_fail {
+                        break;
                     }
                 }
             });
@@ -724,6 +748,28 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
     use std::sync::Arc;
+
+    fn assemble_chunks_in_order(chunks: &[(u64, u64, Vec<u8>)]) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(chunks.iter().map(|c| c.2.len()).sum());
+        for (_, _, data) in chunks {
+            buffer.extend_from_slice(data);
+        }
+        buffer
+    }
+
+    #[tokio::test]
+    async fn test_parallel_chunks_maintain_order() {
+        let chunks = vec![
+            (0, 1999, vec![1u8; 2000]),
+            (2000, 3999, vec![2u8; 2000]),
+            (4000, 5999, vec![3u8; 2000]),
+        ];
+        let buffer = assemble_chunks_in_order(&chunks);
+        assert_eq!(buffer.len(), 6000);
+        assert_eq!(buffer[0], 1);
+        assert_eq!(buffer[2000], 2);
+        assert_eq!(buffer[4000], 3);
+    }
 
     async fn simulate_background_prefetch<F, Fut>(
         start: u64,
