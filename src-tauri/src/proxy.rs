@@ -21,6 +21,7 @@ use tokio::task::JoinHandle;
 
 // Maximum buffer size allowed across all tracks (prevents unbounded memory use)
 const ABSOLUTE_MAX_BUFFER: u64 = 500 * 1024 * 1024; // 500MB
+const MAX_BG_RETRIES: u32 = 3;
 
 fn buffer_size_limit() -> u64 {
     let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
@@ -564,26 +565,30 @@ async fn handle_stream(
                 let limit = buffer_size_limit();
                 while current < bg_total && current < start + limit {
                     let next_end = (current + 2 * 1024 * 1024 - 1).min(bg_total.saturating_sub(1)).min(start + limit - 1);
-                    if let Ok(data) = fetch_range_from_drive(&bg_client, &bg_url, &bg_token, current, next_end).await {
-                        let mut tc = bg_arc.lock().await;
-                        // verify window hasn't changed
-                        if tc.window_start != start {
-                            break; // User seeked, this task is obsolete
-                        }
-                        tc.buffer.extend_from_slice(&data);
-                        current += data.len() as u64;
-                        
-                        // Emit event via Tauri IPC
-                        if let Some(app) = crate::APP_HANDLE.get() {
-                            let _ = app.emit("buffer-status", BufferState {
-                                track_id: track_id_bg.clone(),
-                                buffer_start_byte: tc.window_start,
-                                buffer_end_byte: tc.window_start + tc.buffer.len() as u64,
-                                total_size_byte: bg_total,
-                            });
-                        }
-                    } else {
-                        break;
+                    let data = match bg_fetch_with_retry(
+                        |s, e| fetch_range_from_drive(&bg_client, &bg_url, &bg_token, s, e),
+                        current, next_end, MAX_BG_RETRIES,
+                    ).await {
+                        Ok(d) => d,
+                        Err(DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota) => break,
+                        Err(_) => break,
+                    };
+                    let mut tc = bg_arc.lock().await;
+                    // verify window hasn't changed
+                    if tc.window_start != start {
+                        break; // User seeked, this task is obsolete
+                    }
+                    tc.buffer.extend_from_slice(&data);
+                    current += data.len() as u64;
+                    
+                    // Emit event via Tauri IPC
+                    if let Some(app) = crate::APP_HANDLE.get() {
+                        let _ = app.emit("buffer-status", BufferState {
+                            track_id: track_id_bg.clone(),
+                            buffer_start_byte: tc.window_start,
+                            buffer_end_byte: tc.window_start + tc.buffer.len() as u64,
+                            total_size_byte: bg_total,
+                        });
                     }
                 }
             });
@@ -678,4 +683,97 @@ pub fn start_proxy() {
             }
         }
     });
+}
+
+async fn bg_fetch_with_retry<F, Fut>(
+    fetch: F,
+    current: u64,
+    next_end: u64,
+    max_retries: u32,
+) -> Result<Vec<u8>, DriveErr>
+where
+    F: Fn(u64, u64) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, DriveErr>>,
+{
+    let mut last_err = DriveErr::Upstream;
+    for attempt in 0..=max_retries {
+        match fetch(current, next_end).await {
+            Ok(data) => return Ok(data),
+            Err(DriveErr::Rate) => {
+                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                last_err = DriveErr::Rate;
+            }
+            Err(DriveErr::Auth) => {
+                last_err = DriveErr::Auth;
+                break;
+            }
+            Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
+                return Err(e);
+            }
+            Err(e) => {
+                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                last_err = e;
+            }
+        }
+    }
+    Err(last_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Arc;
+
+    async fn simulate_background_prefetch<F, Fut>(
+        start: u64,
+        total_size: u64,
+        chunk_size: u64,
+        fetch: F,
+    ) -> Result<(), DriveErr>
+    where
+        F: Fn(u64, u64) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<u8>, DriveErr>>,
+    {
+        let end = (start + chunk_size - 1).min(total_size.saturating_sub(1));
+        bg_fetch_with_retry(|s, e| fetch(s, e), start, end, MAX_BG_RETRIES).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_background_prefetch_retries_on_transient_error() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        let max_ok_after = 3u32;
+        let att = Arc::clone(&attempts);
+        let flaky_fetch = move |start, end| {
+            let a = Arc::clone(&att);
+            async move {
+                let n = a.fetch_add(1, Ordering::SeqCst);
+                if n < max_ok_after {
+                    Err(DriveErr::Rate)
+                } else {
+                    Ok(vec![0u8; (end - start + 1) as usize])
+                }
+            }
+        };
+        let result = simulate_background_prefetch(0, 1024 * 1024 * 4, 2 * 1024 * 1024, flaky_fetch).await;
+        assert!(result.is_ok());
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn test_background_prefetch_hard_error_no_retry() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        let att = Arc::clone(&attempts);
+        let hard_fetch = move |_, _| {
+            let a = Arc::clone(&att);
+            async move {
+                a.fetch_add(1, Ordering::SeqCst);
+                Err(DriveErr::NotFound)
+            }
+        };
+        let result = simulate_background_prefetch(0, 1024 * 1024 * 4, 2 * 1024 * 1024, hard_fetch).await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
 }
