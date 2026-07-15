@@ -10,10 +10,6 @@ export function setCustomDownloadPath(path: string): void {
   localStorage.setItem(STORAGE_KEY, path);
 }
 
-export function clearCustomDownloadPath(): void {
-  localStorage.removeItem(STORAGE_KEY);
-}
-
 export async function getEffectiveDownloadPath(): Promise<string> {
   const custom = getCustomDownloadPath();
   if (custom) return custom;
