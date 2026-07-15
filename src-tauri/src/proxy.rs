@@ -518,6 +518,58 @@ async fn handle_stream(
         }
     });
 
+    // Spawn background prefetch for slices ahead of requested range
+    let bg_client = state.client.clone();
+    let bg_url = api_url.clone();
+    let bg_token = final_token.clone();
+    let bg_id = query.id.clone();
+    let bg_total = total_size;
+    let bg_start = actual_end + 1;
+
+    tokio::spawn(async move {
+        let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
+            Some(c) => c,
+            None => return,
+        };
+        let max_bytes = {
+            let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
+            let bytes = seconds * 320_000 / 8;
+            bytes.clamp(5 * 1024 * 1024, 500 * 1024 * 1024)
+        };
+        let max_offset = bg_start + max_bytes;
+        let mut offset = bg_start;
+
+        while offset < bg_total && offset < max_offset {
+            let (first_missing, count) = slice_cache.find_missing_run(&bg_id, offset, 4).await;
+            if count == 0 {
+                offset += crate::slice_cache::SLICE_SIZE;
+                continue;
+            }
+            let batch_end = (first_missing + (count as u64) * crate::slice_cache::SLICE_SIZE).min(bg_total);
+            match fetch_range_from_drive(&bg_client, &bg_url, &bg_token, first_missing, batch_end - 1).await {
+                Ok(data) => {
+                    slice_cache.batch_insert(&bg_id, first_missing, data).await;
+                    if let Some(app) = crate::APP_HANDLE.get() {
+                        let _ = app.emit("buffer-status", BufferState {
+                            track_id: bg_id.clone(),
+                            buffer_start_byte: 0,
+                            buffer_end_byte: batch_end,
+                            total_size_byte: bg_total,
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[proxy] prefetch-batch-fail at {first_missing}: {e:?}");
+                    if matches!(e, DriveErr::Rate) {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+            offset = batch_end;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    });
+
     // Build streaming response
     let stream = ReceiverStream::new(rx)
         .map(|chunk| Ok::<Bytes, std::convert::Infallible>(Bytes::from(chunk)));
