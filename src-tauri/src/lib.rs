@@ -15,6 +15,7 @@ lazy_static::lazy_static! {
 }
 
 pub mod protocol;
+mod slice_cache;
 mod thumbnail;
 
 #[command]
@@ -356,6 +357,8 @@ mod proxy;
 pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
+pub static GLOBAL_SLICE_CACHE: once_cell::sync::OnceCell<slice_cache::SliceCache> =
+    once_cell::sync::OnceCell::new();
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 
@@ -407,6 +410,14 @@ fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
+    {
+        let seconds = GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
+        let bytes = seconds * 320_000 / 8;
+        let max_bytes = bytes.clamp(5 * 1024 * 1024, 500 * 1024 * 1024);
+        GLOBAL_SLICE_CACHE
+            .set(slice_cache::SliceCache::new(max_bytes))
+            .ok();
+    }
     proxy::start_proxy();
     protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
