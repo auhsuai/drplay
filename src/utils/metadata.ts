@@ -83,6 +83,8 @@ const HEAD_BYTES = 262144;
 const TAIL_BYTES = 131072;
 const MAX_COVER_FETCH = 50 * 1024 * 1024;
 const CACHE_VERSION = 2;
+const inflightMetadata = new Map<string, Promise<CachedMetadata>>();
+const INFLIGHT_TIMEOUT = 30_000;
 
 export interface CachedMetadata {
   title: string;
@@ -283,7 +285,7 @@ async function compressImage(
   });
 }
 
-export async function getTrackMetadata(
+async function getTrackMetadataImpl(
   fileId: string,
   token?: string,
   size?: number,
@@ -529,6 +531,48 @@ export async function getTrackMetadata(
   }
   return cacheTrackMetadata(fileId, entry);
   }, _signal);
+}
+
+export async function getTrackMetadata(
+  fileId: string,
+  token?: string,
+  size?: number,
+  name?: string,
+  _signal?: AbortSignal,
+  forceNetwork: boolean = false,
+): Promise<CachedMetadata> {
+  if (!forceNetwork) {
+    const cached = metadataCache[fileId];
+    if (cached && cached.v >= 9) return cached;
+  }
+
+  if (!forceNetwork) {
+    const existing = inflightMetadata.get(fileId);
+    if (existing) return existing;
+  }
+
+  const promise = getTrackMetadataImpl(fileId, token, size, name, _signal, forceNetwork);
+
+  inflightMetadata.set(fileId, promise);
+
+  promise.catch(() => {
+    /* suppressed — callers handle their own errors via the returned promise */
+  });
+
+  const timeoutId = setTimeout(() => {
+    if (inflightMetadata.get(fileId) === promise) {
+      inflightMetadata.delete(fileId);
+    }
+  }, INFLIGHT_TIMEOUT);
+
+  promise.finally(() => {
+    clearTimeout(timeoutId);
+    if (inflightMetadata.get(fileId) === promise) {
+      inflightMetadata.delete(fileId);
+    }
+  });
+
+  return promise;
 }
 
 export async function updateTrackDuration(fileId: string, accurateDuration: number): Promise<void> {
