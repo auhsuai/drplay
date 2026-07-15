@@ -579,6 +579,7 @@ async fn handle_stream(
         .status(StatusCode::PARTIAL_CONTENT)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size))
         .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response body").into_response())
