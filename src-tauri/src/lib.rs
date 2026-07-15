@@ -245,17 +245,10 @@ struct LocalMetadata {
 pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
     if let Ok(mut exe_path) = std::env::current_exe() {
         exe_path.pop();
-        let path1 = exe_path.join("music_databasev2.db");
-        if path1.exists() { return Some(path1); }
-        let path2 = exe_path.join("music_database.db");
-        if path2.exists() { return Some(path2); }
+        let path = exe_path.join("music_database.db");
+        if path.exists() { return Some(path); }
     }
-
-    if std::path::Path::new("music_databasev2.db").exists() {
-        Some(std::path::PathBuf::from("music_databasev2.db"))
-    } else if std::path::Path::new("../music_databasev2.db").exists() {
-        Some(std::path::PathBuf::from("../music_databasev2.db"))
-    } else if std::path::Path::new("music_database.db").exists() {
+    if std::path::Path::new("music_database.db").exists() {
         Some(std::path::PathBuf::from("music_database.db"))
     } else if std::path::Path::new("../music_database.db").exists() {
         Some(std::path::PathBuf::from("../music_database.db"))
@@ -333,65 +326,6 @@ fn get_local_metadata(
 }
 
 #[tauri::command]
-async fn add_drive_track_to_db(
-    file_id: String,
-    size: i64,
-    name: String,
-    title: Option<String>,
-    artist: Option<String>,
-    duration: Option<f64>,
-    duration_estimated: Option<bool>,
-    picture_data: Option<Vec<u8>>,
-    picture_data_full: Option<Vec<u8>>,
-    app: tauri::AppHandle,
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> Result<String, String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-
-    // 1. Dedup — migrate thumbnail, return existing id
-    if let Some(existing) = get_local_metadata_internal(size, &name, &conn) {
-        if let Ok(cache_dir) = app.path().app_cache_dir() {
-            let _ = thumbnail::migrate_thumbnail(&cache_dir, &file_id, &existing.id);
-        }
-        return Ok(existing.id);
-    }
-
-    // 2. INSERT — this is the source of truth, must be committed first
-    let new_id = uuid::Uuid::new_v4().to_string();
-    let final_title = title.unwrap_or_else(|| name.clone());
-    let final_artist = artist.unwrap_or_default();
-
-    conn.execute(
-        "INSERT INTO tracks (id, title, artist, duration, duration_estimated, size_bytes, file_path)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![
-            new_id, final_title, final_artist, duration,
-            duration_estimated.unwrap_or(false), size,
-            format!("drive://{}", file_id),
-        ],
-    ).map_err(|e| e.to_string())?;
-    drop(conn);
-
-    // 3. Save thumbnail(s) to filesystem
-    if let Ok(cache_dir) = app.path().app_cache_dir() {
-        if let Some(pic) = picture_data {
-            let path = thumbnail::thumbnail_path(&cache_dir, &new_id, true);
-            if let Err(e) = thumbnail::atomic_write(&path, &pic) {
-                eprintln!("Warning: failed to write thumbnail for {}: {}", new_id, e);
-            }
-        }
-        if let Some(pic_full) = picture_data_full {
-            let path = thumbnail::thumbnail_path(&cache_dir, &new_id, false);
-            if let Err(e) = thumbnail::atomic_write(&path, &pic_full) {
-                eprintln!("Warning: failed to write full thumbnail for {}: {}", new_id, e);
-            }
-        }
-    }
-
-    Ok(new_id)
-}
-
-#[tauri::command]
 fn verify_track_exists(db_id: String, pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>) -> bool {
     let conn = match pool.get() {
         Ok(c) => c,
@@ -464,30 +398,6 @@ pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
 pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
-fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
-    let mut cols: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(tracks)") {
-        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) {
-            for row in rows.flatten() {
-                cols.push(row);
-            }
-        }
-    }
-    if !cols.contains(&"cover_art".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN cover_art BLOB", []).map_err(|e| e.to_string())?;
-    }
-    if !cols.contains(&"thumbnail".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN thumbnail BLOB", []).map_err(|e| e.to_string())?;
-    }
-    if !cols.contains(&"size_bytes".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER", []).map_err(|e| e.to_string())?;
-    }
-    if !cols.contains(&"duration_estimated".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN duration_estimated INTEGER DEFAULT 0", []).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute_batch("PRAGMA journal_mode=WAL;").map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA synchronous=NORMAL;").map_err(|e| e.to_string())?;
@@ -529,7 +439,6 @@ pub fn run() {
                 // Schema migration
                 if let Ok(conn) = migration_pool.get() {
                     configure_sqlite_durability(&conn).ok();
-                    ensure_schema(&conn).ok();
                 }
             }
 
@@ -594,7 +503,6 @@ pub fn run() {
             get_local_metadata,
             update_stream_token, clear_stream_token,
             update_minimize_to_tray,
-            add_drive_track_to_db,
             verify_track_exists,
             update_track_duration_in_db,
             clear_local_cache,

@@ -124,6 +124,18 @@ function setMetadataCache(fileId: string, entry: CachedMetadata) {
   }
 }
 
+export function cacheTrackMetadata(fileId: string, entry: CachedMetadata): CachedMetadata {
+  const stored: CachedMetadata = { ...entry, pictureDataFull: null };
+  setMetadataCache(fileId, stored);
+  setCache(`metadata_${fileId}`, stored, true).catch((e) => console.warn(`[${META_MODULE}] cache-set-failed`, classifyMetaError(e)));
+  return entry;
+}
+
+export function clearAllMetadataCache(): void {
+  for (const k of Object.keys(metadataCache)) delete metadataCache[k];
+  memCacheKeys.length = 0;
+}
+
 function guessMime(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
@@ -515,9 +527,7 @@ export async function getTrackMetadata(
     entry.coverUrl = entry.coverUrl ?? existingMem.coverUrl;
     entry.fullCoverUrl = entry.fullCoverUrl ?? existingMem.fullCoverUrl;
   }
-  setMetadataCache(fileId, entry);
-  setCache(`metadata_${fileId}`, entry, true).catch(e => console.warn(`[${META_MODULE}] cache-set-failed`, classifyMetaError(e)));
-  return entry;
+  return cacheTrackMetadata(fileId, entry);
   }, _signal);
 }
 
