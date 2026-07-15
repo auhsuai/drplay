@@ -3,6 +3,8 @@ import { Folder, ArrowLeft, HardDrive, Check, Search, Loader2 } from 'lucide-rea
 import { useTranslation } from 'react-i18next';
 import { db } from '../../db/db';
 import { getValidToken } from '../../utils/apiClient';
+import { searchFolders, listFolderChildren, getFileParents, getFileName } from '../../utils/driveApi';
+import { showErrorToast } from '../../utils/simpleToast';
 
 const FOLDER_MODULE = "FolderSelection";
 
@@ -64,18 +66,13 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     try {
       const safeQuery = query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
       const q = `name contains '${safeQuery}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-      const response = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name&pageSize=30`,
-        { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setApiSearchResults(data.files?.filter((f: FolderItem) => f.id !== currentFolderId) || []);
-      }
+      const files = await searchFolders(token, q, controller.signal);
+      setApiSearchResults(files.filter((f: FolderItem) => f.id !== currentFolderId));
     } catch (e: any) {
       if (e.name !== 'AbortError') {
         setApiSearchResults([]);
         console.warn(`[${FOLDER_MODULE}] api-search-failed`, classifyFolderError(e));
+        showErrorToast(t('folder_selection.search_error') || 'Failed to search folders');
       }
     } finally {
       setIsSearchingApi(false);
@@ -128,22 +125,13 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
       if (dbFolders.length > 0) {
         setFolders(dbFolders.map(c => ({ id: c.id, name: c.name })));
       } else {
-        const q = `'${folderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder'`;
         const freshToken = (await getValidToken()) || token;
-        const response = await fetch(
-          `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name`,
-          { headers: { Authorization: `Bearer ${freshToken}` } }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          setFolders(data.files || []);
-        } else {
-          setFolders([]);
-        }
+        const files = await listFolderChildren(freshToken, folderId);
+        setFolders(files.map(f => ({ id: f.id, name: f.name })));
       }
     } catch (e) {
-      console.error("[FolderSelection] Failed to fetch folders", e);
+      console.error("[FolderSelection] Failed to fetch folders", classifyFolderError(e));
+      showErrorToast(t('folder_selection.folders_error') || 'Failed to load folders');
       setFolders([]);
     } finally {
       isLoadingRef.current = false;
@@ -175,36 +163,30 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     isLoadingRef.current = true;
     setIsLoading(true);
     try {
-      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${currentFolderId}?fields=parents`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.parents && data.parents.length > 0) {
-          const fetchedParentId = data.parents[0];
-          setCurrentFolderId(fetchedParentId);
-          if (fetchedParentId === 'root') {
-            setCurrentFolderName('My Drive');
-          } else {
-            try {
-              const pRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fetchedParentId}?fields=name`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              if (pRes.ok) {
-                const pData = await pRes.json();
-                setCurrentFolderName(pData.name);
-              }
-              } catch (e) { console.warn('[FolderSelection] Failed to fetch parent folder name', e); }
-          }
+      const parents = await getFileParents(token, currentFolderId);
+      if (parents === null) {
+        // Drive request failed hard — fall back to root.
+        setCurrentFolderId('root');
+        setCurrentFolderName('My Drive');
+      } else if (parents.length > 0) {
+        const fetchedParentId = parents[0];
+        setCurrentFolderId(fetchedParentId);
+        if (fetchedParentId === 'root') {
+          setCurrentFolderName('My Drive');
         } else {
-          setCurrentFolderId('root');
+          try {
+            const name = await getFileName(token, fetchedParentId);
+            if (name) setCurrentFolderName(name);
+          } catch (e) {
+            console.warn(`[${FOLDER_MODULE}] fetch-parent-name-failed`, classifyFolderError(e));
+          }
         }
       } else {
         setCurrentFolderId('root');
-        setCurrentFolderName('My Drive');
       }
     } catch (e) {
       console.error(`[${FOLDER_MODULE}] fetch-parent-failed`, classifyFolderError(e));
+      showErrorToast(t('folder_selection.back_error') || 'Failed to navigate back');
       setCurrentFolderId('root');
       setCurrentFolderName('My Drive');
     }

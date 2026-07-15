@@ -34,35 +34,40 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   const [recentlyAdded, setRecentlyAdded] = useState<Track[]>([]);
   const [showFullRecent, setShowFullRecent] = useState(false);
 
-  const { greeting, subtitle } = useMemo(() => {
-    const hour = new Date().getHours();
-    let timeKey: 'morning' | 'afternoon' | 'evening';
-    let greetingText = '';
-    
-    if (hour < 12) {
-      timeKey = 'morning';
-      greetingText = t('home.good_morning', 'Good morning');
-    } else if (hour < 18) {
-      timeKey = 'afternoon';
-      greetingText = t('home.good_afternoon', 'Good afternoon');
-    } else {
-      timeKey = 'evening';
-      greetingText = t('home.good_evening', 'Good evening');
-    }
-
+  // Read visit count + pick the random greeting object exactly ONCE per mount.
+  // Reading sessionStorage and calling Math.random() inside useMemo caused the
+  // subtitle to reshuffle on every render (incl. StrictMode double-invoke).
+  // Keep useMemo pure; the non-deterministic choices live here.
+  const randomGreetingRef = useRef<{ randomObj: Record<string, string> } | null>(null);
+  if (randomGreetingRef.current === null) {
     const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
     // Cycle: Time-specific -> General -> General -> Time-specific ...
     const isTimeSpecific = visitCount % 3 === 0;
+    const hour = new Date().getHours();
+    let timeKey: 'morning' | 'afternoon' | 'evening';
+    if (hour < 12) timeKey = 'morning';
+    else if (hour < 18) timeKey = 'afternoon';
+    else timeKey = 'evening';
+    const possibleSubtitles = isTimeSpecific
+      ? (greetingsData as any)[timeKey]
+      : (greetingsData as any)['general'];
+    const randomObj = possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)];
+    randomGreetingRef.current = { randomObj };
+  }
 
-    let possibleSubtitles = [];
-    if (isTimeSpecific) {
-      possibleSubtitles = (greetingsData as any)[timeKey];
+  const { greeting, subtitle } = useMemo(() => {
+    const hour = new Date().getHours();
+    let greetingText = '';
+    if (hour < 12) {
+      greetingText = t('home.good_morning', 'Good morning');
+    } else if (hour < 18) {
+      greetingText = t('home.good_afternoon', 'Good afternoon');
     } else {
-      possibleSubtitles = (greetingsData as any)['general'];
+      greetingText = t('home.good_evening', 'Good evening');
     }
 
-    const randomObj = possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)];
     const lang = i18n.language?.startsWith('vi') ? 'vi' : 'en';
+    const randomObj = randomGreetingRef.current!.randomObj;
     const randomSubtitle = randomObj[lang] || randomObj['en'];
 
     return { greeting: greetingText, subtitle: randomSubtitle };

@@ -261,11 +261,4 @@ export const SongCard = React.memo(function SongCard({
     </div>
     </div>
   );
-}, (prev, next) => {
-  return prev.item.id === next.item.id &&
-         prev.isPlaying === next.isPlaying &&
-         prev.isSelected === next.isSelected &&
-         prev.isSelectionMode === next.isSelectionMode &&
-         prev.isHighlighted === next.isHighlighted &&
-         prev.highlightTrigger === next.highlightTrigger;
 });

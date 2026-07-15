@@ -5,8 +5,7 @@ import { ThemeDropdown } from "./components/ThemeDropdown";
 import { CreditsSection } from "./components/CreditsSection";
 
 import { ThemeType } from "../../hooks/useTheme";
-import { clear as clearIdb } from "idb-keyval";
-import { invoke } from "@tauri-apps/api/core";
+import { clearAppCache } from "../../utils/cache";
 import { open } from "@tauri-apps/plugin-dialog";
 import { showErrorToast } from "../../utils/simpleToast";
 import { setCustomDownloadPath, getEffectiveDownloadPath } from "../../utils/downloadPath";
@@ -241,9 +240,7 @@ export function SettingsTab({
               <button
                 onClick={async () => {
                   try {
-                    await clearIdb();
-                    localStorage.removeItem('__drplay_metadata_lru');
-                    await invoke("clear_local_cache");
+                    await clearAppCache();
                     showErrorToast(t('settings.clear_cache_success', 'Cache cleared successfully!'));
                   } catch (e) {
                     showErrorToast(t('settings.clear_cache_error', 'Failed to clear cache.'));

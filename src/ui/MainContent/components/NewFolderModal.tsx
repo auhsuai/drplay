@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { X, Loader2, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { showErrorToast } from "../../../utils/simpleToast";
 
 interface NewFolderModalProps {
   isOpen: boolean;
@@ -21,9 +22,15 @@ export function NewFolderModal({
   if (!isOpen) return null;
 
   const handleCreate = async () => {
-    if (!newFolderName.trim()) return;
+    const name = newFolderName.trim();
+    if (!name) return;
+    // Reject characters that are invalid in Drive/folder names before calling the API.
+    if (/[\\/:*?"<>|]/.test(name)) {
+      showErrorToast(t('drive.folder_name_invalid') || "Folder name contains invalid characters");
+      return;
+    }
     try {
-      await onCreate(newFolderName.trim());
+      await onCreate(name);
       setNewFolderName(""); // Reset only on success
     } catch (e) {
       // Error is handled and alerted by parent

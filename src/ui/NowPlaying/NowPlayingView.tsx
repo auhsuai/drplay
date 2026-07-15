@@ -70,8 +70,9 @@ export function NowPlayingView({
       
       let isCancelled = false;
       let objectUrl: string | null = null;
+      const controller = new AbortController();
 
-      getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName)
+      getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName, controller.signal)
         .then(metadata => {
           if (isCancelled) return;
           if (metadata.title) setRealTitle(metadata.title);
@@ -127,6 +128,7 @@ export function NowPlayingView({
         
       return () => {
         isCancelled = true;
+        controller.abort();
         if (objectUrl) URL.revokeObjectURL(objectUrl);
         setBgColor('');
         setBgPalette([]);

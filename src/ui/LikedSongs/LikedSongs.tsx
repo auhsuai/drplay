@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Track } from '../../App';
 import { getFavorites, removeFavorite } from '../../utils/favorites';
 import { getTrackMetadata } from '../../utils/metadata';
+import { showErrorToast } from '../../utils/simpleToast';
 import { MoreMenu } from '../components/MoreMenu';
 import { prefetchVisibleTracks } from '../../utils/streamPrefetcher';
 
@@ -52,9 +53,14 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     let cancelled = false;
     const controller = new AbortController();
     
-    // Load metadata/covers for favorites
-    favorites.forEach(track => {
-      if (!covers[track.id]) {
+    // Load metadata/covers for favorites. Process in small batches of
+    // COVER_CONCURRENCY so a large playlist doesn't spawn hundreds of Drive
+    // requests at once (was: unlimited parallel via forEach).
+    const COVER_CONCURRENCY = 5;
+    const tracksToLoad = favorites.filter(track => !covers[track.id]);
+
+    const loadBatch = async (batch: Track[]) => {
+      await Promise.all(batch.map(track =>
         getTrackMetadata(track.id, token, track.size, track.originalName, controller.signal).then(metadata => {
           if (cancelled) return;
           if (metadata.coverUrl) {
@@ -72,9 +78,16 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
               [track.id]: url
             }));
           }
-        }).catch(err => console.warn('[LikedSongs] Failed to load cover metadata for track', track.id, err));
+        }).catch(err => console.warn('[LikedSongs] Failed to load cover metadata for track', track.id, err))
+      ));
+    };
+
+    const run = async () => {
+      for (let i = 0; i < tracksToLoad.length && !cancelled; i += COVER_CONCURRENCY) {
+        await loadBatch(tracksToLoad.slice(i, i + COVER_CONCURRENCY));
       }
-    });
+    };
+    run().catch(err => console.error('[LikedSongs] Failed to load covers', err));
 
     return () => {
       cancelled = true;
@@ -84,9 +97,14 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     };
   }, [favorites, token]);
 
-  const handleUnlike = (e: React.MouseEvent, trackId: string) => {
+  const handleUnlike = async (e: React.MouseEvent, trackId: string) => {
     e.stopPropagation();
-    removeFavorite(trackId);
+    try {
+      await removeFavorite(trackId);
+    } catch (e) {
+      showErrorToast(t('liked_songs.remove_failed') || 'Không thể xóa khỏi yêu thích, vui lòng thử lại.');
+      console.error('[LikedSongs] Failed to remove favorite', trackId, e);
+    }
   };
 
   return (

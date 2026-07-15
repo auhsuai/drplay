@@ -70,7 +70,7 @@ export function MainContent({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkMoveScreen, setShowBulkMoveScreen] = useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
-  const [isBulkOperating] = useState(false);
+  const [isBulkOperating, setIsBulkOperating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -279,13 +279,31 @@ export function MainContent({
     setIsSelectionMode(false);
     setShowBulkDeleteConfirm(false);
 
+    setIsBulkOperating(true);
+    const deletedIds: string[] = [];
+    const failedIds: string[] = [];
     try {
-      await Promise.all(itemsToDelete.map(id => deleteFile(token, id)));
-      await db.files.bulkDelete(itemsToDelete);
-      if (onRemoveItem) itemsToDelete.forEach(id => onRemoveItem(id));
+      for (const id of itemsToDelete) {
+        try {
+          await deleteFile(token, id);
+          deletedIds.push(id);
+        } catch (e) {
+          failedIds.push(id);
+          console.error(`[MainContent] bulk-delete: Failed to delete item ${id}`, e);
+        }
+      }
+      if (deletedIds.length > 0) {
+        await db.files.bulkDelete(deletedIds);
+        if (onRemoveItem) deletedIds.forEach(id => onRemoveItem(id));
+      }
+      if (failedIds.length > 0) {
+        showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
+      }
     } catch (e) {
-      console.error("[MainContent] bulk-delete: Failed to delete items", e);
+      console.error("[MainContent] bulk-delete: Unexpected error during bulk delete", e);
       showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
+    } finally {
+      setIsBulkOperating(false);
     }
   };
 
@@ -293,28 +311,38 @@ export function MainContent({
     if (!token || selectedIds.size === 0) return;
     
     const itemsToMove = Array.from(selectedIds);
-    const originalParents = new Map<string, string>();
-    for (const id of itemsToMove) {
-      const item = await db.files.get(id);
-      if (item) originalParents.set(id, item.parentId);
-    }
-    
+
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setShowBulkMoveScreen(false);
 
+    setIsBulkOperating(true);
+    const movedIds: string[] = [];
+    const failedIds: string[] = [];
     try {
-      await Promise.all(itemsToMove.map(id => moveFile(token, id, currentFolderId, destinationFolderId)));
       for (const id of itemsToMove) {
+        try {
+          await moveFile(token, id, currentFolderId, destinationFolderId);
+          movedIds.push(id);
+        } catch (e) {
+          failedIds.push(id);
+          console.error(`[MainContent] bulk-move: Failed to move item ${id}`, e);
+        }
+      }
+      // Update local DB only for items that actually moved on Drive,
+      // so local state always matches Drive reality (no desync).
+      for (const id of movedIds) {
         await db.files.update(id, { parentId: destinationFolderId });
       }
-      if (onRemoveItem) itemsToMove.forEach(id => onRemoveItem(id));
-    } catch (e) {
-      console.error("[MainContent] bulk-move: Failed to move items", e);
-      for (const [id, parentId] of originalParents) {
-        await db.files.update(id, { parentId }).catch((err) => console.warn("[MainContent] bulk-move: Failed to restore original parent during rollback", id, err));
+      if (onRemoveItem && movedIds.length > 0) movedIds.forEach(id => onRemoveItem(id));
+      if (failedIds.length > 0) {
+        showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
       }
+    } catch (e) {
+      console.error("[MainContent] bulk-move: Unexpected error during bulk move", e);
       showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
+    } finally {
+      setIsBulkOperating(false);
     }
   };
 

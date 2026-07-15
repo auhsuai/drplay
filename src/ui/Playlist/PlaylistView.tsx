@@ -28,6 +28,7 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
       setPlaylist(data);
     } catch (e) {
       console.error("[PlaylistView] Failed to load playlist", e);
+      showErrorToast(t('playlist.load_error') || "Failed to load playlist");
     }
   };
 
@@ -71,19 +72,35 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
     }
   };
 
+  const MAX_COVER_BYTES = 5 * 1024 * 1024;
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setSelectedImage(event.target?.result as string);
-        setIsCropperOpen(true);
-      };
-      reader.readAsDataURL(file);
-    }
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+    if (!file) return;
+
+    // Validate type (accept="image/*" is advisory only) and size before reading.
+    if (!file.type.startsWith("image/")) {
+      showErrorToast(t('playlist.cover_invalid_type') || "Please choose an image file");
+      return;
+    }
+    if (file.size > MAX_COVER_BYTES) {
+      showErrorToast(t('playlist.cover_too_large') || "Image must be 5 MB or smaller");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setSelectedImage(event.target?.result as string);
+      setIsCropperOpen(true);
+    };
+    reader.onerror = () => {
+      console.error("[PlaylistView] FileReader failed to read cover image", { name: file.name, size: file.size });
+      showErrorToast(t('playlist.cover_read_error') || "Failed to read the selected image");
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSaveCover = async (base64Img: string) => {

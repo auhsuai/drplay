@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { restoreFile, permanentlyDeleteFile } from '../../utils/driveApi';
+import { restoreFile, permanentlyDeleteFile, getTrashedFiles } from '../../utils/driveApi';
 import { showErrorToast } from '../../utils/simpleToast';
 
 interface TrashScreenProps {
@@ -48,16 +48,11 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     try {
       // Fetch trashed audio files and folders that were deleted by DrPlay
       const q = "trashed=true and appProperties has { key='deletedByDrPlay' and value='true' }";
-      const response = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType)&orderBy=folder,name`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setItems(data.files || []);
-      }
+      const files = await getTrashedFiles(token, q);
+      setItems(files.map((f: TrashedItem) => ({ id: f.id, name: f.name, mimeType: f.mimeType })));
     } catch (e) {
       console.error("[Trash] Failed to fetch trashed items", e);
+      showErrorToast(t('settings.trash_load_error') || "Failed to load trash");
     } finally {
       setIsLoading(false);
     }
