@@ -10,15 +10,15 @@ use sha2::Sha256;
 use reqwest::Client;
 use serde::Deserialize;
 use tauri::Emitter;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
+use bytes::Bytes;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
-use tokio::task::JoinHandle;
-use futures_util::future::join_all;
 
 // Maximum buffer size allowed across all tracks (prevents unbounded memory use)
 const ABSOLUTE_MAX_BUFFER: u64 = 500 * 1024 * 1024; // 500MB
@@ -38,17 +38,13 @@ struct BufferState {
     total_size_byte: u64,
 }
 
-struct TrackCache {
-    buffer: Vec<u8>,
-    window_start: u64,
-    fetch_task: Option<JoinHandle<()>>,
+struct TrackMeta {
     total_size: u64,
     content_type: String,
     accessed_at: u64,
-    fetching: AtomicBool,
 }
 
-type CacheStore = Arc<Mutex<HashMap<String, Arc<Mutex<TrackCache>>>>>;
+type CacheStore = Arc<Mutex<HashMap<String, Arc<Mutex<TrackMeta>>>>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -126,8 +122,6 @@ fn extract_drive_reason(body: &str) -> Option<String> {
 /// The reason string is authoritative; status code is the fallback.
 fn classify_drive_error(status: u16, body: &str) -> DriveErr {
     if let Some(reason) = extract_drive_reason(body) {
-        // Exact matches first so downloadQuotaExceeded is not swallowed by the
-        // generic "quotaexceeded" contains-check below.
         match reason.as_str() {
             "downloadquotaexceeded" => return DriveErr::DownloadQuota,
             "insufficientfilepermissions"
@@ -150,8 +144,6 @@ fn classify_drive_error(status: u16, body: &str) -> DriveErr {
     match status {
         401 => DriveErr::Auth,
         404 => DriveErr::NotFound,
-        // Unknown 403/429 without a reason: stay conservative and back off
-        // rather than skip a track that might just be throttled.
         403 | 429 => DriveErr::Rate,
         _ => DriveErr::Upstream,
     }
@@ -200,43 +192,11 @@ async fn fetch_range_from_drive(
     Ok(bytes.to_vec())
 }
 
-async fn forward_multipart_range(
-    client: &Client,
-    api_url: &str,
-    token: &str,
-    ranges: &[(u64, u64)],
-    total_size: u64,
-) -> Result<Response, DriveErr> {
-    let boundary = format!("drplay_{}", uuid::Uuid::new_v4());
-    let mut body = Vec::new();
-
-    for &(start, end) in ranges {
-        let chunk = fetch_range_from_drive(client, api_url, token, start, end).await?;
-        let header = format!(
-            "\r\n--{}\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
-            boundary, start, end, total_size
-        );
-        body.extend_from_slice(header.as_bytes());
-        body.extend_from_slice(&chunk);
-    }
-    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
-
-    Ok(Response::builder()
-        .status(206)
-        .header(header::CONTENT_TYPE, format!("multipart/byteranges; boundary={}", boundary))
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .body(axum::body::Body::from(body))
-        .unwrap())
-}
-
 /// Called when a Drive request fails with 401 (expired OAuth token). Signals the
 /// frontend to refresh the token, then waits (bounded) for `update_stream_token`
 /// to publish a new one and returns it. Returns None on timeout / no change so
 /// the caller can surface an explicit auth error instead of a generic 502.
 async fn recover_stream_token(old_token: &str) -> Option<String> {
-    // Register interest on the notify BEFORE emitting, otherwise a fast frontend
-    // refresh could call notify_waiters() before we start waiting -> lost wakeup.
     let notify = crate::GLOBAL_TOKEN_NOTIFY.clone();
     let notified = notify.notified();
     tokio::pin!(notified);
@@ -259,30 +219,6 @@ async fn recover_stream_token(old_token: &str) -> Option<String> {
     } else {
         Some(new_token)
     }
-}
-
-fn respond_from_cache(buffer: &[u8], window_start: u64, start: u64, end: u64, total_size: u64, content_type: &str) -> Response {
-    let offset = (start - window_start) as usize;
-    let mut read_end = (end.saturating_sub(window_start) + 1) as usize;
-    read_end = read_end.min(buffer.len());
-    let mut chunk_size = read_end.saturating_sub(offset);
-    let max_chunk = 2 * 1024 * 1024;
-    if chunk_size > max_chunk {
-        chunk_size = max_chunk;
-        read_end = offset + chunk_size;
-    }
-    let chunk = buffer[offset..read_end].to_vec();
-    let real_end = start + chunk.len() as u64 - 1;
-
-    Response::builder()
-        .status(StatusCode::PARTIAL_CONTENT)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
-        .header(header::CONTENT_LENGTH, chunk.len().to_string())
-        .body(axum::body::Body::from(chunk))
-        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response())
 }
 
 async fn handle_stream(
@@ -340,8 +276,6 @@ async fn handle_stream(
     let mut final_token = crate::GLOBAL_STREAM_TOKEN.lock().await.clone();
 
     if final_token.is_empty() {
-        // No token yet (e.g. play attempted before the frontend seeded it, or it
-        // was cleared). Ask the frontend to (re)publish a token before giving up.
         match recover_stream_token(&final_token).await {
             Some(t) => { final_token = t; }
             None => return (StatusCode::UNAUTHORIZED, [("X-Stream-Error-Type", "auth-expired")], "No token").into_response(),
@@ -360,14 +294,11 @@ async fn handle_stream(
         }
     };
 
-    // For HEAD (the frontend's classification probe) always re-validate against
-    // Drive so a file deleted / access-revoked *after* its size was cached is
-    // still surfaced with the correct X-Stream-Error-Type header.
+    // For HEAD always re-validate against Drive
     let (total_size, content_type) = if total_size == 0 || method == axum::http::Method::HEAD {
         match get_total_size(&state.client, &api_url, &final_token).await {
             Ok(v) => v,
             Err(DriveErr::Auth) => {
-                // Expired token on the probe. Recover once before deciding.
                 match recover_stream_token(&final_token).await {
                     Some(t) => {
                         final_token = t;
@@ -408,262 +339,207 @@ async fn handle_stream(
             .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build HEAD body").into_response());
     }
 
-    if ranges.len() > 1 {
-        for attempt in 0..2 {
-            match forward_multipart_range(&state.client, &api_url, &final_token, &ranges, total_size).await {
-                Ok(r) => {
-                    FAIL_COUNT.store(0, Ordering::Relaxed);
-                    return r;
-                }
-                Err(DriveErr::Rate) => {
-                    return handle_rate_limit(now).await;
-                }
-                Err(DriveErr::Auth) if attempt == 0 => {
-                    match recover_stream_token(&final_token).await {
-                        Some(t) => { final_token = t; continue; }
-                        None => return drive_err_response(DriveErr::Auth),
-                    }
-                }
-                Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                    return drive_err_response(e);
-                }
-                Err(_) => {
-                    return (StatusCode::BAD_GATEWAY, "Upstream error").into_response();
-                }
-            }
-        }
-        return (StatusCode::BAD_GATEWAY, "Upstream error").into_response();
-    }
+    // Multipart ranges → fall through to serve the full file as a single range
+    let (start, end) = if ranges.len() > 1 {
+        (0u64, total_size.saturating_sub(1))
+    } else {
+        let r = ranges.first().cloned().unwrap_or((0, total_size.saturating_sub(1)));
+        (r.0, r.1.min(total_size.saturating_sub(1)))
+    };
 
-    // Single-range or no-range path
-    let range_value = ranges.first().cloned().unwrap_or((0, total_size.saturating_sub(1)));
-    let start = range_value.0;
-    let end = range_value.1.min(total_size.saturating_sub(1));
-
-    let mut store = state.cache_store.lock().await;
-    
-    // LRU Cleanup: Keep up to 3 tracks in memory to avoid thrashing
-    if store.len() >= 3 && !store.contains_key(&query.id) {
-        let mut oldest_key = String::new();
-        let mut oldest_time = u64::MAX;
-        for (k, arc) in store.iter() {
-            if let Ok(tc) = arc.try_lock() {
-                if tc.accessed_at < oldest_time {
-                    oldest_time = tc.accessed_at;
-                    oldest_key = k.clone();
-                }
-            }
-        }
-        if !oldest_key.is_empty() {
-            if let Some(arc) = store.remove(&oldest_key) {
-                // Ensure we reliably abort the task
-                let mut tc = arc.lock().await;
-                if let Some(task) = tc.fetch_task.take() {
-                    task.abort();
-                }
-            }
-        }
-    }
-
-    let track_cache_arc = store.entry(query.id.clone()).or_insert_with(|| {
-        Arc::new(Mutex::new(TrackCache {
-            buffer: Vec::with_capacity(2 * 1024 * 1024),
-            window_start: 0,
-            fetch_task: None,
+    // Store metadata
+    {
+        let mut store = state.cache_store.lock().await;
+        store.insert(query.id.clone(), Arc::new(Mutex::new(TrackMeta {
             total_size,
             content_type: content_type.clone(),
             accessed_at: now_epoch_secs(),
-            fetching: AtomicBool::new(false),
-        }))
-    }).clone();
-    
-    // Drop the global store lock so other requests can proceed
-    drop(store);
-
-    let mut track_cache = track_cache_arc.lock().await;
-    track_cache.accessed_at = now_epoch_secs();
-    let window_end = track_cache.window_start + track_cache.buffer.len() as u64;
-
-    if start >= track_cache.window_start && start < window_end {
-        // Cache Hit!
+        })));
         FAIL_COUNT.store(0, Ordering::Relaxed);
-        respond_from_cache(&track_cache.buffer, track_cache.window_start, start, end, total_size, &track_cache.content_type)
-    } else {
-        // Cache Miss — try to claim the fetching flag
-        if track_cache.fetching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
-            // Another request is already fetching — wait briefly then check cache
-            drop(track_cache);
-            for _ in 0..50 {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                let tc = track_cache_arc.lock().await;
-                let window_end = tc.window_start + tc.buffer.len() as u64;
-                if start >= tc.window_start && start < window_end {
-                    return respond_from_cache(&tc.buffer, tc.window_start, start, end, total_size, &tc.content_type);
-                }
-                drop(tc);
-            }
-            // Timeout — re-acquire lock and try to re-claim the fetching flag
-            track_cache = track_cache_arc.lock().await;
-            track_cache.accessed_at = now_epoch_secs();
-            let window_end = track_cache.window_start + track_cache.buffer.len() as u64;
-            if start >= track_cache.window_start && start < window_end {
-                return respond_from_cache(&track_cache.buffer, track_cache.window_start, start, end, total_size, &track_cache.content_type);
-            }
-            if track_cache.fetching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
-                // Another thread already claimed it — retry cache hit check one more time
-                let window_end = track_cache.window_start + track_cache.buffer.len() as u64;
-                if start >= track_cache.window_start && start < window_end {
-                    return respond_from_cache(&track_cache.buffer, track_cache.window_start, start, end, total_size, &track_cache.content_type);
-                }
-                drop(track_cache);
-                return (StatusCode::SERVICE_UNAVAILABLE, "Buffer not ready").into_response();
-            }
-        }
+    }
 
-        // We own the fetching flag — abort previous task
-        if let Some(task) = track_cache.fetch_task.take() {
-            task.abort();
-        }
+    let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
+        Some(c) => c,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Cache not initialized").into_response(),
+    };
 
-        // Release per-track lock so metadata requests don't block during network I/O
-        drop(track_cache);
+    // Align to SLICE_SIZE boundaries
+    let slice_start = (start / crate::slice_cache::SLICE_SIZE) * crate::slice_cache::SLICE_SIZE;
+    let slice_last = ((end / crate::slice_cache::SLICE_SIZE) + 1) * crate::slice_cache::SLICE_SIZE;
+    let desired_total = (end - start + 1) as usize;
 
-        // Fetch first 2MB synchronously (NO lock held)
-        let initial_fetch_end = (start + 2 * 1024 * 1024 - 1).min(total_size.saturating_sub(1));
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+    let track_id = query.id.clone();
+    let fetch_client = state.client.clone();
+    let fetch_api_url = api_url.clone();
+    let fetch_token = final_token.clone();
+    let actual_start = start;
+    let actual_end = end;
 
-        let mut chunk = vec![];
-        let max_retries = 3;
-        for attempt in 0..max_retries {
-            match fetch_range_from_drive(&state.client, &api_url, &final_token, start, initial_fetch_end).await {
-                Ok(c) => {
-                    chunk = c;
-                    FAIL_COUNT.store(0, Ordering::Relaxed);
-                    break;
-                }
-                Err(DriveErr::Rate) => {
-                    if attempt == max_retries - 1 {
-                        return handle_rate_limit(now).await;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                }
-                Err(DriveErr::Auth) => {
-                    match recover_stream_token(&final_token).await {
-                        Some(t) => { final_token = t; continue; }
-                        None => return drive_err_response(DriveErr::Auth),
+    tokio::spawn(async move {
+        let mut current_offset = slice_start;
+        let mut buffer_status_emitted = false;
+        let mut bytes_sent = 0usize;
+
+        while current_offset < slice_last {
+            // Cache hit path
+            if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
+                let mut chunk = (*data).clone();
+
+                // Front trim for first slice
+                if current_offset == slice_start && actual_start > slice_start {
+                    let skip = (actual_start - slice_start) as usize;
+                    if skip < chunk.len() {
+                        chunk.drain(..skip);
                     }
                 }
-                Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                    return drive_err_response(e);
-                }
-                Err(_) => {
-                    if attempt == max_retries - 1 {
-                        return (StatusCode::BAD_GATEWAY, "Gateway Error").into_response();
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                }
-            }
-        }
 
-        if chunk.is_empty() {
-            return (StatusCode::BAD_GATEWAY, "Gateway Error").into_response();
-        }
-
-        // Re-acquire per-track lock to update buffer
-        let mut tc = track_cache_arc.lock().await;
-        tc.window_start = start;
-        tc.buffer = chunk.clone();
-        tc.fetching.store(false, Ordering::Release);
-
-        if let Some(app) = crate::APP_HANDLE.get() {
-            let _ = app.emit("buffer-status", BufferState {
-                track_id: query.id.clone(),
-                buffer_start_byte: start,
-                buffer_end_byte: start + chunk.len() as u64,
-                total_size_byte: total_size,
-            });
-        }
-
-        // Spawn background task to fetch remaining up to 100MB
-        let background_start = start + chunk.len() as u64;
-        if background_start < total_size {
-            let bg_client = state.client.clone();
-            let bg_url = api_url.clone();
-            let bg_token = final_token.clone();
-            let bg_arc = track_cache_arc.clone();
-            let bg_total = total_size;
-
-            let track_id_bg = query.id.clone();
-            let task = tokio::spawn(async move {
-                let limit = buffer_size_limit();
-                let max_fetch = (start + limit).min(bg_total);
-                let mut pending: Vec<(u64, u64)> = Vec::new();
-                let mut current = background_start;
-
-                while current < max_fetch {
-                    let chunk_end = (current + 2 * 1024 * 1024 - 1).min(max_fetch.saturating_sub(1));
-                    pending.push((current, chunk_end));
-                    current = chunk_end + 1;
+                // End trim to match exact requested range
+                let remaining = desired_total.saturating_sub(bytes_sent);
+                if remaining < chunk.len() {
+                    chunk.truncate(remaining);
                 }
 
-                for batch in pending.chunks(4) {
-                    let futures: Vec<_> = batch
-                        .iter()
-                        .map(|&(cs, ce)| bg_fetch_with_retry(
-                            |s, e| fetch_range_from_drive(&bg_client, &bg_url, &bg_token, s, e),
-                            cs, ce, MAX_BG_RETRIES,
-                        ))
-                        .collect();
-                    let results = join_all(futures).await;
-
-                    let mut tc_bg = bg_arc.lock().await;
-                    if tc_bg.window_start != start {
+                bytes_sent += chunk.len();
+                if !chunk.is_empty() {
+                    if tx.send(chunk).await.is_err() {
                         break;
                     }
+                }
+                current_offset += crate::slice_cache::SLICE_SIZE;
+                continue;
+            }
 
-                    let mut any_fail = false;
-                    for result in results {
-                        match result {
-                            Ok(data) => {
-                                tc_bg.buffer.extend_from_slice(&data);
+            // Cache miss: find consecutive missing slices
+            let (fetch_start, count) = slice_cache.find_missing_run(
+                &track_id, current_offset, 4,
+            ).await;
+
+            if count == 0 {
+                current_offset += crate::slice_cache::SLICE_SIZE;
+                continue;
+            }
+
+            let fetch_end_slice = fetch_start + (count as u64) * crate::slice_cache::SLICE_SIZE;
+            let fetch_end_byte = fetch_end_slice.min(total_size).saturating_sub(1);
+
+            // Fetch batch from Drive (with retry)
+            let mut last_err = None;
+            let mut batch_data = None;
+            for attempt in 0..3 {
+                match fetch_range_from_drive(
+                    &fetch_client, &fetch_api_url, &fetch_token,
+                    fetch_start, fetch_end_byte,
+                ).await {
+                    Ok(data) => {
+                        batch_data = Some(data);
+                        break;
+                    }
+                    Err(DriveErr::Rate) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                        last_err = Some(DriveErr::Rate);
+                    }
+                    Err(DriveErr::Auth) => {
+                        last_err = Some(DriveErr::Auth);
+                        break;
+                    }
+                    Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
+                        last_err = Some(e);
+                        break;
+                    }
+                    Err(e) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                        last_err = Some(e);
+                    }
+                }
+            }
+
+            match batch_data {
+                Some(data) => {
+                    slice_cache.batch_insert(&track_id, fetch_start, data).await;
+
+                    // Send each cached slice with trimming
+                    for i in 0..count {
+                        let slice_offset = fetch_start + (i as u64) * crate::slice_cache::SLICE_SIZE;
+                        if slice_offset > actual_end {
+                            break;
+                        }
+                        if let Some(cached) = slice_cache.try_get(&track_id, slice_offset).await {
+                            let mut chunk = (*cached).clone();
+
+                            // Front trim for first requested slice
+                            if slice_offset == slice_start && actual_start > slice_start {
+                                let skip = (actual_start - slice_start) as usize;
+                                if skip < chunk.len() {
+                                    chunk.drain(..skip);
+                                }
                             }
-                            Err(e) => {
-                                any_fail = true;
-                                eprintln!("[proxy] bg-prefetch-chunk-fail: {:?}", e);
-                                break;
+
+                            // End trim to match exact range
+                            let remaining = desired_total.saturating_sub(bytes_sent);
+                            if remaining < chunk.len() {
+                                chunk.truncate(remaining);
+                            }
+
+                            bytes_sent += chunk.len();
+                            if !chunk.is_empty() {
+                                if tx.send(chunk).await.is_err() {
+                                    return;
+                                }
                             }
                         }
                     }
 
-                    if let Some(app) = crate::APP_HANDLE.get() {
-                        let _ = app.emit("buffer-status", BufferState {
-                            track_id: track_id_bg.clone(),
-                            buffer_start_byte: tc_bg.window_start,
-                            buffer_end_byte: tc_bg.window_start + tc_bg.buffer.len() as u64,
-                            total_size_byte: bg_total,
-                        });
+                    // Emit buffer-status once after first successful batch
+                    if !buffer_status_emitted {
+                        buffer_status_emitted = true;
+                        if let Some(app) = crate::APP_HANDLE.get() {
+                            let _ = app.emit("buffer-status", BufferState {
+                                track_id: track_id.clone(),
+                                buffer_start_byte: 0,
+                                buffer_end_byte: total_size,
+                                total_size_byte: total_size,
+                            });
+                        }
                     }
 
-                    if any_fail {
-                        break;
-                    }
+                    current_offset = fetch_end_slice;
                 }
-            });
-            tc.fetch_task = Some(task);
+                None => {
+                    if let Some(err) = last_err {
+                        eprintln!("[proxy] batch-fetch-fail: {:?}", err);
+                        if err == DriveErr::Rate {
+                            let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                            let cooldown = {
+                                let base = 30u64;
+                                base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
+                            };
+                            GLOBAL_BACKOFF_UNTIL.store(
+                                now_epoch_secs() + cooldown,
+                                Ordering::Release,
+                            );
+                        }
+                    } else {
+                        eprintln!("[proxy] batch-fetch-fail: unknown error");
+                    }
+                    break;
+                }
+            }
         }
+    });
 
-        // Return initial chunk
-        let real_end = start + chunk.len() as u64 - 1;
-        let body = axum::body::Body::from(chunk);
-        Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
-            .header(header::CONTENT_LENGTH, (real_end - start + 1).to_string())
-            .body(body)
-            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response())
-    }
+    // Build streaming response
+    let stream = ReceiverStream::new(rx)
+        .map(|chunk| Ok::<Bytes, std::convert::Infallible>(Bytes::from(chunk)));
+    let body = axum::body::Body::from_stream(stream);
+
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size))
+        .body(body)
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response body").into_response())
 }
 
 /// Probe a file's total size + content type. Uses a 1-byte ranged GET (not HEAD)
@@ -853,70 +729,5 @@ mod tests {
         let result = simulate_background_prefetch(0, 1024 * 1024 * 4, 2 * 1024 * 1024, hard_fetch).await;
         assert!(result.is_err());
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn test_respond_from_cache_partial_content() {
-        let buffer = vec![42u8; 2000];
-        let resp = respond_from_cache(&buffer, 0, 100, 500, 10000, "audio/mpeg");
-        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
-        let cr = resp.headers().get(header::CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap();
-        assert_eq!(cr, "bytes 100-500/10000");
-        let cl: usize = resp.headers().get(header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse().ok())
-            .unwrap();
-        assert_eq!(cl, 401);
-    }
-
-    #[tokio::test]
-    async fn test_respond_from_cache_truncates_at_2mb() {
-        let buffer = vec![0u8; 5 * 1024 * 1024];
-        let resp = respond_from_cache(&buffer, 0, 0, 5_000_000, 10_000_000, "audio/mpeg");
-        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
-        let cr = resp.headers().get(header::CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap();
-        // 2MB limit means chunk ends at 2_097_152 - 1 = 2_097_151
-        assert_eq!(cr, format!("bytes 0-{}/10000000", 2 * 1024 * 1024 - 1));
-        let cl: usize = resp.headers().get(header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse().ok())
-            .unwrap();
-        assert_eq!(cl, 2 * 1024 * 1024);
-    }
-
-    #[tokio::test]
-    async fn test_fetching_flag_coordination() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let f1 = Arc::clone(&flag);
-        let f2 = Arc::clone(&flag);
-        let t1 = tokio::spawn(async move {
-            f1.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
-        });
-        let t2 = tokio::spawn(async move {
-            f2.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
-        });
-        let (r1, r2) = tokio::join!(t1, t2);
-        assert_ne!(r1.unwrap(), r2.unwrap(), "exactly one thread should claim the flag");
-    }
-
-    #[tokio::test]
-    async fn test_fetching_flag_reset_allows_second_claim() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let f1 = Arc::clone(&flag);
-        let t1 = tokio::spawn(async move {
-            f1.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
-        });
-        assert!(t1.await.unwrap());
-        // Reset
-        flag.store(false, Ordering::Release);
-        let f2 = Arc::clone(&flag);
-        let t2 = tokio::spawn(async move {
-            f2.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
-        });
-        assert!(t2.await.unwrap());
     }
 }
