@@ -214,6 +214,10 @@ export const usePlayer = (accessToken: string | null) => {
         if (!targetTrack.queueItemId) {
           targetTrack = {...targetTrack, queueItemId: crypto.randomUUID()};
         }
+        // ROOT FIX: contextQueue-less plays left playbackQueue empty/stale,
+        // making handleNextTrack/handlePrevTrack silently dead. Ensure the
+        // current track is always present in the playback queue.
+        setPlaybackQueue([targetTrack]);
       }
     }
 
@@ -300,7 +304,10 @@ export const usePlayer = (accessToken: string | null) => {
     if (!currentTrack || playbackQueue.length === 0) return;
 
     const currentIndex = playbackQueue.findIndex(item => item.queueItemId ? (item.queueItemId === currentTrack.queueItemId) : (item.id === currentTrack.id));
-    if (currentIndex === -1) return;
+    if (currentIndex === -1) {
+      console.warn(`[usePlayer] handleNextTrack: current track not found in playbackQueue`, { currentTrackId: currentTrack?.id });
+      return;
+    }
 
     if (currentIndex < playbackQueue.length - 1) {
       handlePlayTrack(playbackQueue[currentIndex + 1], undefined, true);
@@ -315,7 +322,10 @@ export const usePlayer = (accessToken: string | null) => {
     if (!currentTrack || playbackQueue.length === 0) return;
 
     const currentIndex = playbackQueue.findIndex(item => item.queueItemId ? (item.queueItemId === currentTrack.queueItemId) : (item.id === currentTrack.id));
-    if (currentIndex === -1) return;
+    if (currentIndex === -1) {
+      console.warn(`[usePlayer] handlePrevTrack: current track not found in playbackQueue`, { currentTrackId: currentTrack?.id });
+      return;
+    }
 
     if (currentIndex > 0) {
       handlePlayTrack(playbackQueue[currentIndex - 1], undefined, true);
@@ -416,6 +426,7 @@ export const usePlayer = (accessToken: string | null) => {
     isPlaying,
     setIsPlaying,
     isDownloading,
+    playbackQueue,
     playMode,
     bufferSeconds,
     setBufferSeconds,

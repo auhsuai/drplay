@@ -12,6 +12,8 @@ interface UsePlaybackControlParams {
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
+  onNextTrackRef: React.MutableRefObject<() => void>;
+  onPrevTrackRef: React.MutableRefObject<() => void>;
   onTogglePlayMode: () => void;
   onExpandNowPlaying: () => void;
   dispatch: React.Dispatch<PlayerAction>;
@@ -39,15 +41,19 @@ export interface PlaybackControlAPI {
 }
 
 export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackControlAPI {
-  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onTogglePlayMode, onExpandNowPlaying, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, audioRef2, activeAudioIndexRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef } = params;
+  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, onExpandNowPlaying, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, audioRef2, activeAudioIndexRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef } = params;
 
   const { error: errorInfo, pendingResumeTime } = playerState;
   const currentTrackRef = useRef(currentTrack);
   currentTrackRef.current = currentTrack;
 
+  // onNextTrackRef/onPrevTrackRef are created ONCE in PlayerBar.tsx (before
+  // useAudioEngine is called, due to a circular hook ordering dependency) and
+  // passed in here. They are the single source of truth for next/prev — synced
+  // in the effect below and reused by mediaSession + callbackRefs so every
+  // consumer (useAudioEngine auto-advance, useKeyboard, media keys) reads the
+  // same ref object whose .current is always the current handleNextClick/handlePrevClick.
   const onTogglePlayRef = useRef(onTogglePlay);
-  const onNextTrackRef = useRef(onNextTrack);
-  const onPrevTrackRef = useRef(onPrevTrack);
   const onTogglePlayModeRef = useRef(onTogglePlayMode);
   const onToggleNowPlayingRef = useRef(onExpandNowPlaying);
   const isPlayingRef = useRef(isPlaying);
