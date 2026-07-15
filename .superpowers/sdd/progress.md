@@ -4,3 +4,4 @@ Task 3: complete (commits 87bd57c..b9d2723, review clean — note: stuck fetching 
 Task 4: complete (commits b9d2723..d57d553, review clean after 2 fix rounds)
 Task 5: complete (commits d57d553..8c01cc8, review clean)
 Task 6: complete (commits 8c01cc8..c9c9e31, review clean)
+Final review: approved with fixes (Important: fetching flag race, duplicate prefetch — both fixed)

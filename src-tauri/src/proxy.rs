@@ -20,15 +20,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
 
-// Maximum buffer size allowed across all tracks (prevents unbounded memory use)
-const ABSOLUTE_MAX_BUFFER: u64 = 500 * 1024 * 1024; // 500MB
-const MAX_BG_RETRIES: u32 = 3;
 
-fn buffer_size_limit() -> u64 {
-    let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
-    let bytes = seconds * 320_000 / 8; // 320kbps → bytes
-    bytes.clamp(5 * 1024 * 1024, ABSOLUTE_MAX_BUFFER)
-}
 
 #[derive(serde::Serialize, Clone)]
 struct BufferState {
@@ -41,7 +33,6 @@ struct BufferState {
 struct TrackMeta {
     total_size: u64,
     content_type: String,
-    accessed_at: u64,
 }
 
 type CacheStore = Arc<Mutex<HashMap<String, Arc<Mutex<TrackMeta>>>>>;
@@ -353,7 +344,6 @@ async fn handle_stream(
         store.insert(query.id.clone(), Arc::new(Mutex::new(TrackMeta {
             total_size,
             content_type: content_type.clone(),
-            accessed_at: now_epoch_secs(),
         })));
         FAIL_COUNT.store(0, Ordering::Relaxed);
     }
@@ -617,46 +607,8 @@ pub fn start_proxy() {
     });
 }
 
-async fn bg_fetch_with_retry<F, Fut>(
-    fetch: F,
-    current: u64,
-    next_end: u64,
-    max_retries: u32,
-) -> Result<Vec<u8>, DriveErr>
-where
-    F: Fn(u64, u64) -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<u8>, DriveErr>>,
-{
-    let mut last_err = DriveErr::Upstream;
-    for attempt in 0..=max_retries {
-        match fetch(current, next_end).await {
-            Ok(data) => return Ok(data),
-            Err(DriveErr::Rate) => {
-                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                last_err = DriveErr::Rate;
-            }
-            Err(DriveErr::Auth) => {
-                last_err = DriveErr::Auth;
-                break;
-            }
-            Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                return Err(e);
-            }
-            Err(e) => {
-                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                last_err = e;
-            }
-        }
-    }
-    Err(last_err)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::sync::atomic::AtomicU32;
-    use std::sync::Arc;
-
     fn assemble_chunks_in_order(chunks: &[(u64, u64, Vec<u8>)]) -> Vec<u8> {
         let mut buffer = Vec::with_capacity(chunks.iter().map(|c| c.2.len()).sum());
         for (_, _, data) in chunks {
@@ -677,57 +629,5 @@ mod tests {
         assert_eq!(buffer[0], 1);
         assert_eq!(buffer[2000], 2);
         assert_eq!(buffer[4000], 3);
-    }
-
-    async fn simulate_background_prefetch<F, Fut>(
-        start: u64,
-        total_size: u64,
-        chunk_size: u64,
-        fetch: F,
-    ) -> Result<(), DriveErr>
-    where
-        F: Fn(u64, u64) -> Fut,
-        Fut: std::future::Future<Output = Result<Vec<u8>, DriveErr>>,
-    {
-        let end = (start + chunk_size - 1).min(total_size.saturating_sub(1));
-        bg_fetch_with_retry(|s, e| fetch(s, e), start, end, MAX_BG_RETRIES).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_background_prefetch_retries_on_transient_error() {
-        let attempts = Arc::new(AtomicU32::new(0));
-        let max_ok_after = 3u32;
-        let att = Arc::clone(&attempts);
-        let flaky_fetch = move |start, end| {
-            let a = Arc::clone(&att);
-            async move {
-                let n = a.fetch_add(1, Ordering::SeqCst);
-                if n < max_ok_after {
-                    Err(DriveErr::Rate)
-                } else {
-                    Ok(vec![0u8; (end - start + 1) as usize])
-                }
-            }
-        };
-        let result = simulate_background_prefetch(0, 1024 * 1024 * 4, 2 * 1024 * 1024, flaky_fetch).await;
-        assert!(result.is_ok());
-        assert_eq!(attempts.load(Ordering::SeqCst), 4);
-    }
-
-    #[tokio::test]
-    async fn test_background_prefetch_hard_error_no_retry() {
-        let attempts = Arc::new(AtomicU32::new(0));
-        let att = Arc::clone(&attempts);
-        let hard_fetch = move |_, _| {
-            let a = Arc::clone(&att);
-            async move {
-                a.fetch_add(1, Ordering::SeqCst);
-                Err(DriveErr::NotFound)
-            }
-        };
-        let result = simulate_background_prefetch(0, 1024 * 1024 * 4, 2 * 1024 * 1024, hard_fetch).await;
-        assert!(result.is_err());
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

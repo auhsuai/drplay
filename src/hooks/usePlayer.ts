@@ -279,7 +279,6 @@ export const usePlayer = (accessToken: string | null) => {
     }
 
     try {
-      let accurateMetaDuration = undefined;
       const freshToken = await getValidToken();
       if (isIntentStale(myId)) return;
       if (!freshToken) {
