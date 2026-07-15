@@ -35,7 +35,7 @@ export async function prefetchVisibleTracks(trackIds: string[]) {
   const uncached = trackIds.filter(id => id && !prefetchedStreams.has(id));
   if (uncached.length === 0) return;
 
-  await runWithConcurrencyLimit(uncached, 6, async (id) => {
+  await runWithConcurrencyLimit(uncached, 20, async (id) => {
     try {
       const url = await invoke<string>("get_stream_url", { fileId: id });
       if (typeof url === "string" && url.length > 0) {

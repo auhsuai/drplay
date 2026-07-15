@@ -285,38 +285,34 @@ export const usePlayer = (accessToken: string | null) => {
         setIsDownloading(false);
         return;
       }
-      
-      const [metadata, streamUrl] = await Promise.all([
-        getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName)
-          .then(m => m)
-          .catch(e => {
-            console.warn(`[usePlayer] bitrate-buffer-fail`, classifyPlayerError(e));
-            return null;
-          }),
-        (async () => {
-          const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
-          return invoke<string>("get_stream_url", {
-            fileId: targetTrack.id,
-            duration: undefined,
-            bufferSeconds,
-            ext,
-          });
-        })(),
-      ]);
+
+      const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
+      const streamUrl = await invoke<string>("get_stream_url", {
+        fileId: targetTrack.id,
+        bufferSeconds,
+        ext,
+      });
 
       if (isIntentStale(myId)) return;
+      if (!streamUrl) {
+        setIsDownloading(false);
+        return;
+      }
 
-      const accurateMetaDuration = metadata?.duration ?? undefined;
-
-      setCurrentTrack({ 
-        ...targetTrack, 
-        streamUrl, 
-        restoreDuration: accurateMetaDuration || targetTrack.restoreDuration 
-      });
+      setCurrentTrack({ ...targetTrack, streamUrl });
       triggerReload();
       setIsPlaying(true);
+      setIsDownloading(false);
 
       maybePrefetchNextTrack(contextQueue, targetTrack);
+
+      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName)
+        .then(metadata => {
+          if (metadata.duration && !isIntentStale(myId)) {
+            setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
+          }
+        })
+        .catch(e => console.warn(`[usePlayer] metadata-fetch-fail`, classifyPlayerError(e)));
     } catch (e) {
       if (isIntentStale(myId)) return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
