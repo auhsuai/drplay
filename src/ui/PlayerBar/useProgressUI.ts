@@ -59,8 +59,35 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       }
       seekTimeoutRef.current = setTimeout(() => {
         const active2 = getActiveAudio();
-        if (active2) {
+        if (!active2 || !active2.duration || active2.duration <= 0) return;
+
+        const buf = active2.buffered;
+        let inBuffer = false;
+        for (let i = 0; i < buf.length; i++) {
+          if (finalTime >= buf.start(i) && finalTime <= buf.end(i)) {
+            inBuffer = true;
+            break;
+          }
+        }
+
+        if (inBuffer) {
           active2.currentTime = finalTime;
+        } else {
+          const onProgress = () => {
+            const b = active2.buffered;
+            for (let i = 0; i < b.length; i++) {
+              if (finalTime >= b.start(i) && finalTime <= b.end(i)) {
+                active2.currentTime = finalTime;
+                active2.removeEventListener('progress', onProgress);
+                break;
+              }
+            }
+          };
+          active2.addEventListener('progress', onProgress);
+          setTimeout(() => {
+            active2.removeEventListener('progress', onProgress);
+            active2.currentTime = finalTime;
+          }, 10000);
         }
       }, 250);
 

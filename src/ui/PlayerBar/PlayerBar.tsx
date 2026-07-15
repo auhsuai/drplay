@@ -148,7 +148,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     setIsVolumeActive: triggerVolumeActive,
     progressFillRef,
     currentTimeTextRef,
-    tauriBufferEndRef: trackMetadata.tauriBufferEndRef,
   });
 
   // 5. Volume sync effect
