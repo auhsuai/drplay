@@ -5,10 +5,17 @@
 // unknown) and how they log without leaking secrets (auth tokens, file ids,
 // local proxy links).
 //
-// NOTE: src/utils/logger.ts already ships a console-level sanitizer, but it is
-// not exported, and workers run in a separate global scope where initLogger()
-// is never called. We therefore keep a minimal, self-contained sanitizer here
-// so worker logs are safe by construction.
+// NOTE: workers run in a separate global scope where initLogger() (called in
+// main.tsx) is never invoked, so the global console is NOT monkeypatched with
+// the sanitizer. We therefore redact inline here. The final assembled `line`
+// is additionally passed through the canonical `sanitizeString` from
+// src/utils/logger.ts (the 2026 reference standard) so worker logs share the
+// exact same redaction semantics as the main thread. The local `sanitize`
+// below is kept only for the context-key scrubbing `SENSITIVE_KEYS` behavior
+// (logger.ts has no field-name awareness) and the `Bearer -> [REDACTED]`
+// shape that the worker test asserts.
+
+import { sanitizeString } from '../utils/logger';
 
 export type WorkerErrorKind = 'network' | 'timeout' | 'abort' | 'parse' | 'unknown';
 
@@ -21,8 +28,10 @@ export class WorkerAbortError extends Error {
   }
 }
 
-// Keep in sync with src/utils/logger.ts patterns. Duplicated on purpose: the
-// logger's sanitizer is not exported and workers cannot rely on it.
+// Keep in sync with src/utils/logger.ts patterns. The regex portion duplicates
+// logger.ts on purpose: logWorkerError must keep working even if logger.ts is
+// not importable, and the context-key scrubbing / `[REDACTED]` Bearer shape
+// below are not covered by logger.ts's `sanitizeString`.
 const SENSITIVE_PATTERNS: RegExp[] = [
   /http:\/\/127\.0\.0\.1:\d+\/[^\s"']*/g,
   /https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[^\s"']*/g,
@@ -46,6 +55,17 @@ function sanitize(value: string): string {
     });
   }
   return out;
+}
+
+// Thin, throw-safe wrapper around logger.ts's canonical sanitizer. If
+// sanitizeString ever throws (it shouldn't), we fall back to the raw value so
+// the worker still emits the log instead of dropping it or crashing on log.
+function safeSanitize(value: string): string {
+  try {
+    return sanitizeString(value);
+  } catch {
+    return value;
+  }
 }
 
 // Field names that almost always carry a secret regardless of value shape.
@@ -99,6 +119,11 @@ export function logWorkerError(
   // secrets never reach the logs through the structured fields.
   const ctxStr = sanitize(formatContext(context));
   const line = `[${timestamp()}] [${module}] ${kind}: ${message}${ctxStr ? ' | ' + ctxStr : ''}`;
-  if (level === 'warn') console.warn(line);
-  else console.error(line);
+  // Final line goes through the canonical 2026 sanitizer from logger.ts as a
+  // single source of truth for link/id/token redaction. safeSanitize guarantees
+  // we never throw while logging and never silently drop the message if the
+  // sanitizer itself fails.
+  const safeLine = safeSanitize(line);
+  if (level === 'warn') console.warn(safeLine);
+  else console.error(safeLine);
 }

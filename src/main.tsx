@@ -4,6 +4,7 @@ import "./i18n";
 import App from "./App";
 import { Buffer } from "buffer";
 import { initLogger } from "./utils/logger";
+import { ErrorBoundary } from "./ui/ErrorBoundary";
 
 initLogger();
 
@@ -13,6 +14,8 @@ if (typeof window !== "undefined") {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 );
