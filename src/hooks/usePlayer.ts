@@ -6,6 +6,7 @@ import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
+import { prefetchNextTrackAudio, clearNextTrackPrefetches } from '../utils/nextTrackPrefetcher';
 
 
 const playRequestIdRef = { current: 0 };
@@ -249,6 +250,23 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(true);
       setIsDownloading(false);
 
+      // Prefetch next track in queue
+      if (contextQueue && contextQueue.length > 1) {
+        const currentIdx = contextQueue.findIndex(item => item.queueItemId ? item.queueItemId === targetTrack.queueItemId : item.id === targetTrack.id);
+        if (currentIdx !== -1 && currentIdx < contextQueue.length - 1) {
+          const nextTrack = contextQueue[currentIdx + 1];
+          const nextUrl = getPrefetchedStreamUrl(nextTrack.id);
+          if (nextUrl) {
+            prefetchNextTrackAudio(nextUrl);
+          } else {
+            const ext = nextTrack.originalName?.split('.').pop()?.toLowerCase();
+            invoke<string>("get_stream_url", { fileId: nextTrack.id, ext })
+              .then(url => { if (url) prefetchNextTrackAudio(url); })
+              .catch((err) => { console.warn('[usePlayer] next-track-prefetch-fail', err); });
+          }
+        }
+      }
+
       getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
         if (metadata.duration && !isIntentStale(myId)) {
           setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
@@ -289,6 +307,18 @@ export const usePlayer = (accessToken: string | null) => {
       });
       triggerReload();
       setIsPlaying(true);
+
+      // Prefetch next track in queue
+      if (contextQueue && contextQueue.length > 1) {
+        const currentIdx = contextQueue.findIndex(item => item.queueItemId ? item.queueItemId === targetTrack.queueItemId : item.id === targetTrack.id);
+        if (currentIdx !== -1 && currentIdx < contextQueue.length - 1) {
+          const nextTrack = contextQueue[currentIdx + 1];
+          const ext = nextTrack.originalName?.split('.').pop()?.toLowerCase();
+          invoke<string>("get_stream_url", { fileId: nextTrack.id, ext })
+            .then(url => { if (url) prefetchNextTrackAudio(url); })
+            .catch((err) => { console.warn('[usePlayer] next-track-prefetch-fail', err); });
+        }
+      }
     } catch (e) {
       if (isIntentStale(myId)) return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
