@@ -9,7 +9,7 @@ import { deleteFile, moveFile } from "../../utils/driveApi";
 import { fetchWithAuth } from "../../utils/apiClient";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
-import { getEffectiveDownloadPath } from "../../utils/downloadPath";
+import { getEffectiveDownloadPath, getCustomDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
 import { showErrorToast } from "../../utils/simpleToast";
 
@@ -100,6 +100,13 @@ export function GlobalContextMenu() {
       const buffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(buffer);
       const downloadDirPath = await getEffectiveDownloadPath();
+      if (getCustomDownloadPath()) {
+        try {
+          await invoke("register_download_path", { path: downloadDirPath });
+        } catch (scopeErr) {
+          console.error("[GlobalContextMenu] download: failed to extend fs scope for custom download dir", scopeErr);
+        }
+      }
       const originalName = sanitizeFilename(driveItem.trackInfo?.originalName || `${driveItem.title}.mp3`);
       const savePath = `${downloadDirPath}\\${originalName}`;
       

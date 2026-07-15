@@ -5,10 +5,20 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default",
-    "dialog:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://accounts.google.com/*" },
+        { "url": "https://www.google.com/*" }
+      ]
+    },
+    "dialog:allow-save",
     "keepawake:allow-start",
     "keepawake:allow-stop",
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$DOWNLOAD/**" }]
+    },
     "http:default",
     {
       "identifier": "http:default",
