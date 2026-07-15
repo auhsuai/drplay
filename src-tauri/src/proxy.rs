@@ -11,7 +11,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use tauri::Emitter;
 
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::sync::Arc;
@@ -45,6 +45,7 @@ struct TrackCache {
     total_size: u64,
     content_type: String,
     accessed_at: u64,
+    fetching: AtomicBool,
 }
 
 type CacheStore = Arc<Mutex<HashMap<String, Arc<Mutex<TrackCache>>>>>;
@@ -260,6 +261,30 @@ async fn recover_stream_token(old_token: &str) -> Option<String> {
     }
 }
 
+fn respond_from_cache(buffer: &[u8], window_start: u64, start: u64, end: u64, total_size: u64, content_type: &str) -> Response {
+    let offset = (start - window_start) as usize;
+    let mut read_end = (end.saturating_sub(window_start) + 1) as usize;
+    read_end = read_end.min(buffer.len());
+    let mut chunk_size = read_end.saturating_sub(offset);
+    let max_chunk = 2 * 1024 * 1024;
+    if chunk_size > max_chunk {
+        chunk_size = max_chunk;
+        read_end = offset + chunk_size;
+    }
+    let chunk = buffer[offset..read_end].to_vec();
+    let real_end = start + chunk.len() as u64 - 1;
+
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
+        .header(header::CONTENT_LENGTH, chunk.len().to_string())
+        .body(axum::body::Body::from(chunk))
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response())
+}
+
 async fn handle_stream(
     State(state): State<AppState>,
     Query(query): Query<StreamQuery>,
@@ -448,6 +473,7 @@ async fn handle_stream(
             total_size,
             content_type: content_type.clone(),
             accessed_at: now_epoch_secs(),
+            fetching: AtomicBool::new(false),
         }))
     }).clone();
     
@@ -460,44 +486,45 @@ async fn handle_stream(
 
     if start >= track_cache.window_start && start < window_end {
         // Cache Hit!
-        let offset = (start - track_cache.window_start) as usize;
-        let mut read_end = (end.saturating_sub(track_cache.window_start) + 1) as usize;
-        read_end = read_end.min(track_cache.buffer.len());
-        let mut chunk_size = read_end.saturating_sub(offset);
-        
-        // Limit chunk size to 2MB to keep browser requests flowing
-        let max_chunk = 2 * 1024 * 1024;
-        if chunk_size > max_chunk {
-            chunk_size = max_chunk;
-            read_end = offset + chunk_size;
+        FAIL_COUNT.store(0, Ordering::Relaxed);
+        respond_from_cache(&track_cache.buffer, track_cache.window_start, start, end, total_size, &track_cache.content_type)
+    } else {
+        // Cache Miss — try to claim the fetching flag
+        if track_cache.fetching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+            // Another request is already fetching — wait briefly then check cache
+            drop(track_cache);
+            for _ in 0..50 {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                let tc = track_cache_arc.lock().await;
+                let window_end = tc.window_start + tc.buffer.len() as u64;
+                if start >= tc.window_start && start < window_end {
+                    return respond_from_cache(&tc.buffer, tc.window_start, start, end, total_size, &tc.content_type);
+                }
+                drop(tc);
+            }
+            // Timeout — re-acquire lock and check once more
+            track_cache = track_cache_arc.lock().await;
+            track_cache.accessed_at = now_epoch_secs();
+            let window_end = track_cache.window_start + track_cache.buffer.len() as u64;
+            if start >= track_cache.window_start && start < window_end {
+                return respond_from_cache(&track_cache.buffer, track_cache.window_start, start, end, total_size, &track_cache.content_type);
+            }
         }
 
-        let chunk = track_cache.buffer[offset..read_end].to_vec();
-        let real_end = start + chunk.len() as u64 - 1;
-        let body = axum::body::Body::from(chunk);
-        
-        FAIL_COUNT.store(0, Ordering::Relaxed);
-        
-        return Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_TYPE, content_type.clone())
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
-            .header(header::CONTENT_LENGTH, (real_end - start + 1).to_string())
-            .body(body)
-            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response());
-    } else {
-        // Cache Miss!
+        // We own the fetching flag (or timed out) — abort previous task
         if let Some(task) = track_cache.fetch_task.take() {
             task.abort();
         }
 
-        // Fetch first 2MB synchronously
+        // Ensure flag is set (fresh claim or after timeout)
+        track_cache.fetching.store(true, Ordering::Release);
+
+        // Release per-track lock so metadata requests don't block during network I/O
+        drop(track_cache);
+
+        // Fetch first 2MB synchronously (NO lock held)
         let initial_fetch_end = (start + 2 * 1024 * 1024 - 1).min(total_size.saturating_sub(1));
-        // DO NOT drop lock before network call to prevent concurrent identical fetches!
-        // This ensures the first request fetches and others wait to get a Cache Hit.
-        
+
         let mut chunk = vec![];
         let max_retries = 3;
         for attempt in 0..max_retries {
@@ -514,15 +541,12 @@ async fn handle_stream(
                     tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
                 }
                 Err(DriveErr::Auth) => {
-                    // Expired token mid-stream. Signal the frontend, wait for a
-                    // fresh token, then retry with it (no fixed backoff needed).
                     match recover_stream_token(&final_token).await {
                         Some(t) => { final_token = t; continue; }
                         None => return drive_err_response(DriveErr::Auth),
                     }
                 }
                 Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                    // Non-retryable: file gone / no access / per-file quota spent.
                     return drive_err_response(e);
                 }
                 Err(_) => {
@@ -535,13 +559,15 @@ async fn handle_stream(
         }
 
         if chunk.is_empty() {
-            // Exhausted retries (e.g. repeated token expiry) without any data.
             return (StatusCode::BAD_GATEWAY, "Gateway Error").into_response();
         }
 
-        track_cache.window_start = start;
-        track_cache.buffer = chunk.clone();
-        
+        // Re-acquire per-track lock to update buffer
+        let mut tc = track_cache_arc.lock().await;
+        tc.window_start = start;
+        tc.buffer = chunk.clone();
+        tc.fetching.store(false, Ordering::Release);
+
         if let Some(app) = crate::APP_HANDLE.get() {
             let _ = app.emit("buffer-status", BufferState {
                 track_id: query.id.clone(),
@@ -550,7 +576,7 @@ async fn handle_stream(
                 total_size_byte: total_size,
             });
         }
-        
+
         // Spawn background task to fetch remaining up to 100MB
         let background_start = start + chunk.len() as u64;
         if background_start < total_size {
@@ -583,8 +609,8 @@ async fn handle_stream(
                         .collect();
                     let results = join_all(futures).await;
 
-                    let mut tc = bg_arc.lock().await;
-                    if tc.window_start != start {
+                    let mut tc_bg = bg_arc.lock().await;
+                    if tc_bg.window_start != start {
                         break;
                     }
 
@@ -592,7 +618,7 @@ async fn handle_stream(
                     for result in results {
                         match result {
                             Ok(data) => {
-                                tc.buffer.extend_from_slice(&data);
+                                tc_bg.buffer.extend_from_slice(&data);
                             }
                             Err(e) => {
                                 any_fail = true;
@@ -605,8 +631,8 @@ async fn handle_stream(
                     if let Some(app) = crate::APP_HANDLE.get() {
                         let _ = app.emit("buffer-status", BufferState {
                             track_id: track_id_bg.clone(),
-                            buffer_start_byte: tc.window_start,
-                            buffer_end_byte: tc.window_start + tc.buffer.len() as u64,
+                            buffer_start_byte: tc_bg.window_start,
+                            buffer_end_byte: tc_bg.window_start + tc_bg.buffer.len() as u64,
                             total_size_byte: bg_total,
                         });
                     }
@@ -616,13 +642,13 @@ async fn handle_stream(
                     }
                 }
             });
-            track_cache.fetch_task = Some(task);
+            tc.fetch_task = Some(task);
         }
-        
+
         // Return initial chunk
         let real_end = start + chunk.len() as u64 - 1;
         let body = axum::body::Body::from(chunk);
-        return Response::builder()
+        Response::builder()
             .status(StatusCode::PARTIAL_CONTENT)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::ACCEPT_RANGES, "bytes")
@@ -630,7 +656,7 @@ async fn handle_stream(
             .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
             .header(header::CONTENT_LENGTH, (real_end - start + 1).to_string())
             .body(body)
-            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response());
+            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response())
     }
 }
 
@@ -821,5 +847,70 @@ mod tests {
         let result = simulate_background_prefetch(0, 1024 * 1024 * 4, 2 * 1024 * 1024, hard_fetch).await;
         assert!(result.is_err());
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_respond_from_cache_partial_content() {
+        let buffer = vec![42u8; 2000];
+        let resp = respond_from_cache(&buffer, 0, 100, 500, 10000, "audio/mpeg");
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        let cr = resp.headers().get(header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap();
+        assert_eq!(cr, "bytes 100-500/10000");
+        let cl: usize = resp.headers().get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap();
+        assert_eq!(cl, 401);
+    }
+
+    #[tokio::test]
+    async fn test_respond_from_cache_truncates_at_2mb() {
+        let buffer = vec![0u8; 5 * 1024 * 1024];
+        let resp = respond_from_cache(&buffer, 0, 0, 5_000_000, 10_000_000, "audio/mpeg");
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        let cr = resp.headers().get(header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap();
+        // 2MB limit means chunk ends at 2_097_152 - 1 = 2_097_151
+        assert_eq!(cr, format!("bytes 0-{}/10000000", 2 * 1024 * 1024 - 1));
+        let cl: usize = resp.headers().get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap();
+        assert_eq!(cl, 2 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_fetching_flag_coordination() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let f1 = Arc::clone(&flag);
+        let f2 = Arc::clone(&flag);
+        let t1 = tokio::spawn(async move {
+            f1.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+        });
+        let t2 = tokio::spawn(async move {
+            f2.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+        });
+        let (r1, r2) = tokio::join!(t1, t2);
+        assert_ne!(r1.unwrap(), r2.unwrap(), "exactly one thread should claim the flag");
+    }
+
+    #[tokio::test]
+    async fn test_fetching_flag_reset_allows_second_claim() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let f1 = Arc::clone(&flag);
+        let t1 = tokio::spawn(async move {
+            f1.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+        });
+        assert!(t1.await.unwrap());
+        // Reset
+        flag.store(false, Ordering::Release);
+        let f2 = Arc::clone(&flag);
+        let t2 = tokio::spawn(async move {
+            f2.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+        });
+        assert!(t2.await.unwrap());
     }
 }
