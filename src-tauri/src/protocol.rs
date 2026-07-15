@@ -1,8 +1,8 @@
 use tauri::http::{Response, StatusCode};
 use moka::future::Cache;
 use bytes::Bytes;
-use once_cell::sync::Lazy;
 use hmac::Mac;
+use once_cell::sync::Lazy;
 
 use std::path::Path;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -11,13 +11,20 @@ use crate::thumbnail::{validate_file_id, thumbnail_path};
 
 const MAX_COVER_SIZE: usize = 52_428_800;
 
-static ACCESS_RECORDER: Lazy<std::sync::Mutex<crate::thumbnail::AccessRecorder>> =
-    Lazy::new(|| {
-        let log_path = crate::get_db_path()
-            .and_then(|p| p.parent().map(|parent| parent.join(".thumbnails").join("access_log.json")))
-            .unwrap_or_else(|| std::path::PathBuf::from(".thumbnails/access_log.json"));
-        std::sync::Mutex::new(crate::thumbnail::AccessRecorder::new(log_path))
-    });
+// Initialized from `lib.rs` `setup` with `<app_cache_dir>/.thumbnails/access_log.json`
+// so that the access log is co-located with the thumbnail files (both under
+// `app_cache_dir()/.thumbnails/`). This is required for `gc_thumbnails` to map files
+// to their last-access times; if the log lived elsewhere every thumbnail would read as
+// `last_access = 0` and be wiped on the next GC.
+static ACCESS_RECORDER: std::sync::OnceLock<std::sync::Mutex<crate::thumbnail::AccessRecorder>> =
+    std::sync::OnceLock::new();
+
+pub fn init_access_recorder(log_path: std::path::PathBuf) {
+    let recorder = crate::thumbnail::AccessRecorder::new(log_path);
+    if ACCESS_RECORDER.set(std::sync::Mutex::new(recorder)).is_err() {
+        eprintln!("[protocol] ACCESS_RECORDER already initialized");
+    }
+}
 
 pub static ETAG_CACHE: Lazy<Cache<String, (String, Bytes)>> = Lazy::new(|| {
     Cache::builder()
@@ -270,12 +277,34 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     .and_then(|h| h.to_str().ok().map(|s| s.to_string()));
 
                 use tauri::Manager;
-                let db_path = crate::get_db_path();
-                let cache_dir = db_path.as_deref().and_then(|p| p.parent());
+                // Thumbnails are stored under `<app_cache_dir>/.thumbnails` (thumbnail.rs:67),
+                // so look them up there — NOT in the db directory. Using the wrong base dir
+                // would mean thumbnails are never found, the access recorder never fires, and
+                // `gc_thumbnails` would then wipe every real thumbnail.
+                let cache_dir = app_handle.path().app_cache_dir().ok();
                 let pool_state = app_handle.try_state::<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>();
                 let pool = pool_state.map(|p| p.inner().clone());
 
-                let fetch_result = handle_cover_get(&file_id, thumb, cache_dir, pool.as_ref(), &ACCESS_RECORDER, Some(&app_handle));
+                let recorder = match ACCESS_RECORDER.get() {
+                    Some(r) => r,
+                    None => {
+                        responder.respond(
+                            Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(b"Access recorder not initialized".to_vec())
+                                .unwrap(),
+                        );
+                        return;
+                    }
+                };
+                let fetch_result = handle_cover_get(
+                    &file_id,
+                    thumb,
+                    cache_dir.as_deref(),
+                    pool.as_ref(),
+                    recorder,
+                    Some(&app_handle),
+                );
 
                 match fetch_result {
                     Ok((etag, bytes_val)) => {

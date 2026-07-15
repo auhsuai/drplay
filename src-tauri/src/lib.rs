@@ -207,76 +207,13 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
 }
 
 #[tauri::command]
-async fn extract_metadata_safe(file_id: String, token: String) -> Result<serde_json::Value, String> {
-    use std::io::Cursor;
-    use lofty::file::{AudioFile, TaggedFileExt};
-    use lofty::probe::Probe;
-    use lofty::tag::Accessor;
-    use base64::Engine;
-
-    let mut final_token = token;
-    {
-        let global = GLOBAL_STREAM_TOKEN.lock().await;
-        if !global.is_empty() {
-            final_token = global.clone();
-        }
-    }
-
-    let client = reqwest::Client::new();
-    let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", file_id);
-    let resp = client.get(&url)
-        .header("Authorization", format!("Bearer {}", final_token))
-        .header("Range", "bytes=0-131072")
-        .send().await.map_err(|e| e.to_string())?;
-
-    if !resp.status().is_success() {
-        return Err(format!("API Error: {}", resp.status()));
-    }
-
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-    let mut cursor = Cursor::new(bytes.to_vec());
-
-    let probe = match Probe::new(&mut cursor).guess_file_type() {
-        Ok(p) => p,
-        Err(_) => return Err("Could not guess file format".to_string()),
-    };
-
-    match probe.read() {
-        Ok(tagged_file) => {
-            let mut title = None;
-            let mut artist = None;
-            let mut duration = None;
-            let mut picture_data = None;
-            let mut picture_format = None;
-
-            let dur = tagged_file.properties().duration().as_secs_f64();
-            if dur > 0.0 {
-                duration = Some(dur);
-            }
-
-            if let Some(tag) = tagged_file.primary_tag() {
-                title = tag.title().map(|s| s.into_owned());
-                artist = tag.artist().map(|s| s.into_owned());
-
-                if let Some(pic) = tag.pictures().first() {
-                    picture_data = Some(base64::engine::general_purpose::STANDARD.encode(pic.data()));
-                    picture_format = pic.mime_type().map(|m| m.to_string());
-                }
-            } else if let Some(tag) = tagged_file.first_tag() {
-                title = tag.title().map(|s| s.into_owned());
-                artist = tag.artist().map(|s| s.into_owned());
-            }
-
-            Ok(serde_json::json!({
-                "title": title,
-                "artist": artist,
-                "duration": duration,
-                "pictureData": picture_data,
-                "pictureFormat": picture_format,
-            }))
-        },
-        Err(e) => Err(format!("Parse error: {}", e))
-    }
+fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_fs::FsExt;
+    let scope = app.fs_scope();
+    scope
+        .allow_directory(path, true)
+        .map_err(|e| format!("failed to extend fs scope for download dir: {}", e))?;
+    Ok(())
 }
 
 pub static CURRENT_FILE_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -478,28 +415,6 @@ async fn update_track_duration_in_db(
     Ok(())
 }
 
-#[tauri::command]
-async fn remove_track_from_db(
-    db_id: String,
-    app: tauri::AppHandle,
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> Result<(), String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM tracks WHERE id = ?", [&db_id])
-        .map_err(|e| e.to_string())?;
-
-    if let Ok(cache_dir) = app.path().app_cache_dir() {
-        for thumb in &[true, false] {
-            let path = thumbnail::thumbnail_path(&cache_dir, &db_id, *thumb);
-            if path.exists() {
-                std::fs::remove_file(&path).ok();
-            }
-        }
-    }
-
-    Ok(())
-}
-
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16};
 
 mod proxy;
@@ -524,13 +439,20 @@ fn update_minimize_to_tray(minimize: bool) {
 #[tauri::command]
 async fn clear_local_cache(app: tauri::AppHandle) -> Result<(), String> {
     if let Ok(cache_dir) = app.path().app_cache_dir() {
-        let thumb_dir = cache_dir.join("thumb");
-        if thumb_dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&thumb_dir) {
-                eprintln!("Failed to clear thumbnail cache: {}", e);
-            } else {
-                std::fs::create_dir_all(&thumb_dir).ok();
-            }
+        // Thumbnails live in `<app_cache_dir>/.thumbnails` (thumbnail.rs:67), and the
+        // access log is co-located there so GC can map files to last-access times.
+        let thumb_dir = cache_dir.join(".thumbnails");
+        if !thumb_dir.exists() {
+            // Idempotent: nothing to GC yet.
+            return Ok(());
+        }
+        let access_log_path = thumb_dir.join("access_log.json");
+        if let Err(e) = crate::thumbnail::gc_thumbnails(
+            &thumb_dir,
+            &access_log_path,
+            &crate::thumbnail::GcPolicy::default(),
+        ) {
+            eprintln!("[clear_local_cache] failed to GC thumbnails: {}", e);
         }
     }
     Ok(())
@@ -580,9 +502,20 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_keepawake::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
+
+            // F2: point the access recorder at `<app_cache_dir>/.thumbnails/access_log.json`
+            // so it is co-located with the thumbnail files (both under `app_cache_dir()/.thumbnails/`).
+            // This is required for `gc_thumbnails` (driven by `clear_local_cache`) to map files
+            // to last-access times; a mismatched path would make every thumbnail read as
+            // `last_access = 0` and be wiped on the next GC.
+            if let Ok(cache_dir) = app.path().app_cache_dir() {
+                let access_log = cache_dir.join(".thumbnails").join("access_log.json");
+                crate::protocol::init_access_recorder(access_log);
+            }
 
             use r2d2_sqlite::SqliteConnectionManager;
             use r2d2::Pool;
@@ -655,7 +588,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             login_google_native,
             refresh_google_token,
-            extract_metadata_safe,
+            register_download_path,
             get_stream_url,
             update_buffer_settings,
             get_local_metadata,
@@ -663,7 +596,6 @@ pub fn run() {
             update_minimize_to_tray,
             add_drive_track_to_db,
             verify_track_exists,
-            remove_track_from_db,
             update_track_duration_in_db,
             clear_local_cache,
         ])
