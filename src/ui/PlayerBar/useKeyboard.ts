@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { formatTime } from '../../utils/formatTime';
 
 const KEY_MODULE = 'useKeyboard';
 
@@ -20,12 +19,10 @@ interface UseKeyboardParams {
   setVolume: React.Dispatch<React.SetStateAction<number>>;
   setIsMuted: React.Dispatch<React.SetStateAction<boolean>>;
   setIsVolumeActive: React.Dispatch<React.SetStateAction<boolean>>;
-  progressFillRef: React.RefObject<HTMLDivElement | null>;
-  currentTimeTextRef: React.RefObject<HTMLSpanElement | null>;
 }
 
 export function useKeyboard(params: UseKeyboardParams): void {
-  const { getActiveAudio, onTogglePlayRef, onNextTrackRef, onPrevTrackRef, onTogglePlayModeRef, setVolume, setIsMuted, setIsVolumeActive, progressFillRef, currentTimeTextRef } = params;
+  const { getActiveAudio, onTogglePlayRef, onNextTrackRef, onPrevTrackRef, onTogglePlayModeRef, setVolume, setIsMuted, setIsVolumeActive } = params;
 
   const arrowSeekBaseRef = useRef<number | null>(null);
   const isArrowSeekingRef = useRef(false);
@@ -80,33 +77,8 @@ export function useKeyboard(params: UseKeyboardParams): void {
               const newTime = Math.min(dur, arrowSeekBaseRef.current + 5);
               arrowSeekBaseRef.current = newTime;
 
-              const activeForBuf = getActiveAudio();
-              let isInBuffer = true;
-              if (activeForBuf && activeForBuf.buffered.length > 0 && dur > 0) {
-                isInBuffer = false;
-                const b = activeForBuf.buffered;
-                for (let i = 0; i < b.length; i++) {
-                  if (newTime >= b.start(i) && newTime <= b.end(i)) {
-                    isInBuffer = true;
-                    break;
-                  }
-                }
-              }
-
-              if (isInBuffer) {
-                active.currentTime = newTime;
-                isArrowSeekingRef.current = false;
-              } else {
-                isArrowSeekingRef.current = true;
-                arrowTargetTimeRef.current = newTime;
-                if (currentTimeTextRef.current) {
-                  currentTimeTextRef.current.textContent = formatTime(newTime);
-                }
-                if (progressFillRef.current && dur > 0) {
-                  progressFillRef.current.style.width = `${(newTime / dur) * 100}%`;
-                }
-              }
-            }
+            active.currentTime = newTime;
+          }
           }
           break;
         case 'ArrowUp':
@@ -169,27 +141,7 @@ export function useKeyboard(params: UseKeyboardParams): void {
           isArrowSeekingRef.current = false;
           const target = arrowTargetTimeRef.current;
           if (target > 0) {
-            const b = active.buffered;
-            let inBuffer = false;
-            for (let i = 0; i < b.length; i++) {
-              if (target >= b.start(i) && target <= b.end(i)) { inBuffer = true; break; }
-            }
-            if (inBuffer) {
-              active.currentTime = target;
-            } else {
-              const onProgress = () => {
-                const b2 = active.buffered;
-                for (let i = 0; i < b2.length; i++) {
-                  if (target >= b2.start(i) && target <= b2.end(i)) {
-                    active.currentTime = target;
-                    active.removeEventListener('progress', onProgress);
-                    break;
-                  }
-                }
-              };
-              active.addEventListener('progress', onProgress);
-              setTimeout(() => { active.removeEventListener('progress', onProgress); active.currentTime = target; }, 10000);
-            }
+            active.currentTime = target;
           }
         }
       }

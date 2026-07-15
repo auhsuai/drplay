@@ -146,8 +146,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     setVolume,
     setIsMuted,
     setIsVolumeActive: triggerVolumeActive,
-    progressFillRef,
-    currentTimeTextRef,
   });
 
   // 5. Volume sync effect
