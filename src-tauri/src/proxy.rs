@@ -362,6 +362,15 @@ async fn handle_stream(
     let track_id = query.id.clone();
     let fetch_client = state.client.clone();
     let fetch_api_url = api_url.clone();
+
+    // Proactively refresh the Drive token if it is expiring soon, so that the
+    // whole seek fetch loop (and any concurrent seeks) start from a fresh token
+    // instead of racing a just-expired one into a wall of 401s. Single-flight
+    // inside `proactively_refresh_token` dedups concurrent refreshes. On failure
+    // it keeps the old token and the reactive `recover_stream_token` path below
+    // still catches a real 401 (Task 1 is preserved).
+    crate::proactively_refresh_token().await;
+
     let mut fetch_token = final_token.clone();
     let mut auth_recover_count = 0u32;
     let actual_start = start;

@@ -11,8 +11,19 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Manager;
 lazy_static::lazy_static! {
     pub static ref GLOBAL_STREAM_TOKEN: tokio::sync::Mutex<String> = tokio::sync::Mutex::new(String::new());
+    pub static ref GLOBAL_REFRESH_TOKEN: tokio::sync::Mutex<String> = tokio::sync::Mutex::new(String::new());
+    pub static ref GLOBAL_TOKEN_EXPIRES_AT: tokio::sync::Mutex<std::time::SystemTime> =
+        tokio::sync::Mutex::new(std::time::SystemTime::UNIX_EPOCH);
     pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
+    // Single-flight guard: when held, a refresh is in progress so other callers
+    // wait for the result instead of firing a parallel refresh (avoids the race
+    // where N concurrent seeks each trigger their own token refresh).
+    pub static ref GLOBAL_TOKEN_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
 }
+
+/// How long before the token's nominal expiry we proactively refresh, so that
+/// in-flight Drive requests don't hit a just-expired token.
+const TOKEN_REFRESH_LEAD_SECS: u64 = 60;
 
 pub mod protocol;
 mod slice_cache;
@@ -23,6 +34,135 @@ async fn update_stream_token(token: String) -> Result<(), String> {
     *GLOBAL_STREAM_TOKEN.lock().await = token;
     GLOBAL_TOKEN_NOTIFY.notify_waiters();
     Ok(())
+}
+
+/// Persist the full token set (access + refresh + lifetime) so the Rust proxy
+/// can proactively refresh the Drive OAuth token before it expires, instead of
+/// relying solely on the frontend's own scheduling. Called by the frontend right
+/// after login / refresh (alongside `update_stream_token`).
+#[command]
+async fn set_token_credentials(
+    access_token: String,
+    refresh_token: String,
+    expires_in: Option<u64>,
+) -> Result<(), String> {
+    {
+        let mut rt = GLOBAL_REFRESH_TOKEN.lock().await;
+        *rt = refresh_token;
+    }
+    {
+        let mut t = GLOBAL_STREAM_TOKEN.lock().await;
+        *t = access_token;
+    }
+    set_token_expiry(expires_in);
+    GLOBAL_TOKEN_NOTIFY.notify_waiters();
+    Ok(())
+}
+
+/// Record the token's absolute expiry time. A `None`/0 expires_in means we have
+/// no lifetime info, so we fall back to a far-future timestamp and let the
+/// reactive (Auth-error) recovery path handle expiry instead.
+fn set_token_expiry(expires_in: Option<u64>) {
+    let secs = expires_in.unwrap_or(0);
+    let expires_at = if secs == 0 {
+        std::time::SystemTime::UNIX_EPOCH
+    } else {
+        std::time::SystemTime::now() + std::time::Duration::from_secs(secs)
+    };
+    // Best-effort write; ignore the lock error (only fails on poison).
+    if let Ok(mut guard) = GLOBAL_TOKEN_EXPIRES_AT.try_lock() {
+        *guard = expires_at;
+    }
+}
+
+/// Returns true when the stored token will (or already did) expire within
+/// `TOKEN_REFRESH_LEAD_SECS`. A zero expiry (unknown lifetime) is treated as
+/// "not expiring" so this never blocks normal playback — expiry is then handled
+/// reactively by `recover_stream_token` on an actual 401.
+pub fn token_is_expiring_soon(now: std::time::SystemTime) -> bool {
+    let expires_at = match GLOBAL_TOKEN_EXPIRES_AT.try_lock() {
+        Ok(g) => *g,
+        Err(_) => return false,
+    };
+    if expires_at == std::time::SystemTime::UNIX_EPOCH {
+        return false;
+    }
+    let lead = std::time::Duration::from_secs(TOKEN_REFRESH_LEAD_SECS);
+    now >= expires_at - lead
+}
+
+/// Proactively refresh the Drive OAuth token if it is expiring soon, using a
+/// single-flight guard so that concurrent callers (e.g. many simultaneous
+/// seeks) share ONE refresh instead of each firing their own. On success the
+/// new access token is written to `GLOBAL_STREAM_TOKEN` and the expiry updated.
+/// On failure we log context and return `Ok(())` — callers still hold the old
+/// token and the existing reactive `recover_stream_token` path will catch a
+/// real 401. Never panics.
+pub async fn proactively_refresh_token() {
+    let now = std::time::SystemTime::now();
+    if !token_is_expiring_soon(now) {
+        return;
+    }
+
+    // Single-flight: only the first concurrent caller performs the network
+    // refresh; the rest wait for the guard drop then read the fresh token.
+    let _guard = GLOBAL_TOKEN_REFRESH_LOCK.lock().await;
+
+    // Re-check after acquiring the lock: a sibling may have just refreshed.
+    if !token_is_expiring_soon(std::time::SystemTime::now()) {
+        return;
+    }
+
+    let refresh_token = match GLOBAL_REFRESH_TOKEN.try_lock() {
+        Ok(g) if !g.is_empty() => g.clone(),
+        Ok(_) => {
+            eprintln!(
+                "[token] proactive refresh skipped: no refresh token stored (forgot set_token_credentials?) at {}",
+                now_epoch_debug()
+            );
+            return;
+        }
+        Err(_) => {
+            eprintln!("[token] proactive refresh skipped: refresh token lock poisoned at {}", now_epoch_debug());
+            return;
+        }
+    };
+
+    match refresh_google_token(refresh_token).await {
+        Ok(json) => {
+            let access = json.get("access_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let new_refresh = json.get("refresh_token").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let expires_in = json.get("expires_in").and_then(|v| v.as_u64());
+            if access.is_empty() {
+                eprintln!("[token] proactive refresh returned empty access_token at {}", now_epoch_debug());
+                return;
+            }
+            {
+                let mut t = GLOBAL_STREAM_TOKEN.lock().await;
+                *t = access;
+            }
+            if let Some(nr) = new_refresh {
+                if !nr.is_empty() {
+                    let mut rt = GLOBAL_REFRESH_TOKEN.lock().await;
+                    *rt = nr;
+                }
+            }
+            set_token_expiry(expires_in);
+            GLOBAL_TOKEN_NOTIFY.notify_waiters();
+            eprintln!("[token] proactive refresh ok, new expiry in {}s at {}", expires_in.unwrap_or(0), now_epoch_debug());
+        }
+        Err(e) => {
+            // Fallback: keep the old token; reactive recovery will catch a 401.
+            eprintln!("[token] proactive refresh FAILED (continuing with old token): {} at {}", e, now_epoch_debug());
+        }
+    }
+}
+
+fn now_epoch_debug() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[command]
@@ -512,7 +652,7 @@ pub fn run() {
             get_stream_url,
             update_buffer_settings,
             get_local_metadata,
-            update_stream_token, clear_stream_token,
+            update_stream_token, clear_stream_token, set_token_credentials,
             update_minimize_to_tray,
             verify_track_exists,
             update_track_duration_in_db,
@@ -532,6 +672,56 @@ pub fn run() {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn token_expiry_unknown_is_not_expiring() {
+        // No lifetime recorded yet -> never treated as expiring (reactive path).
+        set_token_expiry(None);
+        let now = SystemTime::now();
+        assert!(!token_is_expiring_soon(now));
+    }
+
+    #[test]
+    fn token_expiry_far_future_not_expiring() {
+        set_token_expiry(Some(3600));
+        let now = SystemTime::now();
+        assert!(!token_is_expiring_soon(now));
+    }
+
+    #[test]
+    fn token_expiry_within_lead_is_expiring() {
+        // Expires in 30s (< TOKEN_REFRESH_LEAD_SECS of 60) -> expiring soon.
+        set_token_expiry(Some(30));
+        let now = SystemTime::now();
+        assert!(token_is_expiring_soon(now));
+    }
+
+    #[test]
+    fn token_expiry_already_expired_is_expiring() {
+        // Past expiry -> definitely expiring.
+        {
+            let mut g = GLOBAL_TOKEN_EXPIRES_AT.try_lock().unwrap();
+            *g = SystemTime::now() - Duration::from_secs(10);
+        }
+        assert!(token_is_expiring_soon(SystemTime::now()));
+    }
+
+    #[test]
+    fn set_token_credentials_stores_refresh_and_access() {
+        tauri::async_runtime::block_on(async {
+            set_token_credentials(
+                "access-abc".to_string(),
+                "refresh-xyz".to_string(),
+                Some(3600),
+            )
+            .await
+            .unwrap();
+            assert_eq!(GLOBAL_STREAM_TOKEN.lock().await.as_str(), "access-abc");
+            assert_eq!(GLOBAL_REFRESH_TOKEN.lock().await.as_str(), "refresh-xyz");
+            assert!(!token_is_expiring_soon(SystemTime::now()));
+        });
+    }
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
