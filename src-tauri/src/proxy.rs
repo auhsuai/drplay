@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
+use once_cell::sync::Lazy;
 
 
 
@@ -57,6 +58,12 @@ fn now_epoch_secs() -> u64 {
 
 static GLOBAL_BACKOFF_UNTIL: AtomicU64 = AtomicU64::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Per-track cancel signal for background prefetch tasks. When a new stream
+/// request arrives for a track, the previous prefetch task (if any) is
+/// signalled to stop so it stops filling the slice cache.
+static PREFETCH_CANCEL: Lazy<Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn parse_multi_range(range_str: &str, total_size: u64) -> Vec<(u64, u64)> {
     let prefix = "bytes=";
@@ -526,7 +533,39 @@ async fn handle_stream(
     let bg_total = total_size;
     let bg_start = actual_end + 1;
 
+    // Cancel any previously-running prefetch for this track, then register a
+    // fresh cancel signal so the next request for this track stops this one.
+    let cancel = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut guards = PREFETCH_CANCEL.lock().await;
+        if let Some(old) = guards.insert(bg_id.clone(), cancel.clone()) {
+            old.notify_waiters();
+        }
+    }
+    let cancel_for_task = cancel.clone();
+    let bg_id_for_task = bg_id.clone();
+
     tokio::spawn(async move {
+        // Remove this task's cancel entry from the global map when it exits,
+        // but only if it is still the current entry (a newer request replaces it).
+        struct CancelGuard {
+            id: String,
+            signal: Arc<tokio::sync::Notify>,
+        }
+        impl Drop for CancelGuard {
+            fn drop(&mut self) {
+                let id = self.id.clone();
+                let signal = self.signal.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut guards = PREFETCH_CANCEL.lock().await;
+                    if guards.get(&id).map(|s| Arc::ptr_eq(s, &signal)).unwrap_or(false) {
+                        guards.remove(&id);
+                    }
+                });
+            }
+        }
+        let _guard = CancelGuard { id: bg_id_for_task.clone(), signal: cancel_for_task.clone() };
+
         let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
             Some(c) => c,
             None => return,
@@ -540,7 +579,12 @@ async fn handle_stream(
         let mut offset = bg_start;
 
         while offset < bg_total && offset < max_offset {
-            let (first_missing, count) = slice_cache.find_missing_run(&bg_id, offset, 4).await;
+            // Stop early if a newer request cancelled this prefetch.
+            tokio::select! {
+                _ = cancel_for_task.notified() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+            }
+            let (first_missing, count) = slice_cache.find_missing_run(&bg_id_for_task, offset, 4).await;
             if count == 0 {
                 offset += crate::slice_cache::SLICE_SIZE;
                 continue;
@@ -548,10 +592,10 @@ async fn handle_stream(
             let batch_end = (first_missing + (count as u64) * crate::slice_cache::SLICE_SIZE).min(bg_total);
             match fetch_range_from_drive(&bg_client, &bg_url, &bg_token, first_missing, batch_end - 1).await {
                 Ok(data) => {
-                    slice_cache.batch_insert(&bg_id, first_missing, data).await;
+                    slice_cache.batch_insert(&bg_id_for_task, first_missing, data).await;
                     if let Some(app) = crate::APP_HANDLE.get() {
                         let _ = app.emit("buffer-status", BufferState {
-                            track_id: bg_id.clone(),
+                            track_id: bg_id_for_task.clone(),
                             buffer_start_byte: 0,
                             buffer_end_byte: batch_end,
                             total_size_byte: bg_total,
