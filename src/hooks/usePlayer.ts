@@ -64,13 +64,6 @@ export const usePlayer = (accessToken: string | null) => {
     }
   }, [isPlaying]);
 
-  // Persist playMode changes
-  useEffect(() => {
-    idbSet('drplay_playmode', playMode).catch(e =>
-      console.warn(`[usePlayer] playmode-save-fail`, classifyPlayerError(e))
-    );
-  }, [playMode]);
-
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
@@ -134,7 +127,6 @@ export const usePlayer = (accessToken: string | null) => {
           if (isIntentStale(myId)) return;
 
           const savedQueue = await get('drplay_queue');
-          const savedPlayMode = await get('drplay_playmode');
           if (isIntentStale(myId)) return;
 
           const restoredTrack: Track = {
@@ -151,7 +143,6 @@ export const usePlayer = (accessToken: string | null) => {
           } else {
             setPlaybackQueue([restoredTrack]);
           }
-          if (savedPlayMode) setPlayMode(savedPlayMode);
           triggerReload();
         }
       } catch (e) {
