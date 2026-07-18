@@ -26,7 +26,6 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
   const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSeekTargetRef = useRef<number | null>(null);
   const isSeekCorrectionRef = useRef(false);
-  const restoredAudioTrackIdRef = useRef<string | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const active = getActiveAudio();
@@ -115,10 +114,6 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
     const updateProgressUI = () => {
       const audio = getActiveAudio();
       if (audio && !isDraggingRef.current && progressFillRef.current && currentTimeTextRef.current) {
-        if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
-          return;
-        }
-
         const time = audio.currentTime;
         const dur = audio.duration || duration;
         if (dur > 0) {
