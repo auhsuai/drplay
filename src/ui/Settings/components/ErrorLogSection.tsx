@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getErrorLogs,
@@ -73,6 +73,7 @@ export function ErrorLogSection() {
   const [copied, setCopied] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [hasSelection, setHasSelection] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +95,18 @@ export function ErrorLogSection() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      const text = sel?.toString().trim() ?? "";
+      setHasSelection(text.length > 0 && el.contains(sel!.anchorNode as Node));
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
   }, []);
 
   const handleCopy = async () => {
@@ -157,14 +170,16 @@ export function ErrorLogSection() {
         <ScrollText className="w-4 h-4" />
         {copied
           ? t("settings.error_log_copied") || "Copied!"
-          : t("settings.error_log_copy") || "Copy Report"}
+          : hasSelection
+            ? t("settings.error_log_copy_selected") || "Copy Selected"
+            : t("settings.error_log_copy") || "Copy Report"}
       </button>
       <button
         onClick={handleClear}
         disabled={logs.length === 0 || busy}
         className="px-5 py-2.5 rounded-xl bg-gray-200 dark:bg-[#2A2A2A] hover:bg-gray-300 dark:hover:bg-[#3A3A3A] text-gray-900 dark:text-gray-100 text-sm font-semibold transition-all transform active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
-        {t("settings.error_log_clear") || "Clear Log"}
+        {t("settings.error_log_clear") || "Clear"}
       </button>
     </div>
   );
