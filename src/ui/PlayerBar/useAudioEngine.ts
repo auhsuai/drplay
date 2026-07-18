@@ -73,6 +73,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const isProgrammaticActionRef = useRef(false);
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const formatRetryRef = useRef(0);
   const lastKnownPositionRef = useRef(0);
   const errorPositionRef = useRef<number | null>(null);
   const lastSaveTimeRef = useRef(0);
@@ -215,6 +216,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     try {
       await loadNormalAudio(track, pos);
       retryCountRef.current = 0;
+      formatRetryRef.current = 0;
     } catch (err) {
       retryCountRef.current += 1;
       console.error('[Player] Retry failed', err);
@@ -308,9 +310,24 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
         if (u.hostname === 'drplay.localhost' && u.pathname === '/stream') {
           const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
           if (headResp.ok) {
-            isRealFormatError = true;
+            // Backend re-validated successfully (token valid) → the file is
+            // fine, this is NOT a format error. Leave isRealFormatError false
+            // so transient handling (refresh/retry) can run below instead of
+            // spuriously retrying from position 0 forever.
+            isRealFormatError = false;
           } else {
-            errorType = headResp.headers.get('X-Stream-Error-Type') || 'transient';
+            const hdrType = headResp.headers.get('X-Stream-Error-Type') || 'transient';
+            // Only permanent, unrecoverable errors count as a real format error.
+            // Everything else (auth-expired/rate-limited/upstream/url-expired) is
+            // transient and must fall through to the refresh/retry branches.
+            const PERMANENT = new Set(['permanent', 'access-denied', 'download-quota']);
+            if (PERMANENT.has(hdrType)) {
+              isRealFormatError = true;
+              errorType = hdrType;
+            } else {
+              isRealFormatError = false;
+              errorType = hdrType;
+            }
             if (errorType === 'rate-limited') {
               rateLimitUntilRef.current = Date.now() + 300_000;
             }
@@ -399,12 +416,22 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       // A very recent token refresh strongly implies this "unsupported source"
       // was actually a 401 from an expired token (the proxy recovered and the
       // HEAD probe now succeeds), not a genuine format problem. Retry instead of
-      // skipping the track.
+      // skipping the track — but bound this to avoid an infinite loop when the
+      // underlying issue is never actually resolved.
       const tokenTime = Number(localStorage.getItem('drplay_token_time'));
       if (Number.isFinite(tokenTime) && Date.now() - tokenTime < 15000) {
-        const track = currentTrackRef.current;
-        if (track?.streamUrl) {
-          performRetry(track).catch(() => {});
+        if (formatRetryRef.current < 3) {
+          formatRetryRef.current += 1;
+          const track = currentTrackRef.current;
+          if (track?.streamUrl) {
+            performRetry(track).catch(() => {});
+            return;
+          }
+        } else {
+          // Exhausted retries from position 0: surface a real network error
+          // instead of looping forever. formatRetryRef resets on a successful
+          // canplay or when the track changes.
+          dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
           return;
         }
       }
@@ -478,6 +505,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const handleCanPlay = () => {
     const audio = getActiveAudio();
     retryCountRef.current = 0;
+    formatRetryRef.current = 0;
     clearRetryTimeout();
     clearBufferingTimers();
     applyBuffering(false);
