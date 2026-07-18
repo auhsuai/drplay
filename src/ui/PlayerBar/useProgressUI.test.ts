@@ -19,3 +19,17 @@ describe('lossless detection', () => {
     expect(isLossless('track.m4a')).toBe(false);
   });
 });
+
+function shouldCorrect(diff: number, count: number): boolean {
+  const THRESHOLD = 2.5;
+  const MAX_CORRECT = 2;
+  return diff > THRESHOLD && count < MAX_CORRECT;
+}
+
+describe('seek correction', () => {
+  it('corrects only when diff large and under limit', () => {
+    expect(shouldCorrect(3, 0)).toBe(true);
+    expect(shouldCorrect(0.5, 0)).toBe(false);
+    expect(shouldCorrect(3, 2)).toBe(false);
+  });
+});

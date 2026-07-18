@@ -34,6 +34,7 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
   const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSeekTargetRef = useRef<number | null>(null);
   const isSeekCorrectionRef = useRef(false);
+  const seekCorrectionCountRef = useRef(0);
   const restoredAudioTrackIdRef = useRef<string | null>(null);
   const isLosslessRef = useRef(false);
   const lastSeekTimeRef = useRef(0);
@@ -44,6 +45,7 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
     if (!active || duration === 0 || !progressBarRef.current) return;
 
     isDraggingRef.current = true;
+    seekCorrectionCountRef.current = 0;
     try { progressBarRef.current.setPointerCapture(e.pointerId); } catch { }
     const bounds = progressBarRef.current.getBoundingClientRect();
 
@@ -190,10 +192,16 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       }
       const active = getActiveAudio();
       if (lastSeekTargetRef.current !== null && active) {
+        const THRESHOLD = 2.5;
+        const MAX_CORRECT = 2;
         const diff = Math.abs(active.currentTime - lastSeekTargetRef.current);
-        if (diff > 1) {
+        if (diff > THRESHOLD && seekCorrectionCountRef.current < MAX_CORRECT) {
+          seekCorrectionCountRef.current += 1;
           isSeekCorrectionRef.current = true;
           active.currentTime = lastSeekTargetRef.current;
+        } else {
+          isSeekCorrectionRef.current = false;
+          seekCorrectionCountRef.current = 0;
         }
         lastSeekTargetRef.current = null;
       }
