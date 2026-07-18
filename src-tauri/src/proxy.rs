@@ -684,3 +684,30 @@ mod tests {
         assert_eq!(buffer[4000], 3);
     }
 }
+
+#[cfg(test)]
+mod stream_header_tests {
+    use super::*;
+    use axum::http::{StatusCode, header};
+
+    fn build_stream_headers(had_range: bool, start: u64, end: u64, total: u64, ctype: &str) -> Response {
+        let response_len = (end - start + 1) as u64;
+        let (status, cr, cl) = if had_range {
+            (StatusCode::PARTIAL_CONTENT, Some(format!("bytes {}-{}/{}", start, end, total)), Some(response_len.to_string()))
+        } else {
+            (StatusCode::OK, None, Some(response_len.to_string()))
+        };
+        let mut b = Response::builder().status(status).header(header::CONTENT_TYPE, ctype).header(header::ACCEPT_RANGES, "bytes").header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+        if let Some(c) = cr { b = b.header(header::CONTENT_RANGE, c); }
+        if let Some(l) = cl { b = b.header(header::CONTENT_LENGTH, l); }
+        b.body(axum::body::Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn test_range_response_headers_immediate() {
+        let resp = build_stream_headers(true, 1000, 1999, 50000, "audio/flac");
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(resp.headers().get(header::ACCEPT_RANGES).unwrap(), "bytes");
+        assert_eq!(resp.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 1000-1999/50000");
+    }
+}
