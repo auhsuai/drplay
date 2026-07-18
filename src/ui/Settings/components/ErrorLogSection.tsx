@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getErrorLogs,
@@ -72,6 +72,7 @@ export function ErrorLogSection() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,9 +100,16 @@ export function ErrorLogSection() {
     if (logs.length === 0 || busy) return;
     setBusy(true);
     try {
-      const text = selectedDate
-        ? await exportErrorLogsSanitizedForDate(selectedDate)
-        : await exportErrorLogsSanitized();
+      const sel = window.getSelection();
+      const selectedText = sel?.toString().trim() ?? "";
+      const hasSelection =
+        selectedText.length > 0 &&
+        containerRef.current?.contains(sel!.anchorNode as Node);
+      const text = hasSelection
+        ? selectedText
+        : selectedDate
+          ? await exportErrorLogsSanitizedForDate(selectedDate)
+          : await exportErrorLogsSanitized();
       const ok = await copyToClipboard(text);
       if (ok) {
         setCopied(true);
@@ -162,7 +170,7 @@ export function ErrorLogSection() {
   );
 
   return (
-    <div className="flex flex-col gap-2 mt-6 mb-8">
+    <div ref={containerRef} className="flex flex-col gap-2 mt-6 mb-8">
       <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
         {t("settings.error_log_title") || "Error Log"}
       </h2>
