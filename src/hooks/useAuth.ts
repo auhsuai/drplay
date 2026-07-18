@@ -136,6 +136,12 @@ export const useAuth = (onLogoutExt?: () => void) => {
     }).then(fn => {
       if (listenerCancelled) { fn(); return; }
       unlistenFn = fn;
+    }).catch((err) => {
+      // listenerCancelled just means the effect already cleaned up; an abort
+      // there is expected and silent. Surface anything else for observability.
+      if (!(err instanceof DOMException && err.name === 'AbortError') && !listenerCancelled) {
+        console.warn(`[${AUTH_MODULE}] token-expired listener registration failed`, classifyError(err));
+      }
     });
     
     return () => {
