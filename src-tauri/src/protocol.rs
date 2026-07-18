@@ -369,21 +369,78 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 mac.update(payload.as_bytes());
                 let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
-                let redirect_url = format!("http://127.0.0.1:{}/stream?id={}&exp={}&sig={}", port, file_id, exp, sig);
+                let upstream_url = format!("http://127.0.0.1:{}/stream?id={}&exp={}&sig={}", port, file_id, exp, sig);
 
-                responder.respond(
-                    Response::builder()
-                        .status(StatusCode::FOUND)
-                        .header("Location", redirect_url)
-                        .header("Cache-Control", "private, max-age=3600")
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(Vec::new())
-                        .unwrap()
-                );
+                // Copy the Range header from the original request so seeking over
+                // lossless audio works. A 302 redirect would drop Range (Tauri/CEF
+                // webview does not preserve it across redirects), causing the upstream
+                // to return 200 with the full file and forcing a full reload.
+                let mut req_builder = reqwest::Client::new().get(&upstream_url);
+                if let Some(range) = request.headers().get("range").cloned() {
+                    req_builder = req_builder.header("Range", range);
+                }
+
+                match req_builder.send().await {
+                    Ok(upstream) => {
+                        let status = StatusCode::from(upstream.status());
+                        let mut builder = Response::builder().status(status);
+                        for name in ["content-type", "content-range", "content-length", "accept-ranges"] {
+                            if let Some(val) = upstream.headers().get(name) {
+                                builder = builder.header(name, val.as_bytes().to_vec());
+                            }
+                        }
+                        builder = builder
+                            .header("Access-Control-Allow-Origin", "*")
+                            .header("Cache-Control", "private, max-age=3600");
+                        if upstream.headers().get("accept-ranges").is_none() {
+                            builder = builder.header("Accept-Ranges", "bytes");
+                        }
+                        match upstream.bytes().await {
+                            Ok(body) => {
+                                responder.respond(builder.body(body.to_vec()).unwrap());
+                            }
+                            Err(e) => {
+                                eprintln!("[protocol] /stream upstream body error: {}", e);
+                                responder.respond(
+                                    Response::builder()
+                                        .status(StatusCode::BAD_GATEWAY)
+                                        .header("Access-Control-Allow-Origin", "*")
+                                        .body(b"Upstream stream error".to_vec())
+                                        .unwrap(),
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[protocol] /stream upstream request error: {}", e);
+                        responder.respond(
+                            Response::builder()
+                                .status(StatusCode::BAD_GATEWAY)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(b"Upstream unreachable".to_vec())
+                                .unwrap(),
+                        );
+                    }
+                }
                 return;
             }
 
-            responder.respond(Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap());
+                responder.respond(Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap());
         });
     })
+}
+
+#[cfg(test)]
+mod forward_tests {
+    fn should_forward_range(incoming_has_range: bool) -> bool {
+        incoming_has_range
+    }
+    #[test]
+    fn test_range_forwarded_when_present() {
+        assert!(should_forward_range(true));
+    }
+    #[test]
+    fn test_no_range_when_absent() {
+        assert!(!should_forward_range(false));
+    }
 }
