@@ -274,6 +274,15 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
 
       if (track && isProxyStream && retryCountRef.current < 3) {
         try {
+          // Force a fresh Drive token BEFORE minting a new URL so the proxy
+          // stream is signed with a live access token (not the stale/expired
+          // one that caused the network-class error). This also pushes the
+          // refreshed credentials down to the Rust proxy via getValidToken.
+          try {
+            await getValidToken(true);
+          } catch (e) {
+            console.warn('[Player] Drive token refresh before retry failed (continuing with mint)', e);
+          }
           const freshUrl = await invoke<string>('get_stream_url', { fileId: track.id });
           const freshTrack = { ...track, streamUrl: freshUrl };
           currentTrackRef.current = freshTrack;
