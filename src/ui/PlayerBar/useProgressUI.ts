@@ -23,7 +23,6 @@ interface UseProgressUIParams {
 export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
   const { getActiveAudio, currentTrack, audioRef, progressBarRef, progressFillRef, currentTimeTextRef, volumeBarRef, setVolume, setIsMuted, duration } = params;
   const isDraggingRef = useRef(false);
-  const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSeekTargetRef = useRef<number | null>(null);
   const isSeekCorrectionRef = useRef(false);
 
@@ -53,15 +52,11 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       isDraggingRef.current = false;
       const finalTime = updateTime(clientX);
 
-      if (seekTimeoutRef.current) {
-        clearTimeout(seekTimeoutRef.current);
+      const active2 = getActiveAudio();
+      if (active2) {
+        lastSeekTargetRef.current = finalTime;
+        active2.currentTime = finalTime;
       }
-      seekTimeoutRef.current = setTimeout(() => {
-        const active2 = getActiveAudio();
-        if (active2) {
-          active2.currentTime = finalTime;
-        }
-      }, 250);
 
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
