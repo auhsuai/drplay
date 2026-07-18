@@ -188,7 +188,16 @@
     "empty_trash_error": "Lỗi khi dọn thùng rác",
     "restore_error": "Lỗi khi khôi phục",
     "contact": "Liên hệ",
-    "open_link_error": "Không thể mở liên kết"
+    "open_link_error": "Không thể mở liên kết",
+    "error_log_title": "Nhật ký lỗi",
+    "error_log_copy": "Sao chép báo cáo",
+    "error_log_copied": "Đã copy!",
+    "error_log_clear": "Xoá log",
+    "error_log_empty": "Chưa có lỗi nào được ghi nhận.",
+    "error_log_note": "Nhật ký này đã được lọc bỏ thông tin cá nhân (ID, token, liên kết) trước khi rời khỏi thiết bị của bạn.",
+    "error_log_stack": "Dấu vết ngăn xếp",
+    "error_log_copy_error": "Không thể sao chép vào clipboard.",
+    "error_log_clear_error": "Lỗi khi xoá nhật ký."
   },
   "sort": {
     "name_asc": "A-Z",
