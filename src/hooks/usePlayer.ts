@@ -37,10 +37,7 @@ export const usePlayer = (accessToken: string | null) => {
   const [originalQueue, setOriginalQueue] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [bufferSeconds, setBufferSeconds] = useState(1400);
-  const [crossfadeEnabled, setCrossfadeEnabled] = useState(false);
-  const [crossfadeDuration, setCrossfadeDuration] = useState(3000);
   const initialBufferRef = useRef(true);
-  const initialCrossfadeRef = useRef(true);
 
   // Persist buffer setting changes to IndexedDB and Rust backend
   useEffect(() => {
@@ -53,16 +50,6 @@ export const usePlayer = (accessToken: string | null) => {
       console.warn(`[usePlayer] buffer-settings-failed`, classifyPlayerError(e))
     );
   }, [bufferSeconds]);
-
-  // Persist crossfade settings to IndexedDB
-  useEffect(() => {
-    if (initialCrossfadeRef.current) {
-      initialCrossfadeRef.current = false;
-      return;
-    }
-    idbSet("drplay_crossfade_enabled", crossfadeEnabled);
-    idbSet("drplay_crossfade_duration", crossfadeDuration);
-  }, [crossfadeEnabled, crossfadeDuration]);
 
   // Keep system awake while playing
   useEffect(() => {
@@ -113,13 +100,6 @@ export const usePlayer = (accessToken: string | null) => {
           : undefined;
         if (validBuffer !== undefined) setBufferSeconds(validBuffer);
 
-        const storedCrossfadeEnabled = await get("drplay_crossfade_enabled");
-        if (typeof storedCrossfadeEnabled === "boolean") setCrossfadeEnabled(storedCrossfadeEnabled);
-        const rawCrossfadeDuration = await get("drplay_crossfade_duration");
-        if (typeof rawCrossfadeDuration === "number" && Number.isFinite(rawCrossfadeDuration) && rawCrossfadeDuration > 0) {
-          setCrossfadeDuration(rawCrossfadeDuration);
-        }
-
         if (lastSession && lastSession.track) {
           if (isIntentStale(myId)) {
             return;
@@ -146,12 +126,14 @@ export const usePlayer = (accessToken: string | null) => {
           }
           if (isIntentStale(myId)) return;
 
-          setCurrentTrack({
+          const restoredTrack: Track = {
             ...lastSession.track,
             streamUrl,
             restoreTime: lastSession.time,
-            restoreDuration: lastSession.duration
-          });
+            restoreDuration: lastSession.duration,
+          };
+          setCurrentTrack(restoredTrack);
+          setPlaybackQueue([restoredTrack]);
           triggerReload();
         }
       } catch (e) {
@@ -454,10 +436,6 @@ export const usePlayer = (accessToken: string | null) => {
     playMode,
     bufferSeconds,
     setBufferSeconds,
-    crossfadeEnabled,
-    setCrossfadeEnabled,
-    crossfadeDuration,
-    setCrossfadeDuration,
     handlePlayTrack,
     handleNextTrack,
     handlePrevTrack,
