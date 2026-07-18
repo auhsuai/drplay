@@ -197,7 +197,10 @@
     "error_log_note": "Nhật ký này đã được lọc bỏ thông tin cá nhân (ID, token, liên kết) trước khi rời khỏi thiết bị của bạn.",
     "error_log_stack": "Dấu vết ngăn xếp",
     "error_log_copy_error": "Không thể sao chép vào clipboard.",
-    "error_log_clear_error": "Lỗi khi xoá nhật ký."
+    "error_log_clear_error": "Lỗi khi xoá nhật ký.",
+    "error_log_by_date": "Lỗi theo ngày",
+    "error_log_back": "Quay lại",
+    "error_log_count": "{{count}} lỗi"
   },
   "sort": {
     "name_asc": "A-Z",

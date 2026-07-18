@@ -4,6 +4,8 @@ import {
   getErrorLogs,
   clearErrorLogs,
   exportErrorLogsSanitized,
+  exportErrorLogsSanitizedForDate,
+  groupLogsByDate,
   type ErrorLogEntry,
 } from "../../../utils/errorLog";
 import { copyToClipboard } from "../../../utils/copyToClipboard";
@@ -23,12 +25,53 @@ function formatTs(ts: number): string {
   return d.toLocaleString();
 }
 
+function LogEntryCard({ entry }: { entry: ErrorLogEntry }) {
+  const { t } = useTranslation();
+  // SECURITY: each entry is its own text node (<div>/<pre>), mapped from the
+  // array. Raw messages are NEVER concatenated into a single HTML blob, and
+  // dangerouslySetInnerHTML is NEVER used — preventing log forging via
+  // injected newlines. This exact card is reused in both the date-group view
+  // and the day-detail view.
+  return (
+    <div
+      key={entry.id}
+      className="border-b border-gray-200 dark:border-[#2A2A2A] pb-3 last:border-b-0 last:pb-0"
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <span
+          className={`text-[11px] font-bold uppercase px-2 py-0.5 rounded-full ${LEVEL_BADGE[entry.level]}`}
+        >
+          {entry.level}
+        </span>
+        <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+          {entry.source}
+        </span>
+        <span className="text-xs text-gray-400">{formatTs(entry.ts)}</span>
+      </div>
+      <pre className="whitespace-pre-wrap break-all text-sm text-gray-800 dark:text-gray-200 font-sans m-0">
+        {entry.message}
+      </pre>
+      {entry.stack ? (
+        <details className="mt-1">
+          <summary className="text-xs text-gray-400 cursor-pointer select-none">
+            {t("settings.error_log_stack") || "Stack trace"}
+          </summary>
+          <pre className="whitespace-pre-wrap break-all text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono m-0">
+            {entry.stack}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 export function ErrorLogSection() {
   const { t } = useTranslation();
   const [logs, setLogs] = useState<ErrorLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,7 +99,9 @@ export function ErrorLogSection() {
     if (logs.length === 0 || busy) return;
     setBusy(true);
     try {
-      const text = await exportErrorLogsSanitized();
+      const text = selectedDate
+        ? await exportErrorLogsSanitizedForDate(selectedDate)
+        : await exportErrorLogsSanitized();
       const ok = await copyToClipboard(text);
       if (ok) {
         setCopied(true);
@@ -135,42 +180,40 @@ export function ErrorLogSection() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {t("settings.error_log_empty") || "No errors have been recorded yet."}
           </p>
+        ) : selectedDate === null ? (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">
+              {t("settings.error_log_by_date") || "Errors by day"}
+            </p>
+            {groupLogsByDate(logs).map((group) => (
+              <button
+                key={group.dateKey}
+                onClick={() => setSelectedDate(group.dateKey)}
+                className="flex items-center justify-between w-full text-left px-3 py-2.5 rounded-lg bg-white dark:bg-[#222] hover:bg-gray-100 dark:hover:bg-[#2E2E2E] border border-gray-200 dark:border-[#2A2A2A] transition-all"
+              >
+                <span className="text-sm font-medium text-gray-800 dark:text-gray-100">
+                  {group.dateKey}
+                </span>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gray-200 dark:bg-[#333] text-gray-600 dark:text-gray-300">
+                  {t("settings.error_log_count", { count: group.entries.length }) ||
+                    `${group.entries.length} errors`}
+                </span>
+              </button>
+            ))}
+          </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {/* SECURITY: each entry is its own text node (<div>/<pre>), mapped
-                from the array. Raw messages are NEVER concatenated into a single
-                HTML blob, preventing log forging via injected newlines. */}
-            {logs.map((entry) => (
-              <div
-                key={entry.id}
-                className="border-b border-gray-200 dark:border-[#2A2A2A] pb-3 last:border-b-0 last:pb-0"
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <span
-                    className={`text-[11px] font-bold uppercase px-2 py-0.5 rounded-full ${LEVEL_BADGE[entry.level]}`}
-                  >
-                    {entry.level}
-                  </span>
-                  <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                    {entry.source}
-                  </span>
-                  <span className="text-xs text-gray-400">{formatTs(entry.ts)}</span>
-                </div>
-                <pre className="whitespace-pre-wrap break-all text-sm text-gray-800 dark:text-gray-200 font-sans m-0">
-                  {entry.message}
-                </pre>
-                {entry.stack ? (
-                  <details className="mt-1">
-                    <summary className="text-xs text-gray-400 cursor-pointer select-none">
-                      {t("settings.error_log_stack") || "Stack trace"}
-                    </summary>
-                    <pre className="whitespace-pre-wrap break-all text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono m-0">
-                      {entry.stack}
-                    </pre>
-                  </details>
-                ) : null}
-              </div>
-            ))}
+            <button
+              onClick={() => setSelectedDate(null)}
+              className="self-start text-xs font-semibold text-[#4285F4] hover:underline flex items-center gap-1"
+            >
+              ← {t("settings.error_log_back") || "Back"}
+            </button>
+            {groupLogsByDate(logs)
+              .find((g) => g.dateKey === selectedDate)
+              ?.entries.map((entry) => (
+                <LogEntryCard key={entry.id} entry={entry} />
+              ))}
           </div>
         )}
       </div>

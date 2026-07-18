@@ -197,7 +197,10 @@
     "error_log_note": "These logs are filtered to remove personal information (IDs, tokens, links) before leaving your device.",
     "error_log_stack": "Stack trace",
     "error_log_copy_error": "Could not copy to clipboard.",
-    "error_log_clear_error": "Failed to clear logs."
+    "error_log_clear_error": "Failed to clear logs.",
+    "error_log_by_date": "Errors by day",
+    "error_log_back": "Back",
+    "error_log_count": "{{count}} errors"
   },
   "sort": {
     "name_asc": "A-Z",

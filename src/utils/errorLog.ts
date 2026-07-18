@@ -70,24 +70,93 @@ export async function clearErrorLogs(): Promise<void> {
   }
 }
 
+function formatLogsToReport(entries: ErrorLogEntry[]): string {
+  if (entries.length === 0) return '';
+  return entries
+    .map((e) => {
+      const lines = [
+        `[${new Date(e.ts).toISOString()}] ${e.level} | ${e.source}`,
+        e.message,
+        e.stack ?? ''
+      ];
+      return lines.filter((l) => l !== '').join('\n');
+    })
+    .join('\n---\n');
+}
+
 export async function exportErrorLogsSanitized(): Promise<string> {
   try {
     const logs = await getErrorLogs();
     if (logs.length === 0) return '';
-
-    return logs
-      .map((e) => {
-        const lines = [
-          `[${new Date(e.ts).toISOString()}] ${e.level} | ${e.source}`,
-          e.message,
-          e.stack ?? ''
-        ];
-        return lines.filter((l) => l !== '').join('\n');
-      })
-      .join('\n---\n');
+    return formatLogsToReport(logs);
   } catch (err) {
     console.warn(
       `[exportErrorLogsSanitized] failed to export at ${new Date().toISOString()}: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return '';
+  }
+}
+
+export interface LogDateGroup {
+  dateKey: string;
+  entries: ErrorLogEntry[];
+}
+
+export function groupLogsByDate(logs: ErrorLogEntry[]): LogDateGroup[] {
+  // Pure function: never throws.
+  // dateKey uses toLocaleDateString() in LOCAL timezone as BOTH the group
+  // key and the display label. Using the same string for key+display keeps
+  // grouping and rendering consistent and avoids timezone-mismatch bugs
+  // (where an entry's key would not match the label it is shown under).
+  // See MDN: Date.prototype.toLocaleDateString() returns the date portion
+  // interpreted in the local timezone.
+  const byDate = new Map<string, ErrorLogEntry[]>();
+
+  for (const entry of logs) {
+    const d = new Date(entry.ts);
+    if (Number.isNaN(d.getTime())) continue;
+    const dateKey = d.toLocaleDateString();
+    const bucket = byDate.get(dateKey);
+    if (bucket) {
+      bucket.push(entry);
+    } else {
+      byDate.set(dateKey, [entry]);
+    }
+  }
+
+  const groups: LogDateGroup[] = [];
+  for (const [dateKey, entries] of byDate.entries()) {
+    // Entries within a group sorted newest-first by ts.
+    const sorted = [...entries].sort((a, b) => b.ts - a.ts);
+    groups.push({ dateKey, entries: sorted });
+  }
+
+  // Groups sorted newest-first (largest ts on top).
+  groups.sort((a, b) => {
+    const aMax = a.entries.reduce((m, e) => Math.max(m, e.ts), 0);
+    const bMax = b.entries.reduce((m, e) => Math.max(m, e.ts), 0);
+    return bMax - aMax;
+  });
+
+  return groups;
+}
+
+export async function exportErrorLogsSanitizedForDate(
+  dateKey: string
+): Promise<string> {
+  try {
+    const logs = await getErrorLogs();
+    if (logs.length === 0) return '';
+
+    const group = groupLogsByDate(logs).find((g) => g.dateKey === dateKey);
+    if (!group || group.entries.length === 0) return '';
+
+    return formatLogsToReport(group.entries);
+  } catch (err) {
+    console.warn(
+      `[exportErrorLogsSanitizedForDate] failed to export for date ${dateKey} at ${new Date().toISOString()}: ${
         err instanceof Error ? err.message : String(err)
       }`
     );
