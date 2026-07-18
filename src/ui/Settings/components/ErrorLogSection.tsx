@@ -191,7 +191,7 @@ export function ErrorLogSection() {
       </h2>
 
       {selectedDate && (
-        <div className="flex items-center justify-between py-2">
+        <div className="flex items-end justify-between">
           <button
             onClick={() => setSelectedDate(null)}
             className="text-sm font-semibold text-gray-800 dark:text-gray-200 hover:text-[#4285F4] transition-colors py-2.5"
