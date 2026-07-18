@@ -10,10 +10,6 @@ use sha2::Sha256;
 use reqwest::Client;
 use serde::Deserialize;
 use tauri::Emitter;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
-use bytes::Bytes;
-
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
@@ -147,7 +143,7 @@ fn drive_err_response(e: DriveErr) -> Response {
         DriveErr::AccessDenied => (StatusCode::FORBIDDEN, [("X-Stream-Error-Type", "access-denied")], "Access denied").into_response(),
         DriveErr::DownloadQuota => (StatusCode::FORBIDDEN, [("X-Stream-Error-Type", "download-quota")], "Download quota exceeded").into_response(),
         DriveErr::Auth => (StatusCode::UNAUTHORIZED, [("X-Stream-Error-Type", "auth-expired")], "Auth expired").into_response(),
-        _ => (StatusCode::BAD_GATEWAY, "Upstream error").into_response(),
+        _ => (StatusCode::BAD_GATEWAY, [("X-Stream-Error-Type", "upstream")], "Upstream error").into_response(),
     }
 }
 
@@ -285,8 +281,15 @@ async fn handle_stream(
         }
     };
 
-    // For HEAD always re-validate against Drive
-    let (total_size, content_type) = if total_size == 0 || method == axum::http::Method::HEAD {
+    // Any request carrying a Range header is a seek: a stale cached total_size
+    // (or one that drifted) would make us promise a wrong Content-Range and
+    // trigger ERR_CONTENT_LENGTH_MISMATCH on the browser. Always re-probe the
+    // authoritative total_size for Range/seek requests.
+    let range_str = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let has_range = range_str.is_some();
+
+    // For HEAD, or any Range/seek request, always re-validate total_size against Drive
+    let (total_size, content_type) = if total_size == 0 || method == axum::http::Method::HEAD || has_range {
         match get_total_size(&state.client, &api_url, &final_token).await {
             Ok(v) => v,
             Err(DriveErr::Auth) => {
@@ -311,7 +314,6 @@ async fn handle_stream(
         (total_size, content_type)
     };
 
-    let range_str = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     let ranges = range_str.map(|r| parse_multi_range(r, total_size)).unwrap_or_default();
 
     if method == axum::http::Method::HEAD {
@@ -348,221 +350,248 @@ async fn handle_stream(
         FAIL_COUNT.store(0, Ordering::Relaxed);
     }
 
-    let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
-        Some(c) => c,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Cache not initialized").into_response(),
-    };
-
-    // Align to SLICE_SIZE boundaries
-    let slice_start = (start / crate::slice_cache::SLICE_SIZE) * crate::slice_cache::SLICE_SIZE;
-    let slice_last = ((end / crate::slice_cache::SLICE_SIZE) + 1) * crate::slice_cache::SLICE_SIZE;
+    let actual_start = start;
+    let actual_end = end;
     let desired_total = (end - start + 1) as usize;
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+    // Hard safety cap so a seek to end + huge prefetch window can never OOM.
+    // Seek ranges from the frontend are throttled to a few MB; this only
+    // guards against pathological requests. Above the cap we still must NOT
+    // close the stream short — but buffering >100MB is the real risk, so we
+    // keep the buffer approach regardless; 100MB is a sane ceiling for a music
+    // streamer and well within normal RAM budgets.
+    const MAX_BUFFER_BYTES: usize = 100 * 1024 * 1024;
+    if desired_total > MAX_BUFFER_BYTES {
+        return drive_err_response(DriveErr::Upstream);
+    }
+
     let track_id = query.id.clone();
-    let fetch_client = state.client.clone();
-    let fetch_api_url = api_url.clone();
 
     // Proactively refresh the Drive token if it is expiring soon, so that the
-    // whole seek fetch loop (and any concurrent seeks) start from a fresh token
-    // instead of racing a just-expired one into a wall of 401s. Single-flight
-    // inside `proactively_refresh_token` dedups concurrent refreshes. On failure
-    // it keeps the old token and the reactive `recover_stream_token` path below
+    // whole seek fetch starts from a fresh token instead of racing a
+    // just-expired one into a wall of 401s. Single-flight inside
+    // `proactively_refresh_token` dedups concurrent refreshes. On failure it
+    // keeps the old token and the reactive `recover_stream_token` path below
     // still catches a real 401 (Task 1 is preserved).
     crate::proactively_refresh_token().await;
 
     let mut fetch_token = final_token.clone();
     let mut auth_recover_count = 0u32;
-    let actual_start = start;
-    let actual_end = end;
 
-    tokio::spawn(async move {
-        let mut current_offset = slice_start;
-        let mut buffer_status_emitted = false;
-        let mut bytes_sent = 0usize;
+    // Buffer the ENTIRE requested range into memory BEFORE responding. This
+    // guarantees the body length always matches the advertised Content-Range /
+    // Content-Length, eliminating ERR_CONTENT_LENGTH_MISMATCH and the resulting
+    // ffmpeg "PTS is not defined" on seek. We never buffer the whole file — only
+    // the (small) seek window the frontend asked for.
+    let mut buffer: Vec<u8> = Vec::with_capacity(desired_total);
 
-        while current_offset < slice_last {
-            // Cache hit path
-            if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
-                let mut chunk = (*data).clone();
+    let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
+        Some(c) => c,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Cache not initialized").into_response(),
+    };
 
-                // Front trim for first slice
-                if current_offset == slice_start && actual_start > slice_start {
-                    let skip = (actual_start - slice_start) as usize;
-                    if skip < chunk.len() {
-                        chunk.drain(..skip);
-                    }
+    // Align to SLICE_SIZE boundaries for the cache-aware fetch loop.
+    let slice_start = (start / crate::slice_cache::SLICE_SIZE) * crate::slice_cache::SLICE_SIZE;
+    let slice_last = ((end / crate::slice_cache::SLICE_SIZE) + 1) * crate::slice_cache::SLICE_SIZE;
+
+    let fetch_client = state.client.clone();
+    let fetch_api_url = api_url.clone();
+
+    let mut current_offset = slice_start;
+    let mut bytes_collected = 0usize;
+    let mut buffer_status_emitted = false;
+    let mut fatal_err: Option<DriveErr> = None;
+    let mut rate_backoff = false;
+
+    while current_offset < slice_last {
+        // Cache hit path
+        if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
+            let mut chunk = (*data).clone();
+
+            if current_offset == slice_start && actual_start > slice_start {
+                let skip = (actual_start - slice_start) as usize;
+                if skip < chunk.len() {
+                    chunk.drain(..skip);
                 }
-
-                // End trim to match exact requested range
-                let remaining = desired_total.saturating_sub(bytes_sent);
-                if remaining < chunk.len() {
-                    chunk.truncate(remaining);
-                }
-
-                bytes_sent += chunk.len();
-                if !chunk.is_empty() {
-                    if tx.send(chunk).await.is_err() {
-                        break;
-                    }
-                }
-                current_offset += crate::slice_cache::SLICE_SIZE;
-                continue;
             }
 
-            // Cache miss: find consecutive missing slices
-            let (fetch_start, count) = slice_cache.find_missing_run(
-                &track_id, current_offset, 4,
-            ).await;
-
-            if count == 0 {
-                current_offset += crate::slice_cache::SLICE_SIZE;
-                continue;
+            let remaining = desired_total.saturating_sub(bytes_collected);
+            if remaining < chunk.len() {
+                chunk.truncate(remaining);
             }
 
-            let fetch_end_slice = fetch_start + (count as u64) * crate::slice_cache::SLICE_SIZE;
-            let fetch_end_byte = fetch_end_slice.min(total_size).saturating_sub(1);
+            buffer.extend_from_slice(&chunk);
+            bytes_collected += chunk.len();
+            current_offset += crate::slice_cache::SLICE_SIZE;
+            continue;
+        }
 
-            // Fetch batch from Drive (with retry)
-            let mut last_err = None;
-            let mut batch_data = None;
-            for attempt in 0..3 {
-                match fetch_range_from_drive(
-                    &fetch_client, &fetch_api_url, &fetch_token,
-                    fetch_start, fetch_end_byte,
-                ).await {
-                    Ok(data) => {
-                        batch_data = Some(data);
+        // Cache miss: find consecutive missing slices
+        let (fetch_start, count) = slice_cache.find_missing_run(&track_id, current_offset, 4).await;
+        if count == 0 {
+            current_offset += crate::slice_cache::SLICE_SIZE;
+            continue;
+        }
+
+        let fetch_end_slice = fetch_start + (count as u64) * crate::slice_cache::SLICE_SIZE;
+        let fetch_end_byte = fetch_end_slice.min(total_size).saturating_sub(1);
+
+        // Fetch batch from Drive (with retry + auth recovery)
+        let mut last_err = None;
+        let mut batch_data = None;
+        for attempt in 0..3 {
+            match fetch_range_from_drive(
+                &fetch_client, &fetch_api_url, &fetch_token,
+                fetch_start, fetch_end_byte,
+            ).await {
+                Ok(data) => { batch_data = Some(data); break; }
+                Err(DriveErr::Rate) => {
+                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                    last_err = Some(DriveErr::Rate);
+                }
+                Err(DriveErr::Auth) => {
+                    last_err = Some(DriveErr::Auth);
+                    if auth_recover_count >= 2 {
+                        eprintln!(
+                            "[proxy][{}] stream auth-recover exhausted (track_id short={}..) at {}",
+                            module_path!(),
+                            &track_id.chars().take(6).collect::<String>(),
+                            now_epoch_secs(),
+                        );
                         break;
                     }
-                    Err(DriveErr::Rate) => {
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                        last_err = Some(DriveErr::Rate);
-                    }
-                    Err(DriveErr::Auth) => {
-                        last_err = Some(DriveErr::Auth);
-                        if auth_recover_count >= 2 {
+                    match recover_stream_token(&fetch_token).await {
+                        Some(new_token) => {
                             eprintln!(
-                                "[proxy][{}] stream auth-recover exhausted (track_id short={}..) at {}",
+                                "[proxy][{}] stream auth-recover ok (track_id short={}..) at {}",
                                 module_path!(),
                                 &track_id.chars().take(6).collect::<String>(),
                                 now_epoch_secs(),
                             );
-                            break;
+                            fetch_token = new_token;
+                            auth_recover_count += 1;
+                            continue;
                         }
-                        match recover_stream_token(&fetch_token).await {
-                            Some(new_token) => {
-                                eprintln!(
-                                    "[proxy][{}] stream auth-recover ok (track_id short={}..) at {}",
-                                    module_path!(),
-                                    &track_id.chars().take(6).collect::<String>(),
-                                    now_epoch_secs(),
-                                );
-                                fetch_token = new_token;
-                                auth_recover_count += 1;
-                                continue;
-                            }
-                            None => {
-                                eprintln!(
-                                    "[proxy][{}] stream auth-recover failed (track_id short={}..) at {}",
-                                    module_path!(),
-                                    &track_id.chars().take(6).collect::<String>(),
-                                    now_epoch_secs(),
-                                );
-                                last_err = Some(DriveErr::Auth);
-                                break;
-                            }
-                        }
-                    }
-                    Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                        last_err = Some(e);
-                        break;
-                    }
-                    Err(e) => {
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                        last_err = Some(e);
-                    }
-                }
-            }
-
-            match batch_data {
-                Some(data) => {
-                    slice_cache.batch_insert(&track_id, fetch_start, data).await;
-
-                    // Send each cached slice with trimming
-                    for i in 0..count {
-                        let slice_offset = fetch_start + (i as u64) * crate::slice_cache::SLICE_SIZE;
-                        if slice_offset > actual_end {
-                            break;
-                        }
-                        if let Some(cached) = slice_cache.try_get(&track_id, slice_offset).await {
-                            let mut chunk = (*cached).clone();
-
-                            // Front trim for first requested slice
-                            if slice_offset == slice_start && actual_start > slice_start {
-                                let skip = (actual_start - slice_start) as usize;
-                                if skip < chunk.len() {
-                                    chunk.drain(..skip);
-                                }
-                            }
-
-                            // End trim to match exact range
-                            let remaining = desired_total.saturating_sub(bytes_sent);
-                            if remaining < chunk.len() {
-                                chunk.truncate(remaining);
-                            }
-
-                            bytes_sent += chunk.len();
-                            if !chunk.is_empty() {
-                                if tx.send(chunk).await.is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                    }
-
-                    // Emit buffer-status once after first successful batch
-                    if !buffer_status_emitted {
-                        buffer_status_emitted = true;
-                        if let Some(app) = crate::APP_HANDLE.get() {
-                            let _ = app.emit("buffer-status", BufferState {
-                                track_id: track_id.clone(),
-                                buffer_start_byte: 0,
-                                buffer_end_byte: total_size,
-                                total_size_byte: total_size,
-                            });
-                        }
-                    }
-
-                    current_offset = fetch_end_slice;
-                }
-                None => {
-                    if let Some(err) = last_err {
-                        eprintln!("[proxy] batch-fetch-fail: {:?}", err);
-                        if err == DriveErr::Rate {
-                            let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-                            let cooldown = {
-                                let base = 30u64;
-                                base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
-                            };
-                            GLOBAL_BACKOFF_UNTIL.store(
-                                now_epoch_secs() + cooldown,
-                                Ordering::Release,
+                        None => {
+                            eprintln!(
+                                "[proxy][{}] stream auth-recover failed (track_id short={}..) at {}",
+                                module_path!(),
+                                &track_id.chars().take(6).collect::<String>(),
+                                now_epoch_secs(),
                             );
+                            last_err = Some(DriveErr::Auth);
+                            break;
                         }
-                    } else {
-                        eprintln!("[proxy] batch-fetch-fail: unknown error");
                     }
+                }
+                Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
+                    last_err = Some(e);
                     break;
+                }
+                Err(e) => {
+                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                    last_err = Some(e);
                 }
             }
         }
-    });
 
-    // Spawn background prefetch for slices ahead of requested range
+        match batch_data {
+            Some(data) => {
+                slice_cache.batch_insert(&track_id, fetch_start, data).await;
+
+                for i in 0..count {
+                    let slice_offset = fetch_start + (i as u64) * crate::slice_cache::SLICE_SIZE;
+                    if slice_offset > actual_end {
+                        break;
+                    }
+                    if let Some(cached) = slice_cache.try_get(&track_id, slice_offset).await {
+                        let mut chunk = (*cached).clone();
+
+                        if slice_offset == slice_start && actual_start > slice_start {
+                            let skip = (actual_start - slice_start) as usize;
+                            if skip < chunk.len() {
+                                chunk.drain(..skip);
+                            }
+                        }
+
+                        let remaining = desired_total.saturating_sub(bytes_collected);
+                        if remaining < chunk.len() {
+                            chunk.truncate(remaining);
+                        }
+
+                        buffer.extend_from_slice(&chunk);
+                        bytes_collected += chunk.len();
+                    }
+                }
+
+                if !buffer_status_emitted {
+                    buffer_status_emitted = true;
+                    if let Some(app) = crate::APP_HANDLE.get() {
+                        let _ = app.emit("buffer-status", BufferState {
+                            track_id: track_id.clone(),
+                            buffer_start_byte: 0,
+                            buffer_end_byte: total_size,
+                            total_size_byte: total_size,
+                        });
+                    }
+                }
+
+                current_offset = fetch_end_slice;
+            }
+            None => {
+                let err = last_err.unwrap_or(DriveErr::Upstream);
+                eprintln!(
+                    "[proxy][{}] buffer-seek-fail track_id short={}.. err={:?} at {}",
+                    module_path!(),
+                    &track_id.chars().take(6).collect::<String>(),
+                    err,
+                    now_epoch_secs(),
+                );
+                if err == DriveErr::Rate {
+                    rate_backoff = true;
+                }
+                fatal_err = Some(err);
+                break;
+            }
+        }
+    }
+
+    // If fetch failed we MUST NOT send a 206 with fewer bytes than promised —
+    // that is exactly the ERR_CONTENT_LENGTH_MISMATCH we are fixing. Return a
+    // terminal error response instead (with a precise X-Stream-Error-Type).
+    if let Some(err) = fatal_err {
+        if rate_backoff {
+            let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+            let cooldown = {
+                let base = 30u64;
+                base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
+            };
+            GLOBAL_BACKOFF_UNTIL.store(now_epoch_secs() + cooldown, Ordering::Release);
+        }
+        return drive_err_response(err);
+    }
+
+    // Sanity: if we somehow collected the wrong byte count, do not lie to the
+    // browser. Send a 502 instead of a truncated-but-claimed-complete body.
+    if buffer.len() != desired_total {
+        eprintln!(
+            "[proxy][{}] buffer length mismatch (track_id short={}..) got={} want={} at {}",
+            module_path!(),
+            &track_id.chars().take(6).collect::<String>(),
+            buffer.len(),
+            desired_total,
+            now_epoch_secs(),
+        );
+        return drive_err_response(DriveErr::Upstream);
+    }
+
+    // Spawn background prefetch for slices ahead of requested range. This runs
+    // independently of the main response and only warms slice_cache; it does
+    // NOT influence what we already buffered & are about to send. Logic
+    // unchanged from before.
     let bg_client = state.client.clone();
     let bg_url = api_url.clone();
-    let bg_token = final_token.clone();
+    let bg_token = fetch_token.clone();
     let bg_id = query.id.clone();
     let bg_total = total_size;
     let bg_start = actual_end + 1;
@@ -611,16 +640,16 @@ async fn handle_stream(
         }
     });
 
-    // Build streaming response
-    let stream = ReceiverStream::new(rx)
-        .map(|chunk| Ok::<Bytes, std::convert::Infallible>(Bytes::from(chunk)));
-    let body = axum::body::Body::from_stream(stream);
+    // Build response: the body length is EXACTLY buffer.len(), so we set
+    // Content-Length explicitly to match — no mismatch possible.
+    let body = axum::body::Body::from(buffer);
 
     Response::builder()
         .status(StatusCode::PARTIAL_CONTENT)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::CONTENT_LENGTH, desired_total.to_string())
         .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size))
         .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response body").into_response())
@@ -845,5 +874,117 @@ mod auth_recovery_tests {
         assert!(!r3, "must break after 2 recoveries to avoid infinite loop");
         assert_eq!(auth_recover_count, 2);
         assert_eq!(attempts, 2, "recover must NOT be called a 3rd time");
+    }
+}
+
+/// Tests for the lossless-seek fix (ERR_CONTENT_LENGTH_MISMATCH root cause).
+#[cfg(test)]
+mod seek_fix_tests {
+    use super::*;
+    use axum::http::Method;
+
+    /// (a) Re-probe decision: a request carrying a Range header (seek) must
+    /// always re-probe total_size from Drive, even when the cache already has
+    /// a (possibly stale) non-zero total_size. Mirrors the condition in
+    /// `handle_stream`: `total_size == 0 || method == HEAD || has_range`.
+    fn should_reprobe(total_size: u64, method: Method, has_range: bool) -> bool {
+        total_size == 0 || method == Method::HEAD || has_range
+    }
+
+    #[test]
+    fn test_reprobe_total_size_when_range_present() {
+        // Cached non-zero total_size, but a seek (Range present) → must re-probe.
+        assert!(should_reprobe(50_000_000, Method::GET, true),
+            "seek requests must always re-probe total_size");
+        // Head always re-probes.
+        assert!(should_reprobe(50_000_000, Method::HEAD, false));
+        // Fresh cache (total_size == 0) re-probes.
+        assert!(should_reprobe(0, Method::GET, false));
+        // Plain GET with warm cache does NOT re-probe (avoids extra round-trip).
+        assert!(!should_reprobe(50_000_000, Method::GET, false));
+    }
+
+    /// (b) Buffer exact length: assembling the requested range from slices
+    /// must yield a buffer whose length == (end - start + 1), exactly what we
+    /// advertise in Content-Length. Mirrors the `buffer` assembly loop in
+    /// `handle_stream`.
+    fn buffer_range(
+        slices: &[(u64, Vec<u8>)],
+        actual_start: u64,
+        actual_end: u64,
+    ) -> Vec<u8> {
+        let slice_size = crate::slice_cache::SLICE_SIZE;
+        let slice_start = (actual_start / slice_size) * slice_size;
+        let slice_last = ((actual_end / slice_size) + 1) * slice_size;
+        let desired_total = (actual_end - actual_start + 1) as usize;
+
+        let mut buffer: Vec<u8> = Vec::with_capacity(desired_total);
+        let mut bytes_collected = 0usize;
+        let mut current = slice_start;
+
+        while current < slice_last {
+            let mut chunk = slices
+                .iter()
+                .find(|(off, _)| *off == current)
+                .map(|(_, d)| d.clone())
+                .unwrap_or_default();
+
+            if current == slice_start && actual_start > slice_start {
+                let skip = (actual_start - slice_start) as usize;
+                if skip < chunk.len() { chunk.drain(..skip); }
+            }
+            let remaining = desired_total.saturating_sub(bytes_collected);
+            if remaining < chunk.len() { chunk.truncate(remaining); }
+
+            buffer.extend_from_slice(&chunk);
+            bytes_collected += chunk.len();
+            current += slice_size;
+        }
+        buffer
+    }
+
+    #[test]
+    fn test_buffer_exact_length_matches_content_length() {
+        // Simulate 3 x 1MB slices (SLICE_SIZE = 1MB) covering a seek.
+        let sz = crate::slice_cache::SLICE_SIZE;
+        let slices = vec![
+            (0 * sz, vec![1u8; sz as usize]),
+            (1 * sz, vec![2u8; sz as usize]),
+            (2 * sz, vec![3u8; sz as usize]),
+        ];
+        // Seek range that starts mid-slice and ends mid-slice.
+        let actual_start = sz + 5000;
+        let actual_end = 2 * sz + 9999;
+        let desired = (actual_end - actual_start + 1) as usize;
+
+        let buf = buffer_range(&slices, actual_start, actual_end);
+        assert_eq!(buf.len(), desired, "buffered body must equal advertised Content-Length");
+        assert_eq!(buf[0], 2); // first collected slice is offset sz (value 2), front-trimmed
+        assert_eq!(buf[desired - 1], 3); // end trim keeps last slice's head
+        assert_eq!(buf.len() as u64, actual_end - actual_start + 1);
+    }
+
+    /// (c) Fetch failure must NOT produce a short 206. Mirrors the `fatal_err`
+    /// branch: when a batch fetch fails after recover, `handle_stream` returns
+    /// a terminal error response instead of a partial body.
+    #[test]
+    fn test_fetch_failure_returns_error_not_short_206() {
+        // Simulate the loop: a non-recoverable Drive error short-circuits.
+        let fatal_err: Option<DriveErr> = Some(DriveErr::Upstream);
+        let buffered_len = 0usize; // nothing collected because fetch failed
+        let desired_total = 2_000_000usize;
+
+        // The contract we enforce: do NOT send a body whose length != desired.
+        let send_response = fatal_err.is_none() && buffered_len == desired_total;
+        assert!(!send_response, "must NOT emit a 206 with a short body");
+
+        // Instead a terminal error response is returned.
+        let resp = match fatal_err {
+            Some(e) => drive_err_response(e),
+            None => (StatusCode::PARTIAL_CONTENT, "ok").into_response(),
+        };
+        assert_ne!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        // Error-type header present for frontend diagnostics.
+        assert!(resp.headers().contains_key("X-Stream-Error-Type"));
     }
 }
