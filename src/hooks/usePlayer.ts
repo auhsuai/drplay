@@ -64,6 +64,13 @@ export const usePlayer = (accessToken: string | null) => {
     }
   }, [isPlaying]);
 
+  // Persist playMode changes
+  useEffect(() => {
+    idbSet('drplay_playmode', playMode).catch(e =>
+      console.warn(`[usePlayer] playmode-save-fail`, classifyPlayerError(e))
+    );
+  }, [playMode]);
+
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
@@ -127,6 +134,7 @@ export const usePlayer = (accessToken: string | null) => {
           if (isIntentStale(myId)) return;
 
           const savedQueue = await get('drplay_queue');
+          const savedPlayMode = await get('drplay_playmode');
           if (isIntentStale(myId)) return;
 
           const restoredTrack: Track = {
@@ -139,10 +147,23 @@ export const usePlayer = (accessToken: string | null) => {
 
           if (savedQueue && Array.isArray(savedQueue) && savedQueue.length > 0) {
             setOriginalQueue(savedQueue);
-            setPlaybackQueue([...savedQueue]);
+            if (savedPlayMode === 'shuffle') {
+              const q = [...savedQueue];
+              const idx = q.findIndex(t => t.id === restoredTrack.id);
+              let head = idx !== -1 ? q.splice(idx, 1)[0] : { ...restoredTrack, queueItemId: crypto.randomUUID() };
+              for (let i = q.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [q[i], q[j]] = [q[j], q[i]];
+              }
+              q.unshift(head);
+              setPlaybackQueue(q);
+            } else {
+              setPlaybackQueue([...savedQueue]);
+            }
           } else {
             setPlaybackQueue([restoredTrack]);
           }
+          if (savedPlayMode) setPlayMode(savedPlayMode);
           triggerReload();
         }
       } catch (e) {
