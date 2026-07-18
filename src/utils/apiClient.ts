@@ -72,6 +72,28 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
   }, refreshInMs);
 };
 
+// Push the full token set (access + refresh + lifetime) to the Rust proxy so it
+// can proactively refresh the Drive OAuth token before expiry, instead of relying
+// solely on the frontend's scheduling. Best-effort: a failure here must NOT block
+// login/playback — Task 1 recover still works. Tauri deserializes the command args
+// as `accessToken`, `refreshToken`, `expiresIn`.
+export const pushTokenCredentials = async (
+  accessToken: string,
+  refreshToken: string,
+  expiresIn?: number
+): Promise<void> => {
+  try {
+    await invoke("set_token_credentials", {
+      accessToken,
+      refreshToken,
+      expiresIn: expiresIn ?? null,
+    });
+  } catch (e) {
+    const kind = classifyInvokeError(e);
+    console.warn("[Auth] pushTokenCredentials failed (best-effort, continuing)", kind);
+  }
+};
+
 export async function revokeGoogleToken(token: string): Promise<void> {
   if (!token) return;
   try {
@@ -155,6 +177,18 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
       localStorage.setItem("drplay_token_time", Date.now().toString());
       if (tokenData.refresh_token) {
         localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
+      }
+
+      // Push the full credential set so the Rust proxy can proactively refresh
+      // the Drive token itself. Best-effort; never blocks playback.
+      try {
+        await pushTokenCredentials(
+          tokenData.access_token,
+          tokenData.refresh_token ?? refreshToken,
+          tokenData.expires_in
+        );
+      } catch (e) {
+        console.warn("[Auth] pushTokenCredentials (refresh path) failed (best-effort)", classifyInvokeError(e));
       }
 
       // Await so the Rust proxy has the fresh token BEFORE we resolve waiters /

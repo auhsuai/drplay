@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker, stopProSyncWorker, setTokenRefreshHandler, updateWorkerToken } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
-import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
+import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh, pushTokenCredentials } from "../utils/apiClient";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
 
@@ -66,6 +66,17 @@ export const useAuth = (onLogoutExt?: () => void) => {
     // CRITICAL: Send token to Rust backend proxy immediately
     invoke("update_stream_token", { token: tokenData.access_token }).catch(e =>
       console.error(`[${AUTH_MODULE}] Login token push to Rust proxy failed (update_stream_token update)`, classifyInvokeError(e))
+    );
+
+    // Push the full credential set so the Rust proxy can proactively refresh the
+    // Drive token itself. Best-effort: a failure must NOT block login (Task 1
+    // recover still works).
+    pushTokenCredentials(
+      tokenData.access_token,
+      tokenData.refresh_token,
+      tokenData.expires_in
+    ).catch(e =>
+      console.warn(`[${AUTH_MODULE}] Login credential push failed (set_token_credentials, best-effort)`, classifyInvokeError(e))
     );
     
     scheduleProactiveRefresh(tokenData.expires_in || 3600);
