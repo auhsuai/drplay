@@ -573,6 +573,13 @@ async fn handle_stream(
 
     // Sanity: if we somehow collected the wrong byte count, do not lie to the
     // browser. Send a 502 instead of a truncated-but-claimed-complete body.
+    eprintln!(
+        "[proxy][{}] SEEK diag (track_id short={}..) total_size={} start={} end={} desired_total={} buffer_len={} at {}",
+        module_path!(),
+        &track_id.chars().take(6).collect::<String>(),
+        total_size, actual_start, actual_end, desired_total, buffer.len(),
+        now_epoch_secs(),
+    );
     if buffer.len() != desired_total {
         eprintln!(
             "[proxy][{}] buffer length mismatch (track_id short={}..) got={} want={} at {}",

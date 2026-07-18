@@ -309,6 +309,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
         const u = new URL(currentTrack.streamUrl);
         if (u.hostname === 'drplay.localhost' && u.pathname === '/stream') {
           const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+          console.log('[Player-DIAG] HEAD probe status=', headResp.status, 'errType=', headResp.headers.get('X-Stream-Error-Type'));
           if (headResp.ok) {
             // Backend re-validated successfully (token valid) → the file is
             // fine, this is NOT a format error. Leave isRealFormatError false
