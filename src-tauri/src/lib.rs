@@ -217,14 +217,9 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
-pub static CURRENT_FILE_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DownloadState {
-    Idle,
-    Downloading,
-    Completed,
-    Failed(String),
+pub fn buffer_bytes_for_seconds(seconds: u64) -> u64 {
+    let bytes = seconds * 320_000 / 8;
+    bytes.clamp(5 * 1024 * 1024, 500 * 1024 * 1024)
 }
 
 #[tauri::command]
@@ -412,8 +407,7 @@ pub fn run() {
     crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
     {
         let seconds = GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
-        let bytes = seconds * 320_000 / 8;
-        let max_bytes = bytes.clamp(5 * 1024 * 1024, 500 * 1024 * 1024);
+        let max_bytes = buffer_bytes_for_seconds(seconds);
         GLOBAL_SLICE_CACHE
             .set(slice_cache::SliceCache::new(max_bytes))
             .ok();

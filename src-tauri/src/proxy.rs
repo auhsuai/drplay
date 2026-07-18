@@ -572,8 +572,7 @@ async fn handle_stream(
         };
         let max_bytes = {
             let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
-            let bytes = seconds * 320_000 / 8;
-            bytes.clamp(5 * 1024 * 1024, 500 * 1024 * 1024)
+            crate::buffer_bytes_for_seconds(seconds)
         };
         let max_offset = bg_start + max_bytes;
         let mut offset = bg_start;

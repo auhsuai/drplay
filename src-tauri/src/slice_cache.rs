@@ -152,24 +152,6 @@ impl SliceCache {
     pub fn used_bytes(&self) -> u64 {
         self.cache.weighted_size()
     }
-
-    /// Snapshot of cache occupancy for memory debugging. `track_count` counts
-    /// distinct track ids currently held (approximated by scanning keys).
-    pub async fn stats(&self) -> (u64, u64, u64) {
-        let entries = self.cache.entry_count();
-        let bytes = self.cache.weighted_size();
-        let mut tracks = std::collections::HashSet::new();
-        // moka doesn't expose key iteration cheaply; approximate track count
-        // via the inflight map keys plus a best-effort scan is skipped.
-        let inflight = self.inflight.read().await;
-        for (key, _) in inflight.iter() {
-            tracks.insert(key.0.clone());
-        }
-        // entry_count already reflects cached slices; track count from cache
-        // keys needs iteration which moka doesn't provide, so report entries
-        // and bytes precisely and track_count as inflight distinct ids.
-        (entries, bytes, tracks.len() as u64)
-    }
 }
 
 #[cfg(test)]
