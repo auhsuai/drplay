@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
 import { ThemeDropdown } from "./components/ThemeDropdown";
 import { CreditsSection } from "./components/CreditsSection";
+import { ErrorLogSection } from "./components/ErrorLogSection";
 
 import { ThemeType } from "../../hooks/useTheme";
 import { clearAppCache } from "../../utils/cache";
@@ -254,6 +255,8 @@ export function SettingsTab({
           </div>
 
           <CreditsSection />
+
+          <ErrorLogSection />
         </div>
       </div>
     </main>
