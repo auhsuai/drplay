@@ -322,10 +322,12 @@ export function NowPlayingView({
         </button>
       </div>
 
-      <div className="relative z-10 w-full h-full flex flex-col items-center p-6 md:p-12 gap-8 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
+      <div className="relative z-10 w-full h-full flex flex-col items-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
+        {/* Content group: centered vertically when room, scrolls when not */}
+        <div className="my-auto w-full flex flex-col items-center">
         {/* Cover Art Container */}
-        <div className="flex-1 min-h-0 w-full flex items-center justify-center mt-4 md:mt-8">
-          <div className={`h-full max-h-[560px] w-64 md:w-80 lg:w-[480px] xl:w-[560px] max-w-full aspect-square rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center relative' : 'bg-gray-100 dark:bg-[#202124]'}`}>
+        <div className="w-full flex items-center justify-center mt-4 md:mt-8">
+          <div className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center relative' : 'bg-gray-100 dark:bg-[#202124]'}`}>
           {coverUrl ? (
             <img 
               src={coverUrl} 
@@ -341,7 +343,7 @@ export function NowPlayingView({
           </div>
         </div>
         
-        <div className="w-full max-w-4xl px-4 shrink-0 pb-8">
+        <div className="w-full max-w-4xl px-4 shrink-0 mt-6 md:mt-8 pb-8">
           {/* Info */}
           <div className="text-center mb-8">
             <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-2 truncate tracking-tight">
@@ -423,6 +425,7 @@ export function NowPlayingView({
               <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">{formatTime(duration)}</span>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </main>
