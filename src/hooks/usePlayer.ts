@@ -64,6 +64,13 @@ export const usePlayer = (accessToken: string | null) => {
     }
   }, [isPlaying]);
 
+  // Persist playMode changes
+  useEffect(() => {
+    idbSet('drplay_playmode', playMode).catch(e =>
+      console.warn(`[usePlayer] playmode-save-fail`, classifyPlayerError(e))
+    );
+  }, [playMode]);
+
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
@@ -126,6 +133,10 @@ export const usePlayer = (accessToken: string | null) => {
           }
           if (isIntentStale(myId)) return;
 
+          const savedQueue = await get('drplay_queue');
+          const savedPlayMode = await get('drplay_playmode');
+          if (isIntentStale(myId)) return;
+
           const restoredTrack: Track = {
             ...lastSession.track,
             streamUrl,
@@ -133,7 +144,14 @@ export const usePlayer = (accessToken: string | null) => {
             restoreDuration: lastSession.duration,
           };
           setCurrentTrack(restoredTrack);
-          setPlaybackQueue([restoredTrack]);
+
+          if (savedQueue && Array.isArray(savedQueue) && savedQueue.length > 0) {
+            setOriginalQueue(savedQueue);
+            setPlaybackQueue([...savedQueue]);
+          } else {
+            setPlaybackQueue([restoredTrack]);
+          }
+          if (savedPlayMode) setPlayMode(savedPlayMode);
           triggerReload();
         }
       } catch (e) {
@@ -166,6 +184,9 @@ export const usePlayer = (accessToken: string | null) => {
 
       if (newOriginalQueue.length > 0) {
         setOriginalQueue(newOriginalQueue);
+        idbSet('drplay_queue', newOriginalQueue).catch(e =>
+          console.warn(`[usePlayer] queue-save-fail`, classifyPlayerError(e))
+        );
         if (playMode === 'shuffle') {
           const shuffled = [...newOriginalQueue];
           const trackIndex = shuffled.findIndex(t => t.id === track.id);
@@ -197,10 +218,10 @@ export const usePlayer = (accessToken: string | null) => {
         if (!targetTrack.queueItemId) {
           targetTrack = {...targetTrack, queueItemId: crypto.randomUUID()};
         }
-        // ROOT FIX: contextQueue-less plays left playbackQueue empty/stale,
-        // making handleNextTrack/handlePrevTrack silently dead. Ensure the
-        // current track is always present in the playback queue.
         setPlaybackQueue([targetTrack]);
+        idbSet('drplay_queue', []).catch(e =>
+          console.warn(`[usePlayer] queue-clear-fail`, classifyPlayerError(e))
+        );
       }
     }
 
