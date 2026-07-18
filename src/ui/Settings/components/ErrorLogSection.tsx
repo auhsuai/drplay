@@ -171,6 +171,15 @@ export function ErrorLogSection() {
         </div>
       </div>
 
+      {selectedDate && (
+        <button
+          onClick={() => setSelectedDate(null)}
+          className="self-start text-xs font-semibold text-[#4285F4] hover:underline flex items-center gap-1 mb-2"
+        >
+          ← {t("settings.error_log_back") || "Back"}
+        </button>
+      )}
+
       <div className="mt-2 rounded-xl border border-gray-200 dark:border-[#2A2A2A] bg-gray-50 dark:bg-[#1A1A1A] p-3 max-h-80 overflow-y-auto">
         {loading ? (
           <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -203,12 +212,6 @@ export function ErrorLogSection() {
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            <button
-              onClick={() => setSelectedDate(null)}
-              className="self-start text-xs font-semibold text-[#4285F4] hover:underline flex items-center gap-1"
-            >
-              ← {t("settings.error_log_back") || "Back"}
-            </button>
             {groupLogsByDate(logs)
               .find((g) => g.dateKey === selectedDate)
               ?.entries.map((entry) => (
