@@ -354,14 +354,34 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       try {
         const u = new URL(currentTrack.streamUrl);
         if (u.hostname === 'drplay.localhost' && u.pathname === '/stream') {
-          const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-          if (headResp.ok) {
-            isRealFormatError = true;
-          } else {
-            errorType = headResp.headers.get('X-Stream-Error-Type') || 'transient';
-            if (errorType === 'rate-limited') {
-              rateLimitUntilRef.current = Date.now() + 300_000;
+          // Retry the HEAD probe a few times. During a transient Drive error
+          // the proxy is still retrying upstream, so a single failed probe would
+          // produce a false-positive banner. Only treat it as a real error if
+          // all probes fail.
+          let headOk = false;
+          let lastErrorType: string | null = null;
+          for (let probe = 0; probe < 3 && !headOk; probe++) {
+            if (probe > 0) {
+              await new Promise(r => setTimeout(r, 500 * probe));
             }
+            try {
+              const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+              if (headResp.ok) {
+                headOk = true;
+              } else {
+                lastErrorType = headResp.headers.get('X-Stream-Error-Type') || 'transient';
+                if (lastErrorType === 'rate-limited') {
+                  rateLimitUntilRef.current = Date.now() + 300_000;
+                }
+              }
+            } catch {
+              lastErrorType = 'transient';
+            }
+          }
+          if (headOk) {
+            isRealFormatError = true;
+          } else if (lastErrorType && lastErrorType !== 'transient') {
+            errorType = lastErrorType;
           }
         }
       } catch (err) {

@@ -501,6 +501,10 @@ async fn handle_stream(
                     }
 
                     retry_deadline = None;
+                    // A successful batch means Drive recovered — clear any stale
+                    // global rate-limit cooldown so subsequent requests (e.g. an
+                    // auto-skip to the next track) are not immediately 503'd.
+                    GLOBAL_BACKOFF_UNTIL.store(0, Ordering::Release);
                     current_offset = fetch_end_slice;
                 }
                 None => {
