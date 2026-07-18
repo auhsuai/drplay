@@ -9,6 +9,7 @@ import { set as idbSet } from 'idb-keyval';
 import { PlayerAction, AudioRefs } from './types';
 import type { TFunction } from 'i18next';
 
+console.error('[Player-v2-SEEK-FIX] MODULE LOADED - new seek fix build active');
 const AUDIO_MODULE = 'useAudioEngine';
 const AUDIO_LOG = '[Player]';
 
@@ -245,6 +246,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const handleAudioError = async () => {
     const audio = getActiveAudio();
     const error = audio?.error;
+    console.error('[Player-v2-SEEK-FIX] handleAudioError ENTERED code=', error?.code, 'msg=', error?.message);
     if (!audio || !error) return;
     if (error.code === MediaError.MEDIA_ERR_ABORTED) return;
 
@@ -309,7 +311,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
         const u = new URL(currentTrack.streamUrl);
         if (u.hostname === 'drplay.localhost' && u.pathname === '/stream') {
           const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-          console.log('[Player-DIAG] HEAD probe status=', headResp.status, 'errType=', headResp.headers.get('X-Stream-Error-Type'));
+          console.error('[Player-v2-SEEK-FIX] HEAD probe status=', headResp.status, 'errType=', headResp.headers.get('X-Stream-Error-Type'));
           if (headResp.ok) {
             // Backend re-validated successfully (token valid) → the file is
             // fine, this is NOT a format error. Leave isRealFormatError false
