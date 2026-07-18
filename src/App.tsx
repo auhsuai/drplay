@@ -8,7 +8,6 @@ import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
 import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
 import { TrashScreen } from "./ui/Settings/TrashScreen";
 import { GlobalContextMenu } from "./ui/components/GlobalContextMenu";
-import { MemMonitor } from "./ui/components/MemMonitor";
 import React, { Suspense } from "react";
 
 const MainContent = React.lazy(() => import('./ui/MainContent/MainContent').then(module => ({ default: module.MainContent })));
@@ -794,9 +793,6 @@ function App() {
         )}
 
         <div id="toast-root" />
-
-        {/* Dev-only RAM monitor */}
-        {import.meta.env.DEV && <MemMonitor />}
       </div>
     );
   }

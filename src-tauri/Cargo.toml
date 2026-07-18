@@ -51,7 +51,6 @@ async-stream = "0.3.5"
 bytes = "1.6.0"
 uuid = { version = "1.8.0", features = ["v4"] }
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
-sysinfo = "0.33"
 once_cell = "1.21.4"
 walkdir = "2.5.0"
 

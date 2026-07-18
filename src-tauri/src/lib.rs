@@ -26,40 +26,6 @@ async fn update_stream_token(token: String) -> Result<(), String> {
 }
 
 #[command]
-async fn get_memory_snapshot() -> Result<serde_json::Value, String> {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    let pid = std::process::id();
-    let working_set_kb: u64 = sys
-        .process(sysinfo::Pid::from_u32(pid))
-        .map(|p| p.memory()) // bytes on Windows
-        .unwrap_or(0);
-
-    let (entries, bytes, track_count) = if let Some(cache) = crate::GLOBAL_SLICE_CACHE.get() {
-        cache.stats().await
-    } else {
-        (0, 0, 0)
-    };
-
-    Ok(serde_json::json!({
-        "process_working_set_mb": working_set_kb / (1024 * 1024),
-        "slice_cache_entries": entries,
-        "slice_cache_bytes": bytes,
-        "slice_cache_mb": bytes / (1024 * 1024),
-        "slice_cache_track_count": track_count,
-        "ts": chrono_now_secs(),
-    }))
-}
-
-fn chrono_now_secs() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-#[command]
 async fn login_google_native() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         const CREDENTIALS_JSON: &str = include_str!("../../wa_credential.json");
@@ -547,7 +513,6 @@ pub fn run() {
             update_buffer_settings,
             get_local_metadata,
             update_stream_token, clear_stream_token,
-            get_memory_snapshot,
             update_minimize_to_tray,
             verify_track_exists,
             update_track_duration_in_db,
