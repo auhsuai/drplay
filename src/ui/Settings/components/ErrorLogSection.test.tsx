@@ -14,8 +14,9 @@ i18n.use(initReactI18next).init({
         settings: {
           error_log_title: "Error Log",
           error_log_copy: "Copy Report",
+          error_log_copy_selected: "Copy Selected",
           error_log_copied: "Copied!",
-          error_log_clear: "Clear Log",
+          error_log_clear: "Clear",
           error_log_empty: "No errors have been recorded yet.",
           error_log_note: "filtered",
           error_log_stack: "Stack trace",
@@ -55,6 +56,11 @@ vi.mock("../../../utils/errorLog", async () => {
 
 vi.mock("../../../utils/simpleToast", () => ({
   showErrorToast: vi.fn(),
+}));
+
+const clipboardWriteTextMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: clipboardWriteTextMock,
 }));
 
 const getErrorLogsMock = vi.mocked(getErrorLogs);
@@ -159,7 +165,7 @@ describe("ErrorLogSection", () => {
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledWith(KEY_A);
     expect(exportErrorLogsSanitizedMock).not.toHaveBeenCalled();
     await new Promise((r) => setTimeout(r, 0));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("day report text");
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith("day report text");
   });
 
   it("copy button calls clipboard.writeText with sanitized text", async () => {
@@ -175,18 +181,20 @@ describe("ErrorLogSection", () => {
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledTimes(1);
     await screen.findByText(/Copied!/i);
     await new Promise((r) => setTimeout(r, 0));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith(
       "2023-11-14T22:13:20.000Z [error] Player: boom"
     );
     expect(await screen.findByText(/Copied!/i)).toBeTruthy();
   });
 
-  it("copy button is disabled when log is empty", async () => {
+  it("copy button is disabled when log is empty and in day view", async () => {
     getErrorLogsMock.mockResolvedValue([]);
     render(<ErrorLogSection />);
     await screen.findByText(/No errors have been recorded yet/i);
-    const btn = screen.getByRole("button", { name: /Copy Report/i }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    // Copy/Clear buttons are only rendered in day view (selectedDate != null).
+    // With empty log there are no day groups to click into, so buttons don't exist.
+    expect(screen.queryByRole("button", { name: /Copy Report/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Copy Selected/i })).toBeNull();
   });
 
   it("clear button calls clearErrorLogs and empties the list", async () => {
@@ -196,7 +204,7 @@ describe("ErrorLogSection", () => {
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
     await screen.findByText((c) => c.startsWith("boom"));
-    fireEvent.click(screen.getByRole("button", { name: /Clear Log/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Clear/i }));
     expect(clearErrorLogsMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/No errors have been recorded yet/i)).toBeTruthy();
   });
