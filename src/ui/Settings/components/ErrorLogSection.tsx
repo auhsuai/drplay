@@ -167,27 +167,16 @@ export function ErrorLogSection() {
         {t("settings.error_log_title") || "Error Log"}
       </h2>
 
-      {selectedDate ? (
-        <>
-          <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[520px] py-2">
-            {t("settings.error_log_note") ||
-              "These logs are filtered to remove personal information (IDs, tokens, links) before they leave your device."}
-          </p>
-          <div className="flex items-center justify-between py-2">
-            <button
-              onClick={() => setSelectedDate(null)}
-              className="text-sm font-semibold text-[#4285F4] hover:underline transition-colors"
-            >
-              ← {t("settings.error_log_back") || "Back"}
-            </button>
-            {actionButtons}
-          </div>
-        </>
-      ) : (
-        <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[520px] py-2">
-          {t("settings.error_log_note") ||
-            "These logs are filtered to remove personal information (IDs, tokens, links) before they leave your device."}
-        </p>
+      {selectedDate && (
+        <div className="flex items-center justify-between py-2">
+          <button
+            onClick={() => setSelectedDate(null)}
+            className="text-sm font-semibold text-[#4285F4] hover:underline transition-colors"
+          >
+            ← {t("settings.error_log_back") || "Back"}
+          </button>
+          {actionButtons}
+        </div>
       )}
 
       <div className="max-h-80 overflow-y-auto">
@@ -201,9 +190,6 @@ export function ErrorLogSection() {
           </p>
         ) : selectedDate === null ? (
           <div className="flex flex-col gap-2">
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">
-              {t("settings.error_log_by_date") || "Errors by day"}
-            </p>
             {groupLogsByDate(logs).map((group) => (
               <button
                 key={group.dateKey}
