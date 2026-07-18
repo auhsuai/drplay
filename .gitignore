@@ -53,6 +53,8 @@ test_server.py
 cover_art_test.jpg
 thumbnail_test.jpg
 sample.png
+# Keep the app icon used as MediaSession fallback artwork (served from public/)
+!public/sample.png
 *.bat
 src-tauri/fix_*.py
 src-tauri/update_rust.py
