@@ -184,13 +184,10 @@ export function ErrorLogSection() {
           </div>
         </>
       ) : (
-        <div className="flex items-center justify-between py-2">
-          <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[520px]">
-            {t("settings.error_log_note") ||
-              "These logs are filtered to remove personal information (IDs, tokens, links) before they leave your device."}
-          </p>
-          {actionButtons}
-        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[520px] py-2">
+          {t("settings.error_log_note") ||
+            "These logs are filtered to remove personal information (IDs, tokens, links) before they leave your device."}
+        </p>
       )}
 
       <div className="max-h-80 overflow-y-auto">
