@@ -139,45 +139,58 @@ export function ErrorLogSection() {
     }
   };
 
+  const actionButtons = (
+    <div className="flex items-center gap-2 shrink-0">
+      <button
+        onClick={handleCopy}
+        disabled={logs.length === 0 || busy}
+        className="px-5 py-2.5 rounded-xl bg-[#4285F4] hover:bg-[#3367d6] text-white text-sm font-semibold transition-all transform active:scale-[0.97] shadow-[0_4px_12px_rgba(66,133,244,0.3)] hover:shadow-[0_6px_16px_rgba(66,133,244,0.4)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+      >
+        <ScrollText className="w-4 h-4" />
+        {copied
+          ? t("settings.error_log_copied") || "Copied!"
+          : t("settings.error_log_copy") || "Copy Report"}
+      </button>
+      <button
+        onClick={handleClear}
+        disabled={logs.length === 0 || busy}
+        className="px-5 py-2.5 rounded-xl bg-gray-200 dark:bg-[#2A2A2A] hover:bg-gray-300 dark:hover:bg-[#3A3A3A] text-gray-900 dark:text-gray-100 text-sm font-semibold transition-all transform active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+      >
+        {t("settings.error_log_clear") || "Clear Log"}
+      </button>
+    </div>
+  );
+
   return (
     <div className="flex flex-col gap-2 mt-6 mb-8">
       <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
         {t("settings.error_log_title") || "Error Log"}
       </h2>
 
-      <div className="flex items-center justify-between py-2">
-        <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[520px]">
-          {t("settings.error_log_note") ||
-            "These logs are filtered to remove personal information (IDs, tokens, links) before they leave your device."}
-        </p>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleCopy}
-            disabled={logs.length === 0 || busy}
-            className="px-5 py-2.5 rounded-xl bg-[#4285F4] hover:bg-[#3367d6] text-white text-sm font-semibold transition-all transform active:scale-[0.97] shadow-[0_4px_12px_rgba(66,133,244,0.3)] hover:shadow-[0_6px_16px_rgba(66,133,244,0.4)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            <ScrollText className="w-4 h-4" />
-            {copied
-              ? t("settings.error_log_copied") || "Copied!"
-              : t("settings.error_log_copy") || "Copy Report"}
-          </button>
-          <button
-            onClick={handleClear}
-            disabled={logs.length === 0 || busy}
-            className="px-5 py-2.5 rounded-xl bg-gray-200 dark:bg-[#2A2A2A] hover:bg-gray-300 dark:hover:bg-[#3A3A3A] text-gray-900 dark:text-gray-100 text-sm font-semibold transition-all transform active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {t("settings.error_log_clear") || "Clear Log"}
-          </button>
+      {selectedDate ? (
+        <>
+          <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[520px] py-2">
+            {t("settings.error_log_note") ||
+              "These logs are filtered to remove personal information (IDs, tokens, links) before they leave your device."}
+          </p>
+          <div className="flex items-center justify-between py-2">
+            <button
+              onClick={() => setSelectedDate(null)}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-[#4285F4] hover:text-[#3367d6] hover:bg-[#4285F4]/10 transition-all"
+            >
+              ← {t("settings.error_log_back") || "Back"}
+            </button>
+            {actionButtons}
+          </div>
+        </>
+      ) : (
+        <div className="flex items-center justify-between py-2">
+          <p className="text-xs text-gray-500 dark:text-gray-400 max-w-[520px]">
+            {t("settings.error_log_note") ||
+              "These logs are filtered to remove personal information (IDs, tokens, links) before they leave your device."}
+          </p>
+          {actionButtons}
         </div>
-      </div>
-
-      {selectedDate && (
-        <button
-          onClick={() => setSelectedDate(null)}
-          className="self-start text-xs font-semibold text-[#4285F4] hover:underline flex items-center gap-1 mb-2"
-        >
-          ← {t("settings.error_log_back") || "Back"}
-        </button>
       )}
 
       <div className="mt-2 rounded-xl border border-gray-200 dark:border-[#2A2A2A] bg-gray-50 dark:bg-[#1A1A1A] p-3 max-h-80 overflow-y-auto">
