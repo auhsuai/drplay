@@ -20,9 +20,14 @@ pub struct SliceCache {
 
 impl SliceCache {
     pub fn new(max_bytes: u64) -> Self {
-        let max_entries = (max_bytes / SLICE_SIZE).max(1);
+        let max_bytes = max_bytes.max(1);
         SliceCache {
-            cache: Cache::builder().max_capacity(max_entries).build(),
+            cache: Cache::builder()
+                .max_capacity(max_bytes)
+                .weigher(|_k: &(String, u64), v: &Arc<Vec<u8>>| -> u32 {
+                    v.len().try_into().unwrap_or(u32::MAX)
+                })
+                .build(),
             inflight: RwLock::new(HashMap::new()),
             max_bytes: AtomicU64::new(max_bytes),
         }
@@ -145,14 +150,14 @@ impl SliceCache {
     }
 
     pub fn used_bytes(&self) -> u64 {
-        self.cache.entry_count() * SLICE_SIZE
+        self.cache.weighted_size()
     }
 
     /// Snapshot of cache occupancy for memory debugging. `track_count` counts
     /// distinct track ids currently held (approximated by scanning keys).
     pub async fn stats(&self) -> (u64, u64, u64) {
         let entries = self.cache.entry_count();
-        let bytes = entries * SLICE_SIZE;
+        let bytes = self.cache.weighted_size();
         let mut tracks = std::collections::HashSet::new();
         // moka doesn't expose key iteration cheaply; approximate track count
         // via the inflight map keys plus a best-effort scan is skipped.

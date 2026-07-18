@@ -15,7 +15,7 @@ lazy_static::lazy_static! {
 }
 
 pub mod protocol;
-mod slice_cache;
+pub mod slice_cache;
 mod thumbnail;
 
 #[command]
