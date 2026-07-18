@@ -48,7 +48,7 @@ function LogEntryCard({ entry }: { entry: ErrorLogEntry }) {
         </span>
         <span className="text-xs text-gray-400">{formatTs(entry.ts)}</span>
       </div>
-      <pre className="whitespace-pre-wrap break-all text-sm text-gray-800 dark:text-gray-200 font-sans m-0">
+      <pre className="whitespace-pre-wrap break-all text-sm text-gray-800 dark:text-gray-200 font-sans m-0 select-text">
         {entry.message}
       </pre>
       {entry.stack ? (
@@ -56,7 +56,7 @@ function LogEntryCard({ entry }: { entry: ErrorLogEntry }) {
           <summary className="text-xs text-gray-400 cursor-pointer select-none">
             {t("settings.error_log_stack") || "Stack trace"}
           </summary>
-          <pre className="whitespace-pre-wrap break-all text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono m-0">
+          <pre className="whitespace-pre-wrap break-all text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono m-0 select-text">
             {entry.stack}
           </pre>
         </details>
@@ -207,7 +207,7 @@ export function ErrorLogSection() {
             ))}
           </div>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 select-text">
             {groupLogsByDate(logs)
               .find((g) => g.dateKey === selectedDate)
               ?.entries.map((entry) => (
