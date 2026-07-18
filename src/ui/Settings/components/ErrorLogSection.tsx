@@ -176,7 +176,7 @@ export function ErrorLogSection() {
           <div className="flex items-center justify-between py-2">
             <button
               onClick={() => setSelectedDate(null)}
-              className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-[#4285F4] hover:text-[#3367d6] hover:bg-[#4285F4]/10 transition-all shadow-[0_4px_12px_rgba(66,133,244,0.15)]"
+              className="text-sm font-semibold text-[#4285F4] hover:underline transition-colors"
             >
               ← {t("settings.error_log_back") || "Back"}
             </button>
