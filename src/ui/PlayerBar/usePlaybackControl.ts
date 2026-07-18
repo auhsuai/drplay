@@ -271,6 +271,11 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       const artwork: MediaImage[] = [];
       if ((currentTrack as any).coverUrl) {
         artwork.push({ src: (currentTrack as any).coverUrl, sizes: '512x512', type: 'image/jpeg' });
+      } else {
+        // Fallback to the app icon so the Windows taskbar media controls
+        // (and other MediaSession consumers) always show artwork instead
+        // of a blank placeholder when a track has no cover art.
+        artwork.push({ src: '/sample.png', sizes: '512x512', type: 'image/png' });
       }
 
       navigator.mediaSession.metadata = new MediaMetadata({
