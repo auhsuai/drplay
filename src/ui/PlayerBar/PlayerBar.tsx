@@ -139,6 +139,7 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
   // useKeyboard — needs audio engine + playback control
   useKeyboard({
     getActiveAudio: audioEngine.getActiveAudio,
+    currentTrack,
     onTogglePlayRef: playbackControl.callbackRefs.onTogglePlayRef,
     onNextTrackRef,
     onPrevTrackRef,

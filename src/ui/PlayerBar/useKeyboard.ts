@@ -2,6 +2,10 @@ import { useEffect, useRef } from 'react';
 
 const KEY_MODULE = 'useKeyboard';
 
+function isLossless(name: string): boolean {
+  return /\.(flac|wav|aiff|alac)$/i.test(name);
+}
+
 // Classify an error for observability (no secrets logged). Mirrors the
 // classify* helpers in apiClient.ts — only name/message are inspected.
 function classifyKeyError(err: unknown): string {
@@ -12,6 +16,7 @@ function classifyKeyError(err: unknown): string {
 
 interface UseKeyboardParams {
   getActiveAudio: () => HTMLAudioElement | null;
+  currentTrack: { originalName?: string; streamUrl: string } | null;
   onTogglePlayRef: React.MutableRefObject<() => void>;
   onNextTrackRef: React.MutableRefObject<() => void>;
   onPrevTrackRef: React.MutableRefObject<() => void>;
@@ -22,13 +27,23 @@ interface UseKeyboardParams {
 }
 
 export function useKeyboard(params: UseKeyboardParams): void {
-  const { getActiveAudio, onTogglePlayRef, onNextTrackRef, onPrevTrackRef, onTogglePlayModeRef, setVolume, setIsMuted, setIsVolumeActive } = params;
+  const { getActiveAudio, currentTrack, onTogglePlayRef, onNextTrackRef, onPrevTrackRef, onTogglePlayModeRef, setVolume, setIsMuted, setIsVolumeActive } = params;
 
   const arrowSeekBaseRef = useRef<number | null>(null);
   const isArrowSeekingRef = useRef(false);
   const arrowTargetTimeRef = useRef(0);
   const lastSeekTimestampRef = useRef(0);
+  const isLosslessRef = useRef(false);
   const volumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Track lossless classification — updates whenever the current track changes.
+  useEffect(() => {
+    const name = currentTrack?.originalName || currentTrack?.streamUrl || '';
+    isLosslessRef.current = isLossless(name);
+  }, [currentTrack]);
+
+  const LOSSLESS_MIN_INTERVAL = 400;
+  const NORMAL_MIN_INTERVAL = 100;
 
   const triggerVolumeActive = () => {
     setIsVolumeActive(true);
@@ -53,7 +68,8 @@ export function useKeyboard(params: UseKeyboardParams): void {
             const active = getActiveAudio();
             if (active) {
               const now = Date.now();
-              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
+              const minInterval = isLosslessRef.current ? LOSSLESS_MIN_INTERVAL : NORMAL_MIN_INTERVAL;
+              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > minInterval) {
                 arrowSeekBaseRef.current = active.currentTime;
               }
               lastSeekTimestampRef.current = now;
@@ -69,7 +85,8 @@ export function useKeyboard(params: UseKeyboardParams): void {
             const active = getActiveAudio();
             if (active) {
               const now = Date.now();
-              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
+              const minInterval = isLosslessRef.current ? LOSSLESS_MIN_INTERVAL : NORMAL_MIN_INTERVAL;
+              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > minInterval) {
                 arrowSeekBaseRef.current = active.currentTime;
               }
               lastSeekTimestampRef.current = now;

@@ -20,6 +20,14 @@ interface UseProgressUIParams {
   duration: number;
 }
 
+const LOSSLESS_SEEK_DELAY = 400;
+const SEEK_COOLDOWN = 300;
+const NORMAL_SEEK_DELAY = 250;
+
+function isLossless(name: string): boolean {
+  return /\.(flac|wav|aiff|alac)$/i.test(name);
+}
+
 export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
   const { getActiveAudio, currentTrack, audioRef, progressBarRef, progressFillRef, currentTimeTextRef, volumeBarRef, setVolume, setIsMuted, duration } = params;
   const isDraggingRef = useRef(false);
@@ -27,6 +35,9 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
   const lastSeekTargetRef = useRef<number | null>(null);
   const isSeekCorrectionRef = useRef(false);
   const restoredAudioTrackIdRef = useRef<string | null>(null);
+  const isLosslessRef = useRef(false);
+  const lastSeekTimeRef = useRef(0);
+  const seekCooldownPendingRef = useRef(false);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const active = getActiveAudio();
@@ -54,15 +65,24 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       isDraggingRef.current = false;
       const finalTime = updateTime(clientX);
 
+      if (isLosslessRef.current) {
+        const now = Date.now();
+        if (seekCooldownPendingRef.current || (now - lastSeekTimeRef.current) < SEEK_COOLDOWN) return;
+        lastSeekTimeRef.current = now;
+        seekCooldownPendingRef.current = true;
+      }
+
       if (seekTimeoutRef.current) {
         clearTimeout(seekTimeoutRef.current);
       }
+      const delay = isLosslessRef.current ? LOSSLESS_SEEK_DELAY : NORMAL_SEEK_DELAY;
       seekTimeoutRef.current = setTimeout(() => {
+        seekCooldownPendingRef.current = false;
         const active2 = getActiveAudio();
         if (active2) {
           active2.currentTime = finalTime;
         }
-      }, 250);
+      }, delay);
 
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
@@ -151,6 +171,12 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       };
     }
   }, [getActiveAudio, duration, currentTrack]);
+
+  // Track lossless classification — updates whenever the current track changes.
+  useEffect(() => {
+    const name = currentTrack?.originalName || currentTrack?.streamUrl || '';
+    isLosslessRef.current = isLossless(name);
+  }, [currentTrack]);
 
   // Seek accuracy correction
   useEffect(() => {
