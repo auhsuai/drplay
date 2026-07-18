@@ -12,6 +12,17 @@ import type { TFunction } from 'i18next';
 const AUDIO_MODULE = 'useAudioEngine';
 const AUDIO_LOG = '[Player]';
 
+// Threshold (seconds) within which an `ended` event is treated as "truly at the
+// end of the track". An `ended` firing while currentTime is far from duration is
+// a spurious/early-ended event (e.g. caused by a mid-track src reload) and must
+// NOT trigger a track skip.
+const ENDED_THRESHOLD_SEC = 1.0;
+
+// Safety window (ms) after a programmatic reload during which any stray `ended`
+// event is suppressed. Guarantees the suppress flag cannot stay stuck forever
+// even if `canplay` never fires.
+const SUPPRESS_ENDED_SAFETY_MS = 15000;
+
 // Classify an audio-engine error for observability. Only surface the
 // message/name — never log tokens, URLs, or signed stream credentials.
 function classifyAudioError(err: unknown): string {
@@ -27,7 +38,7 @@ export interface AudioEngineAPI {
   getActiveAudio: () => HTMLAudioElement | null;
   loadNormalAudio: (track: Track, position: number | null, cancellationCheck?: () => boolean) => Promise<HTMLAudioElement>;
   performRetry: (track: Track) => Promise<void>;
-  handleEnded: () => void;
+  handleEnded: (event?: React.SyntheticEvent<HTMLAudioElement>) => void;
   handleAudioError: () => Promise<void>;
   handleTimeUpdate: () => void;
   handleLoadedMetadata: () => void;
@@ -73,6 +84,11 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const isProgrammaticActionRef = useRef(false);
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When true, stray `ended` events (caused by a programmatic reload/refresh of
+  // the active audio element's src) are suppressed so they do not trigger a
+  // spurious track skip. Reset safely via try/finally + a safety timeout.
+  const suppressEndedRef = useRef(false);
+  const suppressEndedSafetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastKnownPositionRef = useRef(0);
   const errorPositionRef = useRef<number | null>(null);
   const lastSaveTimeRef = useRef(0);
@@ -126,6 +142,28 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     }
   };
 
+  // Arm the suppress-ended flag before a programmatic reload. Any `ended` event
+  // fired while this is active is treated as spurious. A safety timeout ensures
+  // the flag is always cleared even if `canplay` never arrives.
+  const armSuppressEnded = () => {
+    suppressEndedRef.current = true;
+    if (suppressEndedSafetyRef.current) clearTimeout(suppressEndedSafetyRef.current);
+    suppressEndedSafetyRef.current = setTimeout(() => {
+      suppressEndedRef.current = false;
+      suppressEndedSafetyRef.current = null;
+    }, SUPPRESS_ENDED_SAFETY_MS);
+  };
+
+  // Disarm the suppress-ended flag (called once the reload has settled, e.g. on
+  // `canplay`). Clears the safety timeout so it does not fire later.
+  const disarmSuppressEnded = () => {
+    suppressEndedRef.current = false;
+    if (suppressEndedSafetyRef.current) {
+      clearTimeout(suppressEndedSafetyRef.current);
+      suppressEndedSafetyRef.current = null;
+    }
+  };
+
   function cleanupResumeHandlers() {
     if (resumeHandlerRef.current) {
       resumeHandlerRef.current.audio.removeEventListener('loadedmetadata', resumeHandlerRef.current.handler);
@@ -169,6 +207,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
 
     cleanupResumeHandlers();
     isProgrammaticActionRef.current = true;
+    armSuppressEnded();
 
     try {
       safePause(audio);
@@ -201,9 +240,12 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
         crossfadeEngineRef.current.setGain(1, 1);
       }
       activeAudioIndexRef.current = 0;
+      disarmSuppressEnded();
       return audio;
     } finally {
       isProgrammaticActionRef.current = false;
+      // Safety net: never leave the flag stuck if an exception escaped above.
+      disarmSuppressEnded();
     }
   }
 
@@ -227,14 +269,46 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     }
   }
 
-  const handleEnded = () => {
+  const handleEnded = (event?: React.SyntheticEvent<HTMLAudioElement>) => {
     if (manualResume) return;
+    // A programmatic reload (src refresh / retry) may emit a stray `ended`;
+    // suppress it so it does not cause a spurious track skip.
+    if (suppressEndedRef.current) {
+      console.warn(`${AUDIO_LOG} suppressed stray ended event during reload`);
+      return;
+    }
+
+    // Only the active audio element can legitimately reach the end of the track.
+    const active = getActiveAudio();
+    const target = event?.currentTarget ?? active;
+    if (!active || target !== active) {
+      // `ended` fired on a non-active element (e.g. an idle/secondary audio
+      // element) — ignore, it does not represent the currently playing track.
+      console.warn(`${AUDIO_LOG} ignored ended on non-active audio element`);
+      return;
+    }
+
+    const duration = active.duration;
+    const currentTime = active.currentTime;
+    const isRealEnd =
+      active.ended &&
+      isFinite(duration) && duration > 0 &&
+      isFinite(currentTime) &&
+      currentTime >= duration - ENDED_THRESHOLD_SEC;
+
+    if (!isRealEnd) {
+      // Spurious early `ended` (mid-track). Do not skip. Log with context only
+      // (never URL/token). Avoid noisy warn when the element simply isn't at end.
+      console.warn(
+        `${AUDIO_LOG} ignored spurious ended (not at track end)`,
+        { currentTime, duration, threshold: ENDED_THRESHOLD_SEC }
+      );
+      return;
+    }
+
     if (playMode === 'repeat-one') {
-      const active = getActiveAudio();
-      if (active) {
-        active.currentTime = 0;
-        safePlay(active).catch(e => console.error(`${AUDIO_LOG} replay-failed`, classifyAudioError(e)));
-      }
+      active.currentTime = 0;
+      safePlay(active).catch(e => console.error(`${AUDIO_LOG} replay-failed`, classifyAudioError(e)));
     } else {
       onNextTrackRefForEnded.current();
     }
