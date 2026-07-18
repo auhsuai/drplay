@@ -15,7 +15,7 @@ use tokio_stream::StreamExt;
 use bytes::Bytes;
 
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
@@ -377,8 +377,6 @@ async fn handle_stream(
         let mut current_offset = slice_start;
         let mut buffer_status_emitted = false;
         let mut bytes_sent = 0usize;
-        let mut retry_deadline: Option<Instant> = None;
-
         while current_offset < slice_last {
             // Cache hit path
             if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
@@ -516,7 +514,7 @@ async fn handle_stream(
                         DriveErr::Auth => {
                             break;
                         }
-                        // Transient errors (Rate, Upstream) — retry with 5s cap
+                        // Transient errors (Rate, Upstream) — retry until browser disconnects
                         _ => {
                             if err == DriveErr::Rate {
                                 let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -528,11 +526,6 @@ async fn handle_stream(
                                     now_epoch_secs() + cooldown,
                                     Ordering::Release,
                                 );
-                            }
-                            let deadline = retry_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(5));
-                            if Instant::now() >= *deadline {
-                                eprintln!("[proxy] batch-fetch-retry-exhausted (5s)");
-                                break;
                             }
                             tokio::time::sleep(Duration::from_millis(500)).await;
                             continue;
