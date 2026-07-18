@@ -79,10 +79,6 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       consecutiveAutoSkipRef.current += 1;
       if (consecutiveAutoSkipRef.current >= MAX_CONSECUTIVE_AUTO_SKIP) {
         consecutiveAutoSkipRef.current = 0;
-        isAutoTransitioningRef.current = false;
-        dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.playlist_error', 'Nhiều bài liên tiếp bị lỗi, đã dừng phát') } });
-        onTogglePlayRef.current();
-        return;
       }
     } else {
       consecutiveAutoSkipRef.current = 0;

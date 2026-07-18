@@ -1,8 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { Track } from '../../App';
-import { CrossfadeEngine } from '../../utils/crossfade';
 import { safePlay, safePause } from '../../utils/safeAudio';
 import { updateTrackDuration } from '../../utils/metadata';
+import { captureError } from '../../utils/errorLog';
 import { getValidToken } from '../../utils/apiClient';
 import { invoke } from '@tauri-apps/api/core';
 import { set as idbSet } from 'idb-keyval';
@@ -58,8 +58,6 @@ interface UseAudioEngineParams {
   isPlaying: boolean;
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   loadNonce: number | undefined;
-  crossfadeEnabled: boolean;
-  crossfadeDuration: number;
   dispatch: React.Dispatch<PlayerAction>;
   t: TFunction;
   isPlayingRef: React.MutableRefObject<boolean>;
@@ -72,12 +70,11 @@ interface UseAudioEngineParams {
 }
 
 export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
-  const { currentTrack, isPlaying, playMode, loadNonce, crossfadeEnabled, crossfadeDuration, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering } = params;
+  const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering } = params;
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioRef2 = useRef<HTMLAudioElement>(null);
   const activeAudioIndexRef = useRef<0 | 1>(0);
-  const crossfadeEngineRef = useRef<CrossfadeEngine | null>(null);
 
   const resumeHandlerRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
   const resumeSeekRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
@@ -114,26 +111,11 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     if (stallWatchdogRef.current) { clearTimeout(stallWatchdogRef.current); stallWatchdogRef.current = null; }
   };
 
-  const audioRefs: AudioRefs = { audioRef, audioRef2, activeAudioIndexRef, crossfadeEngineRef };
+  const audioRefs: AudioRefs = { audioRef, audioRef2, activeAudioIndexRef };
 
   const getActiveAudio = useCallback(() => {
     return activeAudioIndexRef.current === 0 ? audioRef.current : audioRef2.current;
   }, []);
-
-  // Crossfade engine init
-  useEffect(() => {
-    const engine = new CrossfadeEngine();
-    crossfadeEngineRef.current = engine;
-    return () => {
-      engine.destroy();
-      crossfadeEngineRef.current = null;
-    };
-  }, []);
-
-  const crossfadeEnabledRef = useRef(crossfadeEnabled);
-  const crossfadeDurationRef = useRef(crossfadeDuration);
-  useEffect(() => { crossfadeEnabledRef.current = crossfadeEnabled; }, [crossfadeEnabled]);
-  useEffect(() => { crossfadeDurationRef.current = crossfadeDuration; }, [crossfadeDuration]);
 
   const clearRetryTimeout = () => {
     if (retryTimeoutRef.current) {
@@ -235,10 +217,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
         await safePlay(audio);
       }
 
-      if (crossfadeEngineRef.current) {
-        crossfadeEngineRef.current.setGain(0, 1);
-        crossfadeEngineRef.current.setGain(1, 1);
-      }
       activeAudioIndexRef.current = 0;
       disarmSuppressEnded();
       return audio;
@@ -318,7 +296,12 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     const audio = getActiveAudio();
     const error = audio?.error;
     if (!audio || !error) return;
-    if (error.code === MediaError.MEDIA_ERR_ABORTED) return;
+    if (error.code === MediaError.MEDIA_ERR_ABORTED) {
+      captureError({ level: 'info', source: 'audio-engine', message: 'Audio load aborted (MEDIA_ERR_ABORTED)', kind: 'abort' });
+      return;
+    }
+
+    captureError({ level: 'error', source: 'audio-engine', message: `Audio error: code=${error.code}${error.message ? ' msg=' + error.message : ''}${lastKnownPositionRef.current > 0 ? ' pos=' + lastKnownPositionRef.current.toFixed(1) : ''}`, kind: error.code === MediaError.MEDIA_ERR_NETWORK ? 'network' : 'decode' });
 
     if (lastKnownPositionRef.current > 0) {
       errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
@@ -575,123 +558,21 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     }
   }, []);
 
-  // Main crossfade effect
+  // Load audio on track change
   useEffect(() => {
-    const audio = audioRef.current;
-    const audio2 = audioRef2.current;
-    if (!audio || !audio2 || !currentTrack?.streamUrl) return;
-
+    if (!currentTrack?.streamUrl) return;
     let cancelled = false;
-
-    const loadAndPlay = async () => {
-      const hasActiveSrc = (activeAudioIndexRef.current === 0 ? audio.src : audio2.src) !== '';
-      const shouldCrossfade = crossfadeEnabledRef.current && isPlaying && hasActiveSrc;
-
-      if (shouldCrossfade) {
-        const fromIndex = activeAudioIndexRef.current;
-        const toIndex = (fromIndex === 0 ? 1 : 0) as 0 | 1;
-        const fromEl = fromIndex === 0 ? audio : audio2;
-        const toEl = toIndex === 0 ? audio : audio2;
-
-        isProgrammaticActionRef.current = true;
-        try {
-          toEl.src = currentTrack.streamUrl;
-          let toElFailed = false;
-
-          const onToElError = () => {
-            if (toElFailed) return;
-            toElFailed = true;
-            console.warn('[Player] Crossfade target error, keeping current track');
-            if (!errorInfoRef.current) {
-              dispatch({ type: 'ERROR', error: { type: 'rate_limited', text: t('player.playback_error', 'Không thể phát bài hát này, vui lòng thử lại sau') } });
-            }
-          };
-
-          const cleanupToEl = () => {
-            toEl.removeEventListener('error', onToElError);
-          };
-
-          toEl.addEventListener('error', onToElError);
-          toEl.load();
-
-          if (cancelled) return;
-
-          if (toEl.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-            await waitForAudioEvent(toEl, 'canplay', 30000);
-          }
-
-          if (cancelled || toElFailed) { cleanupToEl(); return; }
-          cleanupToEl();
-
-          const engine = crossfadeEngineRef.current;
-          if (engine) {
-            await engine.ensureContext();
-            engine.connect(fromEl, fromIndex);
-            engine.connect(toEl, toIndex);
-            engine.setGain(fromIndex, 1);
-            engine.setGain(toIndex, 0);
-
-            try {
-              await safePlay(toEl);
-            } catch (err: any) {
-              if (err.name === 'NotAllowedError') {
-                dispatch({ type: 'BLOCKED', time: null });
-                return;
-              }
-            }
-
-            if (cancelled) return;
-            const fadeMs = crossfadeDurationRef.current;
-            const toDurMs = Number.isFinite(toEl.duration) ? toEl.duration * 1000 : fadeMs;
-            const fromRemainMs = Number.isFinite(fromEl.duration)
-              ? Math.max(0, (fromEl.duration - fromEl.currentTime) * 1000)
-              : fadeMs;
-            const cappedMs = Math.min(fadeMs, toDurMs, fromRemainMs);
-            const effectiveFadeMs = cappedMs <= 0 ? 0 : Math.max(150, cappedMs);
-            await engine.crossfade(fromIndex, toIndex, effectiveFadeMs);
-            safePause(fromEl);
-            fromEl.removeAttribute('src');
-            fromEl.load();
-            activeAudioIndexRef.current = toIndex;
-            dispatch({ type: 'PLAY_SUCCESS' });
-          }
-        } finally {
-          isProgrammaticActionRef.current = false;
-        }
-      } else {
-        if (cancelled) return;
-        try {
-          const position = currentTrack.restoreTime ?? null;
-          await loadNormalAudio(currentTrack, position, () => cancelled);
-          if (cancelled) return;
-          dispatch({ type: 'PLAY_SUCCESS' });
-        } catch (err: any) {
-          if (err.message === 'Cancelled') return;
-          console.warn('[Player] play() interrupted', err);
-          if (err.name === 'NotAllowedError') {
-            dispatch({ type: 'BLOCKED', time: getActiveAudio()?.currentTime ?? 0 });
-          }
-        }
-      }
-    };
-
-    loadAndPlay().catch(err => {
-      if (err.message !== 'Cancelled') {
-        console.warn('[Player] loadAndPlay unhandled error', err);
+    const position = currentTrack.restoreTime ?? null;
+    loadNormalAudio(currentTrack, position, () => cancelled).then(() => {
+      if (!cancelled) dispatch({ type: 'PLAY_SUCCESS' });
+    }).catch(err => {
+      if (err.message === 'Cancelled') return;
+      console.warn('[Player] loadNormalAudio error', err);
+      if (err.name === 'NotAllowedError') {
+        dispatch({ type: 'BLOCKED', time: getActiveAudio()?.currentTime ?? 0 });
       }
     });
-
-    return () => {
-      cancelled = true;
-      if (audio) {
-        audio.removeAttribute('src');
-        audio.load();
-      }
-      if (audio2) {
-        audio2.removeAttribute('src');
-        audio2.load();
-      }
-    };
+    return () => { cancelled = true; };
   }, [loadNonce]);
 
   // Resume handler cleanup
