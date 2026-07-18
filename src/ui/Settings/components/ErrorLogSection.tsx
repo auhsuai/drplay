@@ -193,7 +193,7 @@ export function ErrorLogSection() {
         </div>
       )}
 
-      <div className="mt-2 rounded-xl border border-gray-200 dark:border-[#2A2A2A] bg-gray-50 dark:bg-[#1A1A1A] p-3 max-h-80 overflow-y-auto">
+      <div className="max-h-80 overflow-y-auto">
         {loading ? (
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {t("loading") || "Loading..."}
