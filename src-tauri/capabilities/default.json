@@ -9,7 +9,9 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://accounts.google.com/*" },
-        { "url": "https://www.google.com/*" }
+        { "url": "https://www.google.com/*" },
+        { "url": "https://t.me/*" },
+        { "url": "https://github.com/*" }
       ]
     },
     "dialog:allow-save",
