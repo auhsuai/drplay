@@ -15,7 +15,7 @@ use tokio_stream::StreamExt;
 use bytes::Bytes;
 
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
@@ -377,6 +377,7 @@ async fn handle_stream(
         let mut current_offset = slice_start;
         let mut buffer_status_emitted = false;
         let mut bytes_sent = 0usize;
+        let mut retry_deadline: Option<Instant> = None;
 
         while current_offset < slice_last {
             // Cache hit path
@@ -503,23 +504,40 @@ async fn handle_stream(
                     current_offset = fetch_end_slice;
                 }
                 None => {
-                    if let Some(err) = last_err {
-                        eprintln!("[proxy] batch-fetch-fail: {:?}", err);
-                        if err == DriveErr::Rate {
-                            let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-                            let cooldown = {
-                                let base = 30u64;
-                                base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
-                            };
-                            GLOBAL_BACKOFF_UNTIL.store(
-                                now_epoch_secs() + cooldown,
-                                Ordering::Release,
-                            );
+                    let err = last_err.unwrap_or(DriveErr::Upstream);
+                    eprintln!("[proxy] batch-fetch-fail: {:?}", err);
+
+                    match err {
+                        // Permanent errors — give up immediately
+                        DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota => {
+                            break;
                         }
-                    } else {
-                        eprintln!("[proxy] batch-fetch-fail: unknown error");
+                        // Auth exhaustion — give up
+                        DriveErr::Auth => {
+                            break;
+                        }
+                        // Transient errors (Rate, Upstream) — retry with 5s cap
+                        _ => {
+                            if err == DriveErr::Rate {
+                                let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                                let cooldown = {
+                                    let base = 30u64;
+                                    base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
+                                };
+                                GLOBAL_BACKOFF_UNTIL.store(
+                                    now_epoch_secs() + cooldown,
+                                    Ordering::Release,
+                                );
+                            }
+                            let deadline = retry_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(5));
+                            if Instant::now() >= *deadline {
+                                eprintln!("[proxy] batch-fetch-retry-exhausted (5s)");
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            continue;
+                        }
                     }
-                    break;
                 }
             }
         }

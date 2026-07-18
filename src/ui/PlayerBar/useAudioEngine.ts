@@ -456,8 +456,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
           return;
         }
       }
-      dispatch({ type: 'ERROR', error: { type: 'format_error', text: t('player.format_error', 'File lỗi định dạng, đang chuyển bài kế tiếp...') } });
-      onNextTrackRefForEnded.current(true);
+      dispatch({ type: 'ERROR', error: { type: 'format_error', text: t('player.format_error', 'Không thể phát file này, đang thử lại...') } });
       return;
     }
 

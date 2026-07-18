@@ -104,7 +104,8 @@
     "format_error": "Audio format not supported, skipping to next track...",
     "drive_quota_exceeded": "Google Drive quota exceeded, retrying later...",
     "access_denied": "You no longer have access to this file, skipping...",
-    "download_quota": "This file exceeded Google's download quota, skipping..."
+    "download_quota": "This file exceeded Google's download quota, skipping...",
+    "seek_too_fast": "Shouldn't seek too fast with lossless file type. Skipping..."
   },
   "song_card": {
     "unknown_title": "Unknown Title",
@@ -157,9 +158,6 @@
     "playback": "Playback",
     "buffer_size": "Buffer Size",
     "buffer_desc": "Adjust pre-load time.",
-    "crossfade": "Crossfade",
-    "crossfade_desc": "Smoothly transition between tracks.",
-    "crossfade_duration": "Fade Duration",
     "milliseconds": "ms",
     "seconds": "seconds",
     "minutes": "minutes",

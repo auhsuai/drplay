@@ -63,6 +63,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   const isTransitioningRef = useRef(false);
   const isAutoTransitioningRef = useRef(false);
   const consecutiveAutoSkipRef = useRef(0);
+  const formatRetryCountRef = useRef(0);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -79,6 +80,10 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       consecutiveAutoSkipRef.current += 1;
       if (consecutiveAutoSkipRef.current >= MAX_CONSECUTIVE_AUTO_SKIP) {
         consecutiveAutoSkipRef.current = 0;
+        isAutoTransitioningRef.current = false;
+        dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.playlist_error', 'Nhiều bài liên tiếp bị lỗi, đã dừng phát') } });
+        onTogglePlayRef.current();
+        return;
       }
     } else {
       consecutiveAutoSkipRef.current = 0;
@@ -114,8 +119,27 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
 
   const handleRetry = useCallback(async () => {
     if (!currentTrack?.streamUrl) return;
+    if (errorInfoRef.current?.type === 'format_error') {
+      formatRetryCountRef.current += 1;
+      if (formatRetryCountRef.current >= 2) {
+        formatRetryCountRef.current = 0;
+        dispatch({ type: 'ERROR', error: { type: 'format_error', text: t('player.seek_too_fast', 'Shouldn\'t seek too fast with lossless file type. Skipping...') } });
+        onNextTrackRef.current();
+        return;
+      }
+      const pos = errorPositionRef.current;
+      errorPositionRef.current = null;
+      dispatch({ type: 'CLEAR_ERROR' });
+      try {
+        await loadNormalAudio(currentTrack, pos);
+        formatRetryCountRef.current = 0;
+        return;
+      } catch {
+        // loadNormalAudio failed — handleAudioError will dispatch format_error again
+      }
+    }
     await performRetry(currentTrack);
-  }, [currentTrack, performRetry]);
+  }, [currentTrack, performRetry, loadNormalAudio, dispatch, t]);
 
   async function handleManualResume() {
     if (!currentTrack?.streamUrl || pendingResumeTime === null) return;

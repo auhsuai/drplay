@@ -104,7 +104,8 @@
     "format_error": "File lỗi định dạng, đang chuyển bài kế tiếp...",
     "drive_quota_exceeded": "Google Drive đã vượt quá giới hạn, đang thử lại...",
     "access_denied": "Bạn không còn quyền truy cập file này, đang chuyển bài...",
-    "download_quota": "File đã vượt giới hạn tải xuống của Google, đang chuyển bài..."
+    "download_quota": "File đã vượt giới hạn tải xuống của Google, đang chuyển bài...",
+    "seek_too_fast": "Không nên seek quá nhanh với file lossless. Đang chuyển bài..."
   },
   "song_card": {
     "unknown_title": "Không rõ tên",
@@ -157,9 +158,6 @@
     "playback": "Phát nhạc",
     "buffer_size": "Bộ nhớ đệm",
     "buffer_desc": "Điều chỉnh thời gian tải trước.",
-    "crossfade": "Làm mượt",
-    "crossfade_desc": "Chuyển bài mượt mà giữa các track.",
-    "crossfade_duration": "Thời gian làm mượt",
     "milliseconds": "ms",
     "seconds": "giây",
     "minutes": "phút",

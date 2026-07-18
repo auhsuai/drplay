@@ -1,5 +1,4 @@
 import { Track } from "../../App";
-import { CrossfadeEngine } from "../../utils/crossfade";
 import React from "react";
 
 export type PlayerAction =
@@ -27,15 +26,12 @@ export interface PlayerBarProps {
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   onTogglePlayMode: () => void;
   onExpandNowPlaying: () => void;
-  crossfadeEnabled: boolean;
-  crossfadeDuration: number;
 }
 
 export interface AudioRefs {
   audioRef: React.RefObject<HTMLAudioElement | null>;
   audioRef2: React.RefObject<HTMLAudioElement | null>;
   activeAudioIndexRef: React.MutableRefObject<0 | 1>;
-  crossfadeEngineRef: React.MutableRefObject<CrossfadeEngine | null>;
 }
 
 export interface PositionRefs {
@@ -75,5 +71,5 @@ export interface PlaybackRefs {
 export const MAX_CONSECUTIVE_AUTO_SKIP = 3;
 
 export const toastTypes: string[] = ['rate_limited', 'drive_quota_exceeded'];
-export const bannerTypes: string[] = ['network_disconnected', 'network_interrupted', 'auth_expired'];
+export const bannerTypes: string[] = ['network_disconnected', 'network_interrupted', 'auth_expired', 'format_error'];
 export const TOAST_DURATION = 10;
