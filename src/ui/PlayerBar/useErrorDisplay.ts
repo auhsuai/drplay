@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { PlayerAction, toastTypes, TOAST_DURATION } from './types';
+import { PlayerAction, toastTypes, TOAST_DURATION, TOAST_SLIDE_IN_MS, TOAST_DISMISS_DELAY_MS } from './types';
 
 export interface ErrorDisplayAPI {
   toastSlideIn: boolean;
@@ -40,12 +40,12 @@ export function useErrorDisplay(params: UseErrorDisplayParams): ErrorDisplayAPI 
   const dismissToast = useCallback(() => {
     clearToastTimer();
     setToastSlideIn(false);
-    setTimeout(() => dispatch({ type: 'CLEAR_ERROR' }), 300);
+    setTimeout(() => dispatch({ type: 'CLEAR_ERROR' }), TOAST_DISMISS_DELAY_MS);
   }, [dispatch]);
 
   useEffect(() => {
     if (errorInfo && toastTypes.includes(errorInfo.type)) {
-      setTimeout(() => setToastSlideIn(true), 10);
+      setTimeout(() => setToastSlideIn(true), TOAST_SLIDE_IN_MS);
       toastDismissRef.current = dismissToast;
 
       if (document.visibilityState === 'visible') {

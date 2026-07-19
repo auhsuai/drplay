@@ -97,7 +97,7 @@ export function CreditsSection() {
           </div>
           <button
             onClick={handleCopy(index, display)}
-            className="text-sm text-gray-500 dark:text-gray-400 hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
+            className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
             title={t("settings.copy") || "Copy"}
           >
             {copiedIndex === index ? (t("settings.copied") || "Copied!") : display}

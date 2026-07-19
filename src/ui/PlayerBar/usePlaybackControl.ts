@@ -3,8 +3,15 @@ import { Track } from '../../App';
 import { listen } from '@tauri-apps/api/event';
 import { safePlay, safePause } from '../../utils/safeAudio';
 import { getValidToken } from '../../utils/apiClient';
+import { captureError } from '../../utils/errorLog';
 import { PlayerAction, MAX_CONSECUTIVE_AUTO_SKIP, CallbackRefs } from './types';
 import type { TFunction } from 'i18next';
+
+// Debounce (ms) before clearing the manual next/prev transition lock so rapid
+// double-fires aren't dropped and the lock can't stick if a click handler throws.
+const TRANSITION_RESET_MS = 200;
+// Delay (ms) before auto-retrying after a Drive quota-exceeded event.
+const DRIVE_QUOTA_RETRY_MS = 30_000;
 
 interface UsePlaybackControlParams {
   currentTrack: Track | null;
@@ -93,7 +100,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
     try {
       onNextTrack();
     } catch (err) {
-      console.error('[Player] onNextTrack threw', err);
+      captureError({ level: 'error', source: 'playback-control', message: `onNextTrack threw (${err instanceof Error ? err.name : 'unknown'})`, kind: 'navigation' });
     } finally {
       setTimeout(() => {
         if (isAutoSkip) {
@@ -101,7 +108,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
         } else {
           isTransitioningRef.current = false;
         }
-      }, 200);
+      }, TRANSITION_RESET_MS);
     }
   };
 
@@ -111,9 +118,9 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
     try {
       onPrevTrack();
     } catch (err) {
-      console.error('[Player] onPrevTrack threw', err);
+      captureError({ level: 'error', source: 'playback-control', message: `onPrevTrack threw (${err instanceof Error ? err.name : 'unknown'})`, kind: 'navigation' });
     } finally {
-      setTimeout(() => { isTransitioningRef.current = false; }, 200);
+      setTimeout(() => { isTransitioningRef.current = false; }, TRANSITION_RESET_MS);
     }
   };
 
@@ -152,7 +159,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       await loadNormalAudio(currentTrack, resumeTime);
       dispatch({ type: 'RESUMED' });
     } catch (err: any) {
-      console.error('[Player] Manual resume failed', err);
+      captureError({ level: 'error', source: 'playback-control', message: `Manual resume failed (${err?.name ?? 'unknown'})`, kind: 'resume' });
       if (err.name === 'NotAllowedError') {
         dispatch({ type: 'BLOCKED', time: resumeTime });
       } else {
@@ -187,12 +194,14 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
           await loadNormalAudio(track, safePos);
         }
       } catch (err) {
-        console.error('[Player] Refresh token failed', err);
+        captureError({ level: 'error', source: 'playback-control', message: `Token refresh on 'token-expired' failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'auth' });
         if (!errorInfoRef.current) {
           dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.auth_expired', 'Phiên đăng nhập hết hạn, vui lòng đăng nhập lại') } });
         }
       }
-    }).then(fn => { unlistenFns.push(fn); }).catch(() => {});
+    }).then(fn => { unlistenFns.push(fn); }).catch((err) => {
+      captureError({ level: 'warn', source: 'playback-control', message: `Tauri event listener registration failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'listener' });
+    });
 
     listen('drive-quota-exceeded', () => {
       console.warn('[Player] Google Drive API quota exceeded');
@@ -204,8 +213,10 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
         if (track?.streamUrl) {
           await performRetry(track);
         }
-      }, 30_000);
-    }).then(fn => { unlistenFns.push(fn); }).catch(() => {});
+      }, DRIVE_QUOTA_RETRY_MS);
+    }).then(fn => { unlistenFns.push(fn); }).catch((err) => {
+      captureError({ level: 'warn', source: 'playback-control', message: `Tauri event listener registration failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'listener' });
+    });
 
     return () => {
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
@@ -221,7 +232,11 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       if (!isPlayingRef.current) return;
       const track = currentTrackRef.current;
       if (!track?.streamUrl) return;
-      await performRetry(track);
+      try {
+        await performRetry(track);
+      } catch (err) {
+        captureError({ level: 'error', source: 'playback-control', message: `performRetry on 'online' failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'retry' });
+      }
     };
 
     window.addEventListener('online', handleOnline);
@@ -335,7 +350,11 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       }
     };
 
-    checkDevices().then(count => { if (!cancelled) lastDeviceCount = count; }).catch(() => {});
+    checkDevices()
+      .then(count => { if (!cancelled) lastDeviceCount = count; })
+      .catch((err) => {
+        captureError({ level: 'warn', source: 'playback-control', message: `checkDevices failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'device' });
+      });
 
     const handleDeviceChange = async () => {
       const newCount = await checkDevices();

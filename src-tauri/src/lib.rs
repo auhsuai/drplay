@@ -14,6 +14,20 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
 }
 
+// --- Named constants for the stream URL / buffer sizing (no magic numbers) ---
+// Signed-URL lifetime: 24h. Shared by `get_stream_url` and the `/stream`
+// redirect in protocol.rs so the two signers stay in sync.
+pub(crate) const STREAM_URL_TTL_SECS: u64 = 86_400;
+// Fallback buffer seconds when the frontend omits `buffer_seconds`.
+const DEFAULT_BUFFER_SECONDS_F64: f64 = 180.0;
+// Nominal decode rate used to size the prefetch window: 320 kbit/s audio
+// => 320_000/8 = 40_000 bytes/s.
+const NOMINAL_BYTES_PER_SEC: u64 = 320_000 / 8;
+const MIN_BUFFER_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_BUFFER_BYTES: u64 = 500 * 1024 * 1024;
+// Default prefetch window (seconds) when the user has not changed the setting.
+const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
+
 pub mod protocol;
 pub mod slice_cache;
 mod thumbnail;
@@ -192,7 +206,7 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
     let ext_str = ext.unwrap_or_default();
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
 
-    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 86400;
+    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + STREAM_URL_TTL_SECS;
     let payload = format!("{}:{}:{}", file_id, ext_str, exp);
     let secret = crate::PROXY_SECRET.get().ok_or("Proxy not initialized")?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;
@@ -200,7 +214,7 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
     let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
     if let Some(b) = bitrate {
-        let buf = buffer_seconds.unwrap_or(180.0);
+        let buf = buffer_seconds.unwrap_or(DEFAULT_BUFFER_SECONDS_F64);
         Ok(format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig))
     } else {
         Ok(format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig))
@@ -218,8 +232,8 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
 }
 
 pub fn buffer_bytes_for_seconds(seconds: u64) -> u64 {
-    let bytes = seconds * 320_000 / 8;
-    bytes.clamp(5 * 1024 * 1024, 500 * 1024 * 1024)
+    let bytes = seconds * NOMINAL_BYTES_PER_SEC;
+    bytes.clamp(MIN_BUFFER_BYTES, MAX_BUFFER_BYTES)
 }
 
 #[tauri::command]
@@ -351,7 +365,7 @@ mod proxy;
 
 pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
-pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(300);
+pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(DEFAULT_BUFFER_SECONDS_USIZE);
 pub static GLOBAL_SLICE_CACHE: once_cell::sync::OnceCell<slice_cache::SliceCache> =
     once_cell::sync::OnceCell::new();
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);

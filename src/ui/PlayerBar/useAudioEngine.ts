@@ -7,6 +7,7 @@ import { getValidToken } from '../../utils/apiClient';
 import { invoke } from '@tauri-apps/api/core';
 import { set as idbSet } from 'idb-keyval';
 import { PlayerAction, AudioRefs } from './types';
+import { decideDecodeFailure, isProxyStreamUrl } from './streamError';
 import type { TFunction } from 'i18next';
 
 const AUDIO_MODULE = 'useAudioEngine';
@@ -23,6 +24,23 @@ const ENDED_THRESHOLD_SEC = 1.0;
 // even if `canplay` never fires.
 const SUPPRESS_ENDED_SAFETY_MS = 15000;
 
+// --- Named timeouts / backoffs (no magic numbers) ---
+// How long to wait for `loadedmetadata` / `canplay` after (re)loading a source.
+const LOAD_METADATA_TIMEOUT_MS = 10_000;
+const CANPLAY_TIMEOUT_MS = 30_000;
+// HEAD probe against the proxy used to distinguish transient vs permanent errors.
+const HEAD_PROBE_TIMEOUT_MS = 5_000;
+const HEAD_PROBE_MAX_ATTEMPTS = 3;
+const HEAD_PROBE_BACKOFF_BASE_MS = 500;
+// Cooldown applied when the proxy reports a rate-limited (429) state.
+const RATE_LIMIT_COOLDOWN_MS = 300_000;
+// Window after a token refresh during which a decode error is retried (the proxy
+// may still be recovering) instead of being treated as definitive.
+const TOKEN_RECENCY_WINDOW_MS = 15_000;
+// Bounds (ms) for the backoff before auto-retrying after a rate-limited state.
+const RATE_LIMIT_RETRY_MIN_MS = 5_000;
+const RATE_LIMIT_RETRY_MAX_MS = 60_000;
+
 // Classify an audio-engine error for observability. Only surface the
 // message/name — never log tokens, URLs, or signed stream credentials.
 function classifyAudioError(err: unknown): string {
@@ -31,6 +49,18 @@ function classifyAudioError(err: unknown): string {
   }
   if (typeof err === 'string') return err;
   return 'Unknown audio error';
+}
+
+// Fire-and-forget retry helper: `performRetry` already surfaces the failure to
+// the UI, but swallowing its rejection with `.catch(() => {})` hides the failure
+// from the persisted error log. Capture it (sanitized, no secrets) instead.
+function captureRetryFailure(where: string, e: unknown): void {
+  captureError({
+    level: 'warn',
+    source: 'audio-engine',
+    message: `${where}: retry failed (${classifyAudioError(e)})`,
+    kind: 'retry',
+  });
 }
 
 export interface AudioEngineAPI {
@@ -201,14 +231,14 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
 
       if (position !== null) {
         if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
-          await waitForAudioEvent(audio, 'loadedmetadata', 10000);
+          await waitForAudioEvent(audio, 'loadedmetadata', LOAD_METADATA_TIMEOUT_MS);
         }
         if (cancellationCheck?.()) throw new Error('Cancelled');
         audio.currentTime = position;
       }
 
       if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
-        await waitForAudioEvent(audio, 'canplay', 30000);
+          await waitForAudioEvent(audio, 'canplay', CANPLAY_TIMEOUT_MS);
       }
 
       if (cancellationCheck?.()) throw new Error('Cancelled');
@@ -237,7 +267,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       retryCountRef.current = 0;
     } catch (err) {
       retryCountRef.current += 1;
-      console.error('[Player] Retry failed', err);
+      captureError({ level: 'error', source: 'audio-engine', message: `performRetry failed (attempt ${retryCountRef.current}, ${classifyAudioError(err)})`, kind: 'retry' });
       if (retryCountRef.current < 3) {
         dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
       } else {
@@ -323,21 +353,17 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       // Mint a fresh signed URL (busts the cached redirect) and resume from the
       // last position instead of showing a misleading network banner.
       const track = currentTrackRef.current;
-      let isProxyStream = false;
-      try {
-        const u = new URL(track?.streamUrl ?? '');
-        isProxyStream = u.hostname === 'drplay.localhost' && u.pathname === '/stream';
-      } catch { isProxyStream = false; }
+      const isProxyStream = isProxyStreamUrl(track?.streamUrl);
 
       if (track && isProxyStream && retryCountRef.current < 3) {
         try {
           const freshUrl = await invoke<string>('get_stream_url', { fileId: track.id });
           const freshTrack = { ...track, streamUrl: freshUrl };
           currentTrackRef.current = freshTrack;
-          performRetry(freshTrack).catch(() => {});
+          performRetry(freshTrack).catch(e => captureRetryFailure('network-url-refresh', e));
           return;
         } catch (e) {
-          console.warn('[Player] Failed to refresh stream URL after network error', e);
+          captureError({ level: 'warn', source: 'audio-engine', message: `get_stream_url refresh after MEDIA_ERR_NETWORK failed (${classifyAudioError(e)})`, kind: 'network' });
         }
       }
 
@@ -347,51 +373,50 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       return;
     }
 
-    let isRealFormatError = false;
+    let headOk = false;
     let errorType = 'transient';
 
     if (currentTrack?.streamUrl) {
       try {
-        const u = new URL(currentTrack.streamUrl);
-        if (u.hostname === 'drplay.localhost' && u.pathname === '/stream') {
+        if (isProxyStreamUrl(currentTrack.streamUrl)) {
           // Retry the HEAD probe a few times. During a transient Drive error
           // the proxy is still retrying upstream, so a single failed probe would
           // produce a false-positive banner. Only treat it as a real error if
           // all probes fail.
-          let headOk = false;
           let lastErrorType: string | null = null;
-          for (let probe = 0; probe < 3 && !headOk; probe++) {
+          for (let probe = 0; probe < HEAD_PROBE_MAX_ATTEMPTS && !headOk; probe++) {
             if (probe > 0) {
-              await new Promise(r => setTimeout(r, 500 * probe));
+              await new Promise(r => setTimeout(r, HEAD_PROBE_BACKOFF_BASE_MS * probe));
             }
             try {
-              const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+              const headResp = await fetch(currentTrack.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(HEAD_PROBE_TIMEOUT_MS) });
               if (headResp.ok) {
                 headOk = true;
               } else {
                 lastErrorType = headResp.headers.get('X-Stream-Error-Type') || 'transient';
                 if (lastErrorType === 'rate-limited') {
-                  rateLimitUntilRef.current = Date.now() + 300_000;
+                  rateLimitUntilRef.current = Date.now() + RATE_LIMIT_COOLDOWN_MS;
                 }
               }
             } catch {
               lastErrorType = 'transient';
             }
           }
-          if (headOk) {
-            isRealFormatError = true;
-          } else if (lastErrorType && lastErrorType !== 'transient') {
+          if (!headOk && lastErrorType && lastErrorType !== 'transient') {
             errorType = lastErrorType;
           }
         }
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          errorType = 'transient';
-        } else if (err instanceof TypeError) {
-          errorType = 'transient';
-        } else {
-          errorType = 'transient';
-        }
+        // URL parse failure or a thrown fetch (AbortError from the timeout,
+        // TypeError on CORS/network). All of these mean "transient" for our
+        // purposes — capture with context rather than swallowing silently.
+        captureError({
+          level: 'warn',
+          source: 'audio-engine',
+          message: `HEAD probe exception (${classifyAudioError(err)})`,
+          kind: 'transient',
+        });
+        errorType = 'transient';
       }
     }
 
@@ -418,12 +443,12 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
 
     if (errorType === 'rate-limited') {
       dispatch({ type: 'ERROR', error: { type: 'rate_limited', text: t('player.rate_limited', 'Google Drive tạm thời quá tải, đang thử lại...') } });
-      const waitMs = Math.max(5000, Math.min(rateLimitUntilRef.current - Date.now(), 60000));
+      const waitMs = Math.max(RATE_LIMIT_RETRY_MIN_MS, Math.min(rateLimitUntilRef.current - Date.now(), RATE_LIMIT_RETRY_MAX_MS));
       clearRetryTimeout();
       retryTimeoutRef.current = setTimeout(() => {
         const track = currentTrackRef.current;
         if (track?.streamUrl) {
-          performRetry(track).catch(() => {});
+          performRetry(track).catch(e => captureRetryFailure('rate-limited', e));
         }
       }, waitMs);
       return;
@@ -438,10 +463,10 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
           const freshUrl = await invoke<string>('get_stream_url', { fileId: track.id });
           const freshTrack = { ...track, streamUrl: freshUrl };
           currentTrackRef.current = freshTrack;
-          performRetry(freshTrack).catch(() => {});
+          performRetry(freshTrack).catch(e => captureRetryFailure('url-expired', e));
           return;
         } catch (e) {
-          console.warn('[Player] Failed to regenerate expired stream URL', e);
+          captureError({ level: 'warn', source: 'audio-engine', message: `get_stream_url regenerate after url-expired failed (${classifyAudioError(e)})`, kind: 'url-expired' });
         }
       }
       dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
@@ -454,30 +479,46 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       try {
         await getValidToken(true);
       } catch (e) {
-        console.warn('[Player] Token refresh after auth-expired failed', e);
+        captureError({ level: 'warn', source: 'audio-engine', message: `token refresh after auth-expired failed (${classifyAudioError(e)})`, kind: 'auth' });
       }
       const track = currentTrackRef.current;
       if (track?.streamUrl) {
-        performRetry(track).catch(() => {});
+        performRetry(track).catch(e => captureRetryFailure('auth-expired', e));
       }
       return;
     }
 
-    if (isRealFormatError && (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || error.code === MediaError.MEDIA_ERR_DECODE)) {
-      // A very recent token refresh strongly implies this "unsupported source"
-      // was actually a 401 from an expired token (the proxy recovered and the
-      // HEAD probe now succeeds), not a genuine format problem. Retry instead of
-      // skipping the track.
-      const tokenTime = Number(localStorage.getItem('drplay_token_time'));
-      if (Number.isFinite(tokenTime) && Date.now() - tokenTime < 15000) {
+    {
+      const decision = decideDecodeFailure({
+        mediaErrorCode: error.code,
+        headOk,
+        ext: currentTrackRef.current?.originalName?.split('.').pop()?.toLowerCase(),
+      });
+
+      if (decision.shouldRetryWithCorrectType) {
+        // The file's format IS playable in the WebView, so a decode/unsupported
+        // error almost certainly means the proxy served it with the wrong
+        // Content-Type (e.g. application/octet-stream for FLAC). Retry with a
+        // freshly-signed URL — the proxy now returns the correct MIME type
+        // (audio/flac) and the track should play.
         const track = currentTrackRef.current;
         if (track?.streamUrl) {
-          performRetry(track).catch(() => {});
+          performRetry(track).catch(e => captureRetryFailure('correct-type-retry', e));
           return;
         }
+      } else if (decision.isDefinitiveFormatError) {
+        // Genuinely unsupported format the WebView cannot decode → skip.
+        const tokenTime = Number(localStorage.getItem('drplay_token_time'));
+        if (Number.isFinite(tokenTime) && Date.now() - tokenTime < TOKEN_RECENCY_WINDOW_MS) {
+          const track = currentTrackRef.current;
+          if (track?.streamUrl) {
+            performRetry(track).catch(e => captureRetryFailure('format-error-retry', e));
+            return;
+          }
+        }
+        dispatch({ type: 'ERROR', error: { type: 'format_error', text: t('player.format_error', 'Không thể phát file này, đang thử lại...') } });
+        return;
       }
-      dispatch({ type: 'ERROR', error: { type: 'format_error', text: t('player.format_error', 'Không thể phát file này, đang thử lại...') } });
-      return;
     }
 
     if (errorInfoRef.current?.type !== 'network_interrupted') {

@@ -161,7 +161,7 @@ export function ErrorLogSection() {
   };
 
   const actionButtons = (
-    <div className="flex items-center gap-2 shrink-0">
+    <div className="flex items-center gap-2 shrink-0 -mt-[2px]">
       <button
         onClick={handleCopy}
         disabled={logs.length === 0 || busy}

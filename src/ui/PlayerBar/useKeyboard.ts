@@ -2,6 +2,14 @@ import { useEffect, useRef } from 'react';
 
 const KEY_MODULE = 'useKeyboard';
 
+// Nudge (seconds) applied per Left/Right arrow key press.
+const ARROW_SEEK_STEP_SEC = 5;
+// Window (ms) after the last arrow seek before the base position is reset, so
+// repeated presses accumulate from the same anchor instead of re-anchoring.
+const ARROW_SEEK_BASE_EXPIRE_MS = 500;
+// How long (ms) the volume HUD stays visible after the last volume keypress.
+const VOLUME_INDICATOR_MS = 300;
+
 // Classify an error for observability (no secrets logged). Mirrors the
 // classify* helpers in apiClient.ts — only name/message are inspected.
 function classifyKeyError(err: unknown): string {
@@ -33,7 +41,7 @@ export function useKeyboard(params: UseKeyboardParams): void {
   const triggerVolumeActive = () => {
     setIsVolumeActive(true);
     if (volumeTimeoutRef.current) clearTimeout(volumeTimeoutRef.current);
-    volumeTimeoutRef.current = setTimeout(() => setIsVolumeActive(false), 300);
+    volumeTimeoutRef.current = setTimeout(() => setIsVolumeActive(false), VOLUME_INDICATOR_MS);
   };
 
   useEffect(() => {
@@ -53,11 +61,11 @@ export function useKeyboard(params: UseKeyboardParams): void {
             const active = getActiveAudio();
             if (active) {
               const now = Date.now();
-              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
+              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > ARROW_SEEK_BASE_EXPIRE_MS) {
                 arrowSeekBaseRef.current = active.currentTime;
               }
               lastSeekTimestampRef.current = now;
-              const newTime = Math.max(0, arrowSeekBaseRef.current - 5);
+              const newTime = Math.max(0, arrowSeekBaseRef.current - ARROW_SEEK_STEP_SEC);
               arrowSeekBaseRef.current = newTime;
               active.currentTime = newTime;
             }
@@ -69,12 +77,12 @@ export function useKeyboard(params: UseKeyboardParams): void {
             const active = getActiveAudio();
             if (active) {
               const now = Date.now();
-              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > 500) {
+              if (arrowSeekBaseRef.current === null || now - lastSeekTimestampRef.current > ARROW_SEEK_BASE_EXPIRE_MS) {
                 arrowSeekBaseRef.current = active.currentTime;
               }
               lastSeekTimestampRef.current = now;
               const dur = active.duration || 0;
-              const newTime = Math.min(dur, arrowSeekBaseRef.current + 5);
+              const newTime = Math.min(dur, arrowSeekBaseRef.current + ARROW_SEEK_STEP_SEC);
               arrowSeekBaseRef.current = newTime;
 
             active.currentTime = newTime;

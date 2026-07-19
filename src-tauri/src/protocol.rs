@@ -350,22 +350,33 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let file_id = match parsed_url.query_pairs().find(|(k, _)| k == "id") {
                     Some((_, id)) => id.into_owned(),
                     None => {
-                        responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap());
+                        responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap_or_else(|_| Response::new(Vec::new())));
                         return;
                     }
                 };
                 let port = crate::PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
 
-                let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() + 86400;
+                let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() + crate::STREAM_URL_TTL_SECS;
                 let payload = format!("{}:{}:{}", file_id, "", exp);
                 let secret = match crate::PROXY_SECRET.get() {
                     Some(s) => s.clone(),
                     None => {
-                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(b"Proxy not ready".to_vec()).unwrap());
+                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(b"Proxy not ready".to_vec()).unwrap_or_else(|_| Response::new(Vec::new())));
                         return;
                     }
                 };
-                let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(secret.as_bytes()).unwrap();
+                let mut mac = match <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(secret.as_bytes()) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        responder.respond(
+                            Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(b"HMAC init error".to_vec())
+                                .unwrap_or_else(|_| Response::new(Vec::new())),
+                        );
+                        return;
+                    }
+                };
                 mac.update(payload.as_bytes());
                 let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
@@ -378,7 +389,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                         .header("Cache-Control", "private, max-age=3600")
                         .header("Access-Control-Allow-Origin", "*")
                         .body(Vec::new())
-                        .unwrap()
+                        .unwrap_or_else(|_| Response::new(Vec::new()))
                 );
                 return;
             }

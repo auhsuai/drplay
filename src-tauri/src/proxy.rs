@@ -21,7 +21,58 @@ use tokio::sync::Mutex;
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
 
+// --- Named constants: no magic numbers / strings on the production path ---
+// Reqwest total per-request timeout (conn + read). Bounds every Drive call so a
+// stalled socket cannot hang a stream task forever (reqwest docs: Client::builder().timeout).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+// Bounded wait for a fresh OAuth token via the global Notify.
+const TOKEN_RECOVERY_TIMEOUT: Duration = Duration::from_secs(8);
+// Retry attempts for a transient Drive batch fetch before giving up.
+const FETCH_RETRY_ATTEMPTS: u32 = 3;
+// Base (seconds) for exponential backoff between fetch retries: 1 << attempt.
+const FETCH_RETRY_BASE_BACKOFF_SECS: u64 = 1;
+// Bounded mpsc buffer between the fetch task and the streaming response.
+const STREAM_CHANNEL_BOUND: usize = 8;
+// Consecutive slices fetched/looked-up in one batch (find_missing_run count).
+const PREFETCH_BATCH_SLICES: usize = 4;
+// Global rate-limit cooldown: base seconds, hard cap, and shift exponent cap.
+const COOLDOWN_BASE_SECS: u64 = 30;
+const COOLDOWN_MAX_SECS: u64 = 300;
+const COOLDOWN_EXP_CAP: u32 = 4;
+// Overall transient-retry budget for one stream (not per-attempt).
+const RETRY_DEADLINE_SECS: u64 = 5;
+// Sleep when a background prefetch hits a rate limit.
+const PREFETCH_RATE_LIMIT_SLEEP_SECS: u64 = 5;
+// Delay between transient retry attempts in the main fetch loop.
+const STREAM_RETRY_DELAY_MS: u64 = 500;
+// Poll interval / yield for the background prefetch task.
+const PREFETCH_POLL_INTERVAL_MS: u64 = 1;
+const PREFETCH_YIELD_MS: u64 = 50;
+// Fallback total size (10 MB) and Content-Type used only when Drive cannot be
+// probed (network down). Never forwarded as a real value to the WebView logic.
+const DEFAULT_TOTAL_SIZE_FALLBACK: u64 = 10_000_000;
+const FALLBACK_CONTENT_TYPE: &str = "audio/mpeg";
 
+/// Exponential backoff (seconds) for the global rate-limit cooldown, hard-capped.
+/// `fail_count` is the post-increment value of `FAIL_COUNT`.
+fn compute_cooldown_secs(fail_count: u32) -> u64 {
+    COOLDOWN_BASE_SECS
+        .checked_shl(fail_count.min(COOLDOWN_EXP_CAP) as u32)
+        .unwrap_or(COOLDOWN_MAX_SECS)
+        .min(COOLDOWN_MAX_SECS)
+}
+
+/// Trim a cached slice to the requested byte window: drop `skip` leading bytes
+/// on the very first slice, then truncate to `remaining` bytes at the tail.
+/// Used identically on both the cache-hit and batch-send paths.
+fn trim_cached_slice(chunk: &mut Vec<u8>, skip: usize, remaining: usize) {
+    if skip < chunk.len() {
+        chunk.drain(..skip);
+    }
+    if remaining < chunk.len() {
+        chunk.truncate(remaining);
+    }
+}
 
 #[derive(serde::Serialize, Clone)]
 struct BufferState {
@@ -206,7 +257,7 @@ async fn recover_stream_token(old_token: &str) -> Option<String> {
 
     tokio::select! {
         _ = &mut notified => {}
-        _ = tokio::time::sleep(std::time::Duration::from_secs(8)) => {
+        _ = tokio::time::sleep(TOKEN_RECOVERY_TIMEOUT) => {
             return None;
         }
     }
@@ -216,6 +267,33 @@ async fn recover_stream_token(old_token: &str) -> Option<String> {
         None
     } else {
         Some(new_token)
+    }
+}
+
+/// Map a file extension to its canonical audio MIME type.
+///
+/// Google Drive frequently returns `application/octet-stream` (or a stale type)
+/// for FLAC and other lossless files. The `ext` query param is already part of
+/// the signed URL, so when it maps to a known type we OVERRIDE Drive's
+/// Content-Type. Without this, the WebView cannot pick a demuxer for an
+/// `octet-stream` FLAC stream and rejects it with `MEDIA_ERR_SRC_NOT_SUPPORTED`,
+/// causing the frontend to wrongly skip a perfectly playable track as a
+/// "format error". Chromium/WebView2 decode FLAC natively when served as
+/// `audio/flac` (see MDN: Chrome/Edge FLAC = Yes; chromium.org audio codecs).
+fn content_type_for_ext(ext: &str) -> Option<&'static str> {
+    match ext.to_ascii_lowercase().as_str() {
+        "flac" => Some("audio/flac"),
+        "ogg" | "oga" => Some("audio/ogg"),
+        "opus" => Some("audio/ogg"),
+        "wav" => Some("audio/wav"),
+        "m4a" => Some("audio/mp4"),
+        "aac" => Some("audio/aac"),
+        "mp3" => Some("audio/mpeg"),
+        "mp4" | "m4v" => Some("video/mp4"),
+        "webm" => Some("audio/webm"),
+        "caf" => Some("audio/x-caf"),
+        "aiff" | "aif" => Some("audio/aiff"),
+        _ => None,
     }
 }
 
@@ -282,14 +360,20 @@ async fn handle_stream(
 
     let api_url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media&acknowledgeAbuse=true", query.id);
 
-    let (total_size, content_type) = {
+    // Clone the inner Arc out from under the outer store lock, then release the
+    // store lock *before* awaiting the inner per-track mutex. Holding the outer
+    // `Mutex<HashMap>` across an `.await` would serialize every concurrent stream
+    // on a single lock and is exactly the kind of shared-state hazard to avoid.
+    let cached_meta = {
         let store = state.cache_store.lock().await;
-        if let Some(arc) = store.get(&query.id) {
+        store.get(&query.id).map(Arc::clone)
+    };
+    let (total_size, content_type) = match cached_meta {
+        Some(arc) => {
             let tc = arc.lock().await;
             (tc.total_size, tc.content_type.clone())
-        } else {
-            (0, String::new())
         }
+        None => (0, String::new()),
     };
 
     // For HEAD always re-validate against Drive
@@ -304,7 +388,7 @@ async fn handle_stream(
                             Ok(v) => v,
                             Err(DriveErr::Rate) => return handle_rate_limit(now).await,
                             Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota | DriveErr::Auth)) => return drive_err_response(e),
-                            Err(_) => (10_000_000, "audio/mpeg".to_string()),
+                            Err(_) => (DEFAULT_TOTAL_SIZE_FALLBACK, FALLBACK_CONTENT_TYPE.to_string()),
                         }
                     }
                     None => return drive_err_response(DriveErr::Auth),
@@ -312,10 +396,21 @@ async fn handle_stream(
             }
             Err(DriveErr::Rate) => return handle_rate_limit(now).await,
             Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => return drive_err_response(e),
-            Err(_) => (10_000_000, "audio/mpeg".to_string()),
+            Err(_) => (DEFAULT_TOTAL_SIZE_FALLBACK, FALLBACK_CONTENT_TYPE.to_string()),
         }
     } else {
         (total_size, content_type)
+    };
+
+    // Override Drive's (often wrong) Content-Type using the extension carried in
+    // the signed URL. This is what lets lossless formats like FLAC actually play
+    // in the WebView instead of being rejected as a "format error".
+    let resolved_content_type = match query.ext.as_deref().and_then(content_type_for_ext) {
+        Some(ct) => {
+            eprintln!("[proxy] content-type override: ext={} -> {}", query.ext.as_deref().unwrap_or(""), ct);
+            ct.to_string()
+        }
+        None => content_type,
     };
 
     let range_str = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
@@ -328,7 +423,7 @@ async fn handle_stream(
         
         return Response::builder()
             .status(status)
-            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CONTENT_TYPE, resolved_content_type)
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
@@ -350,7 +445,7 @@ async fn handle_stream(
         let mut store = state.cache_store.lock().await;
         store.insert(query.id.clone(), Arc::new(Mutex::new(TrackMeta {
             total_size,
-            content_type: content_type.clone(),
+            content_type: resolved_content_type.clone(),
         })));
         FAIL_COUNT.store(0, Ordering::Relaxed);
     }
@@ -365,7 +460,7 @@ async fn handle_stream(
     let slice_last = ((end / crate::slice_cache::SLICE_SIZE) + 1) * crate::slice_cache::SLICE_SIZE;
     let desired_total = (end - start + 1) as usize;
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(STREAM_CHANNEL_BOUND);
     let track_id = query.id.clone();
     let fetch_client = state.client.clone();
     let fetch_api_url = api_url.clone();
@@ -380,36 +475,29 @@ async fn handle_stream(
         let mut retry_deadline: Option<Instant> = None;
         while current_offset < slice_last {
             // Cache hit path
-            if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
-                let mut chunk = (*data).clone();
+                if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
+                    let mut chunk = (*data).clone();
+                    let skip = if current_offset == slice_start && actual_start > slice_start {
+                        (actual_start - slice_start) as usize
+                    } else {
+                        0
+                    };
+                    let remaining = desired_total.saturating_sub(bytes_sent);
+                    trim_cached_slice(&mut chunk, skip, remaining);
 
-                // Front trim for first slice
-                if current_offset == slice_start && actual_start > slice_start {
-                    let skip = (actual_start - slice_start) as usize;
-                    if skip < chunk.len() {
-                        chunk.drain(..skip);
+                    bytes_sent += chunk.len();
+                    if !chunk.is_empty() {
+                        if tx.send(chunk).await.is_err() {
+                            break;
+                        }
                     }
+                    current_offset += crate::slice_cache::SLICE_SIZE;
+                    continue;
                 }
-
-                // End trim to match exact requested range
-                let remaining = desired_total.saturating_sub(bytes_sent);
-                if remaining < chunk.len() {
-                    chunk.truncate(remaining);
-                }
-
-                bytes_sent += chunk.len();
-                if !chunk.is_empty() {
-                    if tx.send(chunk).await.is_err() {
-                        break;
-                    }
-                }
-                current_offset += crate::slice_cache::SLICE_SIZE;
-                continue;
-            }
 
             // Cache miss: find consecutive missing slices
             let (fetch_start, count) = slice_cache.find_missing_run(
-                &track_id, current_offset, 4,
+                &track_id, current_offset, PREFETCH_BATCH_SLICES,
             ).await;
 
             if count == 0 {
@@ -423,7 +511,7 @@ async fn handle_stream(
             // Fetch batch from Drive (with retry)
             let mut last_err = None;
             let mut batch_data = None;
-            for attempt in 0..3 {
+            for attempt in 0..FETCH_RETRY_ATTEMPTS {
                 match fetch_range_from_drive(
                     &fetch_client, &fetch_api_url, &fetch_token,
                     fetch_start, fetch_end_byte,
@@ -433,7 +521,7 @@ async fn handle_stream(
                         break;
                     }
                     Err(DriveErr::Rate) => {
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS))).await;
                         last_err = Some(DriveErr::Rate);
                     }
                     Err(DriveErr::Auth) => {
@@ -445,7 +533,7 @@ async fn handle_stream(
                         break;
                     }
                     Err(e) => {
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS))).await;
                         last_err = Some(e);
                     }
                 }
@@ -463,20 +551,13 @@ async fn handle_stream(
                         }
                         if let Some(cached) = slice_cache.try_get(&track_id, slice_offset).await {
                             let mut chunk = (*cached).clone();
-
-                            // Front trim for first requested slice
-                            if slice_offset == slice_start && actual_start > slice_start {
-                                let skip = (actual_start - slice_start) as usize;
-                                if skip < chunk.len() {
-                                    chunk.drain(..skip);
-                                }
-                            }
-
-                            // End trim to match exact range
+                            let skip = if slice_offset == slice_start && actual_start > slice_start {
+                                (actual_start - slice_start) as usize
+                            } else {
+                                0
+                            };
                             let remaining = desired_total.saturating_sub(bytes_sent);
-                            if remaining < chunk.len() {
-                                chunk.truncate(remaining);
-                            }
+                            trim_cached_slice(&mut chunk, skip, remaining);
 
                             bytes_sent += chunk.len();
                             if !chunk.is_empty() {
@@ -523,22 +604,19 @@ async fn handle_stream(
                         // Transient errors (Rate, Upstream) — retry with 5s cap
                         _ => {
                             if err == DriveErr::Rate {
-                                let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-                                let cooldown = {
-                                    let base = 30u64;
-                                    base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
-                                };
-                                GLOBAL_BACKOFF_UNTIL.store(
+                            let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                            let cooldown = compute_cooldown_secs(fail_count);
+                            GLOBAL_BACKOFF_UNTIL.store(
                                     now_epoch_secs() + cooldown,
                                     Ordering::Release,
                                 );
                             }
-                            let deadline = retry_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(5));
+                            let deadline = retry_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(RETRY_DEADLINE_SECS));
                             if Instant::now() >= *deadline {
                                 eprintln!("[proxy] batch-fetch-retry-exhausted (5s)");
                                 break;
                             }
-                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            tokio::time::sleep(Duration::from_millis(STREAM_RETRY_DELAY_MS)).await;
                             continue;
                         }
                     }
@@ -603,9 +681,9 @@ async fn handle_stream(
             // Stop early if a newer request cancelled this prefetch.
             tokio::select! {
                 _ = cancel_for_task.notified() => break,
-                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+                _ = tokio::time::sleep(std::time::Duration::from_millis(PREFETCH_POLL_INTERVAL_MS)) => {}
             }
-            let (first_missing, count) = slice_cache.find_missing_run(&bg_id_for_task, offset, 4).await;
+            let (first_missing, count) = slice_cache.find_missing_run(&bg_id_for_task, offset, PREFETCH_BATCH_SLICES).await;
             if count == 0 {
                 offset += crate::slice_cache::SLICE_SIZE;
                 continue;
@@ -626,12 +704,12 @@ async fn handle_stream(
                 Err(e) => {
                     eprintln!("[proxy] prefetch-batch-fail at {first_missing}: {e:?}");
                     if matches!(e, DriveErr::Rate) {
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(PREFETCH_RATE_LIMIT_SLEEP_SECS)).await;
                     }
                 }
             }
             offset = batch_end;
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(PREFETCH_YIELD_MS)).await;
         }
     });
 
@@ -642,7 +720,7 @@ async fn handle_stream(
 
     Response::builder()
         .status(StatusCode::PARTIAL_CONTENT)
-        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_TYPE, resolved_content_type)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size))
@@ -668,7 +746,7 @@ async fn get_total_size(client: &Client, api_url: &str, token: &str) -> Result<(
     }
     let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("audio/mpeg")
+        .unwrap_or(FALLBACK_CONTENT_TYPE)
         .to_string();
     // A 206 response carries the true total in Content-Range: "bytes 0-0/<TOTAL>".
     let total = resp.headers().get(reqwest::header::CONTENT_RANGE)
@@ -699,13 +777,25 @@ async fn handle_options() -> Response {
         .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, HEAD, OPTIONS")
         .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
         .body(axum::body::Body::empty())
-        .unwrap()
+        .unwrap_or_else(|e| {
+            eprintln!("[proxy] failed to build OPTIONS response: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "").into_response()
+        })
 }
 
 pub fn start_proxy() {
     tauri::async_runtime::spawn(async move {
+        let client = match Client::builder().timeout(REQUEST_TIMEOUT).build() {
+            Ok(c) => c,
+            Err(e) => {
+                // A bare Client::new() is the safe fallback (it never times out,
+                // but the proxy still boots). Log so the missing timeout is visible.
+                eprintln!("[proxy] reqwest client build failed (timeout={REQUEST_TIMEOUT:?}): {e}");
+                Client::new()
+            }
+        };
         let state = AppState {
-            client: Client::new(),
+            client,
             cache_store: Arc::new(Mutex::new(HashMap::new())),
         };
 
@@ -727,6 +817,8 @@ pub fn start_proxy() {
 
 #[cfg(test)]
 mod tests {
+    use super::content_type_for_ext;
+
     fn assemble_chunks_in_order(chunks: &[(u64, u64, Vec<u8>)]) -> Vec<u8> {
         let mut buffer = Vec::with_capacity(chunks.iter().map(|c| c.2.len()).sum());
         for (_, _, data) in chunks {
@@ -747,5 +839,22 @@ mod tests {
         assert_eq!(buffer[0], 1);
         assert_eq!(buffer[2000], 2);
         assert_eq!(buffer[4000], 3);
+    }
+
+    #[test]
+    fn test_content_type_for_ext_maps_flac_and_is_case_insensitive() {
+        // The root-cause fix: FLAC must be served as audio/flac, not Drive's
+        // application/octet-stream, otherwise the WebView rejects it with
+        // MEDIA_ERR_SRC_NOT_SUPPORTED and the track is wrongly skipped.
+        assert_eq!(content_type_for_ext("flac"), Some("audio/flac"));
+        assert_eq!(content_type_for_ext("FLAC"), Some("audio/flac"));
+        assert_eq!(content_type_for_ext("Ogg"), Some("audio/ogg"));
+        assert_eq!(content_type_for_ext("wav"), Some("audio/wav"));
+        assert_eq!(content_type_for_ext("m4a"), Some("audio/mp4"));
+        assert_eq!(content_type_for_ext("aac"), Some("audio/aac"));
+        assert_eq!(content_type_for_ext("mp3"), Some("audio/mpeg"));
+        // Unknown extensions are NOT overridden — proxy keeps Drive's content type.
+        assert_eq!(content_type_for_ext("xyz"), None);
+        assert_eq!(content_type_for_ext(""), None);
     }
 }
