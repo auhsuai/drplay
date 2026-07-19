@@ -33,7 +33,7 @@ base64 = "0.22.1"
 url = "2.5.0"
 reqwest = { version = "0.12.4", features = ["json", "stream", "rustls-tls"] }
 aws-config = { version = "1.5", features = ["behavior-version-latest", "rustls"] }
-aws-sdk-s3 = { version = "1.59", default-features = false, features = ["rustls"] }
+aws-sdk-s3 = { version = "1.59", default-features = false, features = ["rustls", "behavior-version-latest"] }
 open = "5.1.2"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 image = "0.25.10"
