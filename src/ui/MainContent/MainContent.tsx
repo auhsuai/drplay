@@ -9,6 +9,9 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
+import { useScrollVelocity } from "../../hooks/useScrollVelocity";
+import { useCoverWindowing } from "../../hooks/useCoverWindowing";
+import type { CoverWindowItem } from "../../hooks/useCoverWindowing";
 
 
 interface MainContentProps {
@@ -74,17 +77,7 @@ export function MainContent({
   const [isBulkOperating, setIsBulkOperating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isEditingPage, setIsEditingPage] = useState(false);
-  const [pageInputValue, setPageInputValue] = useState("");
-  const pageInputRef = React.useRef<HTMLInputElement>(null);
-  const itemsPerPage = 50;
   const mainRef = React.useRef<HTMLElement>(null);
-
-  // Reset page when folder, search, or sort changes
-  React.useEffect(() => {
-    setCurrentPage(1);
-  }, [currentFolderId, searchQuery, sortOption]);
 
   // Reset highlight and search on folder change
   React.useEffect(() => {
@@ -202,31 +195,14 @@ export function MainContent({
       const filteredItemsForHighlight = searchQuery ? (globalSearchItems || []) : items;
       const index = filteredItemsForHighlight.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
-        const targetPage = Math.floor(index / itemsPerPage) + 1;
-        setCurrentPage(targetPage);
         setTimeout(() => {
-          const indexInPage = index % itemsPerPage;
-          const scrollEl = mainRef.current;
-          const el = scrollEl?.querySelector(`[data-hl-index="${indexInPage}"]`) as HTMLElement | null;
-          if (el && scrollEl) {
-            const cont = scrollEl.getBoundingClientRect();
-            const rect = el.getBoundingClientRect();
-            const itemCenter = rect.top - cont.top + rect.height / 2;
-            const viewCenter = cont.height / 2;
-            // Đã nằm giữa màn hình (vùng giữa ±20%) -> không cuộn
-            if (Math.abs(itemCenter - viewCenter) < cont.height * 0.2) return;
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } else {
-            rowVirtualizer.scrollToIndex(indexInPage, { align: 'center', behavior: 'smooth' });
-          }
+          rowVirtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
         }, 50);
       }
     }
   }, [highlightedFileId, items, searchQuery, globalSearchItems]);
 
   const filteredItems = searchQuery ? globalSearchItems : items;
-  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
-  const currentItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   React.useEffect(() => {
     clearPrefetchedStreams();
@@ -234,15 +210,29 @@ export function MainContent({
   }, [currentFolderId]);
 
   React.useEffect(() => {
-    const trackIds = currentItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
+    const trackIds = filteredItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
     prefetchVisibleTracks(trackIds);
-  }, [currentItems]);
+  }, [filteredItems]);
   
   const rowVirtualizer = useVirtualizer({
-    count: currentItems.length,
+    count: filteredItems.length,
     getScrollElement: () => mainRef.current,
     estimateSize: () => 92,
     overscan: 10,
+  });
+
+  const { dynamicMargin } = useScrollVelocity(mainRef);
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const visibleRange = virtualItems.length > 0
+    ? { start: virtualItems[0].index, end: virtualItems[virtualItems.length - 1].index }
+    : { start: 0, end: 0 };
+
+  const coverMap = useCoverWindowing({
+    items: filteredItems as CoverWindowItem[],
+    range: visibleRange,
+    token,
+    dynamicMargin,
   });
 
   const handleCreateFolder = async (folderName: string) => {
@@ -331,8 +321,6 @@ export function MainContent({
           console.error(`[MainContent] bulk-move: Failed to move item ${id}`, e);
         }
       }
-      // Update local DB only for items that actually moved on Drive,
-      // so local state always matches Drive reality (no desync).
       for (const id of movedIds) {
         await db.files.update(id, { parentId: destinationFolderId });
       }
@@ -566,8 +554,6 @@ export function MainContent({
                         <button
                           key={opt.id}
                           onClick={() => {
-                            // If they select a new field, default to the sensible direction
-                            // Date defaults to Newest (desc), others to Ascending
                             let newOpt = opt.id;
                             if (opt.id === 'modifiedTime') newOpt = 'modifiedTime desc';
                             
@@ -613,9 +599,9 @@ export function MainContent({
             {searchQuery ? t('drive.no_search_results') : t('drive.no_audio')}
           </div>
         ) : (
-          <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+          <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px`, contain: 'strict' }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const item = currentItems[virtualRow.index];
+              const item = filteredItems[virtualRow.index];
               return (
                 <div
                   key={virtualRow.key}
@@ -666,6 +652,7 @@ export function MainContent({
                   }}
                   onBulkMoveClick={() => setShowBulkMoveScreen(true)}
                   onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
+                  coverUrl={coverMap.get(item.id)}
                 />
                 </div>
               );
@@ -673,91 +660,6 @@ export function MainContent({
           </div>
         )}
       </div>
-
-      {/* Pagination Controls */}
-      {totalPages > 1 && (
-        <div className={`sticky bottom-0 w-full flex justify-center items-end pb-0 pt-6 pointer-events-none ${isEditingPage ? 'z-50' : 'z-20'}`}>
-          <div className="flex items-center justify-center gap-3 sm:gap-6 pointer-events-auto pb-1 w-full max-w-[400px]">
-            <div className="flex justify-end">
-              <button 
-                disabled={currentPage === 1}
-                onClick={() => {
-                  setCurrentPage(p => p - 1);
-                  mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
-                className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
-              >
-                {t('playlist.prev', 'Previous')}
-              </button>
-            </div>
-            
-            <div className="flex justify-center relative">
-              {isEditingPage && (
-                <div 
-                  className="fixed inset-0 cursor-default bg-transparent"
-                  style={{ zIndex: -1 }}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setIsEditingPage(false);
-                  }}
-                />
-              )}
-              
-              <div 
-                className={`flex items-center text-sm font-medium text-gray-900 dark:text-white tracking-wider text-center drop-shadow-md transition-colors ${!isEditingPage ? 'cursor-pointer hover:text-[#4285F4]' : ''}`}
-                onClick={() => {
-                  if (!isEditingPage) {
-                    setIsEditingPage(true);
-                    setPageInputValue(currentPage.toString());
-                    setTimeout(() => pageInputRef.current?.focus(), 0);
-                  }
-                }}
-              >
-                <input
-                  ref={pageInputRef}
-                  type="text"
-                  readOnly={!isEditingPage}
-                  value={isEditingPage ? pageInputValue : currentPage}
-                  onChange={(e) => isEditingPage && setPageInputValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const newPage = parseInt(pageInputValue.trim(), 10);
-                      if (!isNaN(newPage) && newPage >= 1 && newPage <= totalPages) {
-                        setCurrentPage(newPage);
-                        mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-                      }
-                      setIsEditingPage(false);
-                    }
-                    if (e.key === 'Escape') {
-                      setIsEditingPage(false);
-                    }
-                  }}
-                  className={`text-right bg-transparent outline-none p-0 m-0 text-inherit font-inherit ${!isEditingPage ? 'cursor-pointer pointer-events-none' : ''}`}
-                  style={{ 
-                    width: `${Math.max(1, (isEditingPage ? pageInputValue : currentPage.toString()).length)}ch`,
-                    caretColor: isEditingPage ? 'inherit' : 'transparent' 
-                  }}
-                />
-                <span className="whitespace-pre"> / {totalPages}</span>
-              </div>
-            </div>
-
-            <div className="flex justify-start">
-              <button 
-                disabled={currentPage === totalPages}
-                onClick={() => {
-                  setCurrentPage(p => p + 1);
-                  mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
-                className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
-              >
-                {t('playlist.next', 'Next')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <BulkDeleteConfirmModal
         isOpen={showBulkDeleteConfirm}
