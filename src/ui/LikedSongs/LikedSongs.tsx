@@ -182,7 +182,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
                   
                   <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? 'bg-[#4285F4]/10 text-[#4285F4]' : 'bg-gray-200 dark:bg-gray-800'}`}>
                     {covers[track.id] ? (
-                      <img src={covers[track.id]} alt="cover" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                      <img src={covers[track.id]} alt="cover" loading="lazy" decoding="async" onError={() => setCovers((c) => { const n = { ...c }; delete n[track.id]; return n; })} className="w-full h-full object-cover" />
                     ) : (
                       <Music className={`w-5 h-5 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-400'}`} />
                     )}

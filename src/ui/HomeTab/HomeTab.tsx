@@ -279,7 +279,7 @@ function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onP
         style={!coverUrl ? { background: fillColor } : undefined}
       >
         {coverUrl ? (
-          <img src={coverUrl} loading="lazy" decoding="async" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+          <img src={coverUrl} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
         ) : (
           <Music className="w-12 h-12 text-white/90 group-hover:scale-110 transition-transform duration-700" />
         )}

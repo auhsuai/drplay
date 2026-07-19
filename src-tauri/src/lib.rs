@@ -377,23 +377,17 @@ fn get_local_metadata(
     size: i64,
     name: String,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-    app_handle: tauri::AppHandle,
+    #[allow(unused_variables)]
+    _app_handle: tauri::AppHandle,
 ) -> Option<LocalMetadata> {
     let conn = pool.get().ok()?;
-    let mut meta = get_local_metadata_internal(size, &name, &conn)?;
-    
-    // Check if thumbnail exists on disk since we don't save to DB anymore
-    use tauri::Manager;
-    if !meta.has_cover {
-        if let Ok(dir) = app_handle.path().app_cache_dir() {
-            let thumb_path = crate::thumbnail::thumbnail_path(&dir, &meta.id, true);
-            let full_path = crate::thumbnail::thumbnail_path(&dir, &meta.id, false);
-            if thumb_path.exists() || full_path.exists() {
-                meta.has_cover = true;
-            }
-        }
-    }
-    
+    let meta = get_local_metadata_internal(size, &name, &conn)?;
+
+    // `has_cover` is derived purely from the DB (cover_art IS NOT NULL OR a valid
+    // R2 key in cover_url). Covers are no longer persisted to disk, and the
+    // in-RAM moka cache (protocol.rs) only holds real R2/SQLite covers, so no
+    // disk existence check is needed here — `has_cover` stays authoritative.
+
     Some(meta)
 }
 
@@ -445,28 +439,11 @@ fn update_minimize_to_tray(minimize: bool) {
 }
 
 #[tauri::command]
-async fn clear_local_cache(app: tauri::AppHandle) -> Result<(), String> {
-    if let Ok(cache_dir) = app.path().app_cache_dir() {
-        // Thumbnails live in `<app_cache_dir>/.thumbnails` (thumbnail.rs:67), and the
-        // access log is co-located there so GC can map files to last-access times.
-        let thumb_dir = cache_dir.join(".thumbnails");
-        if !thumb_dir.exists() {
-            // Idempotent: nothing to GC yet.
-            return Ok(());
-        }
-        // DISABLED by project requirement: cached covers must never be auto-deleted
-        // (kept for potential offline reuse later). The read path in protocol.rs is
-        // preserved; only the deletion (gc_thumbnails) is skipped.
-        //
-        // let access_log_path = thumb_dir.join("access_log.json");
-        // if let Err(e) = crate::thumbnail::gc_thumbnails(
-        //     &thumb_dir,
-        //     &access_log_path,
-        //     &crate::thumbnail::GcPolicy::default(),
-        // ) {
-        //     eprintln!("[clear_local_cache] failed to GC thumbnails: {}", e);
-        // }
-    }
+async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
+    // Covers are now served from the in-RAM `COVER_CACHE` (protocol.rs) with an R2
+    // source of truth; nothing is persisted to disk anymore, so there is no on-disk
+    // cover cache to clear. Kept as a stable, idempotent no-op command so the existing
+    // JS caller keeps working without change.
     Ok(())
 }
 
@@ -505,11 +482,9 @@ pub fn run() {
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
 
-            // F2: point the access recorder at `<app_cache_dir>/.thumbnails/access_log.json`
-            // so it is co-located with the thumbnail files (both under `app_cache_dir()/.thumbnails/`).
-            // This is required for `gc_thumbnails` (driven by `clear_local_cache`) to map files
-            // to last-access times; a mismatched path would make every thumbnail read as
-            // `last_access = 0` and be wiped on the next GC.
+            // Initialize the access recorder used by the cover GET path in protocol.rs.
+            // The recorder MUST be set here: the protocol handler returns HTTP 500 if it
+            // is missing. The log path is where recorded accesses are flushed.
             if let Ok(cache_dir) = app.path().app_cache_dir() {
                 let access_log = cache_dir.join(".thumbnails").join("access_log.json");
                 crate::protocol::init_access_recorder(access_log);

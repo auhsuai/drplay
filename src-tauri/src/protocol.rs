@@ -3,19 +3,30 @@ use moka::future::Cache;
 use bytes::Bytes;
 use hmac::Mac;
 use once_cell::sync::Lazy;
+use std::time::Duration;
 
-use std::path::Path;
 use r2d2_sqlite::SqliteConnectionManager;
 
-use crate::thumbnail::{validate_file_id, thumbnail_path};
+use crate::thumbnail::validate_file_id;
 
+// --- Named constants for the in-RAM cover cache (no magic numbers) ---
+// Total RAM budget for decoded cover bytes held in the moka cache. The weigher
+// counts each entry's byte length, so the cache evicts (LRU + TinyLFU admission)
+// once the summed weight passes this cap — preventing unbounded growth / OOM.
+const COVER_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+// Entries expire after this idle/write TTL so stale covers are re-fetched from R2.
+const COVER_CACHE_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+// Max size accepted for an incoming POSTed cover payload (legacy local-cover path).
 const MAX_COVER_SIZE: usize = 52_428_800;
 
-// Initialized from `lib.rs` `setup` with `<app_cache_dir>/.thumbnails/access_log.json`
-// so that the access log is co-located with the thumbnail files (both under
-// `app_cache_dir()/.thumbnails/`). This is required for `gc_thumbnails` to map files
-// to their last-access times; if the log lived elsewhere every thumbnail would read as
-// `last_access = 0` and be wiped on the next GC.
+// Cache key suffix marking the thumbnail (downscaled) vs full variant.
+fn cover_cache_key(raw_id: &str, thumb: bool) -> String {
+    format!("{}_{}", raw_id, if thumb { 't' } else { 'f' })
+}
+
+// Initialized from `lib.rs` `setup` with a log path under `<app_cache_dir>/.thumbnails/`.
+// The cover GET path records each access here; the handler returns HTTP 500 if the
+// recorder has not been initialized, so `init_access_recorder` must run at setup.
 static ACCESS_RECORDER: std::sync::OnceLock<std::sync::Mutex<crate::thumbnail::AccessRecorder>> =
     std::sync::OnceLock::new();
 
@@ -32,6 +43,25 @@ pub static ETAG_CACHE: Lazy<Cache<String, (String, Bytes)>> = Lazy::new(|| {
         .weigher(|_k, v: &(String, Bytes)| v.1.len() as u32)
         .build()
 });
+
+// In-RAM, bounded, TTL-expiring cover cache. Keyed by `{music_id}_{t|f}` (t = thumb,
+// f = full). Source of truth stays in R2 (aws-sdk-s3); this cache only avoids
+// re-fetching the same cover bytes on every UI paint. Bounded by total BYTES via the
+// weigher and by time via TTL — no unbounded growth, no disk writes.
+pub static COVER_CACHE: Lazy<Cache<String, (String, Bytes)>> = Lazy::new(|| {
+    Cache::builder()
+        .max_capacity(COVER_CACHE_MAX_BYTES as u64)
+        .weigher(|_k, v: &(String, Bytes)| v.1.len() as u32)
+        .time_to_live(Duration::from_secs(COVER_CACHE_TTL_SECS))
+        .build()
+});
+
+// Embedded music-note placeholder returned when a track has NO real cover
+// (both cover_url and thumb_url empty/missing in the DB, and no SQLite blob).
+// Keeps `has_cover` false on the JS side so the app knows there is no real cover,
+// but shows a friendly icon instead of a black/transparent image.
+const MUSIC_NOTE_PLACEHOLDER: &[u8] = include_bytes!("assets/music_note.svg");
+const MUSIC_NOTE_ETAG: &str = "\"music-note\"";
 
 fn query_cover_blob(
     pool: &r2d2::Pool<SqliteConnectionManager>,
@@ -91,7 +121,6 @@ async fn handle_cover_get_r2(
     raw_id: &str,
     thumb: bool,
     pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
-    cache_dir: Option<&Path>,
 ) -> Option<(String, Bytes)> {
     let (cover_url, thumb_url) = match pool.and_then(|p| query_cover_url(p, raw_id)) {
         Some(v) => v,
@@ -116,110 +145,66 @@ async fn handle_cover_get_r2(
     eprintln!("[protocol] cover_r2: id={:?} thumb={} key={:?}", raw_id, thumb, key);
     match crate::r2::get_cover_bytes(key).await {
         Ok(data) => {
-            // Cache the R2 object to local disk so subsequent loads are instant
-            // (the disk check in handle_cover_get runs BEFORE the R2 fetch).
-            if let Some(dir) = cache_dir {
-                let target = thumbnail_path(dir, raw_id, thumb);
-                let _ = crate::thumbnail::atomic_write(&target, &data);
-            }
             let etag = format!("\"{:x}\"", md5::compute(&data));
             Some((etag, Bytes::from(data)))
         }
-        // NotFound / error -> fall through to disk/SQLite/legacy sources.
-        Err(_) => None,
+        // NotFound / error -> fall through to SQLite/legacy sources / placeholder.
+        Err(e) => {
+            eprintln!("[protocol] cover_r2: fetch failed id={:?} key={:?} err={}", raw_id, key, e);
+            None
+        }
     }
 }
 
 async fn handle_cover_get<R: tauri::Runtime>(
     raw_id: &str,
     thumb: bool,
-    cache_dir: Option<&Path>,
     pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
     recorder: &std::sync::Mutex<crate::thumbnail::AccessRecorder>,
     app: Option<&tauri::AppHandle<R>>,
-) -> Result<(String, Bytes), String> {
+) -> Result<(String, Bytes, &'static str), CoverError> {
     if let Err(e) = validate_file_id(raw_id) {
-        return Err(e);
+        return Err(CoverError::BadId(e));
     }
 
-    // Step 0: R2 object storage (server-side fetch of cover_url/thumb_url).
-    // Runs inline; on miss/error it falls through to disk/SQLite below.
-    if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool, cache_dir).await {
+    let cache_key = cover_cache_key(raw_id, thumb);
+
+    // Step 0: in-RAM cache (bounded, TTL). Hits avoid any R2/DB round trip.
+    if let Some(hit) = COVER_CACHE.get(&cache_key).await {
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
-        return Ok(r2_result);
+        return Ok((hit.0, hit.1, "image/jpeg"));
     }
 
-    // Step 1: try filesystem (primary) exact match
-    if let Some(dir) = cache_dir {
-        let exact = thumbnail_path(dir, raw_id, thumb);
-        if exact.exists() {
-            if let Ok(data) = std::fs::read(&exact) {
-                if let Ok(mut r) = recorder.lock() {
-                    r.record(raw_id);
-                }
-                let etag = format!("\"{:x}\"", md5::compute(&data));
-                return Ok((etag, Bytes::from(data)));
-            }
+    // Step 1: R2 object storage (server-side fetch of cover_url/thumb_url).
+    if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool).await {
+        COVER_CACHE.insert(cache_key, r2_result.clone()).await;
+        if let Ok(mut r) = recorder.lock() {
+            r.record(raw_id);
         }
+        return Ok((r2_result.0, r2_result.1, "image/jpeg"));
     }
 
     // Step 2: SQLite blob fallback — only for ids without drive_ prefix (legacy records)
     if let Some(pool) = pool {
         if !raw_id.starts_with(crate::thumbnail::PREFIX) {
             if let Ok(Some(blob)) = query_cover_blob(pool, raw_id, thumb) {
-                // Lazy-migrate to filesystem
-                if let Some(dir) = cache_dir {
-                    let target = thumbnail_path(dir, raw_id, thumb);
-                    let _ = crate::thumbnail::atomic_write(&target, &blob);
-                }
+                let etag = format!("\"{:x}\"", md5::compute(&blob));
+                let bytes = Bytes::from(blob);
+                COVER_CACHE.insert(cache_key, (etag.clone(), bytes.clone())).await;
                 if let Ok(mut r) = recorder.lock() {
                     r.record(raw_id);
                 }
-                let etag = format!("\"{:x}\"", md5::compute(&blob));
-                return Ok((etag, Bytes::from(blob)));
+                return Ok((etag, bytes, "image/jpeg"));
             }
         }
     }
 
-    // Step 3: Fallback full→thumb (if exact match and SQLite both failed)
-    if !thumb {
-        if let Some(dir) = cache_dir {
-            let thumb_path = thumbnail_path(dir, raw_id, true);
-            if thumb_path.exists() {
-                // We found thumb, but full is missing. Emit repair!
-                if let Some(pool) = pool {
-                    let drive_file_id_opt = if raw_id.starts_with(crate::thumbnail::PREFIX) {
-                        Some(raw_id.trim_start_matches(crate::thumbnail::PREFIX).to_string())
-                    } else {
-                        get_drive_file_id_for_track(pool, raw_id).ok().flatten()
-                    };
-
-                    if let Some(drive_file_id) = drive_file_id_opt {
-                        if let Some(app) = app {
-                            use tauri::Emitter;
-                            let payload = serde_json::json!({
-                                "driveFileId": drive_file_id,
-                                "dbId": raw_id,
-                            });
-                            let _ = app.emit("repair-missing-thumbnail", payload);
-                        }
-                    }
-                }
-
-                if let Ok(data) = std::fs::read(&thumb_path) {
-                    if let Ok(mut r) = recorder.lock() {
-                        r.record(raw_id);
-                    }
-                    let etag = format!("\"{:x}\"", md5::compute(&data));
-                    return Ok((etag, Bytes::from(data)));
-                }
-            }
-        }
-    }
-
-    // Emit repair if everything failed
+    // Step 3: No real cover anywhere (no R2 key, no SQLite blob). Emit a repair
+    // signal if we can map to a Drive file, then return the music-note placeholder
+    // so the UI never shows a black/transparent image. `has_cover` on the JS side
+    // stays false, so the app knows there is no real cover.
     if let Some(pool) = pool {
         let drive_file_id_opt = if raw_id.starts_with(crate::thumbnail::PREFIX) {
             Some(raw_id.trim_start_matches(crate::thumbnail::PREFIX).to_string())
@@ -239,7 +224,13 @@ async fn handle_cover_get<R: tauri::Runtime>(
         }
     }
 
-    Err("not found".into())
+    Err(CoverError::NoCover)
+}
+
+#[derive(Debug)]
+enum CoverError {
+    BadId(String),
+    NoCover,
 }
 
 fn get_drive_file_id_for_track(
@@ -259,9 +250,8 @@ fn get_drive_file_id_for_track(
 
 fn handle_cover_post(
     raw_id: &str,
-    thumb: bool,
+    _thumb: bool,
     body: &[u8],
-    cache_dir: &Path,
 ) -> Result<(), String> {
     validate_file_id(raw_id)?;
     if body.is_empty() {
@@ -270,20 +260,12 @@ fn handle_cover_post(
     if body.len() > MAX_COVER_SIZE {
         return Err("payload too large".into());
     }
-    let path = thumbnail_path(cache_dir, raw_id, thumb);
-    crate::thumbnail::atomic_write(&path, body)?;
+    // Covers now live in R2 (server-side, keyed by cover_url/thumb_url) and are
+    // served from the in-RAM cache. We no longer persist cover bytes to disk, so
+    // this legacy local-cover write is intentionally a no-op: accepting the
+    // payload keeps the protocol contract stable without growing `.thumbnails/`.
+    eprintln!("[protocol] cover POST accepted (no disk write) id={:?}", raw_id);
     Ok(())
-}
-
-fn transparent_pixel() -> Vec<u8> {
-    vec![
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
-        0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
-        0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
-        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-    ]
 }
 
 pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
@@ -326,26 +308,14 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 return;
             }
 
-            // POST /cover/{id} — nhận raw binary body
+            // POST /cover/{id} — nhận raw binary body (legacy local-cover path).
             if method == "POST" && path.starts_with("/cover/") {
                 let raw_id = path.trim_start_matches("/cover/");
                 let thumb = parsed_url.query_pairs()
                     .any(|(k, v)| k == "thumb" && v == "true");
                 let body = request.body();
 
-                use tauri::Manager;
-                let cache_dir = match app_handle.path().app_cache_dir() {
-                    Ok(d) => d,
-                    Err(_) => {
-                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Vec::new()).unwrap_or_else(|e| {
-                            eprintln!("[protocol] failed to build 500 (cover POST cache dir) response: {e}");
-                            Response::new(Vec::new())
-                        }));
-                        return;
-                    }
-                };
-
-                match handle_cover_post(raw_id, thumb, body, &cache_dir) {
+                match handle_cover_post(raw_id, thumb, body) {
                     Ok(_) => responder.respond(Response::builder().status(StatusCode::OK).body(Vec::new()).unwrap_or_else(|e| {
                         eprintln!("[protocol] failed to build 200 (cover POST) response: {e}");
                         Response::new(Vec::new())
@@ -376,11 +346,6 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     .and_then(|h| h.to_str().ok().map(|s| s.to_string()));
 
                 use tauri::Manager;
-                // Thumbnails are stored under `<app_cache_dir>/.thumbnails` (thumbnail.rs:67),
-                // so look them up there — NOT in the db directory. Using the wrong base dir
-                // would mean thumbnails are never found, the access recorder never fires, and
-                // `gc_thumbnails` would then wipe every real thumbnail.
-                let cache_dir = app_handle.path().app_cache_dir().ok();
                 let pool_state = app_handle.try_state::<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>();
                 let pool = pool_state.map(|p| p.inner().clone());
 
@@ -402,14 +367,13 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let fetch_result = handle_cover_get(
                     &file_id,
                     thumb,
-                    cache_dir.as_deref(),
                     pool.as_ref(),
                     recorder,
                     Some(&app_handle),
                 ).await;
 
                 match fetch_result {
-                    Ok((etag, bytes_val)) => {
+                    Ok((etag, bytes_val, content_type)) => {
                         if client_etag.as_deref() == Some(etag.as_str()) {
                             responder.respond(
                                 Response::builder()
@@ -425,7 +389,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                             responder.respond(
                                 Response::builder()
                                     .status(StatusCode::OK)
-                                    .header("Content-Type", "image/jpeg")
+                                    .header("Content-Type", content_type)
                                     .header("Access-Control-Allow-Origin", "*")
                                     .header("Cache-Control", "public, max-age=31536000, immutable")
                                     .header("ETag", etag)
@@ -437,17 +401,31 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                             );
                         }
                     }
-                    Err(_) => {
+                    Err(CoverError::BadId(e)) => {
+                        responder.respond(
+                            Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body(e.into_bytes())
+                                .unwrap_or_else(|e| {
+                                    eprintln!("[protocol] failed to build 400 (bad id) response: {e}");
+                                    Response::new(Vec::new())
+                                })
+                        );
+                    }
+                    Err(CoverError::NoCover) => {
+                        // No real cover: return the embedded music-note placeholder.
+                        // `has_cover` on the JS side is false, so the app already
+                        // knows there is no real cover; this just avoids a black image.
                         responder.respond(
                             Response::builder()
                                 .status(StatusCode::OK)
-                                .header("Content-Type", "image/png")
+                                .header("Content-Type", "image/svg+xml")
                                 .header("Access-Control-Allow-Origin", "*")
                                 .header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
-                                .header("ETag", "\"transparent\"")
-                                .body(transparent_pixel())
+                                .header("ETag", MUSIC_NOTE_ETAG)
+                                .body(MUSIC_NOTE_PLACEHOLDER.to_vec())
                                 .unwrap_or_else(|e| {
-                                    eprintln!("[protocol] failed to build 200 (transparent cover) response: {e}");
+                                    eprintln!("[protocol] failed to build 200 (music-note placeholder) response: {e}");
                                     Response::new(Vec::new())
                                 })
                         );
@@ -511,4 +489,52 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
             }));
         });
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cover_cache_stores_and_fetches_by_key() {
+        let cache: Cache<String, (String, Bytes)> = Cache::builder()
+            .max_capacity(1_000)
+            .weigher(|_k: &String, v: &(String, Bytes)| v.1.len() as u32)
+            .time_to_live(Duration::from_secs(60))
+            .build();
+
+        let key = cover_cache_key("abc123", true);
+        assert!(cache.get(&key).await.is_none(), "fresh cache must miss");
+
+        let payload = Bytes::from(vec![1u8, 2, 3, 4, 5]);
+        cache.insert(key.clone(), ("\"etag\"".to_string(), payload.clone())).await;
+        let got = cache.get(&key).await;
+        assert!(got.is_some(), "inserted entry must be fetchable");
+        assert_eq!(got.unwrap().1, payload);
+
+        // Different thumb/full variant is a separate key.
+        assert!(cache.get(&cover_cache_key("abc123", false)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn cover_cache_evicts_under_byte_capacity() {
+        // Tiny capacity forces eviction once summed weights exceed the cap.
+        let cache: Cache<String, (String, Bytes)> = Cache::builder()
+            .max_capacity(10) // 10 bytes total
+            .weigher(|_k: &String, v: &(String, Bytes)| v.1.len() as u32)
+            .build();
+
+        // Insert two 8-byte entries (16 bytes > 10 capacity).
+        cache.insert("a".to_string(), ("e".to_string(), Bytes::from(vec![0u8; 8]))).await;
+        cache.insert("b".to_string(), ("e".to_string(), Bytes::from(vec![1u8; 8]))).await;
+
+        // Drain maintenance tasks so eviction is applied.
+        cache.run_pending_tasks().await;
+
+        // At most one 8-byte entry can remain under a 10-byte cap.
+        let a = cache.get(&"a".to_string()).await;
+        let b = cache.get(&"b".to_string()).await;
+        let present = a.is_some() as u32 + b.is_some() as u32;
+        assert!(present <= 1, "byte cap must evict down to <=1 entry, got {}", present);
+    }
 }
