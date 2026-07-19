@@ -7,9 +7,7 @@ import { getFavorites, removeFavorite } from '../../utils/favorites';
 import { showErrorToast } from '../../utils/simpleToast';
 import { MoreMenu } from '../components/MoreMenu';
 import { prefetchVisibleTracks } from '../../utils/streamPrefetcher';
-import { useScrollVelocity } from '../../hooks/useScrollVelocity';
-import { useCoverWindowing } from '../../hooks/useCoverWindowing';
-import type { CoverWindowItem } from '../../hooks/useCoverWindowing';
+
 
 
 interface LikedSongsProps {
@@ -18,7 +16,7 @@ interface LikedSongsProps {
   currentTrack?: Track | null;
 }
 
-export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
+export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   const { t } = useTranslation();
   const [favorites, setFavorites] = useState<Track[]>([]);
   const scrollRef = useRef<HTMLElement>(null);
@@ -54,20 +52,6 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 64,
     overscan: 10,
-  });
-
-  const { dynamicMargin } = useScrollVelocity(scrollRef);
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
-  const visibleRange = virtualItems.length > 0
-    ? { start: virtualItems[0].index, end: virtualItems[virtualItems.length - 1].index }
-    : { start: 0, end: 0 };
-
-  const coverMap = useCoverWindowing({
-    items: favorites.map(t => ({ id: t.id, isFolder: false, trackInfo: { size: t.size, originalName: t.originalName } })) as CoverWindowItem[],
-    range: visibleRange,
-    token,
-    dynamicMargin,
   });
 
   const handleUnlike = async (e: React.MouseEvent, trackId: string) => {
@@ -128,7 +112,6 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
             <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px`, contain: 'strict' }}>
               {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                 const track = favorites[virtualRow.index];
-                const coverUrl = coverMap.get(track.id);
                 return (
                   <div
                     key={virtualRow.key}
@@ -167,11 +150,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
                       </div>
                       
                       <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? 'bg-[#4285F4]/10 text-[#4285F4]' : 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 text-[#4285F4]'}`}>
-                        {coverUrl ? (
-                          <img src={coverUrl} alt="cover" loading="lazy" decoding="async" className="w-full h-full object-cover" />
-                        ) : (
-                          <Music className="w-5 h-5 opacity-80" />
-                        )}
+                        <Music className="w-5 h-5 opacity-80" />
                       </div>
                       
                       <div className="flex-1 min-w-0 flex flex-col justify-center">

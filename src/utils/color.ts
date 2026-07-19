@@ -25,6 +25,7 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
       clearTimeout(timer);
       img.onload = null;
       img.onerror = null;
+      img.src = ""; // release the decoded full-size image promptly
       action();
     };
 

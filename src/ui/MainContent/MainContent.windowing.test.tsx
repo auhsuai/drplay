@@ -32,11 +32,9 @@ vi.mock('../../utils/normalizeText', () => ({
 const hoisted = vi.hoisted(() => {
   const getVirtualItems = vi.fn<() => { key: number; index: number; start: number; size: number }[]>();
   const getTotalSize = vi.fn<() => number>();
-  const mockUseCoverWindowing = vi.fn<() => Map<string, string | null>>();
   return {
     getVirtualItems,
     getTotalSize,
-    mockUseCoverWindowing,
     useVirtualizer: vi.fn(() => ({
       getVirtualItems,
       getTotalSize,
@@ -48,25 +46,9 @@ vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: hoisted.useVirtualizer,
 }));
 
-vi.mock('../../hooks/useScrollVelocity', () => ({
-  useScrollVelocity: vi.fn(() => ({ velocity: 0, dynamicMargin: 3 })),
-}));
-
-vi.mock('../../hooks/useCoverWindowing', () => ({
-  useCoverWindowing: hoisted.mockUseCoverWindowing,
-  PREFETCH_MARGIN_SLOW: 3,
-  PREFETCH_MARGIN_MED: 6,
-  PREFETCH_MARGIN_FAST: 12,
-  VELOCITY_FAST_THRESHOLD: 100,
-  VELOCITY_MED_THRESHOLD: 40,
-  EVICT_MULTIPLIER: 2,
-}));
-
 vi.mock('./components/SongCard', () => ({
-  SongCard: vi.fn(({ coverUrl, item }: { coverUrl?: string | null; item: DriveItem }) => (
-    <div data-testid="song-card" data-cover-url={String(coverUrl)} data-item-id={item.id}>
-      {coverUrl ? <img alt="cover" src={coverUrl} /> : <div data-testid="music-icon" />}
-    </div>
+  SongCard: vi.fn(({ item }: { item: DriveItem }) => (
+    <div data-testid="song-card" data-item-id={item.id} />
   )),
 }));
 
@@ -103,12 +85,10 @@ const baseProps = {
   currentTrack: null,
 };
 
-describe('MainContent windowing integration', () => {
+describe('MainContent virtualized rendering', () => {
   beforeEach(() => {
     hoisted.getVirtualItems.mockReset();
     hoisted.getTotalSize.mockReset();
-    hoisted.mockUseCoverWindowing.mockReset();
-    hoisted.mockUseCoverWindowing.mockReturnValue(new Map<string, string | null>());
     hoisted.getVirtualItems.mockReturnValue([
       { key: 0, index: 0, start: 0, size: 92 },
       { key: 1, index: 1, start: 92, size: 92 },
@@ -125,40 +105,5 @@ describe('MainContent windowing integration', () => {
     const cards = screen.getAllByTestId('song-card');
     expect(cards.length).toBe(2);
     expect(cards.length).toBeLessThan(50);
-  });
-
-  it('calls useCoverWindowing with full items and visible range', () => {
-    const items = makeItems(50);
-    render(<MainContent {...baseProps} items={items} />);
-    expect(hoisted.mockUseCoverWindowing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        items,
-        range: expect.any(Object),
-        token: 'tok',
-      }),
-    );
-  });
-
-  it('passes coverUrl from hook to SongCard', () => {
-    const mockCovers = new Map<string, string | null>();
-    mockCovers.set('id0', 'http://cover/0');
-    mockCovers.set('id1', null);
-    hoisted.mockUseCoverWindowing.mockReturnValue(mockCovers);
-
-    render(<MainContent {...baseProps} items={makeItems(3)} />);
-    const cards = screen.getAllByTestId('song-card');
-    expect(cards[0].getAttribute('data-cover-url')).toBe('http://cover/0');
-    expect(cards[1].getAttribute('data-cover-url')).toBe('null');
-  });
-
-  it('renders Music icon when row has null coverUrl', () => {
-    const mockCovers = new Map<string, string | null>();
-    mockCovers.set('id0', null);
-    hoisted.mockUseCoverWindowing.mockReturnValue(mockCovers);
-
-    render(<MainContent {...baseProps} items={makeItems(3)} />);
-    const cards = screen.getAllByTestId('song-card');
-    expect(cards[0].querySelector('[data-testid="music-icon"]')).not.toBeNull();
-    expect(cards[0].querySelector('img')).toBeNull();
   });
 });

@@ -9,9 +9,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
-import { useScrollVelocity } from "../../hooks/useScrollVelocity";
-import { useCoverWindowing } from "../../hooks/useCoverWindowing";
-import type { CoverWindowItem } from "../../hooks/useCoverWindowing";
+
 
 
 interface MainContentProps {
@@ -219,20 +217,6 @@ export function MainContent({
     getScrollElement: () => mainRef.current,
     estimateSize: () => 92,
     overscan: 10,
-  });
-
-  const { dynamicMargin } = useScrollVelocity(mainRef);
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
-  const visibleRange = virtualItems.length > 0
-    ? { start: virtualItems[0].index, end: virtualItems[virtualItems.length - 1].index }
-    : { start: 0, end: 0 };
-
-  const coverMap = useCoverWindowing({
-    items: filteredItems as CoverWindowItem[],
-    range: visibleRange,
-    token,
-    dynamicMargin,
   });
 
   const handleCreateFolder = async (folderName: string) => {
@@ -652,7 +636,6 @@ export function MainContent({
                   }}
                   onBulkMoveClick={() => setShowBulkMoveScreen(true)}
                   onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
-                  coverUrl={coverMap.get(item.id)}
                 />
                 </div>
               );

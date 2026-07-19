@@ -13,9 +13,9 @@ use crate::thumbnail::validate_file_id;
 // Total RAM budget for decoded cover bytes held in the moka cache. The weigher
 // counts each entry's byte length, so the cache evicts (LRU + TinyLFU admission)
 // once the summed weight passes this cap — preventing unbounded growth / OOM.
-const COVER_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+const COVER_CACHE_MAX_BYTES: usize = 96 * 1024 * 1024; // 96 MiB
 // Entries expire after this idle/write TTL so stale covers are re-fetched from R2.
-const COVER_CACHE_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+const COVER_CACHE_TTL_SECS: u64 = 3600; // 1 hour
 // Max size accepted for an incoming POSTed cover payload (legacy local-cover path).
 const MAX_COVER_SIZE: usize = 52_428_800;
 
