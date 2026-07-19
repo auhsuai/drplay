@@ -121,9 +121,6 @@ export const SongCard = React.memo(function SongCard({
   }, [injectedCoverUrl]);
 
   React.useEffect(() => {
-    // When a valid cover URL is injected via windowing, the card
-    // MUST NOT self-fetch (single source of truth, no duplicate/racey fetches).
-    if (typeof injectedCoverUrl === 'string') return;
     if (item.isFolder || !token) return;
 
     const controller = new AbortController();
@@ -139,12 +136,14 @@ export const SongCard = React.memo(function SongCard({
         if (metadata.duration) setDuration(metadata.duration);
         if (metadata.size) setSize(metadata.size);
 
-        if (metadata.coverUrl) {
-          setCoverUrl(metadata.coverUrl);
-        } else if (metadata.pictureData && metadata.pictureFormat) {
-          const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
-          objectUrl = URL.createObjectURL(blob);
-          setCoverUrl(objectUrl);
+        if (typeof injectedCoverUrl !== 'string') {
+          if (metadata.coverUrl) {
+            setCoverUrl(metadata.coverUrl);
+          } else if (metadata.pictureData && metadata.pictureFormat) {
+            const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
+            objectUrl = URL.createObjectURL(blob);
+            setCoverUrl(objectUrl);
+          }
         }
       } catch (e) {
         const { name, message } = classifyCardError(e);

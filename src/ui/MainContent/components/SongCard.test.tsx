@@ -54,9 +54,11 @@ describe('SongCard coverUrl prop', () => {
     cleanup();
   });
 
-  it('does NOT self-fetch when coverUrl prop is provided', () => {
+  it('fetches metadata even when coverUrl prop is provided (just skips cover)', async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} coverUrl="http://injected/cover" />);
-    expect(mockedFetch).not.toHaveBeenCalled();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
+    await screen.findByText('Fetched Title');
     expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
   });
 
@@ -82,5 +84,32 @@ describe('SongCard coverUrl prop', () => {
     );
     expect(mockedFetch).not.toHaveBeenCalled();
     expect(container.querySelector('.lucide-folder')).not.toBeNull();
+  });
+
+  it('metadata update callback still works when injectedCoverUrl changes', async () => {
+    mockedFetch.mockResolvedValue({
+      title: 'Updated Title',
+      artist: 'Updated Artist',
+      coverUrl: 'http://cover/2',
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} coverUrl="http://injected/cover" />
+    );
+    await screen.findByText('Updated Title');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
+    mockedFetch.mockClear();
+    mockedFetch.mockResolvedValue({
+      title: 'Re-fetched Title',
+      artist: 'Re-fetched Artist',
+      coverUrl: 'http://cover/3',
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
+    await screen.findByText('Re-fetched Title');
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
   });
 });
