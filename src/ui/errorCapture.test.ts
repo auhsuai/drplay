@@ -109,4 +109,52 @@ describe("global error capture", () => {
     expect(() => boundary.componentDidCatch(error, errorInfo)).not.toThrow();
     expect(captureSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("intentional AbortError (user/code cancel) is ignored by unhandledrejection", async () => {
+    await import("../main");
+
+    const rejEvent = {
+      reason: new DOMException("The user aborted a request", "AbortError"),
+    } as any;
+    listeners.unhandledrejection.forEach((cb) => cb(rejEvent));
+
+    const aborted = captureSpy.mock.calls.find(
+      (c) => c[0].source === "unhandledrejection",
+    );
+    expect(aborted).toBeUndefined();
+  });
+
+  it("AbortError caused by timeout is still logged as kind='timeout' (real failure)", async () => {
+    await import("../main");
+
+    const rejEvent = {
+      reason: new DOMException(
+        "The operation was aborted due to timeout",
+        "AbortError",
+      ),
+    } as any;
+    listeners.unhandledrejection.forEach((cb) => cb(rejEvent));
+
+    const arg = captureSpy.mock.calls.find(
+      (c) => c[0].source === "unhandledrejection",
+    )?.[0];
+    expect(arg).toBeDefined();
+    expect(arg.kind).toBe("timeout");
+    expect(arg.level).toBe("warn");
+  });
+
+  it("intentional AbortError is ignored by window.onerror", async () => {
+    await import("../main");
+
+    const errEvent = {
+      message: "The user aborted a request",
+      error: new DOMException("The user aborted a request", "AbortError"),
+    } as any;
+    listeners.error.forEach((cb) => cb(errEvent));
+
+    const aborted = captureSpy.mock.calls.find(
+      (c) => c[0].source === "window.onerror",
+    );
+    expect(aborted).toBeUndefined();
+  });
 });
