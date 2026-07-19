@@ -94,13 +94,25 @@ async fn handle_cover_get_r2(
 ) -> Option<(String, Bytes)> {
     let (cover_url, thumb_url) = match pool.and_then(|p| query_cover_url(p, raw_id)) {
         Some(v) => v,
-        None => return None,
+        None => {
+            eprintln!("[protocol] cover_r2: NO DB ROW for id={:?} (has_cover_url maybe false or id mismatch)", raw_id);
+            return None;
+        }
     };
-    let key = if thumb { &thumb_url } else { &cover_url };
-    let key = key.as_ref()?;
-    if key.trim().is_empty() {
-        return None;
-    }
+    // The DB's cover_url column reliably holds the full cover key
+    // ("covers/<id>.jpg"); thumb_url is sometimes malformed in legacy rows
+    // (e.g. stores the file extension). Use cover_url for BOTH thumb and full
+    // requests — the webview scales the full image down just fine, and it
+    // guarantees we never request a bogus key like "mp3".
+    let key = cover_url.as_ref().filter(|k| k.starts_with("covers/"));
+    let key = match key {
+        Some(k) if !k.trim().is_empty() => k,
+        _ => {
+            eprintln!("[protocol] cover_r2: NO VALID cover_url for id={:?} thumb={} (cover_url={:?} thumb_url={:?})", raw_id, thumb, cover_url, thumb_url);
+            return None;
+        }
+    };
+    eprintln!("[protocol] cover_r2: id={:?} thumb={} key={:?}", raw_id, thumb, key);
     match crate::r2::get_cover_bytes(key).await {
         Ok(data) => {
             let etag = format!("\"{:x}\"", md5::compute(&data));
