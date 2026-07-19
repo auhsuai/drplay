@@ -111,19 +111,7 @@ async fn handle_cover_get_r2(
     }
 }
 
-// Sync bridge: block on the async R2 fetch using the shared tokio runtime.
-// Returns None on any failure so the caller falls back to disk/SQLite. No unwrap
-// on the external call; a busy runtime simply yields None (safe fallback).
-fn handle_cover_get_r2_sync(
-    raw_id: &str,
-    thumb: bool,
-    pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
-) -> Option<(String, Bytes)> {
-    let rt = tokio::runtime::Handle::try_current().ok()?;
-    rt.block_on(handle_cover_get_r2(raw_id, thumb, pool))
-}
-
-fn handle_cover_get<R: tauri::Runtime>(
+async fn handle_cover_get<R: tauri::Runtime>(
     raw_id: &str,
     thumb: bool,
     cache_dir: Option<&Path>,
@@ -137,7 +125,7 @@ fn handle_cover_get<R: tauri::Runtime>(
 
     // Step 0: R2 object storage (server-side fetch of cover_url/thumb_url).
     // Runs inline; on miss/error it falls through to disk/SQLite below.
-    if let Some(r2_result) = handle_cover_get_r2_sync(raw_id, thumb, pool) {
+    if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool).await {
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
@@ -399,7 +387,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     pool.as_ref(),
                     recorder,
                     Some(&app_handle),
-                );
+                ).await;
 
                 match fetch_result {
                     Ok((etag, bytes_val)) => {

@@ -95,7 +95,7 @@ fn get_client() -> Option<aws_sdk_s3::Client> {
                 .endpoint_url(cfg.endpoint.clone())
                 .region(aws_sdk_s3::config::Region::new(cfg.region.clone()))
                 .credentials_provider(creds)
-                .force_path_style(true)
+                .force_path_style(false)
                 .build();
             BUCKET.get_or_init(|| bucket);
             Some(aws_sdk_s3::Client::from_conf(s3_cfg))
