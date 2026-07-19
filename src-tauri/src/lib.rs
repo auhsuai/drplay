@@ -46,12 +46,12 @@ async fn login_google_native() -> Result<Value, String> {
         let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).map_err(|e| format!("Invalid wa_credential.json: {}", e))?;
         let client_id = ClientId::new(creds["installed"]["client_id"].as_str().ok_or("Missing client_id in wa_credential.json")?.to_string());
         let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().ok_or("Missing client_secret in wa_credential.json")?.to_string());
-        let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap();
-        let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
+        let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).map_err(|e| format!("invalid AuthUrl: {e:?}"))?;
+        let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).map_err(|e| format!("invalid TokenUrl: {e:?}"))?;
 
         // 1. Dynamic Port Binding
         let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| format!("Failed to start server: {}", e))?;
-        let port = server.server_addr().to_ip().unwrap().port();
+        let port = server.server_addr().to_ip().ok_or("server address has no IP")?.port();
         let redirect_uri = format!("http://127.0.0.1:{}", port);
 
         let client = BasicClient::new(
@@ -60,7 +60,7 @@ async fn login_google_native() -> Result<Value, String> {
             auth_url,
             Some(token_url),
         )
-        .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).unwrap());
+            .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).map_err(|e| format!("invalid RedirectUrl: {e:?}"))?);
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
         let (auth_url, csrf_token) = client
@@ -92,7 +92,7 @@ async fn login_google_native() -> Result<Value, String> {
 
                 if error.is_some() {
                     let response = tiny_http::Response::from_string("<html><body><script>window.close();</script></body></html>")
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
                     let _ = request.respond(response);
                     return Err("User cancelled authorization".to_string());
                 }
@@ -132,7 +132,7 @@ async fn login_google_native() -> Result<Value, String> {
                     "#;
 
                     let response = tiny_http::Response::from_string(html_response)
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
                     let _ = request.respond(response);
 
                     let token_result = client
@@ -427,7 +427,7 @@ pub fn run() {
             .ok();
     }
     proxy::start_proxy();
-    protocol::register(tauri::Builder::default())
+    let app_result = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -527,9 +527,17 @@ pub fn run() {
             update_track_duration_in_db,
             clear_local_cache,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|_app_handle, event| match event {
+        .build(tauri::generate_context!());
+
+    let app = match app_result {
+        Ok(app) => app,
+        Err(e) => {
+            eprintln!("[drplay] failed to build tauri application: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|_app_handle, event| match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 IS_QUITTING.store(true, Ordering::SeqCst);
             }
