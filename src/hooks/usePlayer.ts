@@ -6,7 +6,7 @@ import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
-import { prefetchNextTrackAudio, clearNextTrackPrefetches } from '../utils/nextTrackPrefetcher';
+import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
 
 
 const playRequestIdRef = { current: 0 };

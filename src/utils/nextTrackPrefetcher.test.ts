@@ -12,7 +12,7 @@ describe('nextTrackPrefetcher', () => {
       ok: true,
       headers: new Headers({ 'content-range': 'bytes 0-524287/10000000' }),
     });
-    global.fetch = mockFetch;
+    globalThis.fetch = mockFetch;
 
     prefetchNextTrackAudio('http://drplay.localhost/stream?id=test123&sig=abc');
 
@@ -30,7 +30,7 @@ describe('nextTrackPrefetcher', () => {
   it('should be no-op for already prefetched track', async () => {
     const { prefetchNextTrackAudio } = await import('./nextTrackPrefetcher');
     const mockFetch = vi.fn().mockResolvedValue({ ok: true });
-    global.fetch = mockFetch;
+    globalThis.fetch = mockFetch;
 
     prefetchNextTrackAudio('http://drplay.localhost/stream?id=test123&sig=abc');
     prefetchNextTrackAudio('http://drplay.localhost/stream?id=test123&sig=abc');

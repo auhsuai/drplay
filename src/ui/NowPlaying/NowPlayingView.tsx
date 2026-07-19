@@ -322,9 +322,9 @@ export function NowPlayingView({
         </button>
       </div>
 
-      <div className="relative z-10 w-full h-full flex flex-col items-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
+      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
         {/* Content group: centered vertically when room, scrolls when not */}
-        <div className="my-auto w-full flex flex-col items-center">
+        <div className="w-full flex flex-col items-center pt-24 md:pt-28 pb-24 md:pb-28">
         {/* Cover Art Container */}
         <div className="w-full flex items-center justify-center mt-4 md:mt-8">
           <div className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center relative' : 'bg-gray-100 dark:bg-[#202124]'}`}>
@@ -403,7 +403,7 @@ export function NowPlayingView({
               </div>
             </div>
             
-            <div className="w-full flex items-center gap-3">
+            <div className="w-full flex items-center gap-3 mb-2">
               <span ref={currentTimeTextRef} className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums">0:00</span>
               <div 
                 ref={progressBarRef}

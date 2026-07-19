@@ -31,7 +31,7 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
 }
 
 export function clearNextTrackPrefetches(): void {
-  for (const [url, controller] of abortControllers) {
+  for (const [, controller] of abortControllers) {
     controller.abort();
   }
   abortControllers.clear();
