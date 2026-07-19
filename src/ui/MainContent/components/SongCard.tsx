@@ -115,15 +115,15 @@ export const SongCard = React.memo(function SongCard({
 
   // Keep the injected cover in sync when the windowing layer provides/clears it.
   React.useEffect(() => {
-    if (injectedCoverUrl !== undefined) {
+    if (typeof injectedCoverUrl === 'string') {
       setCoverUrl(injectedCoverUrl);
     }
   }, [injectedCoverUrl]);
 
   React.useEffect(() => {
-    // Backward-compatible path: when a cover is injected via windowing, the card
+    // When a valid cover URL is injected via windowing, the card
     // MUST NOT self-fetch (single source of truth, no duplicate/racey fetches).
-    if (injectedCoverUrl !== undefined) return;
+    if (typeof injectedCoverUrl === 'string') return;
     if (item.isFolder || !token) return;
 
     const controller = new AbortController();

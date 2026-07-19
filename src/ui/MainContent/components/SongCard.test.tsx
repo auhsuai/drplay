@@ -69,11 +69,11 @@ describe('SongCard coverUrl prop', () => {
     expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
   });
 
-  it('renders Music icon (no img) when coverUrl is null', () => {
+  it('self-fetches when injectedCoverUrl is null (windowing evicted state, not a real url)', async () => {
     render(<SongCard {...baseProps} item={makeItem()} coverUrl={null} />);
-    expect(mockedFetch).not.toHaveBeenCalled();
-    expect(screen.queryByAltText('cover')).toBeNull();
-    expect(document.querySelector('.lucide-music')).not.toBeNull();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
+    await screen.findByAltText('cover');
   });
 
   it('does not self-fetch for folder items even without coverUrl', () => {

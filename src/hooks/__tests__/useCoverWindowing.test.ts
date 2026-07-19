@@ -4,6 +4,25 @@ import { act, renderHook, waitFor, cleanup } from '@testing-library/react';
 import { useCoverWindowing } from '../useCoverWindowing';
 import type { CoverWindowItem } from '../useCoverWindowing';
 
+// jsdom lacks URL.createObjectURL and Blob; polyfill them for pictureData tests.
+if (typeof URL.createObjectURL === 'undefined') {
+  const blobUrlMap = new Map<string, Blob>();
+  let counter = 0;
+  URL.createObjectURL = vi.fn((blob: Blob) => {
+    const url = `blob:mock/${++counter}`;
+    blobUrlMap.set(url, blob);
+    return url;
+  });
+  URL.revokeObjectURL = vi.fn((url: string) => {
+    blobUrlMap.delete(url);
+  });
+}
+if (typeof Blob === 'undefined') {
+  (globalThis as any).Blob = class Blob {
+    constructor(public parts: any[], public options?: any) {}
+  };
+}
+
 vi.mock('../../utils/metadata', () => ({
   getTrackMetadata: vi.fn(),
 }));
@@ -127,7 +146,36 @@ describe('useCoverWindowing', () => {
     });
   });
 
-  it('guards against race: latest generation wins, no stale writes', async () => {
+  it('falls back to pictureData when coverUrl is absent (creates blob URL)', async () => {
+  mockedFetch.mockImplementation((_id: string) =>
+    Promise.resolve({ coverUrl: undefined, pictureData: new Uint8Array([137, 80, 78, 71]), pictureFormat: 'image/png' }) as never,
+  );
+  const items = makeItems(3);
+  const { result } = renderHook(() =>
+    useCoverWindowing({ items, range: { start: 0, end: 2 }, token: 'tok' }),
+  );
+  await waitFor(() => {
+    const url = result.current.get('t0');
+    expect(url).not.toBeNull();
+    expect(url).toMatch(/^blob:/);
+  });
+});
+
+it('passes trackInfo.size and trackInfo.originalName to getTrackMetadata when available', async () => {
+  const items: CoverWindowItem[] = [
+    { id: 't0', isFolder: false, trackInfo: { size: 12345, originalName: 'song.mp3' } },
+    { id: 't1', isFolder: false },
+  ];
+  renderHook(() =>
+    useCoverWindowing({ items, range: { start: 0, end: 1 }, token: 'tok' }),
+  );
+  await waitFor(() => {
+    expect(mockedFetch).toHaveBeenCalledWith('t0', 'tok', 12345, 'song.mp3', expect.any(Object));
+    expect(mockedFetch).toHaveBeenCalledWith('t1', 'tok', undefined, undefined, expect.any(Object));
+  });
+});
+
+it('guards against race: latest generation wins, no stale writes', async () => {
     const items = makeItems(6);
     mockedFetch.mockImplementation((id: string) =>
       (id === 't0'

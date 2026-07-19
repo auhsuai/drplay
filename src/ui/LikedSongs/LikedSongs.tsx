@@ -64,7 +64,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     : { start: 0, end: 0 };
 
   const coverMap = useCoverWindowing({
-    items: favorites.map(t => ({ id: t.id, isFolder: false })) as CoverWindowItem[],
+    items: favorites.map(t => ({ id: t.id, isFolder: false, trackInfo: { size: t.size, originalName: t.originalName } })) as CoverWindowItem[],
     range: visibleRange,
     token,
     dynamicMargin,
