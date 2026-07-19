@@ -112,9 +112,13 @@ fn get_client() -> Option<aws_sdk_s3::Client> {
 pub async fn get_cover_bytes(key: &str) -> Result<Vec<u8>, R2Error> {
     let client = match get_client() {
         Some(c) => c,
-        None => return Err(R2Error::ClientBuild("client unavailable".into())),
+        None => {
+            eprintln!("[{}] get_cover_bytes: CLIENT UNAVAILABLE (config missing or parse failed) key={:?}", MODULE, key);
+            return Err(R2Error::ClientBuild("client unavailable".into()));
+        }
     };
     let bucket = BUCKET.get().cloned().unwrap_or_default();
+    eprintln!("[{}] get_cover_bytes: GET bucket={:?} key={:?}", MODULE, bucket, key);
 
     let resp = client
         .get_object()
@@ -133,7 +137,9 @@ pub async fn get_cover_bytes(key: &str) -> Result<Vec<u8>, R2Error> {
                 );
                 R2Error::GetObject(format!("body_collect: {}", e))
             })?;
-            Ok(data.into_bytes().to_vec())
+            let bytes = data.into_bytes().to_vec();
+            eprintln!("[{}] get_cover_bytes: OK key=<redacted> bytes={}", MODULE, bytes.len());
+            Ok(bytes)
         }
         Err(err) => {
             // S3Error is a typed, matchable error. Detect NoSuchKey / 404 to fall back.

@@ -345,7 +345,7 @@ fn get_local_metadata_internal(
             artist: row.get(1).unwrap_or_default(),
             album: row.get(2).unwrap_or_default(),
             duration: row.get(3).unwrap_or_default(),
-            has_cover: row.get(5).unwrap_or_default(),
+            has_cover: row.get(5).unwrap_or_default() || cover_url.as_deref().map(|k| k.starts_with("covers/")).unwrap_or(false),
             file_type: row.get(6).unwrap_or_default(),
             id: row.get(7).unwrap_or_default(),
             cover_url,
