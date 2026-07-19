@@ -180,11 +180,11 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
                     <Play className={`w-4 h-4 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-900 dark:text-white'}`} fill="currentColor" />
                   </div>
                   
-                  <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? 'bg-[#4285F4]/10 text-[#4285F4]' : 'bg-gray-200 dark:bg-gray-800'}`}>
+                  <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? 'bg-[#4285F4]/10 text-[#4285F4]' : 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 text-[#4285F4]'}`}>
                     {covers[track.id] ? (
                       <img src={covers[track.id]} alt="cover" loading="lazy" decoding="async" onError={() => setCovers((c) => { const n = { ...c }; delete n[track.id]; return n; })} className="w-full h-full object-cover" />
                     ) : (
-                      <Music className={`w-5 h-5 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-400'}`} />
+                      <Music className="w-5 h-5 opacity-80" />
                     )}
                   </div>
                   

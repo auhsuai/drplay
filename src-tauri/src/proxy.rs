@@ -87,7 +87,7 @@ struct TrackMeta {
     content_type: String,
 }
 
-type CacheStore = Arc<Mutex<HashMap<String, Arc<Mutex<TrackMeta>>>>>;
+type CacheStore = moka::future::Cache<String, Arc<Mutex<TrackMeta>>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -360,14 +360,10 @@ async fn handle_stream(
 
     let api_url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media&acknowledgeAbuse=true", query.id);
 
-    // Clone the inner Arc out from under the outer store lock, then release the
-    // store lock *before* awaiting the inner per-track mutex. Holding the outer
-    // `Mutex<HashMap>` across an `.await` would serialize every concurrent stream
-    // on a single lock and is exactly the kind of shared-state hazard to avoid.
-    let cached_meta = {
-        let store = state.cache_store.lock().await;
-        store.get(&query.id).map(Arc::clone)
-    };
+    // Look up the per-track meta in the bounded cache. A miss (entry not present
+    // or already evicted) is a graceful cache miss — the caller re-probes Drive
+    // below, exactly like the original "no entry" path. No panic, no 500.
+    let cached_meta = state.cache_store.get(&query.id).await;
     let (total_size, content_type) = match cached_meta {
         Some(arc) => {
             let tc = arc.lock().await;
@@ -440,13 +436,14 @@ async fn handle_stream(
         (r.0, r.1.min(total_size.saturating_sub(1)))
     };
 
-    // Store metadata
+    // Store metadata in the bounded cache. The cache self-evicts (LRU + TinyLFU
+    // admission once `max_capacity` is reached) so the native process RSS stays
+    // bounded regardless of how many distinct tracks are streamed.
     {
-        let mut store = state.cache_store.lock().await;
-        store.insert(query.id.clone(), Arc::new(Mutex::new(TrackMeta {
+        state.cache_store.insert(query.id.clone(), Arc::new(Mutex::new(TrackMeta {
             total_size,
             content_type: resolved_content_type.clone(),
-        })));
+        }))).await;
         FAIL_COUNT.store(0, Ordering::Relaxed);
     }
 
@@ -796,7 +793,7 @@ pub fn start_proxy() {
         };
         let state = AppState {
             client,
-            cache_store: Arc::new(Mutex::new(HashMap::new())),
+            cache_store: new_cache_store(),
         };
 
         let app = Router::new()
@@ -815,9 +812,35 @@ pub fn start_proxy() {
     });
 }
 
+/// Bounded track-metadata cache.
+///
+/// Root cause (P0-1): the original `cache_store` was an unbounded
+/// `Arc<Mutex<HashMap<String, ...>>>` that inserted a fresh `TrackMeta` for
+/// every track ever streamed and NEVER evicted. With a ~12 000-track library
+/// the native Rust process RSS grew without bound on every play.
+///
+/// This replaces it with a `moka` bounded cache: `max_capacity` keeps the
+/// entry count bounded (LRU + TinyLFU admission), and `time_to_idle` drops
+/// entries that have not been touched in a while. The async `moka::future`
+/// API matches the `COVER_CACHE`/`ETAG_CACHE` pattern already used in
+/// `protocol.rs`. A missing entry is simply a cache miss (graceful fallback,
+/// never a panic or a 500) — callers re-probe Drive on miss.
+const TRACK_CACHE_MAX_ENTRIES: u64 = 2000;
+const TRACK_CACHE_IDLE_TTL: Duration = Duration::from_secs(30 * 60); // 30 min
+
+fn new_cache_store() -> CacheStore {
+    moka::future::Cache::builder()
+        .max_capacity(TRACK_CACHE_MAX_ENTRIES)
+        .time_to_idle(TRACK_CACHE_IDLE_TTL)
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::content_type_for_ext;
+    use super::{new_cache_store, TrackMeta, TRACK_CACHE_MAX_ENTRIES};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     fn assemble_chunks_in_order(chunks: &[(u64, u64, Vec<u8>)]) -> Vec<u8> {
         let mut buffer = Vec::with_capacity(chunks.iter().map(|c| c.2.len()).sum());
@@ -856,5 +879,37 @@ mod tests {
         // Unknown extensions are NOT overridden — proxy keeps Drive's content type.
         assert_eq!(content_type_for_ext("xyz"), None);
         assert_eq!(content_type_for_ext(""), None);
+    }
+
+    // Regression for P0-1 (RAM leak): the track-metadata cache must be bounded.
+    // The old implementation used an unbounded `HashMap` and inserted a fresh
+    // `TrackMeta` for every track ever streamed with NO eviction, so RSS grew
+    // without bound across a ~12k-track library. This test inserts far more
+    // than the cap and asserts the cache stays bounded — which fails (compile
+    // error / unbounded growth) on the old code and passes on the bounded cache.
+    #[tokio::test]
+    async fn test_track_cache_is_bounded_and_evicts() {
+        // Re-create the same bounded cache the proxy uses in production.
+        let cache = new_cache_store();
+        let cap = TRACK_CACHE_MAX_ENTRIES;
+
+        // Insert 5x the cap in distinct keys — simulating repeated plays across
+        // a large library.
+        for i in 0..(cap * 5) {
+            let meta = Arc::new(Mutex::new(TrackMeta {
+                total_size: 1_000_000,
+                content_type: "audio/mpeg".to_string(),
+            }));
+            cache.insert(format!("track-{i}"), meta).await;
+        }
+
+        // Drive moka's admission/eviction so the count reflects the cap.
+        cache.run_pending_tasks().await;
+
+        let count = cache.entry_count();
+        assert!(
+            count <= cap,
+            "track cache must stay bounded (<= {cap}), but held {count} entries"
+        );
     }
 }

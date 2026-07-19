@@ -79,6 +79,9 @@ export function NowPlayingView({
           if (metadata.artist) setRealArtist(metadata.artist);
           
           const targetCoverUrl = metadata.fullCoverUrl || metadata.coverUrl;
+          // Decode the palette from the FULL cover for best color accuracy.
+          // getPalette is memoized by cover URL in color.ts, so an identical
+          // cover is decoded at most once across tracks / reopens.
           if (targetCoverUrl) {
             setCoverUrl(targetCoverUrl);
               getPalette(targetCoverUrl)
@@ -289,7 +292,9 @@ export function NowPlayingView({
         <button onClick={onBack} className="absolute top-8 left-8 p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95 z-50">
           <ChevronDown className="w-6 h-6" />
         </button>
-        <Music className="w-24 h-24 text-gray-300 dark:text-gray-700 mb-6" />
+        <div className="w-48 h-48 rounded-2xl bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center mb-6">
+          <Music className="w-24 h-24 text-[#4285F4]/40 dark:text-[#34A853]/50 drop-shadow-sm" />
+        </div>
         <h2 className="text-xl font-bold text-gray-500 dark:text-gray-400">{t('player.no_track', 'Chưa có bài hát nào')}</h2>
       </main>
     );

@@ -200,7 +200,7 @@ export const SongCard = React.memo(function SongCard({
         ) : item.isFolder ? (
           <Folder className="w-6 h-6" fill="currentColor" />
         ) : (
-          <Music className="w-6 h-6" />
+          <Music className="w-6 h-6 opacity-80" />
         )}
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">

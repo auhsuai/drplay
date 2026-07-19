@@ -56,13 +56,6 @@ pub static COVER_CACHE: Lazy<Cache<String, (String, Bytes)>> = Lazy::new(|| {
         .build()
 });
 
-// Embedded music-note placeholder returned when a track has NO real cover
-// (both cover_url and thumb_url empty/missing in the DB, and no SQLite blob).
-// Keeps `has_cover` false on the JS side so the app knows there is no real cover,
-// but shows a friendly icon instead of a black/transparent image.
-const MUSIC_NOTE_PLACEHOLDER: &[u8] = include_bytes!("assets/music_note.svg");
-const MUSIC_NOTE_ETAG: &str = "\"music-note\"";
-
 fn query_cover_blob(
     pool: &r2d2::Pool<SqliteConnectionManager>,
     file_id: &str,
@@ -413,19 +406,19 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                         );
                     }
                     Err(CoverError::NoCover) => {
-                        // No real cover: return the embedded music-note placeholder.
-                        // `has_cover` on the JS side is false, so the app already
-                        // knows there is no real cover; this just avoids a black image.
+                        // No real cover anywhere (no R2 key, no SQLite blob). Return
+                        // 204 No Content with an empty body so the browser <img> onError
+                        // fires and the frontend shows its own Music icon. `has_cover`
+                        // on the JS side is already false for this case. R2/DB errors
+                        // fall through here too (not a 500), per AGENTS.md Luật 4 —
+                        // we never panic and never surface internal errors to the client.
                         responder.respond(
                             Response::builder()
-                                .status(StatusCode::OK)
-                                .header("Content-Type", "image/svg+xml")
+                                .status(StatusCode::NO_CONTENT)
                                 .header("Access-Control-Allow-Origin", "*")
-                                .header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
-                                .header("ETag", MUSIC_NOTE_ETAG)
-                                .body(MUSIC_NOTE_PLACEHOLDER.to_vec())
+                                .body(Vec::new())
                                 .unwrap_or_else(|e| {
-                                    eprintln!("[protocol] failed to build 200 (music-note placeholder) response: {e}");
+                                    eprintln!("[protocol] failed to build 204 (no cover) response: {e}");
                                     Response::new(Vec::new())
                                 })
                         );

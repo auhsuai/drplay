@@ -11,12 +11,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { SongCard } from "../MainContent/components/SongCard";
 
 const GOOGLE_COLORS = ['#4285F4', '#EA4335', '#FBBC05', '#34A853'];
-
 const getFillColor = (str: string) => {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
   return GOOGLE_COLORS[Math.abs(hash) % GOOGLE_COLORS.length];
 };
 
@@ -240,9 +237,9 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
 
 function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onPlay: () => void, token: string | null, isOverlayBtn?: boolean }) {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const fillColor = getFillColor(track.id);
   const [title, setTitle] = useState(track.title);
   const [artist, setArtist] = useState(track.artist);
-  const fillColor = getFillColor(track.id);
   const { t } = useTranslation();
   
   useEffect(() => {
@@ -275,13 +272,13 @@ function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onP
       className="group cursor-pointer active:scale-[0.98] transition-transform duration-200"
     >
       <div 
-        className="w-full aspect-square rounded-2xl mb-4 relative overflow-hidden flex items-center justify-center shadow-sm"
         style={!coverUrl ? { background: fillColor } : undefined}
+        className="w-full aspect-square rounded-2xl mb-4 relative overflow-hidden flex items-center justify-center shadow-sm"
       >
         {coverUrl ? (
           <img src={coverUrl} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
         ) : (
-          <Music className="w-12 h-12 text-white/90 group-hover:scale-110 transition-transform duration-700" />
+          <Music className="w-12 h-12 text-white opacity-80 group-hover:scale-110 transition-transform duration-700" />
         )}
         
         {isOverlayBtn ? (
