@@ -99,16 +99,16 @@ async fn handle_cover_get_r2(
             return None;
         }
     };
-    // The DB's cover_url column reliably holds the full cover key
-    // ("covers/<id>.jpg"); thumb_url is sometimes malformed in legacy rows
-    // (e.g. stores the file extension). Use cover_url for BOTH thumb and full
-    // requests — the webview scales the full image down just fine, and it
-    // guarantees we never request a bogus key like "mp3".
-    let key = cover_url.as_ref().filter(|k| k.starts_with("covers/"));
+    // Legacy DB rows sometimes have cover_url/thumb_url SWAPPED or store a
+    // bogus value (e.g. the file extension "mp3") in one of the columns.
+    // Accept whichever column holds a valid R2 key ("covers/..."); the webview
+    // scales the full image down for thumbnails, so either key works.
+    let key = cover_url.as_ref().filter(|k| k.starts_with("covers/"))
+        .or_else(|| thumb_url.as_ref().filter(|k| k.starts_with("covers/")));
     let key = match key {
         Some(k) if !k.trim().is_empty() => k,
         _ => {
-            eprintln!("[protocol] cover_r2: NO VALID cover_url for id={:?} thumb={} (cover_url={:?} thumb_url={:?})", raw_id, thumb, cover_url, thumb_url);
+            eprintln!("[protocol] cover_r2: NO VALID R2 KEY for id={:?} thumb={} (cover_url={:?} thumb_url={:?})", raw_id, thumb, cover_url, thumb_url);
             return None;
         }
     };
