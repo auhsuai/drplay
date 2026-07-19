@@ -2,6 +2,10 @@ import React, { useEffect, useRef } from 'react';
 import { formatTime } from '../../utils/formatTime';
 import { Track } from '../../App';
 
+// Maximum divergence (seconds) between the requested seek target and the actual
+// playback position after a `seeked` event before we correct it back.
+const SEEK_CORRECTION_THRESHOLD_SEC = 1;
+
 export interface ProgressUIAPI {
   handlePointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
   handleVolumePointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
@@ -23,17 +27,22 @@ interface UseProgressUIParams {
 export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
   const { getActiveAudio, currentTrack, audioRef, progressBarRef, progressFillRef, currentTimeTextRef, volumeBarRef, setVolume, setIsMuted, duration } = params;
   const isDraggingRef = useRef(false);
-  const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSeekTargetRef = useRef<number | null>(null);
   const isSeekCorrectionRef = useRef(false);
-  const restoredAudioTrackIdRef = useRef<string | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const active = getActiveAudio();
     if (!active || duration === 0 || !progressBarRef.current) return;
 
     isDraggingRef.current = true;
-    try { progressBarRef.current.setPointerCapture(e.pointerId); } catch { }
+    try {
+      progressBarRef.current.setPointerCapture(e.pointerId);
+    } catch (err) {
+      // setPointerCapture can throw (e.g. InvalidStateError) if the element is
+      // detached or the pointerId is stale. It's a benign enhancement — the drag
+      // still works via the window-level listeners — so log with context only.
+      console.warn(`[useProgressUI] setPointerCapture failed for pointerId=${e.pointerId}`, err instanceof Error ? err.name : '');
+    }
     const bounds = progressBarRef.current.getBoundingClientRect();
 
     const updateTime = (clientX: number) => {
@@ -54,15 +63,11 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       isDraggingRef.current = false;
       const finalTime = updateTime(clientX);
 
-      if (seekTimeoutRef.current) {
-        clearTimeout(seekTimeoutRef.current);
+      const active2 = getActiveAudio();
+      if (active2) {
+        lastSeekTargetRef.current = finalTime;
+        active2.currentTime = finalTime;
       }
-      seekTimeoutRef.current = setTimeout(() => {
-        const active2 = getActiveAudio();
-        if (active2) {
-          active2.currentTime = finalTime;
-        }
-      }, 250);
 
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
@@ -115,10 +120,6 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
     const updateProgressUI = () => {
       const audio = getActiveAudio();
       if (audio && !isDraggingRef.current && progressFillRef.current && currentTimeTextRef.current) {
-        if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
-          return;
-        }
-
         const time = audio.currentTime;
         const dur = audio.duration || duration;
         if (dur > 0) {
@@ -165,7 +166,7 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       const active = getActiveAudio();
       if (lastSeekTargetRef.current !== null && active) {
         const diff = Math.abs(active.currentTime - lastSeekTargetRef.current);
-        if (diff > 1) {
+        if (diff > SEEK_CORRECTION_THRESHOLD_SEC) {
           isSeekCorrectionRef.current = true;
           active.currentTime = lastSeekTargetRef.current;
         }

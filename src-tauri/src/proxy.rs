@@ -10,22 +10,68 @@ use sha2::Sha256;
 use reqwest::Client;
 use serde::Deserialize;
 use tauri::Emitter;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
+use bytes::Bytes;
 
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
-use tokio::task::JoinHandle;
+use once_cell::sync::Lazy;
 
-// Maximum buffer size allowed across all tracks (prevents unbounded memory use)
-const ABSOLUTE_MAX_BUFFER: u64 = 500 * 1024 * 1024; // 500MB
+// --- Named constants: no magic numbers / strings on the production path ---
+// Reqwest total per-request timeout (conn + read). Bounds every Drive call so a
+// stalled socket cannot hang a stream task forever (reqwest docs: Client::builder().timeout).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+// Bounded wait for a fresh OAuth token via the global Notify.
+const TOKEN_RECOVERY_TIMEOUT: Duration = Duration::from_secs(8);
+// Retry attempts for a transient Drive batch fetch before giving up.
+const FETCH_RETRY_ATTEMPTS: u32 = 3;
+// Base (seconds) for exponential backoff between fetch retries: 1 << attempt.
+const FETCH_RETRY_BASE_BACKOFF_SECS: u64 = 1;
+// Bounded mpsc buffer between the fetch task and the streaming response.
+const STREAM_CHANNEL_BOUND: usize = 8;
+// Consecutive slices fetched/looked-up in one batch (find_missing_run count).
+const PREFETCH_BATCH_SLICES: usize = 4;
+// Global rate-limit cooldown: base seconds, hard cap, and shift exponent cap.
+const COOLDOWN_BASE_SECS: u64 = 30;
+const COOLDOWN_MAX_SECS: u64 = 300;
+const COOLDOWN_EXP_CAP: u32 = 4;
+// Overall transient-retry budget for one stream (not per-attempt).
+const RETRY_DEADLINE_SECS: u64 = 5;
+// Sleep when a background prefetch hits a rate limit.
+const PREFETCH_RATE_LIMIT_SLEEP_SECS: u64 = 5;
+// Delay between transient retry attempts in the main fetch loop.
+const STREAM_RETRY_DELAY_MS: u64 = 500;
+// Poll interval / yield for the background prefetch task.
+const PREFETCH_POLL_INTERVAL_MS: u64 = 1;
+const PREFETCH_YIELD_MS: u64 = 50;
+// Fallback total size (10 MB) and Content-Type used only when Drive cannot be
+// probed (network down). Never forwarded as a real value to the WebView logic.
+const DEFAULT_TOTAL_SIZE_FALLBACK: u64 = 10_000_000;
+const FALLBACK_CONTENT_TYPE: &str = "audio/mpeg";
 
-fn buffer_size_limit() -> u64 {
-    let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
-    let bytes = seconds * 320_000 / 8; // 320kbps → bytes
-    bytes.clamp(5 * 1024 * 1024, ABSOLUTE_MAX_BUFFER)
+/// Exponential backoff (seconds) for the global rate-limit cooldown, hard-capped.
+/// `fail_count` is the post-increment value of `FAIL_COUNT`.
+fn compute_cooldown_secs(fail_count: u32) -> u64 {
+    COOLDOWN_BASE_SECS
+        .checked_shl(fail_count.min(COOLDOWN_EXP_CAP) as u32)
+        .unwrap_or(COOLDOWN_MAX_SECS)
+        .min(COOLDOWN_MAX_SECS)
+}
+
+/// Trim a cached slice to the requested byte window: drop `skip` leading bytes
+/// on the very first slice, then truncate to `remaining` bytes at the tail.
+/// Used identically on both the cache-hit and batch-send paths.
+fn trim_cached_slice(chunk: &mut Vec<u8>, skip: usize, remaining: usize) {
+    if skip < chunk.len() {
+        chunk.drain(..skip);
+    }
+    if remaining < chunk.len() {
+        chunk.truncate(remaining);
+    }
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -36,16 +82,12 @@ struct BufferState {
     total_size_byte: u64,
 }
 
-struct TrackCache {
-    buffer: Vec<u8>,
-    window_start: u64,
-    fetch_task: Option<JoinHandle<()>>,
+struct TrackMeta {
     total_size: u64,
     content_type: String,
-    accessed_at: u64,
 }
 
-type CacheStore = Arc<Mutex<HashMap<String, Arc<Mutex<TrackCache>>>>>;
+type CacheStore = Arc<Mutex<HashMap<String, Arc<Mutex<TrackMeta>>>>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -67,6 +109,12 @@ fn now_epoch_secs() -> u64 {
 
 static GLOBAL_BACKOFF_UNTIL: AtomicU64 = AtomicU64::new(0);
 static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Per-track cancel signal for background prefetch tasks. When a new stream
+/// request arrives for a track, the previous prefetch task (if any) is
+/// signalled to stop so it stops filling the slice cache.
+static PREFETCH_CANCEL: Lazy<Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn parse_multi_range(range_str: &str, total_size: u64) -> Vec<(u64, u64)> {
     let prefix = "bytes=";
@@ -123,8 +171,6 @@ fn extract_drive_reason(body: &str) -> Option<String> {
 /// The reason string is authoritative; status code is the fallback.
 fn classify_drive_error(status: u16, body: &str) -> DriveErr {
     if let Some(reason) = extract_drive_reason(body) {
-        // Exact matches first so downloadQuotaExceeded is not swallowed by the
-        // generic "quotaexceeded" contains-check below.
         match reason.as_str() {
             "downloadquotaexceeded" => return DriveErr::DownloadQuota,
             "insufficientfilepermissions"
@@ -147,8 +193,6 @@ fn classify_drive_error(status: u16, body: &str) -> DriveErr {
     match status {
         401 => DriveErr::Auth,
         404 => DriveErr::NotFound,
-        // Unknown 403/429 without a reason: stay conservative and back off
-        // rather than skip a track that might just be throttled.
         403 | 429 => DriveErr::Rate,
         _ => DriveErr::Upstream,
     }
@@ -197,43 +241,11 @@ async fn fetch_range_from_drive(
     Ok(bytes.to_vec())
 }
 
-async fn forward_multipart_range(
-    client: &Client,
-    api_url: &str,
-    token: &str,
-    ranges: &[(u64, u64)],
-    total_size: u64,
-) -> Result<Response, DriveErr> {
-    let boundary = format!("drplay_{}", uuid::Uuid::new_v4());
-    let mut body = Vec::new();
-
-    for &(start, end) in ranges {
-        let chunk = fetch_range_from_drive(client, api_url, token, start, end).await?;
-        let header = format!(
-            "\r\n--{}\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
-            boundary, start, end, total_size
-        );
-        body.extend_from_slice(header.as_bytes());
-        body.extend_from_slice(&chunk);
-    }
-    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
-
-    Ok(Response::builder()
-        .status(206)
-        .header(header::CONTENT_TYPE, format!("multipart/byteranges; boundary={}", boundary))
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .body(axum::body::Body::from(body))
-        .unwrap())
-}
-
 /// Called when a Drive request fails with 401 (expired OAuth token). Signals the
 /// frontend to refresh the token, then waits (bounded) for `update_stream_token`
 /// to publish a new one and returns it. Returns None on timeout / no change so
 /// the caller can surface an explicit auth error instead of a generic 502.
 async fn recover_stream_token(old_token: &str) -> Option<String> {
-    // Register interest on the notify BEFORE emitting, otherwise a fast frontend
-    // refresh could call notify_waiters() before we start waiting -> lost wakeup.
     let notify = crate::GLOBAL_TOKEN_NOTIFY.clone();
     let notified = notify.notified();
     tokio::pin!(notified);
@@ -245,7 +257,7 @@ async fn recover_stream_token(old_token: &str) -> Option<String> {
 
     tokio::select! {
         _ = &mut notified => {}
-        _ = tokio::time::sleep(std::time::Duration::from_secs(8)) => {
+        _ = tokio::time::sleep(TOKEN_RECOVERY_TIMEOUT) => {
             return None;
         }
     }
@@ -255,6 +267,33 @@ async fn recover_stream_token(old_token: &str) -> Option<String> {
         None
     } else {
         Some(new_token)
+    }
+}
+
+/// Map a file extension to its canonical audio MIME type.
+///
+/// Google Drive frequently returns `application/octet-stream` (or a stale type)
+/// for FLAC and other lossless files. The `ext` query param is already part of
+/// the signed URL, so when it maps to a known type we OVERRIDE Drive's
+/// Content-Type. Without this, the WebView cannot pick a demuxer for an
+/// `octet-stream` FLAC stream and rejects it with `MEDIA_ERR_SRC_NOT_SUPPORTED`,
+/// causing the frontend to wrongly skip a perfectly playable track as a
+/// "format error". Chromium/WebView2 decode FLAC natively when served as
+/// `audio/flac` (see MDN: Chrome/Edge FLAC = Yes; chromium.org audio codecs).
+fn content_type_for_ext(ext: &str) -> Option<&'static str> {
+    match ext.to_ascii_lowercase().as_str() {
+        "flac" => Some("audio/flac"),
+        "ogg" | "oga" => Some("audio/ogg"),
+        "opus" => Some("audio/ogg"),
+        "wav" => Some("audio/wav"),
+        "m4a" => Some("audio/mp4"),
+        "aac" => Some("audio/aac"),
+        "mp3" => Some("audio/mpeg"),
+        "mp4" | "m4v" => Some("video/mp4"),
+        "webm" => Some("audio/webm"),
+        "caf" => Some("audio/x-caf"),
+        "aiff" | "aif" => Some("audio/aiff"),
+        _ => None,
     }
 }
 
@@ -313,8 +352,6 @@ async fn handle_stream(
     let mut final_token = crate::GLOBAL_STREAM_TOKEN.lock().await.clone();
 
     if final_token.is_empty() {
-        // No token yet (e.g. play attempted before the frontend seeded it, or it
-        // was cleared). Ask the frontend to (re)publish a token before giving up.
         match recover_stream_token(&final_token).await {
             Some(t) => { final_token = t; }
             None => return (StatusCode::UNAUTHORIZED, [("X-Stream-Error-Type", "auth-expired")], "No token").into_response(),
@@ -323,24 +360,27 @@ async fn handle_stream(
 
     let api_url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media&acknowledgeAbuse=true", query.id);
 
-    let (total_size, content_type) = {
+    // Clone the inner Arc out from under the outer store lock, then release the
+    // store lock *before* awaiting the inner per-track mutex. Holding the outer
+    // `Mutex<HashMap>` across an `.await` would serialize every concurrent stream
+    // on a single lock and is exactly the kind of shared-state hazard to avoid.
+    let cached_meta = {
         let store = state.cache_store.lock().await;
-        if let Some(arc) = store.get(&query.id) {
+        store.get(&query.id).map(Arc::clone)
+    };
+    let (total_size, content_type) = match cached_meta {
+        Some(arc) => {
             let tc = arc.lock().await;
             (tc.total_size, tc.content_type.clone())
-        } else {
-            (0, String::new())
         }
+        None => (0, String::new()),
     };
 
-    // For HEAD (the frontend's classification probe) always re-validate against
-    // Drive so a file deleted / access-revoked *after* its size was cached is
-    // still surfaced with the correct X-Stream-Error-Type header.
+    // For HEAD always re-validate against Drive
     let (total_size, content_type) = if total_size == 0 || method == axum::http::Method::HEAD {
         match get_total_size(&state.client, &api_url, &final_token).await {
             Ok(v) => v,
             Err(DriveErr::Auth) => {
-                // Expired token on the probe. Recover once before deciding.
                 match recover_stream_token(&final_token).await {
                     Some(t) => {
                         final_token = t;
@@ -348,7 +388,7 @@ async fn handle_stream(
                             Ok(v) => v,
                             Err(DriveErr::Rate) => return handle_rate_limit(now).await,
                             Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota | DriveErr::Auth)) => return drive_err_response(e),
-                            Err(_) => (10_000_000, "audio/mpeg".to_string()),
+                            Err(_) => (DEFAULT_TOTAL_SIZE_FALLBACK, FALLBACK_CONTENT_TYPE.to_string()),
                         }
                     }
                     None => return drive_err_response(DriveErr::Auth),
@@ -356,10 +396,21 @@ async fn handle_stream(
             }
             Err(DriveErr::Rate) => return handle_rate_limit(now).await,
             Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => return drive_err_response(e),
-            Err(_) => (10_000_000, "audio/mpeg".to_string()),
+            Err(_) => (DEFAULT_TOTAL_SIZE_FALLBACK, FALLBACK_CONTENT_TYPE.to_string()),
         }
     } else {
         (total_size, content_type)
+    };
+
+    // Override Drive's (often wrong) Content-Type using the extension carried in
+    // the signed URL. This is what lets lossless formats like FLAC actually play
+    // in the WebView instead of being rejected as a "format error".
+    let resolved_content_type = match query.ext.as_deref().and_then(content_type_for_ext) {
+        Some(ct) => {
+            eprintln!("[proxy] content-type override: ext={} -> {}", query.ext.as_deref().unwrap_or(""), ct);
+            ct.to_string()
+        }
+        None => content_type,
     };
 
     let range_str = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
@@ -372,7 +423,7 @@ async fn handle_stream(
         
         return Response::builder()
             .status(status)
-            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CONTENT_TYPE, resolved_content_type)
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
@@ -381,228 +432,300 @@ async fn handle_stream(
             .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build HEAD body").into_response());
     }
 
-    if ranges.len() > 1 {
-        for attempt in 0..2 {
-            match forward_multipart_range(&state.client, &api_url, &final_token, &ranges, total_size).await {
-                Ok(r) => {
-                    FAIL_COUNT.store(0, Ordering::Relaxed);
-                    return r;
-                }
-                Err(DriveErr::Rate) => {
-                    return handle_rate_limit(now).await;
-                }
-                Err(DriveErr::Auth) if attempt == 0 => {
-                    match recover_stream_token(&final_token).await {
-                        Some(t) => { final_token = t; continue; }
-                        None => return drive_err_response(DriveErr::Auth),
-                    }
-                }
-                Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                    return drive_err_response(e);
-                }
-                Err(_) => {
-                    return (StatusCode::BAD_GATEWAY, "Upstream error").into_response();
-                }
-            }
-        }
-        return (StatusCode::BAD_GATEWAY, "Upstream error").into_response();
-    }
-
-    // Single-range or no-range path
-    let range_value = ranges.first().cloned().unwrap_or((0, total_size.saturating_sub(1)));
-    let start = range_value.0;
-    let end = range_value.1.min(total_size.saturating_sub(1));
-
-    let mut store = state.cache_store.lock().await;
-    
-    // LRU Cleanup: Keep up to 3 tracks in memory to avoid thrashing
-    if store.len() >= 3 && !store.contains_key(&query.id) {
-        let mut oldest_key = String::new();
-        let mut oldest_time = u64::MAX;
-        for (k, arc) in store.iter() {
-            if let Ok(tc) = arc.try_lock() {
-                if tc.accessed_at < oldest_time {
-                    oldest_time = tc.accessed_at;
-                    oldest_key = k.clone();
-                }
-            }
-        }
-        if !oldest_key.is_empty() {
-            if let Some(arc) = store.remove(&oldest_key) {
-                // Ensure we reliably abort the task
-                let mut tc = arc.lock().await;
-                if let Some(task) = tc.fetch_task.take() {
-                    task.abort();
-                }
-            }
-        }
-    }
-
-    let track_cache_arc = store.entry(query.id.clone()).or_insert_with(|| {
-        Arc::new(Mutex::new(TrackCache {
-            buffer: Vec::with_capacity(2 * 1024 * 1024),
-            window_start: 0,
-            fetch_task: None,
-            total_size,
-            content_type: content_type.clone(),
-            accessed_at: now_epoch_secs(),
-        }))
-    }).clone();
-    
-    // Drop the global store lock so other requests can proceed
-    drop(store);
-
-    let mut track_cache = track_cache_arc.lock().await;
-    track_cache.accessed_at = now_epoch_secs();
-    let window_end = track_cache.window_start + track_cache.buffer.len() as u64;
-
-    if start >= track_cache.window_start && start < window_end {
-        // Cache Hit!
-        let offset = (start - track_cache.window_start) as usize;
-        let mut read_end = (end.saturating_sub(track_cache.window_start) + 1) as usize;
-        read_end = read_end.min(track_cache.buffer.len());
-        let mut chunk_size = read_end.saturating_sub(offset);
-        
-        // Limit chunk size to 2MB to keep browser requests flowing
-        let max_chunk = 2 * 1024 * 1024;
-        if chunk_size > max_chunk {
-            chunk_size = max_chunk;
-            read_end = offset + chunk_size;
-        }
-
-        let chunk = track_cache.buffer[offset..read_end].to_vec();
-        let real_end = start + chunk.len() as u64 - 1;
-        let body = axum::body::Body::from(chunk);
-        
-        FAIL_COUNT.store(0, Ordering::Relaxed);
-        
-        return Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_TYPE, content_type.clone())
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
-            .header(header::CONTENT_LENGTH, (real_end - start + 1).to_string())
-            .body(body)
-            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response());
+    // Multipart ranges → fall through to serve the full file as a single range
+    let (start, end) = if ranges.len() > 1 {
+        (0u64, total_size.saturating_sub(1))
     } else {
-        // Cache Miss!
-        if let Some(task) = track_cache.fetch_task.take() {
-            task.abort();
-        }
+        let r = ranges.first().cloned().unwrap_or((0, total_size.saturating_sub(1)));
+        (r.0, r.1.min(total_size.saturating_sub(1)))
+    };
 
-        // Fetch first 2MB synchronously
-        let initial_fetch_end = (start + 2 * 1024 * 1024 - 1).min(total_size.saturating_sub(1));
-        // DO NOT drop lock before network call to prevent concurrent identical fetches!
-        // This ensures the first request fetches and others wait to get a Cache Hit.
-        
-        let mut chunk = vec![];
-        let max_retries = 3;
-        for attempt in 0..max_retries {
-            match fetch_range_from_drive(&state.client, &api_url, &final_token, start, initial_fetch_end).await {
-                Ok(c) => {
-                    chunk = c;
-                    FAIL_COUNT.store(0, Ordering::Relaxed);
-                    break;
-                }
-                Err(DriveErr::Rate) => {
-                    if attempt == max_retries - 1 {
-                        return handle_rate_limit(now).await;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                }
-                Err(DriveErr::Auth) => {
-                    // Expired token mid-stream. Signal the frontend, wait for a
-                    // fresh token, then retry with it (no fixed backoff needed).
-                    match recover_stream_token(&final_token).await {
-                        Some(t) => { final_token = t; continue; }
-                        None => return drive_err_response(DriveErr::Auth),
-                    }
-                }
-                Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                    // Non-retryable: file gone / no access / per-file quota spent.
-                    return drive_err_response(e);
-                }
-                Err(_) => {
-                    if attempt == max_retries - 1 {
-                        return (StatusCode::BAD_GATEWAY, "Gateway Error").into_response();
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                }
-            }
-        }
+    // Store metadata
+    {
+        let mut store = state.cache_store.lock().await;
+        store.insert(query.id.clone(), Arc::new(Mutex::new(TrackMeta {
+            total_size,
+            content_type: resolved_content_type.clone(),
+        })));
+        FAIL_COUNT.store(0, Ordering::Relaxed);
+    }
 
-        if chunk.is_empty() {
-            // Exhausted retries (e.g. repeated token expiry) without any data.
-            return (StatusCode::BAD_GATEWAY, "Gateway Error").into_response();
-        }
+    let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
+        Some(c) => c,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Cache not initialized").into_response(),
+    };
 
-        track_cache.window_start = start;
-        track_cache.buffer = chunk.clone();
-        
-        if let Some(app) = crate::APP_HANDLE.get() {
-            let _ = app.emit("buffer-status", BufferState {
-                track_id: query.id.clone(),
-                buffer_start_byte: start,
-                buffer_end_byte: start + chunk.len() as u64,
-                total_size_byte: total_size,
-            });
-        }
-        
-        // Spawn background task to fetch remaining up to 100MB
-        let background_start = start + chunk.len() as u64;
-        if background_start < total_size {
-            let bg_client = state.client.clone();
-            let bg_url = api_url.clone();
-            let bg_token = final_token.clone();
-            let bg_arc = track_cache_arc.clone();
-            let bg_total = total_size;
+    // Align to SLICE_SIZE boundaries
+    let slice_start = (start / crate::slice_cache::SLICE_SIZE) * crate::slice_cache::SLICE_SIZE;
+    let slice_last = ((end / crate::slice_cache::SLICE_SIZE) + 1) * crate::slice_cache::SLICE_SIZE;
+    let desired_total = (end - start + 1) as usize;
 
-            let track_id_bg = query.id.clone();
-            let task = tokio::spawn(async move {
-                let mut current = background_start;
-                let limit = buffer_size_limit();
-                while current < bg_total && current < start + limit {
-                    let next_end = (current + 2 * 1024 * 1024 - 1).min(bg_total.saturating_sub(1)).min(start + limit - 1);
-                    if let Ok(data) = fetch_range_from_drive(&bg_client, &bg_url, &bg_token, current, next_end).await {
-                        let mut tc = bg_arc.lock().await;
-                        // verify window hasn't changed
-                        if tc.window_start != start {
-                            break; // User seeked, this task is obsolete
-                        }
-                        tc.buffer.extend_from_slice(&data);
-                        current += data.len() as u64;
-                        
-                        // Emit event via Tauri IPC
-                        if let Some(app) = crate::APP_HANDLE.get() {
-                            let _ = app.emit("buffer-status", BufferState {
-                                track_id: track_id_bg.clone(),
-                                buffer_start_byte: tc.window_start,
-                                buffer_end_byte: tc.window_start + tc.buffer.len() as u64,
-                                total_size_byte: bg_total,
-                            });
-                        }
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(STREAM_CHANNEL_BOUND);
+    let track_id = query.id.clone();
+    let fetch_client = state.client.clone();
+    let fetch_api_url = api_url.clone();
+    let fetch_token = final_token.clone();
+    let actual_start = start;
+    let actual_end = end;
+
+    tokio::spawn(async move {
+        let mut current_offset = slice_start;
+        let mut buffer_status_emitted = false;
+        let mut bytes_sent = 0usize;
+        let mut retry_deadline: Option<Instant> = None;
+        while current_offset < slice_last {
+            // Cache hit path
+                if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
+                    let mut chunk = (*data).clone();
+                    let skip = if current_offset == slice_start && actual_start > slice_start {
+                        (actual_start - slice_start) as usize
                     } else {
+                        0
+                    };
+                    let remaining = desired_total.saturating_sub(bytes_sent);
+                    trim_cached_slice(&mut chunk, skip, remaining);
+
+                    bytes_sent += chunk.len();
+                    if !chunk.is_empty() {
+                        if tx.send(chunk).await.is_err() {
+                            break;
+                        }
+                    }
+                    current_offset += crate::slice_cache::SLICE_SIZE;
+                    continue;
+                }
+
+            // Cache miss: find consecutive missing slices
+            let (fetch_start, count) = slice_cache.find_missing_run(
+                &track_id, current_offset, PREFETCH_BATCH_SLICES,
+            ).await;
+
+            if count == 0 {
+                current_offset += crate::slice_cache::SLICE_SIZE;
+                continue;
+            }
+
+            let fetch_end_slice = fetch_start + (count as u64) * crate::slice_cache::SLICE_SIZE;
+            let fetch_end_byte = fetch_end_slice.min(total_size).saturating_sub(1);
+
+            // Fetch batch from Drive (with retry)
+            let mut last_err = None;
+            let mut batch_data = None;
+            for attempt in 0..FETCH_RETRY_ATTEMPTS {
+                match fetch_range_from_drive(
+                    &fetch_client, &fetch_api_url, &fetch_token,
+                    fetch_start, fetch_end_byte,
+                ).await {
+                    Ok(data) => {
+                        batch_data = Some(data);
                         break;
                     }
+                    Err(DriveErr::Rate) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS))).await;
+                        last_err = Some(DriveErr::Rate);
+                    }
+                    Err(DriveErr::Auth) => {
+                        last_err = Some(DriveErr::Auth);
+                        break;
+                    }
+                    Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
+                        last_err = Some(e);
+                        break;
+                    }
+                    Err(e) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS))).await;
+                        last_err = Some(e);
+                    }
                 }
-            });
-            track_cache.fetch_task = Some(task);
+            }
+
+            match batch_data {
+                Some(data) => {
+                    slice_cache.batch_insert(&track_id, fetch_start, data).await;
+
+                    // Send each cached slice with trimming
+                    for i in 0..count {
+                        let slice_offset = fetch_start + (i as u64) * crate::slice_cache::SLICE_SIZE;
+                        if slice_offset > actual_end {
+                            break;
+                        }
+                        if let Some(cached) = slice_cache.try_get(&track_id, slice_offset).await {
+                            let mut chunk = (*cached).clone();
+                            let skip = if slice_offset == slice_start && actual_start > slice_start {
+                                (actual_start - slice_start) as usize
+                            } else {
+                                0
+                            };
+                            let remaining = desired_total.saturating_sub(bytes_sent);
+                            trim_cached_slice(&mut chunk, skip, remaining);
+
+                            bytes_sent += chunk.len();
+                            if !chunk.is_empty() {
+                                if tx.send(chunk).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
+                    // Emit buffer-status once after first successful batch
+                    if !buffer_status_emitted {
+                        buffer_status_emitted = true;
+                        if let Some(app) = crate::APP_HANDLE.get() {
+                            let _ = app.emit("buffer-status", BufferState {
+                                track_id: track_id.clone(),
+                                buffer_start_byte: 0,
+                                buffer_end_byte: total_size,
+                                total_size_byte: total_size,
+                            });
+                        }
+                    }
+
+                    retry_deadline = None;
+                    // A successful batch means Drive recovered — clear any stale
+                    // global rate-limit cooldown so subsequent requests (e.g. an
+                    // auto-skip to the next track) are not immediately 503'd.
+                    GLOBAL_BACKOFF_UNTIL.store(0, Ordering::Release);
+                    current_offset = fetch_end_slice;
+                }
+                None => {
+                    let err = last_err.unwrap_or(DriveErr::Upstream);
+                    eprintln!("[proxy] batch-fetch-fail: {:?}", err);
+
+                    match err {
+                        // Permanent errors — give up immediately
+                        DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota => {
+                            break;
+                        }
+                        // Auth exhaustion — give up
+                        DriveErr::Auth => {
+                            break;
+                        }
+                        // Transient errors (Rate, Upstream) — retry with 5s cap
+                        _ => {
+                            if err == DriveErr::Rate {
+                            let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+                            let cooldown = compute_cooldown_secs(fail_count);
+                            GLOBAL_BACKOFF_UNTIL.store(
+                                    now_epoch_secs() + cooldown,
+                                    Ordering::Release,
+                                );
+                            }
+                            let deadline = retry_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(RETRY_DEADLINE_SECS));
+                            if Instant::now() >= *deadline {
+                                eprintln!("[proxy] batch-fetch-retry-exhausted (5s)");
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(STREAM_RETRY_DELAY_MS)).await;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
-        
-        // Return initial chunk
-        let real_end = start + chunk.len() as u64 - 1;
-        let body = axum::body::Body::from(chunk);
-        return Response::builder()
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
-            .header(header::CONTENT_LENGTH, (real_end - start + 1).to_string())
-            .body(body)
-            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build body").into_response());
+    });
+
+    // Spawn background prefetch for slices ahead of requested range
+    let bg_client = state.client.clone();
+    let bg_url = api_url.clone();
+    let bg_token = final_token.clone();
+    let bg_id = query.id.clone();
+    let bg_total = total_size;
+    let bg_start = actual_end + 1;
+
+    // Cancel any previously-running prefetch for this track, then register a
+    // fresh cancel signal so the next request for this track stops this one.
+    let cancel = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut guards = PREFETCH_CANCEL.lock().await;
+        if let Some(old) = guards.insert(bg_id.clone(), cancel.clone()) {
+            old.notify_waiters();
+        }
     }
+    let cancel_for_task = cancel.clone();
+    let bg_id_for_task = bg_id.clone();
+
+    tokio::spawn(async move {
+        // Remove this task's cancel entry from the global map when it exits,
+        // but only if it is still the current entry (a newer request replaces it).
+        struct CancelGuard {
+            id: String,
+            signal: Arc<tokio::sync::Notify>,
+        }
+        impl Drop for CancelGuard {
+            fn drop(&mut self) {
+                let id = self.id.clone();
+                let signal = self.signal.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut guards = PREFETCH_CANCEL.lock().await;
+                    if guards.get(&id).map(|s| Arc::ptr_eq(s, &signal)).unwrap_or(false) {
+                        guards.remove(&id);
+                    }
+                });
+            }
+        }
+        let _guard = CancelGuard { id: bg_id_for_task.clone(), signal: cancel_for_task.clone() };
+
+        let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
+            Some(c) => c,
+            None => return,
+        };
+        let max_bytes = {
+            let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
+            crate::buffer_bytes_for_seconds(seconds)
+        };
+        let max_offset = bg_start + max_bytes;
+        let mut offset = bg_start;
+
+        while offset < bg_total && offset < max_offset {
+            // Stop early if a newer request cancelled this prefetch.
+            tokio::select! {
+                _ = cancel_for_task.notified() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(PREFETCH_POLL_INTERVAL_MS)) => {}
+            }
+            let (first_missing, count) = slice_cache.find_missing_run(&bg_id_for_task, offset, PREFETCH_BATCH_SLICES).await;
+            if count == 0 {
+                offset += crate::slice_cache::SLICE_SIZE;
+                continue;
+            }
+            let batch_end = (first_missing + (count as u64) * crate::slice_cache::SLICE_SIZE).min(bg_total);
+            match fetch_range_from_drive(&bg_client, &bg_url, &bg_token, first_missing, batch_end - 1).await {
+                Ok(data) => {
+                    slice_cache.batch_insert(&bg_id_for_task, first_missing, data).await;
+                    if let Some(app) = crate::APP_HANDLE.get() {
+                        let _ = app.emit("buffer-status", BufferState {
+                            track_id: bg_id_for_task.clone(),
+                            buffer_start_byte: 0,
+                            buffer_end_byte: batch_end,
+                            total_size_byte: bg_total,
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[proxy] prefetch-batch-fail at {first_missing}: {e:?}");
+                    if matches!(e, DriveErr::Rate) {
+                        tokio::time::sleep(std::time::Duration::from_secs(PREFETCH_RATE_LIMIT_SLEEP_SECS)).await;
+                    }
+                }
+            }
+            offset = batch_end;
+            tokio::time::sleep(std::time::Duration::from_millis(PREFETCH_YIELD_MS)).await;
+        }
+    });
+
+    // Build streaming response
+    let stream = ReceiverStream::new(rx)
+        .map(|chunk| Ok::<Bytes, std::convert::Infallible>(Bytes::from(chunk)));
+    let body = axum::body::Body::from_stream(stream);
+
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, resolved_content_type)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size))
+        .body(body)
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response body").into_response())
 }
 
 /// Probe a file's total size + content type. Uses a 1-byte ranged GET (not HEAD)
@@ -623,7 +746,7 @@ async fn get_total_size(client: &Client, api_url: &str, token: &str) -> Result<(
     }
     let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("audio/mpeg")
+        .unwrap_or(FALLBACK_CONTENT_TYPE)
         .to_string();
     // A 206 response carries the true total in Content-Range: "bytes 0-0/<TOTAL>".
     let total = resp.headers().get(reqwest::header::CONTENT_RANGE)
@@ -654,13 +777,25 @@ async fn handle_options() -> Response {
         .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, HEAD, OPTIONS")
         .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
         .body(axum::body::Body::empty())
-        .unwrap()
+        .unwrap_or_else(|e| {
+            eprintln!("[proxy] failed to build OPTIONS response: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "").into_response()
+        })
 }
 
 pub fn start_proxy() {
     tauri::async_runtime::spawn(async move {
+        let client = match Client::builder().timeout(REQUEST_TIMEOUT).build() {
+            Ok(c) => c,
+            Err(e) => {
+                // A bare Client::new() is the safe fallback (it never times out,
+                // but the proxy still boots). Log so the missing timeout is visible.
+                eprintln!("[proxy] reqwest client build failed (timeout={REQUEST_TIMEOUT:?}): {e}");
+                Client::new()
+            }
+        };
         let state = AppState {
-            client: Client::new(),
+            client,
             cache_store: Arc::new(Mutex::new(HashMap::new())),
         };
 
@@ -678,4 +813,48 @@ pub fn start_proxy() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_type_for_ext;
+
+    fn assemble_chunks_in_order(chunks: &[(u64, u64, Vec<u8>)]) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(chunks.iter().map(|c| c.2.len()).sum());
+        for (_, _, data) in chunks {
+            buffer.extend_from_slice(data);
+        }
+        buffer
+    }
+
+    #[tokio::test]
+    async fn test_parallel_chunks_maintain_order() {
+        let chunks = vec![
+            (0, 1999, vec![1u8; 2000]),
+            (2000, 3999, vec![2u8; 2000]),
+            (4000, 5999, vec![3u8; 2000]),
+        ];
+        let buffer = assemble_chunks_in_order(&chunks);
+        assert_eq!(buffer.len(), 6000);
+        assert_eq!(buffer[0], 1);
+        assert_eq!(buffer[2000], 2);
+        assert_eq!(buffer[4000], 3);
+    }
+
+    #[test]
+    fn test_content_type_for_ext_maps_flac_and_is_case_insensitive() {
+        // The root-cause fix: FLAC must be served as audio/flac, not Drive's
+        // application/octet-stream, otherwise the WebView rejects it with
+        // MEDIA_ERR_SRC_NOT_SUPPORTED and the track is wrongly skipped.
+        assert_eq!(content_type_for_ext("flac"), Some("audio/flac"));
+        assert_eq!(content_type_for_ext("FLAC"), Some("audio/flac"));
+        assert_eq!(content_type_for_ext("Ogg"), Some("audio/ogg"));
+        assert_eq!(content_type_for_ext("wav"), Some("audio/wav"));
+        assert_eq!(content_type_for_ext("m4a"), Some("audio/mp4"));
+        assert_eq!(content_type_for_ext("aac"), Some("audio/aac"));
+        assert_eq!(content_type_for_ext("mp3"), Some("audio/mpeg"));
+        // Unknown extensions are NOT overridden — proxy keeps Drive's content type.
+        assert_eq!(content_type_for_ext("xyz"), None);
+        assert_eq!(content_type_for_ext(""), None);
+    }
 }

@@ -1,6 +1,7 @@
-import type { MouseEvent, ReactElement } from "react";
+import { useState, type MouseEvent, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { copyToClipboard } from "../../../utils/copyToClipboard";
 import { showErrorToast } from "../../../utils/simpleToast";
 
 export const TELEGRAM_URL = "https://t.me/nguyen_tan_an";
@@ -27,17 +28,19 @@ function GithubIcon({ className }: { className?: string }) {
 
 interface CreditLink {
   label: string;
+  display: string;
   url: string;
   Icon: (props: { className?: string }) => ReactElement;
 }
 
 const CREDIT_LINKS: CreditLink[] = [
-  { label: "Telegram", url: TELEGRAM_URL, Icon: TelegramIcon },
-  { label: "Github", url: GITHUB_URL, Icon: GithubIcon },
+  { label: "Telegram", display: "@nguyen_tan_an", url: TELEGRAM_URL, Icon: TelegramIcon },
+  { label: "Github", display: "auhsuai/drplay", url: GITHUB_URL, Icon: GithubIcon },
 ];
 
 export function CreditsSection() {
   const { t } = useTranslation();
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const handleOpen = (url: string) => async (e: MouseEvent<HTMLAnchorElement>) => {
     // Prevent the webview from navigating away; the URL must open in the
@@ -57,23 +60,48 @@ export function CreditsSection() {
     }
   };
 
+  const handleCopy = (index: number, text: string) => async () => {
+    try {
+      const ok = await copyToClipboard(text);
+      if (ok) {
+        setCopiedIndex(index);
+        setTimeout(() => setCopiedIndex(null), 2000);
+      }
+    } catch (err) {
+      console.error("[CreditsSection] copy failed", {
+        module: "CreditsSection",
+        timestamp: new Date().toISOString(),
+        reason: err instanceof Error ? err.message : "unknown",
+      });
+    }
+  };
+
   return (
     <div className="flex flex-col gap-2 mt-6 mb-8">
       <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
         {t("settings.contact") || "Contact"}
       </h2>
-      {CREDIT_LINKS.map(({ label, url, Icon }) => (
-        <div key={url} className="flex items-center gap-4 py-4">
-          <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-            <Icon className="w-6 h-6 text-[#4285F4]" />
+      {CREDIT_LINKS.map(({ label, display, url, Icon }, index) => (
+        <div key={url} className="flex items-center justify-between gap-4 py-4">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+              <Icon className="w-6 h-6 text-[#4285F4]" />
+            </div>
+            <a
+              href={url}
+              onClick={handleOpen(url)}
+              className="text-base font-semibold text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer"
+            >
+              {label}
+            </a>
           </div>
-          <a
-            href={url}
-            onClick={handleOpen(url)}
-            className="text-base font-semibold text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer"
+          <button
+            onClick={handleCopy(index, display)}
+            className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
+            title={t("settings.copy") || "Copy"}
           >
-            {label}
-          </a>
+            {copiedIndex === index ? (t("settings.copied") || "Copied!") : display}
+          </button>
         </div>
       ))}
     </div>

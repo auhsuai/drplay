@@ -7,6 +7,7 @@ import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen"
 import { deleteFile, moveFile } from "../../utils/driveApi";
 import { useLiveQuery } from 'dexie-react-hooks';
 import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
+import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
 
 
@@ -229,6 +230,7 @@ export function MainContent({
 
   React.useEffect(() => {
     clearPrefetchedStreams();
+    clearNextTrackPrefetches();
   }, [currentFolderId]);
 
   React.useEffect(() => {

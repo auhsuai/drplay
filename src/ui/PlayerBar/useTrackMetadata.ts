@@ -5,8 +5,10 @@ import { recordPlay } from '../../utils/history';
 import { isFavorite, addFavorite, removeFavorite } from '../../utils/favorites';
 import { listen } from '@tauri-apps/api/event';
 import { getValidToken } from '../../utils/apiClient';
+import { captureError } from '../../utils/errorLog';
 import { formatTime } from '../../utils/formatTime';
 import { PlayerAction } from './types';
+import { isProxyStreamUrl } from './streamError';
 
 const TRACK_META_MODULE = 'useTrackMetadata';
 
@@ -17,13 +19,6 @@ function classifyTrackMetaError(err: unknown): string {
   if (typeof err === 'string') return err;
   return 'unknown';
 }
-
-const isTrustedStreamUrl = (url: string): boolean => {
-  try {
-    const u = new URL(url);
-    return u.hostname === 'drplay.localhost' && u.pathname === '/stream';
-  } catch { return false; }
-};
 
 export interface TrackMetadataAPI {
   coverUrl: string | null;
@@ -142,8 +137,8 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
           if (!isCancelled) dispatch({ type: 'ERROR', error: { type: 'metadata', text: err.message } });
         });
 
-      if (currentTrack.streamUrl && isTrustedStreamUrl(currentTrack.streamUrl)) {
-        recordPlay(currentTrack).catch(e => console.error(`[${TRACK_META_MODULE}] record-play-failed`, e));
+      if (currentTrack.streamUrl && isProxyStreamUrl(currentTrack.streamUrl)) {
+        recordPlay(currentTrack).catch(e => captureError({ level: 'warn', source: 'track-metadata', message: `recordPlay failed (${classifyTrackMetaError(e)})`, kind: 'history' }));
       }
 
       return () => {

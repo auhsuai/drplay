@@ -104,7 +104,8 @@
     "format_error": "File lỗi định dạng, đang chuyển bài kế tiếp...",
     "drive_quota_exceeded": "Google Drive đã vượt quá giới hạn, đang thử lại...",
     "access_denied": "Bạn không còn quyền truy cập file này, đang chuyển bài...",
-    "download_quota": "File đã vượt giới hạn tải xuống của Google, đang chuyển bài..."
+    "download_quota": "File đã vượt giới hạn tải xuống của Google, đang chuyển bài...",
+    "seek_too_fast": "Không nên seek quá nhanh với file lossless. Đang chuyển bài..."
   },
   "song_card": {
     "unknown_title": "Không rõ tên",
@@ -157,9 +158,6 @@
     "playback": "Phát nhạc",
     "buffer_size": "Bộ nhớ đệm",
     "buffer_desc": "Điều chỉnh thời gian tải trước.",
-    "crossfade": "Làm mượt",
-    "crossfade_desc": "Chuyển bài mượt mà giữa các track.",
-    "crossfade_duration": "Thời gian làm mượt",
     "milliseconds": "ms",
     "seconds": "giây",
     "minutes": "phút",
@@ -188,7 +186,22 @@
     "empty_trash_error": "Lỗi khi dọn thùng rác",
     "restore_error": "Lỗi khi khôi phục",
     "contact": "Liên hệ",
-    "open_link_error": "Không thể mở liên kết"
+    "copy": "Sao chép",
+    "copied": "Đã copy!",
+    "open_link_error": "Không thể mở liên kết",
+    "error_log_title": "Nhật ký lỗi",
+    "error_log_copy": "Sao chép báo cáo",
+    "error_log_copy_selected": "Sao chép vùng chọn",
+    "error_log_copied": "Đã copy!",
+    "error_log_clear": "Xoá",
+    "error_log_empty": "Chưa có lỗi nào được ghi nhận.",
+    "error_log_note": "Nhật ký này đã được lọc bỏ thông tin cá nhân (ID, token, liên kết) trước khi rời khỏi thiết bị của bạn.",
+    "error_log_stack": "Dấu vết ngăn xếp",
+    "error_log_copy_error": "Không thể sao chép vào clipboard.",
+    "error_log_clear_error": "Lỗi khi xoá nhật ký.",
+    "error_log_by_date": "Lỗi theo ngày",
+    "error_log_back": "Quay lại",
+    "error_log_count": "{{count}} lỗi"
   },
   "sort": {
     "name_asc": "A-Z",

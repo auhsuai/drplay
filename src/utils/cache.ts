@@ -1,5 +1,6 @@
 import { keys, delMany } from "idb-keyval";
 import { invoke } from "@tauri-apps/api/core";
+import { clearAllMetadataCache } from "./metadata";
 
 const METADATA_CACHE_PREFIX = "metadata_";
 const METADATA_LRU_KEY = "__drplay_metadata_lru";
@@ -30,6 +31,7 @@ export async function clearAppCache(): Promise<void> {
     }
     try {
       await invoke("clear_local_cache");
+      clearAllMetadataCache();
     } catch (e) {
       console.error(
         "[clearAppCache] invoke clear_local_cache failed",

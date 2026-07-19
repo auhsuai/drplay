@@ -200,26 +200,6 @@ pub fn gc_thumbnails(thumb_dir: &Path, access_log_path: &Path, policy: &GcPolicy
     Ok(())
 }
 
-pub fn migrate_thumbnail(cache_dir: &Path, old_id: &str, new_id: &str) -> Result<(), String> {
-    for thumb in &[true, false] {
-        let old = thumbnail_path(cache_dir, old_id, *thumb);
-        if !old.exists() {
-            continue;
-        }
-        let new = thumbnail_path(cache_dir, new_id, *thumb);
-        if new.exists() {
-            let _ = std::fs::remove_file(&old);
-            continue;
-        }
-        if let Some(parent) = new.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let data = std::fs::read(&old).map_err(|e| e.to_string())?;
-        atomic_write(&new, &data)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

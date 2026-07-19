@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker, stopProSyncWorker, setTokenRefreshHandler, updateWorkerToken } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
+import { clearAllMetadataCache } from "../utils/metadata";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
 
 const AUTH_MODULE = "useAuth";
@@ -92,6 +93,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       try {
         await invoke("clear_stream_token");
         await invoke("clear_local_cache");
+        clearAllMetadataCache();
       } catch (e) {
         console.warn(`[${AUTH_MODULE}] Failed to clear backend token/cache (clear_stream_token/clear_local_cache) — continuing logout`, classifyError(e));
       }
@@ -134,6 +136,12 @@ export const useAuth = (onLogoutExt?: () => void) => {
     }).then(fn => {
       if (listenerCancelled) { fn(); return; }
       unlistenFn = fn;
+    }).catch((err) => {
+      // listenerCancelled just means the effect already cleaned up; an abort
+      // there is expected and silent. Surface anything else for observability.
+      if (!(err instanceof DOMException && err.name === 'AbortError') && !listenerCancelled) {
+        console.warn(`[${AUTH_MODULE}] token-expired listener registration failed`, classifyError(err));
+      }
     });
     
     return () => {

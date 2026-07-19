@@ -218,7 +218,15 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
             let parsed_url = match url::Url::parse(&uri) {
                 Ok(u) => u,
                 Err(_) => {
-                    responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(Vec::new()).unwrap());
+                    responder.respond(
+                        Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body(Vec::new())
+                            .unwrap_or_else(|e| {
+                                eprintln!("[protocol] failed to build BAD_REQUEST (invalid URI) response: {e}");
+                                Response::new(Vec::new())
+                            }),
+                    );
                     return;
                 }
             };
@@ -234,7 +242,10 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                         .header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
                         .header("Access-Control-Allow-Headers", "*")
                         .body(Vec::new())
-                        .unwrap()
+                        .unwrap_or_else(|e| {
+                            eprintln!("[protocol] failed to build OPTIONS response: {e}");
+                            Response::new(Vec::new())
+                        })
                 );
                 return;
             }
@@ -250,14 +261,23 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let cache_dir = match app_handle.path().app_cache_dir() {
                     Ok(d) => d,
                     Err(_) => {
-                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Vec::new()).unwrap());
+                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Vec::new()).unwrap_or_else(|e| {
+                            eprintln!("[protocol] failed to build 500 (cover POST cache dir) response: {e}");
+                            Response::new(Vec::new())
+                        }));
                         return;
                     }
                 };
 
                 match handle_cover_post(raw_id, thumb, body, &cache_dir) {
-                    Ok(_) => responder.respond(Response::builder().status(StatusCode::OK).body(Vec::new()).unwrap()),
-                    Err(e) => responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(e.into_bytes()).unwrap()),
+                    Ok(_) => responder.respond(Response::builder().status(StatusCode::OK).body(Vec::new()).unwrap_or_else(|e| {
+                        eprintln!("[protocol] failed to build 200 (cover POST) response: {e}");
+                        Response::new(Vec::new())
+                    })),
+                    Err(e) => responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(e.into_bytes()).unwrap_or_else(|e| {
+                        eprintln!("[protocol] failed to build 400 (cover POST) response: {e}");
+                        Response::new(Vec::new())
+                    })),
                 }
                 return;
             }
@@ -267,7 +287,10 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let file_id = match parsed_url.query_pairs().find(|(k, _)| k == "id") {
                     Some((_, id)) => id.into_owned(),
                     None => {
-                        responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap());
+                        responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap_or_else(|e| {
+                            eprintln!("[protocol] failed to build 400 (cover missing id) response: {e}");
+                            Response::new(Vec::new())
+                        }));
                         return;
                     }
                 };
@@ -288,12 +311,15 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let recorder = match ACCESS_RECORDER.get() {
                     Some(r) => r,
                     None => {
-                        responder.respond(
-                            Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(b"Access recorder not initialized".to_vec())
-                                .unwrap(),
-                        );
+                            responder.respond(
+                                Response::builder()
+                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(b"Access recorder not initialized".to_vec())
+                                    .unwrap_or_else(|e| {
+                                        eprintln!("[protocol] failed to build 500 (access recorder) response: {e}");
+                                        Response::new(Vec::new())
+                                    }),
+                            );
                         return;
                     }
                 };
@@ -313,8 +339,11 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                                 Response::builder()
                                     .status(StatusCode::NOT_MODIFIED)
                                     .header("Access-Control-Allow-Origin", "*")
-                                    .body(Vec::new())
-                                    .unwrap()
+                                .body(Vec::new())
+                                .unwrap_or_else(|e| {
+                                    eprintln!("[protocol] failed to build 304 (not modified) response: {e}");
+                                    Response::new(Vec::new())
+                                })
                             );
                         } else {
                             responder.respond(
@@ -324,8 +353,11 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                                     .header("Access-Control-Allow-Origin", "*")
                                     .header("Cache-Control", "public, max-age=31536000, immutable")
                                     .header("ETag", etag)
-                                    .body(bytes_val.to_vec())
-                                    .unwrap()
+                                .body(bytes_val.to_vec())
+                                .unwrap_or_else(|e| {
+                                    eprintln!("[protocol] failed to build 200 (cover) response: {e}");
+                                    Response::new(Vec::new())
+                                })
                             );
                         }
                     }
@@ -338,7 +370,10 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                                 .header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
                                 .header("ETag", "\"transparent\"")
                                 .body(transparent_pixel())
-                                .unwrap()
+                                .unwrap_or_else(|e| {
+                                    eprintln!("[protocol] failed to build 200 (transparent cover) response: {e}");
+                                    Response::new(Vec::new())
+                                })
                         );
                     }
                 }
@@ -350,22 +385,33 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let file_id = match parsed_url.query_pairs().find(|(k, _)| k == "id") {
                     Some((_, id)) => id.into_owned(),
                     None => {
-                        responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap());
+                        responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap_or_else(|_| Response::new(Vec::new())));
                         return;
                     }
                 };
                 let port = crate::PROXY_PORT.load(std::sync::atomic::Ordering::SeqCst);
 
-                let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() + 86400;
+                let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() + crate::STREAM_URL_TTL_SECS;
                 let payload = format!("{}:{}:{}", file_id, "", exp);
                 let secret = match crate::PROXY_SECRET.get() {
                     Some(s) => s.clone(),
                     None => {
-                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(b"Proxy not ready".to_vec()).unwrap());
+                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(b"Proxy not ready".to_vec()).unwrap_or_else(|_| Response::new(Vec::new())));
                         return;
                     }
                 };
-                let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(secret.as_bytes()).unwrap();
+                let mut mac = match <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(secret.as_bytes()) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        responder.respond(
+                            Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(b"HMAC init error".to_vec())
+                                .unwrap_or_else(|_| Response::new(Vec::new())),
+                        );
+                        return;
+                    }
+                };
                 mac.update(payload.as_bytes());
                 let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
@@ -378,12 +424,15 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                         .header("Cache-Control", "private, max-age=3600")
                         .header("Access-Control-Allow-Origin", "*")
                         .body(Vec::new())
-                        .unwrap()
+                        .unwrap_or_else(|_| Response::new(Vec::new()))
                 );
                 return;
             }
 
-            responder.respond(Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap());
+            responder.respond(Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap_or_else(|e| {
+                eprintln!("[protocol] failed to build 404 response: {e}");
+                Response::new(Vec::new())
+            }));
         });
     })
 }

@@ -104,7 +104,8 @@
     "format_error": "Audio format not supported, skipping to next track...",
     "drive_quota_exceeded": "Google Drive quota exceeded, retrying later...",
     "access_denied": "You no longer have access to this file, skipping...",
-    "download_quota": "This file exceeded Google's download quota, skipping..."
+    "download_quota": "This file exceeded Google's download quota, skipping...",
+    "seek_too_fast": "Shouldn't seek too fast with lossless file type. Skipping..."
   },
   "song_card": {
     "unknown_title": "Unknown Title",
@@ -157,9 +158,6 @@
     "playback": "Playback",
     "buffer_size": "Buffer Size",
     "buffer_desc": "Adjust pre-load time.",
-    "crossfade": "Crossfade",
-    "crossfade_desc": "Smoothly transition between tracks.",
-    "crossfade_duration": "Fade Duration",
     "milliseconds": "ms",
     "seconds": "seconds",
     "minutes": "minutes",
@@ -188,7 +186,22 @@
     "empty_trash_error": "Failed to empty trash",
     "restore_error": "Failed to restore file",
     "contact": "Contact",
-    "open_link_error": "Failed to open link"
+    "copy": "Copy",
+    "copied": "Copied!",
+    "open_link_error": "Failed to open link",
+    "error_log_title": "Error Log",
+    "error_log_copy": "Copy Report",
+    "error_log_copy_selected": "Copy Selected",
+    "error_log_copied": "Copied!",
+    "error_log_clear": "Clear",
+    "error_log_empty": "No errors have been recorded yet.",
+    "error_log_note": "These logs are filtered to remove personal information (IDs, tokens, links) before leaving your device.",
+    "error_log_stack": "Stack trace",
+    "error_log_copy_error": "Could not copy to clipboard.",
+    "error_log_clear_error": "Failed to clear logs.",
+    "error_log_by_date": "Errors by day",
+    "error_log_back": "Back",
+    "error_log_count": "{{count}} errors"
   },
   "sort": {
     "name_asc": "A-Z",

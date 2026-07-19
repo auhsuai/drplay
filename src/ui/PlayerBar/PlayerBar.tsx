@@ -19,7 +19,7 @@ function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; cla
   return <Icon className={`${className} text-[#4285F4]`} />;
 }
 
-export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying, crossfadeEnabled, crossfadeDuration }: PlayerBarProps) {
+export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
   const { t } = useTranslation();
 
   // 1. Player state
@@ -82,8 +82,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     isPlaying,
     playMode,
     loadNonce,
-    crossfadeEnabled,
-    crossfadeDuration,
     dispatch,
     t,
     isPlayingRef,
@@ -146,9 +144,6 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     setVolume,
     setIsMuted,
     setIsVolumeActive: triggerVolumeActive,
-    progressFillRef,
-    currentTimeTextRef,
-    tauriBufferEndRef: trackMetadata.tauriBufferEndRef,
   });
 
   // 5. Volume sync effect

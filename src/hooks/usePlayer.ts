@@ -6,6 +6,7 @@ import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
+import { prefetchNextTrackAudio, clearNextTrackPrefetches } from '../utils/nextTrackPrefetcher';
 
 
 const playRequestIdRef = { current: 0 };
@@ -36,10 +37,7 @@ export const usePlayer = (accessToken: string | null) => {
   const [originalQueue, setOriginalQueue] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [bufferSeconds, setBufferSeconds] = useState(1400);
-  const [crossfadeEnabled, setCrossfadeEnabled] = useState(false);
-  const [crossfadeDuration, setCrossfadeDuration] = useState(3000);
   const initialBufferRef = useRef(true);
-  const initialCrossfadeRef = useRef(true);
 
   // Persist buffer setting changes to IndexedDB and Rust backend
   useEffect(() => {
@@ -53,16 +51,6 @@ export const usePlayer = (accessToken: string | null) => {
     );
   }, [bufferSeconds]);
 
-  // Persist crossfade settings to IndexedDB
-  useEffect(() => {
-    if (initialCrossfadeRef.current) {
-      initialCrossfadeRef.current = false;
-      return;
-    }
-    idbSet("drplay_crossfade_enabled", crossfadeEnabled);
-    idbSet("drplay_crossfade_duration", crossfadeDuration);
-  }, [crossfadeEnabled, crossfadeDuration]);
-
   // Keep system awake while playing
   useEffect(() => {
     if (isPlaying) {
@@ -75,6 +63,13 @@ export const usePlayer = (accessToken: string | null) => {
       );
     }
   }, [isPlaying]);
+
+  // Persist playMode changes
+  useEffect(() => {
+    idbSet('drplay_playmode', playMode).catch(e =>
+      console.warn(`[usePlayer] playmode-save-fail`, classifyPlayerError(e))
+    );
+  }, [playMode]);
 
   // Cleanup on logout
   useEffect(() => {
@@ -112,13 +107,6 @@ export const usePlayer = (accessToken: string | null) => {
           : undefined;
         if (validBuffer !== undefined) setBufferSeconds(validBuffer);
 
-        const storedCrossfadeEnabled = await get("drplay_crossfade_enabled");
-        if (typeof storedCrossfadeEnabled === "boolean") setCrossfadeEnabled(storedCrossfadeEnabled);
-        const rawCrossfadeDuration = await get("drplay_crossfade_duration");
-        if (typeof rawCrossfadeDuration === "number" && Number.isFinite(rawCrossfadeDuration) && rawCrossfadeDuration > 0) {
-          setCrossfadeDuration(rawCrossfadeDuration);
-        }
-
         if (lastSession && lastSession.track) {
           if (isIntentStale(myId)) {
             return;
@@ -145,12 +133,37 @@ export const usePlayer = (accessToken: string | null) => {
           }
           if (isIntentStale(myId)) return;
 
-          setCurrentTrack({
+          const savedQueue = await get('drplay_queue');
+          const savedPlayMode = await get('drplay_playmode');
+          if (isIntentStale(myId)) return;
+
+          const restoredTrack: Track = {
             ...lastSession.track,
             streamUrl,
             restoreTime: lastSession.time,
-            restoreDuration: lastSession.duration
-          });
+            restoreDuration: lastSession.duration,
+          };
+          setCurrentTrack(restoredTrack);
+
+          if (savedQueue && Array.isArray(savedQueue) && savedQueue.length > 0) {
+            setOriginalQueue(savedQueue);
+            if (savedPlayMode === 'shuffle') {
+              const q = [...savedQueue];
+              const idx = q.findIndex(t => t.id === restoredTrack.id);
+              let head = idx !== -1 ? q.splice(idx, 1)[0] : { ...restoredTrack, queueItemId: crypto.randomUUID() };
+              for (let i = q.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [q[i], q[j]] = [q[j], q[i]];
+              }
+              q.unshift(head);
+              setPlaybackQueue(q);
+            } else {
+              setPlaybackQueue([...savedQueue]);
+            }
+          } else {
+            setPlaybackQueue([restoredTrack]);
+          }
+          if (savedPlayMode) setPlayMode(savedPlayMode);
           triggerReload();
         }
       } catch (e) {
@@ -183,6 +196,9 @@ export const usePlayer = (accessToken: string | null) => {
 
       if (newOriginalQueue.length > 0) {
         setOriginalQueue(newOriginalQueue);
+        idbSet('drplay_queue', newOriginalQueue).catch(e =>
+          console.warn(`[usePlayer] queue-save-fail`, classifyPlayerError(e))
+        );
         if (playMode === 'shuffle') {
           const shuffled = [...newOriginalQueue];
           const trackIndex = shuffled.findIndex(t => t.id === track.id);
@@ -214,10 +230,10 @@ export const usePlayer = (accessToken: string | null) => {
         if (!targetTrack.queueItemId) {
           targetTrack = {...targetTrack, queueItemId: crypto.randomUUID()};
         }
-        // ROOT FIX: contextQueue-less plays left playbackQueue empty/stale,
-        // making handleNextTrack/handlePrevTrack silently dead. Ensure the
-        // current track is always present in the playback queue.
         setPlaybackQueue([targetTrack]);
+        idbSet('drplay_queue', []).catch(e =>
+          console.warn(`[usePlayer] queue-clear-fail`, classifyPlayerError(e))
+        );
       }
     }
 
@@ -225,6 +241,24 @@ export const usePlayer = (accessToken: string | null) => {
 
     setIsPlaying(false);
     setIsDownloading(true);
+
+    const maybePrefetchNextTrack = (queue: Track[] | undefined, current: Track) => {
+      if (!queue || queue.length < 2) return;
+      const idx = queue.findIndex(
+        item => item.queueItemId ? item.queueItemId === current.queueItemId : item.id === current.id
+      );
+      if (idx === -1 || idx >= queue.length - 1) return;
+      const next = queue[idx + 1];
+      const url = getPrefetchedStreamUrl(next.id);
+      if (url) {
+        prefetchNextTrackAudio(url);
+      } else {
+        const ext = next.originalName?.split('.').pop()?.toLowerCase();
+        invoke<string>("get_stream_url", { fileId: next.id, ext })
+          .then(url => { if (url) prefetchNextTrackAudio(url); })
+          .catch(err => { console.warn('[usePlayer] next-track-prefetch-fail', err); });
+      }
+    };
 
     const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
@@ -249,6 +283,8 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(true);
       setIsDownloading(false);
 
+      maybePrefetchNextTrack(contextQueue, targetTrack);
+
       getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
         if (metadata.duration && !isIntentStale(myId)) {
           setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
@@ -258,37 +294,40 @@ export const usePlayer = (accessToken: string | null) => {
     }
 
     try {
-      let accurateMetaDuration = undefined;
       const freshToken = await getValidToken();
       if (isIntentStale(myId)) return;
       if (!freshToken) {
         setIsDownloading(false);
         return;
       }
-      
-      try {
-        const metadata = await getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName);
-        if (isIntentStale(myId)) return;
-        if (metadata.duration) {
-           accurateMetaDuration = metadata.duration;
-        }
-      } catch (e) {
-        console.warn(`[usePlayer] bitrate-buffer-fail`, classifyPlayerError(e));
-      }
 
       const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
-      let streamUrl = await invoke<string>("get_stream_url", { fileId: targetTrack.id, duration: accurateMetaDuration, bufferSeconds, ext });
-      if (isIntentStale(myId)) {
+      const streamUrl = await invoke<string>("get_stream_url", {
+        fileId: targetTrack.id,
+        bufferSeconds,
+        ext,
+      });
+
+      if (isIntentStale(myId)) return;
+      if (!streamUrl) {
+        setIsDownloading(false);
         return;
       }
 
-      setCurrentTrack({ 
-        ...targetTrack, 
-        streamUrl, 
-        restoreDuration: accurateMetaDuration || targetTrack.restoreDuration 
-      });
+      setCurrentTrack({ ...targetTrack, streamUrl });
       triggerReload();
       setIsPlaying(true);
+      setIsDownloading(false);
+
+      maybePrefetchNextTrack(contextQueue, targetTrack);
+
+      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName)
+        .then(metadata => {
+          if (metadata.duration && !isIntentStale(myId)) {
+            setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
+          }
+        })
+        .catch(e => console.warn(`[usePlayer] metadata-fetch-fail`, classifyPlayerError(e)));
     } catch (e) {
       if (isIntentStale(myId)) return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
@@ -430,10 +469,6 @@ export const usePlayer = (accessToken: string | null) => {
     playMode,
     bufferSeconds,
     setBufferSeconds,
-    crossfadeEnabled,
-    setCrossfadeEnabled,
-    crossfadeDuration,
-    setCrossfadeDuration,
     handlePlayTrack,
     handleNextTrack,
     handlePrevTrack,

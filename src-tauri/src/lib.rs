@@ -14,7 +14,22 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
 }
 
+// --- Named constants for the stream URL / buffer sizing (no magic numbers) ---
+// Signed-URL lifetime: 24h. Shared by `get_stream_url` and the `/stream`
+// redirect in protocol.rs so the two signers stay in sync.
+pub(crate) const STREAM_URL_TTL_SECS: u64 = 86_400;
+// Fallback buffer seconds when the frontend omits `buffer_seconds`.
+const DEFAULT_BUFFER_SECONDS_F64: f64 = 180.0;
+// Nominal decode rate used to size the prefetch window: 320 kbit/s audio
+// => 320_000/8 = 40_000 bytes/s.
+const NOMINAL_BYTES_PER_SEC: u64 = 320_000 / 8;
+const MIN_BUFFER_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_BUFFER_BYTES: u64 = 500 * 1024 * 1024;
+// Default prefetch window (seconds) when the user has not changed the setting.
+const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
+
 pub mod protocol;
+pub mod slice_cache;
 mod thumbnail;
 
 #[command]
@@ -31,12 +46,12 @@ async fn login_google_native() -> Result<Value, String> {
         let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).map_err(|e| format!("Invalid wa_credential.json: {}", e))?;
         let client_id = ClientId::new(creds["installed"]["client_id"].as_str().ok_or("Missing client_id in wa_credential.json")?.to_string());
         let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().ok_or("Missing client_secret in wa_credential.json")?.to_string());
-        let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap();
-        let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
+        let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).map_err(|e| format!("invalid AuthUrl: {e:?}"))?;
+        let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).map_err(|e| format!("invalid TokenUrl: {e:?}"))?;
 
         // 1. Dynamic Port Binding
         let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| format!("Failed to start server: {}", e))?;
-        let port = server.server_addr().to_ip().unwrap().port();
+        let port = server.server_addr().to_ip().ok_or("server address has no IP")?.port();
         let redirect_uri = format!("http://127.0.0.1:{}", port);
 
         let client = BasicClient::new(
@@ -45,7 +60,7 @@ async fn login_google_native() -> Result<Value, String> {
             auth_url,
             Some(token_url),
         )
-        .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).unwrap());
+            .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).map_err(|e| format!("invalid RedirectUrl: {e:?}"))?);
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
         let (auth_url, csrf_token) = client
@@ -77,7 +92,7 @@ async fn login_google_native() -> Result<Value, String> {
 
                 if error.is_some() {
                     let response = tiny_http::Response::from_string("<html><body><script>window.close();</script></body></html>")
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
                     let _ = request.respond(response);
                     return Err("User cancelled authorization".to_string());
                 }
@@ -117,7 +132,7 @@ async fn login_google_native() -> Result<Value, String> {
                     "#;
 
                     let response = tiny_http::Response::from_string(html_response)
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
                     let _ = request.respond(response);
 
                     let token_result = client
@@ -191,7 +206,7 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
     let ext_str = ext.unwrap_or_default();
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
 
-    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 86400;
+    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + STREAM_URL_TTL_SECS;
     let payload = format!("{}:{}:{}", file_id, ext_str, exp);
     let secret = crate::PROXY_SECRET.get().ok_or("Proxy not initialized")?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;
@@ -199,7 +214,7 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
     let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
     if let Some(b) = bitrate {
-        let buf = buffer_seconds.unwrap_or(180.0);
+        let buf = buffer_seconds.unwrap_or(DEFAULT_BUFFER_SECONDS_F64);
         Ok(format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig))
     } else {
         Ok(format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig))
@@ -216,14 +231,9 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
-pub static CURRENT_FILE_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DownloadState {
-    Idle,
-    Downloading,
-    Completed,
-    Failed(String),
+pub fn buffer_bytes_for_seconds(seconds: u64) -> u64 {
+    let bytes = seconds * NOMINAL_BYTES_PER_SEC;
+    bytes.clamp(MIN_BUFFER_BYTES, MAX_BUFFER_BYTES)
 }
 
 #[tauri::command]
@@ -245,17 +255,10 @@ struct LocalMetadata {
 pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
     if let Ok(mut exe_path) = std::env::current_exe() {
         exe_path.pop();
-        let path1 = exe_path.join("music_databasev2.db");
-        if path1.exists() { return Some(path1); }
-        let path2 = exe_path.join("music_database.db");
-        if path2.exists() { return Some(path2); }
+        let path = exe_path.join("music_database.db");
+        if path.exists() { return Some(path); }
     }
-
-    if std::path::Path::new("music_databasev2.db").exists() {
-        Some(std::path::PathBuf::from("music_databasev2.db"))
-    } else if std::path::Path::new("../music_databasev2.db").exists() {
-        Some(std::path::PathBuf::from("../music_databasev2.db"))
-    } else if std::path::Path::new("music_database.db").exists() {
+    if std::path::Path::new("music_database.db").exists() {
         Some(std::path::PathBuf::from("music_database.db"))
     } else if std::path::Path::new("../music_database.db").exists() {
         Some(std::path::PathBuf::from("../music_database.db"))
@@ -333,65 +336,6 @@ fn get_local_metadata(
 }
 
 #[tauri::command]
-async fn add_drive_track_to_db(
-    file_id: String,
-    size: i64,
-    name: String,
-    title: Option<String>,
-    artist: Option<String>,
-    duration: Option<f64>,
-    duration_estimated: Option<bool>,
-    picture_data: Option<Vec<u8>>,
-    picture_data_full: Option<Vec<u8>>,
-    app: tauri::AppHandle,
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> Result<String, String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-
-    // 1. Dedup — migrate thumbnail, return existing id
-    if let Some(existing) = get_local_metadata_internal(size, &name, &conn) {
-        if let Ok(cache_dir) = app.path().app_cache_dir() {
-            let _ = thumbnail::migrate_thumbnail(&cache_dir, &file_id, &existing.id);
-        }
-        return Ok(existing.id);
-    }
-
-    // 2. INSERT — this is the source of truth, must be committed first
-    let new_id = uuid::Uuid::new_v4().to_string();
-    let final_title = title.unwrap_or_else(|| name.clone());
-    let final_artist = artist.unwrap_or_default();
-
-    conn.execute(
-        "INSERT INTO tracks (id, title, artist, duration, duration_estimated, size_bytes, file_path)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![
-            new_id, final_title, final_artist, duration,
-            duration_estimated.unwrap_or(false), size,
-            format!("drive://{}", file_id),
-        ],
-    ).map_err(|e| e.to_string())?;
-    drop(conn);
-
-    // 3. Save thumbnail(s) to filesystem
-    if let Ok(cache_dir) = app.path().app_cache_dir() {
-        if let Some(pic) = picture_data {
-            let path = thumbnail::thumbnail_path(&cache_dir, &new_id, true);
-            if let Err(e) = thumbnail::atomic_write(&path, &pic) {
-                eprintln!("Warning: failed to write thumbnail for {}: {}", new_id, e);
-            }
-        }
-        if let Some(pic_full) = picture_data_full {
-            let path = thumbnail::thumbnail_path(&cache_dir, &new_id, false);
-            if let Err(e) = thumbnail::atomic_write(&path, &pic_full) {
-                eprintln!("Warning: failed to write full thumbnail for {}: {}", new_id, e);
-            }
-        }
-    }
-
-    Ok(new_id)
-}
-
-#[tauri::command]
 fn verify_track_exists(db_id: String, pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>) -> bool {
     let conn = match pool.get() {
         Ok(c) => c,
@@ -421,7 +365,9 @@ mod proxy;
 
 pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
-pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(2400);
+pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(DEFAULT_BUFFER_SECONDS_USIZE);
+pub static GLOBAL_SLICE_CACHE: once_cell::sync::OnceCell<slice_cache::SliceCache> =
+    once_cell::sync::OnceCell::new();
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 
@@ -464,30 +410,6 @@ pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
 pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
-fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
-    let mut cols: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(tracks)") {
-        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) {
-            for row in rows.flatten() {
-                cols.push(row);
-            }
-        }
-    }
-    if !cols.contains(&"cover_art".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN cover_art BLOB", []).map_err(|e| e.to_string())?;
-    }
-    if !cols.contains(&"thumbnail".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN thumbnail BLOB", []).map_err(|e| e.to_string())?;
-    }
-    if !cols.contains(&"size_bytes".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER", []).map_err(|e| e.to_string())?;
-    }
-    if !cols.contains(&"duration_estimated".to_string()) {
-        conn.execute("ALTER TABLE tracks ADD COLUMN duration_estimated INTEGER DEFAULT 0", []).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute_batch("PRAGMA journal_mode=WAL;").map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA synchronous=NORMAL;").map_err(|e| e.to_string())?;
@@ -497,13 +419,21 @@ fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
+    {
+        let seconds = GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
+        let max_bytes = buffer_bytes_for_seconds(seconds);
+        GLOBAL_SLICE_CACHE
+            .set(slice_cache::SliceCache::new(max_bytes))
+            .ok();
+    }
     proxy::start_proxy();
-    protocol::register(tauri::Builder::default())
+    let app_result = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_keepawake::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
 
@@ -529,7 +459,6 @@ pub fn run() {
                 // Schema migration
                 if let Ok(conn) = migration_pool.get() {
                     configure_sqlite_durability(&conn).ok();
-                    ensure_schema(&conn).ok();
                 }
             }
 
@@ -594,14 +523,21 @@ pub fn run() {
             get_local_metadata,
             update_stream_token, clear_stream_token,
             update_minimize_to_tray,
-            add_drive_track_to_db,
             verify_track_exists,
             update_track_duration_in_db,
             clear_local_cache,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|_app_handle, event| match event {
+        .build(tauri::generate_context!());
+
+    let app = match app_result {
+        Ok(app) => app,
+        Err(e) => {
+            eprintln!("[drplay] failed to build tauri application: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|_app_handle, event| match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 IS_QUITTING.store(true, Ordering::SeqCst);
             }

@@ -1,4 +1,5 @@
 import React from "react";
+import { captureError } from "../utils/errorLog";
 
 /**
  * Top-level React Error Boundary (React 19 pattern).
@@ -44,6 +45,19 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     // Context-only logging. `error` (message/name) and `errorInfo.componentStack`
     // are safe to surface; no credentials/tokens/PII are ever included.
     console.error("[ErrorBoundary]", error, errorInfo);
+
+    // Route the render error into the global error log (Slice 2).
+    // Wrapped so a failure in captureError can NEVER loop/crash the boundary.
+    try {
+      captureError({
+        level: "error",
+        source: "ErrorBoundary",
+        message: error.message,
+        stack: error.stack,
+      });
+    } catch {
+      // ignore — capture must never break error recovery
+    }
   }
 
   private handleReload = (): void => {
