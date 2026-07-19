@@ -91,6 +91,7 @@ async fn handle_cover_get_r2(
     raw_id: &str,
     thumb: bool,
     pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
+    cache_dir: Option<&Path>,
 ) -> Option<(String, Bytes)> {
     let (cover_url, thumb_url) = match pool.and_then(|p| query_cover_url(p, raw_id)) {
         Some(v) => v,
@@ -115,6 +116,12 @@ async fn handle_cover_get_r2(
     eprintln!("[protocol] cover_r2: id={:?} thumb={} key={:?}", raw_id, thumb, key);
     match crate::r2::get_cover_bytes(key).await {
         Ok(data) => {
+            // Cache the R2 object to local disk so subsequent loads are instant
+            // (the disk check in handle_cover_get runs BEFORE the R2 fetch).
+            if let Some(dir) = cache_dir {
+                let target = thumbnail_path(dir, raw_id, thumb);
+                let _ = crate::thumbnail::atomic_write(&target, &data);
+            }
             let etag = format!("\"{:x}\"", md5::compute(&data));
             Some((etag, Bytes::from(data)))
         }
@@ -137,7 +144,7 @@ async fn handle_cover_get<R: tauri::Runtime>(
 
     // Step 0: R2 object storage (server-side fetch of cover_url/thumb_url).
     // Runs inline; on miss/error it falls through to disk/SQLite below.
-    if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool).await {
+    if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool, cache_dir).await {
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
