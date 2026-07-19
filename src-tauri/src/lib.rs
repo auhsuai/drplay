@@ -253,6 +253,14 @@ struct LocalMetadata {
     file_type: String,
     cover_url: Option<String>,
     thumb_url: Option<String>,
+    bitrate: i64,
+    sample_rate: i64,
+    bit_depth: i64,
+    channels: i64,
+    genre: String,
+    year: i64,
+    track_number: i64,
+    album_artist: String,
 }
 
 pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
@@ -281,16 +289,29 @@ fn get_local_metadata_internal(
     let has_cover_url = HAS_COVER_URL.get_or_init(|| {
         conn.prepare("SELECT cover_url FROM tracks LIMIT 1").is_ok()
     });
+    let has_extended_meta = HAS_EXTENDED_META.get_or_init(|| {
+        conn.prepare("SELECT bitrate FROM tracks LIMIT 1").is_ok()
+    });
 
-    // Column indices: 0 title,1 artist,2 album,3 duration,4 file_path,
+    // Column indices (when both file_type + cover_url present):
+    // 0 title,1 artist,2 album,3 duration,4 file_path,
     // 5 has_cover(cover_art IS NOT NULL),6 file_type,7 id,
-    // 8 cover_url,9 thumb_url (only when schema has them).
-    let query = if *has_file_type && *has_cover_url {
-        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id, cover_url, thumb_url FROM tracks WHERE size_bytes = ?"
-    } else if *has_file_type {
-        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id FROM tracks WHERE size_bytes = ?"
-    } else {
-        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '', id FROM tracks WHERE size_bytes = ?"
+    // 8 cover_url,9 thumb_url,
+    // 10 bitrate,11 sample_rate,12 bit_depth,13 channels,
+    // 14 genre,15 year,16 track_number,17 album_artist.
+    let query = match (*has_file_type, *has_cover_url, *has_extended_meta) {
+        (true, true, true) => {
+            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id, cover_url, thumb_url, bitrate, sample_rate, bit_depth, channels, genre, year, track_number, album_artist FROM tracks WHERE size_bytes = ?"
+        }
+        (true, true, false) => {
+            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id, cover_url, thumb_url FROM tracks WHERE size_bytes = ?"
+        }
+        (true, false, _) => {
+            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id FROM tracks WHERE size_bytes = ?"
+        }
+        _ => {
+            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '', id FROM tracks WHERE size_bytes = ?"
+        }
     };
 
     let mut stmt = conn.prepare(query).ok()?;
@@ -304,6 +325,21 @@ fn get_local_metadata_internal(
         } else {
             (None, None)
         };
+        let (bitrate, sample_rate, bit_depth, channels, genre, year, track_number, album_artist):
+            (i64, i64, i64, i64, String, i64, i64, String) = if *has_extended_meta {
+            (
+                row.get(10).unwrap_or_default(),
+                row.get(11).unwrap_or_default(),
+                row.get(12).unwrap_or_default(),
+                row.get(13).unwrap_or_default(),
+                row.get(14).unwrap_or_default(),
+                row.get(15).unwrap_or_default(),
+                row.get(16).unwrap_or_default(),
+                row.get(17).unwrap_or_default(),
+            )
+        } else {
+            (0, 0, 0, 0, String::new(), 0, 0, String::new())
+        };
         let meta = LocalMetadata {
             title: row.get(0).unwrap_or_default(),
             artist: row.get(1).unwrap_or_default(),
@@ -314,6 +350,14 @@ fn get_local_metadata_internal(
             id: row.get(7).unwrap_or_default(),
             cover_url,
             thumb_url,
+            bitrate,
+            sample_rate,
+            bit_depth,
+            channels,
+            genre,
+            year,
+            track_number,
+            album_artist,
         };
 
         if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
@@ -431,6 +475,7 @@ use std::sync::OnceLock;
 pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
 pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
 pub static HAS_COVER_URL: OnceLock<bool> = OnceLock::new();
+pub static HAS_EXTENDED_META: OnceLock<bool> = OnceLock::new();
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -497,6 +542,26 @@ pub fn run() {
                             "ALTER TABLE tracks ADD COLUMN thumb_url TEXT",
                             [],
                         );
+                    }
+
+                    // Migration: add pro-grade audio metadata columns so old DBs
+                    // (scanned before this feature) still open and just report 0/empty.
+                    let has_extended_meta = *HAS_EXTENDED_META.get_or_init(|| {
+                        conn.prepare("SELECT bitrate FROM tracks LIMIT 1").is_ok()
+                    });
+                    if !has_extended_meta {
+                        for col in [
+                            "ALTER TABLE tracks ADD COLUMN bitrate INTEGER",
+                            "ALTER TABLE tracks ADD COLUMN sample_rate INTEGER",
+                            "ALTER TABLE tracks ADD COLUMN bit_depth INTEGER",
+                            "ALTER TABLE tracks ADD COLUMN channels INTEGER",
+                            "ALTER TABLE tracks ADD COLUMN genre TEXT",
+                            "ALTER TABLE tracks ADD COLUMN year INTEGER",
+                            "ALTER TABLE tracks ADD COLUMN track_number INTEGER",
+                            "ALTER TABLE tracks ADD COLUMN album_artist TEXT",
+                        ] {
+                            let _ = conn.execute(col, []);
+                        }
                     }
                 }
             }
@@ -595,7 +660,9 @@ mod tests {
             "CREATE TABLE tracks (
                 id TEXT, title TEXT, artist TEXT, album TEXT,
                 duration REAL, file_path TEXT, cover_art BLOB,
-                file_type TEXT, size_bytes INTEGER
+                file_type TEXT, size_bytes INTEGER, cover_url TEXT, thumb_url TEXT,
+                bitrate INTEGER, sample_rate INTEGER, bit_depth INTEGER, channels INTEGER,
+                genre TEXT, year INTEGER, track_number INTEGER, album_artist TEXT
             )",
             [],
         )
