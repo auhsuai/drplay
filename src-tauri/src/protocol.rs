@@ -63,6 +63,66 @@ fn query_cover_blob(
     Ok(None)
 }
 
+fn query_cover_url(
+    pool: &r2d2::Pool<SqliteConnectionManager>,
+    file_id: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let conn = pool.get().ok()?;
+    let has_cover_url = *crate::HAS_COVER_URL.get_or_init(|| {
+        conn.prepare("SELECT cover_url FROM tracks LIMIT 1").is_ok()
+    });
+    if !has_cover_url {
+        return None;
+    }
+    let path: (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT cover_url, thumb_url FROM tracks WHERE id = ?",
+            [file_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()?;
+    Some(path)
+}
+
+// Async priority 0: if the DB row carries an R2 object key (cover_url/thumb_url),
+// fetch the bytes directly from R2 server-side. Keeps R2 credentials off the JS
+// layer — the webview still only sees http://drplay.localhost/cover?...
+async fn handle_cover_get_r2(
+    raw_id: &str,
+    thumb: bool,
+    pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
+) -> Option<(String, Bytes)> {
+    let (cover_url, thumb_url) = match pool.and_then(|p| query_cover_url(p, raw_id)) {
+        Some(v) => v,
+        None => return None,
+    };
+    let key = if thumb { &thumb_url } else { &cover_url };
+    let key = key.as_ref()?;
+    if key.trim().is_empty() {
+        return None;
+    }
+    match crate::r2::get_cover_bytes(key).await {
+        Ok(data) => {
+            let etag = format!("\"{:x}\"", md5::compute(&data));
+            Some((etag, Bytes::from(data)))
+        }
+        // NotFound / error -> fall through to disk/SQLite/legacy sources.
+        Err(_) => None,
+    }
+}
+
+// Sync bridge: block on the async R2 fetch using the shared tokio runtime.
+// Returns None on any failure so the caller falls back to disk/SQLite. No unwrap
+// on the external call; a busy runtime simply yields None (safe fallback).
+fn handle_cover_get_r2_sync(
+    raw_id: &str,
+    thumb: bool,
+    pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
+) -> Option<(String, Bytes)> {
+    let rt = tokio::runtime::Handle::try_current().ok()?;
+    rt.block_on(handle_cover_get_r2(raw_id, thumb, pool))
+}
+
 fn handle_cover_get<R: tauri::Runtime>(
     raw_id: &str,
     thumb: bool,
@@ -73,6 +133,15 @@ fn handle_cover_get<R: tauri::Runtime>(
 ) -> Result<(String, Bytes), String> {
     if let Err(e) = validate_file_id(raw_id) {
         return Err(e);
+    }
+
+    // Step 0: R2 object storage (server-side fetch of cover_url/thumb_url).
+    // Runs inline; on miss/error it falls through to disk/SQLite below.
+    if let Some(r2_result) = handle_cover_get_r2_sync(raw_id, thumb, pool) {
+        if let Ok(mut r) = recorder.lock() {
+            r.record(raw_id);
+        }
+        return Ok(r2_result);
     }
 
     // Step 1: try filesystem (primary) exact match

@@ -67,3 +67,9 @@ diff.*
 scratch_*
 pj_rules.md
 refactor_*.cjs
+
+# R2 credentials / secrets — NEVER commit
+cloudflare R2/
+src-tauri/r2_config.json
+r2_config.json
+*.r2.json

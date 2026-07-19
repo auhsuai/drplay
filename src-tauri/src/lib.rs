@@ -30,6 +30,7 @@ const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
 
 pub mod protocol;
 pub mod slice_cache;
+pub mod r2;
 mod thumbnail;
 
 #[command]
@@ -250,6 +251,8 @@ struct LocalMetadata {
     duration: f64,
     has_cover: bool,
     file_type: String,
+    cover_url: Option<String>,
+    thumb_url: Option<String>,
 }
 
 pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
@@ -275,8 +278,16 @@ fn get_local_metadata_internal(
     let has_file_type = HAS_FILE_TYPE.get_or_init(|| {
         conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok()
     });
+    let has_cover_url = HAS_COVER_URL.get_or_init(|| {
+        conn.prepare("SELECT cover_url FROM tracks LIMIT 1").is_ok()
+    });
 
-    let query = if *has_file_type {
+    // Column indices: 0 title,1 artist,2 album,3 duration,4 file_path,
+    // 5 has_cover(cover_art IS NOT NULL),6 file_type,7 id,
+    // 8 cover_url,9 thumb_url (only when schema has them).
+    let query = if *has_file_type && *has_cover_url {
+        "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id, cover_url, thumb_url FROM tracks WHERE size_bytes = ?"
+    } else if *has_file_type {
         "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id FROM tracks WHERE size_bytes = ?"
     } else {
         "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '', id FROM tracks WHERE size_bytes = ?"
@@ -288,6 +299,11 @@ fn get_local_metadata_internal(
     let mut first_match = None;
     while let Ok(Some(row)) = rows.next() {
         let file_path: String = row.get(4).unwrap_or_default();
+        let (cover_url, thumb_url): (Option<String>, Option<String>) = if *has_cover_url {
+            (row.get(8).unwrap_or_default(), row.get(9).unwrap_or_default())
+        } else {
+            (None, None)
+        };
         let meta = LocalMetadata {
             title: row.get(0).unwrap_or_default(),
             artist: row.get(1).unwrap_or_default(),
@@ -296,6 +312,8 @@ fn get_local_metadata_internal(
             has_cover: row.get(5).unwrap_or_default(),
             file_type: row.get(6).unwrap_or_default(),
             id: row.get(7).unwrap_or_default(),
+            cover_url,
+            thumb_url,
         };
 
         if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
@@ -392,14 +410,18 @@ async fn clear_local_cache(app: tauri::AppHandle) -> Result<(), String> {
             // Idempotent: nothing to GC yet.
             return Ok(());
         }
-        let access_log_path = thumb_dir.join("access_log.json");
-        if let Err(e) = crate::thumbnail::gc_thumbnails(
-            &thumb_dir,
-            &access_log_path,
-            &crate::thumbnail::GcPolicy::default(),
-        ) {
-            eprintln!("[clear_local_cache] failed to GC thumbnails: {}", e);
-        }
+        // DISABLED by project requirement: cached covers must never be auto-deleted
+        // (kept for potential offline reuse later). The read path in protocol.rs is
+        // preserved; only the deletion (gc_thumbnails) is skipped.
+        //
+        // let access_log_path = thumb_dir.join("access_log.json");
+        // if let Err(e) = crate::thumbnail::gc_thumbnails(
+        //     &thumb_dir,
+        //     &access_log_path,
+        //     &crate::thumbnail::GcPolicy::default(),
+        // ) {
+        //     eprintln!("[clear_local_cache] failed to GC thumbnails: {}", e);
+        // }
     }
     Ok(())
 }
@@ -408,6 +430,7 @@ use std::sync::OnceLock;
 
 pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
 pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
+pub static HAS_COVER_URL: OnceLock<bool> = OnceLock::new();
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -459,6 +482,22 @@ pub fn run() {
                 // Schema migration
                 if let Ok(conn) = migration_pool.get() {
                     configure_sqlite_durability(&conn).ok();
+
+                    // Migration: add R2 cover/thumb URL columns so old DBs still open.
+                    // Mirrors how `file_type` was gated with HAS_FILE_TYPE.
+                    let has_cover_url = *HAS_COVER_URL.get_or_init(|| {
+                        conn.prepare("SELECT cover_url FROM tracks LIMIT 1").is_ok()
+                    });
+                    if !has_cover_url {
+                        let _ = conn.execute(
+                            "ALTER TABLE tracks ADD COLUMN cover_url TEXT",
+                            [],
+                        );
+                        let _ = conn.execute(
+                            "ALTER TABLE tracks ADD COLUMN thumb_url TEXT",
+                            [],
+                        );
+                    }
                 }
             }
 
