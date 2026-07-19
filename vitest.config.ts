@@ -6,6 +6,7 @@ export default defineConfig({
     // React component/hook tests opt into jsdom via the per-file pragma:
     //   // @vitest-environment jsdom
     environment: "node",
+    setupFiles: ["src/test-setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 });

@@ -1,12 +1,15 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Play, Heart, Music } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Track } from '../../App';
 import { getFavorites, removeFavorite } from '../../utils/favorites';
-import { getTrackMetadata } from '../../utils/metadata';
 import { showErrorToast } from '../../utils/simpleToast';
 import { MoreMenu } from '../components/MoreMenu';
 import { prefetchVisibleTracks } from '../../utils/streamPrefetcher';
+import { useScrollVelocity } from '../../hooks/useScrollVelocity';
+import { useCoverWindowing } from '../../hooks/useCoverWindowing';
+import type { CoverWindowItem } from '../../hooks/useCoverWindowing';
 
 
 interface LikedSongsProps {
@@ -18,7 +21,7 @@ interface LikedSongsProps {
 export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
   const { t } = useTranslation();
   const [favorites, setFavorites] = useState<Track[]>([]);
-  const [covers, setCovers] = useState<Record<string, string>>({});
+  const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     loadFavorites().catch(err => console.error('[LikedSongs] Failed to load favorites', err));
@@ -46,56 +49,26 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
     if (ids.length > 0) prefetchVisibleTracks(ids);
   }, [favorites]);
 
-  const blobUrlsRef = useRef<string[]>([]);
+  const rowVirtualizer = useVirtualizer({
+    count: favorites.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 64,
+    overscan: 10,
+  });
 
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    const controller = new AbortController();
-    
-    // Load metadata/covers for favorites. Process in small batches of
-    // COVER_CONCURRENCY so a large playlist doesn't spawn hundreds of Drive
-    // requests at once (was: unlimited parallel via forEach).
-    const COVER_CONCURRENCY = 5;
-    const tracksToLoad = favorites.filter(track => !covers[track.id]);
+  const { dynamicMargin } = useScrollVelocity(scrollRef);
 
-    const loadBatch = async (batch: Track[]) => {
-      await Promise.all(batch.map(track =>
-        getTrackMetadata(track.id, token, track.size, track.originalName, controller.signal).then(metadata => {
-          if (cancelled) return;
-          if (metadata.coverUrl) {
-            setCovers(prev => ({
-              ...prev,
-              [track.id]: metadata.coverUrl!
-            }));
-          } else if (metadata.pictureData && metadata.pictureFormat) {
-            const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
-            const url = URL.createObjectURL(blob);
-            if (cancelled) { URL.revokeObjectURL(url); return; }
-            blobUrlsRef.current.push(url);
-            setCovers(prev => ({
-              ...prev,
-              [track.id]: url
-            }));
-          }
-        }).catch(err => console.warn('[LikedSongs] Failed to load cover metadata for track', track.id, err))
-      ));
-    };
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const visibleRange = virtualItems.length > 0
+    ? { start: virtualItems[0].index, end: virtualItems[virtualItems.length - 1].index }
+    : { start: 0, end: 0 };
 
-    const run = async () => {
-      for (let i = 0; i < tracksToLoad.length && !cancelled; i += COVER_CONCURRENCY) {
-        await loadBatch(tracksToLoad.slice(i, i + COVER_CONCURRENCY));
-      }
-    };
-    run().catch(err => console.error('[LikedSongs] Failed to load covers', err));
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
-      blobUrlsRef.current = [];
-    };
-  }, [favorites, token]);
+  const coverMap = useCoverWindowing({
+    items: favorites.map(t => ({ id: t.id, isFolder: false })) as CoverWindowItem[],
+    range: visibleRange,
+    token,
+    dynamicMargin,
+  });
 
   const handleUnlike = async (e: React.MouseEvent, trackId: string) => {
     e.stopPropagation();
@@ -108,7 +81,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
   };
 
   return (
-    <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex flex-col relative transition-colors duration-300">
+    <main ref={scrollRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex flex-col relative transition-colors duration-300">
       {/* Header Gradient */}
       <div className="h-64 bg-gradient-to-b from-[#5c4cf4] to-white dark:to-[#121212] flex items-end p-8 flex-shrink-0">
         <div className="flex items-end gap-6">
@@ -126,7 +99,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
       </div>
 
       {/* Action Bar */}
-      <div className="px-8 py-6">
+      <div className="px-8 py-6 flex-shrink-0">
         <button 
           onClick={() => favorites.length > 0 && onPlay(favorites[0], favorites, 0)}
           className="w-14 h-14 bg-[#4285F4] hover:bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
@@ -137,7 +110,7 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
       </div>
 
       {/* Track List */}
-      <div className="px-8 pb-24">
+      <div className="px-8 pb-24 flex-1 min-h-0">
         {favorites.length === 0 ? (
           <div className="text-gray-500 dark:text-gray-400 text-center py-20">
             <Music className="w-16 h-16 mx-auto mb-4 opacity-50" />
@@ -152,63 +125,78 @@ export function LikedSongs({ onPlay, token, currentTrack }: LikedSongsProps) {
               <div className="w-12"></div>
             </div>
             
-            <div className="space-y-1">
-              {favorites.map((track, index) => (
-                <div 
-                  key={track.id}
-                  onClick={() => onPlay(track, favorites, index)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    window.dispatchEvent(new CustomEvent('locate-file', {
-                      detail: { 
-                        fileId: track.id,
-                        parentId: track.parentId,
-                        parentName: track.parentName
-                      }
-                    }));
-                  }}
-                  className={`flex items-center gap-4 p-2 rounded-lg group cursor-pointer transition-all active:scale-[0.99] ${
-                    currentTrack?.id === track.id 
-                      ? 'bg-gray-100 dark:bg-[#2A2A2A]' 
-                      : 'hover:bg-gray-100 dark:hover:bg-[#2A2A2A]'
-                  }`}
-                >
-                  <div className={`w-12 text-center text-sm ${currentTrack?.id === track.id ? 'text-[#4285F4] hidden group-hover:block' : 'text-gray-400 group-hover:hidden'}`}>
-                    {currentTrack?.id === track.id ? <Music className="w-4 h-4 mx-auto" /> : index + 1}
-                  </div>
-                  <div className={`w-12 text-center items-center justify-center ${currentTrack?.id === track.id ? 'flex group-hover:hidden' : 'hidden group-hover:flex'}`}>
-                    <Play className={`w-4 h-4 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-900 dark:text-white'}`} fill="currentColor" />
-                  </div>
-                  
-                  <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? 'bg-[#4285F4]/10 text-[#4285F4]' : 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 text-[#4285F4]'}`}>
-                    {covers[track.id] ? (
-                      <img src={covers[track.id]} alt="cover" loading="lazy" decoding="async" onError={() => setCovers((c) => { const n = { ...c }; delete n[track.id]; return n; })} className="w-full h-full object-cover" />
-                    ) : (
-                      <Music className="w-5 h-5 opacity-80" />
-                    )}
-                  </div>
-                  
-                  <div className="flex-1 min-w-0 flex flex-col justify-center">
-                    <h4 className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-900 dark:text-white group-hover:text-[#4285F4]'}`}>
-                      {track.title}
-                    </h4>
-                    <p className="text-[13px] text-gray-500 truncate leading-tight">
-                      {track.artist || t('unknown_artist')}
-                    </p>
-                  </div>
-                  
-                  <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button 
-                      onClick={(e) => handleUnlike(e, track.id)}
-                      className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all text-[#4285F4] hover:scale-110"
-                      title={t('menu.remove_from_liked')}
+            <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px`, contain: 'strict' }}>
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const track = favorites[virtualRow.index];
+                const coverUrl = coverMap.get(track.id);
+                return (
+                  <div
+                    key={virtualRow.key}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: `${virtualRow.size}px`,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    <div 
+                      onClick={() => onPlay(track, favorites, virtualRow.index)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        window.dispatchEvent(new CustomEvent('locate-file', {
+                          detail: { 
+                            fileId: track.id,
+                            parentId: track.parentId,
+                            parentName: track.parentName
+                          }
+                        }));
+                      }}
+                      className={`flex items-center gap-4 p-2 rounded-lg group cursor-pointer transition-all active:scale-[0.99] ${
+                        currentTrack?.id === track.id 
+                          ? 'bg-gray-100 dark:bg-[#2A2A2A]' 
+                          : 'hover:bg-gray-100 dark:hover:bg-[#2A2A2A]'
+                      }`}
                     >
-                      <Heart className="w-4 h-4" fill="currentColor" />
-                    </button>
-                    <MoreMenu track={track} />
+                      <div className={`w-12 text-center text-sm ${currentTrack?.id === track.id ? 'text-[#4285F4] hidden group-hover:block' : 'text-gray-400 group-hover:hidden'}`}>
+                        {currentTrack?.id === track.id ? <Music className="w-4 h-4 mx-auto" /> : virtualRow.index + 1}
+                      </div>
+                      <div className={`w-12 text-center items-center justify-center ${currentTrack?.id === track.id ? 'flex group-hover:hidden' : 'hidden group-hover:flex'}`}>
+                        <Play className={`w-4 h-4 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-900 dark:text-white'}`} fill="currentColor" />
+                      </div>
+                      
+                      <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? 'bg-[#4285F4]/10 text-[#4285F4]' : 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 text-[#4285F4]'}`}>
+                        {coverUrl ? (
+                          <img src={coverUrl} alt="cover" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                        ) : (
+                          <Music className="w-5 h-5 opacity-80" />
+                        )}
+                      </div>
+                      
+                      <div className="flex-1 min-w-0 flex flex-col justify-center">
+                        <h4 className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-900 dark:text-white group-hover:text-[#4285F4]'}`}>
+                          {track.title}
+                        </h4>
+                        <p className="text-[13px] text-gray-500 truncate leading-tight">
+                          {track.artist || t('unknown_artist')}
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={(e) => handleUnlike(e, track.id)}
+                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all text-[#4285F4] hover:scale-110"
+                          title={t('menu.remove_from_liked')}
+                        >
+                          <Heart className="w-4 h-4" fill="currentColor" />
+                        </button>
+                        <MoreMenu track={track} />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

@@ -5,6 +5,13 @@ import { DriveItem, Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { MoreMenu } from "../../components/MoreMenu";
 
+function classifyCardError(err: unknown): { name: string; message: string } {
+  if (err instanceof Error) {
+    return { name: err.name, message: err.message };
+  }
+  return { name: "UnknownError", message: String(err) };
+}
+
 function formatDuration(seconds: number): string {
   if (!seconds) return "00:00:00";
   const h = Math.floor(seconds / 3600);
@@ -39,6 +46,8 @@ interface SongCardProps {
   hideMenu?: boolean;
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
+  /** Windowing-injected cover. When provided the card MUST NOT self-fetch. */
+  coverUrl?: string | null;
 }
 
 export const SongCard = React.memo(function SongCard({ 
@@ -60,10 +69,11 @@ export const SongCard = React.memo(function SongCard({
   onEnableSelectionMode,
   hideMenu,
   onBulkMoveClick,
-  onBulkDeleteClick
+  onBulkDeleteClick,
+  coverUrl: injectedCoverUrl
 }: SongCardProps) {
   const { t } = useTranslation();
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [coverUrl, setCoverUrl] = useState<string | null>(injectedCoverUrl ?? null);
   const [realTitle, setRealTitle] = useState(item.title);
   const [realArtist, setRealArtist] = useState<string | null>(null);
   const [duration, setDuration] = useState<number>(0);
@@ -103,13 +113,23 @@ export const SongCard = React.memo(function SongCard({
     }
   }, [isHighlighted, highlightTrigger]);
 
+  // Keep the injected cover in sync when the windowing layer provides/clears it.
   React.useEffect(() => {
+    if (injectedCoverUrl !== undefined) {
+      setCoverUrl(injectedCoverUrl);
+    }
+  }, [injectedCoverUrl]);
+
+  React.useEffect(() => {
+    // Backward-compatible path: when a cover is injected via windowing, the card
+    // MUST NOT self-fetch (single source of truth, no duplicate/racey fetches).
+    if (injectedCoverUrl !== undefined) return;
     if (item.isFolder || !token) return;
-    
+
     const controller = new AbortController();
     let isMounted = true;
     let objectUrl: string | null = null;
-    
+
     const fetchMetadata = async () => {
       try {
         const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
@@ -118,7 +138,7 @@ export const SongCard = React.memo(function SongCard({
         if (metadata.artist) setRealArtist(metadata.artist);
         if (metadata.duration) setDuration(metadata.duration);
         if (metadata.size) setSize(metadata.size);
-        
+
         if (metadata.coverUrl) {
           setCoverUrl(metadata.coverUrl);
         } else if (metadata.pictureData && metadata.pictureFormat) {
@@ -127,7 +147,8 @@ export const SongCard = React.memo(function SongCard({
           setCoverUrl(objectUrl);
         }
       } catch (e) {
-        console.warn('[SongCard] Failed to load track metadata', item.id, e);
+        const { name, message } = classifyCardError(e);
+        console.warn('[SongCard] Failed to load track metadata', { id: item.id, name, message });
       }
     };
 
@@ -145,14 +166,14 @@ export const SongCard = React.memo(function SongCard({
     };
 
     window.addEventListener('metadata-updated', handleMetadataUpdated);
-      
-    return () => { 
-      isMounted = false; 
+
+    return () => {
+      isMounted = false;
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       window.removeEventListener('metadata-updated', handleMetadataUpdated);
     };
-  }, [item.id, token]);
+  }, [item.id, token, injectedCoverUrl]);
 
   return (
     <div className="relative group/card w-full">
