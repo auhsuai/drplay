@@ -538,6 +538,13 @@ pub fn run() {
                             let _ = conn.execute(col, []);
                         }
                     }
+
+                    // Migration: add index on size_bytes for fast metadata lookup.
+                    // get_local_metadata queries by size_bytes — without index every
+                    // SongCard mount does a full table scan (~12K rows).
+                    let _ = conn.execute_batch(
+                        "CREATE INDEX IF NOT EXISTS idx_tracks_size_bytes ON tracks(size_bytes);"
+                    );
                 }
             }
 
@@ -642,6 +649,7 @@ mod tests {
             [],
         )
         .unwrap();
+        conn.execute_batch("CREATE INDEX idx_tracks_size_bytes ON tracks(size_bytes);").unwrap();
         conn
     }
 

@@ -151,7 +151,6 @@ function App() {
     handleSelectRootFolder
   } = useDrive(isLoggedIn, accessToken);
 
-  const [metadataVersion, setMetadataVersion] = useState(0);
   const [showRateLimitModal, setShowRateLimitModal] = useState(false);
 
   useEffect(() => {
@@ -200,19 +199,6 @@ function App() {
       cancelled = true;
       quotaFn?.();
       repairFn?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    let timeout: ReturnType<typeof setTimeout>;
-    const handler = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => setMetadataVersion(v => v + 1), 500);
-    };
-    window.addEventListener('metadata-updated', handler);
-    return () => {
-      clearTimeout(timeout);
-      window.removeEventListener('metadata-updated', handler);
     };
   }, []);
 
@@ -308,7 +294,7 @@ function App() {
         }
       }
     });
-  }, [dbFiles, sortOption, currentFolderName, metadataVersion]);
+  }, [dbFiles, sortOption, currentFolderName]);
 
   const handlePlayTrack = (track: Track, contextQueue?: Track[], isNavigation: boolean = false) => {
     playerPlayTrack(track, contextQueue, isNavigation, driveItems, activeTab);

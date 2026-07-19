@@ -79,7 +79,7 @@ class ConcurrencyQueue {
 }
 const metadataQueue = new ConcurrencyQueue(3);
 
-const HEAD_BYTES = 262144;
+const HEAD_BYTES = 65536;
 const TAIL_BYTES = 131072;
 const MAX_COVER_FETCH = 50 * 1024 * 1024;
 const CACHE_VERSION = 2;
