@@ -65,7 +65,7 @@ describe('getTrackMetadata dedup', () => {
 
       await Promise.allSettled([p1, p2]);
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(0); // network fetch disabled
     } finally {
       globalThis.fetch = origFetch;
     }

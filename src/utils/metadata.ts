@@ -287,7 +287,7 @@ async function compressImage(
 
 async function getTrackMetadataImpl(
   fileId: string,
-  token?: string,
+  _token?: string,
   size?: number,
   name?: string,
   _signal?: AbortSignal,
@@ -343,195 +343,25 @@ async function getTrackMetadataImpl(
     }
   }
 
-  // If no token, return empty metadata (cache-only path for UI components)
-  if (!token) {
-    const entry = {
-      title: safeName.replace(/\.[^.]+$/, ''),
-      artist: 'Unknown Artist',
-      duration: 0,
-      durationEstimated: true,
-      pictureData: null,
-      pictureDataFull: null,
-      v: 0,
-    };
-    setMetadataCache(fileId, entry);
-    return entry;
-  }
-
-  // 2. Fetch HEAD + TAIL in one multipart request
-  return metadataQueue.enqueue(async () => {
-    const tailStart = Math.max(HEAD_BYTES, safeSize - TAIL_BYTES);
-    const tailEnd = Math.max(0, safeSize - 1);
-    const rangeHeader = tailEnd < tailStart
-      ? `bytes=0-${HEAD_BYTES - 1}`
-      : `bytes=0-${HEAD_BYTES - 1},${tailStart}-${tailEnd}`;
-
-    const rangeSignal = _signal
-      ? AbortSignal.any([_signal, AbortSignal.timeout(30000)])
-      : AbortSignal.timeout(30000);
-    const response = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
-      headers: { Range: rangeHeader },
-      signal: rangeSignal,
-    });
-
-  if (!response.ok && response.status !== 206) {
-    throw new Error(`Failed to fetch metadata range: ${response.status}`);
-  }
-
-  const parts = await parseMultipartByteRanges(response);
-  const headBuffer = parts[0] || new Uint8Array();
-  const tailBuffer = parts[1] || new Uint8Array();
-
-  if (headBuffer.length === 0) {
-    throw new Error('Empty head buffer — file may be corrupt');
-  }
-
-  // 3. Dynamic Header Expansion
-  let finalHeadBuffer = headBuffer;
-
-  if (headBuffer.length >= 10 && headBuffer[0] === 0x49 && headBuffer[1] === 0x44 && headBuffer[2] === 0x33) {
-    // ID3v2 tag detected
-    const tagSize = ((headBuffer[6] & 0x7f) << 21) | ((headBuffer[7] & 0x7f) << 14) | ((headBuffer[8] & 0x7f) << 7) | (headBuffer[9] & 0x7f);
-    const totalTagSize = tagSize + 10;
-    
-    if (totalTagSize > headBuffer.length) {
-      const fetchUpTo = Math.min(totalTagSize, 20 * 1024 * 1024); // Cap at 20MB
-      if (fetchUpTo > headBuffer.length) {
-        try {
-          const extraResp = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
-            headers: { Range: `bytes=${headBuffer.length}-${fetchUpTo - 1}` },
-            signal: _signal,
-          });
-          if (extraResp.ok || extraResp.status === 206) {
-            const extraBuffer = new Uint8Array(await extraResp.arrayBuffer());
-            const combined = new Uint8Array(headBuffer.length + extraBuffer.length);
-            combined.set(headBuffer, 0);
-            combined.set(extraBuffer, headBuffer.length);
-            finalHeadBuffer = combined;
-          }
-        } catch (e) {
-          console.warn(`[${META_MODULE}] expand-id3-failed`, classifyMetaError(e));
-        }
-      }
-    }
-  } else if (headBuffer.length >= 8 && headBuffer[4] === 0x66 && headBuffer[5] === 0x74 && headBuffer[6] === 0x79 && headBuffer[7] === 0x70) {
-    // M4A / MP4 'ftyp' box detected
-    let moovOffset = -1;
-    let moovSize = 0;
-    for (let i = 0; i < headBuffer.length - 8; i++) {
-      if (headBuffer[i+4] === 0x6D && headBuffer[i+5] === 0x6F && headBuffer[i+6] === 0x6F && headBuffer[i+7] === 0x76) { // 'moov'
-        moovSize = (headBuffer[i] << 24) | (headBuffer[i+1] << 16) | (headBuffer[i+2] << 8) | headBuffer[i+3];
-        moovOffset = i;
-        break;
-      }
-    }
-    if (moovOffset !== -1) {
-      const requiredBytes = moovOffset + moovSize;
-      if (requiredBytes > headBuffer.length) {
-        const fetchUpTo = Math.min(requiredBytes, 20 * 1024 * 1024);
-        if (fetchUpTo > headBuffer.length) {
-          try {
-            const extraResp = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
-              headers: { Range: `bytes=${headBuffer.length}-${fetchUpTo - 1}` },
-              signal: _signal,
-            });
-            if (extraResp.ok || extraResp.status === 206) {
-              const extraBuffer = new Uint8Array(await extraResp.arrayBuffer());
-              const combined = new Uint8Array(headBuffer.length + extraBuffer.length);
-              combined.set(headBuffer, 0);
-              combined.set(extraBuffer, headBuffer.length);
-              finalHeadBuffer = combined;
-            }
-          } catch (e) {
-            console.warn(`[${META_MODULE}] expand-moov-failed`, classifyMetaError(e));
-          }
-        }
-      }
-    }
-  }
-
-  // 4. Parse HEAD
-  const mm = await import('music-metadata-browser');
-  let parsed = await mm.parseBuffer(finalHeadBuffer, { mimeType: guessMime(safeName), size: safeSize });
-
-  // 4. Duration: try TAIL if HEAD has none
-  let duration = parsed.format.duration;
-  let durationEstimated = false;
-  if (!duration && tailBuffer.length > 0) {
-    try {
-      const tailParsed = await mm.parseBuffer(tailBuffer, { mimeType: guessMime(safeName), size: safeSize });
-      duration = tailParsed.format.duration;
-    } catch {
-      // intentional fallback: TAIL parse failing is normal (no trailing metadata); fall through to estimation. Do NOT warn — would spam on every track.
-    }
-  }
-
-  // 5. Set duration to 0 if missing (will be updated dynamically by UI Player)
-  if (!duration) {
-    duration = 0;
-    durationEstimated = true;
-  }
-
-  // 6. Cover: fetch full image, create thumbnail
-  let pictureData: Uint8Array | null = null;
-  let pictureDataFull: Uint8Array | null = null;
-  let pictureFormat: string | undefined;
-
-  const pic = parsed.common.picture?.[0];
-  if (pic) {
-    pictureFormat = pic.format;
-
-    const declaredSize = (pic as any).declaredSize ?? pic.data.length;
-    if (declaredSize > MAX_COVER_FETCH) {
-      console.warn(`[${META_MODULE}] cover-too-large (${declaredSize} bytes > ${MAX_COVER_FETCH}), skipping to avoid memory issues`);
-    } else if (isImageTruncated(pic.data)) {
-      const offset = (pic as any).offset ?? 0;
-      if (declaredSize > 0 && offset + declaredSize <= safeSize) {
-        try {
-          const picResp = await fetch(`http://drplay.localhost/stream?id=${encodeURIComponent(fileId)}`, {
-            headers: { Range: `bytes=${offset}-${offset + declaredSize - 1}` },
-            signal: _signal,
-          });
-          if (picResp.ok || picResp.status === 206) {
-            const fullPic = new Uint8Array(await picResp.arrayBuffer());
-            if (!isImageTruncated(fullPic)) {
-              pictureDataFull = fullPic;
-              pictureData = await compressImage(fullPic, pic.format, 256, 0.7);
-            }
-          }
-        } catch {
-          // intentional fallback: truncated cover that can't be fetched via range is common; skip cover silently. Do NOT warn — would spam.
-        }
-      }
-    } else {
-      pictureDataFull = pic.data;
-      pictureData = await compressImage(pic.data, pic.format, 256, 0.7);
-    }
-  }
-
+  // DISABLED: network metadata fetch (HEAD+TAIL range fetch, music-metadata-browser parse,
+  // canvas cover compress). Metadata comes exclusively from local DB (get_local_metadata
+  // above) and R2/proxy cover URLs. Un-scanned files get a minimal placeholder — no
+  // network, no decode, no parse. To re-enable: restore the block removed in this commit.
   const entry: CachedMetadata = {
-    title: parsed.common.title || safeName.replace(/\.[^.]+$/, ''),
-    artist: parsed.common.artist || 'Unknown Artist',
-    album: parsed.common.album,
-    duration,
-    durationEstimated,
-    pictureData,
-    pictureDataFull,
-    pictureFormat,
-    bitrate: parsed.format.bitrate ?? undefined,
-    size: safeSize,
-    v: 9,
+    title: safeName.replace(/\.[^.]+$/, ''),
+    artist: 'Unknown Artist',
+    duration: 0,
+    durationEstimated: true,
+    pictureData: null,
+    pictureDataFull: null,
+    v: 0,
   };
-
-  const existingMem = metadataCache[fileId];
-  if (existingMem) {
-    entry.dbId = entry.dbId ?? existingMem.dbId;
-    entry.coverUrl = entry.coverUrl ?? existingMem.coverUrl;
-    entry.fullCoverUrl = entry.fullCoverUrl ?? existingMem.fullCoverUrl;
-  }
-  return cacheTrackMetadata(fileId, entry);
-  }, _signal);
+  setMetadataCache(fileId, entry);
+  return entry;
 }
+
+// dead-code references (kept for re-enable)
+void [metadataQueue, HEAD_BYTES, TAIL_BYTES, MAX_COVER_FETCH, guessMime, isImageTruncated, parseMultipartByteRanges, compressImage];
 
 export async function getTrackMetadata(
   fileId: string,
