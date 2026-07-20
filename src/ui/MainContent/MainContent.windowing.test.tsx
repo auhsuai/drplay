@@ -4,6 +4,18 @@ import { render, screen, cleanup } from '@testing-library/react';
 import { MainContent } from './MainContent';
 import type { DriveItem } from '../../App';
 
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: vi.fn(({ count }: { count: number }) => ({
+    getVirtualItems: () => Array.from({ length: count }, (_, i) => ({
+      index: i,
+      key: i,
+      size: 92,
+      start: i * 92,
+    })),
+    getTotalSize: () => count * 92,
+  })),
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string) => k }),
 }));
