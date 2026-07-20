@@ -165,11 +165,12 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
       if (currentTrack && event.payload.track_id === currentTrack.id) {
         if (event.payload.total_size_byte > 0) {
           tauriBufferEndRef.current = (event.payload.buffer_end_byte / event.payload.total_size_byte) * 100;
-
-          if (bufferFillRef.current) {
-            bufferFillRef.current.style.left = '0%';
-            bufferFillRef.current.style.width = `${tauriBufferEndRef.current}%`;
-          }
+          // NOTE: do NOT write to bufferFillRef here. The buffer bar is now
+          // driven by the actual HTMLAudioElement.buffered TimeRanges in
+          // useAudioEngine.handleTimeUpdate (called on every `progress`
+          // event). The proxy's byte-ratio is inaccurate for VBR audio and
+          // reports 100% once its slice cache can serve a range even when
+          // the browser has only buffered a few seconds of decoded media.
         }
       }
     }).then(fn => {

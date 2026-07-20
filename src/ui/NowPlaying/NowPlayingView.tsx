@@ -177,10 +177,10 @@ export const NowPlayingView = memo(function NowPlayingView({
       if (currentTrack && event.payload.track_id === currentTrack.id) {
         if (event.payload.total_size_byte > 0) {
           tauriBufferEndRef.current = (event.payload.buffer_end_byte / event.payload.total_size_byte) * 100;
-          
-          if (bufferFillRef.current) {
-            bufferFillRef.current.style.width = `${tauriBufferEndRef.current}%`;
-          }
+          // NOTE: do NOT write to bufferFillRef here. The buffer bar is now
+          // driven by the actual HTMLAudioElement.buffered TimeRanges in
+          // updateProgressUI (called on every `timeupdate` event). See the
+          // comment there for why the proxy's byte-ratio is inaccurate.
         }
       }
     }).then(fn => {
@@ -224,7 +224,17 @@ export const NowPlayingView = memo(function NowPlayingView({
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
-          // Buffer bar is driven by Tauri buffer-status events only
+          // Buffer bar is driven by the actual browser-buffered range, not the
+          // proxy's byte accounting. The proxy's buffer-status event reports
+          // prefetch progress in bytes which diverges from real playback time
+          // for VBR audio and reports 100% once its slice cache can serve a
+          // range even if the browser has only buffered a few seconds.
+          if (bufferFillRef.current && dur > 0 && audio.buffered.length > 0) {
+            const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
+            const pct = Math.min(100, (bufferedEnd / dur) * 100);
+            bufferFillRef.current.style.left = '0%';
+            bufferFillRef.current.style.width = `${pct}%`;
+          }
         }
       }
     };

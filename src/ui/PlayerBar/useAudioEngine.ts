@@ -97,10 +97,11 @@ interface UseAudioEngineParams {
   rateLimitUntilRef: React.MutableRefObject<number>;
   setDuration: React.Dispatch<React.SetStateAction<number>>;
   setIsBuffering: React.Dispatch<React.SetStateAction<boolean>>;
+  bufferFillRef: React.RefObject<HTMLDivElement | null>;
 }
 
 export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
-  const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering } = params;
+  const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering, bufferFillRef } = params;
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioRef2 = useRef<HTMLAudioElement>(null);
@@ -546,6 +547,19 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     if (!audio) return;
     const time = audio.currentTime;
     if (time > 0 && isFinite(time)) lastKnownPositionRef.current = time;
+
+    // Update the buffer bar from the ACTUAL browser-buffered range
+    // (audio.buffered TimeRanges), NOT the proxy's byte accounting. The
+    // proxy's buffer-status event reports prefetch progress in bytes,
+    // which diverges from real playback time for VBR audio and reports
+    // 100% once the proxy's slice cache can serve a range even if the
+    // browser has only buffered a few seconds of decoded media.
+    if (bufferFillRef.current && audio.duration > 0 && audio.buffered.length > 0) {
+      const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
+      const pct = Math.min(100, (bufferedEnd / audio.duration) * 100);
+      bufferFillRef.current.style.left = '0%';
+      bufferFillRef.current.style.width = `${pct}%`;
+    }
 
     // Data đang chảy → chắc chắn không buffering; huỷ debounce đang chờ.
     if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
