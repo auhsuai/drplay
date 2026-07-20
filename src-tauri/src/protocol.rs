@@ -4,7 +4,6 @@ use bytes::Bytes;
 use hmac::Mac;
 use std::sync::LazyLock;
 use std::time::Duration;
-use std::time::Instant;
 
 use r2d2_sqlite::SqliteConnectionManager;
 
@@ -149,9 +148,7 @@ async fn handle_cover_get<R: tauri::Runtime>(
     recorder: &std::sync::Mutex<crate::thumbnail::AccessRecorder>,
     app: Option<&tauri::AppHandle<R>>,
 ) -> Result<(String, Bytes, &'static str), CoverError> {
-    let start = Instant::now();
     if let Err(e) = validate_file_id(raw_id) {
-        eprintln!("[DIAG] handle_cover_get took {:?} (BadId)", start.elapsed());
         return Err(CoverError::BadId(e));
     }
 
@@ -174,7 +171,6 @@ async fn handle_cover_get<R: tauri::Runtime>(
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
-        eprintln!("[DIAG] handle_cover_get took {:?} (R2 fetch)", start.elapsed());
         return Ok((r2_result.0, r2_result.1, "image/jpeg"));
     }
 
@@ -188,7 +184,6 @@ async fn handle_cover_get<R: tauri::Runtime>(
                 if let Ok(mut r) = recorder.lock() {
                     r.record(raw_id);
                 }
-                eprintln!("[DIAG] handle_cover_get took {:?} (SQLite blob)", start.elapsed());
                 return Ok((etag, bytes, "image/jpeg"));
             }
         }
@@ -219,7 +214,6 @@ async fn handle_cover_get<R: tauri::Runtime>(
 
     // Cache the "no cover" result so subsequent requests skip R2/SQLite.
     COVER_CACHE.insert(cache_key, (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
-    eprintln!("[DIAG] handle_cover_get took {:?} (NoCover)", start.elapsed());
     Err(CoverError::NoCover)
 }
 
