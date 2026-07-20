@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { deleteFile, moveFile } from "../../utils/driveApi";
 
-import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
+import { cachePrefetchedStream, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
 import { invoke } from "@tauri-apps/api/core";
@@ -270,11 +270,6 @@ export const MainContent = React.memo(function MainContent({
     clearNextTrackPrefetches();
   }, [currentFolderId]);
 
-  React.useEffect(() => {
-    const trackIds = currentItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
-    prefetchVisibleTracks(trackIds);
-  }, [currentItems]);
-
   const coverUrlsRef = useRef<Map<string, string>>(new Map());
 
   React.useEffect(() => {
@@ -298,6 +293,9 @@ export const MainContent = React.memo(function MainContent({
         if (data?.metadata?.has_cover && data?.metadata?.id) {
           const url = `http://drplay.localhost/cover?id=${data.metadata.id}&thumb=true&v=2`;
           coverUrlsRef.current.set(id, url);
+        }
+        if (data?.stream_url) {
+          cachePrefetchedStream(id, data.stream_url);
         }
       } catch (e) {
         console.warn('[MainContent] cover-batch-fetch-failed', { fileId: id, error: String(e) });
@@ -707,7 +705,7 @@ export const MainContent = React.memo(function MainContent({
                     disabled={currentPage === 1}
                     onClick={() => {
                       setCurrentPage(p => p - 1);
-                      mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                      rowVirtualizer.scrollToIndex(0, { align: 'start' });
                     }}
                     className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
                   >
@@ -749,7 +747,7 @@ export const MainContent = React.memo(function MainContent({
                           const newPage = parseInt(pageInputValue.trim(), 10);
                           if (!isNaN(newPage) && newPage >= 1 && newPage <= totalPages) {
                             setCurrentPage(newPage);
-                            mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                            rowVirtualizer.scrollToIndex(0, { align: 'start' });
                           }
                           setIsEditingPage(false);
                         }
@@ -772,7 +770,7 @@ export const MainContent = React.memo(function MainContent({
                     disabled={currentPage === totalPages}
                     onClick={() => {
                       setCurrentPage(p => p + 1);
-                      mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                      rowVirtualizer.scrollToIndex(0, { align: 'start' });
                     }}
                     className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
                   >

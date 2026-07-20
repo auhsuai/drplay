@@ -32,6 +32,10 @@ function cacheSet(fileId: string, url: string) {
   }
 }
 
+export function cachePrefetchedStream(fileId: string, url: string): void {
+  cacheSet(fileId, url);
+}
+
 export async function prefetchVisibleTracks(trackIds: string[]) {
   const uncached = trackIds.filter(id => id && !prefetchedStreams.has(id));
   if (uncached.length === 0) return;
