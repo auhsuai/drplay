@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 const prefetchedStreams = new Map<string, string>();
-const MAX_CACHE = 200;
+const MAX_CACHE = 200; // ~40KB max (200 bytes/URL for signed stream URLs)
 
 export function getPrefetchedStreamUrl(fileId: string): string | undefined {
   return prefetchedStreams.get(fileId);

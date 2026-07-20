@@ -6,7 +6,7 @@ import { getTrackMetadata } from "../../../utils/metadata";
 import { MoreMenu } from "../../components/MoreMenu";
 
 export const coverImageCache = new Map<string, string>();
-const COVER_CACHE_MAX = 500;
+const COVER_CACHE_MAX = 500; // ~50KB max (100 bytes/cover URL string)
 
 function classifyCardError(err: unknown): { name: string; message: string } {
   if (err instanceof Error) {
