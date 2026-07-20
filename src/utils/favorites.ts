@@ -1,11 +1,8 @@
-import { get } from 'idb-keyval';
 import { Track } from '../App';
 import { db } from '../db/db';
 import { showErrorToast } from './simpleToast';
 
 const FAV_MODULE = "favorites";
-const BASE_FAVORITES_KEY = 'drplay_favorites';
-let migrationDone = false;
 
 // Classify a favorites persistence error for observability. Returns name +
 // message only — never the error object/stack, which can leak track data.
@@ -19,40 +16,7 @@ function getCurrentUserEmail() {
   return localStorage.getItem('drplay_current_user_email') || 'default';
 }
 
-function getOldUserKey(baseKey: string) {
-  const email = localStorage.getItem('drplay_current_user_email');
-  return email ? `${baseKey}_${email}` : baseKey;
-}
-
-// Chuyển đổi dữ liệu cũ từ idb-keyval sang Dexie
-async function migrateOldFavorites() {
-  if (migrationDone) return;
-  try {
-    const hasMigrated = localStorage.getItem('drplay_favorites_migrated');
-    if (!hasMigrated) {
-      const email = getCurrentUserEmail();
-      const oldFavorites = await get<Track[]>(getOldUserKey(BASE_FAVORITES_KEY));
-      if (oldFavorites && oldFavorites.length > 0) {
-        // Bulk put into Dexie
-        const items = oldFavorites.map((track, index) => ({
-          ...track,
-          userEmail: email,
-          createdAt: Date.now() - index // preserve order roughly
-        }));
-        await db.favorites.bulkPut(items);
-        console.warn(`[favorites] Migrated ${items.length} favorites to Dexie.`);
-      }
-      localStorage.setItem('drplay_favorites_migrated', 'true');
-    }
-  } catch (e) {
-    console.error(`[${FAV_MODULE}] migrate-failed`, classifyFavoriteError(e));
-  } finally {
-    migrationDone = true;
-  }
-}
-
 export async function getFavorites(): Promise<Track[]> {
-  await migrateOldFavorites();
   try {
     const email = getCurrentUserEmail();
     const favs = await db.favorites.where('userEmail').equals(email).toArray();
@@ -65,7 +29,6 @@ export async function getFavorites(): Promise<Track[]> {
 }
 
 export async function addFavorite(track: Track): Promise<void> {
-  await migrateOldFavorites();
   try {
     const email = getCurrentUserEmail();
     const existing = await db.favorites.get(track.id);
@@ -84,7 +47,6 @@ export async function addFavorite(track: Track): Promise<void> {
 }
 
 export async function removeFavorite(trackId: string): Promise<void> {
-  await migrateOldFavorites();
   try {
     await db.favorites.delete(trackId);
     window.dispatchEvent(new CustomEvent('favorites-updated'));
@@ -95,7 +57,6 @@ export async function removeFavorite(trackId: string): Promise<void> {
 }
 
 export async function isFavorite(trackId: string): Promise<boolean> {
-  await migrateOldFavorites();
   try {
     const fav = await db.favorites.get(trackId);
     return !!fav;

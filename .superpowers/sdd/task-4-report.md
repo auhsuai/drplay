@@ -1,54 +1,20 @@
-# Task 4 Report: Frontend — Next-track audio data prefetch
+# Task 4 Report — Migrate `playlists.ts` to `db.playlists`
 
-## What I implemented
+## status
+DONE
 
-1. **`src/utils/nextTrackPrefetcher.ts`** (new) — Module that warms the Rust proxy cache by issuing a Range request for the first 512KB of the next track's stream URL. Features:
-   - `prefetchNextTrackAudio(streamUrl)`: issues `fetch` with `Range: bytes=0-524287`, dedup via `Set<string>`, max 3 concurrent with LRU-eviction, 15s abort timeout
-   - `clearNextTrackPrefetches()`: aborts all in-flight fetches and clears state
+## commits
+- `e4ce052` refactor: playlists -> Dexie playlists table
 
-2. **`src/utils/nextTrackPrefetcher.test.ts`** (new) — 2 tests:
-   - Verifies correct Range header and AbortSignal on fetch
-   - Verifies second call with same URL is no-op (dedup works)
+## test summary
+Command: `npx vitest run src/utils/playlists`
+Result: 8 passed (8)
 
-3. **`src/hooks/usePlayer.ts`** (modified) — Integrated prefetch in two paths:
-   - **Prefetched path** (line 253): finds next track in `contextQueue`, uses `getPrefetchedStreamUrl(nextTrack.id)` for existing prefetched URL, otherwise invokes `get_stream_url`
-   - **Normal path** (line 312): same pattern, always invokes `get_stream_url`
-   - Added imports for `prefetchNextTrackAudio` and `clearNextTrackPrefetches`
+Coverage: createPlaylist (scoped to userEmail), getPlaylists empty, addTrackToPlaylist (append + dedupe), removeTrackFromPlaylist, updatePlaylist (merge), deletePlaylist, per-user isolation (userEmail filtering), and `playlists-updated` dispatchEvent on mutations.
 
-4. **`src/ui/MainContent/MainContent.tsx`** (modified) — Added `clearNextTrackPrefetches()` call alongside `clearPrefetchedStreams()` on folder change
+`npx tsc --noEmit` — clean.
 
-## What I tested and test results
-
-- `npx vitest run src/utils/nextTrackPrefetcher.test.ts` → **PASS** (2/2)
-- `npx vitest run` → **PASS** (50 tests across 9 files, all pass)
-
-## TDD Evidence (RED → GREEN)
-
-**RED:** `npx vitest run src/utils/nextTrackPrefetcher.test.ts` — FAIL (module not found, both tests fail)
-**GREEN:** Same command after creating implementation — PASS (2/2)
-
-Initial failure used `require()` in the second test (from brief), which doesn't work in ESM mode (`"type": "module"`). Fixed to use top-level `import` and replaced placeholder `expect(true).toBe(true)` with meaningful `expect(mockFetch).toHaveBeenCalledTimes(1)`.
-
-## Files changed
-
-| File | Action |
-|------|--------|
-| `src/utils/nextTrackPrefetcher.ts` | Created (96 lines) |
-| `src/utils/nextTrackPrefetcher.test.ts` | Created (39 lines) |
-| `src/hooks/usePlayer.ts` | Modified (+48 lines) |
-| `src/ui/MainContent/MainContent.tsx` | Modified (+2 lines) |
-
-## Self-review findings
-
-- Dedup via `Set<string>` prevents redundant fetches for the same track
-- `MAX_CONCURRENT=3` with eviction bounds memory/resource usage
-- 15s abort timeout prevents hung requests from leaking
-- `.catch(() => {})` silently swallows errors (intentional: best-effort prefetch)
-- Errored/finished fetches clean up from both `warmingTracks` and `abortControllers`
-- Edge case: last track in queue → no prefetch (correct — nothing follows)
-- Edge case: empty/absent contextQueue → gracefully skipped (correct)
-- Concern: `clearNextTrackPrefetches` is only called on folder change in MainContent, not on logout. Acceptable since the 15s timeout handles cleanup and the abort controllers are scoped to the session.
-
-## Issues or concerns
-
-None. Implementation follows the brief exactly (with minor ESM adaptation for the test file).
+## concerns
+- The plan's Task 4 brief listed signatures (`addToPlaylist`/`removeFromPlaylist`/`subscribePlaylists`/`clearCache`) that do NOT exist in the real `src/utils/playlists.ts`. I implemented against the ACTUAL exported API: `getPlaylists`, `createPlaylist`, `deletePlaylist`, `updatePlaylist`, `addTrackToPlaylist`, `removeTrackFromPlaylist`, `getPlaylistById`, `Playlist`. No call sites rely on the brief's names.
+- The real `PlaylistRow` schema (`src/db/db.ts:31`) has no `updatedAt` field, so I did not add one. `Playlist` now carries `userEmail` (read back from the table) so per-user rows are reconstructable; `userEmail` is preserved on `updatePlaylist` rather than overwritten.
+- `idb-keyval` intentionally left installed (still used by storage.ts/cache.ts/favorites.ts until Task 6).

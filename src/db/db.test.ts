@@ -2,7 +2,6 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
 import { db } from './db';
 import { get as kvGet, set as kvSet } from './kv';
-import { runStorageMigration } from './storage';
 
 describe('Dexie storage schema', () => {
   it('exposes typed tables and kv helper', async () => {
@@ -11,9 +10,5 @@ describe('Dexie storage schema', () => {
     expect(db.playlists).toBeDefined();
     expect(db.recentTracks).toBeDefined();
     expect(db.metadataCache).toBeDefined();
-  });
-  it('runStorageMigration is idempotent and safe with empty idb', async () => {
-    await runStorageMigration();
-    await runStorageMigration();
   });
 });

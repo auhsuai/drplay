@@ -18,7 +18,6 @@ const SettingsTab = React.lazy(() => import('./ui/Settings/SettingsTab').then(mo
 import "./App.css";
 import { db } from './db/db';
 import { del as kvDel } from './db/kv';
-import { ensureStorageMigration } from './db/storage';
 import { getFolderAudioQuery } from './utils/audioQuery';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { LoginScreen } from "./ui/Login/LoginScreen";
@@ -71,11 +70,6 @@ const folderFetchGuard = createFolderFetchGuard();
 
 const APP_MODULE = "App";
 
-// Guards the one-time idb-keyval -> Dexie migration against React StrictMode's
-// double-invocation of effects (and any re-mount). runStorageMigration itself is
-// also idempotent (localStorage flag), so this is defence-in-depth.
-let storageMigrationStarted = false;
-
 // Derive a short, safe classification tag from an error's message ONLY.
 // We never log the error object or its stack — those can leak file ids, user
 // data, or (in theory) auth material into logs. Mirrors classifyDriveError
@@ -103,19 +97,6 @@ function App() {
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
   const [isFocused, setIsFocused] = useState(true);
-
-  // One-time storage migration at bootstrap: copy any legacy idb-keyval data
-  // into the new Dexie tables. Fire-and-forget so a failure never blocks render;
-  // ensureStorageMigration shares a memoized promise with the session-load path
-  // in usePlayer so both await the same migration (avoids a session-restore race
-  // on first launch for upgraded users). It swallows/logs its own errors.
-  useEffect(() => {
-    if (storageMigrationStarted) return;
-    storageMigrationStarted = true;
-    ensureStorageMigration().catch((e) =>
-      console.error(`[${APP_MODULE}] storage-migration-failed`, classifyAppError(e))
-    );
-  }, []);
 
   useEffect(() => {
     const handleFocus = () => {

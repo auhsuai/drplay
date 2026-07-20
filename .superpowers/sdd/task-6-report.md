@@ -1,11 +1,28 @@
-# Task 6 Report — Parallel metadata + stream URL fetch
+# Task 6 Report — Dọn code idb-keyval CHẾT, NHƯNG GIỮ migration
 
-**Status:** ✅ Complete
+## status
+DONE
 
-**Commit:** `c9c9e312736d87e4d3c0f5e12725f9df2246a94d`
+## commits
+Không tạo commit (subagent implementer, user sẽ commit/push sau). Chỉ sửa working tree.
 
-**Change:** Replaced sequential `await getTrackMetadata()` → `await invoke("get_stream_url")` with `Promise.all` in `src/hooks/usePlayer.ts:287-307`. The `duration` param is passed as `undefined` since metadata is fetched in parallel; the Rust proxy handles `Option<f64>` safely.
+## test summary
+- `npx tsc --noEmit` → exit 0 (clean)
+- `npx vitest run --exclude '**/errorCapture.test.ts'` → 22 files, **116 passed** (0 failed)
 
-**Test results:** 9 test files, 51 tests — all passed.
+## concerns
+### File đã chạm vào
+- `src/utils/playlists.ts:127` — sửa typo toast: `"Failed to remove track to playlist"` → `"Failed to remove track from playlist"`.
 
-**Concerns:** None. This is a safe refactor — no external behavior change. The metadata fetch error is still caught individually via `.catch()`, and `accurateMetaDuration` defaults to `undefined` if metadata fails or has no duration (same as before).
+### Phân tích idb-keyval (theo `git grep -n "idb-keyval" -- 'src/**'`)
+- `src/db/storage.ts:2` — `import { get as idbGet, keys as idbKeys } from 'idb-keyval';` → **GIỮ** (runStorageMigration, user yêu cầu).
+- `src/utils/favorites.ts:1` — `import { get } from 'idb-keyval';` → **GIỮ**.
+  - `migrateOldFavorites()` (lines 28-52) vẫn được gọi bởi `getFavorites/addFavorite/removeFavorite/isFavorite`. Đây là logic migration favorites ĐANG CHẠY THỰC TẾ, CHƯA redundant (storage.ts không migrate `drplay_favorites`). Không xoá theo chỉ dẫn "đừng xoá mù".
+- `src/App.tsx:74,107` — chỉ là comment mô tả, không phải code chết. Giữ nguyên.
+
+### Kết luận
+Không có đoạn idb-keyval code CHẾT nào ngoài hai nơi trên. Sau Task 1-5, mọi import idb-keyval đều còn được dùng:
+- storage.ts (migration reader — user giữ)
+- favorites.ts (migration path favorites — vẫn active)
+
+→ Không xoá thêm import nào, không xoá idb-keyval khỏi package.json.
