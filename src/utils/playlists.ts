@@ -124,7 +124,7 @@ export async function removeTrackFromPlaylist(playlistId: string, trackId: strin
     }
   } catch (e) {
     console.error(`[${PLAYLIST_MODULE}] remove-track-failed`, classifyPlaylistError(e));
-    showErrorToast("Failed to remove track to playlist");
+    showErrorToast("Failed to remove track from playlist");
   }
 }
 
