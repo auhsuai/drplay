@@ -1,5 +1,4 @@
-import React, { useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import React, { useState, useMemo } from "react";
 import { Track, DriveItem } from "../../App";
 import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -228,7 +227,10 @@ export const MainContent = React.memo(function MainContent({
 
   const filteredItems = searchQuery ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
-  const currentItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const currentItems = useMemo(
+    () => filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage),
+    [filteredItems, currentPage, itemsPerPage]
+  );
 
   React.useEffect(() => {
     if (highlightedFileId && filteredItems.length > 0) {
@@ -247,8 +249,6 @@ export const MainContent = React.memo(function MainContent({
             const viewCenter = cont.height / 2;
             if (Math.abs(itemCenter - viewCenter) < cont.height * 0.2) return;
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } else {
-            rowVirtualizer.scrollToIndex(indexInPage, { align: 'center', behavior: 'smooth' });
           }
         }, 50);
       }
@@ -264,13 +264,6 @@ export const MainContent = React.memo(function MainContent({
     const trackIds = currentItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
     prefetchVisibleTracks(trackIds);
   }, [currentItems]);
-
-  const rowVirtualizer = useVirtualizer({
-    count: currentItems.length,
-    getScrollElement: () => mainRef.current,
-    estimateSize: () => 92,
-    overscan: 10,
-  });
 
   const handlePlay = React.useCallback((t: Track) => {
     const queue = currentItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
@@ -642,27 +635,15 @@ export const MainContent = React.memo(function MainContent({
           </div>
         ) : (
           <>
-            <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const item = currentItems[virtualRow.index];
-              return (
+            <div className="flex flex-col relative w-full">
+            {currentItems.map((item, idx) => (
                 <div
-                  key={virtualRow.key}
-                  data-hl-index={virtualRow.index}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: `${virtualRow.size}px`,
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
+                  key={item.id}
+                  data-hl-index={idx}
                   className="pb-2"
                 >
                 <SongCard 
-                  key={item.id}
                   item={item}
-
                   onPlay={handlePlay}
                   onOpenFolder={onOpenFolder} 
                   token={token}
@@ -695,8 +676,7 @@ export const MainContent = React.memo(function MainContent({
                   onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
                 />
                 </div>
-              );
-            })}
+            ))}
           </div>
 
           {totalPages > 1 && (
