@@ -437,7 +437,6 @@ function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], on
                 key={virtualRow.key}
                 style={{
                   position: 'absolute',
-                  top: 0,
                   left: 0,
                   width: '100%',
                   height: `${virtualRow.size}px`,
