@@ -7,7 +7,7 @@ export function getPrefetchedStreamUrl(fileId: string): string | undefined {
   return prefetchedStreams.get(fileId);
 }
 
-async function runWithConcurrencyLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+export async function runWithConcurrencyLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
   const results: Promise<void>[] = [];
   const executing = new Set<Promise<void>>();
 

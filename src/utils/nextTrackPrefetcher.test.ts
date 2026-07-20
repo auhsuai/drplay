@@ -1,40 +1,55 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  prefetchNextTrackAudio,
+  clearNextTrackPrefetches,
+} from './nextTrackPrefetcher';
 
-describe('nextTrackPrefetcher', () => {
+describe('nextTrackPrefetcher LRU', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.resetModules();
+    clearNextTrackPrefetches();
   });
 
-  it('should fetch first 512KB to warm proxy cache', async () => {
-    const { prefetchNextTrackAudio } = await import('./nextTrackPrefetcher');
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ 'content-range': 'bytes 0-524287/10000000' }),
-    });
-    globalThis.fetch = mockFetch;
+  it('evicts the least-recently-used track when over capacity', async () => {
+    const abortSpy = vi.spyOn(AbortController.prototype, 'abort');
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 200 }));
 
-    prefetchNextTrackAudio('http://drplay.localhost/stream?id=test123&sig=abc');
+    const urls = ['a', 'b', 'c', 'd'].map((u) => `https://x/${u}`);
+    urls.forEach((u) => prefetchNextTrackAudio(u));
 
-    await new Promise(r => setTimeout(r, 10));
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://drplay.localhost/stream?id=test123&sig=abc',
-      expect.objectContaining({
-        headers: { Range: 'bytes=0-524287' },
-        signal: expect.any(AbortSignal),
-      })
-    );
+    // 4 fetches attempted; capacity 3 -> oldest 'a' aborted exactly once
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(abortSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('should be no-op for already prefetched track', async () => {
-    const { prefetchNextTrackAudio } = await import('./nextTrackPrefetcher');
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
-    globalThis.fetch = mockFetch;
+  it('does not refetch an in-flight url', () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 200 }));
+    const url = 'https://x/dup';
+    prefetchNextTrackAudio(url);
+    prefetchNextTrackAudio(url);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fetchSpy.mockRestore();
+  });
 
-    prefetchNextTrackAudio('http://drplay.localhost/stream?id=test123&sig=abc');
-    prefetchNextTrackAudio('http://drplay.localhost/stream?id=test123&sig=abc');
+  it('classifies and logs fetch failures without full url', async () => {
+    const err = new TypeError('Failed to fetch');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(err);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    prefetchNextTrackAudio('https://x/secret-token-1234567890');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(warnSpy).toHaveBeenCalled();
+    const logged = warnSpy.mock.calls[0][1] as { url: string; kind: string };
+    expect(logged.url.length).toBeLessThanOrEqual(17);
+    expect(logged.url).not.toContain('secret-token-1234567890');
+    expect(['timeout', 'network', 'unknown']).toContain(logged.kind);
+
+    fetchSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

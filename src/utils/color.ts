@@ -58,31 +58,37 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
       
       try {
         const half = size / 2;
-        
-        const getQuadrantAvg = (x0: number, y0: number, w: number, h: number) => {
-          const imgData = ctx.getImageData(x0, y0, w, h).data;
-          let r = 0, g = 0, b = 0, count = 0;
-          for (let i = 0; i < imgData.length; i += 16) {
-            r += imgData[i];
-            g += imgData[i+1];
-            b += imgData[i+2];
-            count++;
-          }
-          if (count === 0) return 'rgb(0,0,0)';
-          
-          const darken = 0.5; // Darken slightly more for rich background
-          r = Math.floor((r / count) * darken);
-          g = Math.floor((g / count) * darken);
-          b = Math.floor((b / count) * darken);
+
+        // Single canvas read instead of 4 quadrant reads. Bucketing each
+        // sampled pixel into its quadrant avoids 3 extra GPU->RAM buffer
+        // copies and the 4 intermediate typed-array views.
+        const imgData = ctx.getImageData(0, 0, size, size).data;
+        const sum = [
+          { r: 0, g: 0, b: 0, n: 0 }, // TL
+          { r: 0, g: 0, b: 0, n: 0 }, // TR
+          { r: 0, g: 0, b: 0, n: 0 }, // BL
+          { r: 0, g: 0, b: 0, n: 0 }, // BR
+        ];
+        // Sample every 4th pixel (RGBA = 4 bytes) -> step 16 bytes.
+        for (let i = 0; i < imgData.length; i += 16) {
+          const p = i / 4;
+          const x = p % size;
+          const y = (p / size) | 0;
+          const q = (y < half ? 0 : 2) + (x < half ? 0 : 1);
+          sum[q].r += imgData[i];
+          sum[q].g += imgData[i + 1];
+          sum[q].b += imgData[i + 2];
+          sum[q].n++;
+        }
+
+        const darken = 0.5; // Darken slightly more for rich background
+        const palette = sum.map((s) => {
+          if (s.n === 0) return 'rgba(0,0,0,0.8)';
+          const r = Math.floor((s.r / s.n) * darken);
+          const g = Math.floor((s.g / s.n) * darken);
+          const b = Math.floor((s.b / s.n) * darken);
           return `rgba(${r}, ${g}, ${b}, 0.8)`; // Add slight transparency for better blending
-        };
-        
-        const c1 = getQuadrantAvg(0, 0, half, half); // Top Left
-        const c2 = getQuadrantAvg(half, 0, half, half); // Top Right
-        const c3 = getQuadrantAvg(0, half, half, half); // Bottom Left
-        const c4 = getQuadrantAvg(half, half, half, half); // Bottom Right
-        
-        const palette = [c1, c2, c3, c4];
+        });
         setPaletteCached(imgUrl, palette);
         resolve(palette);
       } catch (e) {
