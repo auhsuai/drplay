@@ -746,7 +746,7 @@ export const MainContent = React.memo(function MainContent({
                     disabled={currentPage === 1}
                     onClick={() => {
                       setCurrentPage(p => p - 1);
-                      rowVirtualizer.scrollToIndex(0, { align: 'start' });
+                      setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
                     }}
                     className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
                   >
@@ -788,7 +788,7 @@ export const MainContent = React.memo(function MainContent({
                           const newPage = parseInt(pageInputValue.trim(), 10);
                           if (!isNaN(newPage) && newPage >= 1 && newPage <= totalPages) {
                             setCurrentPage(newPage);
-                            rowVirtualizer.scrollToIndex(0, { align: 'start' });
+                            setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
                           }
                           setIsEditingPage(false);
                         }
@@ -811,7 +811,7 @@ export const MainContent = React.memo(function MainContent({
                     disabled={currentPage === totalPages}
                     onClick={() => {
                       setCurrentPage(p => p + 1);
-                      rowVirtualizer.scrollToIndex(0, { align: 'start' });
+                      setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
                     }}
                     className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
                   >
