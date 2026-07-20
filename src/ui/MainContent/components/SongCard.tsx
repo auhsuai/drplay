@@ -83,6 +83,7 @@ export const SongCard = React.memo(function SongCard({
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
+  const [shouldFetch, setShouldFetch] = useState(false);
 
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {
@@ -121,7 +122,23 @@ export const SongCard = React.memo(function SongCard({
   }, [injectedCoverUrl]);
 
   React.useEffect(() => {
-    if (item.isFolder || !token) return;
+    const el = cardRef.current;
+    if (!el || shouldFetch) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setShouldFetch(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [shouldFetch]);
+
+  React.useEffect(() => {
+    if (!shouldFetch || item.isFolder || !token) return;
 
     const controller = new AbortController();
     let isMounted = true;
@@ -172,7 +189,7 @@ export const SongCard = React.memo(function SongCard({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       window.removeEventListener('metadata-updated', handleMetadataUpdated);
     };
-  }, [item.id, token, injectedCoverUrl]);
+  }, [item.id, token, injectedCoverUrl, shouldFetch]);
 
   return (
     <div className="relative group/card w-full">
