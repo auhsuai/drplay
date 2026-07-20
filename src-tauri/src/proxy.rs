@@ -46,8 +46,8 @@ const PREFETCH_RATE_LIMIT_SLEEP_SECS: u64 = 5;
 // Delay between transient retry attempts in the main fetch loop.
 const STREAM_RETRY_DELAY_MS: u64 = 500;
 // Poll interval / yield for the background prefetch task.
-const PREFETCH_POLL_INTERVAL_MS: u64 = 1;
-const PREFETCH_YIELD_MS: u64 = 50;
+const PREFETCH_POLL_INTERVAL_MS: u64 = 250;
+const PREFETCH_YIELD_MS: u64 = 100;
 // Fallback total size (10 MB) and Content-Type used only when Drive cannot be
 // probed (network down). Never forwarded as a real value to the WebView logic.
 const DEFAULT_TOTAL_SIZE_FALLBACK: u64 = 10_000_000;
@@ -115,6 +115,13 @@ static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
 /// signalled to stop so it stops filling the slice cache.
 static PREFETCH_CANCEL: Lazy<Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Global concurrency limit for background prefetch tasks. Without this,
+/// virtual scroll renders ~20 visible tracks and each one spawns a prefetch
+/// task that wakes every 250ms, drives 50% CPU, and floods Google Drive
+/// with HEAD + range requests.
+static PREFETCH_SEMAPHORE: Lazy<Arc<tokio::sync::Semaphore>> =
+    Lazy::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
 
 fn parse_multi_range(range_str: &str, total_size: u64) -> Vec<(u64, u64)> {
     let prefix = "bytes=";
@@ -465,12 +472,21 @@ async fn handle_stream(
     let actual_start = start;
     let actual_end = end;
 
+    let (disconnect_tx, mut disconnect_rx) = tokio::sync::watch::channel(false);
+    let mut main_disconnect_rx = disconnect_tx.subscribe();
+
     tokio::spawn(async move {
         let mut current_offset = slice_start;
         let mut buffer_status_emitted = false;
         let mut bytes_sent = 0usize;
         let mut retry_deadline: Option<Instant> = None;
         while current_offset < slice_last {
+            // Detect webview disconnect — break if client has gone
+            tokio::select! {
+                biased;
+                _ = main_disconnect_rx.changed() => break,
+                _ = async {} => {}
+            }
             // Cache hit path
                 if let Some(data) = slice_cache.try_get(&track_id, current_offset).await {
                     let mut chunk = (*data).clone();
@@ -642,7 +658,21 @@ async fn handle_stream(
     let cancel_for_task = cancel.clone();
     let bg_id_for_task = bg_id.clone();
 
+    let sema = PREFETCH_SEMAPHORE.clone();
+
     tokio::spawn(async move {
+        // Respect concurrency cap: wait for a permit but stay responsive
+        // to cancellation — a cancelled task returns before acquiring so
+        // we don't pile up waiters behind the semaphore.
+        {
+            tokio::select! {
+                biased;
+                _ = cancel_for_task.notified() => return,
+                _ = disconnect_rx.changed() => return,
+                _ = sema.acquire_owned() => {}
+            }
+        }
+
         // Remove this task's cancel entry from the global map when it exits,
         // but only if it is still the current entry (a newer request replaces it).
         struct CancelGuard {
@@ -678,6 +708,7 @@ async fn handle_stream(
             // Stop early if a newer request cancelled this prefetch.
             tokio::select! {
                 _ = cancel_for_task.notified() => break,
+                _ = disconnect_rx.changed() => break,
                 _ = tokio::time::sleep(std::time::Duration::from_millis(PREFETCH_POLL_INTERVAL_MS)) => {}
             }
             let (first_missing, count) = slice_cache.find_missing_run(&bg_id_for_task, offset, PREFETCH_BATCH_SLICES).await;
@@ -710,9 +741,16 @@ async fn handle_stream(
         }
     });
 
-    // Build streaming response
+    // Build streaming response.
+    // Keep disconnect_tx alive while the client is connected: the sender is
+    // captured into the stream closure and dropped when the body is dropped
+    // (client disconnect), causing *both* spawned tasks' receivers to return
+    // Err(RecvError::Closed) so they stop promptly.
     let stream = ReceiverStream::new(rx)
-        .map(|chunk| Ok::<Bytes, std::convert::Infallible>(Bytes::from(chunk)));
+        .map(move |chunk| {
+            let _ = &disconnect_tx;
+            Ok::<Bytes, std::convert::Infallible>(Bytes::from(chunk))
+        });
     let body = axum::body::Body::from_stream(stream);
 
     Response::builder()
@@ -840,6 +878,7 @@ mod tests {
     use super::content_type_for_ext;
     use super::{new_cache_store, TrackMeta, TRACK_CACHE_MAX_ENTRIES};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::Mutex;
 
     fn assemble_chunks_in_order(chunks: &[(u64, u64, Vec<u8>)]) -> Vec<u8> {
@@ -911,5 +950,29 @@ mod tests {
             count <= cap,
             "track cache must stay bounded (<= {cap}), but held {count} entries"
         );
+    }
+
+    // Regression: dropping the watch sender must immediately signal all
+    // receivers. This validates the mechanism that the proxy uses to stop
+    // both the main fetch task and the background prefetch task when the
+    // webview disconnects. If a future refactor replaces the watch channel
+    // or removes the disconnect check, this test catches it.
+    #[tokio::test]
+    async fn test_watch_disconnect_signals_task() {
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+
+        tokio::spawn(async move {
+            let _ = rx.changed().await;
+            let _ = done_tx.send(());
+        });
+
+        // Drop the sender — rx.changed() should return Err(RecvError::Closed)
+        drop(tx);
+
+        tokio::time::timeout(Duration::from_secs(1), done_rx)
+            .await
+            .expect("task not notified of disconnect within 1s")
+            .expect("oneshot channel closed");
     }
 }

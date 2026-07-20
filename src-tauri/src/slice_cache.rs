@@ -14,7 +14,7 @@ pub struct InflightEntry {
 
 pub struct SliceCache {
     pub cache: Cache<(String, u64), Arc<Vec<u8>>>,
-    pub inflight: RwLock<HashMap<(String, u64), Arc<InflightEntry>>>,
+    pub inflight: Arc<RwLock<HashMap<(String, u64), Arc<InflightEntry>>>>,
     pub max_bytes: AtomicU64,
 }
 
@@ -28,7 +28,7 @@ impl SliceCache {
                     v.len().try_into().unwrap_or(u32::MAX)
                 })
                 .build(),
-            inflight: RwLock::new(HashMap::new()),
+            inflight: Arc::new(RwLock::new(HashMap::new())),
             max_bytes: AtomicU64::new(max_bytes),
         }
     }
@@ -73,6 +73,8 @@ impl SliceCache {
             });
             inflight.insert(key.clone(), entry.clone());
         }
+
+        let _guard = InflightGuard { inflight: self.inflight.clone(), key: key.clone() };
 
         let result = fetcher().await;
 
@@ -154,9 +156,83 @@ impl SliceCache {
     }
 }
 
+struct InflightGuard {
+    inflight: Arc<RwLock<HashMap<(String, u64), Arc<InflightEntry>>>>,
+    key: (String, u64),
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        // Fast path: best-effort synchronous removal.
+        if let Ok(mut guard) = self.inflight.try_write() {
+            guard.remove(&self.key);
+            return;
+        }
+        // Contention fallback: spawn an async task to remove the entry.
+        // This ensures inflight entries never leak even under concurrent
+        // write-lock contention, fixing the root cause where try_write()
+        // silently fails and leaves waiters hung forever.
+        let inflight = self.inflight.clone();
+        let key = self.key.clone();
+        tokio::spawn(async move {
+            inflight.write().await.remove(&key);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_inflight_guard_does_not_leak_on_concurrent_lock() {
+        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
+        let key = ("leak-test".to_string(), 0u64);
+
+        // Insert entry into inflight
+        {
+            let mut inflight = cache.inflight.write().await;
+            inflight.insert(key.clone(), Arc::new(InflightEntry {
+                notify: Arc::new(Notify::new()),
+                data: RwLock::new(None),
+            }));
+        }
+
+        let cache_clone = cache.clone();
+        let (lock_held_tx, lock_held_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Task that holds the write lock on inflight while guard::drop runs
+        let lock_handle = tokio::spawn(async move {
+            let _lock = cache_clone.inflight.write().await;
+            let _ = lock_held_tx.send(());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(_lock);
+        });
+
+        // Wait for lock to be acquired by the other task
+        lock_held_rx.await.unwrap();
+
+        // Drop InflightGuard while another task holds the write lock.
+        // BUG: try_write() silently fails → entry leaks.
+        // FIX: fallback spawn removes the entry after the lock is released.
+        {
+            let guard = InflightGuard {
+                inflight: cache.inflight.clone(),
+                key: key.clone(),
+            };
+            drop(guard);
+        }
+
+        lock_handle.await.unwrap();
+
+        // Verify entry was removed
+        let inflight = cache.inflight.read().await;
+        assert!(
+            inflight.is_empty(),
+            "inflight entry leaked after InflightGuard::drop"
+        );
+    }
 
     #[tokio::test]
     async fn test_try_get_missing() {

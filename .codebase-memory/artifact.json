@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "4241647fe2ff7733a84c847926d06d7c6340a5f8",
-    "indexed_at": "2026-07-18T08:41:32Z",
+    "commit": "50f22b02974e1ecf0d6f68e4d3d677fd1c0f0909",
+    "indexed_at": "2026-07-19T23:22:51Z",
     "project": "C-Users-thinkpad-Desktop-Antigravity-drplay",
-    "nodes": 1580,
-    "edges": 3297,
-    "original_size": 6422528,
-    "compressed_size": 1108497,
+    "nodes": 1849,
+    "edges": 3799,
+    "original_size": 7143424,
+    "compressed_size": 1221728,
     "compression_level": 3
 }

@@ -5,7 +5,7 @@ import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X,
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { deleteFile, moveFile } from "../../utils/driveApi";
-import { useLiveQuery } from 'dexie-react-hooks';
+
 import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
@@ -40,7 +40,24 @@ import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 import { showErrorToast } from '../../utils/simpleToast';
 
-export function MainContent({ 
+function useDebouncedLiveQuery<T>(
+  querier: () => Promise<T>,
+  deps: React.DependencyList,
+  delayMs = 100
+): T | undefined {
+  const [result, setResult] = React.useState<T>();
+  React.useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const data = await querier();
+      if (!cancelled) setResult(data);
+    }, delayMs);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, deps);
+  return result;
+}
+
+export const MainContent = React.memo(function MainContent({ 
   activeTab, 
   onPlay, 
   items, 
@@ -128,7 +145,17 @@ export function MainContent({
     }
   }, [currentFolderId]);
 
-  const allFiles = useLiveQuery(() => db.files.toArray());
+  const allFiles = useDebouncedLiveQuery(async () => {
+    const files = await db.files.toArray();
+    return files.map(f => ({
+      id: f.id,
+      parentId: f.parentId,
+      name: f.name,
+      isFolder: f.isFolder,
+      size: f.size,
+      modifiedTime: f.modifiedTime,
+    }));
+  }, [], 100);
 
   const parentMap = React.useMemo(() => {
     if (!allFiles) return new Map<string, string>();
@@ -660,4 +687,4 @@ export function MainContent({
       />
     </main>
   );
-}
+});

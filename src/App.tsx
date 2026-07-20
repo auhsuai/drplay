@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -214,6 +214,14 @@ function App() {
     handleTogglePlayMode,
     loadNonce
   } = usePlayer(accessToken);
+
+  const stableHandleTogglePlay = useCallback(handleTogglePlay, [handleTogglePlay]);
+  const stableHandleNextTrack = useCallback(handleNextTrack, [handleNextTrack]);
+  const stableHandlePrevTrack = useCallback(handlePrevTrack, [handlePrevTrack]);
+  const stableHandleTogglePlayMode = useCallback(handleTogglePlayMode, [handleTogglePlayMode]);
+  const onExpandNowPlaying = useCallback(() => {
+    setIsNowPlayingOpen(prev => !prev);
+  }, []);
 
 
 
@@ -589,15 +597,14 @@ function App() {
 
 
 
-  const handleTabChange = (tab: string) => {
-      // If already on My Drive and clicks it again, reset to root
+  const handleTabChange = useCallback((tab: string) => {
       if (activeTab === tab && tab === "My Drive") {
         setCurrentFolderId(appRootFolder || "root");
         setCurrentFolderName("My Drive");
         setFolderHistory([]);
       }
       setActiveTab(tab);
-    };
+    }, [activeTab, appRootFolder]);
 
     return (
       <div className="relative flex flex-col h-screen overflow-hidden bg-white dark:bg-[#121212] transition-colors duration-300">
@@ -699,13 +706,13 @@ function App() {
                 currentTrack={currentTrack}
                 loadNonce={loadNonce}
                 isPlaying={isPlaying}
-                onTogglePlay={handleTogglePlay}
-                onNextTrack={handleNextTrack}
-                onPrevTrack={handlePrevTrack}
+                onTogglePlay={stableHandleTogglePlay}
+                onNextTrack={stableHandleNextTrack}
+                onPrevTrack={stableHandlePrevTrack}
                 isDownloading={isDownloading}
                 playMode={playMode}
-                onTogglePlayMode={handleTogglePlayMode}
-                onExpandNowPlaying={() => setIsNowPlayingOpen(prev => !prev)}
+                onTogglePlayMode={stableHandleTogglePlayMode}
+                onExpandNowPlaying={onExpandNowPlaying}
               />
             </div>
           </div>
@@ -719,11 +726,11 @@ function App() {
           <NowPlayingView
             currentTrack={currentTrack}
             isPlaying={isPlaying}
-            onTogglePlay={handleTogglePlay}
-            onNextTrack={handleNextTrack}
-            onPrevTrack={handlePrevTrack}
+            onTogglePlay={stableHandleTogglePlay}
+            onNextTrack={stableHandleNextTrack}
+            onPrevTrack={stableHandlePrevTrack}
             playMode={playMode}
-            onTogglePlayMode={handleTogglePlayMode}
+            onTogglePlayMode={stableHandleTogglePlayMode}
             onBack={() => setIsNowPlayingOpen(false)}
             isOpen={isNowPlayingOpen}
             token={accessToken}

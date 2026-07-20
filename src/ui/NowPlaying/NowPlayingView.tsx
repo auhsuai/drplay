@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { memo, useState, useEffect, useRef } from "react";
 import { Track } from "../../App";
 import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1, Shuffle } from "lucide-react";
@@ -21,7 +21,7 @@ interface NowPlayingViewProps {
 }
 
 
-export function NowPlayingView({ 
+export const NowPlayingView = memo(function NowPlayingView({ 
   currentTrack, 
   isPlaying, 
   onTogglePlay, 
@@ -435,4 +435,4 @@ export function NowPlayingView({
       </div>
     </main>
   );
-}
+});

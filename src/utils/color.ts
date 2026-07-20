@@ -6,10 +6,28 @@ const IMAGE_LOAD_TIMEOUT_MS = 10000;
 // memoization, burning CPU on the main thread. Cache the resolved palette per
 // URL so an identical cover is decoded at most once; we return the SAME array
 // reference on a cache hit (lets tests assert a memo hit cheaply).
+const MAX_PALETTE_CACHE = 500;
 const paletteCache = new Map<string, string[]>();
 
+function getPaletteCached(url: string): string[] | undefined {
+  const hit = paletteCache.get(url);
+  if (hit !== undefined) {
+    paletteCache.delete(url);
+    paletteCache.set(url, hit);
+  }
+  return hit;
+}
+
+function setPaletteCached(url: string, palette: string[]): void {
+  if (paletteCache.size >= MAX_PALETTE_CACHE) {
+    const oldest = paletteCache.keys().next().value;
+    if (oldest !== undefined) paletteCache.delete(oldest);
+  }
+  paletteCache.set(url, palette);
+}
+
 export const getPalette = (imgUrl: string): Promise<string[]> => {
-  const cached = paletteCache.get(imgUrl);
+  const cached = getPaletteCached(imgUrl);
   if (cached) {
     return Promise.resolve(cached);
   }
@@ -66,7 +84,7 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
         const c4 = getQuadrantAvg(half, half, half, half); // Bottom Right
         
         const palette = [c1, c2, c3, c4];
-        paletteCache.set(imgUrl, palette);
+        setPaletteCached(imgUrl, palette);
         resolve(palette);
       } catch (e) {
         reject(e);

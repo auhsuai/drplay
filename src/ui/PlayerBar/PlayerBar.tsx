@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useReducer, useCallback } from "react";
+import { memo, useRef, useState, useEffect, useReducer, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -19,7 +19,7 @@ function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; cla
   return <Icon className={`${className} text-[#4285F4]`} />;
 }
 
-export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
+function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
   const { t } = useTranslation();
 
   // 1. Player state
@@ -374,3 +374,13 @@ export function PlayerBar({ currentTrack, isPlaying, onTogglePlay, onNextTrack, 
     </div>
   );
 }
+
+export const PlayerBar = memo(PlayerBarImpl, (prevProps, nextProps) => {
+  return (
+    prevProps.currentTrack?.id === nextProps.currentTrack?.id &&
+    prevProps.isPlaying === nextProps.isPlaying &&
+    prevProps.playMode === nextProps.playMode &&
+    prevProps.isDownloading === nextProps.isDownloading &&
+    prevProps.loadNonce === nextProps.loadNonce
+  );
+});
