@@ -10,6 +10,7 @@ import { cachePrefetchedStream, clearPrefetchedStreams } from "../../utils/strea
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
 import { invoke } from "@tauri-apps/api/core";
+import { cacheTrackMetadata } from "../../utils/metadata";
 
 
 
@@ -307,17 +308,32 @@ export const MainContent = React.memo(function MainContent({
         if (data?.stream_url) {
           cachePrefetchedStream(id, data.stream_url);
         }
+        // Populate metadata cache so SongCard's getTrackMetadata
+        // skips its own IPC call entirely.
+        if (data?.metadata?.id) {
+          const m = data.metadata;
+          cacheTrackMetadata(id, {
+            title: m.title || item.trackInfo!.title,
+            artist: m.artist || 'Unknown Artist',
+            duration: m.duration || 0,
+            durationEstimated: !m.duration,
+            pictureData: null,
+            pictureDataFull: null,
+            dbId: m.id,
+            coverUrl: m.has_cover ? `http://drplay.localhost/cover?id=${m.id}&thumb=true&v=2` : undefined,
+            size: item.trackInfo!.size ?? 0,
+            v: 10,
+          });
+        }
         if (!data?.metadata?.has_cover || !data?.metadata?.id) return;
-        const url = `http://drplay.localhost/cover?id=${data.metadata.id}&thumb=true&v=2`;
+        const url = coverUrlsRef.current.get(id) || `http://drplay.localhost/cover?id=${data.metadata.id}&thumb=true&v=2`;
         coverUrlsRef.current.set(id, url);
-        // Pre-decode the cover image into browser's image cache so
-        // the GPU decode cost is paid upfront, not during scroll.
         if (!predecodedRef.current.has(url)) {
           predecodedRef.current.add(url);
           const img = new Image();
           img.decoding = 'async';
           img.src = url;
-          img.decode().catch(() => { /* cached from HTTP, decode is optional */ });
+          img.decode().catch(() => {});
         }
       } catch (e) {
         console.warn('[MainContent] cover-batch-fetch-failed', { fileId: id, error: String(e) });
