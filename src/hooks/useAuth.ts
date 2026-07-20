@@ -6,6 +6,7 @@ import { invalidateCurrentSession } from "../utils/sessionGuard";
 import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
+import { showErrorToast } from "../utils/simpleToast";
 
 const AUTH_MODULE = "useAuth";
 
@@ -127,7 +128,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       try {
         const newToken = await getValidToken(true);
         if (!newToken) {
-          alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục phát nhạc!");
+          showErrorToast("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục phát nhạc!");
           handleAuthLogout();
         }
       } catch (e) {

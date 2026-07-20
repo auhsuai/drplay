@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { restoreFile, permanentlyDeleteFile, getTrashedFiles } from '../../utils/driveApi';
-import { showErrorToast } from '../../utils/simpleToast';
+import { showErrorToast, showSuccessToast } from '../../utils/simpleToast';
 
 interface TrashScreenProps {
   token: string;
@@ -85,7 +85,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       const deletePromises = items.map(item => permanentlyDeleteFile(token, item.id));
       await Promise.all(deletePromises);
       setItems([]);
-      alert(t('settings.empty_trash_success') || "Trash emptied successfully!");
+      showSuccessToast(t('settings.empty_trash_success') || "Trash emptied successfully!");
       onClose();
     } catch (e) {
       console.error("[Trash] empty-trash: Failed to empty trash", e);

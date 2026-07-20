@@ -7,6 +7,7 @@ import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
+import { showErrorToast } from "../utils/simpleToast";
 
 
 const playRequestIdRef = { current: 0 };
@@ -19,12 +20,10 @@ function isIntentStale(myId: number): boolean {
   return myId !== playRequestIdRef.current;
 }
 
-function classifyPlayerError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message || err.name || "Unknown error";
-  }
-  if (typeof err === "string") return err;
-  return "Unknown error";
+function classifyPlayerError(err: unknown): { name: string; message: string } {
+  if (err instanceof Error) return { name: err.name, message: err.message };
+  if (typeof err === "string") return { name: "Error", message: err };
+  return { name: "UnknownError", message: "Unknown error" };
 }
 
 export const usePlayer = (accessToken: string | null) => {
@@ -335,7 +334,7 @@ export const usePlayer = (accessToken: string | null) => {
     } catch (e) {
       if (isIntentStale(myId)) return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
-      alert("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
+      showErrorToast("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
     } finally {
       if (!isIntentStale(myId)) {
         setIsDownloading(false);
@@ -420,7 +419,7 @@ export const usePlayer = (accessToken: string | null) => {
         } catch (e) {
           if (isIntentStale(myId)) return;
           console.error(`[usePlayer] stream-url-resume-fail`, classifyPlayerError(e));
-          alert("Could not start playback. Please try another track.");
+          showErrorToast("Could not start playback. Please try another track.");
         } finally {
           if (!isIntentStale(myId)) setIsDownloading(false);
         }

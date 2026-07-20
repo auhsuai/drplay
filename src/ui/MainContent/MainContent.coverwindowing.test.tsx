@@ -97,7 +97,7 @@ describe('MainContent does not inject coverUrl (SongCard self-fetches)', () => {
     const cards = screen.getAllByTestId('song-card');
     expect(cards.length).toBe(3);
     // All coverUrls must be undefined since MainContent no longer uses
-    // useCoverWindowing — SongCard handles its own metadata fetch.
+    // a cover-windowing hook — SongCard handles its own metadata fetch.
     receivedCoverUrls.forEach((url) => {
       expect(url).toBeUndefined();
     });

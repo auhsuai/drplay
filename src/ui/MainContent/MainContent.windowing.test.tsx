@@ -44,11 +44,6 @@ vi.mock('../../utils/normalizeText', () => ({
   normalizeText: (s: string) => s.toLowerCase(),
 }));
 
-vi.mock('../../hooks/useCoverWindowing', () => ({
-  useCoverWindowing: vi.fn(() => new Map<string, string | null>()),
-  PREFETCH_MARGIN_SLOW: 3,
-}));
-
 vi.mock('./components/SongCard', () => ({
   SongCard: vi.fn(({ item }: { item: DriveItem }) => (
     <div data-testid="song-card" data-item-id={item.id} />
