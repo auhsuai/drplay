@@ -76,7 +76,10 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
   try {
     const rows = await db.metadataCache.toArray();
     const keys = rows
-      .filter((r) => r.entry && r.entry.data && r.entry.data.v >= 9)
+      .filter((r) => {
+        const entry = r.entry as { data?: { v: number } } | undefined;
+        return entry && entry.data && entry.data.v >= 9;
+      })
       .map((r) => r.key as string)
       .filter((k) => typeof k === 'string' && k.startsWith('metadata_'));
     if (keys.length === 0) return [];

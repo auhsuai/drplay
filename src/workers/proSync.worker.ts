@@ -96,7 +96,7 @@ async function startProSync() {
     if (!tokenState || !tokenState.value) {
       await performFullSync();
     } else {
-      await performDeltaSync(tokenState.value);
+      await performDeltaSync(tokenState.value as string);
     }
   } catch (err) {
     // Safety net for the Dexie read above and any error that escaped the

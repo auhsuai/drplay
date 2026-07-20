@@ -202,7 +202,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
             window.dispatchEvent(new CustomEvent('user-changed'));
           }
         })
-        .catch(err => {
+        .catch((err: unknown) => {
           if (err instanceof Error && err.name !== 'AbortError') {
             console.error(`[${AUTH_MODULE}] Failed to fetch user profile (best-effort) — profile may be incomplete`, err);
           }

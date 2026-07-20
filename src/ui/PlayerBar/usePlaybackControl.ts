@@ -158,9 +158,10 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
     try {
       await loadNormalAudio(currentTrack, resumeTime);
       dispatch({ type: 'RESUMED' });
-    } catch (err: any) {
-      captureError({ level: 'error', source: 'playback-control', message: `Manual resume failed (${err?.name ?? 'unknown'})`, kind: 'resume' });
-      if (err.name === 'NotAllowedError') {
+    } catch (err: unknown) {
+      const errName = (typeof err === 'object' && err !== null && 'name' in err) ? (err as { name: string }).name : undefined;
+      captureError({ level: 'error', source: 'playback-control', message: `Manual resume failed (${errName ?? 'unknown'})`, kind: 'resume' });
+      if (errName === 'NotAllowedError') {
         dispatch({ type: 'BLOCKED', time: resumeTime });
       } else {
         dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });

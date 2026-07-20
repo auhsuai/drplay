@@ -131,7 +131,7 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
       let tokenData;
       try {
         tokenData = await invoke<any>("refresh_google_token", { refreshToken });
-      } catch (err: any) {
+      } catch (err: unknown) {
         const errStr = String(err);
         if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {
           throw new TokenRefreshError('Network unreachable', 'network');
@@ -175,8 +175,8 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
       
       refreshSubscribers.forEach(sub => sub.resolve(tokenData.access_token));
       return tokenData.access_token;
-    } catch (err: any) {
-      refreshSubscribers.forEach(sub => sub.reject(err));
+    } catch (err: unknown) {
+      refreshSubscribers.forEach(sub => sub.reject(err instanceof Error ? err : new Error(String(err))));
       
       if (err instanceof TokenRefreshError) {
         if (err.kind === 'invalid_grant') {

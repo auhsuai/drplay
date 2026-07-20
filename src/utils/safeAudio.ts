@@ -15,8 +15,8 @@ export async function safePlay(audio: HTMLAudioElement): Promise<void> {
 
   try {
     await myPromise;
-  } catch (err: any) {
-    if (err && err.name === 'AbortError') {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
       return;
     }
     throw err;

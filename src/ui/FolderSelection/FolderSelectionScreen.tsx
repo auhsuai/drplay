@@ -68,8 +68,8 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
       const q = `name contains '${safeQuery}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
       const files = await searchFolders(token, q, controller.signal);
       setApiSearchResults(files.filter((f: FolderItem) => f.id !== currentFolderId));
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
+    } catch (e: unknown) {
+      if (typeof e === 'object' && e !== null && 'name' in e && (e as { name: unknown }).name !== 'AbortError') {
         setApiSearchResults([]);
         console.warn(`[${FOLDER_MODULE}] api-search-failed`, classifyFolderError(e));
         showErrorToast(t('folder_selection.search_error') || 'Failed to search folders');

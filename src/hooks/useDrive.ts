@@ -111,12 +111,13 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
             const state = await db.syncState.get("drplay_nav_state");
             if (cancelled) return;
             if (state && state.value) {
-              const savedId = state.value.id;
+              const sv = state.value as { id: string; name: string; history: { id: string; name: string }[] };
+              const savedId = sv.id;
               const suspectRoot = savedId === 'root' && localRoot !== 'root';
               const restoredId = suspectRoot ? localRoot! : savedId;
               setCurrentFolderId(restoredId);
-              setCurrentFolderName(restoredId === localRoot || restoredId === 'root' ? "My Drive" : state.value.name);
-              setFolderHistory(suspectRoot ? [] : (state.value.history || []));
+              setCurrentFolderName(restoredId === localRoot || restoredId === 'root' ? "My Drive" : sv.name);
+              setFolderHistory(suspectRoot ? [] : (sv.history || []));
             } else {
               const savedCurrentId = localStorage.getItem("drplay_current_folder_id");
               const savedCurrentName = localStorage.getItem("drplay_current_folder_name");

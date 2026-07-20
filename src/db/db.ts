@@ -9,12 +9,12 @@ export interface DriveFile {
   modifiedTime?: string;
   trashed: boolean;
   isFolder: boolean;
-  metadata?: any; // For future ID3 tag caching
+  metadata?: unknown; // For future ID3 tag caching
 }
 
 export interface SyncState {
   key: string;
-  value: any;
+  value: unknown;
 }
 
 export interface ErrorLogEntry {
@@ -27,12 +27,12 @@ export interface ErrorLogEntry {
   kind?: string;
 }
 
-export interface KvRow { key: string; value: any; }
+export interface KvRow { key: string; value: unknown; }
 export interface PlaylistRow { id: string; name: string; createdAt: number; tracks: any[]; coverImage?: string; userEmail: string; }
 export interface RecentTrackRow { id: string; track: any; userEmail: string; createdAt: number; }
 export interface PlayCountRow { id: string; track: any; count: number; userEmail: string; }
 export interface FolderVisitRow { id: string; name: string; count: number; lastVisited: number; userEmail: string; }
-export interface MetadataCacheRow { key: string; entry: any; }
+export interface MetadataCacheRow { key: string; entry: unknown; }
 
 export class DriveDatabase extends Dexie {
   files!: Table<DriveFile, string>; // Primary key is 'id'
