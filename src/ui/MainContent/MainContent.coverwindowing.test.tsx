@@ -17,6 +17,7 @@ vi.mock('@tanstack/react-virtual', () => ({
       start: i * 92,
     })),
     getTotalSize: () => count * 92,
+    containerRef: { current: document.createElement('div') },
   })),
 }));
 

@@ -422,7 +422,7 @@ export const MainContent = React.memo(function MainContent({
   const currentSortLabel = sortOptions.find(opt => opt.id === baseSortOption)?.label || t('drive.sort', 'Sort');
 
   return (
-    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300" style={{ contain: 'strict' }}>
+    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300" style={{ contain: 'layout style paint' }}>
       {showBulkMoveScreen && token && (
         <FolderSelectionScreen
           token={token}
@@ -866,10 +866,8 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
             className="pb-2"
             style={{
               position: 'absolute',
-              top: 0,
               left: 0,
               width: '100%',
-              height: `${virtualRow.size}px`,
             }}
           >
             <SongCard
