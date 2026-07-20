@@ -197,13 +197,13 @@ export const SongCard = React.memo(function SongCard({
     <div 
       className="relative group/card w-full"
       style={{
-        contain: 'strict',
         contentVisibility: 'auto' as any,
         containIntrinsicSize: 'auto 92px' as any,
       }}
     >
       <div
         ref={cardRef}
+        style={!isHighlighted ? { willChange: 'transform' } : undefined}
         onClick={() => {
           if (isSelectionMode) {
             onToggleSelection?.();
