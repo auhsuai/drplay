@@ -134,7 +134,9 @@ export const SongCard = React.memo(function SongCard({
 
       const fetchMetadata = async () => {
         try {
+        performance.mark(`meta-fetch-${item.id}`);
         const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
+        performance.measure(`meta-fetch-${item.id}`, `meta-fetch-${item.id}`);
         if (!isMounted) return;
         const newMeta = {
           title: metadata.title || item.title,

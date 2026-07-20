@@ -460,12 +460,11 @@ async fn update_track_duration_in_db(
 
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
 // Diagnostic: call counter for IPC timing
-static DIAG_COUNT: AtomicU64 = AtomicU64::new(0);
+// Always log during profiling — removed the modulo-50 sampling.
 fn diag_log(module: &str, dur: std::time::Duration) {
+    static DIAG_COUNT: AtomicU64 = AtomicU64::new(0);
     let c = DIAG_COUNT.fetch_add(1, Ordering::Relaxed);
-    if c % 50 == 0 {
-        eprintln!("[DIAG] {} took {:?} (call #{})", module, dur, c);
-    }
+    eprintln!("[PERF] {} took {:?} (call #{})", module, dur, c);
 }
 
 mod proxy;

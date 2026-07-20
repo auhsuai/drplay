@@ -148,7 +148,10 @@ async fn handle_cover_get<R: tauri::Runtime>(
     recorder: &std::sync::Mutex<crate::thumbnail::AccessRecorder>,
     app: Option<&tauri::AppHandle<R>>,
 ) -> Result<(String, Bytes, &'static str), CoverError> {
+    let _start = std::time::Instant::now();
+
     if let Err(e) = validate_file_id(raw_id) {
+        eprintln!("[PERF] handle_cover_get {} source=BAD_ID took {:?}", raw_id, _start.elapsed());
         return Err(CoverError::BadId(e));
     }
 
@@ -157,11 +160,13 @@ async fn handle_cover_get<R: tauri::Runtime>(
     // Step 0: in-RAM cache (bounded, TTL). Hits avoid any R2/DB round trip.
     if let Some(hit) = COVER_CACHE.get(&cache_key).await {
         if hit.0 == COVER_NOCOVER_ETAG {
+            eprintln!("[PERF] handle_cover_get {} source=NOCOVER_CACHE took {:?}", raw_id, _start.elapsed());
             return Err(CoverError::NoCover);
         }
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
+        eprintln!("[PERF] handle_cover_get {} source=CACHE_HIT took {:?}", raw_id, _start.elapsed());
         return Ok((hit.0, hit.1, "image/jpeg"));
     }
 
@@ -171,6 +176,7 @@ async fn handle_cover_get<R: tauri::Runtime>(
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
+        eprintln!("[PERF] handle_cover_get {} source=R2 took {:?}", raw_id, _start.elapsed());
         return Ok((r2_result.0, r2_result.1, "image/jpeg"));
     }
 
@@ -184,6 +190,7 @@ async fn handle_cover_get<R: tauri::Runtime>(
                 if let Ok(mut r) = recorder.lock() {
                     r.record(raw_id);
                 }
+                eprintln!("[PERF] handle_cover_get {} source=SQLITE took {:?}", raw_id, _start.elapsed());
                 return Ok((etag, bytes, "image/jpeg"));
             }
         }
@@ -214,6 +221,7 @@ async fn handle_cover_get<R: tauri::Runtime>(
 
     // Cache the "no cover" result so subsequent requests skip R2/SQLite.
     COVER_CACHE.insert(cache_key, (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
+    eprintln!("[PERF] handle_cover_get {} source=NOCOVER took {:?}", raw_id, _start.elapsed());
     Err(CoverError::NoCover)
 }
 

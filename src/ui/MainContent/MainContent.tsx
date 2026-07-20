@@ -279,6 +279,7 @@ export const MainContent = React.memo(function MainContent({
       .filter(i => !i.isFolder && i.trackInfo?.id && !coverUrlsRef.current.has(i.trackInfo.id))
       .map(i => i.trackInfo!.id);
     if (trackIds.length === 0) return;
+    performance.mark('cover-batch-start');
 
     const controller = new AbortController();
 
@@ -339,6 +340,8 @@ export const MainContent = React.memo(function MainContent({
         console.warn('[MainContent] cover-batch-fetch-failed', { fileId: id, error: String(e) });
       }
     }).catch(() => {});
+    performance.mark('cover-batch-end');
+    performance.measure('cover-batch', 'cover-batch-start', 'cover-batch-end');
 
     return () => controller.abort();
   }, [currentItems]);
