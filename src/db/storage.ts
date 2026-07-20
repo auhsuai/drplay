@@ -7,6 +7,17 @@ function userEmail(): string {
   return localStorage.getItem('drplay_current_user_email') || 'default';
 }
 
+let _migrationPromise: Promise<void> | null = null;
+
+export function ensureStorageMigration(): Promise<void> {
+  if (!_migrationPromise) {
+    _migrationPromise = runStorageMigration().catch((e) => {
+      console.error('[storage] ensureStorageMigration-failed', e instanceof Error ? e.message : String(e));
+    });
+  }
+  return _migrationPromise;
+}
+
 export async function runStorageMigration(): Promise<void> {
   try {
     if (localStorage.getItem(MIGRATION_FLAG)) return;

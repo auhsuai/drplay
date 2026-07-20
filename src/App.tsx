@@ -18,7 +18,7 @@ const SettingsTab = React.lazy(() => import('./ui/Settings/SettingsTab').then(mo
 import "./App.css";
 import { db } from './db/db';
 import { del as kvDel } from './db/kv';
-import { runStorageMigration } from './db/storage';
+import { ensureStorageMigration } from './db/storage';
 import { getFolderAudioQuery } from './utils/audioQuery';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { LoginScreen } from "./ui/Login/LoginScreen";
@@ -106,11 +106,13 @@ function App() {
 
   // One-time storage migration at bootstrap: copy any legacy idb-keyval data
   // into the new Dexie tables. Fire-and-forget so a failure never blocks render;
-  // runStorageMigration swallows/logs its own errors and sets the done flag.
+  // ensureStorageMigration shares a memoized promise with the session-load path
+  // in usePlayer so both await the same migration (avoids a session-restore race
+  // on first launch for upgraded users). It swallows/logs its own errors.
   useEffect(() => {
     if (storageMigrationStarted) return;
     storageMigrationStarted = true;
-    runStorageMigration().catch((e) =>
+    ensureStorageMigration().catch((e) =>
       console.error(`[${APP_MODULE}] storage-migration-failed`, classifyAppError(e))
     );
   }, []);
