@@ -194,7 +194,14 @@ export const SongCard = React.memo(function SongCard({
   }, [item.id, token, injectedCoverUrl, shouldFetch]);
 
   return (
-    <div className="relative group/card w-full">
+    <div 
+      className="relative group/card w-full"
+      style={{
+        contain: 'strict',
+        contentVisibility: 'auto' as any,
+        containIntrinsicSize: 'auto 92px' as any,
+      }}
+    >
       <div
         ref={cardRef}
         onClick={() => {
@@ -214,7 +221,7 @@ export const SongCard = React.memo(function SongCard({
           setContextMenuPos({ x: e.clientX, y: e.clientY });
           setIsContextMenuOpen(true);
         }}
-        className={`p-3.5 rounded-2xl transition-all duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full ${
+        className={`p-3.5 rounded-2xl transition-[transform,box-shadow,background-color] duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full ${
           isFlashOn
             ? 'bg-white dark:bg-[#383a40] shadow-lg shadow-black/5'
             : isSelected
