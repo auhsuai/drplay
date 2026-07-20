@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { Folder, Music, Square, CheckSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { DriveItem, Track } from "../../../App";
@@ -80,10 +80,8 @@ export const SongCard = React.memo(function SongCard({
     if (injectedCoverUrl !== undefined) return injectedCoverUrl;
     return coverImageCache.get(item.id) ?? null;
   });
-  const [realTitle, setRealTitle] = useState(item.title);
-  const [realArtist, setRealArtist] = useState<string | null>(null);
-  const [duration, setDuration] = useState<number>(0);
-  const [size, setSize] = useState<number>(0);
+  const metadataRef = useRef({ title: item.title, artist: null as string | null, duration: 0, size: 0 });
+  const [, forceRender] = useState(0);
   const cardRef = React.useRef<HTMLDivElement>(null);
   const [isFlashOn, setIsFlashOn] = useState(false);
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
@@ -138,10 +136,17 @@ export const SongCard = React.memo(function SongCard({
         try {
         const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
         if (!isMounted) return;
-        if (metadata.title) setRealTitle(metadata.title);
-        if (metadata.artist) setRealArtist(metadata.artist);
-        if (metadata.duration) setDuration(metadata.duration);
-        if (metadata.size) setSize(metadata.size);
+        const newMeta = {
+          title: metadata.title || item.title,
+          artist: metadata.artist || null,
+          duration: metadata.duration || 0,
+          size: metadata.size || 0,
+        };
+        const old = metadataRef.current;
+        if (newMeta.title !== old.title || newMeta.artist !== old.artist || newMeta.duration !== old.duration || newMeta.size !== old.size) {
+          metadataRef.current = newMeta;
+          forceRender(n => n + 1);
+        }
 
         if (metadata.coverUrl) {
           coverImageCache.set(item.id, metadata.coverUrl);
@@ -196,10 +201,10 @@ export const SongCard = React.memo(function SongCard({
           if (isSelectionMode) {
             onToggleSelection?.();
           } else {
-            item.isFolder ? onOpenFolder(item.id, realTitle) : onPlay({
+            item.isFolder ? onOpenFolder(item.id, metadataRef.current.title) : onPlay({
               ...item.trackInfo!,
-              title: realTitle || item.trackInfo!.title,
-              artist: realArtist || item.trackInfo!.artist
+              title: metadataRef.current.title || item.trackInfo!.title,
+              artist: metadataRef.current.artist || item.trackInfo!.artist
             });
           }
         }}
@@ -239,23 +244,23 @@ export const SongCard = React.memo(function SongCard({
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">
         <h3 className={`font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!text-[#4285F4]' : 'text-gray-800 dark:text-gray-200'}`}>
-          {realTitle}
+          {metadataRef.current.title}
         </h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           {item.isFolder ? (
             <span className="truncate">{t('drive.folders')}</span>
           ) : (
             <div className="flex items-center truncate">
-              {(duration > 0 || size > 0) && (
+              {(metadataRef.current.duration > 0 || metadataRef.current.size > 0) && (
                 <>
                   <span className="text-[11px] font-medium tracking-wide">
-                    {formatDuration(duration)}
+                    {formatDuration(metadataRef.current.duration)}
                   </span>
-                  {size > 0 && (
+                  {metadataRef.current.size > 0 && (
                     <>
                       <span className="mx-2 text-gray-300 dark:text-gray-600">•</span>
                       <span className="text-[11px] font-medium tracking-wide">
-                        {formatSize(size)}
+                        {formatSize(metadataRef.current.size)}
                       </span>
                     </>
                   )}
