@@ -9,6 +9,8 @@ import { deleteFile, moveFile } from "../../utils/driveApi";
 import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
+import { useCoverWindowing } from "../../hooks/useCoverWindowing";
+import { useScrollVelocity } from "../../hooks/useScrollVelocity";
 
 
 
@@ -146,6 +148,7 @@ export const MainContent = React.memo(function MainContent({
   }, [currentFolderId]);
 
   const allFiles = useDebouncedLiveQuery(async () => {
+    if (!searchQuery) return undefined;
     const files = await db.files.toArray();
     return files.map(f => ({
       id: f.id,
@@ -155,7 +158,7 @@ export const MainContent = React.memo(function MainContent({
       size: f.size,
       modifiedTime: f.modifiedTime,
     }));
-  }, [], 100);
+  }, [searchQuery], 100);
 
   const parentMap = React.useMemo(() => {
     if (!allFiles) return new Map<string, string>();
@@ -245,6 +248,14 @@ export const MainContent = React.memo(function MainContent({
     estimateSize: () => 92,
     overscan: 10,
   });
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const range = virtualItems.length > 0
+    ? { start: virtualItems[0].index, end: virtualItems[virtualItems.length - 1].index }
+    : { start: 0, end: 0 };
+
+  const { dynamicMargin } = useScrollVelocity(mainRef);
+  const covers = useCoverWindowing({ items: filteredItems, range, token, dynamicMargin });
 
   const handleCreateFolder = async (folderName: string) => {
     if (!token) return;
@@ -629,7 +640,8 @@ export const MainContent = React.memo(function MainContent({
                 >
                 <SongCard 
                   key={item.id}
-                  item={item} 
+                  item={item}
+                  coverUrl={covers.get(item.id) ?? undefined}
                   onPlay={(t) => {
                     const queue = filteredItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
                     onPlay(t, queue);

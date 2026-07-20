@@ -29,6 +29,35 @@ vi.mock('../../utils/normalizeText', () => ({
   normalizeText: (s: string) => s.toLowerCase(),
 }));
 
+// Capture the coverUrl prop MainContent passes down to each SongCard.
+const receivedCoverUrls: Array<string | null | undefined> = [];
+vi.mock('./components/SongCard', () => ({
+  SongCard: vi.fn(({ item, coverUrl }: { item: DriveItem; coverUrl?: string | null }) => {
+    receivedCoverUrls.push(coverUrl);
+    return <div data-testid="song-card" data-item-id={item.id} />;
+  }),
+}));
+
+// Mock the windowing layer: it resolves a cover for the two visible items.
+vi.mock('../../hooks/useCoverWindowing', () => ({
+  useCoverWindowing: vi.fn(() => {
+    const m = new Map<string, string | null>();
+    m.set('id0', 'http://localhost/cover/id0');
+    m.set('id1', 'http://localhost/cover/id1');
+    return m;
+  }),
+  PREFETCH_MARGIN_SLOW: 3,
+  PREFETCH_MARGIN_MED: 6,
+  PREFETCH_MARGIN_FAST: 12,
+  VELOCITY_FAST_THRESHOLD: 100,
+  VELOCITY_MED_THRESHOLD: 40,
+  EVICT_MULTIPLIER: 2,
+}));
+
+vi.mock('../../hooks/useScrollVelocity', () => ({
+  useScrollVelocity: () => ({ velocity: 0, dynamicMargin: 6 }),
+}));
+
 const hoisted = vi.hoisted(() => {
   const getVirtualItems = vi.fn<() => { key: number; index: number; start: number; size: number }[]>();
   const getTotalSize = vi.fn<() => number>();
@@ -44,26 +73,6 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: hoisted.useVirtualizer,
-}));
-
-vi.mock('../../hooks/useCoverWindowing', () => ({
-  useCoverWindowing: vi.fn(() => new Map<string, string | null>()),
-  PREFETCH_MARGIN_SLOW: 3,
-  PREFETCH_MARGIN_MED: 6,
-  PREFETCH_MARGIN_FAST: 12,
-  VELOCITY_FAST_THRESHOLD: 100,
-  VELOCITY_MED_THRESHOLD: 40,
-  EVICT_MULTIPLIER: 2,
-}));
-
-vi.mock('../../hooks/useScrollVelocity', () => ({
-  useScrollVelocity: () => ({ velocity: 0, dynamicMargin: 3 }),
-}));
-
-vi.mock('./components/SongCard', () => ({
-  SongCard: vi.fn(({ item }: { item: DriveItem }) => (
-    <div data-testid="song-card" data-item-id={item.id} />
-  )),
 }));
 
 function makeItems(n: number): DriveItem[] {
@@ -99,8 +108,9 @@ const baseProps = {
   currentTrack: null,
 };
 
-describe('MainContent virtualized rendering', () => {
+describe('MainContent cover windowing integration', () => {
   beforeEach(() => {
+    receivedCoverUrls.length = 0;
     hoisted.getVirtualItems.mockReset();
     hoisted.getTotalSize.mockReset();
     hoisted.getVirtualItems.mockReturnValue([
@@ -114,10 +124,15 @@ describe('MainContent virtualized rendering', () => {
     cleanup();
   });
 
-  it('only renders virtualized (visible) rows, not all items', () => {
+  it('injects windowed coverUrl into SongCard instead of letting each card self-fetch', () => {
     render(<MainContent {...baseProps} items={makeItems(50)} />);
+    // Only the 2 virtualized rows are rendered.
     const cards = screen.getAllByTestId('song-card');
     expect(cards.length).toBe(2);
-    expect(cards.length).toBeLessThan(50);
+    // Each visible card must receive a coverUrl from the windowing layer,
+    // proving MainContent is wired to useCoverWindowing (the fix for the
+    // RAM spike / high CPU on the My Drive tab).
+    expect(receivedCoverUrls).toContain('http://localhost/cover/id0');
+    expect(receivedCoverUrls).toContain('http://localhost/cover/id1');
   });
 });
