@@ -1,4 +1,4 @@
-import { get, set, del } from 'idb-keyval';
+import { db } from "../db/db";
 import { invoke } from "@tauri-apps/api/core";
 
 const META_MODULE = "metadata";
@@ -26,7 +26,7 @@ function updateLRU(key: string) {
   while (lruKeys.length > MAX_LRU_CACHE) {
     const oldest = lruKeys.shift();
     if (oldest) {
-      del(oldest).catch(e => console.error(`[${META_MODULE}] lru-delete-failed`, classifyMetaError(e)));
+      db.metadataCache.delete(oldest).catch(e => console.error(`[${META_MODULE}] lru-delete-failed`, classifyMetaError(e)));
     }
   }
   
@@ -62,6 +62,15 @@ interface CacheEntry {
   version: number;
   data: CachedMetadata;
   ts: number;
+}
+
+async function getCacheEntry(key: string): Promise<CacheEntry | undefined> {
+  const row = await db.metadataCache.get(key);
+  return row?.entry as CacheEntry | undefined;
+}
+
+async function putCacheEntry(key: string, entry: CacheEntry): Promise<void> {
+  await db.metadataCache.put({ key, entry });
 }
 
 export const metadataCache: Record<string, CachedMetadata> = {};
@@ -112,7 +121,7 @@ async function setCache(
       }
     }
 
-  const existing = await get<CacheEntry>(key);
+  const existing = await getCacheEntry(key);
   const newHasDbId = !!newEntry.dbId;
   const oldHasDbId = !!existing?.data?.dbId;
 
@@ -124,7 +133,7 @@ async function setCache(
   if (existing && oldScore > newScore) return;
   if (existing && oldScore === newScore && existing.ts > Date.now() - 5000) return;
 
-  await set(key, { version: CACHE_VERSION, data: newEntry, ts: Date.now() });
+  await putCacheEntry(key, { version: CACHE_VERSION, data: newEntry, ts: Date.now() });
   updateLRU(key);
 }
 
@@ -146,7 +155,7 @@ async function getTrackMetadataImpl(
   // 0. IDB Check
   if (!forceNetwork) {
     try {
-      const cached = await get<CacheEntry>(`metadata_${fileId}`);
+      const cached = await getCacheEntry(`metadata_${fileId}`);
       if (cached && cached.data && cached.data.v >= 9) {
         setMetadataCache(fileId, cached.data);
         return cached.data;
@@ -253,12 +262,12 @@ export async function updateTrackDuration(fileId: string, accurateDuration: numb
     metadataCache[fileId].durationEstimated = false;
   }
   const key = `metadata_${fileId}`;
-  const entry = await get<CacheEntry>(key);
+  const entry = await getCacheEntry(key);
   if (entry?.data) {
     entry.data.duration = accurateDuration;
     entry.data.durationEstimated = false;
     entry.ts = Date.now();
-    await set(key, entry);
+    await putCacheEntry(key, entry);
 
     if (entry.data.dbId) {
       try {

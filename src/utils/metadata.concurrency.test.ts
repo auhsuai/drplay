@@ -6,10 +6,17 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
-vi.mock('idb-keyval', () => ({
-  get: vi.fn(() => Promise.resolve(undefined)),
-  set: vi.fn(() => Promise.resolve()),
-  del: vi.fn(() => Promise.resolve()),
+// Retarget persistence to an in-memory fake of db.metadataCache.
+// The real db import is replaced so no IndexedDB/fake-indexeddb is needed.
+const memoryStore = new Map<string, any>();
+vi.mock('../db/db', () => ({
+  db: {
+    metadataCache: {
+      get: (key: string) => Promise.resolve(memoryStore.get(key)),
+      put: (row: any) => { memoryStore.set(row.key, row); return Promise.resolve(); },
+      delete: (key: string) => { memoryStore.delete(key); return Promise.resolve(); },
+    },
+  },
 }));
 
 const { invoke } = await import('@tauri-apps/api/core');
