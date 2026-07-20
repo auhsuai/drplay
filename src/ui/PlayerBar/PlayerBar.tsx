@@ -201,11 +201,11 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
           }}
           title={t('player.view_now_playing', 'Xem Đang Phát')}
         >
-          <div className={`relative w-12 h-12 rounded-md shrink-0 transition-colors flex items-center justify-center overflow-hidden ${currentTrack && (!trackMetadata.coverUrl || coverError) ? 'bg-gradient-to-br from-[#4285F4] to-[#34A853]' : 'bg-gray-200 dark:bg-[#121212]'}`}>
+          <div className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden ${currentTrack && (!trackMetadata.coverUrl || coverError) ? 'bg-gray-200 dark:bg-[#121212] text-gray-400' : 'bg-gray-200 dark:bg-[#121212]'}`}>
             {trackMetadata.coverUrl && !coverError ? (
               <img src={trackMetadata.coverUrl} alt="Cover" onError={() => setCoverError(true)} className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110 group-hover:brightness-75" />
             ) : currentTrack ? (
-              <Music className="w-6 h-6 text-white opacity-80 transition-transform duration-300 group-hover:scale-110" />
+              <Music className="w-6 h-6 opacity-80 transition-transform duration-300 group-hover:scale-110" />
             ) : null}
             
             {currentTrack && (
