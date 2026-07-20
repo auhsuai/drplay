@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { get, set as idbSet } from "idb-keyval";
+import { get, set as idbSet } from "../db/kv";
+import { ensureStorageMigration } from "../db/storage";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
 import { Track } from "../App"; // Reuse Track type from App.tsx
 import { getTrackMetadata } from "../utils/metadata";
@@ -88,6 +89,11 @@ export const usePlayer = (accessToken: string | null) => {
     const loadSession = async () => {
       const myId = beginPlaybackIntent();
       try {
+        // Ensure any legacy idb-keyval -> Dexie migration has completed before
+        // we read session/queue/playmode/buffer from db.kv, otherwise an
+        // upgraded user's first launch could restore from an empty kv.
+        await ensureStorageMigration();
+
         const lastSessionStr = localStorage.getItem("drplay_last_session");
         let lastSession;
         if (lastSessionStr) {

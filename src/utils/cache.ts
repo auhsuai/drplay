@@ -1,27 +1,19 @@
-import { keys, delMany } from "idb-keyval";
 import { invoke } from "@tauri-apps/api/core";
+import { db } from "../db/db";
 import { clearAllMetadataCache } from "./metadata";
 
 const METADATA_CACHE_PREFIX = "metadata_";
 const METADATA_LRU_KEY = "__drplay_metadata_lru";
 
-function isCacheKey(key: unknown): boolean {
-  return (
-    typeof key === "string" &&
-    (key.startsWith(METADATA_CACHE_PREFIX) || key === METADATA_LRU_KEY)
-  );
-}
-
 export async function clearAppCache(): Promise<void> {
   try {
-    const allKeys = await keys();
-    const cacheKeys = allKeys.filter(isCacheKey);
-    if (cacheKeys.length > 0) {
-      await delMany(cacheKeys);
-    }
+    await db.metadataCache
+      .where("key")
+      .startsWith(METADATA_CACHE_PREFIX)
+      .delete();
   } catch (e) {
     console.error(
-      "[clearAppCache] failed to read/delete idb metadata cache",
+      "[clearAppCache] failed to delete Dexie metadata cache",
       e instanceof Error ? e.message : String(e)
     );
     throw e;

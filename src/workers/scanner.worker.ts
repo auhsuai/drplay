@@ -1,4 +1,4 @@
-import { get } from 'idb-keyval';
+import { db } from '../db/db';
 import { getTrackMetadata } from '../utils/metadata';
 import { getAudioFilesQuery } from '../utils/audioQuery';
 import { classifyWorkerError, logWorkerError } from './workerError';
@@ -27,7 +27,8 @@ async function startScanner(token: string) {
     const cacheKey = `metadata_${fileId}`;
     try {
       // Skip if file metadata is already fully parsed and cached.
-      const cached = await get<{ version: number; data?: { v?: number }; ts: number }>(cacheKey);
+      const row = await db.metadataCache.get(cacheKey);
+      const cached = row?.entry as { version: number; data?: { v?: number }; ts: number } | undefined;
       if (cached && cached.data && (cached.data.v ?? 0) >= 9) return;
     } catch (err) {
       // Cache read failed: treat as a cache miss and keep scanning this file

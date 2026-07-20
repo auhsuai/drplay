@@ -1,13 +1,10 @@
-import { get, set, keys } from 'idb-keyval';
+import { db } from '../db/db';
 import { Track } from '../App';
 
-const BASE_RECENT_KEY = 'drplay_recent_tracks';
-const BASE_COUNTS_KEY = 'drplay_play_counts';
-const BASE_FOLDER_VISITS_KEY = 'drplay_folder_visits';
+const RECENT_CAP = 1000;
 
-function getUserKey(baseKey: string) {
-  const email = localStorage.getItem('drplay_current_user_email');
-  return email ? `${baseKey}_${email}` : baseKey;
+function currentUserEmail(): string {
+  return localStorage.getItem('drplay_current_user_email') || 'default';
 }
 
 export interface PlayCountEntry {
@@ -23,74 +20,115 @@ export interface FolderVisitEntry {
 }
 
 export async function recordPlay(track: Track) {
-  let recents: Track[] = await get(getUserKey(BASE_RECENT_KEY)) || [];
-  recents = recents.filter(t => t.id !== track.id);
-  recents.unshift(track);
-  if (recents.length > 1000) recents = recents.slice(0, 1000);
-  await set(getUserKey(BASE_RECENT_KEY), recents);
+  const email = currentUserEmail();
+  try {
+    const existing = await db.recentTracks.where('userEmail').equals(email).and((r) => r.id === track.id).toArray();
+    if (existing.length) {
+      await db.recentTracks.delete(existing[0].id);
+    }
+    await db.recentTracks.put({ id: track.id, track, userEmail: email, createdAt: Date.now() });
 
-  const counts: Record<string, PlayCountEntry> = await get(getUserKey(BASE_COUNTS_KEY)) || {};
-  if (!counts[track.id]) {
-    counts[track.id] = { track, count: 0 };
+    const countRows = await db.playCounts.where('userEmail').equals(email).and((r) => r.id === track.id).toArray();
+    const countRow = countRows[0];
+    const nextCount = (countRow?.count || 0) + 1;
+    await db.playCounts.put({ id: track.id, track, count: nextCount, userEmail: email });
+  } catch (e) {
+    console.error('[history] recordPlay-failed', e instanceof Error ? e.message : String(e));
   }
-  counts[track.id].count += 1;
-  counts[track.id].track = track;
-  await set(getUserKey(BASE_COUNTS_KEY), counts);
-  
+
   window.dispatchEvent(new Event('recent-updated'));
 }
 
 export async function getRecentlyPlayed(): Promise<Track[]> {
-  return (await get(getUserKey(BASE_RECENT_KEY))) || [];
+  const email = currentUserEmail();
+  try {
+    const rows = await db.recentTracks.where('userEmail').equals(email).toArray();
+    rows.sort((a, b) => b.createdAt - a.createdAt);
+    const deduped: Track[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      deduped.push(row.track);
+    }
+    return deduped.slice(0, RECENT_CAP);
+  } catch (e) {
+    console.error('[history] getRecentlyPlayed-failed', e instanceof Error ? e.message : String(e));
+    return [];
+  }
 }
 
 export async function getHeavyRotation(): Promise<Track[]> {
-  const counts: Record<string, PlayCountEntry> = await get(getUserKey(BASE_COUNTS_KEY)) || {};
-  return Object.values(counts)
-    .sort((a, b) => b.count - a.count)
-    .map(entry => entry.track)
-    .slice(0, 10);
+  const email = currentUserEmail();
+  try {
+    const rows = await db.playCounts.where('userEmail').equals(email).toArray();
+    return rows
+      .sort((a, b) => b.count - a.count)
+      .map((row) => row.track)
+      .slice(0, 10);
+  } catch (e) {
+    console.error('[history] getHeavyRotation-failed', e instanceof Error ? e.message : String(e));
+    return [];
+  }
 }
 
 export async function getRandomDiscoveries(): Promise<Track[]> {
-  const allKeys = await keys();
-  const metadataKeys = allKeys.filter(k => typeof k === 'string' && k.startsWith('metadata_'));
-  
-  const shuffled = [...metadataKeys];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  try {
+    const rows = await db.metadataCache.toArray();
+    const keys = rows
+      .filter((r) => r.entry && r.entry.data && r.entry.data.v >= 9)
+      .map((r) => r.key as string)
+      .filter((k) => typeof k === 'string' && k.startsWith('metadata_'));
+    if (keys.length === 0) return [];
+
+    const shuffled = [...keys];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const selectedKeys = shuffled.slice(0, 12);
+
+    const tracks: Track[] = [];
+    for (const key of selectedKeys) {
+      const id = key.replace('metadata_', '');
+      tracks.push({
+        id,
+        title: 'Audio Track',
+        artist: '',
+        streamUrl: ''
+      });
+    }
+    return tracks;
+  } catch (e) {
+    console.error('[history] getRandomDiscoveries-failed', e instanceof Error ? e.message : String(e));
+    return [];
   }
-  const selectedKeys = shuffled.slice(0, 12);
-  
-  const tracks: Track[] = [];
-  for (const key of selectedKeys) {
-    const id = (key as string).replace('metadata_', '');
-    tracks.push({
-      id,
-      title: "Audio Track",
-      artist: "",
-      streamUrl: ""
-    });
-  }
-  return tracks;
 }
 
 export async function recordFolderVisit(folderId: string, folderName: string) {
-  if (folderId === 'root') return; // Don't track root folder
-  const visits: Record<string, FolderVisitEntry> = await get(getUserKey(BASE_FOLDER_VISITS_KEY)) || {};
-  if (!visits[folderId]) {
-    visits[folderId] = { id: folderId, name: folderName, count: 0, lastVisited: Date.now() };
+  if (folderId === 'root') return;
+  const email = currentUserEmail();
+  try {
+    const existingRows = await db.folderVisits.where('userEmail').equals(email).and((r) => r.id === folderId).toArray();
+    const existing = existingRows[0];
+    const now = Date.now();
+    const count = (existing?.count || 0) + 1;
+    await db.folderVisits.put({ id: folderId, name: folderName, count, lastVisited: now, userEmail: email });
+  } catch (e) {
+    console.error('[history] recordFolderVisit-failed', e instanceof Error ? e.message : String(e));
   }
-  visits[folderId].count += 1;
-  visits[folderId].name = folderName;
-  visits[folderId].lastVisited = Date.now();
-  await set(getUserKey(BASE_FOLDER_VISITS_KEY), visits);
 }
 
 export async function getMostVisitedFolders(): Promise<FolderVisitEntry[]> {
-  const visits: Record<string, FolderVisitEntry> = await get(getUserKey(BASE_FOLDER_VISITS_KEY)) || {};
-  return Object.values(visits)
-    .sort((a, b) => b.count - a.count || b.lastVisited - a.lastVisited)
-    .slice(0, 4);
+  const email = currentUserEmail();
+  try {
+    const rows = await db.folderVisits.where('userEmail').equals(email).toArray();
+    return rows
+      .sort((a, b) => b.count - a.count || b.lastVisited - a.lastVisited)
+      .slice(0, 4)
+      .map((r) => ({ id: r.id, name: r.name, count: r.count, lastVisited: r.lastVisited }));
+  } catch (e) {
+    console.error('[history] getMostVisitedFolders-failed', e instanceof Error ? e.message : String(e));
+    return [];
+  }
 }
