@@ -201,35 +201,38 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
     }))
 }
 
-#[tauri::command]
-async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
-    let start = Instant::now();
+fn build_stream_url(file_id: &str, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<&str>) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let ext_str = ext.unwrap_or_default();
+    let ext_str = ext.unwrap_or("");
     let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
 
     let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + STREAM_URL_TTL_SECS;
     let payload = format!("{}:{}:{}", file_id, ext_str, exp);
-    let secret = crate::PROXY_SECRET.get().ok_or("Proxy not initialized")?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;
+    // PANIC: PROXY_SECRET is initialized at startup in run() before any command handler runs.
+    // If it's somehow not set, this is a fatal programming error — panic is appropriate.
+    let secret = crate::PROXY_SECRET.get().expect("PROXY_SECRET not initialized — run() must be called first");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC key from PROXY_SECRET");
     mac.update(payload.as_bytes());
     let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(DEFAULT_BUFFER_SECONDS_F64);
-        let result = format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig);
-        let dur = start.elapsed();
-        diag_log("get_stream_url", dur);
-        Ok(result)
+        format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig)
     } else {
-        let result = format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig);
-        let dur = start.elapsed();
-        diag_log("get_stream_url", dur);
-        Ok(result)
+        format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig)
     }
+}
+
+#[tauri::command]
+async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
+    let start = Instant::now();
+    let result = build_stream_url(&file_id, bitrate, buffer_seconds, ext.as_deref());
+    let dur = start.elapsed();
+    diag_log("get_stream_url", dur);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -271,6 +274,12 @@ struct LocalMetadata {
     year: i64,
     track_number: i64,
     album_artist: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct TrackDataBundle {
+    metadata: LocalMetadata,
+    stream_url: String,
 }
 
 pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
@@ -402,6 +411,27 @@ fn get_local_metadata(
     let dur = start.elapsed();
     diag_log("get_local_metadata", dur);
     Some(meta)
+}
+
+#[tauri::command]
+fn get_track_data(
+    file_id: String,
+    size: i64,
+    name: String,
+    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+    bitrate: Option<f64>,
+    buffer_seconds: Option<f64>,
+    ext: Option<String>,
+    #[allow(unused_variables)]
+    _app_handle: tauri::AppHandle,
+) -> Option<TrackDataBundle> {
+    let start = Instant::now();
+    let conn = pool.get().ok()?;
+    let meta = get_local_metadata_internal(size, &name, &conn)?;
+    let stream_url = build_stream_url(&file_id, bitrate, buffer_seconds, ext.as_deref());
+    let dur = start.elapsed();
+    diag_log("get_track_data", dur);
+    Some(TrackDataBundle { metadata: meta, stream_url })
 }
 
 #[tauri::command]
@@ -625,6 +655,7 @@ pub fn run() {
             refresh_google_token,
             register_download_path,
             get_stream_url,
+            get_track_data,
             update_buffer_settings,
             get_local_metadata,
             update_stream_token, clear_stream_token,
