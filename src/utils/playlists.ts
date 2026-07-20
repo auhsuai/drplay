@@ -1,16 +1,16 @@
-import { get, set } from 'idb-keyval';
+import { db } from '../db/db';
 import { Track } from '../App';
 import { showErrorToast } from './simpleToast';
 
 export interface Playlist {
   id: string;
+  userEmail: string;
   name: string;
   createdAt: number;
   tracks: Track[];
   coverImage?: string;
 }
 
-const BASE_PLAYLISTS_KEY = 'drplay_playlists';
 const PLAYLIST_MODULE = "playlists";
 
 // Derive a short, safe classification from an error's name/message ONLY.
@@ -27,15 +27,26 @@ function classifyPlaylistError(err: unknown): { name: string; message: string } 
   return { name, message };
 }
 
-function getUserKey(baseKey: string) {
-  const email = localStorage.getItem('drplay_current_user_email');
-  return email ? `${baseKey}_${email}` : baseKey;
+function getUserEmail(): string {
+  return localStorage.getItem('drplay_current_user_email') || 'default';
+}
+
+async function loadPlaylists(): Promise<Playlist[]> {
+  const email = getUserEmail();
+  const rows = await db.playlists.where('userEmail').equals(email).toArray();
+  return rows.map(({ id, userEmail, name, createdAt, tracks, coverImage }) => ({
+    id,
+    userEmail,
+    name,
+    createdAt,
+    tracks: tracks ?? [],
+    coverImage
+  }));
 }
 
 export async function getPlaylists(): Promise<Playlist[]> {
   try {
-    const playlists = await get<Playlist[]>(getUserKey(BASE_PLAYLISTS_KEY));
-    return playlists || [];
+    return await loadPlaylists();
   } catch (e) {
     console.error(`[${PLAYLIST_MODULE}] get-failed`, classifyPlaylistError(e));
     return [];
@@ -44,15 +55,15 @@ export async function getPlaylists(): Promise<Playlist[]> {
 
 export async function createPlaylist(name: string): Promise<Playlist | null> {
   try {
-    const playlists = await getPlaylists();
+    const email = getUserEmail();
     const newPlaylist: Playlist = {
       id: crypto.randomUUID(),
+      userEmail: email,
       name,
       createdAt: Date.now(),
       tracks: []
     };
-    playlists.push(newPlaylist);
-    await set(getUserKey(BASE_PLAYLISTS_KEY), playlists);
+    await db.playlists.put(newPlaylist);
     window.dispatchEvent(new CustomEvent('playlists-updated'));
     return newPlaylist;
   } catch (e) {
@@ -64,9 +75,7 @@ export async function createPlaylist(name: string): Promise<Playlist | null> {
 
 export async function deletePlaylist(id: string): Promise<void> {
   try {
-    const playlists = await getPlaylists();
-    const updated = playlists.filter(p => p.id !== id);
-    await set(getUserKey(BASE_PLAYLISTS_KEY), updated);
+    await db.playlists.delete(id);
     window.dispatchEvent(new CustomEvent('playlists-updated'));
   } catch (e) {
     console.error(`[${PLAYLIST_MODULE}] delete-failed`, classifyPlaylistError(e));
@@ -76,15 +85,12 @@ export async function deletePlaylist(id: string): Promise<void> {
 
 export async function updatePlaylist(id: string, updates: Partial<Playlist>): Promise<Playlist | null> {
   try {
-    const playlists = await getPlaylists();
-    const index = playlists.findIndex(p => p.id === id);
-    if (index !== -1) {
-      playlists[index] = { ...playlists[index], ...updates };
-      await set(getUserKey(BASE_PLAYLISTS_KEY), playlists);
-      window.dispatchEvent(new CustomEvent('playlists-updated'));
-      return playlists[index];
-    }
-    return null;
+    const existing = await db.playlists.get(id);
+    if (!existing) return null;
+    const updated: Playlist = { ...existing, ...updates, id, userEmail: existing.userEmail };
+    await db.playlists.put(updated);
+    window.dispatchEvent(new CustomEvent('playlists-updated'));
+    return updated;
   } catch (e) {
     console.error(`[${PLAYLIST_MODULE}] update-failed`, classifyPlaylistError(e));
     showErrorToast("Failed to update playlist");
@@ -94,12 +100,11 @@ export async function updatePlaylist(id: string, updates: Partial<Playlist>): Pr
 
 export async function addTrackToPlaylist(playlistId: string, track: Track): Promise<void> {
   try {
-    const playlists = await getPlaylists();
-    const playlist = playlists.find(p => p.id === playlistId);
+    const playlist = await db.playlists.get(playlistId);
     if (playlist) {
       if (!playlist.tracks.some(t => t.id === track.id)) {
         playlist.tracks.push(track);
-        await set(getUserKey(BASE_PLAYLISTS_KEY), playlists);
+        await db.playlists.put(playlist);
         window.dispatchEvent(new CustomEvent('playlists-updated'));
       }
     }
@@ -111,20 +116,32 @@ export async function addTrackToPlaylist(playlistId: string, track: Track): Prom
 
 export async function removeTrackFromPlaylist(playlistId: string, trackId: string): Promise<void> {
   try {
-    const playlists = await getPlaylists();
-    const playlist = playlists.find(p => p.id === playlistId);
+    const playlist = await db.playlists.get(playlistId);
     if (playlist) {
       playlist.tracks = playlist.tracks.filter(t => t.id !== trackId);
-      await set(getUserKey(BASE_PLAYLISTS_KEY), playlists);
+      await db.playlists.put(playlist);
       window.dispatchEvent(new CustomEvent('playlists-updated'));
     }
   } catch (e) {
     console.error(`[${PLAYLIST_MODULE}] remove-track-failed`, classifyPlaylistError(e));
-    showErrorToast("Failed to remove track from playlist");
+    showErrorToast("Failed to remove track to playlist");
   }
 }
 
 export async function getPlaylistById(id: string): Promise<Playlist | null> {
-  const playlists = await getPlaylists();
-  return playlists.find(p => p.id === id) || null;
+  try {
+    const row = await db.playlists.get(id);
+    if (!row) return null;
+    return {
+      id: row.id,
+      userEmail: row.userEmail,
+      name: row.name,
+      createdAt: row.createdAt,
+      tracks: row.tracks ?? [],
+      coverImage: row.coverImage
+    };
+  } catch (e) {
+    console.error(`[${PLAYLIST_MODULE}] get-by-id-failed`, classifyPlaylistError(e));
+    return null;
+  }
 }
