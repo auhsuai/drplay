@@ -271,6 +271,7 @@ export const MainContent = React.memo(function MainContent({
   }, [currentFolderId]);
 
   const coverUrlsRef = useRef<Map<string, string>>(new Map());
+  const predecodedRef = useRef<Set<string>>(new Set());
 
   React.useEffect(() => {
     const trackIds = currentItems
@@ -279,28 +280,49 @@ export const MainContent = React.memo(function MainContent({
     if (trackIds.length === 0) return;
 
     const controller = new AbortController();
-    const batch = trackIds.slice(0, 10);
-    Promise.all(batch.map(async (id) => {
-      const item = currentItems.find(i => i.trackInfo?.id === id);
-      if (!item?.trackInfo) return;
+
+    async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+      const executing = new Set<Promise<void>>();
+      for (const item of items) {
+        if (controller.signal.aborted) break;
+        const p = fn(item).finally(() => executing.delete(p));
+        executing.add(p);
+        if (executing.size >= limit) {
+          await Promise.race(executing);
+        }
+      }
+      await Promise.allSettled(executing);
+    }
+
+    const trackItems = trackIds.map(id => currentItems.find(i => i.trackInfo?.id === id)).filter(Boolean) as typeof currentItems;
+    runWithConcurrency(trackItems, 6, async (item) => {
+      const id = item.trackInfo!.id;
       try {
         const data = await invoke<any>('get_track_data', {
           fileId: id,
-          size: item.trackInfo.size ?? 0,
-          name: item.trackInfo.originalName ?? 'audio.mp3',
+          size: item.trackInfo!.size ?? 0,
+          name: item.trackInfo!.originalName ?? 'audio.mp3',
         });
         if (controller.signal.aborted) return;
-        if (data?.metadata?.has_cover && data?.metadata?.id) {
-          const url = `http://drplay.localhost/cover?id=${data.metadata.id}&thumb=true&v=2`;
-          coverUrlsRef.current.set(id, url);
-        }
         if (data?.stream_url) {
           cachePrefetchedStream(id, data.stream_url);
+        }
+        if (!data?.metadata?.has_cover || !data?.metadata?.id) return;
+        const url = `http://drplay.localhost/cover?id=${data.metadata.id}&thumb=true&v=2`;
+        coverUrlsRef.current.set(id, url);
+        // Pre-decode the cover image into browser's image cache so
+        // the GPU decode cost is paid upfront, not during scroll.
+        if (!predecodedRef.current.has(url)) {
+          predecodedRef.current.add(url);
+          const img = new Image();
+          img.decoding = 'async';
+          img.src = url;
+          img.decode().catch(() => { /* cached from HTTP, decode is optional */ });
         }
       } catch (e) {
         console.warn('[MainContent] cover-batch-fetch-failed', { fileId: id, error: String(e) });
       }
-    })).catch(() => {});
+    }).catch(() => {});
 
     return () => controller.abort();
   }, [currentItems]);
