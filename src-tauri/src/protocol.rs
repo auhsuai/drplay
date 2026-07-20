@@ -2,8 +2,10 @@ use tauri::http::{Response, StatusCode};
 use moka::future::Cache;
 use bytes::Bytes;
 use hmac::Mac;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Duration;
+use tokio::sync::oneshot;
 
 use r2d2_sqlite::SqliteConnectionManager;
 
@@ -58,6 +60,23 @@ pub static COVER_CACHE: LazyLock<Cache<String, (String, Bytes)>> = LazyLock::new
         .time_to_live(Duration::from_secs(COVER_CACHE_TTL_SECS))
         .build()
 });
+
+type CoverResult = Result<(String, Bytes, &'static str), CoverError>;
+
+static IN_FLIGHT: LazyLock<std::sync::Mutex<HashMap<String, Vec<oneshot::Sender<CoverResult>>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+struct InFlightGuard {
+    cache_key: String,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut in_flight) = IN_FLIGHT.lock() {
+            in_flight.remove(&self.cache_key);
+        }
+    }
+}
 
 fn query_cover_blob(
     pool: &r2d2::Pool<SqliteConnectionManager>,
@@ -170,62 +189,118 @@ async fn handle_cover_get<R: tauri::Runtime>(
         return Ok((hit.0, hit.1, "image/jpeg"));
     }
 
-    // Step 1: R2 object storage (server-side fetch of cover_url/thumb_url).
-    if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool).await {
-        COVER_CACHE.insert(cache_key, r2_result.clone()).await;
-        if let Ok(mut r) = recorder.lock() {
-            r.record(raw_id);
-        }
-        eprintln!("[PERF] handle_cover_get {} source=R2 took {:?}", raw_id, _start.elapsed());
-        return Ok((r2_result.0, r2_result.1, "image/jpeg"));
-    }
-
-    // Step 2: SQLite blob fallback — only for ids without drive_ prefix (legacy records)
-    if let Some(pool) = pool {
-        if !raw_id.starts_with(crate::thumbnail::PREFIX) {
-            if let Ok(Some(blob)) = query_cover_blob(pool, raw_id, thumb) {
-                let etag = format!("\"{:x}\"", md5::compute(&blob));
-                let bytes = Bytes::from(blob);
-                COVER_CACHE.insert(cache_key, (etag.clone(), bytes.clone())).await;
-                if let Ok(mut r) = recorder.lock() {
-                    r.record(raw_id);
-                }
-                eprintln!("[PERF] handle_cover_get {} source=SQLITE took {:?}", raw_id, _start.elapsed());
-                return Ok((etag, bytes, "image/jpeg"));
-            }
-        }
-    }
-
-    // Step 3: No real cover anywhere (no R2 key, no SQLite blob). Emit a repair
-    // signal if we can map to a Drive file, then return the music-note placeholder
-    // so the UI never shows a black/transparent image. `has_cover` on the JS side
-    // stays false, so the app knows there is no real cover.
-    if let Some(pool) = pool {
-        let drive_file_id_opt = if raw_id.starts_with(crate::thumbnail::PREFIX) {
-            Some(raw_id.trim_start_matches(crate::thumbnail::PREFIX).to_string())
+    // Step 0.5: In-flight dedup — if another task is already fetching this
+    // cache_key, wait on its result instead of issuing a duplicate R2/SQLite call.
+    // The MutexGuard is scoped to NOT span the .await point (it is !Send).
+    let subscribe_rx = {
+        let mut in_flight = IN_FLIGHT.lock().unwrap();
+        if let Some(waiters) = in_flight.get_mut(&cache_key) {
+            let (tx, rx) = oneshot::channel();
+            waiters.push(tx);
+            Some(rx)
         } else {
-            get_drive_file_id_for_track(pool, raw_id).ok().flatten()
-        };
+            in_flight.insert(cache_key.clone(), Vec::new());
+            None
+        }
+    };
 
-        if let Some(drive_file_id) = drive_file_id_opt {
-            if let Some(app) = app {
-                use tauri::Emitter;
-                let payload = serde_json::json!({
-                    "driveFileId": drive_file_id,
-                    "dbId": raw_id,
-                });
-                let _ = app.emit("repair-missing-thumbnail", payload);
+    if let Some(rx) = subscribe_rx {
+        match rx.await {
+            Ok(result) => return result,
+            Err(_) => {
+                eprintln!("[PERF] handle_cover_get {} source=IN_FLIGHT_RETRY", raw_id);
+                let mut in_flight = IN_FLIGHT.lock().unwrap();
+                in_flight.remove(&cache_key);
+                in_flight.insert(cache_key.clone(), Vec::new());
             }
         }
     }
 
-    // Cache the "no cover" result so subsequent requests skip R2/SQLite.
-    COVER_CACHE.insert(cache_key, (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
-    eprintln!("[PERF] handle_cover_get {} source=NOCOVER took {:?}", raw_id, _start.elapsed());
-    Err(CoverError::NoCover)
+    // Drop guard ensures IN_FLIGHT cleanup even on panic/cancellation.
+    let _guard = InFlightGuard { cache_key: cache_key.clone() };
+
+    // Steps 1-3 wrapped in a labeled block for single cleanup point.
+    let result = 'fetch: {
+        // Step 1: R2 object storage (server-side fetch of cover_url/thumb_url).
+        if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool).await {
+            COVER_CACHE.insert(cache_key.clone(), r2_result.clone()).await;
+            if let Ok(mut r) = recorder.lock() {
+                r.record(raw_id);
+            }
+            eprintln!("[PERF] handle_cover_get {} source=R2 took {:?}", raw_id, _start.elapsed());
+            break 'fetch Ok((r2_result.0, r2_result.1, "image/jpeg"));
+        }
+
+        // Step 2: SQLite blob fallback — only for ids without drive_ prefix (legacy records)
+        if let Some(pool) = pool {
+            if !raw_id.starts_with(crate::thumbnail::PREFIX) {
+                if let Ok(Some(blob)) = query_cover_blob(pool, raw_id, thumb) {
+                    let etag = format!("\"{:x}\"", md5::compute(&blob));
+                    let bytes = Bytes::from(blob);
+                    COVER_CACHE.insert(cache_key.clone(), (etag.clone(), bytes.clone())).await;
+                    if let Ok(mut r) = recorder.lock() {
+                        r.record(raw_id);
+                    }
+                    eprintln!("[PERF] handle_cover_get {} source=SQLITE took {:?}", raw_id, _start.elapsed());
+                    break 'fetch Ok((etag, bytes, "image/jpeg"));
+                }
+            }
+        }
+
+        // Step 3: No real cover anywhere (no R2 key, no SQLite blob). Emit a repair
+        // signal if we can map to a Drive file, then return the music-note placeholder
+        // so the UI never shows a black/transparent image. `has_cover` on the JS side
+        // stays false, so the app knows there is no real cover.
+        if let Some(pool) = pool {
+            let drive_file_id_opt = if raw_id.starts_with(crate::thumbnail::PREFIX) {
+                Some(raw_id.trim_start_matches(crate::thumbnail::PREFIX).to_string())
+            } else {
+                get_drive_file_id_for_track(pool, raw_id).ok().flatten()
+            };
+
+            if let Some(drive_file_id) = drive_file_id_opt {
+                if let Some(app) = app {
+                    use tauri::Emitter;
+                    let payload = serde_json::json!({
+                        "driveFileId": drive_file_id,
+                        "dbId": raw_id,
+                    });
+                    let _ = app.emit("repair-missing-thumbnail", payload);
+                }
+            }
+        }
+
+        // Cache the "no cover" result so subsequent requests skip R2/SQLite.
+        COVER_CACHE.insert(cache_key.clone(), (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
+        eprintln!("[PERF] handle_cover_get {} source=NOCOVER took {:?}", raw_id, _start.elapsed());
+        break 'fetch Err(CoverError::NoCover)
+    };
+
+    // Step 4: Notify any concurrent waiters and remove from IN_FLIGHT.
+    // Must happen AFTER COVER_CACHE insert (already done per-step above) so that
+    // subsequent requests to this key hit the cache instead of joining IN_FLIGHT.
+    {
+        let mut in_flight = IN_FLIGHT.lock().unwrap();
+        if let Some(waiters) = in_flight.remove(&cache_key) {
+            match &result {
+                Ok((etag, bytes, ct)) => {
+                    for tx in waiters {
+                        let _ = tx.send(Ok((etag.clone(), bytes.clone(), *ct)));
+                    }
+                }
+                Err(e) => {
+                    for tx in waiters {
+                        let _ = tx.send(Err(e.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    result
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum CoverError {
     BadId(String),
     NoCover,

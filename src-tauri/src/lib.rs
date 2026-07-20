@@ -594,6 +594,9 @@ pub fn run() {
                     let _ = conn.execute_batch(
                         "CREATE INDEX IF NOT EXISTS idx_tracks_size_bytes ON tracks(size_bytes);"
                     );
+                    let _ = conn.execute_batch(
+                        "CREATE INDEX IF NOT EXISTS idx_tracks_id ON tracks(id);"
+                    );
                 }
             }
 
