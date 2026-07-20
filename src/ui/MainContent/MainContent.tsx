@@ -93,8 +93,8 @@ export const MainContent = React.memo(function MainContent({
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const mainRef = React.useRef<HTMLElement>(null);
-  const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
 
   // Reset highlight and search on folder change
   React.useEffect(() => {
@@ -222,7 +222,7 @@ export const MainContent = React.memo(function MainContent({
 
   const totalPages = Math.ceil(filteredItems.length / PAGE_SIZE);
   const displayItems = React.useMemo(
-    () => filteredItems.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    () => filteredItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
     [filteredItems, page, PAGE_SIZE]
   );
 
@@ -230,7 +230,7 @@ export const MainContent = React.memo(function MainContent({
     if (highlightedFileId && filteredItems.length > 0) {
       const index = filteredItems.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
-        const targetPage = Math.floor(index / PAGE_SIZE);
+        const targetPage = Math.floor(index / PAGE_SIZE) + 1;
         if (targetPage !== page) {
           setPage(targetPage);
         }
@@ -663,18 +663,18 @@ export const MainContent = React.memo(function MainContent({
             {totalPages > 1 && (
               <div className="flex items-center justify-center gap-4 mt-6 pb-4">
                 <button
-                  onClick={() => setPage(p => Math.max(0, p - 1))}
-                  disabled={page === 0}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
                   className="p-1 rounded hover:bg-gray-100 dark:hover:bg-[#33343a] disabled:opacity-30 transition-colors"
                 >
                   <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
                 </button>
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-                  {page + 1} / {totalPages}
+                  {page} / {totalPages}
                 </span>
                 <button
-                  onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                  disabled={page >= totalPages - 1}
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
                   className="p-1 rounded hover:bg-gray-100 dark:hover:bg-[#33343a] disabled:opacity-30 transition-colors"
                 >
                   <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-400" />
