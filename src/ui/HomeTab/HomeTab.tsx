@@ -341,7 +341,7 @@ function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], on
     count: filteredItems.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 92,
-    overscan: 10,
+    overscan: 3,
   });
 
   return (

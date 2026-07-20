@@ -203,7 +203,6 @@ export const SongCard = React.memo(function SongCard({
     >
       <div
         ref={cardRef}
-        style={!isHighlighted ? { willChange: 'transform' } : undefined}
         onClick={() => {
           if (isSelectionMode) {
             onToggleSelection?.();

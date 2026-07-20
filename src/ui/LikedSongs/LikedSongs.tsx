@@ -51,7 +51,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
     count: favorites.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 64,
-    overscan: 10,
+    overscan: 3,
   });
 
   const handleUnlike = async (e: React.MouseEvent, trackId: string) => {

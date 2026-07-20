@@ -56,7 +56,7 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
     count: tracks.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 56,
-    overscan: 10,
+    overscan: 3,
   });
 
   if (!playlist) return null;
