@@ -78,6 +78,7 @@ class ConcurrencyQueue {
   }
 }
 const metadataQueue = new ConcurrencyQueue(3);
+const metadataIpcQueue = new ConcurrencyQueue(5);
 
 const HEAD_BYTES = 65536;
 const TAIL_BYTES = 131072;
@@ -381,7 +382,10 @@ export async function getTrackMetadata(
     if (existing) return existing;
   }
 
-  const promise = getTrackMetadataImpl(fileId, token, size, name, _signal, forceNetwork);
+  const promise = metadataIpcQueue.enqueue(
+    () => getTrackMetadataImpl(fileId, token, size, name, _signal, forceNetwork),
+    _signal
+  );
 
   inflightMetadata.set(fileId, promise);
 
