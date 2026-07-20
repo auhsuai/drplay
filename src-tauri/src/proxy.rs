@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 // --- Named constants: no magic numbers / strings on the production path ---
 // Reqwest total per-request timeout (conn + read). Bounds every Drive call so a
@@ -113,15 +113,15 @@ static FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Per-track cancel signal for background prefetch tasks. When a new stream
 /// request arrives for a track, the previous prefetch task (if any) is
 /// signalled to stop so it stops filling the slice cache.
-static PREFETCH_CANCEL: Lazy<Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+static PREFETCH_CANCEL: LazyLock<Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Global concurrency limit for background prefetch tasks. Without this,
 /// virtual scroll renders ~20 visible tracks and each one spawns a prefetch
 /// task that wakes every 250ms, drives 50% CPU, and floods Google Drive
 /// with HEAD + range requests.
-static PREFETCH_SEMAPHORE: Lazy<Arc<tokio::sync::Semaphore>> =
-    Lazy::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+static PREFETCH_SEMAPHORE: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
 
 fn parse_multi_range(range_str: &str, total_size: u64) -> Vec<(u64, u64)> {
     let prefix = "bytes=";

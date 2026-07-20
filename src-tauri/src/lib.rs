@@ -10,10 +10,12 @@ use tauri::command;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
-lazy_static::lazy_static! {
-    pub static ref GLOBAL_STREAM_TOKEN: tokio::sync::Mutex<String> = tokio::sync::Mutex::new(String::new());
-    pub static ref GLOBAL_TOKEN_NOTIFY: std::sync::Arc<tokio::sync::Notify> = std::sync::Arc::new(tokio::sync::Notify::new());
-}
+use std::sync::LazyLock;
+
+pub static GLOBAL_STREAM_TOKEN: LazyLock<tokio::sync::Mutex<String>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(String::new()));
+pub static GLOBAL_TOKEN_NOTIFY: LazyLock<std::sync::Arc<tokio::sync::Notify>> =
+    LazyLock::new(|| std::sync::Arc::new(tokio::sync::Notify::new()));
 
 // --- Named constants for the stream URL / buffer sizing (no magic numbers) ---
 // Signed-URL lifetime: 24h. Shared by `get_stream_url` and the `/stream`
@@ -441,8 +443,8 @@ mod proxy;
 pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(DEFAULT_BUFFER_SECONDS_USIZE);
-pub static GLOBAL_SLICE_CACHE: once_cell::sync::OnceCell<slice_cache::SliceCache> =
-    once_cell::sync::OnceCell::new();
+pub static GLOBAL_SLICE_CACHE: std::sync::OnceLock<slice_cache::SliceCache> =
+    std::sync::OnceLock::new();
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 

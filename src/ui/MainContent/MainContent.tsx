@@ -46,10 +46,12 @@ function useDebouncedLiveQuery<T>(
   delayMs = 100
 ): T | undefined {
   const [result, setResult] = React.useState<T>();
+  const querierRef = React.useRef(querier);
+  querierRef.current = querier;
   React.useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(async () => {
-      const data = await querier();
+      const data = await querierRef.current();
       if (!cancelled) setResult(data);
     }, delayMs);
     return () => { cancelled = true; clearTimeout(timer); };

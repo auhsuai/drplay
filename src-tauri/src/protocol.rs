@@ -2,7 +2,7 @@ use tauri::http::{Response, StatusCode};
 use moka::future::Cache;
 use bytes::Bytes;
 use hmac::Mac;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -41,7 +41,7 @@ pub fn init_access_recorder(log_path: std::path::PathBuf) {
     }
 }
 
-pub static ETAG_CACHE: Lazy<Cache<String, (String, Bytes)>> = Lazy::new(|| {
+pub static ETAG_CACHE: LazyLock<Cache<String, (String, Bytes)>> = LazyLock::new(|| {
     Cache::builder()
         .max_capacity(50 * 1024 * 1024)
         .weigher(|_k, v: &(String, Bytes)| v.1.len() as u32)
@@ -52,7 +52,7 @@ pub static ETAG_CACHE: Lazy<Cache<String, (String, Bytes)>> = Lazy::new(|| {
 // f = full). Source of truth stays in R2 (aws-sdk-s3); this cache only avoids
 // re-fetching the same cover bytes on every UI paint. Bounded by total BYTES via the
 // weigher and by time via TTL — no unbounded growth, no disk writes.
-pub static COVER_CACHE: Lazy<Cache<String, (String, Bytes)>> = Lazy::new(|| {
+pub static COVER_CACHE: LazyLock<Cache<String, (String, Bytes)>> = LazyLock::new(|| {
     Cache::builder()
         .max_capacity(COVER_CACHE_MAX_BYTES as u64)
         .weigher(|_k, v: &(String, Bytes)| v.1.len() as u32)

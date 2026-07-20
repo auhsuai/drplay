@@ -2,7 +2,6 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./i18n";
 import App from "./App";
-import { Buffer } from "buffer";
 import { initLogger } from "./utils/logger";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { captureError } from "./utils/errorLog";
@@ -67,10 +66,6 @@ export function registerGlobalErrorHandlers(): void {
 }
 
 registerGlobalErrorHandlers();
-
-if (typeof window !== "undefined") {
-  (window as any).Buffer = Buffer;
-}
 
 // Guard the render so importing main.tsx in a non-DOM context (e.g. unit
 // tests / SSR) does not crash the module — global error handlers above still

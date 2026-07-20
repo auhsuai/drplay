@@ -48,8 +48,7 @@ export default defineConfig(async ({ command }) => ({
     rollupOptions: {
       output: {
         manualChunks: {
-          vendor: ['react', 'react-dom', 'react-i18next', 'i18next', 'dexie', 'dexie-react-hooks', '@tauri-apps/api'],
-          utils: ['music-metadata-browser'] // if there's any other large deps
+          vendor: ['react', 'react-dom', 'react-i18next', 'i18next', 'dexie', 'dexie-react-hooks', '@tauri-apps/api']
         }
       }
     }
