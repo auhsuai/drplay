@@ -665,21 +665,19 @@ export const MainContent = React.memo(function MainContent({
                 <button
                   onClick={() => setPage(p => Math.max(0, p - 1))}
                   disabled={page === 0}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="p-1 rounded hover:bg-gray-100 dark:hover:bg-[#33343a] disabled:opacity-30 transition-colors"
                 >
-                  <ChevronLeft className="w-4 h-4" />
-                  <span>{t('pagination.prev', 'Previous')}</span>
+                  <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
                 </button>
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  {t('pagination.page_of', 'Page {{page}} of {{total}}', { page: page + 1, total: totalPages })}
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                  {page + 1} / {totalPages}
                 </span>
                 <button
                   onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
                   disabled={page >= totalPages - 1}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="p-1 rounded hover:bg-gray-100 dark:hover:bg-[#33343a] disabled:opacity-30 transition-colors"
                 >
-                  <span>{t('pagination.next', 'Next')}</span>
-                  <ChevronRight className="w-4 h-4" />
+                  <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-400" />
                 </button>
               </div>
             )}
