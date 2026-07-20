@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { set as idbSet } from '../../db/kv';
 import { PlayerAction, AudioRefs } from './types';
 import { decideDecodeFailure, isProxyStreamUrl } from './streamError';
+import { getBufferedRangePct } from '../../utils/bufferedRange';
 import type { TFunction } from 'i18next';
 
 const AUDIO_MODULE = 'useAudioEngine';
@@ -555,11 +556,12 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     // 100% once the proxy's slice cache can serve a range even if the
     // browser has only buffered a few seconds of decoded media.
     const bufferFill = bufferFillRef?.current;
-    if (bufferFill && audio.duration > 0 && audio.buffered.length > 0) {
-      const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
-      const pct = Math.min(100, (bufferedEnd / audio.duration) * 100);
-      bufferFill.style.left = '0%';
-      bufferFill.style.width = `${pct}%`;
+    if (bufferFill) {
+      const range = getBufferedRangePct(audio);
+      if (range) {
+        bufferFill.style.left = `${range.left}%`;
+        bufferFill.style.width = `${range.width}%`;
+      }
     }
 
     // Data đang chảy → chắc chắn không buffering; huỷ debounce đang chờ.

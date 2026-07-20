@@ -4,6 +4,7 @@ import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1, Shuffle } from "lucide-react";
 import { getTrackMetadata } from "../../utils/metadata";
 import { getPalette } from '../../utils/color';
+import { getBufferedRangePct } from '../../utils/bufferedRange';
 import { useTranslation } from "react-i18next";
 import { listen } from '@tauri-apps/api/event';
 
@@ -229,11 +230,12 @@ export const NowPlayingView = memo(function NowPlayingView({
           // prefetch progress in bytes which diverges from real playback time
           // for VBR audio and reports 100% once its slice cache can serve a
           // range even if the browser has only buffered a few seconds.
-          if (bufferFillRef.current && dur > 0 && audio.buffered.length > 0) {
-            const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
-            const pct = Math.min(100, (bufferedEnd / dur) * 100);
-            bufferFillRef.current.style.left = '0%';
-            bufferFillRef.current.style.width = `${pct}%`;
+          if (bufferFillRef.current) {
+            const range = getBufferedRangePct(audio);
+            if (range) {
+              bufferFillRef.current.style.left = `${range.left}%`;
+              bufferFillRef.current.style.width = `${range.width}%`;
+            }
           }
         }
       }
