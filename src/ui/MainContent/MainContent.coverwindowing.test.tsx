@@ -47,32 +47,6 @@ vi.mock('../../hooks/useCoverWindowing', () => ({
     return m;
   }),
   PREFETCH_MARGIN_SLOW: 3,
-  PREFETCH_MARGIN_MED: 6,
-  PREFETCH_MARGIN_FAST: 12,
-  VELOCITY_FAST_THRESHOLD: 100,
-  VELOCITY_MED_THRESHOLD: 40,
-  EVICT_MULTIPLIER: 2,
-}));
-
-vi.mock('../../hooks/useScrollVelocity', () => ({
-  useScrollVelocity: () => ({ velocity: 0, dynamicMargin: 6 }),
-}));
-
-const hoisted = vi.hoisted(() => {
-  const getVirtualItems = vi.fn<() => { key: number; index: number; start: number; size: number }[]>();
-  const getTotalSize = vi.fn<() => number>();
-  return {
-    getVirtualItems,
-    getTotalSize,
-    useVirtualizer: vi.fn(() => ({
-      getVirtualItems,
-      getTotalSize,
-    })),
-  };
-});
-
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: hoisted.useVirtualizer,
 }));
 
 function makeItems(n: number): DriveItem[] {
@@ -111,13 +85,6 @@ const baseProps = {
 describe('MainContent cover windowing integration', () => {
   beforeEach(() => {
     receivedCoverUrls.length = 0;
-    hoisted.getVirtualItems.mockReset();
-    hoisted.getTotalSize.mockReset();
-    hoisted.getVirtualItems.mockReturnValue([
-      { key: 0, index: 0, start: 0, size: 92 },
-      { key: 1, index: 1, start: 92, size: 92 },
-    ]);
-    hoisted.getTotalSize.mockReturnValue(4600);
   });
 
   afterEach(() => {
@@ -125,10 +92,9 @@ describe('MainContent cover windowing integration', () => {
   });
 
   it('injects windowed coverUrl into SongCard instead of letting each card self-fetch', () => {
-    render(<MainContent {...baseProps} items={makeItems(50)} />);
-    // Only the 2 virtualized rows are rendered.
+    render(<MainContent {...baseProps} items={makeItems(3)} />);
     const cards = screen.getAllByTestId('song-card');
-    expect(cards.length).toBe(2);
+    expect(cards.length).toBe(3);
     // Each visible card must receive a coverUrl from the windowing layer,
     // proving MainContent is wired to useCoverWindowing (the fix for the
     // RAM spike / high CPU on the My Drive tab).

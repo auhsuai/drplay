@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { MainContent } from './MainContent';
 import type { DriveItem } from '../../App';
@@ -29,35 +29,9 @@ vi.mock('../../utils/normalizeText', () => ({
   normalizeText: (s: string) => s.toLowerCase(),
 }));
 
-const hoisted = vi.hoisted(() => {
-  const getVirtualItems = vi.fn<() => { key: number; index: number; start: number; size: number }[]>();
-  const getTotalSize = vi.fn<() => number>();
-  return {
-    getVirtualItems,
-    getTotalSize,
-    useVirtualizer: vi.fn(() => ({
-      getVirtualItems,
-      getTotalSize,
-    })),
-  };
-});
-
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: hoisted.useVirtualizer,
-}));
-
 vi.mock('../../hooks/useCoverWindowing', () => ({
   useCoverWindowing: vi.fn(() => new Map<string, string | null>()),
   PREFETCH_MARGIN_SLOW: 3,
-  PREFETCH_MARGIN_MED: 6,
-  PREFETCH_MARGIN_FAST: 12,
-  VELOCITY_FAST_THRESHOLD: 100,
-  VELOCITY_MED_THRESHOLD: 40,
-  EVICT_MULTIPLIER: 2,
-}));
-
-vi.mock('../../hooks/useScrollVelocity', () => ({
-  useScrollVelocity: () => ({ velocity: 0, dynamicMargin: 3 }),
 }));
 
 vi.mock('./components/SongCard', () => ({
@@ -99,25 +73,20 @@ const baseProps = {
   currentTrack: null,
 };
 
-describe('MainContent virtualized rendering', () => {
-  beforeEach(() => {
-    hoisted.getVirtualItems.mockReset();
-    hoisted.getTotalSize.mockReset();
-    hoisted.getVirtualItems.mockReturnValue([
-      { key: 0, index: 0, start: 0, size: 92 },
-      { key: 1, index: 1, start: 92, size: 92 },
-    ]);
-    hoisted.getTotalSize.mockReturnValue(4600);
-  });
-
+describe('MainContent paginated rendering', () => {
   afterEach(() => {
     cleanup();
   });
 
-  it('only renders virtualized (visible) rows, not all items', () => {
-    render(<MainContent {...baseProps} items={makeItems(50)} />);
+  it('renders all items when count is less than PAGE_SIZE', () => {
+    render(<MainContent {...baseProps} items={makeItems(3)} />);
     const cards = screen.getAllByTestId('song-card');
-    expect(cards.length).toBe(2);
-    expect(cards.length).toBeLessThan(50);
+    expect(cards.length).toBe(3);
+  });
+
+  it('renders PAGE_SIZE items when count exceeds PAGE_SIZE', () => {
+    render(<MainContent {...baseProps} items={makeItems(60)} />);
+    const cards = screen.getAllByTestId('song-card');
+    expect(cards.length).toBe(50);
   });
 });

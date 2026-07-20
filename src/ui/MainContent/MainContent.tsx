@@ -1,7 +1,6 @@
 import React, { useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { Track, DriveItem } from "../../App";
-import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput,  } from "lucide-react";
+import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { deleteFile, moveFile } from "../../utils/driveApi";
@@ -10,7 +9,6 @@ import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/strea
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
 import { useCoverWindowing } from "../../hooks/useCoverWindowing";
-import { useScrollVelocity } from "../../hooks/useScrollVelocity";
 
 
 
@@ -95,6 +93,8 @@ export const MainContent = React.memo(function MainContent({
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const mainRef = React.useRef<HTMLElement>(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
 
   // Reset highlight and search on folder change
   React.useEffect(() => {
@@ -218,19 +218,25 @@ export const MainContent = React.memo(function MainContent({
     });
   }, [globalSearchItemsRaw]);
 
+  const filteredItems = searchQuery ? globalSearchItems : items;
+
+  const totalPages = Math.ceil(filteredItems.length / PAGE_SIZE);
+  const displayItems = React.useMemo(
+    () => filteredItems.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    [filteredItems, page, PAGE_SIZE]
+  );
+
   React.useEffect(() => {
-    if (highlightedFileId && items.length > 0) {
-      const filteredItemsForHighlight = searchQuery ? (globalSearchItems || []) : items;
-      const index = filteredItemsForHighlight.findIndex(item => item.id === highlightedFileId.id);
+    if (highlightedFileId && filteredItems.length > 0) {
+      const index = filteredItems.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
-        setTimeout(() => {
-          rowVirtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
-        }, 50);
+        const targetPage = Math.floor(index / PAGE_SIZE);
+        if (targetPage !== page) {
+          setPage(targetPage);
+        }
       }
     }
-  }, [highlightedFileId, items, searchQuery, globalSearchItems]);
-
-  const filteredItems = searchQuery ? globalSearchItems : items;
+  }, [highlightedFileId, filteredItems, page, PAGE_SIZE]);
 
   React.useEffect(() => {
     clearPrefetchedStreams();
@@ -238,24 +244,16 @@ export const MainContent = React.memo(function MainContent({
   }, [currentFolderId]);
 
   React.useEffect(() => {
-    const trackIds = filteredItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
+    const trackIds = displayItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
     prefetchVisibleTracks(trackIds);
-  }, [filteredItems]);
-  
-  const rowVirtualizer = useVirtualizer({
-    count: filteredItems.length,
-    getScrollElement: () => mainRef.current,
-    estimateSize: () => 92,
-    overscan: 10,
-  });
+  }, [displayItems]);
 
-  const virtualItems = rowVirtualizer.getVirtualItems();
-  const range = virtualItems.length > 0
-    ? { start: virtualItems[0].index, end: virtualItems[virtualItems.length - 1].index }
-    : { start: 0, end: 0 };
+  const covers = useCoverWindowing({ items: displayItems, token });
 
-  const { dynamicMargin } = useScrollVelocity(mainRef);
-  const covers = useCoverWindowing({ items: filteredItems, range, token, dynamicMargin });
+  const handlePlay = React.useCallback((t: Track) => {
+    const queue = displayItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
+    onPlay(t, queue);
+  }, [displayItems, onPlay]);
 
   const handleCreateFolder = async (folderName: string) => {
     if (!token) return;
@@ -621,31 +619,14 @@ export const MainContent = React.memo(function MainContent({
             {searchQuery ? t('drive.no_search_results') : t('drive.no_audio')}
           </div>
         ) : (
-          <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px`, contain: 'strict' }}>
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const item = filteredItems[virtualRow.index];
-              return (
-                <div
-                  key={virtualRow.key}
-                  data-hl-index={virtualRow.index}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: `${virtualRow.size}px`,
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                  className="pb-2"
-                >
+          <>
+            <div className="flex flex-col gap-2 w-full">
+              {displayItems.map((item) => (
                 <SongCard 
                   key={item.id}
                   item={item}
                   coverUrl={covers.get(item.id) ?? undefined}
-                  onPlay={(t) => {
-                    const queue = filteredItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
-                    onPlay(t, queue);
-                  }}
+                  onPlay={handlePlay}
                   onOpenFolder={onOpenFolder} 
                   token={token}
                   currentFolderId={currentFolderId}
@@ -676,10 +657,33 @@ export const MainContent = React.memo(function MainContent({
                   onBulkMoveClick={() => setShowBulkMoveScreen(true)}
                   onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
                 />
-                </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-4 mt-6 pb-4">
+                <button
+                  onClick={() => setPage(p => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>{t('pagination.prev', 'Previous')}</span>
+                </button>
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  {t('pagination.page_of', 'Page {{page}} of {{total}}', { page: page + 1, total: totalPages })}
+                </span>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <span>{t('pagination.next', 'Next')}</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 

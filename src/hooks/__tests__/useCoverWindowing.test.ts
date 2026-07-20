@@ -53,7 +53,7 @@ describe('useCoverWindowing', () => {
 
   it('returns empty map when items is empty', () => {
     const { result } = renderHook(() =>
-      useCoverWindowing({ items: [], range: { start: 0, end: 0 }, token: 'tok' }),
+      useCoverWindowing({ items: [], token: 'tok' }),
     );
     expect(result.current.size).toBe(0);
   });
@@ -61,60 +61,28 @@ describe('useCoverWindowing', () => {
   it('returns empty map when token is null (does not fetch)', () => {
     const items = makeItems(5);
     const { result } = renderHook(() =>
-      useCoverWindowing({ items, range: { start: 0, end: 2 }, token: null }),
+      useCoverWindowing({ items, token: null }),
     );
     expect(result.current.size).toBe(0);
     expect(mockedFetch).not.toHaveBeenCalled();
   });
 
-  it('prefetches exactly the prefetch window (range ± margin) and not beyond', async () => {
-    const items = makeItems(20);
-    const margin = 3;
+  it('fetches covers for all items', async () => {
+    const items = makeItems(5);
     const { result } = renderHook(() =>
-      useCoverWindowing({ items, range: { start: 5, end: 7 }, token: 'tok', dynamicMargin: margin }),
+      useCoverWindowing({ items, token: 'tok' }),
     );
 
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(9));
+    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(5));
 
-    expect(hasCall('t2')).toBe(true);
-    expect(hasCall('t10')).toBe(true);
-    expect(hasCall('t1')).toBe(false);
-    expect(hasCall('t11')).toBe(false);
+    expect(hasCall('t0')).toBe(true);
+    expect(hasCall('t4')).toBe(true);
 
     await waitFor(() => {
-      expect(result.current.size).toBe(9);
-      expect(result.current.get('t5')).toBe('url-t5');
+      expect(result.current.size).toBe(5);
+      expect(result.current.get('t0')).toBe('url-t0');
+      expect(result.current.get('t4')).toBe('url-t4');
     });
-  });
-
-  it('sets null for rows outside evict window', async () => {
-    const items = makeItems(40);
-    const margin = 3;
-    const { result, rerender } = renderHook(
-      ({ range }) => useCoverWindowing({ items, range, token: 'tok', dynamicMargin: margin }),
-      { initialProps: { range: { start: 10, end: 12 } } },
-    );
-
-    // Initial prefetch window = [7,15]
-    await waitFor(() => expect(hasCall('t7')).toBe(true));
-    await waitFor(() => expect(hasCall('t15')).toBe(true));
-    expect(mockedFetch).toHaveBeenCalledTimes(9);
-    await waitFor(() => {
-      expect(result.current.get('t10')).toBe('url-t10');
-    });
-
-    // Scroll far away: range [30,32]; evict window [24,38]; row t10 (idx10)
-    // was fetched but now sits outside evict window -> must be evicted to null.
-    mockedFetch.mockClear();
-    rerender({ range: { start: 30, end: 32 } });
-
-    await waitFor(() => {
-      expect(result.current.has('t10')).toBe(true);
-      expect(result.current.get('t10')).toBeNull();
-    });
-    // New window [27,35] fetched
-    await waitFor(() => expect(hasCall('t27')).toBe(true));
-    await waitFor(() => expect(hasCall('t35')).toBe(true));
   });
 
   it('skips isFolder items', async () => {
@@ -123,7 +91,7 @@ describe('useCoverWindowing', () => {
       { id: 't0', isFolder: false },
     ];
     renderHook(() =>
-      useCoverWindowing({ items, range: { start: 0, end: 1 }, token: 'tok' }),
+      useCoverWindowing({ items, token: 'tok' }),
     );
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
     expect(hasCall('t0')).toBe(true);
@@ -136,7 +104,7 @@ describe('useCoverWindowing', () => {
     );
     const items = makeItems(3);
     const { result } = renderHook(() =>
-      useCoverWindowing({ items, range: { start: 0, end: 2 }, token: 'tok' }),
+      useCoverWindowing({ items, token: 'tok' }),
     );
     await waitFor(() => {
       expect(result.current.get('t1')).toBeNull();
@@ -152,7 +120,7 @@ describe('useCoverWindowing', () => {
   );
   const items = makeItems(3);
   const { result } = renderHook(() =>
-    useCoverWindowing({ items, range: { start: 0, end: 2 }, token: 'tok' }),
+    useCoverWindowing({ items, token: 'tok' }),
   );
   await waitFor(() => {
     const url = result.current.get('t0');
@@ -167,7 +135,7 @@ it('passes trackInfo.size and trackInfo.originalName to getTrackMetadata when av
     { id: 't1', isFolder: false },
   ];
   renderHook(() =>
-    useCoverWindowing({ items, range: { start: 0, end: 1 }, token: 'tok' }),
+    useCoverWindowing({ items, token: 'tok' }),
   );
   await waitFor(() => {
     expect(mockedFetch).toHaveBeenCalledWith('t0', 'tok', 12345, 'song.mp3', expect.any(Object));
@@ -184,16 +152,16 @@ it('guards against race: latest generation wins, no stale writes', async () => {
     );
 
     const { result, rerender } = renderHook(
-      ({ range }) => useCoverWindowing({ items, range, token: 'tok' }),
-      { initialProps: { range: { start: 0, end: 2 } } },
+      ({ items }) => useCoverWindowing({ items, token: 'tok' }),
+      { initialProps: { items } },
     );
 
     await waitFor(() => expect(hasCall('t0')).toBe(true));
 
-    // Move range so t0 leaves prefetch window; resolution of the old promise
+    // Change items so t0 leaves the set; resolution of the old promise
     // must NOT write into the map (generation guard).
-    rerender({ range: { start: 4, end: 5 } });
-    await waitFor(() => expect(hasCall('t4')).toBe(true));
+    rerender({ items: makeItems(3).slice(3) });
+    await waitFor(() => expect(hasCall('t3')).toBe(true));
     await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
 
     // t0 may or may not be in map, but if present it must NOT be the STALE value.
