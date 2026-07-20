@@ -110,9 +110,9 @@ export function useCoverWindowing({
       return controller;
     };
 
-    // Khi lướt rất nhanh, không prefetch cover để tránh decode ảnh gây tốn CPU/RAM.
-    // Ảnh sẽ tự load khi tốc độ cuộn giảm xuống mức vừa (margin = 6) hoặc chậm (margin = 3).
-    if (margin >= PREFETCH_MARGIN_FAST) return;
+    // Khi lướt nhanh hoặc trung bình, không prefetch cover — chỉ prefetch khi gần như dừng
+    // (margin <= 3). Tránh decode ảnh gây tốn CPU/RAM khi cuộn folder lớn.
+    if (margin > PREFETCH_MARGIN_SLOW) return;
 
     for (let i = prefetchStart; i <= prefetchEnd; i++) {
       const item = items[i];
