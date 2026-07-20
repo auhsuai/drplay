@@ -345,8 +345,8 @@ async function getTrackMetadataImpl(
 
   // DISABLED: network metadata fetch (HEAD+TAIL range fetch, music-metadata-browser parse,
   // canvas cover compress). Metadata comes exclusively from local DB (get_local_metadata
-  // above) and R2/proxy cover URLs. Un-scanned files get a minimal placeholder — no
-  // network, no decode, no parse. To re-enable: restore the block removed in this commit.
+  // above) and R2/proxy cover URLs. Un-scanned files get a v:9 placeholder (only memory
+  // cache, not IDB) so subsequent calls skip IPC/get_local_metadata entirely.
   const entry: CachedMetadata = {
     title: safeName.replace(/\.[^.]+$/, ''),
     artist: 'Unknown Artist',
@@ -354,7 +354,7 @@ async function getTrackMetadataImpl(
     durationEstimated: true,
     pictureData: null,
     pictureDataFull: null,
-    v: 0,
+    v: 9,
   };
   setMetadataCache(fileId, entry);
   return entry;
