@@ -13,24 +13,33 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getPalette } from "./color";
 
 // Minimal canvas/Image stubs so the decode path executes without a real DOM.
+// NOTE: under Vitest 4 a `vi.fn().mockImplementation(() => ({}))` is no longer
+// constructable via `new`, so we use a real class and track instances on the
+// constructor to preserve the call-count assertions below.
 function installImageStubs() {
-  const imageCtor = vi.fn().mockImplementation(() => {
-    const img: any = {};
-    // Resolve asynchronously like a real network image load.
-    queueMicrotask(() => {
-      if (typeof img.onload === "function") img.onload();
-    });
-    Object.defineProperty(img, "src", {
-      set() {
-        /* triggering onload via microtask above */
-      },
-      get() {
-        return "";
-      },
-    });
-    return img;
-  });
-  (globalThis as any).Image = imageCtor;
+  const ctor = class {
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    crossOrigin: string | null = null;
+    constructor() {
+      (ctor as any).instances.push(this);
+      // Resolve asynchronously like a real network image load.
+      queueMicrotask(() => {
+        if (typeof this.onload === "function") this.onload();
+      });
+    }
+    set src(_v: string) {
+      /* triggering onload via microtask above */
+    }
+    get src() {
+      return "";
+    }
+  };
+  (ctor as any).instances = [] as any[];
+  (ctor as any).mockClear = () => {
+    (ctor as any).instances = [] as any[];
+  };
+  (globalThis as any).Image = ctor;
 
   (globalThis as any).document = {
     createElement: () => ({
@@ -42,7 +51,7 @@ function installImageStubs() {
       }),
     }),
   };
-  return imageCtor;
+  return ctor;
 }
 
 describe("getPalette — memoization (P0-2 regression)", () => {
@@ -51,7 +60,7 @@ describe("getPalette — memoization (P0-2 regression)", () => {
   });
 
   it("returns the same array reference and does not re-decode on repeat calls", async () => {
-    const ImageCtor = installImageStubs();
+    const ImageCtor = installImageStubs() as any;
 
     const url = "http://drplay.localhost/cover?id=abc&thumb=true&v=2";
     const first = await getPalette(url);
@@ -62,16 +71,16 @@ describe("getPalette — memoization (P0-2 regression)", () => {
     // Memo hit: identical reference, no second decode.
     expect(second).toBe(first);
     // Image must be constructed at most once across both calls.
-    expect(ImageCtor).toHaveBeenCalledTimes(1);
+    expect(ImageCtor.instances.length).toBe(1);
   });
 
   it("distinct URLs are decoded independently", async () => {
-    const ImageCtor = installImageStubs();
+    const ImageCtor = installImageStubs() as any;
 
     const a = await getPalette("http://x/cover?id=1&thumb=true");
     const b = await getPalette("http://x/cover?id=2&thumb=true");
 
     expect(a).not.toBe(b);
-    expect(ImageCtor).toHaveBeenCalledTimes(2);
+    expect(ImageCtor.instances.length).toBe(2);
   });
 });
