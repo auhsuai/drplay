@@ -5,6 +5,9 @@ import { DriveItem, Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { MoreMenu } from "../../components/MoreMenu";
 
+export const coverImageCache = new Map<string, string>();
+const COVER_CACHE_MAX = 500;
+
 function classifyCardError(err: unknown): { name: string; message: string } {
   if (err instanceof Error) {
     return { name: err.name, message: err.message };
@@ -73,7 +76,10 @@ export const SongCard = React.memo(function SongCard({
   coverUrl: injectedCoverUrl
 }: SongCardProps) {
   const { t } = useTranslation();
-  const [coverUrl, setCoverUrl] = useState<string | null>(injectedCoverUrl ?? null);
+  const [coverUrl, setCoverUrl] = useState<string | null>(() => {
+    if (injectedCoverUrl !== undefined) return injectedCoverUrl;
+    return coverImageCache.get(item.id) ?? null;
+  });
   const [realTitle, setRealTitle] = useState(item.title);
   const [realArtist, setRealArtist] = useState<string | null>(null);
   const [duration, setDuration] = useState<number>(0);
@@ -83,7 +89,7 @@ export const SongCard = React.memo(function SongCard({
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
-  const [shouldFetch, setShouldFetch] = useState(false);
+  const [shouldFetch] = useState(true);
 
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {
@@ -122,30 +128,14 @@ export const SongCard = React.memo(function SongCard({
   }, [injectedCoverUrl]);
 
   React.useEffect(() => {
-    const el = cardRef.current;
-    if (!el || shouldFetch) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setShouldFetch(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [shouldFetch]);
-
-  React.useEffect(() => {
     if (!shouldFetch || item.isFolder || !token) return;
 
     const controller = new AbortController();
     let isMounted = true;
     let objectUrl: string | null = null;
 
-    const fetchMetadata = async () => {
-      try {
+      const fetchMetadata = async () => {
+        try {
         const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
         if (!isMounted) return;
         if (metadata.title) setRealTitle(metadata.title);
@@ -153,6 +143,13 @@ export const SongCard = React.memo(function SongCard({
         if (metadata.duration) setDuration(metadata.duration);
         if (metadata.size) setSize(metadata.size);
 
+        if (metadata.coverUrl) {
+          coverImageCache.set(item.id, metadata.coverUrl);
+          if (coverImageCache.size > COVER_CACHE_MAX) {
+            const oldest = coverImageCache.keys().next().value;
+            if (oldest !== undefined) coverImageCache.delete(oldest);
+          }
+        }
         if (typeof injectedCoverUrl !== 'string') {
           if (metadata.coverUrl) {
             setCoverUrl(metadata.coverUrl);

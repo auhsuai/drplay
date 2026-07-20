@@ -39,7 +39,6 @@ impl std::error::Error for R2Error {}
 
 #[derive(serde::Deserialize, Clone)]
 struct R2Config {
-    account_id: String,
     endpoint: String,
     bucket: String,
     region: String,
@@ -118,8 +117,6 @@ pub async fn get_cover_bytes(key: &str) -> Result<Vec<u8>, R2Error> {
         }
     };
     let bucket = BUCKET.get().cloned().unwrap_or_default();
-    eprintln!("[{}] get_cover_bytes: GET bucket={:?} key={:?}", MODULE, bucket, key);
-
     let resp = client
         .get_object()
         .bucket(&bucket)
@@ -130,44 +127,22 @@ pub async fn get_cover_bytes(key: &str) -> Result<Vec<u8>, R2Error> {
     match resp {
         Ok(out) => {
             let data = out.body.collect().await.map_err(|e| {
-                let ts = now_ts();
-                eprintln!(
-                    "[{}] get_object body collect failed key=<redacted> ts={} err={}",
-                    MODULE, ts, e
-                );
                 R2Error::GetObject(format!("body_collect: {}", e))
             })?;
             let bytes = data.into_bytes().to_vec();
-            eprintln!("[{}] get_cover_bytes: OK key=<redacted> bytes={}", MODULE, bytes.len());
             Ok(bytes)
         }
         Err(err) => {
             // S3Error is a typed, matchable error. Detect NoSuchKey / 404 to fall back.
-            let ts = now_ts();
             let is_missing = format!("{:?}", err).contains("NoSuchKey")
                 || format!("{:?}", err).to_lowercase().contains("nosuchkey");
             if is_missing {
-                eprintln!(
-                    "[{}] get_object not found key=<redacted> ts={}",
-                    MODULE, ts
-                );
                 Err(R2Error::NotFound)
             } else {
-                eprintln!(
-                    "[{}] get_object failed key=<redacted> ts={} err={:?}",
-                    MODULE, ts, err
-                );
                 Err(R2Error::GetObject(format!("{:?}", err)))
             }
         }
     }
-}
-
-fn now_ts() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 // Re-exported for a clean unused-import if `ByteStream` is referenced elsewhere;

@@ -43,8 +43,7 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
       clearTimeout(timer);
       img.onload = null;
       img.onerror = null;
-      img.src = ""; // release the decoded full-size image promptly
-      action();
+      try { action(); } finally { img.src = ""; }
     };
 
     img.onload = () => finish(() => {
@@ -87,6 +86,7 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
         setPaletteCached(imgUrl, palette);
         resolve(palette);
       } catch (e) {
+        console.warn('[color] getPalette canvas error', e);
         reject(e);
       }
     });

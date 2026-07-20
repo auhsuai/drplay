@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { useVirtualizer, type ReactVirtualizer } from '@tanstack/react-virtual';
 import { Track, DriveItem } from "../../App";
 import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -232,28 +233,34 @@ export const MainContent = React.memo(function MainContent({
     [filteredItems, currentPage, itemsPerPage]
   );
 
+  const rowVirtualizer = useVirtualizer({
+    count: currentItems.length,
+    getScrollElement: () => mainRef.current,
+    estimateSize: () => 92,
+    overscan: 2,
+    getItemKey: (index: number) => currentItems[index].id,
+    useFlushSync: false,
+    directDomUpdates: true,
+  });
+
   React.useEffect(() => {
     if (highlightedFileId && filteredItems.length > 0) {
       const index = filteredItems.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
         const targetPage = Math.floor(index / itemsPerPage) + 1;
-        setCurrentPage(targetPage);
-        setTimeout(() => {
-          const indexInPage = index % itemsPerPage;
-          const scrollEl = mainRef.current;
-          const el = scrollEl?.querySelector(`[data-hl-index="${indexInPage}"]`) as HTMLElement | null;
-          if (el && scrollEl) {
-            const cont = scrollEl.getBoundingClientRect();
-            const rect = el.getBoundingClientRect();
-            const itemCenter = rect.top - cont.top + rect.height / 2;
-            const viewCenter = cont.height / 2;
-            if (Math.abs(itemCenter - viewCenter) < cont.height * 0.2) return;
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-        }, 50);
+        if (targetPage !== currentPage) {
+          setCurrentPage(targetPage);
+          setTimeout(() => {
+            const pageIndex = index % itemsPerPage;
+            rowVirtualizer.scrollToIndex(pageIndex, { align: 'center' });
+          }, 50);
+        } else {
+          const pageIndex = index % itemsPerPage;
+          rowVirtualizer.scrollToIndex(pageIndex, { align: 'center' });
+        }
       }
     }
-  }, [highlightedFileId, items, searchQuery, globalSearchItems]);
+  }, [highlightedFileId, currentPage, filteredItems, rowVirtualizer]);
 
   React.useEffect(() => {
     clearPrefetchedStreams();
@@ -389,7 +396,7 @@ export const MainContent = React.memo(function MainContent({
           title="Chọn thư mục đích"
         />
       )}
-      <div className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
+      <div className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
         <div className="flex items-center justify-between">
           {isSelectionMode ? (
             <div className="flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-left-4 duration-300">
@@ -635,49 +642,26 @@ export const MainContent = React.memo(function MainContent({
           </div>
         ) : (
           <>
-            <div className="flex flex-col relative w-full">
-            {currentItems.map((item, idx) => (
-                <div
-                  key={item.id}
-                  data-hl-index={idx}
-                  className="pb-2"
-                >
-                <SongCard 
-                  item={item}
-                  onPlay={handlePlay}
-                  onOpenFolder={onOpenFolder} 
-                  token={token}
-                  currentFolderId={currentFolderId}
-                  currentFolderName={currentFolderName}
-                  folderHistory={folderHistory}
-                  isHighlighted={item.id === highlightedFileId?.id}
-                  highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
-                  isPlaying={currentTrack?.id === item.id}
-                  onRefresh={onRefresh}
-                  onRemoveItem={onRemoveItem}
-                  isSelectionMode={isSelectionMode}
-                  isSelected={selectedIds.has(item.id)}
-                  onToggleSelection={() => {
-                    setSelectedIds(prev => {
-                      const next = new Set(prev);
-                      if (next.has(item.id)) {
-                        next.delete(item.id);
-                      } else {
-                        next.add(item.id);
-                      }
-                      return next;
-                    });
-                  }}
-                  onEnableSelectionMode={() => {
-                    setIsSelectionMode(true);
-                    setSelectedIds(new Set([item.id]));
-                  }}
-                  onBulkMoveClick={() => setShowBulkMoveScreen(true)}
-                  onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
-                />
-                </div>
-            ))}
-          </div>
+            <VirtualizedSongList
+              items={currentItems}
+              rowVirtualizer={rowVirtualizer}
+              onPlay={handlePlay}
+              onOpenFolder={onOpenFolder}
+              token={token}
+              currentFolderId={currentFolderId}
+              currentFolderName={currentFolderName}
+              folderHistory={folderHistory}
+              highlightedFileId={highlightedFileId}
+              isPlaying={currentTrack?.id}
+              onRefresh={onRefresh}
+              onRemoveItem={onRemoveItem}
+              isSelectionMode={isSelectionMode}
+              selectedIds={selectedIds}
+              setSelectedIds={setSelectedIds}
+              setIsSelectionMode={setIsSelectionMode}
+              onBulkMoveClick={() => setShowBulkMoveScreen(true)}
+              onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
+            />
 
           {totalPages > 1 && (
             <div className={`sticky bottom-0 w-full flex justify-center items-end pb-0 pt-6 pointer-events-none ${isEditingPage ? 'z-50' : 'z-20'}`}>
@@ -781,5 +765,108 @@ export const MainContent = React.memo(function MainContent({
         isCreating={isCreating}
       />
     </main>
+  );
+});
+
+const VirtualizedSongList = React.memo(function VirtualizedSongList({
+  items,
+  rowVirtualizer,
+  onPlay,
+  onOpenFolder,
+  token,
+  currentFolderId,
+  currentFolderName,
+  folderHistory,
+  highlightedFileId,
+  isPlaying,
+  onRefresh,
+  onRemoveItem,
+  isSelectionMode,
+  selectedIds,
+  setSelectedIds,
+  setIsSelectionMode,
+  onBulkMoveClick,
+  onBulkDeleteClick,
+}: {
+  items: DriveItem[];
+  rowVirtualizer: ReactVirtualizer<HTMLElement, Element>;
+  onPlay: (track: Track) => void;
+  onOpenFolder: (id: string, name: string) => void;
+  token: string | null;
+  currentFolderId: string;
+  currentFolderName: string;
+  folderHistory: { id: string; name: string }[];
+  highlightedFileId: { id: string; ts: number } | null | undefined;
+  isPlaying: string | undefined;
+  onRefresh: () => void;
+  onRemoveItem?: (id: string) => void;
+  isSelectionMode: boolean;
+  selectedIds: Set<string>;
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
+  onBulkMoveClick: () => void;
+  onBulkDeleteClick: () => void;
+}) {
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
+  return (
+    <div
+      ref={rowVirtualizer.containerRef}
+      style={{
+        position: 'relative',
+        width: '100%',
+      }}
+    >
+      {virtualItems.map((virtualRow) => {
+        const item = items[virtualRow.index];
+        if (!item) return null;
+        return (
+          <div
+            key={virtualRow.key}
+            data-index={virtualRow.index}
+            ref={rowVirtualizer.measureElement}
+            className="pb-2"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: `${virtualRow.size}px`,
+            }}
+          >
+            <SongCard
+              item={item}
+              onPlay={(track) => onPlay(track)}
+              onOpenFolder={onOpenFolder}
+              token={token}
+              currentFolderId={currentFolderId}
+              currentFolderName={currentFolderName}
+              folderHistory={folderHistory}
+              isHighlighted={item.id === highlightedFileId?.id}
+              highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
+              isPlaying={item.trackInfo?.id === isPlaying}
+              onRefresh={onRefresh}
+              onRemoveItem={onRemoveItem}
+              isSelectionMode={isSelectionMode}
+              isSelected={selectedIds.has(item.id)}
+              onToggleSelection={() => {
+                setSelectedIds(prev => {
+                  const next = new Set(prev);
+                  if (next.has(item.id)) next.delete(item.id);
+                  else next.add(item.id);
+                  return next;
+                });
+              }}
+              onEnableSelectionMode={() => {
+                setIsSelectionMode(true);
+                setSelectedIds(new Set([item.id]));
+              }}
+              onBulkMoveClick={onBulkMoveClick}
+              onBulkDeleteClick={onBulkDeleteClick}
+            />
+          </div>
+        );
+      })}
+    </div>
   );
 });

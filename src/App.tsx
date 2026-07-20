@@ -26,7 +26,7 @@ import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
-import { metadataCache } from "./utils/metadata";
+import { metadataCache, getTrackMetadata } from "./utils/metadata";
 import { createFolderFetchGuard } from "./utils/folderFetchGuard";
 
 export type Track = {
@@ -166,29 +166,27 @@ function App() {
     
     listen<{ driveFileId: string, dbId: string }>('repair-missing-thumbnail', async (event) => {
       try {
-        const { getValidToken } = await import('./utils/apiClient');
         const token = await getValidToken();
         if (!token) return;
-        
-        const { getTrackMetadata } = await import('./utils/metadata');
+
         const meta = await getTrackMetadata(event.payload.driveFileId, token, undefined, undefined, undefined, true);
-        
+
         if (meta.pictureData) {
           await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=true`, {
             method: 'POST',
             body: meta.pictureData as any,
-          });
+          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: true, err }));
         }
         if (meta.pictureDataFull) {
           await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=false`, {
             method: 'POST',
             body: meta.pictureDataFull as any,
-          });
+          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: false, err }));
         }
-        
+
         window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: event.payload.driveFileId } }));
       } catch (e) {
-        console.warn(`[${APP_MODULE}] Failed to repair thumbnail:`, classifyAppError(e));
+        console.warn(`[${APP_MODULE}] repair-thumbnail-failed`, { driveFileId: event.payload.driveFileId, error: classifyAppError(e) });
       }
     }).then(fn => {
       if (cancelled) { fn(); return; }

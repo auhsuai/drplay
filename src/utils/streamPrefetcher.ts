@@ -22,12 +22,13 @@ async function runWithConcurrencyLimit<T>(items: T[], limit: number, fn: (item: 
   await Promise.allSettled(results);
 }
 
-function evictIfNeeded() {
-  if (prefetchedStreams.size >= MAX_CACHE) {
-    const keysToDelete = [...prefetchedStreams.keys()].slice(0, Math.floor(MAX_CACHE / 3));
-    for (const key of keysToDelete) {
-      prefetchedStreams.delete(key);
-    }
+function cacheSet(fileId: string, url: string) {
+  if (prefetchedStreams.has(fileId)) prefetchedStreams.delete(fileId);
+  prefetchedStreams.set(fileId, url);
+  while (prefetchedStreams.size > MAX_CACHE) {
+    const oldest = prefetchedStreams.keys().next().value;
+    if (oldest === undefined) break;
+    prefetchedStreams.delete(oldest);
   }
 }
 
@@ -39,11 +40,13 @@ export async function prefetchVisibleTracks(trackIds: string[]) {
     try {
       const url = await invoke<string>("get_stream_url", { fileId: id });
       if (typeof url === "string" && url.length > 0) {
-        evictIfNeeded();
-        prefetchedStreams.set(id, url);
+        cacheSet(id, url);
       }
-    } catch {
-      // Silently fail; will fetch on demand
+    } catch (error) {
+      let kind: "timeout" | "network" | "unknown" = "unknown";
+      if (error instanceof Error && /timeout/i.test(error.message)) kind = "timeout";
+      else if (error instanceof Error && /network|fetch|connection/i.test(error.message)) kind = "network";
+      console.warn("[streamPrefetcher] prefetch failed", { fileId: id, kind, error });
     }
   });
 }

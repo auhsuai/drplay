@@ -5,6 +5,7 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl, RefreshToken
 };
 use serde_json::Value;
+use std::time::Instant;
 use tauri::command;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -200,6 +201,7 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
 
 #[tauri::command]
 async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
+    let start = Instant::now();
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -216,9 +218,15 @@ async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: O
 
     if let Some(b) = bitrate {
         let buf = buffer_seconds.unwrap_or(DEFAULT_BUFFER_SECONDS_F64);
-        Ok(format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig))
+        let result = format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig);
+        let dur = start.elapsed();
+        diag_log("get_stream_url", dur);
+        Ok(result)
     } else {
-        Ok(format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig))
+        let result = format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig);
+        let dur = start.elapsed();
+        diag_log("get_stream_url", dur);
+        Ok(result)
     }
 }
 
@@ -380,6 +388,7 @@ fn get_local_metadata(
     #[allow(unused_variables)]
     _app_handle: tauri::AppHandle,
 ) -> Option<LocalMetadata> {
+    let start = Instant::now();
     let conn = pool.get().ok()?;
     let meta = get_local_metadata_internal(size, &name, &conn)?;
 
@@ -388,6 +397,8 @@ fn get_local_metadata(
     // in-RAM moka cache (protocol.rs) only holds real R2/SQLite covers, so no
     // disk existence check is needed here — `has_cover` stays authoritative.
 
+    let dur = start.elapsed();
+    diag_log("get_local_metadata", dur);
     Some(meta)
 }
 
@@ -415,7 +426,15 @@ async fn update_track_duration_in_db(
     Ok(())
 }
 
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
+// Diagnostic: call counter for IPC timing
+static DIAG_COUNT: AtomicU64 = AtomicU64::new(0);
+fn diag_log(module: &str, dur: std::time::Duration) {
+    let c = DIAG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if c % 50 == 0 {
+        eprintln!("[DIAG] {} took {:?} (call #{})", module, dur, c);
+    }
+}
 
 mod proxy;
 
@@ -440,10 +459,9 @@ fn update_minimize_to_tray(minimize: bool) {
 
 #[tauri::command]
 async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
-    // Covers are now served from the in-RAM `COVER_CACHE` (protocol.rs) with an R2
-    // source of truth; nothing is persisted to disk anymore, so there is no on-disk
-    // cover cache to clear. Kept as a stable, idempotent no-op command so the existing
-    // JS caller keeps working without change.
+    // Invalidate both in-RAM caches so stale entries are purged on explicit clear.
+    crate::protocol::COVER_CACHE.invalidate_all();
+    crate::protocol::ETAG_CACHE.invalidate_all();
     Ok(())
 }
 

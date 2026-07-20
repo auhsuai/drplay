@@ -4,6 +4,7 @@ use bytes::Bytes;
 use hmac::Mac;
 use once_cell::sync::Lazy;
 use std::time::Duration;
+use std::time::Instant;
 
 use r2d2_sqlite::SqliteConnectionManager;
 
@@ -13,11 +14,14 @@ use crate::thumbnail::validate_file_id;
 // Total RAM budget for decoded cover bytes held in the moka cache. The weigher
 // counts each entry's byte length, so the cache evicts (LRU + TinyLFU admission)
 // once the summed weight passes this cap — preventing unbounded growth / OOM.
-const COVER_CACHE_MAX_BYTES: usize = 96 * 1024 * 1024; // 96 MiB
+const COVER_CACHE_MAX_BYTES: usize = 384 * 1024 * 1024; // 384 MiB
 // Entries expire after this idle/write TTL so stale covers are re-fetched from R2.
 const COVER_CACHE_TTL_SECS: u64 = 3600; // 1 hour
 // Max size accepted for an incoming POSTed cover payload (legacy local-cover path).
 const MAX_COVER_SIZE: usize = 52_428_800;
+/// Sentinel etag stored in COVER_CACHE when a track has no cover (NoCover).
+/// Checking this in step 0 avoids re-fetching from R2 + SQLite on every mount.
+const COVER_NOCOVER_ETAG: &str = "\"nocover\"";
 
 // Cache key suffix marking the thumbnail (downscaled) vs full variant.
 fn cover_cache_key(raw_id: &str, thumb: bool) -> String {
@@ -112,15 +116,12 @@ fn query_cover_url(
 // layer — the webview still only sees http://drplay.localhost/cover?...
 async fn handle_cover_get_r2(
     raw_id: &str,
-    thumb: bool,
+    _thumb: bool,
     pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
 ) -> Option<(String, Bytes)> {
     let (cover_url, thumb_url) = match pool.and_then(|p| query_cover_url(p, raw_id)) {
         Some(v) => v,
-        None => {
-            eprintln!("[protocol] cover_r2: NO DB ROW for id={:?} (has_cover_url maybe false or id mismatch)", raw_id);
-            return None;
-        }
+        None => return None,
     };
     // Legacy DB rows sometimes have cover_url/thumb_url SWAPPED or store a
     // bogus value (e.g. the file extension "mp3") in one of the columns.
@@ -130,22 +131,14 @@ async fn handle_cover_get_r2(
         .or_else(|| thumb_url.as_ref().filter(|k| k.starts_with("covers/")));
     let key = match key {
         Some(k) if !k.trim().is_empty() => k,
-        _ => {
-            eprintln!("[protocol] cover_r2: NO VALID R2 KEY for id={:?} thumb={} (cover_url={:?} thumb_url={:?})", raw_id, thumb, cover_url, thumb_url);
-            return None;
-        }
+        _ => return None,
     };
-    eprintln!("[protocol] cover_r2: id={:?} thumb={} key={:?}", raw_id, thumb, key);
     match crate::r2::get_cover_bytes(key).await {
         Ok(data) => {
             let etag = format!("\"{:x}\"", md5::compute(&data));
             Some((etag, Bytes::from(data)))
         }
-        // NotFound / error -> fall through to SQLite/legacy sources / placeholder.
-        Err(e) => {
-            eprintln!("[protocol] cover_r2: fetch failed id={:?} key={:?} err={}", raw_id, key, e);
-            None
-        }
+        Err(_e) => None
     }
 }
 
@@ -156,7 +149,9 @@ async fn handle_cover_get<R: tauri::Runtime>(
     recorder: &std::sync::Mutex<crate::thumbnail::AccessRecorder>,
     app: Option<&tauri::AppHandle<R>>,
 ) -> Result<(String, Bytes, &'static str), CoverError> {
+    let start = Instant::now();
     if let Err(e) = validate_file_id(raw_id) {
+        eprintln!("[DIAG] handle_cover_get took {:?} (BadId)", start.elapsed());
         return Err(CoverError::BadId(e));
     }
 
@@ -164,6 +159,9 @@ async fn handle_cover_get<R: tauri::Runtime>(
 
     // Step 0: in-RAM cache (bounded, TTL). Hits avoid any R2/DB round trip.
     if let Some(hit) = COVER_CACHE.get(&cache_key).await {
+        if hit.0 == COVER_NOCOVER_ETAG {
+            return Err(CoverError::NoCover);
+        }
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
@@ -176,6 +174,7 @@ async fn handle_cover_get<R: tauri::Runtime>(
         if let Ok(mut r) = recorder.lock() {
             r.record(raw_id);
         }
+        eprintln!("[DIAG] handle_cover_get took {:?} (R2 fetch)", start.elapsed());
         return Ok((r2_result.0, r2_result.1, "image/jpeg"));
     }
 
@@ -189,6 +188,7 @@ async fn handle_cover_get<R: tauri::Runtime>(
                 if let Ok(mut r) = recorder.lock() {
                     r.record(raw_id);
                 }
+                eprintln!("[DIAG] handle_cover_get took {:?} (SQLite blob)", start.elapsed());
                 return Ok((etag, bytes, "image/jpeg"));
             }
         }
@@ -217,6 +217,9 @@ async fn handle_cover_get<R: tauri::Runtime>(
         }
     }
 
+    // Cache the "no cover" result so subsequent requests skip R2/SQLite.
+    COVER_CACHE.insert(cache_key, (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
+    eprintln!("[DIAG] handle_cover_get took {:?} (NoCover)", start.elapsed());
     Err(CoverError::NoCover)
 }
 
@@ -257,7 +260,6 @@ fn handle_cover_post(
     // served from the in-RAM cache. We no longer persist cover bytes to disk, so
     // this legacy local-cover write is intentionally a no-op: accepting the
     // payload keeps the protocol contract stable without growing `.thumbnails/`.
-    eprintln!("[protocol] cover POST accepted (no disk write) id={:?}", raw_id);
     Ok(())
 }
 

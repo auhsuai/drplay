@@ -37,51 +37,6 @@ function updateLRU(key: string) {
   }
 }
 
-class ConcurrencyQueue {
-  private queue: (() => void)[] = [];
-  private activeCount = 0;
-  constructor(private concurrency: number) {}
-  async enqueue<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    return new Promise((resolve, reject) => {
-      const run = async () => {
-        if (signal?.aborted) {
-          this.activeCount--;
-          this.dequeue();
-          return reject(new DOMException("Aborted", "AbortError"));
-        }
-        try {
-          resolve(await task());
-        } catch (e) {
-          reject(e);
-        } finally {
-          this.activeCount--;
-          this.dequeue();
-        }
-      };
-      if (this.activeCount < this.concurrency) {
-        this.activeCount++;
-        run();
-      } else {
-        this.queue.push(run);
-      }
-    });
-  }
-  private dequeue() {
-    if (this.queue.length > 0 && this.activeCount < this.concurrency) {
-      const next = this.queue.shift();
-      if (next) {
-        this.activeCount++;
-        next();
-      }
-    }
-  }
-}
-const metadataQueue = new ConcurrencyQueue(3);
-
-const HEAD_BYTES = 65536;
-const TAIL_BYTES = 131072;
-const MAX_COVER_FETCH = 50 * 1024 * 1024;
 const CACHE_VERSION = 2;
 const inflightMetadata = new Map<string, Promise<CachedMetadata>>();
 const INFLIGHT_TIMEOUT = 30_000;
@@ -138,77 +93,6 @@ export function clearAllMetadataCache(): void {
   memCacheKeys.length = 0;
 }
 
-function guessMime(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase() || '';
-  const map: Record<string, string> = {
-    mp3: 'audio/mpeg', flac: 'audio/flac', ogg: 'audio/ogg',
-    wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac',
-    wma: 'audio/x-ms-wma', opus: 'audio/opus',
-  };
-  return map[ext] || 'audio/mpeg';
-}
-
-function isImageTruncated(data: Uint8Array): boolean {
-  if (data.length < 8) return true;
-  if (data[0] === 0xFF && data[1] === 0xD8) {
-    return !(data[data.length - 2] === 0xFF && data[data.length - 1] === 0xD9);
-  }
-  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) {
-    const iend = new Uint8Array([0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]);
-    const tail = data.slice(-8);
-    return !iend.every((b, i) => tail[i] === b);
-  }
-  return false;
-}
-
-function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, from: number): number {
-  outer: for (let i = from; i <= haystack.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) {
-      if (haystack[i + j] !== needle[j]) continue outer;
-    }
-    return i;
-  }
-  return -1;
-}
-
-async function parseMultipartByteRanges(response: Response): Promise<Uint8Array[]> {
-  const contentType = response.headers.get('Content-Type') || '';
-  const boundaryMatch = contentType.match(/boundary=([^;]+)/);
-  const buf = new Uint8Array(await response.arrayBuffer());
-
-  if (!boundaryMatch) {
-    return [buf];
-  }
-
-  const boundary = `--${boundaryMatch[1]}`;
-  const boundaryBytes = new TextEncoder().encode(boundary);
-  const parts: Uint8Array[] = [];
-
-  let searchStart = 0;
-  const indices: number[] = [];
-  while (true) {
-    const idx = indexOfBytes(buf, boundaryBytes, searchStart);
-    if (idx === -1) break;
-    indices.push(idx);
-    searchStart = idx + boundaryBytes.length;
-  }
-
-  for (let i = 0; i < indices.length - 1; i++) {
-    const sectionStart = indices[i] + boundaryBytes.length;
-    const sectionEnd = indices[i + 1];
-    const section = buf.slice(sectionStart, sectionEnd);
-    const headerEnd = indexOfBytes(section, new TextEncoder().encode('\r\n\r\n'), 0);
-    if (headerEnd === -1) continue;
-    let body = section.slice(headerEnd + 4);
-    if (body.length >= 2 && body[body.length - 1] === 0x0A && body[body.length - 2] === 0x0D) {
-      body = body.slice(0, body.length - 2);
-    }
-    parts.push(body);
-  }
-
-  return parts;
-}
-
 async function setCache(
   key: string,
   newEntry: CachedMetadata,
@@ -223,10 +107,10 @@ async function setCache(
         newEntry.coverUrl = undefined;
         newEntry.fullCoverUrl = undefined;
       }
-    } catch {
-      // IPC error — keep entry, don't block user
+      } catch (e) {
+        console.warn(`[${META_MODULE}] verify-track-exists-failed`, classifyMetaError(e), { dbId: newEntry.dbId });
+      }
     }
-  }
 
   const existing = await get<CacheEntry>(key);
   const newHasDbId = !!newEntry.dbId;
@@ -242,47 +126,6 @@ async function setCache(
 
   await set(key, { version: CACHE_VERSION, data: newEntry, ts: Date.now() });
   updateLRU(key);
-}
-
-async function compressImage(
-  data: Uint8Array,
-  format: string,
-  maxSize: number = 256,
-  quality: number = 0.7,
-): Promise<Uint8Array> {
-  const blob = new Blob([data], { type: format });
-  const img = await createImageBitmap(blob);
-
-  if (img.width <= maxSize && img.height <= maxSize) {
-    return data;
-  }
-
-  const scale = Math.min(maxSize / img.width, maxSize / img.height);
-  const w = Math.floor(img.width * scale);
-  const h = Math.floor(img.height * scale);
-
-  if (typeof OffscreenCanvas !== 'undefined') {
-    const canvas = new OffscreenCanvas(w, h);
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(img, 0, 0, w, h);
-    const compressed = await canvas.convertToBlob({ type: 'image/jpeg', quality });
-    return new Uint8Array(await compressed.arrayBuffer());
-  }
-
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(img, 0, 0, w, h);
-  return new Promise((resolve) => {
-    canvas.toBlob(async (blob) => {
-      if (blob) {
-        resolve(new Uint8Array(await blob.arrayBuffer()));
-      } else {
-        resolve(data);
-      }
-    }, 'image/jpeg', quality);
-  });
 }
 
 async function getTrackMetadataImpl(
@@ -308,8 +151,8 @@ async function getTrackMetadataImpl(
         setMetadataCache(fileId, cached.data);
         return cached.data;
       }
-    } catch {
-      // ignore IDB error
+    } catch (e) {
+      console.warn(`[${META_MODULE}] idb-read-failed`, classifyMetaError(e), { fileId });
     }
   }
 
@@ -338,8 +181,8 @@ async function getTrackMetadataImpl(
         setMetadataCache(fileId, entry);
         return entry;
       }
-    } catch {
-      // continue to network fetch
+    } catch (e) {
+      console.warn(`[${META_MODULE}] local-metadata-failed`, classifyMetaError(e), { fileId, size: safeSize, name: safeName });
     }
   }
 
@@ -347,6 +190,8 @@ async function getTrackMetadataImpl(
   // canvas cover compress). Metadata comes exclusively from local DB (get_local_metadata
   // above) and R2/proxy cover URLs. Un-scanned files get a v:9 placeholder (only memory
   // cache, not IDB) so subsequent calls skip IPC/get_local_metadata entirely.
+
+  // Fallback: v:9 placeholder (no cover data)
   const entry: CachedMetadata = {
     title: safeName.replace(/\.[^.]+$/, ''),
     artist: 'Unknown Artist',
@@ -360,15 +205,12 @@ async function getTrackMetadataImpl(
   return entry;
 }
 
-// dead-code references (kept for re-enable)
-void [metadataQueue, HEAD_BYTES, TAIL_BYTES, MAX_COVER_FETCH, guessMime, isImageTruncated, parseMultipartByteRanges, compressImage];
-
 export async function getTrackMetadata(
   fileId: string,
   token?: string,
   size?: number,
   name?: string,
-  _signal?: AbortSignal,
+  signal?: AbortSignal,
   forceNetwork: boolean = false,
 ): Promise<CachedMetadata> {
   if (!forceNetwork) {
@@ -381,7 +223,7 @@ export async function getTrackMetadata(
     if (existing) return existing;
   }
 
-  const promise = getTrackMetadataImpl(fileId, token, size, name, _signal, forceNetwork);
+  const promise = getTrackMetadataImpl(fileId, token, size, name, signal, forceNetwork);
 
   inflightMetadata.set(fileId, promise);
 

@@ -46,9 +46,10 @@ export const usePlayer = (accessToken: string | null) => {
       return;
     }
     idbSet("drplay_buffer_seconds", bufferSeconds);
-    invoke("update_buffer_settings", { seconds: bufferSeconds }).catch(e =>
-      console.warn(`[usePlayer] buffer-settings-failed`, classifyPlayerError(e))
-    );
+    invoke("update_buffer_settings", { seconds: bufferSeconds }).catch(e => {
+      const errMsg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      console.warn(`[usePlayer] buffer-settings-failed`, { seconds: bufferSeconds, error: errMsg });
+    });
   }, [bufferSeconds]);
 
   // Keep system awake while playing
@@ -256,7 +257,10 @@ export const usePlayer = (accessToken: string | null) => {
         const ext = next.originalName?.split('.').pop()?.toLowerCase();
         invoke<string>("get_stream_url", { fileId: next.id, ext })
           .then(url => { if (url) prefetchNextTrackAudio(url); })
-          .catch(err => { console.warn('[usePlayer] next-track-prefetch-fail', err); });
+          .catch(err => {
+            const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+            console.warn(`[usePlayer] next-track-prefetch-fail`, { fileId: next.id, error: errMsg });
+          });
       }
     };
 

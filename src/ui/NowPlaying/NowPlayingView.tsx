@@ -7,6 +7,11 @@ import { getPalette } from '../../utils/color';
 import { useTranslation } from "react-i18next";
 import { listen } from '@tauri-apps/api/event';
 
+function classifyNowPlayingError(err: unknown): { name: string; message: string } {
+  if (err instanceof Error) return { name: err.name, message: err.message };
+  return { name: "UnknownError", message: String(err) };
+}
+
 interface NowPlayingViewProps {
   currentTrack: Track | null;
   isPlaying: boolean;
@@ -78,13 +83,10 @@ export const NowPlayingView = memo(function NowPlayingView({
           if (metadata.title) setRealTitle(metadata.title);
           if (metadata.artist) setRealArtist(metadata.artist);
           
-          const targetCoverUrl = metadata.fullCoverUrl || metadata.coverUrl;
-          // Decode the palette from the FULL cover for best color accuracy.
-          // getPalette is memoized by cover URL in color.ts, so an identical
-          // cover is decoded at most once across tracks / reopens.
-          if (targetCoverUrl) {
-            setCoverUrl(targetCoverUrl);
-              getPalette(targetCoverUrl)
+          const targetCover = metadata.fullCoverUrl || metadata.coverUrl;
+          if (targetCover) {
+            setCoverUrl(targetCover);
+              getPalette(targetCover)
                 .then(colors => {
                   if (isCancelled) return;
                   setBgColor(colors[0]);
@@ -95,7 +97,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                     setBgColor('');
                     setBgPalette([]);
                   }
-                  console.warn('[NowPlaying] Failed to extract color palette from cover', err);
+                  console.warn('[NowPlaying] palette-failed', { trackId: currentTrack?.id, err: classifyNowPlayingError(err) });
                 });
           } else if ((metadata.pictureDataFull || metadata.pictureData) && metadata.pictureFormat) {
             const data = metadata.pictureDataFull || metadata.pictureData;
@@ -114,7 +116,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                     setBgColor('');
                     setBgPalette([]);
                   }
-                  console.warn('[NowPlaying] Failed to extract color palette from cover', err);
+                  console.warn('[NowPlaying] palette-failed', { trackId: currentTrack?.id, err: classifyNowPlayingError(err) });
                 });
           } else {
             setBgColor('');
@@ -122,7 +124,7 @@ export const NowPlayingView = memo(function NowPlayingView({
           }
         })
         .catch((e) => {
-          console.error('[NowPlaying] Failed to load track metadata', e);
+          console.error('[NowPlaying] track-metadata-failed', { trackId: currentTrack?.id, ...classifyNowPlayingError(e) });
           if (!isCancelled) {
             setBgColor('');
             setBgPalette([]);
@@ -243,7 +245,7 @@ export const NowPlayingView = memo(function NowPlayingView({
     if (!progressBarRef.current) return;
     setIsDragging(true);
     isDraggingRef.current = true;
-      try { progressBarRef.current.setPointerCapture(e.pointerId); } catch (err) { console.warn('[NowPlaying] setPointerCapture failed', err); }
+      try { progressBarRef.current.setPointerCapture(e.pointerId); } catch (err) { console.warn('[NowPlaying] setPointerCapture failed', { pointerId: e.pointerId, trackId: currentTrack?.id, err }); }
     const bounds = progressBarRef.current.getBoundingClientRect();
     
     const updateTimeUI = (clientX: number) => {

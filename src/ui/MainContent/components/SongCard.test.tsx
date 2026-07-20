@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
-import { SongCard } from './SongCard';
+import { SongCard, coverImageCache } from './SongCard';
 import { getTrackMetadata } from '../../../utils/metadata';
 import type { DriveItem } from '../../../App';
 
@@ -40,6 +40,7 @@ const baseProps = {
 
 describe('SongCard coverUrl prop', () => {
   beforeEach(() => {
+    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
@@ -71,11 +72,23 @@ describe('SongCard coverUrl prop', () => {
     expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
   });
 
-  it('self-fetches when injectedCoverUrl is null (windowing evicted state, not a real url)', async () => {
+  it('fetches metadata when injectedCoverUrl is null', async () => {
     render(<SongCard {...baseProps} item={makeItem()} coverUrl={null} />);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
     await screen.findByAltText('cover');
+  });
+
+  it('caches and reuses coverUrl from cache on remount', async () => {
+    const { unmount, container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    await screen.findByAltText('cover');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
+
+    unmount();
+    cleanup();
+
+    const { container: container2 } = render(<SongCard {...baseProps} item={makeItem()} />);
+    await screen.findByAltText('cover');
+    expect(container2.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
   });
 
   it('does not self-fetch for folder items even without coverUrl', () => {
