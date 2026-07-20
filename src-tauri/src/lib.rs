@@ -502,6 +502,7 @@ pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
 pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
 pub static HAS_COVER_URL: OnceLock<bool> = OnceLock::new();
 pub static HAS_EXTENDED_META: OnceLock<bool> = OnceLock::new();
+pub static HAS_DURATION_ESTIMATED: OnceLock<bool> = OnceLock::new();
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -586,6 +587,20 @@ pub fn run() {
                         ] {
                             let _ = conn.execute(col, []);
                         }
+                    }
+
+                    // Migration: add duration_estimated flag column so old DBs (scanned
+                    // before duration estimation) still open. DEFAULT 1 = "duration needs
+                    // (re)estimation"; update_track_duration_in_db sets it to 0 once a real
+                    // duration is stored.
+                    let has_duration_estimated = *HAS_DURATION_ESTIMATED.get_or_init(|| {
+                        conn.prepare("SELECT duration_estimated FROM tracks LIMIT 1").is_ok()
+                    });
+                    if !has_duration_estimated {
+                        let _ = conn.execute(
+                            "ALTER TABLE tracks ADD COLUMN duration_estimated INTEGER DEFAULT 1",
+                            [],
+                        );
                     }
 
                     // Migration: add index on size_bytes for fast metadata lookup.
