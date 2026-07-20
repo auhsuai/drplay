@@ -257,8 +257,7 @@ export const usePlayer = (accessToken: string | null) => {
         invoke<string>("get_stream_url", { fileId: next.id, ext })
           .then(url => { if (url) prefetchNextTrackAudio(url); })
           .catch(err => {
-            const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-            console.warn(`[usePlayer] next-track-prefetch-fail`, { fileId: next.id, error: errMsg });
+            console.warn(`[usePlayer] next-track-prefetch-fail`, { fileId: next.id, ...classifyPlayerError(err) });
           });
       }
     };

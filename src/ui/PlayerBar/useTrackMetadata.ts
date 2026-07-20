@@ -134,7 +134,10 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
         }
       })
         .catch(err => {
-          if (!isCancelled) dispatch({ type: 'ERROR', error: { type: 'metadata', text: err.message } });
+          const errName = classifyTrackMetaError(err);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[${TRACK_META_MODULE}] metadata-fetch-failed`, { trackId: currentTrack.id, name: errName, message: errMsg });
+          if (!isCancelled) dispatch({ type: 'ERROR', error: { type: 'metadata', text: errMsg } });
         });
 
       if (currentTrack.streamUrl && isProxyStreamUrl(currentTrack.streamUrl)) {
