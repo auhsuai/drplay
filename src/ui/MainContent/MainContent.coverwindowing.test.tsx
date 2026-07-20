@@ -50,17 +50,6 @@ vi.mock('./components/SongCard', () => ({
   }),
 }));
 
-// Mock the windowing layer: it resolves a cover for the two visible items.
-vi.mock('../../hooks/useCoverWindowing', () => ({
-  useCoverWindowing: vi.fn(() => {
-    const m = new Map<string, string | null>();
-    m.set('id0', 'http://localhost/cover/id0');
-    m.set('id1', 'http://localhost/cover/id1');
-    return m;
-  }),
-  PREFETCH_MARGIN_SLOW: 3,
-}));
-
 function makeItems(n: number): DriveItem[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `id${i}`,
@@ -94,7 +83,7 @@ const baseProps = {
   currentTrack: null,
 };
 
-describe('MainContent cover windowing integration', () => {
+describe('MainContent does not inject coverUrl (SongCard self-fetches)', () => {
   beforeEach(() => {
     receivedCoverUrls.length = 0;
   });
@@ -103,14 +92,14 @@ describe('MainContent cover windowing integration', () => {
     cleanup();
   });
 
-  it('injects windowed coverUrl into SongCard instead of letting each card self-fetch', () => {
+  it('does not pass coverUrl to SongCard — each card self-fetches metadata', () => {
     render(<MainContent {...baseProps} items={makeItems(3)} />);
     const cards = screen.getAllByTestId('song-card');
     expect(cards.length).toBe(3);
-    // Each visible card must receive a coverUrl from the windowing layer,
-    // proving MainContent is wired to useCoverWindowing (the fix for the
-    // RAM spike / high CPU on the My Drive tab).
-    expect(receivedCoverUrls).toContain('http://localhost/cover/id0');
-    expect(receivedCoverUrls).toContain('http://localhost/cover/id1');
+    // All coverUrls must be undefined since MainContent no longer uses
+    // useCoverWindowing — SongCard handles its own metadata fetch.
+    receivedCoverUrls.forEach((url) => {
+      expect(url).toBeUndefined();
+    });
   });
 });

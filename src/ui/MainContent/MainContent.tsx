@@ -9,7 +9,6 @@ import { deleteFile, moveFile } from "../../utils/driveApi";
 import { prefetchVisibleTracks, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
-import { useCoverWindowing } from "../../hooks/useCoverWindowing";
 
 
 
@@ -265,8 +264,6 @@ export const MainContent = React.memo(function MainContent({
     const trackIds = currentItems.filter(i => !i.isFolder && i.trackInfo?.id).map(i => i.trackInfo!.id);
     prefetchVisibleTracks(trackIds);
   }, [currentItems]);
-
-  const covers = useCoverWindowing({ items: currentItems, token });
 
   const rowVirtualizer = useVirtualizer({
     count: currentItems.length,
@@ -665,7 +662,7 @@ export const MainContent = React.memo(function MainContent({
                 <SongCard 
                   key={item.id}
                   item={item}
-                  coverUrl={covers.get(item.id) ?? undefined}
+
                   onPlay={handlePlay}
                   onOpenFolder={onOpenFolder} 
                   token={token}
