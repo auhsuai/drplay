@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.drplay.app",
   "build": {
-    "beforeDevCommand": "node scripts/copy-r2-config.mjs && npm run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "node scripts/copy-r2-config.mjs && npm run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -26,9 +26,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": [
-      "r2_config.json"
-    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
