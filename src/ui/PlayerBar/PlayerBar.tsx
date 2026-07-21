@@ -93,7 +93,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     setIsBuffering,
   });
 
-  const { audioRefs: { audioRef, audioRef2, activeAudioIndexRef } } = audioEngine;
+  const { audioRefs: { audioRef } } = audioEngine;
 
   // useProgressUI — needs getActiveAudio, audioRef from audioEngine
   const progressUI = useProgressUI({
@@ -126,8 +126,6 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     loadNormalAudio: audioEngine.loadNormalAudio,
     performRetry: audioEngine.performRetry,
     audioRef,
-    audioRef2,
-    activeAudioIndexRef,
     lastKnownPositionRef: audioEngine.lastKnownPositionRef,
     errorPositionRef: audioEngine.errorPositionRef,
     rateLimitUntilRef,
@@ -147,9 +145,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
 
   // 5. Volume sync effect
   useEffect(() => {
-    for (const el of [audioRef.current, audioRef2.current]) {
-      if (el) el.volume = isMuted ? 0 : volume;
-    }
+    if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume;
   }, [volume, isMuted, currentTrack]);
 
   // 6. Volume timeout cleanup
@@ -308,23 +304,10 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         </div>
       </div>
 
-      {/* Hidden Audio Elements */}
+      {/* Hidden Audio Element */}
       <audio
         id="drplay-audio"
         ref={audioRef}
-        preload="auto"
-        onTimeUpdate={audioEngine.handleTimeUpdate}
-        onProgress={audioEngine.handleTimeUpdate}
-        onLoadedMetadata={audioEngine.handleLoadedMetadata}
-        onCanPlay={audioEngine.handleCanPlay}
-        onWaiting={audioEngine.handleWaiting}
-        onPlaying={audioEngine.handlePlaying}
-        onError={audioEngine.handleAudioError}
-        onEnded={audioEngine.handleEnded}
-      />
-      <audio
-        id="drplay-audio-2"
-        ref={audioRef2}
         preload="auto"
         onTimeUpdate={audioEngine.handleTimeUpdate}
         onProgress={audioEngine.handleTimeUpdate}
