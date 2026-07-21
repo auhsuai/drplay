@@ -459,6 +459,40 @@ function App() {
       
       const q = getFolderAudioQuery(folderId);
 
+      // Ask Drive to return each page already in (approximately) the same
+      // order this folder is currently displayed in, instead of Drive's own
+      // unspecified order. Complements the bulkPut-coalescing fix below:
+      // even with that fix, pages still eventually get merged into the same
+      // sorted `driveItems` list, and if a later page's items are
+      // completely unrelated to the current sort order, the final combined
+      // sort can still noticeably reorder what's on-screen once that page
+      // lands. With the fetch order pre-aligned to the current sort, each
+      // new page's items mostly slot in at/near the end instead of
+      // scattering throughout already-visible ones. `folder` always sorts
+      // first so folders keep coming before files, matching this
+      // component's own unconditional folders-first comparator in
+      // `driveItems` below. `quotaBytesUsed` is Drive's closest equivalent
+      // to file size -- for real audio files (not Google-native Docs/Sheets,
+      // which this folder's own query already excludes) it equals the
+      // actual file size. This only affects the ORDER results arrive in;
+      // the existing client-side sort in `driveItems` still runs unchanged
+      // and remains the source of truth for what's actually displayed, so
+      // this cannot make sorting incorrect -- only reduces how much
+      // reshuffling happens while a big folder is still loading. Source:
+      // Drive API v3 files.list `orderBy` docs (developers.google.com/
+      // workspace/drive/api/reference/rest/v3/files/list).
+      const driveOrderBy = (() => {
+        switch (sortOption) {
+          case 'name desc': return 'folder,name_natural desc';
+          case 'modifiedTime': return 'folder,modifiedTime';
+          case 'modifiedTime desc': return 'folder,modifiedTime desc';
+          case 'size': return 'folder,quotaBytesUsed';
+          case 'size desc': return 'folder,quotaBytesUsed desc';
+          case 'name':
+          default: return 'folder,name_natural';
+        }
+      })();
+
       let pageToken: string | undefined = undefined;
       let allFiles: any[] = [];
       // Files from page 2 onward are buffered and written in ONE bulkPut
@@ -484,7 +518,7 @@ function App() {
       let isFirstPage = true;
 
       do {
-        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=1000` + (pageToken ? `&pageToken=${pageToken}` : '');
+        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&orderBy=${encodeURIComponent(driveOrderBy)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=1000` + (pageToken ? `&pageToken=${pageToken}` : '');
         const response = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
 
         if (!response.ok) {
