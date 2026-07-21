@@ -71,9 +71,3 @@ refactor_*.cjs
 # Accidental stray binaries swept in by a bulk-add commit — unrelated to the app
 Claude Setup.exe
 samply-*.zip
-
-# R2 credentials / secrets — NEVER commit
-cloudflare R2/
-src-tauri/r2_config.json
-r2_config.json
-*.r2.json
