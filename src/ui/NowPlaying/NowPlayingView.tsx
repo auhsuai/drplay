@@ -2,16 +2,14 @@ import { memo, useState, useEffect, useRef } from "react";
 import { Track } from "../../App";
 import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1, Shuffle } from "lucide-react";
-import { getTrackMetadata } from "../../utils/metadata";
-import { getPalette } from '../../utils/color';
 import { renderBufferFromBytes } from '../../utils/bufferedRange';
 import { useTranslation } from "react-i18next";
 import { listen } from '@tauri-apps/api/event';
 
-function classifyNowPlayingError(err: unknown): { name: string; message: string } {
-  if (err instanceof Error) return { name: err.name, message: err.message };
-  return { name: "UnknownError", message: String(err) };
-}
+// This app streams straight from Google Drive with no local tag/cover
+// database, so there is no cover art and no palette-derived background here —
+// title/artist come directly from the Track object (Drive filename), and the
+// background is the flat theme color.
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -27,25 +25,21 @@ interface NowPlayingViewProps {
 }
 
 
-export const NowPlayingView = memo(function NowPlayingView({ 
-  currentTrack, 
-  isPlaying, 
-  onTogglePlay, 
-  onNextTrack, 
-  onPrevTrack, 
-  playMode, 
+export const NowPlayingView = memo(function NowPlayingView({
+  currentTrack,
+  isPlaying,
+  onTogglePlay,
+  onNextTrack,
+  onPrevTrack,
+  playMode,
   onTogglePlayMode,
   onBack,
   isOpen,
-  token
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [realTitle, setRealTitle] = useState("");
   const [realArtist, setRealArtist] = useState("");
-  const [bgColor, setBgColor] = useState<string>('');
-  const [bgPalette, setBgPalette] = useState<string[]>([]);
-  
+
   // Progress state
   const [duration, setDuration] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -61,8 +55,7 @@ export const NowPlayingView = memo(function NowPlayingView({
     if (currentTrack) {
       setRealTitle(currentTrack.title);
       setRealArtist(currentTrack.artist || "");
-      setCoverUrl(null);
-      
+
       if (currentTrack.restoreTime !== undefined) {
          setDuration(currentTrack.restoreDuration || 0);
          if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(currentTrack.restoreTime);
@@ -73,75 +66,6 @@ export const NowPlayingView = memo(function NowPlayingView({
          if (progressFillRef.current) progressFillRef.current.style.width = '0%';
       }
       if (bufferFillRef.current) bufferFillRef.current.innerHTML = '';
-      
-      let isCancelled = false;
-      let objectUrl: string | null = null;
-      const controller = new AbortController();
-
-      getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName, controller.signal)
-        .then(metadata => {
-          if (isCancelled) return;
-          if (metadata.title) setRealTitle(metadata.title);
-          if (metadata.artist) setRealArtist(metadata.artist);
-          
-          const targetCover = metadata.fullCoverUrl || metadata.coverUrl;
-          if (targetCover) {
-            setCoverUrl(targetCover);
-              getPalette(targetCover)
-                .then(colors => {
-                  if (isCancelled) return;
-                  setBgColor(colors[0]);
-                  setBgPalette(colors);
-                })
-                .catch((err) => {
-                  if (!isCancelled) {
-                    setBgColor('');
-                    setBgPalette([]);
-                  }
-                  console.warn('[NowPlaying] palette-failed', { trackId: currentTrack?.id, err: classifyNowPlayingError(err) });
-                });
-          } else if ((metadata.pictureDataFull || metadata.pictureData) && metadata.pictureFormat) {
-            const data = metadata.pictureDataFull || metadata.pictureData;
-            const blob = new Blob([new Uint8Array(data!)], { type: metadata.pictureFormat });
-            objectUrl = URL.createObjectURL(blob);
-            setCoverUrl(objectUrl);
-            
-              getPalette(objectUrl)
-                .then(colors => {
-                  if (isCancelled) return;
-                  setBgColor(colors[0]);
-                  setBgPalette(colors);
-                })
-                .catch((err) => {
-                  if (!isCancelled) {
-                    setBgColor('');
-                    setBgPalette([]);
-                  }
-                  console.warn('[NowPlaying] palette-failed', { trackId: currentTrack?.id, err: classifyNowPlayingError(err) });
-                });
-          } else {
-            setBgColor('');
-            setBgPalette([]);
-          }
-        })
-        .catch((e) => {
-          console.error('[NowPlaying] track-metadata-failed', { trackId: currentTrack?.id, ...classifyNowPlayingError(e) });
-          if (!isCancelled) {
-            setBgColor('');
-            setBgPalette([]);
-          }
-        });
-        
-      return () => {
-        isCancelled = true;
-        controller.abort();
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        setBgColor('');
-        setBgPalette([]);
-      };
-    } else {
-      setBgColor('');
-      setBgPalette([]);
     }
   }, [currentTrack?.id, currentTrack?.streamUrl]);
 
@@ -164,7 +88,7 @@ export const NowPlayingView = memo(function NowPlayingView({
   }, [currentTrack]);
 
   const tauriBufferEndRef = useRef<number | null>(null);
-  
+
   useEffect(() => {
     tauriBufferEndRef.current = null;
     let bufferFn: (() => void) | null = null;
@@ -196,13 +120,13 @@ export const NowPlayingView = memo(function NowPlayingView({
       bufferFn?.();
     };
   }, [currentTrack?.id]);
-  
+
   useEffect(() => {
     if (!isOpen) return;
     let lastTimeText = "";
     let lastProgressWidth = "";
     const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
-    
+
     const updateProgressUI = () => {
       if (audio && !isDraggingRef.current && progressFillRef.current && currentTimeTextRef.current) {
         const time = audio.currentTime;
@@ -216,12 +140,12 @@ export const NowPlayingView = memo(function NowPlayingView({
         if (dur > 0) {
           const progressPercent = (time / dur) * 100;
           const newWidth = `${progressPercent}%`;
-          
+
           if (Math.abs(parseFloat(lastProgressWidth) - progressPercent) > 0.05 || lastProgressWidth === "") {
             progressFillRef.current.style.width = newWidth;
             lastProgressWidth = newWidth;
           }
-          
+
           const newTimeText = formatTime(time);
           if (lastTimeText !== newTimeText) {
             currentTimeTextRef.current.textContent = newTimeText;
@@ -238,7 +162,7 @@ export const NowPlayingView = memo(function NowPlayingView({
     if (audio) {
       audio.addEventListener('timeupdate', updateProgressUI);
       updateProgressUI();
-      
+
       return () => {
         audio.removeEventListener('timeupdate', updateProgressUI);
       };
@@ -253,7 +177,7 @@ export const NowPlayingView = memo(function NowPlayingView({
     isDraggingRef.current = true;
       try { progressBarRef.current.setPointerCapture(e.pointerId); } catch (err) { console.warn('[NowPlaying] setPointerCapture failed', { pointerId: e.pointerId, trackId: currentTrack?.id, err }); }
     const bounds = progressBarRef.current.getBoundingClientRect();
-    
+
     const updateTimeUI = (clientX: number) => {
       const percent = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
       const newTime = percent * duration;
@@ -261,13 +185,13 @@ export const NowPlayingView = memo(function NowPlayingView({
       if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(newTime);
       return newTime;
     };
-    
+
     updateTimeUI(e.clientX);
-    
+
     const onPointerMove = (moveEvent: PointerEvent) => {
       updateTimeUI(moveEvent.clientX);
     };
-    
+
     const commit = (clientX: number) => {
       setIsDragging(false);
       isDraggingRef.current = false;
@@ -288,7 +212,7 @@ export const NowPlayingView = memo(function NowPlayingView({
     const onPointerCancel = (cancelEvent: PointerEvent) => {
       commit(cancelEvent.clientX);
     };
-    
+
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', onPointerCancel);
@@ -310,25 +234,14 @@ export const NowPlayingView = memo(function NowPlayingView({
 
 
   return (
-    <main 
+    <main
       className="h-full overflow-hidden flex flex-col relative transition-all duration-1000 ease-in-out"
-      style={bgPalette.length === 4 ? {
-        background: `
-          linear-gradient(to bottom, transparent 65%, var(--player-bg-fade) 100%),
-          radial-gradient(circle at 0% 0%, ${bgPalette[0]} 0%, transparent 75%),
-          radial-gradient(circle at 100% 0%, ${bgPalette[1]} 0%, transparent 75%),
-          radial-gradient(circle at 0% 100%, ${bgPalette[2]} 0%, transparent 75%),
-          radial-gradient(circle at 100% 100%, ${bgPalette[3]} 0%, transparent 75%),
-          var(--player-bg-solid)
-        `
-      } : {
-        background: bgColor ? `linear-gradient(to bottom, ${bgColor} 0%, var(--player-bg-solid) 100%)` : 'var(--player-bg-solid)'
-      }}
+      style={{ background: 'var(--player-bg-solid)' }}
     >
       {/* Back Button */}
       <div className="absolute top-6 left-6 z-50">
-        <button 
-          onClick={onBack} 
+        <button
+          onClick={onBack}
           className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
         >
           <ChevronDown className="w-6 h-6" />
@@ -340,22 +253,11 @@ export const NowPlayingView = memo(function NowPlayingView({
         <div className="w-full flex flex-col items-center pt-24 md:pt-28 pb-24 md:pb-28">
         {/* Cover Art Container */}
         <div className="w-full flex items-center justify-center mt-4 md:mt-8">
-          <div className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? 'bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center relative' : 'bg-gray-100 dark:bg-[#202124]'}`}>
-          {coverUrl ? (
-            <img 
-              src={coverUrl} 
-              alt="Cover" 
-              className="w-full h-full object-cover" 
-              onError={() => setCoverUrl(null)}
-            />
-          ) : (
-            <>
-              <Music className="w-20 h-20 text-[#4285F4]/40 drop-shadow-sm" />
-            </>
-          )}
+          <div className="w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center relative">
+            <Music className="w-20 h-20 text-[#4285F4]/40 drop-shadow-sm" />
           </div>
         </div>
-        
+
         <div className="w-full max-w-4xl px-4 shrink-0 mt-6 md:mt-8 pb-8">
           {/* Info */}
           <div className="text-center mb-8">
@@ -372,16 +274,16 @@ export const NowPlayingView = memo(function NowPlayingView({
             <div className="w-full flex items-center justify-center mb-4">
               {/* Left spacer for perfect centering */}
               <div className="flex-1 flex justify-end"></div>
-              
+
               <div className="flex items-center gap-6 px-6">
-                <button 
+                <button
                   onClick={onPrevTrack}
                   className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92]"
                 >
                   <SkipBack className="w-5 h-5" />
                 </button>
-                
-                <button 
+
+                <button
                   onClick={onTogglePlay}
                   className="w-10 h-10 flex items-center justify-center text-white bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90"
                 >
@@ -392,18 +294,18 @@ export const NowPlayingView = memo(function NowPlayingView({
                   )}
                 </button>
 
-                <button 
+                <button
                   onClick={onNextTrack}
                   className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92]"
                 >
                   <SkipForward className="w-5 h-5" />
                 </button>
               </div>
-              
+
               {/* Right side controls */}
               <div className="flex-1 flex justify-start">
                 <div className="relative group flex items-center">
-                  <button 
+                  <button
                     onClick={onTogglePlayMode}
                     className={`p-2 rounded-full transition-all active:scale-[0.92] ${playMode !== 'normal' ? 'text-[#4285F4] hover:bg-[#4285F4]/10' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'}`}
                   >
@@ -415,20 +317,20 @@ export const NowPlayingView = memo(function NowPlayingView({
                 </div>
               </div>
             </div>
-            
+
             <div className="w-full flex items-center gap-3 mb-2">
               <span ref={currentTimeTextRef} className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums">0:00</span>
-              <div 
+              <div
                 ref={progressBarRef}
                 className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
                 onPointerDown={handlePointerDown}
               >
-                <div 
+                <div
                   ref={bufferFillRef}
                   className="absolute left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-full pointer-events-none transform-gpu will-change-[width]"
                 ></div>
-                
-                <div 
+
+                <div
                   ref={progressFillRef}
                   className={`absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width] ${isDragging ? '' : 'transition-all duration-150'}`}
                 >
