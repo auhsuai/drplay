@@ -90,6 +90,16 @@ async function parseDriveJson(ctx: string, res: Response): Promise<any> {
 
 async function startProSync() {
   if (!currentToken) return;
+  // Reset the 401-retry budget at the start of every fresh sync attempt.
+  // Previously this only reset on a SUCCESSFUL token refresh, so any 401s
+  // hit during earlier, unrelated sync passes (this worker is a long-lived
+  // singleton reused for every periodic sync over the app's whole session —
+  // see proSyncManager.ts) stayed counted forever. Once the lifetime total
+  // reached MAX_SYNC_RETRIES, every subsequent sync would give up on the
+  // very first 401 without even attempting a refresh — the retry budget is
+  // meant to bound retries *within one sync attempt*, not accumulate across
+  // separate ones.
+  syncRetryCount = 0;
   try {
     const tokenState = await db.syncState.get('startPageToken');
 

@@ -71,7 +71,7 @@ impl SliceCache {
             inflight.insert(key.clone(), entry.clone());
         }
 
-        let _guard = InflightGuard { inflight: self.inflight.clone(), key: key.clone() };
+        let _guard = InflightGuard { inflight: self.inflight.clone(), key: key.clone(), entry: entry.clone() };
 
         let result = fetcher().await;
 
@@ -153,13 +153,23 @@ impl SliceCache {
 struct InflightGuard {
     inflight: Arc<RwLock<HashMap<(String, u64), Arc<InflightEntry>>>>,
     key: (String, u64),
+    // Identity token for this guard's own map entry (mirrors proxy.rs's
+    // CancelGuard). Without this, a newer request for the same key that
+    // inserted its OWN fresh entry between this guard being created and it
+    // dropping could have its entry wrongly removed by this (stale) guard —
+    // stranding whatever is waiting on the newer entry's `notify`. Checked
+    // via `Arc::ptr_eq` rather than the key alone so we only ever remove
+    // exactly the entry this guard was created for.
+    entry: Arc<InflightEntry>,
 }
 
 impl Drop for InflightGuard {
     fn drop(&mut self) {
         // Fast path: best-effort synchronous removal.
         if let Ok(mut guard) = self.inflight.try_write() {
-            guard.remove(&self.key);
+            if guard.get(&self.key).map(|e| Arc::ptr_eq(e, &self.entry)).unwrap_or(false) {
+                guard.remove(&self.key);
+            }
             return;
         }
         // Contention fallback: spawn an async task to remove the entry.
@@ -168,8 +178,12 @@ impl Drop for InflightGuard {
         // silently fails and leaves waiters hung forever.
         let inflight = self.inflight.clone();
         let key = self.key.clone();
+        let entry = self.entry.clone();
         tokio::spawn(async move {
-            inflight.write().await.remove(&key);
+            let mut guards = inflight.write().await;
+            if guards.get(&key).map(|e| Arc::ptr_eq(e, &entry)).unwrap_or(false) {
+                guards.remove(&key);
+            }
         });
     }
 }
@@ -185,12 +199,13 @@ mod tests {
         let key = ("leak-test".to_string(), 0u64);
 
         // Insert entry into inflight
+        let entry = Arc::new(InflightEntry {
+            notify: Arc::new(Notify::new()),
+            data: RwLock::new(None),
+        });
         {
             let mut inflight = cache.inflight.write().await;
-            inflight.insert(key.clone(), Arc::new(InflightEntry {
-                notify: Arc::new(Notify::new()),
-                data: RwLock::new(None),
-            }));
+            inflight.insert(key.clone(), entry.clone());
         }
 
         let cache_clone = cache.clone();
@@ -214,6 +229,7 @@ mod tests {
             let guard = InflightGuard {
                 inflight: cache.inflight.clone(),
                 key: key.clone(),
+                entry: entry.clone(),
             };
             drop(guard);
         }
@@ -225,6 +241,47 @@ mod tests {
         assert!(
             inflight.is_empty(),
             "inflight entry leaked after InflightGuard::drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stale_inflight_guard_does_not_remove_newer_entry() {
+        // Identity-check hardening (mirrors proxy.rs's CancelGuard): a guard
+        // built for an OLD entry must not remove a NEWER entry that has since
+        // taken over the same key, even though the map key matches.
+        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
+        let key = ("stale-test".to_string(), 0u64);
+
+        let old_entry = Arc::new(InflightEntry {
+            notify: Arc::new(Notify::new()),
+            data: RwLock::new(None),
+        });
+        let stale_guard = InflightGuard {
+            inflight: cache.inflight.clone(),
+            key: key.clone(),
+            entry: old_entry.clone(),
+        };
+
+        // A newer request for the same key replaces the map entry (as
+        // get_or_fetch's insert would) — `old_entry`/`stale_guard` no longer
+        // reflect what's actually stored.
+        let new_entry = Arc::new(InflightEntry {
+            notify: Arc::new(Notify::new()),
+            data: RwLock::new(None),
+        });
+        {
+            let mut inflight = cache.inflight.write().await;
+            inflight.insert(key.clone(), new_entry.clone());
+        }
+
+        // Dropping the stale guard must NOT remove the newer entry.
+        drop(stale_guard);
+
+        let inflight = cache.inflight.read().await;
+        let current = inflight.get(&key);
+        assert!(
+            current.is_some() && Arc::ptr_eq(current.unwrap(), &new_entry),
+            "stale InflightGuard removed a newer entry for the same key"
         );
     }
 
