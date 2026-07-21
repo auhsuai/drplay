@@ -290,7 +290,9 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
 
       navigator.mediaSession.metadata = new MediaMetadata({
         title: currentTrack.title || currentTrack.originalName || 'Unknown Title',
-        artist: currentTrack.artist || 'DrPlay',
+        // No tag database, so there is no real artist — show the app name in
+        // the OS media widget instead of leaving it blank.
+        artist: 'DrPlay',
         artwork,
       });
 
