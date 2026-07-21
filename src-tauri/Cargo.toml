@@ -29,7 +29,6 @@ tauri-plugin-keepawake = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 oauth2 = "4.4.2"
-base64 = "0.22.1"
 url = "2.5.0"
 reqwest = { version = "0.12.4", features = ["json", "stream", "rustls-tls"] }
 open = "5.1.2"
@@ -37,18 +36,15 @@ rusqlite = { version = "0.31.0", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24.0"
 tokio = { version = "1", features = ["full"] }
-futures-util = "0.3.30"
 tiny_http = "0.12.0"
 hmac = "0.12.1"
 sha2 = "0.10.8"
 axum = "0.7.5"
 tokio-stream = "0.1.15"
-async-stream = "0.3.5"
 bytes = "1.6.0"
 uuid = { version = "1.8.0", features = ["v4"] }
 rand = "0.8"
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
-walkdir = "2.5.0"
 
 [profile.release]
 lto = true

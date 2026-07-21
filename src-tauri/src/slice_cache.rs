@@ -1,7 +1,6 @@
 use moka::future::Cache;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::sync::{Notify, RwLock};
 
@@ -15,7 +14,6 @@ pub struct InflightEntry {
 pub struct SliceCache {
     pub cache: Cache<(String, u64), Arc<Vec<u8>>>,
     pub inflight: Arc<RwLock<HashMap<(String, u64), Arc<InflightEntry>>>>,
-    pub max_bytes: AtomicU64,
 }
 
 impl SliceCache {
@@ -29,7 +27,6 @@ impl SliceCache {
                 })
                 .build(),
             inflight: Arc::new(RwLock::new(HashMap::new())),
-            max_bytes: AtomicU64::new(max_bytes),
         }
     }
 
@@ -151,9 +148,6 @@ impl SliceCache {
         }
     }
 
-    pub fn used_bytes(&self) -> u64 {
-        self.cache.weighted_size()
-    }
 }
 
 struct InflightGuard {

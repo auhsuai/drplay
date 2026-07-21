@@ -341,17 +341,30 @@ fn get_local_metadata_internal(
     first_match
 }
 
+// `async fn` + `spawn_blocking` (matching the pattern already used by
+// `login_google_native` above) so the blocking r2d2 pool checkout + rusqlite
+// query run on the blocking thread pool instead of a Tokio worker thread. A
+// plain sync `#[tauri::command]` fn is NOT automatically offloaded by Tauri —
+// it runs as a regular tokio::spawn task, so its blocking I/O could stall
+// unrelated async work (e.g. the audio proxy's stream handlers) scheduled on
+// the same worker. This command is invoked once per visible row of the "My
+// Drive" virtualized list, so under fast scrolling this matters.
 #[tauri::command]
-fn get_local_metadata(
+async fn get_local_metadata(
     size: i64,
     name: String,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
 ) -> Option<LocalMetadata> {
-    let start = Instant::now();
-    let conn = pool.get().ok()?;
-    let meta = get_local_metadata_internal(size, &name, &conn);
-    diag_log("get_local_metadata", start.elapsed());
-    meta
+    let pool = (*pool).clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let start = Instant::now();
+        let conn = pool.get().ok()?;
+        let meta = get_local_metadata_internal(size, &name, &conn);
+        diag_log("get_local_metadata", start.elapsed());
+        meta
+    })
+    .await
+    .ok()?
 }
 
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
