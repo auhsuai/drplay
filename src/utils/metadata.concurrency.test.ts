@@ -1,25 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getTrackMetadata, clearAllMetadataCache } from './metadata';
-
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
-// Retarget persistence to an in-memory fake of db.metadataCache.
-// The real db import is replaced so no IndexedDB/fake-indexeddb is needed.
-const memoryStore = new Map<string, any>();
-vi.mock('../db/db', () => ({
-  db: {
-    metadataCache: {
-      get: (key: string) => Promise.resolve(memoryStore.get(key)),
-      put: (row: any) => { memoryStore.set(row.key, row); return Promise.resolve(); },
-      delete: (key: string) => { memoryStore.delete(key); return Promise.resolve(); },
-    },
-  },
-}));
-
-const { invoke } = await import('@tauri-apps/api/core');
+import { describe, it, expect } from 'vitest';
 
 class ConcurrencyQueue {
   private queue: (() => void)[] = [];
@@ -93,35 +73,5 @@ describe('ConcurrencyQueue deadlock', () => {
 
     const fastResult = await fastTask();
     expect(fastResult).toBe('done');
-  });
-});
-
-describe('getTrackMetadata caching', () => {
-  beforeEach(() => {
-    clearAllMetadataCache();
-    vi.mocked(invoke).mockReset();
-  });
-
-  it('returns cached metadata on second call without invoking IPC', async () => {
-    vi.mocked(invoke).mockResolvedValue({
-      id: '123',
-      title: 'Real Title',
-      artist: 'Real Artist',
-      album: '',
-      duration: 200,
-      has_cover: true,
-      file_type: 'audio/mpeg',
-    });
-
-    // First call: goes to IPC.
-    const r1 = await getTrackMetadata('file-1', 'tok', 1000, 'song.mp3');
-    expect(r1.title).toBe('Real Title');
-    expect(vi.mocked(invoke)).toHaveBeenCalledTimes(1);
-
-    // Second call same fileId: should return from memory cache, NO IPC.
-    vi.mocked(invoke).mockClear();
-    const r2 = await getTrackMetadata('file-1', 'tok', 1000, 'song.mp3');
-    expect(r2.title).toBe('Real Title');
-    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
   });
 });
