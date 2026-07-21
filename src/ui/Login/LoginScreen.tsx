@@ -3,6 +3,7 @@ import { HardDrive, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { showErrorToast } from "../../utils/simpleToast";
+import { GoogleTokenResponse } from "../../hooks/useAuth";
 
 const LOGIN_MODULE = "LoginScreen";
 
@@ -14,7 +15,11 @@ function classifyLoginError(err: unknown): string {
 }
 
 interface LoginScreenProps {
-  onLogin: (accessToken: string) => void;
+  // `login_google_native` (src-tauri/src/lib.rs) resolves with the full
+  // token object, never a bare access-token string -- this used to be
+  // typed `(accessToken: string) => void`, which never matched what's
+  // actually passed at runtime.
+  onLogin: (tokenData: GoogleTokenResponse) => void;
 }
 
 export function LoginScreen({ onLogin }: LoginScreenProps) {
@@ -46,18 +51,18 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     try {
       setIsLoading(true);
       // Call Rust backend directly
-      const token = await invoke<any>("login_google_native");
+      const tokenData = await invoke<GoogleTokenResponse>("login_google_native");
       setIsLoading(false);
-      onLogin(token);
+      onLogin(tokenData);
     } catch (error) {
       setIsLoading(false);
       const errStr = String(error);
       if (errStr.includes('User denied access')) {
         console.info('[Auth] User cancelled login');
       } else if (errStr.includes('timeout') || errStr.includes('timed out')) {
-        showErrorToast('Đăng nhập quá thời gian chờ, vui lòng thử lại.');
+        showErrorToast(t('login.timeout_error') || 'Đăng nhập quá thời gian chờ, vui lòng thử lại.');
       } else {
-        showErrorToast('Đăng nhập thất bại, vui lòng thử lại.');
+        showErrorToast(t('login.failed_error') || 'Đăng nhập thất bại, vui lòng thử lại.');
       }
       console.error(`[${LOGIN_MODULE}] login-failed`, classifyLoginError(error));
     }

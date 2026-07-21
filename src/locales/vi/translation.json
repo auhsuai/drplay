@@ -5,7 +5,9 @@
     "connect_button": "Kết nối với Google Drive",
     "error_question": "Có lỗi?",
     "cancel_here": "Hủy ở đây",
-    "cancelled_by_user": "Đã hủy thao tác kết nối."
+    "cancelled_by_user": "Đã hủy thao tác kết nối.",
+    "timeout_error": "Đăng nhập quá thời gian chờ, vui lòng thử lại.",
+    "failed_error": "Đăng nhập thất bại, vui lòng thử lại."
   },
   "common": {
     "cancel": "Hủy",
@@ -184,7 +186,10 @@
     "confirm_empty_trash": "Bạn có chắc chắn muốn xóa vĩnh viễn toàn bộ mục trong thùng rác không? Hành động này không thể hoàn tác.",
     "empty_trash_success": "Đã dọn sạch thùng rác thành công!",
     "empty_trash_error": "Lỗi khi dọn thùng rác",
+    "empty_trash_partial": "{{count}} mục không thể xóa, vui lòng thử lại",
     "restore_error": "Lỗi khi khôi phục",
+    "restore_partial": "{{count}} mục không thể khôi phục, vui lòng thử lại",
+    "delete_partial": "{{count}} mục không thể xóa, vui lòng thử lại",
     "contact": "Liên hệ",
     "copy": "Sao chép",
     "copied": "Đã copy!",

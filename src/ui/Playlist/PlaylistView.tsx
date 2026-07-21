@@ -24,21 +24,31 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
 
-  const loadPlaylist = async () => {
-    try {
-      const data = await getPlaylistById(playlistId);
-      setPlaylist(data);
-    } catch (e) {
-      console.error("[PlaylistView] Failed to load playlist", e);
-      showErrorToast(t('playlist.load_error') || "Failed to load playlist");
-    }
-  };
-
   useEffect(() => {
-    loadPlaylist().catch(err => console.error("[PlaylistView] Failed to load playlist", err));
+    // `cancelled` is scoped to THIS effect instance (i.e. this specific
+    // playlistId). If playlistId changes before an in-flight
+    // getPlaylistById(oldId) resolves, that stale response must not
+    // overwrite the new playlist's data -- and since `loadPlaylist` here
+    // is also used as the 'playlists-updated'/'user-changed' listener (not
+    // just the initial call), any invocation of THIS closure after
+    // teardown (old event, arriving late) is guarded the same way.
+    let cancelled = false;
+    const loadPlaylist = async () => {
+      try {
+        const data = await getPlaylistById(playlistId);
+        if (cancelled) return;
+        setPlaylist(data);
+      } catch (e) {
+        if (cancelled) return;
+        console.error("[PlaylistView] Failed to load playlist", e);
+        showErrorToast(t('playlist.load_error') || "Failed to load playlist");
+      }
+    };
+    loadPlaylist();
     window.addEventListener('playlists-updated', loadPlaylist);
     window.addEventListener('user-changed', loadPlaylist);
     return () => {
+      cancelled = true;
       window.removeEventListener('playlists-updated', loadPlaylist);
       window.removeEventListener('user-changed', loadPlaylist);
     };

@@ -10,6 +10,18 @@ import { showErrorToast } from "../utils/simpleToast";
 
 const AUTH_MODULE = "useAuth";
 
+// Actual shape of what `login_google_native` (src-tauri/src/lib.rs) resolves
+// with, and therefore what LoginScreen's `onLogin` callback receives. Was
+// previously typed as `(accessToken: string) => void` in LoginScreenProps,
+// which never matched runtime reality (it's always this 3-field object) --
+// harmless today only because both ends used `any`/loose typing, but it
+// actively misled anyone reading that interface in isolation.
+export interface GoogleTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+}
+
 // Standardize error context so every catch logs the module + subtype and never
 // leaks the access token. Token values are never passed into these helpers.
 const classifyError = (e: unknown): string =>
@@ -51,7 +63,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
     }
   }, []);
 
-  const handleLoginSuccess = (tokenData: any) => {
+  const handleLoginSuccess = (tokenData: GoogleTokenResponse) => {
     if (!tokenData || typeof tokenData.access_token !== 'string' || tokenData.access_token.length === 0) {
       console.error(`[${AUTH_MODULE}] Login aborted: malformed token response (missing access_token) — no token leaked`);
       return;

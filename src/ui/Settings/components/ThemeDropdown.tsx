@@ -1,24 +1,15 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ThemeType } from "../../../hooks/useTheme";
+import { useClickOutside } from "../../../hooks/useClickOutside";
 
 export function ThemeDropdown({ currentTheme, onChange }: { currentTheme: ThemeType, onChange: (theme: ThemeType) => void }) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isOpen]);
+  useClickOutside(menuRef, isOpen, () => setIsOpen(false));
 
   const themes: { code: ThemeType, label: string }[] = [
     { code: 'light', label: t('settings.light_mode') || 'Light' },

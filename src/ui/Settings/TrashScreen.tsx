@@ -3,6 +3,7 @@ import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check,
 import { useTranslation } from 'react-i18next';
 import { restoreFile, permanentlyDeleteFile, getTrashedFiles } from '../../utils/driveApi';
 import { showErrorToast, showSuccessToast } from '../../utils/simpleToast';
+import { useClickOutside } from '../../hooks/useClickOutside';
 
 interface TrashScreenProps {
   token: string;
@@ -31,35 +32,32 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
+  useClickOutside(moreMenuRef, isMoreMenuOpen, () => setIsMoreMenuOpen(false));
+
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
-        setIsMoreMenuOpen(false);
+    // `cancelled` guards against an out-of-order response: if `token` changes
+    // again (e.g. a proactive refresh) while this fetch is still in flight,
+    // and the OLD request resolves after the NEW one, this stops it from
+    // overwriting the fresher list with stale data.
+    let cancelled = false;
+    const fetchTrashed = async () => {
+      setIsLoading(true);
+      try {
+        // Fetch trashed audio files and folders that were deleted by DrPlay
+        const q = "trashed=true and appProperties has { key='deletedByDrPlay' and value='true' }";
+        const files = await getTrashedFiles(token, q);
+        if (cancelled) return;
+        setItems(files.map((f: TrashedItem) => ({ id: f.id, name: f.name, mimeType: f.mimeType })));
+      } catch (e) {
+        if (cancelled) return;
+        console.error("[Trash] Failed to fetch trashed items", e);
+        showErrorToast(t('settings.trash_load_error') || "Failed to load trash");
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     };
-    if (isMoreMenuOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isMoreMenuOpen]);
-
-  const fetchTrashed = async () => {
-    setIsLoading(true);
-    try {
-      // Fetch trashed audio files and folders that were deleted by DrPlay
-      const q = "trashed=true and appProperties has { key='deletedByDrPlay' and value='true' }";
-      const files = await getTrashedFiles(token, q);
-      setItems(files.map((f: TrashedItem) => ({ id: f.id, name: f.name, mimeType: f.mimeType })));
-    } catch (e) {
-      console.error("[Trash] Failed to fetch trashed items", e);
-      showErrorToast(t('settings.trash_load_error') || "Failed to load trash");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
     fetchTrashed();
+    return () => { cancelled = true; };
   }, [token]);
 
   const handleRestore = async (id: string) => {
@@ -76,17 +74,36 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     }
   };
 
+  // All three handlers below use Promise.allSettled instead of Promise.all.
+  // Promise.all rejects (and the local list state is never updated) the
+  // moment ANY single per-item Drive request fails — but the other requests
+  // are still in flight and are NOT cancelled, so some items can genuinely
+  // be deleted/restored on Drive's servers while the UI still shows every
+  // item as untouched (a real desync, worse here than most places because
+  // permanentlyDeleteFile is irreversible). allSettled waits for every
+  // request and lets us reconcile local state with what ACTUALLY succeeded,
+  // regardless of partial failure.
   const handleEmptyTrash = async () => {
     if (!window.confirm(t('settings.confirm_empty_trash') || 'Are you sure you want to permanently delete all trashed items? This cannot be undone.')) {
       return;
     }
     setIsEmptying(true);
     try {
-      const deletePromises = items.map(item => permanentlyDeleteFile(token, item.id));
-      await Promise.all(deletePromises);
-      setItems([]);
-      showSuccessToast(t('settings.empty_trash_success') || "Trash emptied successfully!");
-      onClose();
+      const targets = items;
+      const results = await Promise.allSettled(targets.map(item => permanentlyDeleteFile(token, item.id)));
+      const succeededIds = new Set(
+        targets.filter((_, i) => results[i].status === 'fulfilled').map(item => item.id)
+      );
+      const failedCount = targets.length - succeededIds.size;
+      setItems(prev => prev.filter(item => !succeededIds.has(item.id)));
+      if (failedCount === 0) {
+        showSuccessToast(t('settings.empty_trash_success') || "Trash emptied successfully!");
+        onClose();
+      } else if (succeededIds.size === 0) {
+        showErrorToast(t('settings.empty_trash_error') || "Failed to empty trash");
+      } else {
+        showErrorToast(t('settings.empty_trash_partial', { count: failedCount }) || `${failedCount} item(s) could not be deleted, please try again`);
+      }
     } catch (e) {
       console.error("[Trash] empty-trash: Failed to empty trash", e);
       showErrorToast(t('settings.empty_trash_error') || "Failed to empty trash");
@@ -100,11 +117,23 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
-      await Promise.all(ids.map(id => restoreFile(token, id)));
-      setItems(prev => prev.filter(item => !selectedIds.has(item.id)));
-      window.dispatchEvent(new CustomEvent('refresh-drive'));
-      setSelectedIds(new Set());
-      setIsSelectionMode(false);
+      const results = await Promise.allSettled(ids.map(id => restoreFile(token, id)));
+      const succeededIds = new Set(ids.filter((_, i) => results[i].status === 'fulfilled'));
+      const failedCount = ids.length - succeededIds.size;
+      setItems(prev => prev.filter(item => !succeededIds.has(item.id)));
+      if (succeededIds.size > 0) window.dispatchEvent(new CustomEvent('refresh-drive'));
+      setSelectedIds(prev => {
+        const remaining = new Set(prev);
+        for (const id of succeededIds) remaining.delete(id);
+        return remaining;
+      });
+      if (failedCount === 0) {
+        setIsSelectionMode(false);
+      } else if (succeededIds.size === 0) {
+        showErrorToast(t('settings.restore_error') || "Failed to restore items");
+      } else {
+        showErrorToast(t('settings.restore_partial', { count: failedCount }) || `${failedCount} item(s) could not be restored, please try again`);
+      }
     } catch (e) {
       console.error("[Trash] bulk-restore: Failed to restore items", e);
       showErrorToast(t('settings.restore_error') || "Failed to restore items");
@@ -118,10 +147,22 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
-      await Promise.all(ids.map(id => permanentlyDeleteFile(token, id)));
-      setItems(prev => prev.filter(item => !selectedIds.has(item.id)));
-      setSelectedIds(new Set());
-      setIsSelectionMode(false);
+      const results = await Promise.allSettled(ids.map(id => permanentlyDeleteFile(token, id)));
+      const succeededIds = new Set(ids.filter((_, i) => results[i].status === 'fulfilled'));
+      const failedCount = ids.length - succeededIds.size;
+      setItems(prev => prev.filter(item => !succeededIds.has(item.id)));
+      setSelectedIds(prev => {
+        const remaining = new Set(prev);
+        for (const id of succeededIds) remaining.delete(id);
+        return remaining;
+      });
+      if (failedCount === 0) {
+        setIsSelectionMode(false);
+      } else if (succeededIds.size === 0) {
+        showErrorToast(t('settings.delete_partial', { count: failedCount }) || "Failed to delete items");
+      } else {
+        showErrorToast(t('settings.delete_partial', { count: failedCount }) || `${failedCount} item(s) could not be deleted, please try again`);
+      }
     } catch (e) {
       console.error("[Trash] bulk-delete: Failed to delete items", e);
       showErrorToast(t('settings.empty_trash_error') || "Failed to delete items");
