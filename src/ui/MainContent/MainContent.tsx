@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import { useVirtualizer, type ReactVirtualizer } from '@tanstack/react-virtual';
+import { invoke } from "@tauri-apps/api/core";
 import { Track, DriveItem } from "../../App";
 import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -9,6 +10,7 @@ import { deleteFile, moveFile } from "../../utils/driveApi";
 import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
+import type { DbTagMetadata } from "./components/SongCard";
 
 
 
@@ -268,6 +270,66 @@ export const MainContent = React.memo(function MainContent({
     clearPrefetchedStreams();
     clearNextTrackPrefetches();
   }, [currentFolderId]);
+
+  // DB tag lookup — ONLY for rows visible in this "My Drive" list. Reads real
+  // title/artist tags from the local SQLite DB (see get_local_metadata in
+  // lib.rs); no R2, no cover art, no network fetch. Every other tab (Home,
+  // Liked Songs, Playlists) keeps showing the plain Drive filename.
+  const tagMetadataRef = useRef<Map<string, DbTagMetadata>>(new Map());
+  const [, forceTagRerender] = useState(0);
+
+  React.useEffect(() => {
+    const trackItems = currentItems.filter(
+      i => !i.isFolder && i.trackInfo?.id && !tagMetadataRef.current.has(i.trackInfo.id)
+    );
+    if (trackItems.length === 0) return;
+
+    const controller = new AbortController();
+    const CONCURRENCY = 6;
+
+    async function runWithConcurrency<T>(list: T[], limit: number, fn: (item: T) => Promise<void>) {
+      const executing = new Set<Promise<void>>();
+      for (const item of list) {
+        if (controller.signal.aborted) break;
+        const p = fn(item).finally(() => executing.delete(p));
+        executing.add(p);
+        if (executing.size >= limit) {
+          await Promise.race(executing);
+        }
+      }
+      await Promise.allSettled(executing);
+    }
+
+    let gotAny = false;
+    runWithConcurrency(trackItems, CONCURRENCY, async (item) => {
+      const id = item.trackInfo!.id;
+      try {
+        const data = await invoke<{ title?: string; artist?: string; duration?: number } | null>(
+          'get_local_metadata',
+          {
+            size: item.trackInfo!.size ?? 0,
+            name: item.trackInfo!.originalName ?? 'audio.mp3',
+          }
+        );
+        if (controller.signal.aborted) return;
+        if (data?.title) {
+          tagMetadataRef.current.set(id, {
+            title: data.title,
+            artist: data.artist || '',
+            duration: data.duration || 0,
+          });
+          gotAny = true;
+        }
+      } catch (e) {
+        // No DB / no match / IPC unavailable — silently keep the filename.
+        console.warn('[MainContent] tag-lookup-failed', { fileId: id, error: String(e) });
+      }
+    }).then(() => {
+      if (!controller.signal.aborted && gotAny) forceTagRerender(n => n + 1);
+    });
+
+    return () => controller.abort();
+  }, [currentItems]);
 
   const handlePlay = React.useCallback((t: Track) => {
     const queue = currentItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
@@ -658,6 +720,7 @@ export const MainContent = React.memo(function MainContent({
               setIsSelectionMode={setIsSelectionMode}
               onBulkMoveClick={() => setShowBulkMoveScreen(true)}
               onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
+              tagMetadataMap={tagMetadataRef.current}
             />
 
           {totalPages > 1 && (
@@ -784,6 +847,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode,
   onBulkMoveClick,
   onBulkDeleteClick,
+  tagMetadataMap,
 }: {
   items: DriveItem[];
   rowVirtualizer: ReactVirtualizer<HTMLElement, Element>;
@@ -803,6 +867,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
   onBulkMoveClick: () => void;
   onBulkDeleteClick: () => void;
+  tagMetadataMap?: Map<string, DbTagMetadata>;
 }) {
   const virtualItems = rowVirtualizer.getVirtualItems();
 
@@ -837,6 +902,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
               currentFolderId={currentFolderId}
               currentFolderName={currentFolderName}
               folderHistory={folderHistory}
+              dbMetadata={tagMetadataMap?.get(item.trackInfo?.id ?? '')}
               isHighlighted={item.id === highlightedFileId?.id}
               highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
               isPlaying={item.trackInfo?.id === isPlaying}
