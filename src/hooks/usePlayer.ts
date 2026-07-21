@@ -34,7 +34,7 @@ export const usePlayer = (accessToken: string | null) => {
   const [playMode, setPlayMode] = useState<'normal' | 'shuffle' | 'repeat-all' | 'repeat-one'>('normal');
   const [originalQueue, setOriginalQueue] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
-  const [bufferSeconds, setBufferSeconds] = useState(1400);
+  const [bufferSeconds, setBufferSeconds] = useState(300);
   const initialBufferRef = useRef(true);
 
   // Persist buffer setting changes to IndexedDB and Rust backend
@@ -134,7 +134,7 @@ export const usePlayer = (accessToken: string | null) => {
                 streamUrl = await invoke<string>("get_stream_url", { 
                   fileId: lastSession.track.id, 
                   bitrate: lastSession.track.bitrate, 
-                  bufferSeconds: validBuffer ?? 1400,
+                  bufferSeconds: validBuffer ?? bufferSeconds,
                   ext
                 });
               }
