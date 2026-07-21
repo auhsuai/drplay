@@ -41,6 +41,7 @@ import { SongCard } from './components/SongCard';
 import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 import { showErrorToast } from '../../utils/simpleToast';
+import { captureError } from '../../utils/errorLog';
 
 function useDebouncedLiveQuery<T>(
   querier: () => Promise<T>,
@@ -301,10 +302,30 @@ export const MainContent = React.memo(function MainContent({
       name: item.trackInfo!.originalName ?? 'audio.mp3',
     }));
 
+    // Diagnostic-only: user reports that individual FILE rows (needing this
+    // tag lookup) visibly display slower than FOLDER rows (which need no
+    // lookup at all, just the Drive listing). The Rust side's own diag_log
+    // already showed 83-101ms INSIDE get_local_metadata_batch -- but that
+    // only covers the Rust function body, not IPC serialize/dispatch/
+    // deserialize overhead on top of it. Measuring the FULL round-trip here
+    // (JS call to JS resolution) to see whether that overhead is small (Rust
+    // number ~= what the user perceives) or itself a meaningful, separate
+    // contributor.
+    const invokeStartedAt = performance.now();
     invoke<Record<string, { title?: string; artist?: string; duration?: number }>>(
       'get_local_metadata_batch',
       { items }
     ).then(results => {
+      const roundTripMs = Math.round(performance.now() - invokeStartedAt);
+      const matchedCount = Object.values(results).filter(r => r?.title).length;
+      if (roundTripMs > 150) {
+        captureError({
+          level: 'warn',
+          source: 'MainContent/tag-lookup-batch',
+          message: `get_local_metadata_batch round-trip took ${roundTripMs}ms for ${items.length} item(s) (${matchedCount} matched) — this is the FULL JS-to-JS round-trip including IPC overhead, compare against the Rust-side [PERF] terminal number for the same call`,
+          kind: 'slow-ipc-roundtrip',
+        });
+      }
       if (cancelled) return;
       let gotAny = false;
       for (const [id, data] of Object.entries(results)) {
