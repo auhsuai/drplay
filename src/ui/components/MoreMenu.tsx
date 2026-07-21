@@ -10,6 +10,7 @@ import { getValidToken } from "../../utils/apiClient";
 import { getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { db } from "../../db/db";
 import { showErrorToast } from "../../utils/simpleToast";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 interface MoreMenuProps {
   track?: Track;
@@ -96,18 +97,23 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
     }
   }, [showPlaylistsSubmenu]);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        menuRef.current && !menuRef.current.contains(event.target as Node) &&
-        (!dropdownRef.current || !dropdownRef.current.contains(event.target as Node))
-      ) {
-        setIsOpen(false);
-        setShowPlaylistsSubmenu(false);
-        onClose?.();
-      }
-    };
+  // Closing on an outside click was previously a hand-rolled mousedown
+  // listener here (duplicating the same pattern already consolidated into
+  // useClickOutside for LanguageDropdown/ThemeDropdown/TrashScreen). The
+  // trigger button (menuRef) and the dropdown panel (dropdownRef) are two
+  // separate elements — a click landing on either must NOT close the menu —
+  // which is exactly what useClickOutside's multi-ref support is for.
+  useClickOutside([menuRef, dropdownRef], !!isMenuOpen, () => {
+    setIsOpen(false);
+    setShowPlaylistsSubmenu(false);
+    onClose?.();
+  });
 
+  // Closing on scroll is a distinct behavior (not "click outside") specific
+  // to this menu's absolutely-positioned panel, which can't follow its
+  // trigger button if an ancestor scrolls — kept as its own effect.
+  useEffect(() => {
+    if (!isMenuOpen) return;
     const handleScroll = (e: Event) => {
       if (dropdownRef.current?.contains(e.target as Node)) {
         return;
@@ -116,15 +122,8 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       setShowPlaylistsSubmenu(false);
       onClose?.();
     };
-
-    if (isMenuOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      window.addEventListener("scroll", handleScroll, true);
-    }
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      window.removeEventListener("scroll", handleScroll, true);
-    };
+    window.addEventListener("scroll", handleScroll, true);
+    return () => window.removeEventListener("scroll", handleScroll, true);
   }, [isMenuOpen, onClose]);
 
   const handleAddToPlaylist = async (e: React.MouseEvent, playlistId: string) => {

@@ -1,4 +1,5 @@
 import Dexie, { Table } from 'dexie';
+import { Track } from '../App';
 
 export interface DriveFile {
   id: string;
@@ -28,16 +29,22 @@ export interface ErrorLogEntry {
 }
 
 export interface KvRow { key: string; value: unknown; }
-export interface PlaylistRow { id: string; name: string; createdAt: number; tracks: any[]; coverImage?: string; userEmail: string; }
-export interface RecentTrackRow { id: string; track: any; userEmail: string; createdAt: number; }
-export interface PlayCountRow { id: string; track: any; count: number; userEmail: string; }
+export interface PlaylistRow { id: string; name: string; createdAt: number; tracks: Track[]; coverImage?: string; userEmail: string; }
+export interface RecentTrackRow { id: string; track: Track; userEmail: string; createdAt: number; }
+export interface PlayCountRow { id: string; track: Track; count: number; userEmail: string; }
 export interface FolderVisitRow { id: string; name: string; count: number; lastVisited: number; userEmail: string; }
 export interface MetadataCacheRow { key: string; entry: unknown; }
+// `favorites` rows are a Track plus the two fields addFavorite() stamps on
+// (userEmail, createdAt) — was `Table<any, string>`, which meant Dexie gave
+// zero compile-time protection against writing a malformed row here. Every
+// other row-shaped table below is typed against a real interface; this now
+// matches that bar instead of being the one silent hole.
+export interface FavoriteRow extends Track { userEmail: string; createdAt: number; }
 
 export class DriveDatabase extends Dexie {
   files!: Table<DriveFile, string>; // Primary key is 'id'
   syncState!: Table<SyncState, string>; // Primary key is 'key'
-  favorites!: Table<any, string>; // Primary key is 'id', we store Track objects with an added userEmail index
+  favorites!: Table<FavoriteRow, string>; // Primary key is 'id', we store Track objects with an added userEmail index
   errorLogs!: Table<ErrorLogEntry, string>; // Primary key is 'id', index on 'ts'
   kv!: Table<KvRow, string>;
   playlists!: Table<PlaylistRow, string>;
