@@ -1,73 +1,45 @@
-import { expect, test, describe, it, vi, beforeEach } from "vitest";
-import { metadataCache, cacheTrackMetadata, clearAllMetadataCache } from "./metadata";
+import { expect, test, describe, it, beforeEach } from "vitest";
+import { getTrackMetadata, cacheTrackMetadata, clearAllMetadataCache, metadataCache } from "./metadata";
 
-function makeEntry(): any {
-  return {
-    title: "t",
-    artist: "a",
-    duration: 1,
-    durationEstimated: false,
-    pictureData: new Uint8Array([1, 2, 3]),
-    pictureDataFull: new Uint8Array([9, 9, 9, 9]),
-    v: 9,
-  };
-}
+// This app streams directly from Google Drive with no local tag/cover
+// database: `getTrackMetadata` is now a pure, synchronous-ish derivation from
+// the filename — no IPC, no network fetch, no cover art.
 
-test("cacheTrackMetadata does not persist pictureDataFull in RAM", () => {
-  cacheTrackMetadata("fid1", makeEntry());
-  expect(metadataCache["fid1"].pictureDataFull).toBeNull();
-  expect(metadataCache["fid1"].pictureData).toBeDefined();
-});
-
-test("cacheTrackMetadata still returns full entry for immediate callers (cover repair)", () => {
-  const ret = cacheTrackMetadata("fid2", makeEntry());
-  expect(ret.pictureDataFull).not.toBeNull();
-});
-
-test("clearAllMetadataCache empties the in-memory cache", () => {
-  cacheTrackMetadata("fid3", makeEntry());
+beforeEach(() => {
   clearAllMetadataCache();
-  expect(Object.keys(metadataCache).length).toBe(0);
 });
 
-describe('getTrackMetadata dedup', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.resetModules();
-  });
+test("getTrackMetadata derives the title from the filename (strips extension)", async () => {
+  const meta = await getTrackMetadata("fid1", undefined, 1234, "My Great Song.mp3");
+  expect(meta.title).toBe("My Great Song");
+  expect(meta.artist).toBe("Unknown Artist");
+  expect(meta.size).toBe(1234);
+});
 
-  it('should deduplicate concurrent requests for same fileId', async () => {
-    // Buffer that looks like a minimal ID3v2 header (tag size = 0)
-    // so music-metadata-browser can parse it without error
-    const buf = new ArrayBuffer(100);
-    const view = new DataView(buf);
-    view.setUint8(0, 0x49); view.setUint8(1, 0x44); view.setUint8(2, 0x33); // 'ID3'
-    view.setUint8(3, 0x04); view.setUint8(4, 0x00); view.setUint8(5, 0x00);
-    // tag size = 0 (syncsafe integer)
-    view.setUint8(6, 0x00); view.setUint8(7, 0x00);
-    view.setUint8(8, 0x00); view.setUint8(9, 0x00);
-    // Rest is padding
+test("getTrackMetadata falls back to a default name when none is given", async () => {
+  const meta = await getTrackMetadata("fid-none");
+  expect(meta.title).toBe("audio");
+});
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 206,
-      headers: new Map([['content-range', 'bytes 0-99/1000'], ['content-type', 'audio/mpeg']]),
-      arrayBuffer: () => Promise.resolve(buf),
-    });
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = mockFetch;
+test("getTrackMetadata caches by fileId and returns the same object on a second call", async () => {
+  const first = await getTrackMetadata("fid2", undefined, 100, "Song.flac");
+  const second = await getTrackMetadata("fid2", undefined, 999, "Different Name.flac");
+  // Second call hits the cache — same object, original filename-derived title.
+  expect(second).toBe(first);
+  expect(second.title).toBe("Song");
+});
 
-    try {
-      const { getTrackMetadata } = await import('./metadata');
+test("cacheTrackMetadata stores and returns the entry as-is", () => {
+  const entry = { title: "t", artist: "a", duration: 0, durationEstimated: true };
+  const ret = cacheTrackMetadata("fid3", entry);
+  expect(ret).toBe(entry);
+  expect(metadataCache["fid3"]).toBe(entry);
+});
 
-      const p1 = getTrackMetadata('dedup-test-id', 'test-token', 1000, 'test.mp3');
-      const p2 = getTrackMetadata('dedup-test-id', 'test-token', 1000, 'test.mp3');
-
-      await Promise.allSettled([p1, p2]);
-
-      expect(mockFetch).toHaveBeenCalledTimes(0); // network fetch disabled
-    } finally {
-      globalThis.fetch = origFetch;
-    }
+describe("clearAllMetadataCache", () => {
+  it("empties the in-memory cache", () => {
+    cacheTrackMetadata("fid4", { title: "t", artist: "a", duration: 0, durationEstimated: true });
+    clearAllMetadataCache();
+    expect(Object.keys(metadataCache).length).toBe(0);
   });
 });
