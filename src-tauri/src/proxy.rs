@@ -863,9 +863,9 @@ pub fn start_proxy() {
 /// This replaces it with a `moka` bounded cache: `max_capacity` keeps the
 /// entry count bounded (LRU + TinyLFU admission), and `time_to_idle` drops
 /// entries that have not been touched in a while. The async `moka::future`
-/// API matches the `COVER_CACHE`/`ETAG_CACHE` pattern already used in
-/// `protocol.rs`. A missing entry is simply a cache miss (graceful fallback,
-/// never a panic or a 500) — callers re-probe Drive on miss.
+/// API is the same one used elsewhere in this codebase (see `slice_cache.rs`).
+/// A missing entry is simply a cache miss (graceful fallback, never a panic
+/// or a 500) — callers re-probe Drive on miss.
 const TRACK_CACHE_MAX_ENTRIES: u64 = 2000;
 const TRACK_CACHE_IDLE_TTL: Duration = Duration::from_secs(30 * 60); // 30 min
 
