@@ -26,6 +26,18 @@ jobs:
         run: |
           if (Test-Path wa_credential.json) { exit 0 }
           Set-Content -Path wa_credential.json -Value $env:GOOGLE_OAUTH_CREDENTIALS
+          
+      - name: Create R2 config file
+        shell: pwsh
+        env:
+          R2_CONFIG: ${{ secrets.R2_CONFIG }}
+        run: |
+          $dest = "src-tauri/r2_config.json"
+          if ($env:R2_CONFIG) {
+            Set-Content -Path $dest -Value $env:R2_CONFIG
+          } else {
+            Set-Content -Path $dest -Value '{}'
+          }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
