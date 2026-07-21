@@ -255,6 +255,11 @@ export const MainContent = React.memo(function MainContent({
         const targetPage = Math.floor(index / itemsPerPage) + 1;
         if (targetPage !== currentPage) {
           setCurrentPage(targetPage);
+          // Same stale-measurement-cache issue as the pagination buttons
+          // below (see their handlers for the full explanation) -- jumping
+          // to a different page here swaps in an entirely different set of
+          // items too.
+          rowVirtualizer.measure();
           setTimeout(() => {
             const pageIndex = index % itemsPerPage;
             rowVirtualizer.scrollToIndex(pageIndex, { align: 'center' });
@@ -756,6 +761,19 @@ export const MainContent = React.memo(function MainContent({
                     disabled={currentPage === 1}
                     onClick={() => {
                       setCurrentPage(p => p - 1);
+                      // measure() BEFORE scrollToIndex: a page change swaps in an
+                      // entirely different set of items (all-new getItemKey ids),
+                      // so the PREVIOUS page's cached per-index measurements are
+                      // meaningless for the new one. Without this, the virtualizer
+                      // can compute which indices fall in the visible range using
+                      // stale size data, so some rows near/after the viewport
+                      // fold never get a virtual entry at all -- exactly the
+                      // reported "blank gap, top rows fine, rows further down are
+                      // not" pattern, and why an unrelated re-render (e.g.
+                      // pressing play, which changes an isPlaying prop) happens to
+                      // "fix" it -- that re-render is what finally triggers a real
+                      // remeasurement. Documented gotcha, see TanStack/virtual#425.
+                      rowVirtualizer.measure();
                       setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
                     }}
                     className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
@@ -798,6 +816,9 @@ export const MainContent = React.memo(function MainContent({
                           const newPage = parseInt(pageInputValue.trim(), 10);
                           if (!isNaN(newPage) && newPage >= 1 && newPage <= totalPages) {
                             setCurrentPage(newPage);
+                            // See the Previous/Next handlers' comment -- same
+                            // stale-measurement-cache fix, needed here too.
+                            rowVirtualizer.measure();
                             setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
                           }
                           setIsEditingPage(false);
@@ -821,6 +842,9 @@ export const MainContent = React.memo(function MainContent({
                     disabled={currentPage === totalPages}
                     onClick={() => {
                       setCurrentPage(p => p + 1);
+                      // See the Previous button's handler above for the full
+                      // explanation of why measure() is needed here.
+                      rowVirtualizer.measure();
                       setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
                     }}
                     className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
