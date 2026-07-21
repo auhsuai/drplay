@@ -29,8 +29,6 @@ export interface PlayerBarProps {
 
 export interface AudioRefs {
   audioRef: React.RefObject<HTMLAudioElement | null>;
-  audioRef2: React.RefObject<HTMLAudioElement | null>;
-  activeAudioIndexRef: React.MutableRefObject<0 | 1>;
 }
 
 export interface PositionRefs {
