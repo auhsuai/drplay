@@ -284,15 +284,11 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   // Media Session API
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
-      const artwork: MediaImage[] = [];
-      if ((currentTrack as any).coverUrl) {
-        artwork.push({ src: (currentTrack as any).coverUrl, sizes: '512x512', type: 'image/jpeg' });
-      } else {
-        // Fallback to the app icon so the Windows taskbar media controls
-        // (and other MediaSession consumers) always show artwork instead
-        // of a blank placeholder when a track has no cover art.
-        artwork.push({ src: '/sample.png', sizes: '512x512', type: 'image/png' });
-      }
+      // This app streams straight from Drive with no cover-art pipeline, so
+      // MediaSession artwork always falls back to the app icon (Windows
+      // taskbar / lock-screen media controls always show something instead
+      // of a blank placeholder).
+      const artwork: MediaImage[] = [{ src: '/sample.png', sizes: '512x512', type: 'image/png' }];
 
       navigator.mediaSession.metadata = new MediaMetadata({
         title: currentTrack.title || currentTrack.originalName || 'Unknown Title',
