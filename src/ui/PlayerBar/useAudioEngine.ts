@@ -125,19 +125,58 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   currentTrackRef.current = currentTrack;
 
   // --- Buffering indicator (mạng yếu) ---
-  // Chống nhấp nháy: chỉ hiện spinner sau 500ms `waiting`; ẩn ngay khi có data.
+  // Chống nhấp nháy theo cả hai chiều (hysteresis, giống ExoPlayer/Shaka's
+  // dual-threshold buffering state):
+  //  - Hiện: chỉ sau 500ms `waiting` liên tục (bufferingDelayRef).
+  //  - Ẩn: một khi ĐÃ hiện, giữ tối thiểu MIN_BUFFERING_VISIBLE_MS trước khi
+  //    ẩn — một tick `timeupdate`/`playing` đơn lẻ (dữ liệu nhỏ giọt trên
+  //    mạng chập chờn) không được phép tắt spinner ngay rồi bật lại vài trăm
+  //    ms sau. `handleCanPlay`/pause/đổi bài dùng `immediate: true` để ẩn
+  //    ngay vì đó là tín hiệu dứt khoát (đã sẵn sàng phát / người dùng chủ
+  //    động dừng), không phải "có một ít dữ liệu vừa tới".
   // Watchdog qua `timeupdate` bắt các stall mà `waiting` không phát (MDN/hls.js).
+  const MIN_BUFFERING_VISIBLE_MS = 400;
   const isBufferingRef = useRef(false);
+  const bufferingShownAtRef = useRef<number | null>(null);
   const bufferingDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideBufferingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stallWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const applyBuffering = (v: boolean) => {
-    if (isBufferingRef.current === v) return;
-    isBufferingRef.current = v;
-    setIsBuffering(v);
+  const applyBuffering = (v: boolean, opts?: { immediate?: boolean }) => {
+    if (hideBufferingTimeoutRef.current) {
+      clearTimeout(hideBufferingTimeoutRef.current);
+      hideBufferingTimeoutRef.current = null;
+    }
+
+    if (v) {
+      if (isBufferingRef.current) return;
+      isBufferingRef.current = true;
+      bufferingShownAtRef.current = Date.now();
+      setIsBuffering(true);
+      return;
+    }
+
+    if (!isBufferingRef.current) return;
+    const shownAt = bufferingShownAtRef.current;
+    const elapsed = shownAt !== null ? Date.now() - shownAt : MIN_BUFFERING_VISIBLE_MS;
+
+    if (opts?.immediate || elapsed >= MIN_BUFFERING_VISIBLE_MS) {
+      isBufferingRef.current = false;
+      bufferingShownAtRef.current = null;
+      setIsBuffering(false);
+    } else {
+      const remaining = MIN_BUFFERING_VISIBLE_MS - elapsed;
+      hideBufferingTimeoutRef.current = setTimeout(() => {
+        hideBufferingTimeoutRef.current = null;
+        isBufferingRef.current = false;
+        bufferingShownAtRef.current = null;
+        setIsBuffering(false);
+      }, remaining);
+    }
   };
   const clearBufferingTimers = () => {
     if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
+    if (hideBufferingTimeoutRef.current) { clearTimeout(hideBufferingTimeoutRef.current); hideBufferingTimeoutRef.current = null; }
     if (stallWatchdogRef.current) { clearTimeout(stallWatchdogRef.current); stallWatchdogRef.current = null; }
   };
 
@@ -594,7 +633,10 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     retryCountRef.current = 0;
     clearRetryTimeout();
     clearBufferingTimers();
-    applyBuffering(false);
+    // `canplay` is a definitive "ready to play through" checkpoint (fires once
+    // per src load), not a noisy trickle-of-data tick — hide the spinner right
+    // away rather than waiting out the hysteresis window.
+    applyBuffering(false, { immediate: true });
     if (errorInfoRef.current) {
       dispatch({ type: 'CLEAR_ERROR' });
     }
@@ -656,10 +698,12 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   }, []);
 
   // Pause / track change: không còn phát → xoá spinner buffering và mọi timer.
+  // Immediate: an explicit user action (pause/switch track) must feel
+  // instant, not wait out the hysteresis window meant for network flicker.
   useEffect(() => {
     if (!isPlaying) {
       clearBufferingTimers();
-      applyBuffering(false);
+      applyBuffering(false, { immediate: true });
     }
   }, [isPlaying, currentTrack?.id]);
 
