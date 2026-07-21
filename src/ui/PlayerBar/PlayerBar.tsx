@@ -297,9 +297,9 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
             onPointerDown={progressUI.handlePointerDown}
           >
-            <div 
+            <div
               ref={bufferFillRef}
-              className="absolute left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-full transform-gpu will-change-[width]"
+              className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
             ></div>
             
             <div 

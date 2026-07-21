@@ -4,7 +4,7 @@ import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1, Shuffle } from "lucide-react";
 import { getTrackMetadata } from "../../utils/metadata";
 import { getPalette } from '../../utils/color';
-import { getBufferedRangePct } from '../../utils/bufferedRange';
+import { updateBufferBar } from '../../utils/bufferedRange';
 import { useTranslation } from "react-i18next";
 import { listen } from '@tauri-apps/api/event';
 
@@ -72,7 +72,7 @@ export const NowPlayingView = memo(function NowPlayingView({
          if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = '0:00';
          if (progressFillRef.current) progressFillRef.current.style.width = '0%';
       }
-      if (bufferFillRef.current) bufferFillRef.current.style.width = '0%';
+      if (bufferFillRef.current) bufferFillRef.current.innerHTML = '';
       
       let isCancelled = false;
       let objectUrl: string | null = null;
@@ -225,18 +225,12 @@ export const NowPlayingView = memo(function NowPlayingView({
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
-          // Buffer bar is driven by the actual browser-buffered range, not the
-          // proxy's byte accounting. The proxy's buffer-status event reports
-          // prefetch progress in bytes which diverges from real playback time
-          // for VBR audio and reports 100% once its slice cache can serve a
-          // range even if the browser has only buffered a few seconds.
-          if (bufferFillRef.current) {
-            const range = getBufferedRangePct(audio);
-            if (range) {
-              bufferFillRef.current.style.left = `${range.left}%`;
-              bufferFillRef.current.style.width = `${range.width}%`;
-            }
-          }
+          // Buffer bar is driven by the actual browser-buffered ranges (not the
+          // proxy's byte accounting). updateBufferBar renders EVERY buffered
+          // TimeRange as its own segment, so a forward seek that creates a
+          // non-contiguous range shows both the old region and the new one at
+          // the seek position — accurate regardless of gaps.
+          updateBufferBar(bufferFillRef.current, audio);
         }
       }
     };

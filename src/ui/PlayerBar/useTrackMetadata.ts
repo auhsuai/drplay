@@ -107,7 +107,7 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
         if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = '0:00';
         if (progressFillRef.current) progressFillRef.current.style.width = '0%';
       }
-      if (bufferFillRef.current) bufferFillRef.current.style.width = '0%';
+      if (bufferFillRef.current) bufferFillRef.current.innerHTML = '';
     }
   }, [currentTrack?.id]);
 
