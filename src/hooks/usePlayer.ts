@@ -106,6 +106,18 @@ export const usePlayer = (accessToken: string | null) => {
           : undefined;
         if (validBuffer !== undefined) setBufferSeconds(validBuffer);
 
+        // Explicitly push the resolved value (persisted, or the hardcoded
+        // default if this is a fresh install) to the Rust backend exactly
+        // once at startup. Relying solely on the [bufferSeconds] effect below
+        // is not enough: when `validBuffer` equals the initial state value,
+        // React bails out of re-running that effect (no actual state change),
+        // leaving the Rust-side prefetch window on ITS OWN default until the
+        // user manually changes the setting. That silent frontend/backend
+        // mismatch is exactly what this call closes.
+        invoke("update_buffer_settings", { seconds: validBuffer ?? bufferSeconds }).catch(e =>
+          console.warn(`[usePlayer] initial-buffer-sync-failed`, classifyPlayerError(e))
+        );
+
         if (lastSession && lastSession.track) {
           if (isIntentStale(myId)) {
             return;
