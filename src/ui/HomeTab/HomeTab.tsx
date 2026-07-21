@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { Track } from "../../App";
-import { getTrackMetadata } from "../../utils/metadata";
 import { getRecentlyPlayed, getHeavyRotation, getRandomDiscoveries, getMostVisitedFolders, FolderVisitEntry } from "../../utils/history";
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
@@ -235,52 +234,24 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
 
 
 
-function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onPlay: () => void, token: string | null, isOverlayBtn?: boolean }) {
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+function PremiumCard({ track, onPlay, isOverlayBtn }: { track: Track, onPlay: () => void, token: string | null, isOverlayBtn?: boolean }) {
+  // This app streams straight from Google Drive: there is no cover-art
+  // pipeline, so every card shows a stable per-track fill color + music icon.
+  // Title/artist come directly from the Track object (Drive filename).
   const fillColor = getFillColor(track.id);
-  const [title, setTitle] = useState(track.title);
-  const [artist, setArtist] = useState(track.artist);
   const { t } = useTranslation();
-  
-  useEffect(() => {
-    if (!token) return;
-    const controller = new AbortController();
-    let isMounted = true;
-    let objectUrl: string | null = null;
-    getTrackMetadata(track.id, token, track.size, track.originalName, controller.signal).then(meta => {
-      if (!isMounted) return;
-      if (meta.title) setTitle(meta.title);
-      if (meta.artist) setArtist(meta.artist);
-      if (meta.coverUrl) {
-        setCoverUrl(meta.coverUrl);
-      } else if (meta.pictureData && meta.pictureFormat) {
-        const blob = new Blob([new Uint8Array(meta.pictureData)], { type: meta.pictureFormat });
-        objectUrl = URL.createObjectURL(blob);
-        setCoverUrl(objectUrl);
-      }
-    }).catch(err => console.warn('[HomeTab] Failed to load cover metadata for track', track.id, err));
-    return () => { 
-      isMounted = false; 
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [track.id, token]);
-  
+
   return (
-    <div 
+    <div
       onClick={onPlay}
       className="group cursor-pointer active:scale-[0.98] transition-transform duration-200"
     >
-      <div 
-        style={!coverUrl ? { background: fillColor } : undefined}
+      <div
+        style={{ background: fillColor }}
         className="w-full aspect-square rounded-2xl mb-4 relative overflow-hidden flex items-center justify-center shadow-sm"
       >
-        {coverUrl ? (
-          <img src={coverUrl} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
-        ) : (
-          <Music className="w-12 h-12 text-white opacity-80 group-hover:scale-110 transition-transform duration-700" />
-        )}
-        
+        <Music className="w-12 h-12 text-white opacity-80 group-hover:scale-110 transition-transform duration-700" />
+
         {isOverlayBtn ? (
           <div className="absolute inset-0 bg-white/70 dark:bg-black/70 flex items-center justify-center opacity-80 group-hover:opacity-100 transition-opacity">
             <span className="font-bold text-gray-900 dark:text-white text-[15px] flex items-center gap-1">
@@ -295,8 +266,8 @@ function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onP
       </div>
       {!isOverlayBtn && (
         <div className="px-1">
-          <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1">{title}</h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{artist || t('unknown_artist', 'Unknown Artist')}</p>
+          <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1">{track.title}</h4>
+          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{track.artist || t('unknown_artist', 'Unknown Artist')}</p>
         </div>
       )}
     </div>
