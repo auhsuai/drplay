@@ -464,6 +464,21 @@ function App() {
     // rounds of verified-correct fixes.
     const fetchStartedAt = performance.now();
     let pageCount = 0;
+    // Phase breakdown -- the previous round of instrumentation only
+    // captured the TOTAL elapsed time (e.g. "3454ms across 2 pages"),
+    // which the user correctly pointed out doesn't say WHERE that time
+    // actually goes: pure network wait for driveFetch (which pagination
+    // makes strictly sequential -- page 2 can't be requested before page
+    // 1's response carries its pageToken, so this part has a real,
+    // client-code-independent floor) vs. JSON parsing vs. Dexie bulkPut
+    // writes vs. the delete-sync step. Breaking these out tells us whether
+    // there's still a fixable client-side cost on top of unavoidable
+    // network latency, or whether network wait already accounts for
+    // (almost) the whole total.
+    let fetchMs = 0;
+    let parseMs = 0;
+    let bulkPutMs = 0;
+    let deleteSyncMs = 0;
     try {
       const existingCount = await db.files.where('parentId').equals(folderId).count();
       if (existingCount === 0) {
@@ -545,7 +560,9 @@ function App() {
         // calls the Drive API in a tight per-page loop with no pacing of
         // its own, which makes it more plausible for this specific,
         // heavily-hit call to occasionally land on a rate-limited window.
+        const fetchPhaseStart = performance.now();
         const response = await driveFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        fetchMs += performance.now() - fetchPhaseStart;
 
         if (!response.ok) {
           console.error(`[${APP_MODULE}] Failed to fetch page from drive API`, response.status);
@@ -559,7 +576,9 @@ function App() {
           break;
         }
 
+        const parsePhaseStart = performance.now();
         const data = await response.json();
+        parseMs += performance.now() - parsePhaseStart;
         if (data.files && data.files.length > 0) {
           const filesToInsert = data.files.map((file: any) => ({
             id: file.id,
@@ -576,7 +595,9 @@ function App() {
           }));
 
           if (isFirstPage) {
+            const bulkPutPhaseStart = performance.now();
             await db.files.bulkPut(filesToInsert);
+            bulkPutMs += performance.now() - bulkPutPhaseStart;
           } else {
             laterPagesFiles = laterPagesFiles.concat(filesToInsert);
           }
@@ -601,22 +622,26 @@ function App() {
       // page). No-op (0-length bulkPut is skipped) for the common
       // single-page-folder case, so this changes nothing there.
       if (laterPagesFiles.length > 0) {
+        const laterBulkPutStart = performance.now();
         await db.files.bulkPut(laterPagesFiles);
+        bulkPutMs += performance.now() - laterBulkPutStart;
       }
 
       // Sync deletions: remove local files that are no longer in Google Drive.
       // Only run when the folder was fully and successfully fetched — never
       // after a failed page, otherwise we would wipe the whole folder.
       if (fetchCompleted && !pageToken && folderFetchGuard.isLatest(myId)) {
+        const deleteSyncStart = performance.now();
         const fetchedIds = new Set(allFiles.map((f: any) => f.id));
         const localFiles = await db.files.where('parentId').equals(folderId).toArray();
         const idsToDelete = localFiles
           .filter(f => !fetchedIds.has(f.id))
           .map(f => f.id);
-          
+
         if (idsToDelete.length > 0) {
           await db.files.bulkDelete(idsToDelete);
         }
+        deleteSyncMs += performance.now() - deleteSyncStart;
       }
     } catch (error) {
       const classification = classifyAppError(error);
@@ -636,10 +661,11 @@ function App() {
       // continuing to guess at the cause blind.
       const elapsedMs = Math.round(performance.now() - fetchStartedAt);
       if (elapsedMs > 2000) {
+        const otherMs = Math.max(0, elapsedMs - Math.round(fetchMs) - Math.round(parseMs) - Math.round(bulkPutMs) - Math.round(deleteSyncMs));
         captureError({
           level: 'warn',
           source: 'App/fetchFolderContentsToDexie',
-          message: `Folder load took ${elapsedMs}ms across ${pageCount} Drive API page(s) for folder ${folderId}`,
+          message: `Folder load took ${elapsedMs}ms across ${pageCount} Drive API page(s) for folder ${folderId} -- breakdown: driveFetch=${Math.round(fetchMs)}ms, json-parse=${Math.round(parseMs)}ms, dexie-bulkPut=${Math.round(bulkPutMs)}ms, delete-sync=${Math.round(deleteSyncMs)}ms, other/overhead=${otherMs}ms`,
           kind: 'slow-load',
         });
       }
