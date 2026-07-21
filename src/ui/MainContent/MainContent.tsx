@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo } from "react";
 import { useVirtualizer, type ReactVirtualizer } from '@tanstack/react-virtual';
 import { Track, DriveItem } from "../../App";
 import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput } from "lucide-react";
@@ -6,11 +6,9 @@ import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { deleteFile, moveFile } from "../../utils/driveApi";
 
-import { cachePrefetchedStream, clearPrefetchedStreams } from "../../utils/streamPrefetcher";
+import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
-import { invoke } from "@tauri-apps/api/core";
-import { cacheTrackMetadata } from "../../utils/metadata";
 
 
 
@@ -270,81 +268,6 @@ export const MainContent = React.memo(function MainContent({
     clearPrefetchedStreams();
     clearNextTrackPrefetches();
   }, [currentFolderId]);
-
-  const coverUrlsRef = useRef<Map<string, string>>(new Map());
-  const predecodedRef = useRef<Set<string>>(new Set());
-
-  React.useEffect(() => {
-    const trackIds = currentItems
-      .filter(i => !i.isFolder && i.trackInfo?.id && !coverUrlsRef.current.has(i.trackInfo.id))
-      .map(i => i.trackInfo!.id);
-    if (trackIds.length === 0) return;
-    performance.mark('cover-batch-start');
-
-    const controller = new AbortController();
-
-    async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
-      const executing = new Set<Promise<void>>();
-      for (const item of items) {
-        if (controller.signal.aborted) break;
-        const p = fn(item).finally(() => executing.delete(p));
-        executing.add(p);
-        if (executing.size >= limit) {
-          await Promise.race(executing);
-        }
-      }
-      await Promise.allSettled(executing);
-    }
-
-    const trackItems = trackIds.map(id => currentItems.find(i => i.trackInfo?.id === id)).filter(Boolean) as typeof currentItems;
-    runWithConcurrency(trackItems, 6, async (item) => {
-      const id = item.trackInfo!.id;
-      try {
-        const data = await invoke<any>('get_track_data', {
-          fileId: id,
-          size: item.trackInfo!.size ?? 0,
-          name: item.trackInfo!.originalName ?? 'audio.mp3',
-        });
-        if (controller.signal.aborted) return;
-        if (data?.stream_url) {
-          cachePrefetchedStream(id, data.stream_url);
-        }
-        // Populate metadata cache so SongCard's getTrackMetadata
-        // skips its own IPC call entirely.
-        if (data?.metadata?.id) {
-          const m = data.metadata;
-          cacheTrackMetadata(id, {
-            title: m.title || item.trackInfo!.title,
-            artist: m.artist || 'Unknown Artist',
-            duration: m.duration || 0,
-            durationEstimated: !m.duration,
-            pictureData: null,
-            pictureDataFull: null,
-            dbId: m.id,
-            coverUrl: m.has_cover ? `http://drplay.localhost/cover?id=${m.id}&thumb=true&v=2` : undefined,
-            size: item.trackInfo!.size ?? 0,
-            v: 10,
-          });
-        }
-        if (!data?.metadata?.has_cover || !data?.metadata?.id) return;
-        const url = coverUrlsRef.current.get(id) || `http://drplay.localhost/cover?id=${data.metadata.id}&thumb=true&v=2`;
-        coverUrlsRef.current.set(id, url);
-        if (!predecodedRef.current.has(url)) {
-          predecodedRef.current.add(url);
-          const img = new Image();
-          img.decoding = 'async';
-          img.src = url;
-          img.decode().catch(() => {});
-        }
-      } catch (e) {
-        console.warn('[MainContent] cover-batch-fetch-failed', { fileId: id, error: String(e) });
-      }
-    }).catch(() => {});
-    performance.mark('cover-batch-end');
-    performance.measure('cover-batch', 'cover-batch-start', 'cover-batch-end');
-
-    return () => controller.abort();
-  }, [currentItems]);
 
   const handlePlay = React.useCallback((t: Track) => {
     const queue = currentItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
@@ -735,7 +658,6 @@ export const MainContent = React.memo(function MainContent({
               setIsSelectionMode={setIsSelectionMode}
               onBulkMoveClick={() => setShowBulkMoveScreen(true)}
               onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
-              coverUrlMap={coverUrlsRef.current}
             />
 
           {totalPages > 1 && (
@@ -862,7 +784,6 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode,
   onBulkMoveClick,
   onBulkDeleteClick,
-  coverUrlMap,
 }: {
   items: DriveItem[];
   rowVirtualizer: ReactVirtualizer<HTMLElement, Element>;
@@ -882,7 +803,6 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
   onBulkMoveClick: () => void;
   onBulkDeleteClick: () => void;
-  coverUrlMap?: Map<string, string>;
 }) {
   const virtualItems = rowVirtualizer.getVirtualItems();
 
@@ -917,7 +837,6 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
               currentFolderId={currentFolderId}
               currentFolderName={currentFolderName}
               folderHistory={folderHistory}
-              coverUrl={coverUrlMap?.get(item.trackInfo?.id ?? '')}
               isHighlighted={item.id === highlightedFileId?.id}
               highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
               isPlaying={item.trackInfo?.id === isPlaying}
