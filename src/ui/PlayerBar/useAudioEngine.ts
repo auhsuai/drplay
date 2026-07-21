@@ -103,8 +103,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering } = params;
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  const audioRef2 = useRef<HTMLAudioElement>(null);
-  const activeAudioIndexRef = useRef<0 | 1>(0);
 
   const resumeHandlerRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
   const resumeSeekRef = useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
@@ -180,10 +178,14 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     if (stallWatchdogRef.current) { clearTimeout(stallWatchdogRef.current); stallWatchdogRef.current = null; }
   };
 
-  const audioRefs: AudioRefs = { audioRef, audioRef2, activeAudioIndexRef };
+  const audioRefs: AudioRefs = { audioRef };
 
+  // Single audio element — see AudioRefs. Kept as a function (rather than
+  // inlining `audioRef.current` at every call site) because every other
+  // hook in this feature (useKeyboard, useProgressUI, usePlaybackControl)
+  // already depends on this exact function signature.
   const getActiveAudio = useCallback(() => {
-    return activeAudioIndexRef.current === 0 ? audioRef.current : audioRef2.current;
+    return audioRef.current;
   }, []);
 
   const clearRetryTimeout = () => {
@@ -286,7 +288,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
         await safePlay(audio);
       }
 
-      activeAudioIndexRef.current = 0;
       disarmSuppressEnded();
       return audio;
     } finally {
@@ -660,10 +661,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
 
   // Volume sync
   useEffect(() => {
-    const refs = [audioRef.current, audioRef2.current];
-    for (const el of refs) {
-      if (el) el.volume = 0.5; // placeholder — real volume comes from PlayerBar
-    }
+    if (audioRef.current) audioRef.current.volume = 0.5; // placeholder — real volume comes from PlayerBar
   }, []);
 
   // Load audio on track change
