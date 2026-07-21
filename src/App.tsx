@@ -22,6 +22,7 @@ import { LoginScreen } from "./ui/Login/LoginScreen";
 
 import { getValidToken } from "./utils/apiClient";
 import { driveFetch } from "./utils/driveApi";
+import { captureError } from "./utils/errorLog";
 import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
@@ -452,6 +453,17 @@ function App() {
   async function fetchFolderContentsToDexie(token: string, folderId: string) {
     const myId = folderFetchGuard.start();
     let fetchCompleted = true;
+    // Diagnostic-only instrumentation added while investigating a real,
+    // still-unresolved "folder loading is very slow" report -- captures
+    // concrete evidence (HTTP status on failure, elapsed time on success)
+    // into the app's existing Settings > Error Log (captureError/db.errorLogs),
+    // which already has a sanitized copy-to-report action. This gives a
+    // way to see what's actually happening on a real user's machine without
+    // needing dev tools access, since guessing at architecture-level causes
+    // without that ground truth has not resolved the report after 2 prior
+    // rounds of verified-correct fixes.
+    const fetchStartedAt = performance.now();
+    let pageCount = 0;
     try {
       const existingCount = await db.files.where('parentId').equals(folderId).count();
       if (existingCount === 0) {
@@ -538,6 +550,12 @@ function App() {
         if (!response.ok) {
           console.error(`[${APP_MODULE}] Failed to fetch page from drive API`, response.status);
           fetchCompleted = false;
+          captureError({
+            level: 'error',
+            source: 'App/fetchFolderContentsToDexie',
+            message: `Drive API page fetch failed: HTTP ${response.status} after ${pageCount} successful page(s) and ${Math.round(performance.now() - fetchStartedAt)}ms elapsed (folder had ${allFiles.length} file(s) fetched so far)`,
+            kind: `http-${response.status}`,
+          });
           break;
         }
 
@@ -566,6 +584,7 @@ function App() {
         }
 
         pageToken = data.nextPageToken;
+        pageCount++;
 
         // Hide loading spinner early only if THIS request is still the latest one
         if (isFirstPage && pageToken && existingCount === 0 && folderFetchGuard.isLatest(myId)) {
@@ -600,9 +619,30 @@ function App() {
         }
       }
     } catch (error) {
-      console.error(`[${APP_MODULE}] Failed to fetch folder contents on demand:`, classifyAppError(error));
+      const classification = classifyAppError(error);
+      console.error(`[${APP_MODULE}] Failed to fetch folder contents on demand:`, classification);
       fetchCompleted = false;
+      captureError({
+        level: 'error',
+        source: 'App/fetchFolderContentsToDexie',
+        message: `Folder fetch threw after ${pageCount} successful page(s) and ${Math.round(performance.now() - fetchStartedAt)}ms: ${classification}`,
+        kind: 'exception',
+      });
     } finally {
+      // Diagnostic-only: record a warn-level entry (viewable/copyable via
+      // Settings > Error Log) whenever a folder load takes long enough to
+      // plausibly be the "very slow" the user is reporting, so there is
+      // concrete elapsed-time/page-count evidence to look at instead of
+      // continuing to guess at the cause blind.
+      const elapsedMs = Math.round(performance.now() - fetchStartedAt);
+      if (elapsedMs > 2000) {
+        captureError({
+          level: 'warn',
+          source: 'App/fetchFolderContentsToDexie',
+          message: `Folder load took ${elapsedMs}ms across ${pageCount} Drive API page(s) for folder ${folderId}`,
+          kind: 'slow-load',
+        });
+      }
       if (folderFetchGuard.isLatest(myId)) {
         setIsLoadingTracks(false);
       }
