@@ -4,10 +4,28 @@ import { useTranslation } from "react-i18next";
 import { DriveItem, Track } from "../../../App";
 import { MoreMenu } from "../../components/MoreMenu";
 
-// This app streams files straight from Google Drive: there is no local tag
-// database and no cover-art pipeline, so a song row shows exactly what Drive
-// already gives us for free — the file name (as `item.title`) and its size.
-// No per-card metadata fetch, no cover image.
+// This app streams files straight from Google Drive: there is no cover-art
+// pipeline at all. There IS an optional, read-only DB tag lookup, but it is
+// wired up ONLY by MainContent.tsx for the "My Drive" list (via the
+// `dbMetadata` prop below) — every other place that renders a SongCard
+// (Home, Liked Songs, Playlists) omits the prop, so it just shows the plain
+// Drive filename as before.
+
+export interface DbTagMetadata {
+  title: string;
+  artist: string;
+  duration: number;
+}
+
+function formatDuration(seconds: number): string {
+  if (!seconds) return "";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return h > 0
+    ? `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    : `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
 
 function formatSize(bytes: number): string {
   if (!bytes) return "0 MB";
@@ -35,6 +53,9 @@ interface SongCardProps {
   hideMenu?: boolean;
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
+  /** DB-sourced tag (title/artist/duration). Only ever passed by MainContent
+   * for the "My Drive" list — omitted everywhere else. */
+  dbMetadata?: DbTagMetadata;
 }
 
 export const SongCard = React.memo(function SongCard({
@@ -57,6 +78,7 @@ export const SongCard = React.memo(function SongCard({
   hideMenu,
   onBulkMoveClick,
   onBulkDeleteClick,
+  dbMetadata,
 }: SongCardProps) {
   const { t } = useTranslation();
   const cardRef = React.useRef<HTMLDivElement>(null);
@@ -95,6 +117,8 @@ export const SongCard = React.memo(function SongCard({
   }, [isHighlighted, highlightTrigger]);
 
   const size = item.trackInfo?.size ?? 0;
+  const displayTitle = dbMetadata?.title || item.title;
+  const duration = dbMetadata?.duration ?? 0;
 
   return (
     <div
@@ -109,8 +133,14 @@ export const SongCard = React.memo(function SongCard({
         onClick={() => {
           if (isSelectionMode) {
             onToggleSelection?.();
+          } else if (item.isFolder) {
+            onOpenFolder(item.id, item.title);
           } else {
-            item.isFolder ? onOpenFolder(item.id, item.title) : onPlay(item.trackInfo!);
+            onPlay({
+              ...item.trackInfo!,
+              title: dbMetadata?.title || item.trackInfo!.title,
+              artist: dbMetadata?.artist || item.trackInfo!.artist,
+            });
           }
         }}
         onContextMenu={(e) => {
@@ -147,13 +177,21 @@ export const SongCard = React.memo(function SongCard({
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">
         <h3 className={`font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!text-[#4285F4]' : 'text-gray-800 dark:text-gray-200'}`}>
-          {item.title}
+          {displayTitle}
         </h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           {item.isFolder ? (
             <span className="truncate">{t('drive.folders')}</span>
           ) : (
             <div className="flex items-center truncate">
+              {duration > 0 && (
+                <>
+                  <span className="text-[11px] font-medium tracking-wide">
+                    {formatDuration(duration)}
+                  </span>
+                  {size > 0 && <span className="mx-2 text-gray-300 dark:text-gray-600">•</span>}
+                </>
+              )}
               {size > 0 && (
                 <span className="text-[11px] font-medium tracking-wide">
                   {formatSize(size)}
@@ -199,5 +237,6 @@ export const SongCard = React.memo(function SongCard({
          prev.isSelected === next.isSelected &&
          prev.isSelectionMode === next.isSelectionMode &&
          prev.isHighlighted === next.isHighlighted &&
-         prev.highlightTrigger === next.highlightTrigger;
+         prev.highlightTrigger === next.highlightTrigger &&
+         prev.dbMetadata === next.dbMetadata;
 });
