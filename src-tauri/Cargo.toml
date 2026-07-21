@@ -48,7 +48,19 @@ tokio-stream = "0.1.15"
 bytes = "1.6.0"
 uuid = { version = "1.8.0", features = ["v4"] }
 rand = "0.8"
-moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
+# Pinned to an explicit commit (not `branch = "main"`) so a future
+# `cargo update` can't silently move to a different, unreviewed commit --
+# `branch = "main"` re-resolves to whatever main's HEAD is at update time,
+# which is not reproducible. This specific commit is intentional, not a
+# leftover: it's newer than the latest crates.io release (0.12.15, commit
+# 616473e) and carries a real fix ("Fix LRU eviction stall under concurrent
+# key reuse", PR moka-rs/moka#592, merged 2026-07-12) that is NOT in any
+# released version yet -- directly relevant to this app's own cache
+# workload (many concurrent requests can hit the same track/slice key).
+# Swapping to the crates.io release would silently drop that fix. Cargo.lock
+# already resolves to this exact commit today, so this changes nothing
+# about which code is compiled -- it only makes the pin explicit/immutable.
+moka = { git = "https://github.com/moka-rs/moka", rev = "e617b5f064cdb3ce9845cef06961fdbf07bd9946", features = ["future"] }
 
 [profile.release]
 lto = true
