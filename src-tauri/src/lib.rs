@@ -354,6 +354,18 @@ struct LocalMetadataQuery {
     name: String,
 }
 
+// Shared bound for the local-tag-lookup SQLite pool's real capacity AND
+// get_local_metadata_batch's concurrency limit — one named constant instead
+// of two independently-drifting magic numbers (see the pool construction in
+// `run()`'s `.setup()` closure, and `DB_LOOKUP_SEMAPHORE` right below).
+const DB_POOL_MAX_SIZE: u32 = 10;
+
+// Explicit Tokio Semaphore gating how many get_local_metadata_batch lookups
+// run concurrently, sized to match the SQLite pool's own real capacity. See
+// the PERF NOTE on get_local_metadata_batch below for the full reasoning.
+static DB_LOOKUP_SEMAPHORE: LazyLock<tokio::sync::Semaphore> =
+    LazyLock::new(|| tokio::sync::Semaphore::new(DB_POOL_MAX_SIZE as usize));
+
 // Batched version of the old per-track `get_local_metadata` command. The
 // "My Drive" list previously called that command once per uncached VISIBLE
 // row (throttled 6-wide on the frontend) — up to `itemsPerPage` (50) IPC
@@ -369,29 +381,41 @@ struct LocalMetadataQuery {
 // actually needs, fetch them in one query pass, return a keyed map).
 //
 // PERF NOTE (regression found and fixed after a user report of slower
-// folder-load times): the first version of this batch ran every item
-// SEQUENTIALLY on a SINGLE checked-out connection inside one spawn_blocking.
-// That's strictly cheaper on IPC overhead than the old per-item version, but
-// it also gave up the real concurrency the old version had — `tracks` has no
-// index on `size_bytes` (every lookup is a full table scan), and the old
-// 6-wide-throttled frontend loop meant up to 6 *separate* r2d2 connections
-// could scan concurrently across multiple OS threads. Collapsing all of that
-// onto one connection made every scan for a page fully serial on a single
-// core, which for a non-trivial library can be slower in wall-clock terms
-// than the extra IPC round-trips it was saving.
+// folder-load times, then hardened again on request to use a proper,
+// explicit concurrency primitive instead of an implicit one): the first
+// version of this batch ran every item SEQUENTIALLY on a single checked-out
+// connection inside one spawn_blocking. That's strictly cheaper on IPC
+// overhead than the old per-item version, but it gave up the real
+// concurrency the old version had — `tracks` has no index on `size_bytes`
+// (every lookup is a full table scan), and the old 6-wide-throttled frontend
+// loop meant up to 6 *separate* r2d2 connections could scan concurrently
+// across multiple OS threads. Collapsing all of that onto one connection
+// made every scan for a page fully serial on a single core, which for a
+// non-trivial library can be slower in wall-clock terms than the IPC
+// round-trips it was saving.
 //
-// Fixed by spawning one `spawn_blocking` task PER item (each doing its own
-// `pool.get()` + single-row query) and awaiting them together, instead of
-// one task looping over everything with one connection. r2d2's own
-// `pool.get()` blocks/queues once the pool's `max_size` (10, r2d2's default
-// here — see the `Pool::new(manager)` call below with no `.max_size()`
-// override) connections are checked out, so this naturally reproduces (and
-// slightly improves on, 10 vs the old 6) the old concurrency bound without
-// needing an explicit semaphore — while still being ONE invoke() call from
-// the frontend's perspective. Verified the spawn-many/pool-bounds/collect-
-// into-a-keyed-map shape in an isolated crate (a semaphore standing in for
-// the pool) since this sandbox cannot compile the full Tauri app: with a
-// simulated pool size of 10 and 50 items, real concurrency (>1, <=10) was
+// The immediate fix spawned one task per item and let r2d2's own
+// `pool.get()` block/queue once its (implicit, default) max_size connections
+// were checked out -- that worked, but tied this command's concurrency to a
+// pool default that isn't actually configured as a concurrency control
+// anywhere, and eagerly spawned up to `items.len()` blocking-pool OS threads
+// even though only `max_size` of them could ever do anything at once.
+//
+// This version uses `DB_LOOKUP_SEMAPHORE`, an explicit `tokio::sync::
+// Semaphore` sized to `DB_POOL_MAX_SIZE` (the SAME constant the pool below
+// is built with, so the two can't silently drift apart) -- the standard
+// Tokio pattern for bounding concurrent access to a shared/pooled resource
+// (see `tokio::sync::Semaphore`'s own docs, whose canonical example acquires
+// an owned permit in the accept loop *before* spawning each task, moves it
+// into the task, and drops it when that task's work is done; this command
+// does the same with the borrowed `.acquire()` form since the semaphore here
+// is a `'static` global, not something that needs `Arc`-shared ownership).
+// Only ever spawns as many blocking tasks as can usefully run at once.
+// Verified the exact shape (acquire-before-spawn, permit held across the
+// spawned closure, results collected into a HashMap keyed by id rather than
+// array position) in an isolated crate with a real `tokio::sync::Semaphore`
+// behind a `static LazyLock`, since this sandbox cannot compile the full
+// Tauri app: with 10 permits and 50 items, real concurrency (>1, <=10) was
 // observed and every item still produced a correctly-keyed result.
 //
 // `async fn` + `spawn_blocking` per task (matching `login_google_native`'s
@@ -414,8 +438,21 @@ async fn get_local_metadata_batch(
     let item_count = items.len();
     let mut tasks = Vec::with_capacity(item_count);
     for item in items {
+        // Acquire a permit BEFORE spawning — bounds how many blocking tasks
+        // are even started at once (rather than spawning all `item_count` of
+        // them and having most sit idle waiting on a permit from inside).
+        // `DB_LOOKUP_SEMAPHORE` is a `'static` global, so the borrowed
+        // `.acquire()` permit is itself `'static` and Send, and can be moved
+        // into the spawned closure below just like an owned permit could.
+        let permit = match DB_LOOKUP_SEMAPHORE.acquire().await {
+            Ok(p) => p,
+            // Never actually happens (nothing ever calls `.close()` on this
+            // semaphore), but skip rather than panic if it somehow did.
+            Err(_) => continue,
+        };
         let pool = (*pool).clone();
         tasks.push(tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit; // held for this task's duration, released on drop
             let conn = pool.get().ok()?;
             get_local_metadata_internal(item.size, &item.name, &conn).map(|meta| (item.id, meta))
         }));
@@ -504,7 +541,11 @@ pub fn run() {
                 use r2d2::Pool;
                 let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
                 let manager = SqliteConnectionManager::file(&db_path);
-                if let Ok(pool) = Pool::new(manager) {
+                // Explicit max_size (was `Pool::new(manager)`, silently relying
+                // on r2d2's own default of 10) so this pool's real capacity and
+                // DB_LOOKUP_SEMAPHORE's permit count are the same named constant
+                // instead of two independently-drifting magic numbers.
+                if let Ok(pool) = Pool::builder().max_size(DB_POOL_MAX_SIZE).build(manager) {
                     app.manage(pool);
                 }
             }
