@@ -14,10 +14,16 @@ export function isAudioFile(mimeType: string | undefined, name: string): boolean
 }
 
 export function getAudioQuery(): string {
+  // Was missing the `mimeType='application/octet-stream'` guard its two
+  // siblings below both have on their extension-fallback branch, so this
+  // matched ANY file whose name merely contains an audio-extension
+  // substring (e.g. "notes.mp3.txt"), regardless of actual mimeType. This
+  // query feeds the full-library background sync (proSync.worker.ts), so
+  // the drift could pull non-audio files into the synced library.
   const extConditions = AUDIO_EXTENSIONS
-    .map(ext => `name contains '${ext}'`)
+    .map(ext => `(mimeType='application/octet-stream' and name contains '${ext}')`)
     .join(' or ');
-  return `trashed=false and (mimeType='application/vnd.google-apps.folder' or mimeType contains 'audio/' or (${extConditions}))`;
+  return `trashed=false and (mimeType='application/vnd.google-apps.folder' or mimeType contains 'audio/' or ${extConditions})`;
 }
 
 export function getFolderAudioQuery(folderId: string): string {

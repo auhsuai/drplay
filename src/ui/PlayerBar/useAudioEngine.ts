@@ -1,7 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { Track } from '../../App';
 import { safePlay, safePause } from '../../utils/safeAudio';
-import { updateTrackDuration } from '../../utils/metadata';
 import { captureError } from '../../utils/errorLog';
 import { getValidToken } from '../../utils/apiClient';
 import { invoke } from '@tauri-apps/api/core';
@@ -619,11 +618,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const handleLoadedMetadata = () => {
     const audio = getActiveAudio();
     if (audio) {
-      const accurateDuration = audio.duration;
-      setDuration(accurateDuration);
-      if (currentTrack) {
-        updateTrackDuration(currentTrack.id, accurateDuration);
-      }
+      setDuration(audio.duration);
     }
   };
 

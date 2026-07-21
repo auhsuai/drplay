@@ -25,6 +25,43 @@ function classifyPlayerError(err: unknown): { name: string; message: string } {
   return { name: "UnknownError", message: "Unknown error" };
 }
 
+/**
+ * Fisher-Yates shuffle `queue`, then pin `pinned` to the front so entering
+ * shuffle mode (or restoring a shuffled session) doesn't jump away from the
+ * track that's actually current. Consolidates 3 previously-independent
+ * copies of this logic (session restore, handlePlayTrack,
+ * handleTogglePlayMode) that had silently drifted: two matched the pinned
+ * track by `.id` alone, one matched by `.queueItemId` first -- since
+ * `queueItemId` exists specifically to disambiguate the same track `.id`
+ * appearing twice in a queue, the `.id`-only copies could pin the WRONG
+ * queue entry to the front whenever a queue contained a duplicate track.
+ * This always prefers `queueItemId` when `pinned` has one, matching the
+ * more-correct of the 3 original copies.
+ *
+ * If `pinned` isn't found in `queue` at all, it's still placed at the
+ * front, stamped with a fresh `queueItemId` if it doesn't already have one
+ * (so every entry in the resulting queue is guaranteed to have one).
+ */
+export function shuffleQueuePinning(queue: Track[], pinned: Track): Track[] {
+  const shuffled = [...queue];
+  const idx = shuffled.findIndex((t) =>
+    pinned.queueItemId ? t.queueItemId === pinned.queueItemId : t.id === pinned.id
+  );
+  const head: Track =
+    idx !== -1
+      ? shuffled.splice(idx, 1)[0]
+      : pinned.queueItemId
+        ? pinned
+        : { ...pinned, queueItemId: crypto.randomUUID() };
+
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  shuffled.unshift(head);
+  return shuffled;
+}
+
 export const usePlayer = (accessToken: string | null) => {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [loadNonce, setLoadNonce] = useState(0);
@@ -152,15 +189,7 @@ export const usePlayer = (accessToken: string | null) => {
           if (savedQueue && Array.isArray(savedQueue) && savedQueue.length > 0) {
             setOriginalQueue(savedQueue);
             if (savedPlayMode === 'shuffle') {
-              const q = [...savedQueue];
-              const idx = q.findIndex(t => t.id === restoredTrack.id);
-              let head = idx !== -1 ? q.splice(idx, 1)[0] : { ...restoredTrack, queueItemId: crypto.randomUUID() };
-              for (let i = q.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [q[i], q[j]] = [q[j], q[i]];
-              }
-              q.unshift(head);
-              setPlaybackQueue(q);
+              setPlaybackQueue(shuffleQueuePinning(savedQueue, restoredTrack));
             } else {
               setPlaybackQueue([...savedQueue]);
             }
@@ -204,23 +233,9 @@ export const usePlayer = (accessToken: string | null) => {
           console.warn(`[usePlayer] queue-save-fail`, classifyPlayerError(e))
         );
         if (playMode === 'shuffle') {
-          const shuffled = [...newOriginalQueue];
-          const trackIndex = shuffled.findIndex(t => t.id === track.id);
-          let currentTrackInQueue = shuffled[0];
-          if (trackIndex !== -1) {
-            currentTrackInQueue = shuffled[trackIndex];
-            shuffled.splice(trackIndex, 1);
-          } else {
-             currentTrackInQueue = {...track, queueItemId: crypto.randomUUID()};
-          }
-
-          for (let i = shuffled.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-          }
-          shuffled.unshift(currentTrackInQueue);
+          const shuffled = shuffleQueuePinning(newOriginalQueue, track);
           setPlaybackQueue(shuffled);
-          targetTrack = currentTrackInQueue;
+          targetTrack = shuffled[0];
         } else {
           setPlaybackQueue(newOriginalQueue);
           const trackIndex = newOriginalQueue.findIndex(t => t.id === track.id);
@@ -418,20 +433,7 @@ export const usePlayer = (accessToken: string | null) => {
 
       if (nextMode === 'shuffle') {
         if (queue.length > 0 && track) {
-          const shuffled = [...queue];
-          const trackIndex = shuffled.findIndex(t => t.queueItemId ? (t.queueItemId === track.queueItemId) : (t.id === track.id));
-          let currentTrackInQueue = track;
-          if (trackIndex !== -1) {
-            currentTrackInQueue = shuffled[trackIndex];
-            shuffled.splice(trackIndex, 1);
-          }
-
-          for (let i = shuffled.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-          }
-          shuffled.unshift(currentTrackInQueue);
-          setPlaybackQueue(shuffled);
+          setPlaybackQueue(shuffleQueuePinning(queue, track));
         }
       } else if (prev === 'shuffle') {
         setPlaybackQueue([...queue]);
@@ -452,7 +454,6 @@ export const usePlayer = (accessToken: string | null) => {
     playbackQueue,
     playMode,
     bufferSeconds,
-    setBufferSeconds,
     handlePlayTrack,
     handleNextTrack,
     handlePrevTrack,

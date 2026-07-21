@@ -7,7 +7,13 @@ export function getPrefetchedStreamUrl(fileId: string): string | undefined {
   return prefetchedStreams.get(fileId);
 }
 
-async function runWithConcurrencyLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+// Exported so it can be tested directly (see streamPrefetcher.test.ts) --
+// this is the app's one real concurrency-limiter implementation. A prior
+// test file (metadata.concurrency.test.ts, removed in this audit pass)
+// exercised an unrelated, hand-rolled `ConcurrencyQueue` class defined
+// inline in the test itself -- it never imported from any production
+// module, so it provided zero real coverage of this function.
+export async function runWithConcurrencyLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
   const results: Promise<void>[] = [];
   const executing = new Set<Promise<void>>();
 

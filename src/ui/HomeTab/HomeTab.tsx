@@ -34,6 +34,13 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   // subtitle to reshuffle on every render (incl. StrictMode double-invoke).
   // Keep useMemo pure; the non-deterministic choices live here.
   const randomGreetingRef = useRef<{ randomObj: Record<string, string> } | null>(null);
+  // Guards the visit-counter increment below against the exact same
+  // StrictMode double-invoke hazard the comment above already documents and
+  // guards for the greeting selection -- without this, a dev StrictMode
+  // mount (mount -> cleanup -> mount) would increment `drplay_home_visit`
+  // twice per real visit, desyncing the "every 3rd visit" cycle above from
+  // how many times the user has actually opened the Home tab.
+  const hasIncrementedVisitRef = useRef(false);
   if (randomGreetingRef.current === null) {
     const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
     // Cycle: Time-specific -> General -> General -> Time-specific ...
@@ -69,8 +76,11 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   }, [t, i18n.language]);
 
   useEffect(() => {
-    const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
-    sessionStorage.setItem('drplay_home_visit', (visitCount + 1).toString());
+    if (!hasIncrementedVisitRef.current) {
+      hasIncrementedVisitRef.current = true;
+      const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
+      sessionStorage.setItem('drplay_home_visit', (visitCount + 1).toString());
+    }
 
     const loadData = async () => {
       setRecent(await getRecentlyPlayed());

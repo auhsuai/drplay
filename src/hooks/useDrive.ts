@@ -60,9 +60,19 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   localRoot = remoteConfig.rootFolderId;
                 }
                 const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
+                // Combine the component-unmount signal with a timeout via
+                // AbortSignal.any, falling back to the timeout alone on
+                // runtimes lacking it -- matches the guarded pattern already
+                // established in apiClient.ts's fetchWithAuth for the exact
+                // same "abort + timeout" composition, which this call had
+                // drifted from by calling AbortSignal.any unconditionally.
+                const timeoutSignal = AbortSignal.timeout(15000);
+                const verifySignal = typeof AbortSignal.any === 'function'
+                  ? AbortSignal.any([controller.signal, timeoutSignal])
+                  : timeoutSignal;
                 const verifyRes = await fetch(verifyUrl, {
                   headers: { Authorization: `Bearer ${freshToken}` },
-                  signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+                  signal: verifySignal,
                 });
                 if (cancelled) return;
                 if (!verifyRes.ok) {

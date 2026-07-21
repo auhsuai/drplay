@@ -25,7 +25,6 @@ import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
-import { metadataCache } from "./utils/metadata";
 import { createFolderFetchGuard } from "./utils/folderFetchGuard";
 
 export type Track = {
@@ -220,14 +219,10 @@ function App() {
       
       switch (sortOption) {
         case 'name': {
-          const titleA = metadataCache[a.id]?.title || a.title;
-          const titleB = metadataCache[b.id]?.title || b.title;
-          return collator.compare(titleA, titleB);
+          return collator.compare(a.title, b.title);
         }
         case 'name desc': {
-          const titleA = metadataCache[a.id]?.title || a.title;
-          const titleB = metadataCache[b.id]?.title || b.title;
-          return collator.compare(titleB, titleA);
+          return collator.compare(b.title, a.title);
         }
         case 'modifiedTime': {
           const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
@@ -252,9 +247,7 @@ function App() {
           return diff;
         }
         default: {
-          const titleA = metadataCache[a.id]?.title || a.title;
-          const titleB = metadataCache[b.id]?.title || b.title;
-          return collator.compare(titleA, titleB);
+          return collator.compare(a.title, b.title);
         }
       }
     });
