@@ -267,7 +267,6 @@ function PremiumCard({ track, onPlay, isOverlayBtn }: { track: Track, onPlay: ()
       {!isOverlayBtn && (
         <div className="px-1">
           <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1">{track.title}</h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{track.artist || t('unknown_artist', 'Unknown Artist')}</p>
         </div>
       )}
     </div>
