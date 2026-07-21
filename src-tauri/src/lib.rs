@@ -5,6 +5,7 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl, RefreshToken
 };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::Instant;
 use tauri::command;
 use tauri::menu::{Menu, MenuItem};
@@ -42,7 +43,7 @@ pub mod slice_cache;
 // NOTE: this app streams audio straight from Google Drive — there is no
 // Cloudflare R2 integration and no cover-art pipeline (removed along with the
 // `r2` and `thumbnail` modules; see protocol.rs). There IS a local read-only
-// SQLite tag lookup (`get_local_metadata` below) used ONLY to show real
+// SQLite tag lookup (`get_local_metadata_batch` below) used ONLY to show real
 // title/artist tags for rows in the "My Drive" list — everywhere else in the
 // UI (Home, Liked Songs, Playlists, the player bar) still shows the Drive
 // filename, never a DB tag.
@@ -341,30 +342,60 @@ fn get_local_metadata_internal(
     first_match
 }
 
-// `async fn` + `spawn_blocking` (matching the pattern already used by
-// `login_google_native` above) so the blocking r2d2 pool checkout + rusqlite
-// query run on the blocking thread pool instead of a Tokio worker thread. A
-// plain sync `#[tauri::command]` fn is NOT automatically offloaded by Tauri —
-// it runs as a regular tokio::spawn task, so its blocking I/O could stall
-// unrelated async work (e.g. the audio proxy's stream handlers) scheduled on
-// the same worker. This command is invoked once per visible row of the "My
-// Drive" virtualized list, so under fast scrolling this matters.
-#[tauri::command]
-async fn get_local_metadata(
+#[derive(serde::Deserialize)]
+struct LocalMetadataQuery {
+    /// Caller-supplied correlation key (this app's Drive file id) — never
+    /// used for the DB lookup itself (that's `size`+`name`, see
+    /// `get_local_metadata_internal`), just echoed back as the result map's
+    /// key so the frontend can match each result to its row without relying
+    /// on response-array ordering matching the request-array ordering.
+    id: String,
     size: i64,
     name: String,
+}
+
+// Batched version of the old per-track `get_local_metadata` command. The
+// "My Drive" list previously called that command once per uncached VISIBLE
+// row (throttled 6-wide on the frontend) — up to `itemsPerPage` (50) IPC
+// round-trips just to paint one page. Tauri's `invoke` bridge has real
+// per-call overhead (JSON serialize + copy across the JS/native boundary +
+// deserialize; see e.g. the "IPC is not free, batch intelligently" guidance
+// widely given for Tauri/Electron-style webview IPC), so collapsing this
+// into ONE call with all of a page's uncached rows removes N-1 round-trips
+// for a batch that's always small and bounded (<=50 items, well below any
+// payload size where batching itself becomes a problem — this is not the
+// "ship 120k rows over IPC" anti-pattern, just the ordinary N+1-avoidance
+// pattern also known from GraphQL's DataLoader: collect the keys the caller
+// actually needs, fetch them in one query pass, return a keyed map).
+//
+// `async fn` + `spawn_blocking` (matching `login_google_native`) so the
+// blocking r2d2 pool checkout + the whole loop of rusqlite queries run on
+// the blocking thread pool, not a Tokio worker thread — same reasoning as
+// before, but now it's ONE checkout for the whole batch instead of one per
+// item, which is also strictly cheaper than the old per-item version.
+#[tauri::command]
+async fn get_local_metadata_batch(
+    items: Vec<LocalMetadataQuery>,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> Option<LocalMetadata> {
+) -> HashMap<String, LocalMetadata> {
     let pool = (*pool).clone();
     tauri::async_runtime::spawn_blocking(move || {
         let start = Instant::now();
-        let conn = pool.get().ok()?;
-        let meta = get_local_metadata_internal(size, &name, &conn);
-        diag_log("get_local_metadata", start.elapsed());
-        meta
+        let mut results = HashMap::with_capacity(items.len());
+        let conn = match pool.get() {
+            Ok(c) => c,
+            Err(_) => return results,
+        };
+        for item in items {
+            if let Some(meta) = get_local_metadata_internal(item.size, &item.name, &conn) {
+                results.insert(item.id, meta);
+            }
+        }
+        diag_log("get_local_metadata_batch", start.elapsed());
+        results
     })
     .await
-    .ok()?
+    .unwrap_or_default()
 }
 
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
@@ -431,7 +462,7 @@ pub fn run() {
             APP_HANDLE.set(app.handle().clone()).ok();
 
             // Best-effort, read-only SQLite pool for the local tag lookup
-            // (`get_local_metadata`). If `music_database.db` doesn't exist,
+            // (`get_local_metadata_batch`). If `music_database.db` doesn't exist,
             // `SqliteConnectionManager::file` will happily create an empty one
             // with no `tracks` table — `get_local_metadata_internal` already
             // degrades to `None` in that case, so this is never fatal.
@@ -503,7 +534,7 @@ pub fn run() {
             register_download_path,
             get_stream_url,
             update_buffer_settings,
-            get_local_metadata,
+            get_local_metadata_batch,
             update_stream_token, clear_stream_token,
             update_minimize_to_tray,
             clear_local_cache,

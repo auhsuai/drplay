@@ -272,8 +272,8 @@ export const MainContent = React.memo(function MainContent({
   }, [currentFolderId]);
 
   // DB tag lookup — ONLY for rows visible in this "My Drive" list. Reads real
-  // title/artist tags from the local SQLite DB (see get_local_metadata in
-  // lib.rs); no R2, no cover art, no network fetch. Every other tab (Home,
+  // title/artist tags from the local SQLite DB (see get_local_metadata_batch
+  // in lib.rs); no R2, no cover art, no network fetch. Every other tab (Home,
   // Liked Songs, Playlists) keeps showing the plain Drive filename.
   const tagMetadataRef = useRef<Map<string, DbTagMetadata>>(new Map());
   const [, forceTagRerender] = useState(0);
@@ -284,34 +284,30 @@ export const MainContent = React.memo(function MainContent({
     );
     if (trackItems.length === 0) return;
 
-    const controller = new AbortController();
-    const CONCURRENCY = 6;
+    // One batched IPC call for the whole page instead of one invoke() per
+    // uncached row (was throttled 6-wide, so up to ceil(50/6)=9 sequential
+    // waves of round-trips for a full 50-item page). Tauri's invoke bridge
+    // has real per-call serialize/copy/deserialize overhead, so N separate
+    // small calls cost strictly more than 1 call carrying all N lookups —
+    // this is the same N+1 pattern GraphQL's DataLoader batches away, just
+    // applied to a Tauri command instead of a resolver. Bounded and safe to
+    // send in one shot: currentItems is already paginated to `itemsPerPage`
+    // (50) rows, nowhere near the payload sizes where batching itself would
+    // become the bottleneck.
+    let cancelled = false;
+    const items = trackItems.map(item => ({
+      id: item.trackInfo!.id,
+      size: item.trackInfo!.size ?? 0,
+      name: item.trackInfo!.originalName ?? 'audio.mp3',
+    }));
 
-    async function runWithConcurrency<T>(list: T[], limit: number, fn: (item: T) => Promise<void>) {
-      const executing = new Set<Promise<void>>();
-      for (const item of list) {
-        if (controller.signal.aborted) break;
-        const p = fn(item).finally(() => executing.delete(p));
-        executing.add(p);
-        if (executing.size >= limit) {
-          await Promise.race(executing);
-        }
-      }
-      await Promise.allSettled(executing);
-    }
-
-    let gotAny = false;
-    runWithConcurrency(trackItems, CONCURRENCY, async (item) => {
-      const id = item.trackInfo!.id;
-      try {
-        const data = await invoke<{ title?: string; artist?: string; duration?: number } | null>(
-          'get_local_metadata',
-          {
-            size: item.trackInfo!.size ?? 0,
-            name: item.trackInfo!.originalName ?? 'audio.mp3',
-          }
-        );
-        if (controller.signal.aborted) return;
+    invoke<Record<string, { title?: string; artist?: string; duration?: number }>>(
+      'get_local_metadata_batch',
+      { items }
+    ).then(results => {
+      if (cancelled) return;
+      let gotAny = false;
+      for (const [id, data] of Object.entries(results)) {
         if (data?.title) {
           tagMetadataRef.current.set(id, {
             title: data.title,
@@ -320,15 +316,14 @@ export const MainContent = React.memo(function MainContent({
           });
           gotAny = true;
         }
-      } catch (e) {
-        // No DB / no match / IPC unavailable — silently keep the filename.
-        console.warn('[MainContent] tag-lookup-failed', { fileId: id, error: String(e) });
       }
-    }).then(() => {
-      if (!controller.signal.aborted && gotAny) forceTagRerender(n => n + 1);
+      if (gotAny) forceTagRerender(n => n + 1);
+    }).catch(e => {
+      // No DB / no matches / IPC unavailable — silently keep filenames.
+      console.warn('[MainContent] tag-lookup-batch-failed', { count: items.length, error: String(e) });
     });
 
-    return () => controller.abort();
+    return () => { cancelled = true; };
   }, [currentItems]);
 
   const handlePlay = React.useCallback((t: Track) => {

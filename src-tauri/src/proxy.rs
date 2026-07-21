@@ -505,7 +505,14 @@ async fn handle_stream(
             total_size,
             content_type: resolved_content_type.clone(),
         }))).await;
-        FAIL_COUNT.store(0, Ordering::Relaxed);
+        // NOTE: FAIL_COUNT is intentionally NOT reset here. This point is
+        // only a metadata-probe success (often served from cache_store,
+        // never touching Drive at all) — resetting the circuit breaker's
+        // failure memory this early meant a request that got PAST the probe
+        // but then immediately hit a real, ongoing rate-limit during the
+        // actual byte fetch would never let fail_count climb past 1, which
+        // undermined the backoff escalation below. The real reset now lives
+        // at the genuine fetch-success point in the retry loop below.
     }
 
     let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
@@ -658,6 +665,12 @@ async fn handle_stream(
                     // global rate-limit cooldown so subsequent requests (e.g. an
                     // auto-skip to the next track) are not immediately 503'd.
                     GLOBAL_BACKOFF_UNTIL.store(0, Ordering::Release);
+                    // This is the genuine "we actually fetched real bytes from
+                    // Drive" success point — the correct place to reset the
+                    // circuit breaker's failure memory (moved from the earlier
+                    // metadata-probe-success point above, which fired even when
+                    // the subsequent byte fetch went on to fail).
+                    FAIL_COUNT.store(0, Ordering::Relaxed);
                     current_offset = fetch_end_slice;
                 }
                 None => {
