@@ -373,13 +373,24 @@ struct LocalMetadataQuery {
 // the blocking thread pool, not a Tokio worker thread — same reasoning as
 // before, but now it's ONE checkout for the whole batch instead of one per
 // item, which is also strictly cheaper than the old per-item version.
+//
+// MUST return `Result<T, E>`: Tauri 2 requires any async command that takes
+// a reference-typed input (`tauri::State<'_, _>` borrows from the invoke
+// message) to return `Result` — its own `AsyncCommandMustReturnResult` trait
+// bound only has an impl for `Result<A, B>`. Returning a bare `HashMap<..>`
+// here compiled fine everywhere in THIS sandbox's checks (no cargo/webkit2gtk
+// available to catch it) but fails real compilation with E0277 + a follow-on
+// E0597 lifetime error on Windows CI. This never actually returns `Err` in
+// practice (every internal failure already degrades to an empty/partial
+// map, by design) — the `Result` wrapper exists purely to satisfy this
+// compile-time requirement, not to signal a new error case.
 #[tauri::command]
 async fn get_local_metadata_batch(
     items: Vec<LocalMetadataQuery>,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> HashMap<String, LocalMetadata> {
+) -> Result<HashMap<String, LocalMetadata>, String> {
     let pool = (*pool).clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let results = tauri::async_runtime::spawn_blocking(move || {
         let start = Instant::now();
         let mut results = HashMap::with_capacity(items.len());
         let conn = match pool.get() {
@@ -395,7 +406,8 @@ async fn get_local_metadata_batch(
         results
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_default();
+    Ok(results)
 }
 
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
