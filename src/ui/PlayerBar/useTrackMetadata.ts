@@ -21,7 +21,6 @@ function classifyTrackMetaError(err: unknown): string {
 
 export interface TrackMetadataAPI {
   realTitle: string;
-  realArtist: string;
   isLiked: boolean;
   toggleFavorite: () => Promise<void>;
   tauriBufferEndRef: React.MutableRefObject<number | null>;
@@ -40,7 +39,6 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
   const { currentTrack, dispatch, progressFillRef, currentTimeTextRef, bufferFillRef, setDuration } = params;
 
   const [realTitle, setRealTitle] = useState('');
-  const [realArtist, setRealArtist] = useState('');
   const [isLiked, setIsLiked] = useState(false);
   const tauriBufferEndRef = useRef<number | null>(null);
 
@@ -86,7 +84,6 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
   useEffect(() => {
     if (currentTrack) {
       setRealTitle(currentTrack.title);
-      setRealArtist(currentTrack.artist || '');
       dispatch({ type: 'CLEAR_ERROR' });
 
       const restoreTime = currentTrack.restoreTime;
@@ -151,7 +148,6 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
 
   return {
     realTitle,
-    realArtist,
     isLiked,
     toggleFavorite,
     tauriBufferEndRef,
