@@ -546,6 +546,33 @@ pub fn run() {
                 // DB_LOOKUP_SEMAPHORE's permit count are the same named constant
                 // instead of two independently-drifting magic numbers.
                 if let Ok(pool) = Pool::builder().max_size(DB_POOL_MAX_SIZE).build(manager) {
+                    // Best-effort index creation for get_local_metadata_batch's
+                    // `WHERE size_bytes = ?` / dedup-by-id lookups. This existed
+                    // before (commit 50f22b0 added idx_tracks_size_bytes,
+                    // 36ffce8 added idx_tracks_id) specifically because every
+                    // lookup was a full table scan without it, then was removed
+                    // as unintentional collateral damage during the R2/SQLite
+                    // cover-art pipeline removal (commit 6c25c9b deleted the
+                    // whole surrounding block, not a deliberate call that the
+                    // index was no longer needed) and never restored when the
+                    // DB-only tag lookup came back. Confirmed still missing via
+                    // real timing data from get_local_metadata_batch's own
+                    // diag_log: ~83-101ms for a batch of up to 50 items on a
+                    // real user's multi-GB tracks table -- consistent with scan
+                    // cost, not the sub-millisecond-to-low-single-digit-ms an
+                    // indexed lookup would take. `IF NOT EXISTS` makes this
+                    // idempotent/safe on every startup; failure (fresh install
+                    // with no `tracks` table yet, locked file, etc.) is logged
+                    // and non-fatal -- get_local_metadata_internal already
+                    // degrades to `None` if the table doesn't exist regardless.
+                    if let Ok(conn) = pool.get() {
+                        if let Err(e) = conn.execute_batch(
+                            "CREATE INDEX IF NOT EXISTS idx_tracks_size_bytes ON tracks(size_bytes); \
+                             CREATE INDEX IF NOT EXISTS idx_tracks_id ON tracks(id);"
+                        ) {
+                            eprintln!("[lib] tracks-index-migration-failed (non-fatal): {}", e);
+                        }
+                    }
                     app.manage(pool);
                 }
             }
