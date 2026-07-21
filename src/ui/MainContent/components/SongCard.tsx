@@ -1,27 +1,13 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import { Folder, Music, Square, CheckSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { DriveItem, Track } from "../../../App";
-import { getTrackMetadata } from "../../../utils/metadata";
 import { MoreMenu } from "../../components/MoreMenu";
 
-export const coverImageCache = new Map<string, string>();
-const COVER_CACHE_MAX = 500; // ~50KB max (100 bytes/cover URL string)
-
-function classifyCardError(err: unknown): { name: string; message: string } {
-  if (err instanceof Error) {
-    return { name: err.name, message: err.message };
-  }
-  return { name: "UnknownError", message: String(err) };
-}
-
-function formatDuration(seconds: number): string {
-  if (!seconds) return "00:00:00";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-}
+// This app streams files straight from Google Drive: there is no local tag
+// database and no cover-art pipeline, so a song row shows exactly what Drive
+// already gives us for free — the file name (as `item.title`) and its size.
+// No per-card metadata fetch, no cover image.
 
 function formatSize(bytes: number): string {
   if (!bytes) return "0 MB";
@@ -49,45 +35,35 @@ interface SongCardProps {
   hideMenu?: boolean;
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
-  /** Windowing-injected cover. When provided the card MUST NOT self-fetch. */
-  coverUrl?: string | null;
 }
 
-export const SongCard = React.memo(function SongCard({ 
-  item, 
-  onPlay, 
-  onOpenFolder, 
-  token, 
-  currentFolderId, 
-  currentFolderName, 
-  isHighlighted, 
-  highlightTrigger, 
-  folderHistory, 
-  onRefresh, 
-  onRemoveItem, 
-  isPlaying, 
-  isSelectionMode, 
-  isSelected, 
-  onToggleSelection, 
+export const SongCard = React.memo(function SongCard({
+  item,
+  onPlay,
+  onOpenFolder,
+  token,
+  currentFolderId,
+  currentFolderName,
+  isHighlighted,
+  highlightTrigger,
+  folderHistory,
+  onRefresh,
+  onRemoveItem,
+  isPlaying,
+  isSelectionMode,
+  isSelected,
+  onToggleSelection,
   onEnableSelectionMode,
   hideMenu,
   onBulkMoveClick,
   onBulkDeleteClick,
-  coverUrl: injectedCoverUrl
 }: SongCardProps) {
   const { t } = useTranslation();
-  const [coverUrl, setCoverUrl] = useState<string | null>(() => {
-    if (injectedCoverUrl !== undefined) return injectedCoverUrl;
-    return coverImageCache.get(item.id) ?? null;
-  });
-  const metadataRef = useRef({ title: item.title, artist: null as string | null, duration: 0, size: 0 });
-  const [, forceRender] = useState(0);
   const cardRef = React.useRef<HTMLDivElement>(null);
   const [isFlashOn, setIsFlashOn] = useState(false);
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
-  const [shouldFetch] = useState(true);
 
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {
@@ -95,11 +71,11 @@ export const SongCard = React.memo(function SongCard({
       const headerHeight = 160;
       const playerBarHeight = 85;
       const isVisible = rect.top >= headerHeight && rect.bottom <= (window.innerHeight - playerBarHeight);
-      
+
       if (!isVisible) {
         cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-      
+
       let count = 0;
       setIsFlashOn(true);
       const interval = setInterval(() => {
@@ -110,7 +86,7 @@ export const SongCard = React.memo(function SongCard({
           setIsFlashOn(false);
         }
       }, 300);
-      
+
       return () => {
         clearInterval(interval);
         setIsFlashOn(false);
@@ -118,85 +94,10 @@ export const SongCard = React.memo(function SongCard({
     }
   }, [isHighlighted, highlightTrigger]);
 
-  // Keep the injected cover in sync when the windowing layer provides/clears it.
-  React.useEffect(() => {
-    if (typeof injectedCoverUrl === 'string') {
-      setCoverUrl(injectedCoverUrl);
-    }
-  }, [injectedCoverUrl]);
-
-  React.useEffect(() => {
-    if (!shouldFetch || item.isFolder || !token) return;
-
-    const controller = new AbortController();
-    let isMounted = true;
-    let objectUrl: string | null = null;
-
-      const fetchMetadata = async () => {
-        try {
-        performance.mark(`meta-fetch-${item.id}`);
-        const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
-        performance.measure(`meta-fetch-${item.id}`, `meta-fetch-${item.id}`);
-        if (!isMounted) return;
-        const newMeta = {
-          title: metadata.title || item.title,
-          artist: metadata.artist || null,
-          duration: metadata.duration || 0,
-          size: metadata.size || 0,
-        };
-        const old = metadataRef.current;
-        if (newMeta.title !== old.title || newMeta.artist !== old.artist || newMeta.duration !== old.duration || newMeta.size !== old.size) {
-          metadataRef.current = newMeta;
-          forceRender(n => n + 1);
-        }
-
-        if (metadata.coverUrl) {
-          coverImageCache.set(item.id, metadata.coverUrl);
-          if (coverImageCache.size > COVER_CACHE_MAX) {
-            const oldest = coverImageCache.keys().next().value;
-            if (oldest !== undefined) coverImageCache.delete(oldest);
-          }
-        }
-        if (typeof injectedCoverUrl !== 'string') {
-          if (metadata.coverUrl) {
-            setCoverUrl(metadata.coverUrl);
-          } else if (metadata.pictureData && metadata.pictureFormat) {
-            const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
-            objectUrl = URL.createObjectURL(blob);
-            setCoverUrl(objectUrl);
-          }
-        }
-      } catch (e) {
-        const { name, message } = classifyCardError(e);
-        console.warn('[SongCard] Failed to load track metadata', { id: item.id, name, message });
-      }
-    };
-
-    fetchMetadata();
-
-    const handleMetadataUpdated = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail?.fileId === item.id) {
-        if (objectUrl) {
-          URL.revokeObjectURL(objectUrl);
-          objectUrl = null;
-        }
-        fetchMetadata();
-      }
-    };
-
-    window.addEventListener('metadata-updated', handleMetadataUpdated);
-
-    return () => {
-      isMounted = false;
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      window.removeEventListener('metadata-updated', handleMetadataUpdated);
-    };
-  }, [item.id, token, injectedCoverUrl, shouldFetch]);
+  const size = item.trackInfo?.size ?? 0;
 
   return (
-    <div 
+    <div
       className="relative group/card w-full"
       style={{
         contentVisibility: 'auto' as any,
@@ -209,11 +110,7 @@ export const SongCard = React.memo(function SongCard({
           if (isSelectionMode) {
             onToggleSelection?.();
           } else {
-            item.isFolder ? onOpenFolder(item.id, metadataRef.current.title) : onPlay({
-              ...item.trackInfo!,
-              title: metadataRef.current.title || item.trackInfo!.title,
-              artist: metadataRef.current.artist || item.trackInfo!.artist
-            });
+            item.isFolder ? onOpenFolder(item.id, item.title) : onPlay(item.trackInfo!);
           }
         }}
         onContextMenu={(e) => {
@@ -242,9 +139,7 @@ export const SongCard = React.memo(function SongCard({
         </div>
       )}
       <div className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-500' : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!bg-[#4285F4]/10 !text-[#4285F4]' : 'text-gray-400'}`}`}>
-        {coverUrl && !item.isFolder ? (
-          <img src={coverUrl} alt="cover" loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
-        ) : item.isFolder ? (
+        {item.isFolder ? (
           <Folder className="w-6 h-6" fill="currentColor" />
         ) : (
           <Music className="w-6 h-6 opacity-80" />
@@ -252,27 +147,17 @@ export const SongCard = React.memo(function SongCard({
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">
         <h3 className={`font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!text-[#4285F4]' : 'text-gray-800 dark:text-gray-200'}`}>
-          {metadataRef.current.title}
+          {item.title}
         </h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           {item.isFolder ? (
             <span className="truncate">{t('drive.folders')}</span>
           ) : (
             <div className="flex items-center truncate">
-              {(metadataRef.current.duration > 0 || metadataRef.current.size > 0) && (
-                <>
-                  <span className="text-[11px] font-medium tracking-wide">
-                    {formatDuration(metadataRef.current.duration)}
-                  </span>
-                  {metadataRef.current.size > 0 && (
-                    <>
-                      <span className="mx-2 text-gray-300 dark:text-gray-600">•</span>
-                      <span className="text-[11px] font-medium tracking-wide">
-                        {formatSize(metadataRef.current.size)}
-                      </span>
-                    </>
-                  )}
-                </>
+              {size > 0 && (
+                <span className="text-[11px] font-medium tracking-wide">
+                  {formatSize(size)}
+                </span>
               )}
             </div>
           )}
@@ -280,9 +165,9 @@ export const SongCard = React.memo(function SongCard({
       </div>
       {!hideMenu && (
         <div className={`transition-opacity ml-2 shrink-0 ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-          <MoreMenu 
-            track={item.trackInfo} 
-            driveItem={item} 
+          <MoreMenu
+            track={item.trackInfo}
+            driveItem={item}
             token={token}
             currentFolderId={currentFolderId}
             currentFolderName={currentFolderName}
@@ -310,7 +195,6 @@ export const SongCard = React.memo(function SongCard({
   );
 }, (prev, next) => {
   return prev.item.id === next.item.id &&
-         prev.coverUrl === next.coverUrl &&
          prev.isPlaying === next.isPlaying &&
          prev.isSelected === next.isSelected &&
          prev.isSelectionMode === next.isSelectionMode &&
