@@ -1,6 +1,6 @@
 import { memo, useRef, useState, useEffect, useReducer, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, Maximize2, RefreshCw } from "lucide-react";
+import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from '../components/MoreMenu';
 import { formatTime } from "../../utils/formatTime";
@@ -19,7 +19,7 @@ function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; cla
   return <Icon className={`${className} text-[#4285F4]`} />;
 }
 
-function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
+function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode }: PlayerBarProps) {
   const { t } = useTranslation();
 
   // 1. Player state
@@ -119,7 +119,6 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     onNextTrackRef,
     onPrevTrackRef,
     onTogglePlayMode,
-    onExpandNowPlaying,
     dispatch,
     t,
     playerState,
@@ -177,14 +176,13 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
       {/* Track Info (Left) */}
       <div className="flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2">
-        <div 
-          className="flex items-center gap-2 sm:gap-4 cursor-pointer group py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors min-w-0 flex-1 max-w-[320px]"
-          onClick={() => currentTrack && onExpandNowPlaying()}
+        <div
+          className="flex items-center gap-2 sm:gap-4 py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl min-w-0 flex-1 max-w-[320px]"
           onContextMenu={(e) => {
             e.preventDefault();
             if (currentTrack?.id) {
                window.dispatchEvent(new CustomEvent('locate-file', {
-                 detail: { 
+                 detail: {
                    fileId: currentTrack.id,
                    parentId: currentTrack.parentId,
                    parentName: currentTrack.parentName
@@ -192,26 +190,16 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
                }));
             }
           }}
-          title={t('player.view_now_playing', 'Xem Đang Phát')}
         >
           <div className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden ${currentTrack ? 'bg-gray-200 dark:bg-[#121212] text-gray-400' : 'bg-gray-200 dark:bg-[#121212]'}`}>
             {currentTrack ? (
-              <Music className="w-6 h-6 opacity-80 transition-transform duration-300 group-hover:scale-110" />
+              <Music className="w-6 h-6 opacity-80" />
             ) : null}
-            
-            {currentTrack && (
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity duration-200">
-                <Maximize2 className="w-5 h-5 text-white" />
-              </div>
-            )}
           </div>
           <div className="overflow-hidden flex-1">
-            <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-[#4285F4] transition-colors">
+            <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
               {currentTrack ? trackMetadata.realTitle : t('player.no_track')}
             </h4>
-            <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2 overflow-hidden whitespace-nowrap text-ellipsis">
-              <span className="truncate">{currentTrack ? (trackMetadata.realArtist || t('unknown_artist')) : ""}</span>
-            </p>
           </div>
         </div>
         
