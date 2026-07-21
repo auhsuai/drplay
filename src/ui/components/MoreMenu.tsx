@@ -207,7 +207,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
   const handleDownloadClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!track) return;
-    setDownloadFileName(`${track.title} - ${track.artist || 'Unknown'}`);
+    setDownloadFileName(track.title);
     setShowDownloadDialog(true);
     setIsOpen(false);
   };
