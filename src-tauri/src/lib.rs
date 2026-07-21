@@ -34,12 +34,13 @@ const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
 pub mod protocol;
 pub mod slice_cache;
 
-// NOTE: this app is intentionally a pure Google-Drive audio streamer. There is
-// no local metadata/cover database and no Cloudflare R2 integration — those
-// were removed along with the `r2` and `thumbnail` modules. Every track is
-// identified purely by its Drive file id; title/artist shown in the UI come
-// straight from the Drive filename (see the frontend), never from a scanned
-// tag database.
+// NOTE: this app streams audio straight from Google Drive — there is no
+// Cloudflare R2 integration and no cover-art pipeline (removed along with the
+// `r2` and `thumbnail` modules; see protocol.rs). There IS a local read-only
+// SQLite tag lookup (`get_local_metadata` below) used ONLY to show real
+// title/artist tags for rows in the "My Drive" list — everywhere else in the
+// UI (Home, Liked Songs, Playlists, the player bar) still shows the Drive
+// filename, never a DB tag.
 
 #[command]
 async fn update_stream_token(token: String) -> Result<(), String> {
@@ -260,6 +261,94 @@ fn update_buffer_settings(seconds: usize) {
     GLOBAL_BUFFER_SECONDS.store(seconds, Ordering::SeqCst);
 }
 
+// --- Local (DB-only) tag lookup for the "My Drive" list ---------------------
+// Read-only: never writes to the DB, never touches R2, never serves cover art.
+// If `music_database.db` is missing or lacks the expected columns, every call
+// below degrades gracefully to `None` and the frontend falls back to the
+// Drive filename — this is optional enrichment, not a hard dependency.
+
+#[derive(serde::Serialize, Clone)]
+struct LocalMetadata {
+    id: String,
+    title: String,
+    artist: String,
+    album: String,
+    duration: f64,
+    file_type: String,
+}
+
+pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
+    if let Ok(mut exe_path) = std::env::current_exe() {
+        exe_path.pop();
+        let path = exe_path.join("music_database.db");
+        if path.exists() { return Some(path); }
+    }
+    if std::path::Path::new("music_database.db").exists() {
+        Some(std::path::PathBuf::from("music_database.db"))
+    } else if std::path::Path::new("../music_database.db").exists() {
+        Some(std::path::PathBuf::from("../music_database.db"))
+    } else {
+        None
+    }
+}
+
+// Dedup by file size (Drive doesn't give us a stable local row id), then
+// prefer whichever candidate's file_path/title actually matches the file name
+// — mirrors how the frontend already identifies a track (size + name).
+fn get_local_metadata_internal(
+    size: i64,
+    name: &str,
+    conn: &rusqlite::Connection,
+) -> Option<LocalMetadata> {
+    let has_file_type = HAS_FILE_TYPE.get_or_init(|| {
+        conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok()
+    });
+
+    let query = if *has_file_type {
+        "SELECT title, artist, album, duration, file_type, id, file_path FROM tracks WHERE size_bytes = ?"
+    } else {
+        "SELECT title, artist, album, duration, '', id, file_path FROM tracks WHERE size_bytes = ?"
+    };
+
+    let mut stmt = conn.prepare(query).ok()?;
+    let mut rows = stmt.query([size]).ok()?;
+
+    let mut first_match = None;
+    while let Ok(Some(row)) = rows.next() {
+        let file_path: String = row.get(6).unwrap_or_default();
+        let meta = LocalMetadata {
+            title: row.get(0).unwrap_or_default(),
+            artist: row.get(1).unwrap_or_default(),
+            album: row.get(2).unwrap_or_default(),
+            duration: row.get(3).unwrap_or_default(),
+            file_type: row.get(4).unwrap_or_default(),
+            id: row.get(5).unwrap_or_default(),
+        };
+
+        if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
+            return Some(meta);
+        }
+        if first_match.is_none() {
+            first_match = Some(meta);
+        }
+    }
+
+    first_match
+}
+
+#[tauri::command]
+fn get_local_metadata(
+    size: i64,
+    name: String,
+    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
+) -> Option<LocalMetadata> {
+    let start = Instant::now();
+    let conn = pool.get().ok()?;
+    let meta = get_local_metadata_internal(size, &name, &conn);
+    diag_log("get_local_metadata", start.elapsed());
+    meta
+}
+
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
 // Diagnostic: call counter for IPC timing
 // Always log during profiling — removed the modulo-50 sampling.
@@ -300,6 +389,7 @@ async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
 }
 
 pub static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+static HAS_FILE_TYPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -321,6 +411,21 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
+
+            // Best-effort, read-only SQLite pool for the local tag lookup
+            // (`get_local_metadata`). If `music_database.db` doesn't exist,
+            // `SqliteConnectionManager::file` will happily create an empty one
+            // with no `tracks` table — `get_local_metadata_internal` already
+            // degrades to `None` in that case, so this is never fatal.
+            {
+                use r2d2_sqlite::SqliteConnectionManager;
+                use r2d2::Pool;
+                let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
+                let manager = SqliteConnectionManager::file(&db_path);
+                if let Ok(pool) = Pool::new(manager) {
+                    app.manage(pool);
+                }
+            }
 
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
@@ -380,6 +485,7 @@ pub fn run() {
             register_download_path,
             get_stream_url,
             update_buffer_settings,
+            get_local_metadata,
             update_stream_token, clear_stream_token,
             update_minimize_to_tray,
             clear_local_cache,
@@ -400,4 +506,77 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE tracks (
+                id TEXT, title TEXT, artist TEXT, album TEXT,
+                duration REAL, file_path TEXT,
+                file_type TEXT, size_bytes INTEGER
+            )",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    // Dedup by size: a track of the same byte size is matched, preferring a
+    // name/title match, else the first row.
+    #[test]
+    fn dedup_by_size_prefers_name() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["AAA", "Song A", "Artist A", 200.0, "/content/drive/v1/files/AAA", 1000i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["BBB", "Song B", "Artist B", 200.0, "/content/drive/v1/files/BBB", 1000i64],
+        )
+        .unwrap();
+
+        let m = get_local_metadata_internal(1000, "Song A", &conn).unwrap();
+        assert_eq!(m.id, "AAA");
+        assert_eq!(m.artist, "Artist A");
+    }
+
+    #[test]
+    fn legacy_drive_path_still_reads() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["ZZZ", "My Song", "Someone", 200.0, "/content/drive/v1/files/ZZZ?alt=media", 1000i64],
+        )
+        .unwrap();
+
+        let m = get_local_metadata_internal(1000, "My Song", &conn).unwrap();
+        assert_eq!(m.id, "ZZZ");
+    }
+
+    #[test]
+    fn no_match_returns_first_row_as_fallback() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params!["ONLY", "Unrelated Name", "Artist", 200.0, "/content/drive/v1/files/ONLY", 2000i64],
+        )
+        .unwrap();
+
+        let m = get_local_metadata_internal(2000, "totally-different-name.mp3", &conn).unwrap();
+        assert_eq!(m.id, "ONLY");
+    }
+
+    #[test]
+    fn missing_size_returns_none() {
+        let conn = setup();
+        assert!(get_local_metadata_internal(999_999, "anything.mp3", &conn).is_none());
+    }
 }
