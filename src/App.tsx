@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./ui/Sidebar/Sidebar";
-import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
 import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
 import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
 import { TrashScreen } from "./ui/Settings/TrashScreen";
@@ -185,11 +184,6 @@ function App() {
   const stableHandleNextTrack = useCallback(handleNextTrack, [handleNextTrack]);
   const stableHandlePrevTrack = useCallback(handlePrevTrack, [handlePrevTrack]);
   const stableHandleTogglePlayMode = useCallback(handleTogglePlayMode, [handleTogglePlayMode]);
-  const onExpandNowPlaying = useCallback(() => {
-    setIsNowPlayingOpen(prev => !prev);
-  }, []);
-
-
 
   const dbFiles = useLiveQuery(
     () => {
@@ -278,7 +272,6 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [highlightedFileId, setHighlightedFileId] = useState<{id: string, ts: number} | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
-  const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(() => {
     const saved = localStorage.getItem("drplay_minimize_to_tray");
     return saved !== null ? saved === "true" : true;
@@ -667,42 +660,20 @@ function App() {
               )}
             </Suspense>
 
-            <div className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? 'h-0 overflow-hidden pointer-events-none opacity-0' : ''}`}>
-              <PlayerBar
-                currentTrack={currentTrack}
-                loadNonce={loadNonce}
-                isPlaying={isPlaying}
-                onTogglePlay={stableHandleTogglePlay}
-                onNextTrack={stableHandleNextTrack}
-                onPrevTrack={stableHandlePrevTrack}
-                isDownloading={isDownloading}
-                playMode={playMode}
-                onTogglePlayMode={stableHandleTogglePlayMode}
-                onExpandNowPlaying={onExpandNowPlaying}
-              />
-            </div>
+            <PlayerBar
+              currentTrack={currentTrack}
+              loadNonce={loadNonce}
+              isPlaying={isPlaying}
+              onTogglePlay={stableHandleTogglePlay}
+              onNextTrack={stableHandleNextTrack}
+              onPrevTrack={stableHandlePrevTrack}
+              isDownloading={isDownloading}
+              playMode={playMode}
+              onTogglePlayMode={stableHandleTogglePlayMode}
+            />
           </div>
         </div>
-        
-        {/* Now Playing Full Screen Overlay */}
-        <div
-          className={`fixed inset-0 z-[9999] bg-white dark:bg-[#121212] flex flex-col transition-transform duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${isNowPlayingOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none'
-            }`}
-        >
-          <NowPlayingView
-            currentTrack={currentTrack}
-            isPlaying={isPlaying}
-            onTogglePlay={stableHandleTogglePlay}
-            onNextTrack={stableHandleNextTrack}
-            onPrevTrack={stableHandlePrevTrack}
-            playMode={playMode}
-            onTogglePlayMode={stableHandleTogglePlayMode}
-            onBack={() => setIsNowPlayingOpen(false)}
-            isOpen={isNowPlayingOpen}
-            token={accessToken}
-          />
-        </div>
-        
+
         <GlobalContextMenu />
 
         {showRateLimitModal && (
