@@ -22,7 +22,6 @@ interface UsePlaybackControlParams {
   onNextTrackRef: React.MutableRefObject<() => void>;
   onPrevTrackRef: React.MutableRefObject<() => void>;
   onTogglePlayMode: () => void;
-  onExpandNowPlaying: () => void;
   dispatch: React.Dispatch<PlayerAction>;
   t: TFunction;
   playerState: { error: { type: string; text: string } | null; manualResume: boolean; pendingResumeTime: number | null };
@@ -48,7 +47,7 @@ export interface PlaybackControlAPI {
 }
 
 export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackControlAPI {
-  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, onExpandNowPlaying, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, audioRef2, activeAudioIndexRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef } = params;
+  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, audioRef2, activeAudioIndexRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef } = params;
 
   const { error: errorInfo, pendingResumeTime } = playerState;
   const currentTrackRef = useRef(currentTrack);
@@ -62,7 +61,6 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   // same ref object whose .current is always the current handleNextClick/handlePrevClick.
   const onTogglePlayRef = useRef(onTogglePlay);
   const onTogglePlayModeRef = useRef(onTogglePlayMode);
-  const onToggleNowPlayingRef = useRef(onExpandNowPlaying);
   const isPlayingRef = useRef(isPlaying);
   const errorInfoRef = useRef(errorInfo);
   const handleManualResumeRef = useRef<(() => void) | null>(null);
@@ -414,15 +412,13 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
     onNextTrackRef.current = handleNextClick;
     onPrevTrackRef.current = handlePrevClick;
     onTogglePlayModeRef.current = onTogglePlayMode;
-    onToggleNowPlayingRef.current = onExpandNowPlaying;
-  }, [onTogglePlay, onNextTrack, onPrevTrack, onTogglePlayMode, onExpandNowPlaying, handleNextClick, handlePrevClick]);
+  }, [onTogglePlay, onNextTrack, onPrevTrack, onTogglePlayMode, handleNextClick, handlePrevClick]);
 
   const callbackRefs: CallbackRefs = {
     onTogglePlayRef,
     onNextTrackRef,
     onPrevTrackRef,
     onTogglePlayModeRef,
-    onToggleNowPlayingRef,
     handleManualResumeRef,
     toastDismissRef: { current: null },
   };
