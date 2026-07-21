@@ -46,6 +46,7 @@ tokio-stream = "0.1.15"
 async-stream = "0.3.5"
 bytes = "1.6.0"
 uuid = { version = "1.8.0", features = ["v4"] }
+rand = "0.8"
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
 walkdir = "2.5.0"
 
