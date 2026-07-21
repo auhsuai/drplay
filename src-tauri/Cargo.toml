@@ -33,6 +33,9 @@ base64 = "0.22.1"
 url = "2.5.0"
 reqwest = { version = "0.12.4", features = ["json", "stream", "rustls-tls"] }
 open = "5.1.2"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.24.0"
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3.30"
 tiny_http = "0.12.0"
