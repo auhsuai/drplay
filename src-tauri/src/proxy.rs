@@ -7,6 +7,7 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
 use tauri::Emitter;
@@ -60,6 +61,38 @@ fn compute_cooldown_secs(fail_count: u32) -> u64 {
         .checked_shl(fail_count.min(COOLDOWN_EXP_CAP) as u32)
         .unwrap_or(COOLDOWN_MAX_SECS)
         .min(COOLDOWN_MAX_SECS)
+}
+
+/// AWS "Full Jitter": sleep a RANDOM duration in `[0, computed_delay]` instead
+/// of `computed_delay` itself. Plain exponential backoff alone still lets
+/// every concurrent retrier (the main fetch task plus up to
+/// `PREFETCH_SEMAPHORE`'s 4 background workers, all hitting the same
+/// transient Drive error at roughly the same time) wake up at the exact same
+/// instants — 1s, 2s, 4s later — which just re-synchronizes into another
+/// burst against Drive instead of spreading load out. Full Jitter is the
+/// simplest of the three jittered strategies AWS compared and performed
+/// within noise of the best ("Decorrelated Jitter") in their load tests.
+/// Source: "Exponential Backoff And Jitter", AWS Architecture Blog (Marc
+/// Brooker, 2015) — https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+fn full_jitter(computed_delay: Duration) -> Duration {
+    let upper_ms = computed_delay.as_millis().max(1) as u64;
+    let jittered_ms = rand::thread_rng().gen_range(0..=upper_ms);
+    Duration::from_millis(jittered_ms)
+}
+
+/// AWS "Equal Jitter": keep HALF the computed delay fixed, randomize only the
+/// other half (`sleep = delay/2 + random(0, delay/2)`). Used instead of
+/// `full_jitter` specifically for the GLOBAL rate-limit cooldown below,
+/// because `GLOBAL_BACKOFF_UNTIL` is a circuit-breaker "quiet period" floor
+/// checked by every concurrent stream request — unlike one request's own
+/// short retry loop, jittering it all the way down to near-zero would defeat
+/// the point of having a minimum cooldown after repeated failures at all.
+/// Source: same AWS post cited on `full_jitter`.
+fn equal_jitter(computed_delay: Duration) -> Duration {
+    let total_ms = computed_delay.as_millis().max(1) as u64;
+    let half_ms = total_ms / 2;
+    let jitter_ms = rand::thread_rng().gen_range(0..=(total_ms - half_ms));
+    Duration::from_millis(half_ms + jitter_ms)
 }
 
 /// Trim a cached slice to the requested byte window: drop `skip` leading bytes
@@ -534,7 +567,8 @@ async fn handle_stream(
                         break;
                     }
                     Err(DriveErr::Rate) => {
-                        tokio::time::sleep(std::time::Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS))).await;
+                        let delay = Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS));
+                        tokio::time::sleep(full_jitter(delay)).await;
                         last_err = Some(DriveErr::Rate);
                     }
                     Err(DriveErr::Auth) => {
@@ -546,7 +580,8 @@ async fn handle_stream(
                         break;
                     }
                     Err(e) => {
-                        tokio::time::sleep(std::time::Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS))).await;
+                        let delay = Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS));
+                        tokio::time::sleep(full_jitter(delay)).await;
                         last_err = Some(e);
                     }
                 }
@@ -621,7 +656,7 @@ async fn handle_stream(
                         _ => {
                             if err == DriveErr::Rate {
                             let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-                            let cooldown = compute_cooldown_secs(fail_count);
+                            let cooldown = equal_jitter(Duration::from_secs(compute_cooldown_secs(fail_count))).as_secs();
                             GLOBAL_BACKOFF_UNTIL.store(
                                     now_epoch_secs() + cooldown,
                                     Ordering::Release,
@@ -735,7 +770,10 @@ async fn handle_stream(
                 Err(e) => {
                     eprintln!("[proxy] prefetch-batch-fail at {first_missing}: {e:?}");
                     if matches!(e, DriveErr::Rate) {
-                        tokio::time::sleep(std::time::Duration::from_secs(PREFETCH_RATE_LIMIT_SLEEP_SECS)).await;
+                        // Jittered: up to 4 background prefetch workers can hit the
+                        // same rate limit at once — a fixed sleep would wake them
+                        // all up in lockstep for the next retry burst.
+                        tokio::time::sleep(full_jitter(Duration::from_secs(PREFETCH_RATE_LIMIT_SLEEP_SECS))).await;
                     }
                 }
             }
@@ -800,10 +838,10 @@ async fn get_total_size(client: &Client, api_url: &str, token: &str) -> Result<(
 
 async fn handle_rate_limit(now: u64) -> Response {
     let fail_count = FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-    let cooldown = {
-        let base = 30u64;
-        base.checked_shl(fail_count.min(4) as u32).unwrap_or(300).min(300)
-    };
+    // Reuse the single source of truth for the cooldown formula (was
+    // previously duplicated inline here with its own copy of the base/cap
+    // constants, which could silently drift from `compute_cooldown_secs`).
+    let cooldown = equal_jitter(Duration::from_secs(compute_cooldown_secs(fail_count))).as_secs();
     GLOBAL_BACKOFF_UNTIL.store(now + cooldown, Ordering::Release);
     (StatusCode::SERVICE_UNAVAILABLE, [("X-Stream-Error-Type", "rate-limited")], "Rate limited — backing off").into_response()
 }
@@ -879,10 +917,55 @@ fn new_cache_store() -> CacheStore {
 #[cfg(test)]
 mod tests {
     use super::content_type_for_ext;
+    use super::{compute_cooldown_secs, equal_jitter, full_jitter};
     use super::{new_cache_store, TrackMeta, TRACK_CACHE_MAX_ENTRIES};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
+
+    #[test]
+    fn full_jitter_stays_within_0_and_delay() {
+        let delay = Duration::from_secs(4);
+        for _ in 0..200 {
+            let d = full_jitter(delay);
+            assert!(d <= delay, "full_jitter produced {d:?} > delay {delay:?}");
+        }
+    }
+
+    #[test]
+    fn full_jitter_of_zero_delay_is_zero() {
+        // computed_delay=0 must not panic (division/range edge case) and must
+        // stay at/near zero.
+        let d = full_jitter(Duration::from_millis(0));
+        assert!(d <= Duration::from_millis(1));
+    }
+
+    #[test]
+    fn equal_jitter_never_drops_below_half_the_delay() {
+        // The whole point of Equal Jitter (vs Full Jitter) for the global
+        // rate-limit cooldown: it must never collapse toward zero.
+        let delay = Duration::from_secs(30);
+        for _ in 0..200 {
+            let d = equal_jitter(delay);
+            assert!(d >= delay / 2, "equal_jitter produced {d:?} < half of {delay:?}");
+            assert!(d <= delay, "equal_jitter produced {d:?} > delay {delay:?}");
+        }
+    }
+
+    #[test]
+    fn compute_cooldown_secs_matches_handle_rate_limit_formula() {
+        // Regression: handle_rate_limit() used to duplicate this formula
+        // inline with its own copy of base/cap/exp-cap constants, which could
+        // silently drift from compute_cooldown_secs. It now calls this
+        // function directly — pin the expected sequence so a future edit to
+        // either the constants or the shift logic is caught here.
+        assert_eq!(compute_cooldown_secs(0), 30);
+        assert_eq!(compute_cooldown_secs(1), 60);
+        assert_eq!(compute_cooldown_secs(2), 120);
+        assert_eq!(compute_cooldown_secs(3), 240);
+        assert_eq!(compute_cooldown_secs(4), 300); // 30<<4=480, clamped to the 300s cap
+        assert_eq!(compute_cooldown_secs(100), 300); // exponent itself is clamped too
+    }
 
     fn assemble_chunks_in_order(chunks: &[(u64, u64, Vec<u8>)]) -> Vec<u8> {
         let mut buffer = Vec::with_capacity(chunks.iter().map(|c| c.2.len()).sum());
