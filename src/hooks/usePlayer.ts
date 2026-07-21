@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { get, set as idbSet } from "../db/kv";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
 import { Track } from "../App"; // Reuse Track type from App.tsx
-import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
@@ -286,12 +285,6 @@ export const usePlayer = (accessToken: string | null) => {
       setIsDownloading(false);
 
       maybePrefetchNextTrack(contextQueue, targetTrack);
-
-      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
-        if (metadata.duration && !isIntentStale(myId)) {
-          setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
-        }
-      }).catch(e => console.warn(`[usePlayer] metadata-prefetch-fail`, classifyPlayerError(e)));
       return;
     }
 
@@ -322,14 +315,6 @@ export const usePlayer = (accessToken: string | null) => {
       setIsDownloading(false);
 
       maybePrefetchNextTrack(contextQueue, targetTrack);
-
-      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName)
-        .then(metadata => {
-          if (metadata.duration && !isIntentStale(myId)) {
-            setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
-          }
-        })
-        .catch(e => console.warn(`[usePlayer] metadata-fetch-fail`, classifyPlayerError(e)));
     } catch (e) {
       if (isIntentStale(myId)) return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
@@ -392,24 +377,16 @@ export const usePlayer = (accessToken: string | null) => {
 
         setIsDownloading(true);
         try {
-          let bitrate = undefined;
           const freshToken = await getValidToken();
           if (isIntentStale(myId)) return;
-          
+
           if (!freshToken) {
             setIsDownloading(false);
             return;
           }
-          try {
-            const metadata = await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName);
-            if (isIntentStale(myId)) return;
-            bitrate = metadata.bitrate;
-          } catch (e) {
-            console.warn(`[usePlayer] bitrate-resume-fail`, classifyPlayerError(e));
-          }
 
           const ext = currentTrack.originalName?.split('.').pop()?.toLowerCase();
-          const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, bitrate, bufferSeconds, ext });
+          const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, bufferSeconds, ext });
           if (isIntentStale(myId)) return;
           
           setCurrentTrack(prev => prev ? { ...prev, streamUrl: url } : prev);
