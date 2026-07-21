@@ -906,7 +906,35 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
     >
       {virtualItems.map((virtualRow) => {
         const item = items[virtualRow.index];
-        if (!item) return null;
+        // `item` can be transiently undefined: the virtualizer (especially
+        // with `directDomUpdates: true`, which lets it update DOM positions
+        // outside React's normal render cycle for scroll performance) can
+        // compute virtual rows for an index before `items` (currentItems,
+        // derived from the Dexie-backed `dbFiles` live query) has caught up
+        // to a just-changed length/order -- e.g. right when a background
+        // Drive page finishes and the coalesced bulkPut fires the live
+        // query's one extra re-sort. Rendering `null` here (the previous
+        // behavior) left a literal blank gap exactly where a row should be
+        // until the next render reconciles -- reported by a user as "a gap
+        // where a file should be, and it's slow to fill in". Rendering a
+        // same-sized placeholder instead keeps the slot visually occupied
+        // (matching `estimateSize: 92`) so a transient mismatch is
+        // invisible instead of a jarring hole, while still registering
+        // with `measureElement` so the virtualizer's own measurement isn't
+        // thrown off by skipping the slot.
+        if (!item) {
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={rowVirtualizer.measureElement}
+              className="pb-2"
+              style={{ position: 'absolute', left: 0, width: '100%' }}
+            >
+              <div className="h-[76px] rounded-xl bg-gray-100 dark:bg-[#1a1b1e] animate-pulse" />
+            </div>
+          );
+        }
         return (
           <div
             key={virtualRow.key}
