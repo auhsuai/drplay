@@ -148,6 +148,18 @@ impl SliceCache {
         }
     }
 
+    // Restored: this was removed as "dead code" in an earlier audit pass
+    // (grep found zero callers under src-tauri/src/), which was WRONG --
+    // its only real caller lives in src-tauri/tests/eviction_stall.rs (a
+    // Cargo integration test, a separate compilation unit from src/, so
+    // that grep never saw it). Removing it silently broke that test's
+    // compilation; this sandbox has no working `cargo build`/`cargo test`
+    // for the full app, so nothing here caught it until this file was
+    // read directly while looking for something else entirely. Restored
+    // to its exact original form (git commit 1a9e6ab).
+    pub fn used_bytes(&self) -> u64 {
+        self.cache.weighted_size()
+    }
 }
 
 struct InflightGuard {
