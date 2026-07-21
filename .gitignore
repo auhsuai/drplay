@@ -32,6 +32,15 @@ src-tauri/target/
 .opencode/
 .gemini/
 .thumbnails/
+# Agentic-workflow scratch/process artifacts (task reports, review packages,
+# implementation plans, codebase-index cache) -- not app source, not
+# referenced by anything the app builds/runs, and prone to going stale
+# (some referenced already-deleted code by the time they were reviewed).
+# Removed the ones that had accumulated; ignored so the same tooling
+# regenerating this namespace for future tasks doesn't get re-tracked.
+.superpowers/
+docs/superpowers/
+.codebase-memory/
 Google_Drive_Music_Scanner.ipynb
 test-gui.js
 test_const.rs
