@@ -29,12 +29,12 @@ const NOMINAL_BYTES_PER_SEC: u64 = 320_000 / 8;
 const MIN_BUFFER_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_BUFFER_BYTES: u64 = 500 * 1024 * 1024;
 // Default prefetch window (seconds) when the user has not changed the setting.
-// MUST match the frontend's own default (usePlayer.ts `useState(1400)`) — the
+// MUST match the frontend's own default (usePlayer.ts `useState(300)`) — the
 // frontend pushes its resolved value via `update_buffer_settings` shortly
 // after startup, but keeping this constant in sync too closes the brief
 // window between process start and that first sync (e.g. a stream started
 // before the frontend's effect has run).
-const DEFAULT_BUFFER_SECONDS_USIZE: usize = 1400;
+const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
 
 pub mod protocol;
 pub mod slice_cache;
