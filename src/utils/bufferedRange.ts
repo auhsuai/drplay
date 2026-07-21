@@ -110,3 +110,47 @@ export function updateBufferBar(
 export function clearBufferBar(container: HTMLElement | null): void {
   if (container && container.childElementCount > 0) container.innerHTML = '';
 }
+
+/**
+ * Render the buffer bar from the app's CUSTOM streaming proxy byte accounting.
+ *
+ * This app streams audio through a Rust proxy (src-tauri/src/proxy.rs) that
+ * slices files into chunks and emits a `buffer-status` Tauri event carrying
+ * buffer_start_byte / buffer_end_byte / total_size_byte. The browser's native
+ * `HTMLMediaElement.buffered` is NOT populated by this proxy, so it CANNOT
+ * drive the buffer bar (it stays empty -> nothing ever renders). The proxy's
+ * byte range IS the authoritative buffer source here, so the bar must be
+ * driven by the `buffer-status` event, not by `audio.buffered`.
+ *
+ * Fills `container` with a single segment from startByte..endByte.
+ */
+export function renderBufferFromBytes(
+  container: HTMLElement | null,
+  startByte: number,
+  endByte: number,
+  totalByte: number,
+): void {
+  if (!container) return;
+
+  if (!totalByte || totalByte <= 0 || endByte <= 0 || endByte < startByte) {
+    if (container.childElementCount > 0) container.innerHTML = '';
+    return;
+  }
+
+  const startPct = (startByte / totalByte) * 100;
+  const widthPct = ((endByte - startByte) / totalByte) * 100;
+
+  if (container.childElementCount !== 1) {
+    container.innerHTML = '';
+    const seg = document.createElement('div');
+    seg.className = BUFFER_SEGMENT_BG;
+    seg.style.position = 'absolute';
+    seg.style.top = '0';
+    seg.style.height = '100%';
+    seg.style.pointerEvents = 'none';
+    container.appendChild(seg);
+  }
+  const seg = container.children[0] as HTMLElement;
+  seg.style.left = `${startPct}%`;
+  seg.style.width = `${widthPct}%`;
+}

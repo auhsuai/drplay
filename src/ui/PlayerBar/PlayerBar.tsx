@@ -98,7 +98,6 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     rateLimitUntilRef,
     setDuration,
     setIsBuffering,
-    bufferFillRef,
   });
 
   const { audioRefs: { audioRef, audioRef2, activeAudioIndexRef } } = audioEngine;

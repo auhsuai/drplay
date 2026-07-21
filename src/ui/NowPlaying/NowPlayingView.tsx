@@ -4,7 +4,7 @@ import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown, Play, Pause, SkipBack, SkipForward, Repeat, Repeat1, Shuffle } from "lucide-react";
 import { getTrackMetadata } from "../../utils/metadata";
 import { getPalette } from '../../utils/color';
-import { updateBufferBar } from '../../utils/bufferedRange';
+import { renderBufferFromBytes } from '../../utils/bufferedRange';
 import { useTranslation } from "react-i18next";
 import { listen } from '@tauri-apps/api/event';
 
@@ -176,12 +176,14 @@ export const NowPlayingView = memo(function NowPlayingView({
       total_size_byte: number;
     }>('buffer-status', (event) => {
       if (currentTrack && event.payload.track_id === currentTrack.id) {
-        if (event.payload.total_size_byte > 0) {
-          tauriBufferEndRef.current = (event.payload.buffer_end_byte / event.payload.total_size_byte) * 100;
-          // NOTE: do NOT write to bufferFillRef here. The buffer bar is now
-          // driven by the actual HTMLAudioElement.buffered TimeRanges in
-          // updateProgressUI (called on every `timeupdate` event). See the
-          // comment there for why the proxy's byte-ratio is inaccurate.
+        const { buffer_start_byte, buffer_end_byte, total_size_byte } = event.payload;
+        if (total_size_byte > 0) {
+          tauriBufferEndRef.current = (buffer_end_byte / total_size_byte) * 100;
+          // The buffer bar is driven by the proxy's custom `buffer-status`
+          // event, NOT by HTMLAudioElement.buffered — this app streams through
+          // a chunked Rust proxy that never populates the browser's native
+          // buffered TimeRanges.
+          renderBufferFromBytes(bufferFillRef.current, buffer_start_byte, buffer_end_byte, total_size_byte);
         }
       }
     }).then(fn => {
@@ -225,12 +227,10 @@ export const NowPlayingView = memo(function NowPlayingView({
             currentTimeTextRef.current.textContent = newTimeText;
             lastTimeText = newTimeText;
           }
-          // Buffer bar is driven by the actual browser-buffered ranges (not the
-          // proxy's byte accounting). updateBufferBar renders EVERY buffered
-          // TimeRange as its own segment, so a forward seek that creates a
-          // non-contiguous range shows both the old region and the new one at
-          // the seek position — accurate regardless of gaps.
-          updateBufferBar(bufferFillRef.current, audio);
+          // Buffer bar is driven by the proxy's `buffer-status` event (see the
+          // listener above), NOT by HTMLAudioElement.buffered — this app's
+          // custom chunked proxy never populates the browser's native buffered
+          // TimeRanges. It is rendered from the proxy's byte accounting there.
         }
       }
     };

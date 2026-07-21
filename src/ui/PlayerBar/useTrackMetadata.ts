@@ -9,6 +9,7 @@ import { captureError } from '../../utils/errorLog';
 import { formatTime } from '../../utils/formatTime';
 import { PlayerAction } from './types';
 import { isProxyStreamUrl } from './streamError';
+import { renderBufferFromBytes } from '../../utils/bufferedRange';
 
 const TRACK_META_MODULE = 'useTrackMetadata';
 
@@ -163,14 +164,14 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
       total_size_byte: number;
     }>('buffer-status', (event) => {
       if (currentTrack && event.payload.track_id === currentTrack.id) {
-        if (event.payload.total_size_byte > 0) {
-          tauriBufferEndRef.current = (event.payload.buffer_end_byte / event.payload.total_size_byte) * 100;
-          // NOTE: do NOT write to bufferFillRef here. The buffer bar is now
-          // driven by the actual HTMLAudioElement.buffered TimeRanges in
-          // useAudioEngine.handleTimeUpdate (called on every `progress`
-          // event). The proxy's byte-ratio is inaccurate for VBR audio and
-          // reports 100% once its slice cache can serve a range even when
-          // the browser has only buffered a few seconds of decoded media.
+        const { buffer_start_byte, buffer_end_byte, total_size_byte } = event.payload;
+        if (total_size_byte > 0) {
+          tauriBufferEndRef.current = (buffer_end_byte / total_size_byte) * 100;
+          // The buffer bar is driven by the proxy's custom `buffer-status`
+          // event, NOT by HTMLAudioElement.buffered — this app streams through
+          // a chunked Rust proxy that never populates the browser's native
+          // buffered TimeRanges. Using audio.buffered left the bar empty.
+          renderBufferFromBytes(bufferFillRef.current, buffer_start_byte, buffer_end_byte, total_size_byte);
         }
       }
     }).then(fn => {

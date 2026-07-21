@@ -8,7 +8,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { set as idbSet } from '../../db/kv';
 import { PlayerAction, AudioRefs } from './types';
 import { decideDecodeFailure, isProxyStreamUrl } from './streamError';
-import { updateBufferBar } from '../../utils/bufferedRange';
 import type { TFunction } from 'i18next';
 
 const AUDIO_MODULE = 'useAudioEngine';
@@ -98,11 +97,10 @@ interface UseAudioEngineParams {
   rateLimitUntilRef: React.MutableRefObject<number>;
   setDuration: React.Dispatch<React.SetStateAction<number>>;
   setIsBuffering: React.Dispatch<React.SetStateAction<boolean>>;
-  bufferFillRef: React.RefObject<HTMLDivElement | null>;
 }
 
 export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
-  const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering, bufferFillRef } = params;
+  const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t, isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume, rateLimitUntilRef, setDuration, setIsBuffering } = params;
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioRef2 = useRef<HTMLAudioElement>(null);
@@ -549,13 +547,11 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     const time = audio.currentTime;
     if (time > 0 && isFinite(time)) lastKnownPositionRef.current = time;
 
-    // Update the buffer bar from the ACTUAL browser-buffered range
-    // (audio.buffered TimeRanges), NOT the proxy's byte accounting. The
-    // proxy's buffer-status event reports prefetch progress in bytes,
-    // which diverges from real playback time for VBR audio and reports
-    // 100% once the proxy's slice cache can serve a range even if the
-    // browser has only buffered a few seconds of decoded media.
-    updateBufferBar(bufferFillRef?.current, audio);
+    // NOTE: The buffer bar is NOT updated from audio.buffered here. This app
+    // streams through a custom Rust proxy that never populates the browser's
+    // native buffered TimeRanges, so audio.buffered is always empty and would
+    // wipe the bar on every timeupdate. The buffer bar is driven by the proxy's
+    // `buffer-status` Tauri event (see useTrackMetadata / NowPlayingView).
 
     // Data đang chảy → chắc chắn không buffering; huỷ debounce đang chờ.
     if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
