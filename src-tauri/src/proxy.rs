@@ -581,14 +581,17 @@ async fn handle_stream(
                         }
                     }
 
-                    // Emit buffer-status once after first successful batch
+                    // Emit buffer-status once after first successful batch.
+                    // Use the actual fetched range as buffer_end, NOT total_size
+                    // (which would jump the bar to 100% immediately on first batch).
                     if !buffer_status_emitted {
                         buffer_status_emitted = true;
+                        let first_batch_end = (fetch_start + (count as u64) * crate::slice_cache::SLICE_SIZE).min(total_size);
                         if let Some(app) = crate::APP_HANDLE.get() {
                             let _ = app.emit("buffer-status", BufferState {
                                 track_id: track_id.clone(),
                                 buffer_start_byte: 0,
-                                buffer_end_byte: total_size,
+                                buffer_end_byte: first_batch_end,
                                 total_size_byte: total_size,
                             });
                         }
