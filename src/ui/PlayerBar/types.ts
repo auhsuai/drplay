@@ -25,7 +25,6 @@ export interface PlayerBarProps {
   loadNonce?: number;
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   onTogglePlayMode: () => void;
-  onExpandNowPlaying: () => void;
 }
 
 export interface AudioRefs {
@@ -53,7 +52,6 @@ export interface CallbackRefs {
   onNextTrackRef: React.MutableRefObject<() => void>;
   onPrevTrackRef: React.MutableRefObject<() => void>;
   onTogglePlayModeRef: React.MutableRefObject<() => void>;
-  onToggleNowPlayingRef: React.MutableRefObject<() => void>;
   handleManualResumeRef: React.MutableRefObject<(() => void) | null>;
   toastDismissRef: React.MutableRefObject<(() => void) | null>;
 }
