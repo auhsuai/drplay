@@ -5,6 +5,39 @@ import { Track } from '../../App';
 // Maximum divergence (seconds) between the requested seek target and the actual
 // playback position after a `seeked` event before we correct it back.
 const SEEK_CORRECTION_THRESHOLD_SEC = 1;
+// Maximum time (ms) after a drag-seek commit during which a native `seeked`
+// event is still attributed to THAT specific seek. `seeked` carries no
+// correlation id, so without this bound, ANY unrelated `.currentTime` write
+// that happens to complete before the drag's own `seeked` arrives (a track
+// change, a network-retry resume, a buffer restore -- anything else in
+// useAudioEngine.ts that sets currentTime) gets its result silently
+// overwritten back to wherever the user last dragged to. That reads to a
+// user as a random, unexplained auto-seek with no connection to anything
+// they're currently doing -- exactly this bug, found while investigating a
+// user report of small spontaneous seeks during otherwise-idle playback.
+const SEEK_CORRECTION_WINDOW_MS = 4000;
+
+// Pure decision function (kept separate from the DOM/event-listener code
+// below so it's directly unit-testable without a browser/jsdom).
+export function shouldApplySeekCorrection(params: {
+  targetTime: number;
+  committedAtMs: number;
+  nowMs: number;
+  actualTime: number;
+  thresholdSec?: number;
+  windowMs?: number;
+}): boolean {
+  const {
+    targetTime,
+    committedAtMs,
+    nowMs,
+    actualTime,
+    thresholdSec = SEEK_CORRECTION_THRESHOLD_SEC,
+    windowMs = SEEK_CORRECTION_WINDOW_MS,
+  } = params;
+  if (nowMs - committedAtMs > windowMs) return false;
+  return Math.abs(actualTime - targetTime) > thresholdSec;
+}
 
 export interface ProgressUIAPI {
   handlePointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
@@ -28,6 +61,7 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
   const { getActiveAudio, currentTrack, audioRef, progressBarRef, progressFillRef, currentTimeTextRef, volumeBarRef, setVolume, setIsMuted, duration } = params;
   const isDraggingRef = useRef(false);
   const lastSeekTargetRef = useRef<number | null>(null);
+  const lastSeekCommitTimeRef = useRef(0);
   const isSeekCorrectionRef = useRef(false);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -66,6 +100,7 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       const active2 = getActiveAudio();
       if (active2) {
         lastSeekTargetRef.current = finalTime;
+        lastSeekCommitTimeRef.current = Date.now();
         active2.currentTime = finalTime;
       }
 
@@ -165,8 +200,12 @@ export function useProgressUI(params: UseProgressUIParams): ProgressUIAPI {
       }
       const active = getActiveAudio();
       if (lastSeekTargetRef.current !== null && active) {
-        const diff = Math.abs(active.currentTime - lastSeekTargetRef.current);
-        if (diff > SEEK_CORRECTION_THRESHOLD_SEC) {
+        if (shouldApplySeekCorrection({
+          targetTime: lastSeekTargetRef.current,
+          committedAtMs: lastSeekCommitTimeRef.current,
+          nowMs: Date.now(),
+          actualTime: active.currentTime,
+        })) {
           isSeekCorrectionRef.current = true;
           active.currentTime = lastSeekTargetRef.current;
         }

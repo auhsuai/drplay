@@ -77,7 +77,6 @@ export interface AudioEngineAPI {
   handlePlaying: () => void;
   lastKnownPositionRef: React.MutableRefObject<number>;
   errorPositionRef: React.MutableRefObject<number | null>;
-  pendingBufferRestoreTimeRef: React.MutableRefObject<number | null>;
   restoredAudioTrackIdRef: React.MutableRefObject<string | null>;
   retryCountRef: React.MutableRefObject<number>;
   retryTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
@@ -117,7 +116,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const lastKnownPositionRef = useRef(0);
   const errorPositionRef = useRef<number | null>(null);
   const lastSaveTimeRef = useRef(0);
-  const pendingBufferRestoreTimeRef = useRef<number | null>(null);
   const restoredAudioTrackIdRef = useRef<string | null>(null);
   const currentTrackRef = useRef(currentTrack);
   currentTrackRef.current = currentTrack;
@@ -642,14 +640,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       dispatch({ type: 'CLEAR_ERROR' });
     }
     if (!audio) return;
-    if (pendingBufferRestoreTimeRef.current !== null) {
-      const t = pendingBufferRestoreTimeRef.current;
-      pendingBufferRestoreTimeRef.current = null;
-      if (isFinite(t)) {
-        audio.currentTime = t;
-      }
-      return;
-    }
     if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
       const t = currentTrack.restoreTime;
       if (isFinite(t)) {
@@ -722,7 +712,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     handlePlaying,
     lastKnownPositionRef,
     errorPositionRef,
-    pendingBufferRestoreTimeRef,
     restoredAudioTrackIdRef,
     retryCountRef,
     retryTimeoutRef,

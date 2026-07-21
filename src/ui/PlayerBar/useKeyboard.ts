@@ -33,8 +33,6 @@ export function useKeyboard(params: UseKeyboardParams): void {
   const { getActiveAudio, onTogglePlayRef, onNextTrackRef, onPrevTrackRef, onTogglePlayModeRef, setVolume, setIsMuted, setIsVolumeActive } = params;
 
   const arrowSeekBaseRef = useRef<number | null>(null);
-  const isArrowSeekingRef = useRef(false);
-  const arrowTargetTimeRef = useRef(0);
   const lastSeekTimestampRef = useRef(0);
   const volumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -140,19 +138,10 @@ export function useKeyboard(params: UseKeyboardParams): void {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Keyup: kết thúc arrow seeking → seek audio element một lần duy nhất
+  // Keyup: reset the arrow-seek accumulation anchor so the next press starts
+  // fresh from the current position instead of continuing an old sequence.
   useEffect(() => {
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' && isArrowSeekingRef.current) {
-        const active = getActiveAudio();
-        if (active) {
-          isArrowSeekingRef.current = false;
-          const target = arrowTargetTimeRef.current;
-          if (target > 0) {
-            active.currentTime = target;
-          }
-        }
-      }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         arrowSeekBaseRef.current = null;
       }
