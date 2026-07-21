@@ -29,8 +29,6 @@ interface UsePlaybackControlParams {
   loadNormalAudio: (track: Track, position: number | null, cancellationCheck?: () => boolean) => Promise<HTMLAudioElement>;
   performRetry: (track: Track) => Promise<void>;
   audioRef: React.RefObject<HTMLAudioElement | null>;
-  audioRef2: React.RefObject<HTMLAudioElement | null>;
-  activeAudioIndexRef: React.MutableRefObject<0 | 1>;
   lastKnownPositionRef: React.MutableRefObject<number>;
   errorPositionRef: React.MutableRefObject<number | null>;
   rateLimitUntilRef: React.MutableRefObject<number>;
@@ -47,7 +45,7 @@ export interface PlaybackControlAPI {
 }
 
 export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackControlAPI {
-  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, audioRef2, activeAudioIndexRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef } = params;
+  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef } = params;
 
   const { error: errorInfo, pendingResumeTime } = playerState;
   const currentTrackRef = useRef(currentTrack);
@@ -315,18 +313,16 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   // player-stop
   useEffect(() => {
     const handlePlayerStop = () => {
-      for (const el of [audioRef.current, audioRef2.current]) {
-        if (el) {
-          safePause(el);
-          el.removeAttribute('src');
-          el.load();
-        }
+      const el = audioRef.current;
+      if (el) {
+        safePause(el);
+        el.removeAttribute('src');
+        el.load();
       }
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'paused';
         navigator.mediaSession.metadata = null;
       }
-      activeAudioIndexRef.current = 0;
     };
     window.addEventListener('player-stop', handlePlayerStop);
     return () => window.removeEventListener('player-stop', handlePlayerStop);
@@ -376,10 +372,8 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
 
   // Audio focus sync (OS-level pause/play)
   useEffect(() => {
-    const elements = [audioRef.current, audioRef2.current].filter(
-      (el): el is HTMLAudioElement => el !== null
-    );
-    if (elements.length === 0) return;
+    const el = audioRef.current;
+    if (!el) return;
 
     const handleSystemPause = () => {
       if (isTransitioningRef.current) return;
@@ -395,16 +389,12 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       }
     };
 
-    for (const el of elements) {
-      el.addEventListener('pause', handleSystemPause);
-      el.addEventListener('play', handleSystemPlay);
-    }
+    el.addEventListener('pause', handleSystemPause);
+    el.addEventListener('play', handleSystemPlay);
 
     return () => {
-      for (const el of elements) {
-        el.removeEventListener('pause', handleSystemPause);
-        el.removeEventListener('play', handleSystemPlay);
-      }
+      el.removeEventListener('pause', handleSystemPause);
+      el.removeEventListener('play', handleSystemPlay);
     };
   }, []);
 
