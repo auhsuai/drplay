@@ -256,6 +256,61 @@ export async function getTrackMetadata(
   return promise;
 }
 
+/**
+ * Let an external batch loader (e.g. the MainContent prefetch pass) claim
+ * ownership of a fileId's metadata fetch. Any per-card getTrackMetadata() call
+ * that fires while the batch is in flight will await the SAME promise instead of
+ * issuing its own get_local_metadata IPC — this removes the duplicate-IPC storm
+ * that made scrolling large folders janky.
+ *
+ * Returns true when the claim is registered, false when the id is already cached
+ * or already has an in-flight fetch (caller should not track a resolver for it).
+ */
+export function registerMetadataFetch(fileId: string, promise: Promise<CachedMetadata>): boolean {
+  if (metadataCache[fileId] && metadataCache[fileId].v >= 9) return false;
+  if (inflightMetadata.has(fileId)) return false;
+
+  inflightMetadata.set(fileId, promise);
+
+  promise.catch(() => {
+    /* suppressed — awaiting callers handle their own errors via the returned promise */
+  });
+
+  const timeoutId = setTimeout(() => {
+    if (inflightMetadata.get(fileId) === promise) {
+      inflightMetadata.delete(fileId);
+    }
+  }, INFLIGHT_TIMEOUT);
+
+  promise.finally(() => {
+    clearTimeout(timeoutId);
+    if (inflightMetadata.get(fileId) === promise) {
+      inflightMetadata.delete(fileId);
+    }
+  });
+
+  return true;
+}
+
+/**
+ * Build the same "unscanned" placeholder metadata that getTrackMetadataImpl()
+ * falls back to. A claimed fetch resolves with this when the backend returns
+ * nothing, so awaiting SongCards never hang and render a sane title.
+ */
+export function makePlaceholderMetadata(name?: string, size?: number): CachedMetadata {
+  const safeName = name ?? 'audio.mp3';
+  return {
+    title: safeName.replace(/\.[^.]+$/, ''),
+    artist: 'Unknown Artist',
+    duration: 0,
+    durationEstimated: true,
+    pictureData: null,
+    pictureDataFull: null,
+    size,
+    v: 9,
+  };
+}
+
 export async function updateTrackDuration(fileId: string, accurateDuration: number): Promise<void> {
   if (metadataCache[fileId]) {
     metadataCache[fileId].duration = accurateDuration;

@@ -10,7 +10,7 @@ import { cachePrefetchedStream, clearPrefetchedStreams } from "../../utils/strea
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { normalizeText } from "../../utils/normalizeText";
 import { invoke } from "@tauri-apps/api/core";
-import { cacheTrackMetadata } from "../../utils/metadata";
+import { cacheTrackMetadata, registerMetadataFetch, makePlaceholderMetadata, metadataCache, type CachedMetadata } from "../../utils/metadata";
 
 
 
@@ -241,7 +241,7 @@ export const MainContent = React.memo(function MainContent({
     count: currentItems.length,
     getScrollElement: () => mainRef.current,
     estimateSize: () => 92,
-    overscan: 2,
+    overscan: 6,
     getItemKey: (index: number) => currentItems[index].id,
     useFlushSync: false,
     directDomUpdates: true,
@@ -297,6 +297,30 @@ export const MainContent = React.memo(function MainContent({
     }
 
     const trackItems = trackIds.map(id => currentItems.find(i => i.trackInfo?.id === id)).filter(Boolean) as typeof currentItems;
+
+    // Claim each track's metadata fetch up-front in the shared inflight map. A
+    // SongCard mounting while this batch runs (rows scrolled into view) then awaits
+    // the batch's result instead of firing its own get_local_metadata IPC — which
+    // is what removes the duplicate-IPC storm behind the scroll jank.
+    const resolvers = new Map<string, (m: CachedMetadata) => void>();
+    const placeholders = new Map<string, CachedMetadata>();
+    for (const item of trackItems) {
+      const id = item.trackInfo!.id;
+      placeholders.set(id, makePlaceholderMetadata(item.trackInfo!.originalName, item.trackInfo!.size ?? 0));
+      let resolve!: (m: CachedMetadata) => void;
+      const claim = new Promise<CachedMetadata>(r => { resolve = r; });
+      if (registerMetadataFetch(id, claim)) {
+        resolvers.set(id, resolve);
+      }
+    }
+    const settle = (id: string, meta: CachedMetadata) => {
+      const resolve = resolvers.get(id);
+      if (resolve) {
+        resolve(meta);
+        resolvers.delete(id);
+      }
+    };
+
     runWithConcurrency(trackItems, 6, async (item) => {
       const id = item.trackInfo!.id;
       try {
@@ -305,15 +329,16 @@ export const MainContent = React.memo(function MainContent({
           size: item.trackInfo!.size ?? 0,
           name: item.trackInfo!.originalName ?? 'audio.mp3',
         });
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) { settle(id, placeholders.get(id)!); return; }
         if (data?.stream_url) {
           cachePrefetchedStream(id, data.stream_url);
         }
-        // Populate metadata cache so SongCard's getTrackMetadata
-        // skips its own IPC call entirely.
+        // Populate metadata cache so SongCard's getTrackMetadata skips its own
+        // IPC call entirely, and resolve the claim so any already-awaiting card
+        // gets this metadata without a second IPC.
         if (data?.metadata?.id) {
           const m = data.metadata;
-          cacheTrackMetadata(id, {
+          const entry: CachedMetadata = {
             title: m.title || item.trackInfo!.title,
             artist: m.artist || 'Unknown Artist',
             duration: m.duration || 0,
@@ -324,7 +349,11 @@ export const MainContent = React.memo(function MainContent({
             coverUrl: m.has_cover ? `http://drplay.localhost/cover?id=${m.id}&thumb=true&v=2` : undefined,
             size: item.trackInfo!.size ?? 0,
             v: 10,
-          });
+          };
+          cacheTrackMetadata(id, entry);
+          settle(id, entry);
+        } else {
+          settle(id, placeholders.get(id)!);
         }
         if (!data?.metadata?.has_cover || !data?.metadata?.id) return;
         const url = coverUrlsRef.current.get(id) || `http://drplay.localhost/cover?id=${data.metadata.id}&thumb=true&v=2`;
@@ -337,13 +366,22 @@ export const MainContent = React.memo(function MainContent({
           img.decode().catch(() => {});
         }
       } catch (e) {
+        settle(id, placeholders.get(id)!);
         console.warn('[MainContent] cover-batch-fetch-failed', { fileId: id, error: String(e) });
       }
     }).catch(() => {});
     performance.mark('cover-batch-end');
     performance.measure('cover-batch', 'cover-batch-start', 'cover-batch-end');
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      // Resolve any claims still pending (batch aborted mid-flight) so awaiting
+      // cards fall back to cached/placeholder metadata instead of hanging.
+      for (const [id, resolve] of resolvers) {
+        resolve(metadataCache[id] ?? placeholders.get(id)!);
+      }
+      resolvers.clear();
+    };
   }, [currentItems]);
 
   const handlePlay = React.useCallback((t: Track) => {
