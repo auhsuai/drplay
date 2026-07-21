@@ -238,7 +238,6 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
                       <h4 className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? 'text-[#4285F4]' : 'text-gray-900 dark:text-white group-hover:text-[#4285F4]'}`}>
                         {track.title}
                       </h4>
-                      <p className="text-[13px] text-gray-500 truncate leading-tight">{t('unknown_artist')}</p>
                     </div>
                     
                     <button 
