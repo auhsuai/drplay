@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { Track } from "../../App";
-import { getRecentlyPlayed, getHeavyRotation, getRandomDiscoveries, getMostVisitedFolders, FolderVisitEntry } from "../../utils/history";
+import { getRecentlyPlayed, getHeavyRotation, getMostVisitedFolders, FolderVisitEntry } from "../../utils/history";
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
-import { Play, Music, Clock, Sparkles, ArrowLeft, MoreHorizontal, Search, ArrowUpDown, X, Check, Folder, Repeat, PlusCircle } from "lucide-react";
+import { Play, Music, Clock, ArrowLeft, MoreHorizontal, Search, ArrowUpDown, X, Check, Folder, Repeat, PlusCircle } from "lucide-react";
 import greetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -25,7 +25,6 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   const { t, i18n } = useTranslation();
   const [recent, setRecent] = useState<Track[]>([]);
   const [heavy, setHeavy] = useState<Track[]>([]);
-  const [discover, setDiscover] = useState<Track[]>([]);
   const [mostVisitedFolders, setMostVisitedFolders] = useState<FolderVisitEntry[]>([]);
   const [recentlyAdded, setRecentlyAdded] = useState<Track[]>([]);
   const [showFullRecent, setShowFullRecent] = useState(false);
@@ -76,7 +75,6 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
     const loadData = async () => {
       setRecent(await getRecentlyPlayed());
       setHeavy(await getHeavyRotation());
-      setDiscover(await getRandomDiscoveries());
       setMostVisitedFolders(await getMostVisitedFolders());
 
       if (token) {
@@ -101,17 +99,16 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   }, []);
 
   useEffect(() => {
-    const tracks = [...recent, ...heavy, ...discover, ...recentlyAdded];
+    const tracks = [...recent, ...heavy, ...recentlyAdded];
     const ids = tracks.map(t => t.id).filter(Boolean);
     if (ids.length > 0) prefetchVisibleTracks(ids);
-  }, [recent, heavy, discover, recentlyAdded]);
+  }, [recent, heavy, recentlyAdded]);
 
   if (showFullRecent) {
     return <FullRecentView recent={recent} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} />;
   }
 
   const quickAccess = recent.slice(0, 5);
-  const discoverItems = discover.length > 0 ? discover : [];
   const heavyItems = heavy.length > 0 ? heavy.slice(0, 5) : [];
 
   return (
@@ -139,11 +136,10 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
               {quickAccess.map((track, index) => {
                 const isOverlay = index === 4 && recent.length > 4;
                 return (
-                  <PremiumCard 
-                    key={track.id} 
-                    track={track} 
-                    onPlay={() => isOverlay ? setShowFullRecent(true) : onPlay(track, quickAccess)} 
-                    token={token} 
+                  <PremiumCard
+                    key={track.id}
+                    track={track}
+                    onPlay={() => isOverlay ? setShowFullRecent(true) : onPlay(track, quickAccess)}
                     isOverlayBtn={isOverlay}
                   />
                 );
@@ -161,7 +157,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {recentlyAdded.slice(0, 5).map(track => (
-                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, recentlyAdded)} token={token} />
+                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, recentlyAdded)} />
               ))}
             </div>
           </div>
@@ -207,22 +203,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {heavyItems.map(track => (
-                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, heavyItems)} token={token} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* DISCOVER: Premium Cards */}
-        {discoverItems.length > 0 && (
-          <div className="mb-12">
-             <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Sparkles className="w-4 h-4" />
-              {t('home.discover')}
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {discoverItems.map(track => (
-                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, discoverItems)} token={token} />
+                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, heavyItems)} />
               ))}
             </div>
           </div>
@@ -234,7 +215,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
 
 
 
-function PremiumCard({ track, onPlay, isOverlayBtn }: { track: Track, onPlay: () => void, token: string | null, isOverlayBtn?: boolean }) {
+function PremiumCard({ track, onPlay, isOverlayBtn }: { track: Track, onPlay: () => void, isOverlayBtn?: boolean }) {
   // This app streams straight from Google Drive: there is no cover-art
   // pipeline, so every card shows a stable per-track fill color + music icon.
   // Title/artist come directly from the Track object (Drive filename).

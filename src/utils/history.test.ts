@@ -6,7 +6,6 @@ import {
   recordPlay,
   getRecentlyPlayed,
   getHeavyRotation,
-  getRandomDiscoveries,
   recordFolderVisit,
   getMostVisitedFolders,
   PlayCountEntry,
@@ -67,19 +66,6 @@ describe('history (Dexie-backed)', () => {
     const heavy = await getHeavyRotation();
     expect((heavy[0] as any).id).toBe('t1');
     expect(heavy.length).toBeLessThanOrEqual(10);
-  });
-
-  it('getRandomDiscoveries reads metadataCache entries', async () => {
-    await db.metadataCache.bulkPut([
-      { key: 'metadata_a', entry: { version: 9, data: { v: 9 }, ts: 1 } },
-      { key: 'metadata_b', entry: { version: 9, data: { v: 9 }, ts: 2 } },
-      { key: 'metadata_c', entry: { version: 9, data: { v: 9 }, ts: 3 } },
-    ]);
-
-    const discoveries = await getRandomDiscoveries();
-    expect(discoveries.length).toBeGreaterThan(0);
-    const ids = discoveries.map((t: any) => t.id).sort();
-    expect(ids).toEqual(['a', 'b', 'c']);
   });
 
   it('recordFolderVisit tracks counts and name', async () => {

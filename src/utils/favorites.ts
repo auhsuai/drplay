@@ -32,7 +32,13 @@ export async function addFavorite(track: Track): Promise<void> {
   try {
     const email = getCurrentUserEmail();
     const existing = await db.favorites.get(track.id);
-    if (!existing) {
+    // `favorites` is keyed by track id alone (not a compound [id+userEmail]
+    // key), so a raw `.get(track.id)` can return ANOTHER user's row for the
+    // same track id (e.g. a file shared across two Google accounts on this
+    // device). Only treat it as "already favorited" if it belongs to the
+    // CURRENT user — otherwise this silently no-ops the current user's own
+    // like action because the id looked taken.
+    if (!existing || existing.userEmail !== email) {
       await db.favorites.put({
         ...track,
         userEmail: email,
@@ -48,8 +54,15 @@ export async function addFavorite(track: Track): Promise<void> {
 
 export async function removeFavorite(trackId: string): Promise<void> {
   try {
-    await db.favorites.delete(trackId);
-    window.dispatchEvent(new CustomEvent('favorites-updated'));
+    const email = getCurrentUserEmail();
+    const existing = await db.favorites.get(trackId);
+    // Same non-compound-key issue as addFavorite: only delete the row if it
+    // actually belongs to the current user, otherwise one account's "unlike"
+    // action could permanently delete a different account's favorite.
+    if (existing && existing.userEmail === email) {
+      await db.favorites.delete(trackId);
+      window.dispatchEvent(new CustomEvent('favorites-updated'));
+    }
   } catch (e) {
     console.error(`[${FAV_MODULE}] remove-failed`, classifyFavoriteError(e));
     showErrorToast('Không thể xóa khỏi yêu thích, vui lòng thử lại.');
@@ -58,8 +71,12 @@ export async function removeFavorite(trackId: string): Promise<void> {
 
 export async function isFavorite(trackId: string): Promise<boolean> {
   try {
+    const email = getCurrentUserEmail();
     const fav = await db.favorites.get(trackId);
-    return !!fav;
+    // Only report "favorited" if the stored row belongs to the current
+    // user — otherwise User B's UI would show a heart filled in for a
+    // track only User A ever favorited.
+    return !!fav && fav.userEmail === email;
   } catch (e) {
     return false;
   }

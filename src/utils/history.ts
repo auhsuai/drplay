@@ -72,42 +72,6 @@ export async function getHeavyRotation(): Promise<Track[]> {
   }
 }
 
-export async function getRandomDiscoveries(): Promise<Track[]> {
-  try {
-    const rows = await db.metadataCache.toArray();
-    const keys = rows
-      .filter((r) => {
-        const entry = r.entry as { data?: { v: number } } | undefined;
-        return entry && entry.data && entry.data.v >= 9;
-      })
-      .map((r) => r.key as string)
-      .filter((k) => typeof k === 'string' && k.startsWith('metadata_'));
-    if (keys.length === 0) return [];
-
-    const shuffled = [...keys];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    const selectedKeys = shuffled.slice(0, 12);
-
-    const tracks: Track[] = [];
-    for (const key of selectedKeys) {
-      const id = key.replace('metadata_', '');
-      tracks.push({
-        id,
-        title: 'Audio Track',
-        artist: '',
-        streamUrl: ''
-      });
-    }
-    return tracks;
-  } catch (e) {
-    console.error('[history] getRandomDiscoveries-failed', e instanceof Error ? e.message : String(e));
-    return [];
-  }
-}
-
 export async function recordFolderVisit(folderId: string, folderName: string) {
   if (folderId === 'root') return;
   const email = currentUserEmail();

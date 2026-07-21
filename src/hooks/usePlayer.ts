@@ -87,18 +87,11 @@ export const usePlayer = (accessToken: string | null) => {
     const loadSession = async () => {
       const myId = beginPlaybackIntent();
       try {
-        const lastSessionStr = localStorage.getItem("drplay_last_session");
-        let lastSession;
-        if (lastSessionStr) {
-          try {
-            lastSession = JSON.parse(lastSessionStr);
-          } catch (e) {
-            console.warn(`[usePlayer] session-corrupt`, classifyPlayerError(e));
-            lastSession = await get("drplay_last_session");
-          }
-        } else {
-          lastSession = await get("drplay_last_session");
-        }
+        // The only writer for this key is useAudioEngine.ts's `idbSet(...)`
+        // (IndexedDB, via db/kv.ts) — nothing in this app persists it to
+        // localStorage, so reading straight from IndexedDB is the sole
+        // source of truth.
+        const lastSession = await get("drplay_last_session");
 
         const rawBuffer = await get("drplay_buffer_seconds");
         const validBuffer = (typeof rawBuffer === "number" && Number.isFinite(rawBuffer) && rawBuffer > 0)

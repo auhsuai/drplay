@@ -336,6 +336,15 @@ export const MainContent = React.memo(function MainContent({
     onPlay(t, queue);
   }, [currentItems, onPlay]);
 
+  // Stable references so they don't defeat VirtualizedSongList's React.memo —
+  // a fresh inline arrow function on every MainContent render would make the
+  // memo comparison always see "changed props" and re-render the (expensive,
+  // virtualized) list unconditionally. `setShowBulkMoveScreen`/
+  // `setShowBulkDeleteConfirm` are useState setters, which React guarantees
+  // are stable across renders, so these callbacks never need to change.
+  const handleBulkMoveClick = React.useCallback(() => setShowBulkMoveScreen(true), []);
+  const handleBulkDeleteClick = React.useCallback(() => setShowBulkDeleteConfirm(true), []);
+
   const handleCreateFolder = async (folderName: string) => {
     if (!token) return;
     setIsCreating(true);
@@ -718,8 +727,8 @@ export const MainContent = React.memo(function MainContent({
               selectedIds={selectedIds}
               setSelectedIds={setSelectedIds}
               setIsSelectionMode={setIsSelectionMode}
-              onBulkMoveClick={() => setShowBulkMoveScreen(true)}
-              onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
+              onBulkMoveClick={handleBulkMoveClick}
+              onBulkDeleteClick={handleBulkDeleteClick}
               tagMetadataMap={tagMetadataRef.current}
             />
 

@@ -12,7 +12,6 @@ import { prefetchVisibleTracks } from '../../utils/streamPrefetcher';
 
 interface LikedSongsProps {
   onPlay: (track: Track, context: Track[], startIndex?: number) => void;
-  token: string | null;
   currentTrack?: Track | null;
 }
 

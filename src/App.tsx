@@ -6,7 +6,6 @@ import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
 import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
 import { TrashScreen } from "./ui/Settings/TrashScreen";
-import { GlobalContextMenu } from "./ui/components/GlobalContextMenu";
 import React, { Suspense } from "react";
 
 const MainContent = React.lazy(() => import('./ui/MainContent/MainContent').then(module => ({ default: module.MainContent })));
@@ -124,9 +123,6 @@ function App() {
 
   const { isLoggedIn, accessToken, userProfile, handleLoginSuccess, handleLogout } = useAuth(() => {
     localStorage.removeItem("drplay_root_folder");
-    localStorage.removeItem("drplay_current_folder_id");
-    localStorage.removeItem("drplay_current_folder_name");
-    localStorage.removeItem("drplay_folder_history");
     db.syncState.delete("drplay_nav_state").catch((e) => console.warn(`[${APP_MODULE}] logout-cleanup-failed`, classifyAppError(e)));
     kvDel('drplay_last_session').catch((e) => console.warn(`[${APP_MODULE}] logout-cleanup-failed`, classifyAppError(e)));
     setAppRootFolder(null);
@@ -636,7 +632,7 @@ function App() {
                   }}
                 />
               ) : activeTab === "Liked Songs" ? (
-                <LikedSongs onPlay={(t: Track, c: Track[]) => { handlePlayTrack(t, c); }} token={accessToken} currentTrack={currentTrack} />
+                <LikedSongs onPlay={(t: Track, c: Track[]) => { handlePlayTrack(t, c); }} currentTrack={currentTrack} />
               ) : activeTab.startsWith("playlist_") ? (
                 <PlaylistView
                   playlistId={activeTab.replace("playlist_", "")}
@@ -673,8 +669,6 @@ function App() {
             />
           </div>
         </div>
-
-        <GlobalContextMenu />
 
         {showRateLimitModal && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center backdrop-blur-md bg-black/30 dark:bg-black/50 transition-all duration-300">

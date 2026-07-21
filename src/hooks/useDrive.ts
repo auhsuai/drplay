@@ -119,24 +119,13 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               setCurrentFolderName(restoredId === localRoot || restoredId === 'root' ? "My Drive" : sv.name);
               setFolderHistory(suspectRoot ? [] : (sv.history || []));
             } else {
-              const savedCurrentId = localStorage.getItem("drplay_current_folder_id");
-              const savedCurrentName = localStorage.getItem("drplay_current_folder_name");
-              const savedHistoryStr = localStorage.getItem("drplay_folder_history");
-
-              if (savedCurrentId && savedCurrentName && savedHistoryStr) {
-                setCurrentFolderId(savedCurrentId);
-                setCurrentFolderName(savedCurrentId === 'root' ? "My Drive" : savedCurrentName);
-                try {
-                  setFolderHistory(JSON.parse(savedHistoryStr));
-                } catch (e) {
-                  // Silent before; now logged with context and falls back to [].
-                  console.warn(`[${DRIVE_MODULE}] nav-state-parse — corrupt localStorage folder history, falling back to []`, classifyError(e));
-                  setFolderHistory([]);
-                }
-              } else {
-                setCurrentFolderId(localRoot!);
-                setCurrentFolderName("My Drive");
-              }
+              // No saved nav state in Dexie (db.syncState) — this is either a
+              // fresh install or the very first launch after migrating off an
+              // older pre-Dexie version. There is no longer any writer for a
+              // legacy localStorage nav-state fallback anywhere in this app,
+              // so just default to the Drive root.
+              setCurrentFolderId(localRoot!);
+              setCurrentFolderName("My Drive");
             }
           } catch (e) {
             if (cancelled) return;

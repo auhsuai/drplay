@@ -29,15 +29,15 @@ interface FolderSelectionScreenProps {
   initialFolderHistory?: {id: string, name: string}[];
   title?: string;
   subtitle?: string;
-  appRootFolder?: string | null;
   allowEscapeRoot?: boolean;
 }
 
-export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = 'root', initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder, allowEscapeRoot = false }: FolderSelectionScreenProps) {
+export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = 'root', initialFolderName, initialFolderHistory = [], title, subtitle, allowEscapeRoot = false }: FolderSelectionScreenProps) {
   const { t } = useTranslation();
-  
-  // Resolve appRootFolder from props or localStorage
-  const resolvedAppRoot = appRootFolder || localStorage.getItem("drplay_root_folder");
+
+  // None of this component's callers pass an override, so this always reads
+  // straight from localStorage (the same source useDrive.ts itself uses).
+  const resolvedAppRoot = localStorage.getItem("drplay_root_folder");
   
   const [currentFolderId, setCurrentFolderId] = useState(initialFolderId === 'root' && resolvedAppRoot ? resolvedAppRoot : initialFolderId);
   const [currentFolderName, setCurrentFolderName] = useState(initialFolderName || t('drive.my_drive'));
@@ -248,7 +248,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
 
           <div className="flex items-center text-sm font-medium overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0 mr-2">
             {folderHistory.map((item, index) => (
-              <React.Fragment key={index}>
+              <React.Fragment key={item.id}>
                 <span 
                   onClick={() => handleBreadcrumbClick(index)}
                   className="cursor-pointer text-gray-500 dark:text-gray-400 hover:text-[#4285F4] transition-colors"
