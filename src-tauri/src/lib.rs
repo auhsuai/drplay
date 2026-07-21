@@ -33,8 +33,13 @@ const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
 
 pub mod protocol;
 pub mod slice_cache;
-pub mod r2;
-mod thumbnail;
+
+// NOTE: this app is intentionally a pure Google-Drive audio streamer. There is
+// no local metadata/cover database and no Cloudflare R2 integration — those
+// were removed along with the `r2` and `thumbnail` modules. Every track is
+// identified purely by its Drive file id; title/artist shown in the UI come
+// straight from the Drive filename (see the frontend), never from a scanned
+// tag database.
 
 #[command]
 async fn update_stream_token(token: String) -> Result<(), String> {
@@ -255,209 +260,6 @@ fn update_buffer_settings(seconds: usize) {
     GLOBAL_BUFFER_SECONDS.store(seconds, Ordering::SeqCst);
 }
 
-#[derive(serde::Serialize, Clone)]
-struct LocalMetadata {
-    id: String,
-    title: String,
-    artist: String,
-    album: String,
-    duration: f64,
-    has_cover: bool,
-    file_type: String,
-    cover_url: Option<String>,
-    thumb_url: Option<String>,
-    bitrate: i64,
-    sample_rate: i64,
-    bit_depth: i64,
-    channels: i64,
-    genre: String,
-    year: i64,
-    track_number: i64,
-    album_artist: String,
-}
-
-#[derive(serde::Serialize, Clone)]
-struct TrackDataBundle {
-    metadata: LocalMetadata,
-    stream_url: String,
-}
-
-pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
-    if let Ok(mut exe_path) = std::env::current_exe() {
-        exe_path.pop();
-        let path = exe_path.join("music_database.db");
-        if path.exists() { return Some(path); }
-    }
-    if std::path::Path::new("music_database.db").exists() {
-        Some(std::path::PathBuf::from("music_database.db"))
-    } else if std::path::Path::new("../music_database.db").exists() {
-        Some(std::path::PathBuf::from("../music_database.db"))
-    } else {
-        None
-    }
-}
-
-fn get_local_metadata_internal(
-    size: i64,
-    name: &str,
-    conn: &rusqlite::Connection,
-) -> Option<LocalMetadata> {
-    let has_file_type = HAS_FILE_TYPE.get_or_init(|| {
-        conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok()
-    });
-    let has_cover_url = HAS_COVER_URL.get_or_init(|| {
-        conn.prepare("SELECT cover_url FROM tracks LIMIT 1").is_ok()
-    });
-    let has_extended_meta = HAS_EXTENDED_META.get_or_init(|| {
-        conn.prepare("SELECT bitrate FROM tracks LIMIT 1").is_ok()
-    });
-
-    // Column indices (when both file_type + cover_url present):
-    // 0 title,1 artist,2 album,3 duration,4 file_path,
-    // 5 has_cover(cover_art IS NOT NULL),6 file_type,7 id,
-    // 8 cover_url,9 thumb_url,
-    // 10 bitrate,11 sample_rate,12 bit_depth,13 channels,
-    // 14 genre,15 year,16 track_number,17 album_artist.
-    let query = match (*has_file_type, *has_cover_url, *has_extended_meta) {
-        (true, true, true) => {
-            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id, cover_url, thumb_url, bitrate, sample_rate, bit_depth, channels, genre, year, track_number, album_artist FROM tracks WHERE size_bytes = ?"
-        }
-        (true, true, false) => {
-            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id, cover_url, thumb_url FROM tracks WHERE size_bytes = ?"
-        }
-        (true, false, _) => {
-            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, file_type, id FROM tracks WHERE size_bytes = ?"
-        }
-        _ => {
-            "SELECT title, artist, album, duration, file_path, cover_art IS NOT NULL, '', id FROM tracks WHERE size_bytes = ?"
-        }
-    };
-
-    let mut stmt = conn.prepare(query).ok()?;
-    let mut rows = stmt.query([size]).ok()?;
-
-    let mut first_match = None;
-    while let Ok(Some(row)) = rows.next() {
-        let file_path: String = row.get(4).unwrap_or_default();
-        let (cover_url, thumb_url): (Option<String>, Option<String>) = if *has_cover_url {
-            (row.get(8).unwrap_or_default(), row.get(9).unwrap_or_default())
-        } else {
-            (None, None)
-        };
-        let (bitrate, sample_rate, bit_depth, channels, genre, year, track_number, album_artist):
-            (i64, i64, i64, i64, String, i64, i64, String) = if *has_extended_meta {
-            (
-                row.get(10).unwrap_or_default(),
-                row.get(11).unwrap_or_default(),
-                row.get(12).unwrap_or_default(),
-                row.get(13).unwrap_or_default(),
-                row.get(14).unwrap_or_default(),
-                row.get(15).unwrap_or_default(),
-                row.get(16).unwrap_or_default(),
-                row.get(17).unwrap_or_default(),
-            )
-        } else {
-            (0, 0, 0, 0, String::new(), 0, 0, String::new())
-        };
-        let meta = LocalMetadata {
-            title: row.get(0).unwrap_or_default(),
-            artist: row.get(1).unwrap_or_default(),
-            album: row.get(2).unwrap_or_default(),
-            duration: row.get(3).unwrap_or_default(),
-            has_cover: row.get(5).unwrap_or_default() || cover_url.as_deref().map(|k| k.starts_with("covers/")).unwrap_or(false),
-            file_type: row.get(6).unwrap_or_default(),
-            id: row.get(7).unwrap_or_default(),
-            cover_url,
-            thumb_url,
-            bitrate,
-            sample_rate,
-            bit_depth,
-            channels,
-            genre,
-            year,
-            track_number,
-            album_artist,
-        };
-
-        if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
-            return Some(meta);
-        }
-
-        if first_match.is_none() {
-            first_match = Some(meta);
-        }
-    }
-
-    first_match
-}
-
-#[tauri::command]
-fn get_local_metadata(
-    size: i64,
-    name: String,
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-    #[allow(unused_variables)]
-    _app_handle: tauri::AppHandle,
-) -> Option<LocalMetadata> {
-    let start = Instant::now();
-    let conn = pool.get().ok()?;
-    let meta = get_local_metadata_internal(size, &name, &conn)?;
-
-    // `has_cover` is derived purely from the DB (cover_art IS NOT NULL OR a valid
-    // R2 key in cover_url). Covers are no longer persisted to disk, and the
-    // in-RAM moka cache (protocol.rs) only holds real R2/SQLite covers, so no
-    // disk existence check is needed here — `has_cover` stays authoritative.
-
-    let dur = start.elapsed();
-    diag_log("get_local_metadata", dur);
-    Some(meta)
-}
-
-#[tauri::command]
-fn get_track_data(
-    file_id: String,
-    size: i64,
-    name: String,
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-    bitrate: Option<f64>,
-    buffer_seconds: Option<f64>,
-    ext: Option<String>,
-    #[allow(unused_variables)]
-    _app_handle: tauri::AppHandle,
-) -> Option<TrackDataBundle> {
-    let start = Instant::now();
-    let conn = pool.get().ok()?;
-    let meta = get_local_metadata_internal(size, &name, &conn)?;
-    let stream_url = build_stream_url(&file_id, bitrate, buffer_seconds, ext.as_deref());
-    let dur = start.elapsed();
-    diag_log("get_track_data", dur);
-    Some(TrackDataBundle { metadata: meta, stream_url })
-}
-
-#[tauri::command]
-fn verify_track_exists(db_id: String, pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>) -> bool {
-    let conn = match pool.get() {
-        Ok(c) => c,
-        Err(_) => return true,
-    };
-    conn.query_row("SELECT 1 FROM tracks WHERE id = ?", [&db_id], |_| Ok(()))
-        .is_ok()
-}
-
-#[tauri::command]
-async fn update_track_duration_in_db(
-    db_id: String,
-    duration: f64,
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> Result<(), String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE tracks SET duration = ?1, duration_estimated = 0 WHERE id = ?2",
-        rusqlite::params![duration, db_id],
-    ).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
 // Diagnostic: call counter for IPC timing
 // Always log during profiling — removed the modulo-50 sampling.
@@ -490,26 +292,14 @@ fn update_minimize_to_tray(minimize: bool) {
 
 #[tauri::command]
 async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
-    // Invalidate both in-RAM caches so stale entries are purged on explicit clear.
-    crate::protocol::COVER_CACHE.invalidate_all();
-    crate::protocol::ETAG_CACHE.invalidate_all();
+    // No-op: this app no longer keeps any local metadata/cover cache on the
+    // Rust side (the cover-art/R2/SQLite pipeline was removed). Kept as a
+    // command so the frontend's "clear cache on root-folder switch" call
+    // sites don't need to special-case its absence.
     Ok(())
 }
 
-use std::sync::OnceLock;
-
-pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
-pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
-pub static HAS_COVER_URL: OnceLock<bool> = OnceLock::new();
-pub static HAS_EXTENDED_META: OnceLock<bool> = OnceLock::new();
-pub static HAS_DURATION_ESTIMATED: OnceLock<bool> = OnceLock::new();
-pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
-
-fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String> {
-    conn.execute_batch("PRAGMA journal_mode=WAL;").map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA synchronous=NORMAL;").map_err(|e| e.to_string())?;
-    Ok(())
-}
+pub static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -531,89 +321,6 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
-
-            // Initialize the access recorder used by the cover GET path in protocol.rs.
-            // The recorder MUST be set here: the protocol handler returns HTTP 500 if it
-            // is missing. The log path is where recorded accesses are flushed.
-            if let Ok(cache_dir) = app.path().app_cache_dir() {
-                let access_log = cache_dir.join(".thumbnails").join("access_log.json");
-                crate::protocol::init_access_recorder(access_log);
-            }
-
-            use r2d2_sqlite::SqliteConnectionManager;
-            use r2d2::Pool;
-            let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
-            let manager = SqliteConnectionManager::file(&db_path);
-            if let Ok(pool) = Pool::new(manager) {
-                // Clone before manage so we can use for schema migration
-                let migration_pool = pool.clone();
-                app.manage(pool);
-
-                // Schema migration
-                if let Ok(conn) = migration_pool.get() {
-                    configure_sqlite_durability(&conn).ok();
-
-                    // Migration: add R2 cover/thumb URL columns so old DBs still open.
-                    // Mirrors how `file_type` was gated with HAS_FILE_TYPE.
-                    let has_cover_url = *HAS_COVER_URL.get_or_init(|| {
-                        conn.prepare("SELECT cover_url FROM tracks LIMIT 1").is_ok()
-                    });
-                    if !has_cover_url {
-                        let _ = conn.execute(
-                            "ALTER TABLE tracks ADD COLUMN cover_url TEXT",
-                            [],
-                        );
-                        let _ = conn.execute(
-                            "ALTER TABLE tracks ADD COLUMN thumb_url TEXT",
-                            [],
-                        );
-                    }
-
-                    // Migration: add pro-grade audio metadata columns so old DBs
-                    // (scanned before this feature) still open and just report 0/empty.
-                    let has_extended_meta = *HAS_EXTENDED_META.get_or_init(|| {
-                        conn.prepare("SELECT bitrate FROM tracks LIMIT 1").is_ok()
-                    });
-                    if !has_extended_meta {
-                        for col in [
-                            "ALTER TABLE tracks ADD COLUMN bitrate INTEGER",
-                            "ALTER TABLE tracks ADD COLUMN sample_rate INTEGER",
-                            "ALTER TABLE tracks ADD COLUMN bit_depth INTEGER",
-                            "ALTER TABLE tracks ADD COLUMN channels INTEGER",
-                            "ALTER TABLE tracks ADD COLUMN genre TEXT",
-                            "ALTER TABLE tracks ADD COLUMN year INTEGER",
-                            "ALTER TABLE tracks ADD COLUMN track_number INTEGER",
-                            "ALTER TABLE tracks ADD COLUMN album_artist TEXT",
-                        ] {
-                            let _ = conn.execute(col, []);
-                        }
-                    }
-
-                    // Migration: add duration_estimated flag column so old DBs (scanned
-                    // before duration estimation) still open. DEFAULT 1 = "duration needs
-                    // (re)estimation"; update_track_duration_in_db sets it to 0 once a real
-                    // duration is stored.
-                    let has_duration_estimated = *HAS_DURATION_ESTIMATED.get_or_init(|| {
-                        conn.prepare("SELECT duration_estimated FROM tracks LIMIT 1").is_ok()
-                    });
-                    if !has_duration_estimated {
-                        let _ = conn.execute(
-                            "ALTER TABLE tracks ADD COLUMN duration_estimated INTEGER DEFAULT 1",
-                            [],
-                        );
-                    }
-
-                    // Migration: add index on size_bytes for fast metadata lookup.
-                    // get_local_metadata queries by size_bytes — without index every
-                    // SongCard mount does a full table scan (~12K rows).
-                    let _ = conn.execute_batch(
-                        "CREATE INDEX IF NOT EXISTS idx_tracks_size_bytes ON tracks(size_bytes);"
-                    );
-                    let _ = conn.execute_batch(
-                        "CREATE INDEX IF NOT EXISTS idx_tracks_id ON tracks(id);"
-                    );
-                }
-            }
 
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
@@ -672,13 +379,9 @@ pub fn run() {
             refresh_google_token,
             register_download_path,
             get_stream_url,
-            get_track_data,
             update_buffer_settings,
-            get_local_metadata,
             update_stream_token, clear_stream_token,
             update_minimize_to_tray,
-            verify_track_exists,
-            update_track_duration_in_db,
             clear_local_cache,
         ])
         .build(tauri::generate_context!());
@@ -697,60 +400,4 @@ pub fn run() {
             }
             _ => {}
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rusqlite::Connection;
-
-    fn setup() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute(
-            "CREATE TABLE tracks (
-                id TEXT, title TEXT, artist TEXT, album TEXT,
-                duration REAL, file_path TEXT, cover_art BLOB,
-                file_type TEXT, size_bytes INTEGER, cover_url TEXT, thumb_url TEXT,
-                bitrate INTEGER, sample_rate INTEGER, bit_depth INTEGER, channels INTEGER,
-                genre TEXT, year INTEGER, track_number INTEGER, album_artist TEXT
-            )",
-            [],
-        )
-        .unwrap();
-        conn.execute_batch("CREATE INDEX idx_tracks_size_bytes ON tracks(size_bytes);").unwrap();
-        conn
-    }
-
-    // Old size-based dedup: a track of the same byte size is matched,
-    // preferring a name/title match, else the first row.
-    #[test]
-    fn dedup_by_size_prefers_name() {
-        let conn = setup();
-        conn.execute(
-            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params!["AAA", "Song A", "Artist A", 200.0, "/content/drive/v1/files/AAA", 1000i64],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params!["BBB", "Song B", "Artist B", 200.0, "/content/drive/v1/files/BBB", 1000i64],
-        )
-        .unwrap();
-
-        let m = get_local_metadata_internal(1000, "Song A", &conn).unwrap();
-        assert_eq!(m.id, "AAA");
-    }
-
-    #[test]
-    fn legacy_drive_path_still_reads() {
-        let conn = setup();
-        conn.execute(
-            "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
-            rusqlite::params!["ZZZ", "My Song", "Someone", 200.0, "/content/drive/v1/files/ZZZ?alt=media", 1000i64],
-        )
-        .unwrap();
-
-        let m = get_local_metadata_internal(1000, "My Song", &conn).unwrap();
-        assert_eq!(m.id, "ZZZ");
-    }
 }
