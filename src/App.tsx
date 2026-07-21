@@ -458,9 +458,29 @@ function App() {
       }
       
       const q = getFolderAudioQuery(folderId);
-      
+
       let pageToken: string | undefined = undefined;
       let allFiles: any[] = [];
+      // Files from page 2 onward are buffered and written in ONE bulkPut
+      // after the loop, instead of once per page (see below) -- a folder
+      // large enough to need multiple Drive API pages (>1000 audio files)
+      // used to call `db.files.bulkPut()` once per page, and since
+      // `dbFiles` (App.tsx) is a `useLiveQuery`, EVERY one of those writes
+      // re-fires the live query, which re-sorts the FULL accumulated set
+      // from scratch (driveItems' useMemo depends on `dbFiles`) and
+      // re-renders the whole list. Because Drive doesn't return pages in
+      // this app's own sort order, a later page's items can sort ahead of
+      // earlier ones -- so which items land on the currently-viewed UI
+      // page could keep changing as more pages arrive, which (a) visibly
+      // reshuffles/flickers what the user is looking at, and (b) fires a
+      // FRESH `get_local_metadata_batch` IPC call for whatever newly-shows-
+      // up-as-"new" items land on the current page each time (see
+      // MainContent.tsx's tag-lookup effect). For an N-page folder this
+      // meant up to N full re-sorts/re-renders and up to N separate DB
+      // round-trips instead of a bounded, small number. Page 1 is still
+      // written immediately below so a fresh (previously-empty) folder
+      // still shows results quickly instead of waiting for every page.
+      let laterPagesFiles: any[] = [];
       let isFirstPage = true;
 
       do {
@@ -488,20 +508,34 @@ function App() {
             trashed: false,
             isFolder: file.mimeType === "application/vnd.google-apps.folder"
           }));
-          
-          await db.files.bulkPut(filesToInsert);
+
+          if (isFirstPage) {
+            await db.files.bulkPut(filesToInsert);
+          } else {
+            laterPagesFiles = laterPagesFiles.concat(filesToInsert);
+          }
           allFiles = allFiles.concat(filesToInsert);
         }
 
         pageToken = data.nextPageToken;
-        
+
         // Hide loading spinner early only if THIS request is still the latest one
         if (isFirstPage && pageToken && existingCount === 0 && folderFetchGuard.isLatest(myId)) {
           setIsLoadingTracks(false);
         }
         isFirstPage = false;
-        
+
       } while (pageToken);
+
+      // Single coalesced write for every page after the first -- caps the
+      // live-query-driven re-sort/re-render/re-lookup cascade described
+      // above to at most one EXTRA occurrence, regardless of how many
+      // total Drive pages this folder needed (was: one occurrence PER
+      // page). No-op (0-length bulkPut is skipped) for the common
+      // single-page-folder case, so this changes nothing there.
+      if (laterPagesFiles.length > 0) {
+        await db.files.bulkPut(laterPagesFiles);
+      }
 
       // Sync deletions: remove local files that are no longer in Google Drive.
       // Only run when the folder was fully and successfully fetched — never
