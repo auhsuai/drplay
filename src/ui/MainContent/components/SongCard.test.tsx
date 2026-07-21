@@ -1,15 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
-import { SongCard, coverImageCache } from './SongCard';
-import { getTrackMetadata } from '../../../utils/metadata';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { SongCard } from './SongCard';
 import type { DriveItem } from '../../../App';
-
-vi.mock('../../../utils/metadata', () => ({
-  getTrackMetadata: vi.fn(),
-}));
-
-const mockedFetch = vi.mocked(getTrackMetadata);
 
 function makeItem(over: Partial<DriveItem> = {}): DriveItem {
   return {
@@ -29,8 +22,8 @@ function makeItem(over: Partial<DriveItem> = {}): DriveItem {
 }
 
 const baseProps = {
-  onPlay: () => {},
-  onOpenFolder: () => {},
+  onPlay: vi.fn(),
+  onOpenFolder: vi.fn(),
   token: 'tok',
   currentFolderId: 'root',
   currentFolderName: 'Root',
@@ -38,91 +31,51 @@ const baseProps = {
   onRefresh: () => {},
 };
 
-describe('SongCard coverUrl prop', () => {
-  beforeEach(() => {
-    coverImageCache.clear();
-    mockedFetch.mockReset();
-    mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
-      artist: 'Fetched Artist',
-      coverUrl: 'http://cover/1',
-      pictureData: null,
-      pictureFormat: undefined,
-    } as never);
-  });
-
+// This app streams directly from Google Drive with no tag/cover database, so
+// SongCard no longer fetches anything — it just renders `item.title` (the
+// Drive filename) and a generic Music/Folder icon.
+describe('SongCard', () => {
   afterEach(() => {
     cleanup();
+    vi.clearAllMocks();
   });
 
-  it('fetches metadata even when coverUrl prop is provided (just skips cover)', async () => {
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} coverUrl="http://injected/cover" />);
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
-    await screen.findByText('Fetched Title');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
+  it('renders the track title directly from the item, no fetch', () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(screen.getByText('My Song')).toBeTruthy();
   });
 
-  it('self-fetches when no coverUrl prop is given', async () => {
+  it('renders a music icon (no cover image) for a track', () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
-    // Cover eventually shows from fetched metadata.
-    await screen.findByAltText('cover');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('.lucide-music')).not.toBeNull();
   });
 
-  it('fetches metadata when injectedCoverUrl is null', async () => {
-    render(<SongCard {...baseProps} item={makeItem()} coverUrl={null} />);
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    await screen.findByAltText('cover');
-  });
-
-  it('caches and reuses coverUrl from cache on remount', async () => {
-    const { unmount, container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByAltText('cover');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
-
-    unmount();
-    cleanup();
-
-    const { container: container2 } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByAltText('cover');
-    expect(container2.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
-  });
-
-  it('does not self-fetch for folder items even without coverUrl', () => {
+  it('renders a folder icon for folder items', () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem({ isFolder: true, trackInfo: undefined })} />,
     );
-    expect(mockedFetch).not.toHaveBeenCalled();
     expect(container.querySelector('.lucide-folder')).not.toBeNull();
   });
 
-  it('metadata update callback still works when injectedCoverUrl changes', async () => {
-    mockedFetch.mockResolvedValue({
-      title: 'Updated Title',
-      artist: 'Updated Artist',
-      coverUrl: 'http://cover/2',
-      pictureData: null,
-      pictureFormat: undefined,
-    } as never);
-    const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} coverUrl="http://injected/cover" />
-    );
-    await screen.findByText('Updated Title');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
-    mockedFetch.mockClear();
-    mockedFetch.mockResolvedValue({
-      title: 'Re-fetched Title',
-      artist: 'Re-fetched Artist',
-      coverUrl: 'http://cover/3',
-      pictureData: null,
-      pictureFormat: undefined,
-    } as never);
-    window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
-    await screen.findByText('Re-fetched Title');
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
+  it('calls onOpenFolder when a folder item is clicked', () => {
+    const onOpenFolder = vi.fn();
+    const item = makeItem({ isFolder: true, trackInfo: undefined, title: 'My Folder' });
+    const { container } = render(<SongCard {...baseProps} item={item} onOpenFolder={onOpenFolder} />);
+    fireEvent.click(container.querySelector('.cursor-pointer')!);
+    expect(onOpenFolder).toHaveBeenCalledWith('track-1', 'My Folder');
+  });
+
+  it('calls onPlay with the item trackInfo when a track is clicked', () => {
+    const onPlay = vi.fn();
+    const item = makeItem();
+    const { container } = render(<SongCard {...baseProps} item={item} onPlay={onPlay} />);
+    fireEvent.click(container.querySelector('.cursor-pointer')!);
+    expect(onPlay).toHaveBeenCalledWith(item.trackInfo);
+  });
+
+  it('shows the file size when available', () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(screen.getByText('0.0 MB')).toBeTruthy();
   });
 });
