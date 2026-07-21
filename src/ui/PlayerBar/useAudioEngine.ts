@@ -551,7 +551,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     // streams through a custom Rust proxy that never populates the browser's
     // native buffered TimeRanges, so audio.buffered is always empty and would
     // wipe the bar on every timeupdate. The buffer bar is driven by the proxy's
-    // `buffer-status` Tauri event (see useTrackMetadata / NowPlayingView).
+    // `buffer-status` Tauri event (see useTrackMetadata).
 
     // Data đang chảy → chắc chắn không buffering; huỷ debounce đang chờ.
     if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
