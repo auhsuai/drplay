@@ -79,3 +79,60 @@ describe('SongCard', () => {
     expect(screen.getByText('0.0 MB')).toBeTruthy();
   });
 });
+
+// dbMetadata is only ever passed by MainContent.tsx for the "My Drive" list —
+// these tests cover that opt-in path without affecting the plain-filename
+// behavior exercised above (used by Home/LikedSongs/Playlists, which never
+// pass this prop).
+describe('SongCard dbMetadata (My Drive tag lookup)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('shows the DB tag title instead of the filename when dbMetadata is provided', () => {
+    render(
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        dbMetadata={{ title: 'Real Tag Title', artist: 'Real Artist', duration: 0 }}
+      />,
+    );
+    expect(screen.getByText('Real Tag Title')).toBeTruthy();
+    expect(screen.queryByText('My Song')).toBeNull();
+  });
+
+  it('falls back to the filename title when dbMetadata has no title', () => {
+    render(<SongCard {...baseProps} item={makeItem()} dbMetadata={undefined} />);
+    expect(screen.getByText('My Song')).toBeTruthy();
+  });
+
+  it('shows a formatted duration alongside size when dbMetadata provides one', () => {
+    render(
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        dbMetadata={{ title: 'Real Tag Title', artist: '', duration: 125 }}
+      />,
+    );
+    expect(screen.getByText('02:05')).toBeTruthy();
+    expect(screen.getByText('0.0 MB')).toBeTruthy();
+  });
+
+  it('enriches onPlay with the DB tag title/artist when a track is clicked', () => {
+    const onPlay = vi.fn();
+    const item = makeItem();
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={item}
+        onPlay={onPlay}
+        dbMetadata={{ title: 'Real Tag Title', artist: 'Real Artist', duration: 0 }}
+      />,
+    );
+    fireEvent.click(container.querySelector('.cursor-pointer')!);
+    expect(onPlay).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Real Tag Title', artist: 'Real Artist' }),
+    );
+  });
+});
