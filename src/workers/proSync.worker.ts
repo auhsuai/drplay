@@ -119,6 +119,14 @@ async function startProSync() {
 async function performFullSync() {
   if (!currentToken) return;
   let startToken = '';
+  // Tracks whether the files pagination loop actually reached its natural
+  // end (no more nextPageToken) vs. broke out early (retries exhausted,
+  // non-401 failure, bulkPut failure). Previously this function sent
+  // SYNC_COMPLETE unconditionally at the end regardless of which happened,
+  // so the main thread could believe a sync had fully finished when it had
+  // only partially synced the file list. Every exit path below now sends
+  // exactly one of SYNC_COMPLETE (only when this is true) or SYNC_ERROR.
+  let filesSyncedFully = false;
 
   // Retry the whole pass only when the startPageToken fetch hits 401 and the
   // main thread successfully refreshes the token.
@@ -131,7 +139,10 @@ async function performFullSync() {
       const tokenRes = await fetchDrive('startPageToken', currentToken, tokenUrl);
 
       if (tokenRes.status === 401) {
-        if (syncRetryCount >= MAX_SYNC_RETRIES) return;
+        if (syncRetryCount >= MAX_SYNC_RETRIES) {
+          self.postMessage({ type: 'SYNC_ERROR' });
+          return;
+        }
         syncRetryCount++;
         self.postMessage({ type: 'TOKEN_EXPIRED' });
         const refreshed = await waitForTokenRefresh();
@@ -140,6 +151,7 @@ async function performFullSync() {
           retryFullSync = true;
           continue;
         }
+        self.postMessage({ type: 'SYNC_ERROR' });
         return;
       }
       if (tokenRes.ok) {
@@ -149,6 +161,7 @@ async function performFullSync() {
     } catch (err) {
       if (err instanceof WorkerAbortError) return;
       logWorkerError('proSync/full-sync', { phase: 'startPageToken' }, err, 'error');
+      self.postMessage({ type: 'SYNC_ERROR' });
       return;
     }
 
@@ -193,7 +206,6 @@ async function performFullSync() {
         if (filesToInsert.length > 0) {
           try {
             await db.files.bulkPut(filesToInsert);
-            self.postMessage({ type: 'SYNC_PROGRESS' });
           } catch (err) {
             logWorkerError('proSync/full-sync', { phase: 'bulkPut', count: filesToInsert.length }, err, 'error');
             break;
@@ -201,6 +213,7 @@ async function performFullSync() {
         }
 
         pageToken = data.nextPageToken;
+        if (!pageToken) filesSyncedFully = true;
       } while (pageToken);
     } catch (err) {
       if (err instanceof WorkerAbortError) return;
@@ -216,13 +229,20 @@ async function performFullSync() {
     }
   }
 
-  self.postMessage({ type: 'SYNC_COMPLETE' });
+  self.postMessage({ type: filesSyncedFully ? 'SYNC_COMPLETE' : 'SYNC_ERROR' });
 }
 
 async function performDeltaSync(startPageToken: string) {
   if (!currentToken) return;
   let pageToken = startPageToken;
   let newStartPageToken = startPageToken;
+  // Same accurate-completion tracking as performFullSync (see its comment).
+  // Previously this only sent SYNC_COMPLETE when the page token had actually
+  // advanced, which meant a delta sync that broke early (401s exhausted)
+  // sent nothing at all, AND a delta sync that legitimately found zero
+  // changes since last time (a common, healthy outcome for a periodic
+  // re-sync) also sent nothing — both looked identical to the main thread.
+  let changesSyncedFully = false;
 
   try {
     do {
@@ -240,6 +260,7 @@ async function performDeltaSync(startPageToken: string) {
           } catch (err) {
             logWorkerError('proSync/delta-sync', { phase: 'deleteStartToken' }, err, 'error');
           }
+          // performFullSync now sends its own SYNC_COMPLETE/SYNC_ERROR.
           await performFullSync();
           return;
         }
@@ -259,13 +280,11 @@ async function performDeltaSync(startPageToken: string) {
       const data = await parseDriveJson('changes', res);
 
       const changes = data.changes || [];
-      let hasValidChanges = false;
 
       for (const change of changes) {
         try {
           if (change.removed || (change.file && change.file.trashed)) {
             await db.files.delete(change.fileId);
-            hasValidChanges = true;
           } else if (change.file) {
             const isFolder = change.file.mimeType === 'application/vnd.google-apps.folder';
 
@@ -280,7 +299,6 @@ async function performDeltaSync(startPageToken: string) {
                 trashed: false,
                 isFolder,
               });
-              hasValidChanges = true;
             }
           }
         } catch (err) {
@@ -293,22 +311,24 @@ async function performDeltaSync(startPageToken: string) {
         newStartPageToken = data.newStartPageToken;
       }
       pageToken = data.nextPageToken;
-
-      if (hasValidChanges) {
-        self.postMessage({ type: 'SYNC_PROGRESS' });
-      }
+      if (!pageToken) changesSyncedFully = true;
     } while (pageToken);
 
+    if (!changesSyncedFully) {
+      self.postMessage({ type: 'SYNC_ERROR' });
+      return;
+    }
     if (newStartPageToken !== startPageToken) {
       try {
         await db.syncState.put({ key: 'startPageToken', value: newStartPageToken });
       } catch (err) {
         logWorkerError('proSync/delta-sync', { phase: 'saveStartToken' }, err, 'error');
       }
-      self.postMessage({ type: 'SYNC_COMPLETE' });
     }
+    self.postMessage({ type: 'SYNC_COMPLETE' });
   } catch (err) {
     if (err instanceof WorkerAbortError) return;
     logWorkerError('proSync/delta-sync', { phase: 'changes' }, err, 'error');
+    self.postMessage({ type: 'SYNC_ERROR' });
   }
 }

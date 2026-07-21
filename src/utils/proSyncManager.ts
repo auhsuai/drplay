@@ -28,10 +28,14 @@ export function startProSyncWorker(token: string) {
         return;
       }
 
-      if (e.data.type === 'SYNC_PROGRESS') {
-        window.dispatchEvent(new CustomEvent('pro-sync-progress'));
-      } else if (e.data.type === 'SYNC_COMPLETE') {
+      if (e.data.type === 'SYNC_COMPLETE') {
         window.dispatchEvent(new CustomEvent('pro-sync-complete'));
+      } else if (e.data.type === 'SYNC_ERROR') {
+        // Previously dropped entirely -- the worker already logs the
+        // underlying cause (logWorkerError), this just lets the main thread
+        // react too (e.g. stop showing a loading state that would otherwise
+        // wait forever for a completion signal that will never arrive).
+        window.dispatchEvent(new CustomEvent('pro-sync-error'));
       }
     };
   }

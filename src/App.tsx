@@ -542,11 +542,18 @@ function App() {
 
   useEffect(() => {
     const handleSyncComplete = () => setIsLoadingTracks(false);
+    // A failed background sync must clear the loading state too -- otherwise
+    // a first-sync failure (e.g. offline, repeated 401s) would leave this
+    // stuck true forever, since previously nothing but 'pro-sync-complete'
+    // ever cleared it and the worker could fail without ever sending that.
+    const handleSyncError = () => setIsLoadingTracks(false);
 
     window.addEventListener('pro-sync-complete', handleSyncComplete);
+    window.addEventListener('pro-sync-error', handleSyncError);
 
     return () => {
       window.removeEventListener('pro-sync-complete', handleSyncComplete);
+      window.removeEventListener('pro-sync-error', handleSyncError);
     };
   }, []);
 
