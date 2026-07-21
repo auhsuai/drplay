@@ -20,7 +20,8 @@ import { getFolderAudioQuery } from './utils/audioQuery';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { LoginScreen } from "./ui/Login/LoginScreen";
 
-import { fetchWithAuth, getValidToken } from "./utils/apiClient";
+import { getValidToken } from "./utils/apiClient";
+import { driveFetch } from "./utils/driveApi";
 import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
@@ -297,7 +298,7 @@ function App() {
           
           if (!folderInfo || !folderInfo.parentId) {
             try {
-              const res = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${current}?fields=parents`, {
+              const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${current}?fields=parents`, {
                 headers: { Authorization: `Bearer ${accessToken}` }
               });
               if (res.ok) {
@@ -322,7 +323,7 @@ function App() {
           const parentInfo = await db.files.get(pId);
           if (!parentInfo) {
             try {
-              const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${pId}?fields=name`, {
+              const pRes = await driveFetch(`https://www.googleapis.com/drive/v3/files/${pId}?fields=name`, {
                 headers: { Authorization: `Bearer ${accessToken}` }
               });
               if (pRes.ok) {
@@ -356,7 +357,7 @@ function App() {
         // full restart re-fetched everything. Prefer the live API result and
         // only fall back to the cache if the API call fails.
         try {
-          const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
+          const response = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
             headers: { Authorization: `Bearer ${accessToken}` }
           });
           if (response.ok) {
@@ -388,7 +389,7 @@ function App() {
           if (parentInfo) {
             folderName = parentInfo.name;
           } else {
-             const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
+             const pRes = await driveFetch(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
                 headers: { Authorization: `Bearer ${accessToken}` }
               });
               if (pRes.ok) {
@@ -519,7 +520,20 @@ function App() {
 
       do {
         const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&orderBy=${encodeURIComponent(driveOrderBy)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=1000` + (pageToken ? `&pageToken=${pageToken}` : '');
-        const response = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
+        // driveFetch (not the raw fetchWithAuth this loop used before) --
+        // this is the single most-frequently-hit Drive API call in the
+        // whole app (every folder open), and it was the ONE call site
+        // with no protection against transient 429/5xx responses: any
+        // rate-limit or server hiccup mid-fetch used to abort this loop
+        // immediately (see the `break` below), silently truncating the
+        // folder listing with no retry, while nearly every OTHER Drive
+        // operation in driveApi.ts already retries 429/5xx with backoff
+        // via this same driveFetch. The always-running background full-
+        // library sync (proSync.worker.ts, starts right after login) also
+        // calls the Drive API in a tight per-page loop with no pacing of
+        // its own, which makes it more plausible for this specific,
+        // heavily-hit call to occasionally land on a rate-limited window.
+        const response = await driveFetch(url, { headers: { Authorization: `Bearer ${token}` } });
 
         if (!response.ok) {
           console.error(`[${APP_MODULE}] Failed to fetch page from drive API`, response.status);
