@@ -1,10 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Track } from '../../App';
-import { getTrackMetadata } from '../../utils/metadata';
 import { recordPlay } from '../../utils/history';
 import { isFavorite, addFavorite, removeFavorite } from '../../utils/favorites';
 import { listen } from '@tauri-apps/api/event';
-import { getValidToken } from '../../utils/apiClient';
 import { captureError } from '../../utils/errorLog';
 import { formatTime } from '../../utils/formatTime';
 import { PlayerAction } from './types';
@@ -22,7 +20,6 @@ function classifyTrackMetaError(err: unknown): string {
 }
 
 export interface TrackMetadataAPI {
-  coverUrl: string | null;
   realTitle: string;
   realArtist: string;
   isLiked: boolean;
@@ -42,7 +39,6 @@ interface UseTrackMetadataParams {
 export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataAPI {
   const { currentTrack, dispatch, progressFillRef, currentTimeTextRef, bufferFillRef, setDuration } = params;
 
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [realTitle, setRealTitle] = useState('');
   const [realArtist, setRealArtist] = useState('');
   const [isLiked, setIsLiked] = useState(false);
@@ -84,12 +80,13 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
     }
   };
 
-  // Track change effect — clears state, restores session, fetches metadata
+  // Track change effect — clears state, restores session, sets title/artist.
+  // Title/artist come straight from the Track object (Drive filename); there
+  // is no tag database to enrich them further.
   useEffect(() => {
     if (currentTrack) {
       setRealTitle(currentTrack.title);
       setRealArtist(currentTrack.artist || '');
-      setCoverUrl(null);
       dispatch({ type: 'CLEAR_ERROR' });
 
       const restoreTime = currentTrack.restoreTime;
@@ -112,43 +109,10 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
     }
   }, [currentTrack?.id]);
 
-  // Metadata fetch + play record
+  // Play record
   useEffect(() => {
-    if (currentTrack) {
-      let isCancelled = false;
-      let objectUrl: string | null = null;
-
-      getValidToken().then(token => {
-        if (isCancelled) return null;
-        return getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName);
-      }).then(metadata => {
-        if (!metadata || isCancelled) return;
-        if (metadata.title) setRealTitle(metadata.title);
-        if (metadata.artist) setRealArtist(metadata.artist);
-
-        if (metadata.coverUrl) {
-          setCoverUrl(metadata.coverUrl);
-        } else if (metadata.pictureData && metadata.pictureFormat) {
-          const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
-          objectUrl = URL.createObjectURL(blob);
-          setCoverUrl(objectUrl);
-        }
-      })
-        .catch(err => {
-          const errName = classifyTrackMetaError(err);
-          const errMsg = err instanceof Error ? err.message : String(err);
-          console.warn(`[${TRACK_META_MODULE}] metadata-fetch-failed`, { trackId: currentTrack.id, name: errName, message: errMsg });
-          if (!isCancelled) dispatch({ type: 'ERROR', error: { type: 'metadata', text: errMsg } });
-        });
-
-      if (currentTrack.streamUrl && isProxyStreamUrl(currentTrack.streamUrl)) {
-        recordPlay(currentTrack).catch(e => captureError({ level: 'warn', source: 'track-metadata', message: `recordPlay failed (${classifyTrackMetaError(e)})`, kind: 'history' }));
-      }
-
-      return () => {
-        isCancelled = true;
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-      };
+    if (currentTrack && currentTrack.streamUrl && isProxyStreamUrl(currentTrack.streamUrl)) {
+      recordPlay(currentTrack).catch(e => captureError({ level: 'warn', source: 'track-metadata', message: `recordPlay failed (${classifyTrackMetaError(e)})`, kind: 'history' }));
     }
   }, [currentTrack?.id]);
 
@@ -186,7 +150,6 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
   }, [currentTrack?.id]);
 
   return {
-    coverUrl,
     realTitle,
     realArtist,
     isLiked,
