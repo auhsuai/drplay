@@ -21,7 +21,6 @@
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "$DOWNLOAD/**" }]
     },
-    "http:default",
     {
       "identifier": "http:default",
       "allow": [{ "url": "https://*.googleapis.com/*" }, { "url": "https://*.googleusercontent.com/*" }]
