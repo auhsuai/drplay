@@ -925,7 +925,6 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
       ref={rowVirtualizer.containerRef}
       style={{
         position: 'relative',
-        width: '100%',
       }}
     >
       {virtualItems.map((virtualRow) => {
@@ -953,7 +952,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
               data-index={virtualRow.index}
               ref={rowVirtualizer.measureElement}
               className="pb-2"
-              style={{ position: 'absolute', left: 0, width: '100%' }}
+              style={{ position: 'absolute', top: 0, left: 0, width: '100%' }}
             >
               <div className="h-[76px] rounded-xl bg-gray-100 dark:bg-[#1a1b1e] animate-pulse" />
             </div>
@@ -967,6 +966,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
             className="pb-2"
             style={{
               position: 'absolute',
+              top: 0,
               left: 0,
               width: '100%',
             }}
