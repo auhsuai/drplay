@@ -238,14 +238,26 @@ export const MainContent = React.memo(function MainContent({
     [filteredItems, currentPage, itemsPerPage]
   );
 
+  // `directDomUpdates: true` (an opt-in perf optimization that lets the
+  // virtualizer write row positions straight to the DOM, bypassing React's
+  // own render for scroll-only updates) was removed after 3 rounds of
+  // reported/fixed-but-recurring "blank/misplaced row" symptoms that
+  // resurfaced even after correcting a real, documented requirement
+  // violation for that mode (missing `top: 0` anchor). Rather than keep
+  // chasing individual requirements of an advanced, opt-in feature this
+  // app's actual list sizes (capped at `itemsPerPage` = 50 rows) don't need
+  // the performance benefit of, reverted to the library's own default,
+  // React-driven update path -- the standard usage the vast majority of
+  // this library's users rely on, and the one with by far the most
+  // real-world mileage. Positions are now set directly in each row's JSX
+  // style (see `transform: translateY(...)` below) instead of being
+  // written imperatively outside React's render.
   const rowVirtualizer = useVirtualizer({
     count: currentItems.length,
     getScrollElement: () => mainRef.current,
     estimateSize: () => 92,
     overscan: 2,
     getItemKey: (index: number) => currentItems[index].id,
-    useFlushSync: false,
-    directDomUpdates: true,
   });
 
   React.useEffect(() => {
@@ -922,9 +934,9 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
 
   return (
     <div
-      ref={rowVirtualizer.containerRef}
       style={{
         position: 'relative',
+        height: `${rowVirtualizer.getTotalSize()}px`,
       }}
     >
       {virtualItems.map((virtualRow) => {
@@ -952,7 +964,13 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
               data-index={virtualRow.index}
               ref={rowVirtualizer.measureElement}
               className="pb-2"
-              style={{ position: 'absolute', top: 0, left: 0, width: '100%' }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
             >
               <div className="h-[76px] rounded-xl bg-gray-100 dark:bg-[#1a1b1e] animate-pulse" />
             </div>
@@ -969,6 +987,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
               top: 0,
               left: 0,
               width: '100%',
+              transform: `translateY(${virtualRow.start}px)`,
             }}
           >
             <SongCard
