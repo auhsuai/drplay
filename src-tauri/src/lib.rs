@@ -368,45 +368,66 @@ struct LocalMetadataQuery {
 // pattern also known from GraphQL's DataLoader: collect the keys the caller
 // actually needs, fetch them in one query pass, return a keyed map).
 //
-// `async fn` + `spawn_blocking` (matching `login_google_native`) so the
-// blocking r2d2 pool checkout + the whole loop of rusqlite queries run on
-// the blocking thread pool, not a Tokio worker thread — same reasoning as
-// before, but now it's ONE checkout for the whole batch instead of one per
-// item, which is also strictly cheaper than the old per-item version.
+// PERF NOTE (regression found and fixed after a user report of slower
+// folder-load times): the first version of this batch ran every item
+// SEQUENTIALLY on a SINGLE checked-out connection inside one spawn_blocking.
+// That's strictly cheaper on IPC overhead than the old per-item version, but
+// it also gave up the real concurrency the old version had — `tracks` has no
+// index on `size_bytes` (every lookup is a full table scan), and the old
+// 6-wide-throttled frontend loop meant up to 6 *separate* r2d2 connections
+// could scan concurrently across multiple OS threads. Collapsing all of that
+// onto one connection made every scan for a page fully serial on a single
+// core, which for a non-trivial library can be slower in wall-clock terms
+// than the extra IPC round-trips it was saving.
+//
+// Fixed by spawning one `spawn_blocking` task PER item (each doing its own
+// `pool.get()` + single-row query) and awaiting them together, instead of
+// one task looping over everything with one connection. r2d2's own
+// `pool.get()` blocks/queues once the pool's `max_size` (10, r2d2's default
+// here — see the `Pool::new(manager)` call below with no `.max_size()`
+// override) connections are checked out, so this naturally reproduces (and
+// slightly improves on, 10 vs the old 6) the old concurrency bound without
+// needing an explicit semaphore — while still being ONE invoke() call from
+// the frontend's perspective. Verified the spawn-many/pool-bounds/collect-
+// into-a-keyed-map shape in an isolated crate (a semaphore standing in for
+// the pool) since this sandbox cannot compile the full Tauri app: with a
+// simulated pool size of 10 and 50 items, real concurrency (>1, <=10) was
+// observed and every item still produced a correctly-keyed result.
+//
+// `async fn` + `spawn_blocking` per task (matching `login_google_native`'s
+// use of spawn_blocking) so each blocking r2d2 checkout + rusqlite query
+// runs on the blocking thread pool, never a Tokio async worker thread.
 //
 // MUST return `Result<T, E>`: Tauri 2 requires any async command that takes
 // a reference-typed input (`tauri::State<'_, _>` borrows from the invoke
 // message) to return `Result` — its own `AsyncCommandMustReturnResult` trait
-// bound only has an impl for `Result<A, B>`. Returning a bare `HashMap<..>`
-// here compiled fine everywhere in THIS sandbox's checks (no cargo/webkit2gtk
-// available to catch it) but fails real compilation with E0277 + a follow-on
-// E0597 lifetime error on Windows CI. This never actually returns `Err` in
-// practice (every internal failure already degrades to an empty/partial
-// map, by design) — the `Result` wrapper exists purely to satisfy this
-// compile-time requirement, not to signal a new error case.
+// bound only has an impl for `Result<A, B>`. This never actually returns
+// `Err` in practice (every internal failure already degrades to a partial
+// map, by design) — the wrapper exists purely to satisfy this compile-time
+// requirement, not to signal a new error case.
 #[tauri::command]
 async fn get_local_metadata_batch(
     items: Vec<LocalMetadataQuery>,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
 ) -> Result<HashMap<String, LocalMetadata>, String> {
-    let pool = (*pool).clone();
-    let results = tauri::async_runtime::spawn_blocking(move || {
-        let start = Instant::now();
-        let mut results = HashMap::with_capacity(items.len());
-        let conn = match pool.get() {
-            Ok(c) => c,
-            Err(_) => return results,
-        };
-        for item in items {
-            if let Some(meta) = get_local_metadata_internal(item.size, &item.name, &conn) {
-                results.insert(item.id, meta);
-            }
+    let start = Instant::now();
+    let item_count = items.len();
+    let mut tasks = Vec::with_capacity(item_count);
+    for item in items {
+        let pool = (*pool).clone();
+        tasks.push(tauri::async_runtime::spawn_blocking(move || {
+            let conn = pool.get().ok()?;
+            get_local_metadata_internal(item.size, &item.name, &conn).map(|meta| (item.id, meta))
+        }));
+    }
+
+    let mut results = HashMap::with_capacity(item_count);
+    for task in tasks {
+        if let Ok(Some((id, meta))) = task.await {
+            results.insert(id, meta);
         }
-        diag_log("get_local_metadata_batch", start.elapsed());
-        results
-    })
-    .await
-    .unwrap_or_default();
+    }
+    diag_log("get_local_metadata_batch", start.elapsed());
     Ok(results)
 }
 
