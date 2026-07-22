@@ -7,6 +7,10 @@ import type { DriveItem } from '../../App';
 // DO NOT mock @tanstack/react-virtual — we need the REAL virtualizer
 // to catch the "initial count 0 → no items rendered" bug.
 
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue({}),
+}));
+
 // jsdom limitation: HTMLElement.offsetHeight is always 0 because jsdom
 // doesn't compute layout. The virtualizer's calculateRange bails out when
 // outerSize === 0 (see @tanstack/virtual-core calculateRange). To test the

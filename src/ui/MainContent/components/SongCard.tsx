@@ -58,7 +58,7 @@ interface SongCardProps {
   dbMetadata?: DbTagMetadata;
 }
 
-export const SongCard = React.memo(function SongCard({
+export function SongCard({
   item,
   onPlay,
   onOpenFolder,
@@ -124,7 +124,7 @@ export const SongCard = React.memo(function SongCard({
     <div
       className="relative group/card w-full"
       style={{
-        contain: 'layout style' as any,
+        contain: 'layout style',
       }}
     >
       <div
@@ -230,12 +230,4 @@ export const SongCard = React.memo(function SongCard({
     </div>
     </div>
   );
-}, (prev, next) => {
-  return prev.item.id === next.item.id &&
-         prev.isPlaying === next.isPlaying &&
-         prev.isSelected === next.isSelected &&
-         prev.isSelectionMode === next.isSelectionMode &&
-         prev.isHighlighted === next.isHighlighted &&
-         prev.highlightTrigger === next.highlightTrigger &&
-         prev.dbMetadata === next.dbMetadata;
-});
+}

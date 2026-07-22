@@ -15,6 +15,10 @@ vi.stubGlobal('requestAnimationFrame', ((fn: FrameRequestCallback) => {
   return 0;
 }) as typeof requestAnimationFrame);
 
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: vi.fn(() => ({
     getVirtualItems: () => Array.from({ length: 12 }, (_, i) => ({

@@ -14,6 +14,12 @@ export class TokenRefreshError extends Error {
 
 const CLIENT_MODULE = "Auth";
 
+interface RefreshTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+}
+
 const MAX_SAFE_TIMEOUT = 2_147_483_647; // 32-bit signed int limit (~24.8 days); larger values overflow and fire immediately
 
 // Every outbound network call must be bounded so a stalled server cannot hang
@@ -128,9 +134,9 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
     const mySessionId = getCurrentSessionId();
 
     try {
-      let tokenData;
+      let tokenData: RefreshTokenResponse;
       try {
-        tokenData = await invoke<any>("refresh_google_token", { refreshToken });
+        tokenData = await invoke<RefreshTokenResponse>("refresh_google_token", { refreshToken });
       } catch (err: unknown) {
         const errStr = String(err);
         if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {
@@ -211,16 +217,20 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
   // cannot hang the caller forever. Merge with any caller-supplied signal
   // (e.g. a component-unmount cancel) via AbortSignal.any so neither wins,
   // falling back to the timeout alone on runtimes lacking AbortSignal.any.
-  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-  const signal = options.signal && typeof AbortSignal.any === 'function'
-    ? AbortSignal.any([options.signal, timeoutSignal])
-    : timeoutSignal;
-
-  const requestOptions: RequestInit = { ...options, headers, signal };
+  const createRequestSignal = (): AbortSignal => {
+    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+    return options.signal && typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
+  };
 
   // Main request (timeout-bounded). Network/timeout here reject naturally so
   // callers can decide retry vs. surface; we never swallow a hang.
-  const response = await fetch(url, requestOptions);
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    signal: createRequestSignal(),
+  });
 
   // Nếu gặp lỗi 401 Unauthorized
   if (response.status === 401) {
@@ -229,8 +239,13 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
       const retryHeaders = new Headers(options.headers);
       retryHeaders.set("Authorization", `Bearer ${newToken}`);
       try {
-        // Retry also uses the same bounded signal so it cannot hang either.
-        return await fetch(url, { ...options, headers: retryHeaders, signal });
+        // AbortSignal is single-use. A fresh timeout signal prevents a slow
+        // first 401 response from consuming the retry's entire timeout budget.
+        return await fetch(url, {
+          ...options,
+          headers: retryHeaders,
+          signal: createRequestSignal(),
+        });
       } catch (err) {
         // Retry failed: classify and throw a clear, typed error. We do NOT
         // swallow it (caller must know) and we do NOT hang.

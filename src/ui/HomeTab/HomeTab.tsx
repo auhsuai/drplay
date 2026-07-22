@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import { Track } from "../../App";
+import type { DriveItem, Track, UserProfile } from "../../App";
 import { getRecentlyPlayed, getHeavyRotation, getMostVisitedFolders, FolderVisitEntry } from "../../utils/history";
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
@@ -16,11 +16,16 @@ const getFillColor = (str: string) => {
   return GOOGLE_COLORS[Math.abs(hash) % GOOGLE_COLORS.length];
 };
 
+function getHomeVisitCount(): number {
+  const parsed = Number.parseInt(sessionStorage.getItem('drplay_home_visit') ?? '0', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
 export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: { 
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
   onOpenFolder: (id: string, name: string) => void,
   token: string | null, 
-  userProfile?: any 
+  userProfile?: UserProfile | null,
 }) {
   const { t, i18n } = useTranslation();
   const [recent, setRecent] = useState<Track[]>([]);
@@ -42,7 +47,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   // how many times the user has actually opened the Home tab.
   const hasIncrementedVisitRef = useRef(false);
   if (randomGreetingRef.current === null) {
-    const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
+    const visitCount = getHomeVisitCount();
     // Cycle: Time-specific -> General -> General -> Time-specific ...
     const isTimeSpecific = visitCount % 3 === 0;
     const hour = new Date().getHours();
@@ -51,8 +56,8 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
     else if (hour < 18) timeKey = 'afternoon';
     else timeKey = 'evening';
     const possibleSubtitles = isTimeSpecific
-      ? (greetingsData as any)[timeKey]
-      : (greetingsData as any)['general'];
+      ? greetingsData[timeKey]
+      : greetingsData.general;
     const randomObj = possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)];
     randomGreetingRef.current = { randomObj };
   }
@@ -78,35 +83,59 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   useEffect(() => {
     if (!hasIncrementedVisitRef.current) {
       hasIncrementedVisitRef.current = true;
-      const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
+      const visitCount = getHomeVisitCount();
       sessionStorage.setItem('drplay_home_visit', (visitCount + 1).toString());
     }
 
+    let cancelled = false;
     const loadData = async () => {
-      setRecent(await getRecentlyPlayed());
-      setHeavy(await getHeavyRotation());
-      setMostVisitedFolders(await getMostVisitedFolders());
+      const [nextRecent, nextHeavy, nextFolders] = await Promise.all([
+        getRecentlyPlayed(),
+        getHeavyRotation(),
+        getMostVisitedFolders(),
+      ]);
+      if (cancelled) return;
 
-      if (token) {
-        getRecentlyAddedAudioFiles(token).then(files => {
-          const tracks = files.map(f => ({
-            id: f.id,
-            title: f.name,
-            artist: "",
-            streamUrl: "",
-            originalName: f.name,
-            size: f.size
-          }));
-          setRecentlyAdded(tracks);
-        }).catch(err => console.warn('[HomeTab] Failed to load recently-added files from Drive', err));
+      setRecent(nextRecent);
+      setHeavy(nextHeavy);
+      setMostVisitedFolders(nextFolders);
+
+      if (!token) {
+        setRecentlyAdded([]);
+        return;
+      }
+
+      try {
+        const files = await getRecentlyAddedAudioFiles(token);
+        if (cancelled) return;
+        setRecentlyAdded(files.map((file) => ({
+          id: file.id,
+          title: file.name,
+          artist: "",
+          streamUrl: "",
+          originalName: file.name,
+          size: file.size,
+        })));
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[HomeTab] Failed to load recently-added files from Drive', err);
+        }
       }
     };
-    loadData().catch(err => console.error('[HomeTab] Failed to load home tab data', err));
 
-    const handleUpdate = () => { loadData().catch(err => console.error('[HomeTab] Failed to load home tab data', err)); };
-    window.addEventListener('recent-updated', handleUpdate);
-    return () => window.removeEventListener('recent-updated', handleUpdate);
-  }, []);
+    const runLoad = () => {
+      void loadData().catch((err) => {
+        if (!cancelled) console.error('[HomeTab] Failed to load home tab data', err);
+      });
+    };
+    runLoad();
+
+    window.addEventListener('recent-updated', runLoad);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('recent-updated', runLoad);
+    };
+  }, [token]);
 
   useEffect(() => {
     const tracks = [...recent, ...heavy, ...recentlyAdded];
@@ -386,7 +415,7 @@ function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], on
         <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const track = filteredItems[virtualRow.index];
-            const driveItem = {
+            const driveItem: DriveItem = {
               id: track.id,
               title: track.title,
               isFolder: false,
@@ -406,7 +435,7 @@ function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], on
                 className="pb-2"
               >
                 <SongCard
-                  item={driveItem as any}
+                  item={driveItem}
                   onPlay={(t) => onPlay(t, filteredItems)}
                   onOpenFolder={() => {}}
                   token={token}

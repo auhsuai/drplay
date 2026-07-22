@@ -66,8 +66,10 @@ describe('fetchWithAuth', () => {
 
     expect(res.status).toBe(200);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(timeoutSpy).toHaveBeenCalled(); // timeout applied on main + reused on retry
+    expect(timeoutSpy).toHaveBeenCalledTimes(2); // fresh timeout for main request and retry
+    const firstOpts = fetchSpy.mock.calls[0][1] as RequestInit;
     const retryOpts = fetchSpy.mock.calls[1][1] as RequestInit;
+    expect(retryOpts.signal).not.toBe(firstOpts.signal);
     const retryHeaders = new Headers(retryOpts.headers);
     expect(retryHeaders.get('Authorization')).toBe('Bearer new');
     expect(storage.getItem('drplay_access_token')).toBe('new');

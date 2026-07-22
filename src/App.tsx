@@ -177,11 +177,6 @@ function App() {
     loadNonce
   } = usePlayer(accessToken);
 
-  const stableHandleTogglePlay = useCallback(handleTogglePlay, [handleTogglePlay]);
-  const stableHandleNextTrack = useCallback(handleNextTrack, [handleNextTrack]);
-  const stableHandlePrevTrack = useCallback(handlePrevTrack, [handlePrevTrack]);
-  const stableHandleTogglePlayMode = useCallback(handleTogglePlayMode, [handleTogglePlayMode]);
-
   const dbFiles = useLiveQuery(
     () => {
       // Return empty if currentFolderId is not initialized to avoid unnecessary queries
@@ -808,12 +803,12 @@ function App() {
               currentTrack={currentTrack}
               loadNonce={loadNonce}
               isPlaying={isPlaying}
-              onTogglePlay={stableHandleTogglePlay}
-              onNextTrack={stableHandleNextTrack}
-              onPrevTrack={stableHandlePrevTrack}
+              onTogglePlay={handleTogglePlay}
+              onNextTrack={handleNextTrack}
+              onPrevTrack={handlePrevTrack}
               isDownloading={isDownloading}
               playMode={playMode}
-              onTogglePlayMode={stableHandleTogglePlayMode}
+              onTogglePlayMode={handleTogglePlayMode}
             />
           </div>
         </div>

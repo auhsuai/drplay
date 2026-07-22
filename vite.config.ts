@@ -42,7 +42,7 @@ export default defineConfig(async ({ command }) => ({
   // Vite 8 (rolldown/oxc) đổi sang build.rolldownOptions...drop* nhưng hành vi drop giữ nguyên.
   // => KHÔNG tự thêm lại 'console' vào drop; muốn tắt log prod hãy sửa logger.ts.
   esbuild: {
-    drop: command === 'build' ? (['debugger'] as any) : undefined,
+    drop: command === 'build' ? ['debugger'] : undefined,
   },
   build: {
     rollupOptions: {

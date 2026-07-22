@@ -2,12 +2,35 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { get, set as idbSet } from "../db/kv";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
-import { Track } from "../App"; // Reuse Track type from App.tsx
+import type { DriveItem, Track } from "../App";
 import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
 import { showErrorToast } from "../utils/simpleToast";
 
+
+type PlayMode = 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
+
+interface PersistedPlayerSession {
+  track: Track;
+  time: number;
+  duration: number;
+}
+
+function isPlayMode(value: unknown): value is PlayMode {
+  return value === 'normal' || value === 'shuffle' || value === 'repeat-all' || value === 'repeat-one';
+}
+
+function isTrackArray(value: unknown): value is Track[] {
+  return Array.isArray(value) && value.every((track) => {
+    if (!track || typeof track !== 'object') return false;
+    const candidate = track as Partial<Track>;
+    return typeof candidate.id === 'string'
+      && typeof candidate.title === 'string'
+      && typeof candidate.artist === 'string'
+      && typeof candidate.streamUrl === 'string';
+  });
+}
 
 const playRequestIdRef = { current: 0 };
 
@@ -68,7 +91,7 @@ export const usePlayer = (accessToken: string | null) => {
   const triggerReload = () => setLoadNonce(n => n + 1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [playMode, setPlayMode] = useState<'normal' | 'shuffle' | 'repeat-all' | 'repeat-one'>('normal');
+  const [playMode, setPlayMode] = useState<PlayMode>('normal');
   const [originalQueue, setOriginalQueue] = useState<Track[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [bufferSeconds, setBufferSeconds] = useState(300);
@@ -80,7 +103,9 @@ export const usePlayer = (accessToken: string | null) => {
       initialBufferRef.current = false;
       return;
     }
-    idbSet("drplay_buffer_seconds", bufferSeconds);
+    idbSet("drplay_buffer_seconds", bufferSeconds).catch(e => {
+      console.warn(`[usePlayer] buffer-settings-save-failed`, classifyPlayerError(e));
+    });
     invoke("update_buffer_settings", { seconds: bufferSeconds }).catch(e => {
       const errMsg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       console.warn(`[usePlayer] buffer-settings-failed`, { seconds: bufferSeconds, error: errMsg });
@@ -110,8 +135,12 @@ export const usePlayer = (accessToken: string | null) => {
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
+      // Invalidate any pending token/IPC work so a late stream URL cannot revive
+      // playback after logout or an explicit player stop.
+      beginPlaybackIntent();
       setCurrentTrack(null);
       setIsPlaying(false);
+      setIsDownloading(false);
       setOriginalQueue([]);
       setPlaybackQueue([]);
     };
@@ -128,9 +157,9 @@ export const usePlayer = (accessToken: string | null) => {
         // (IndexedDB, via db/kv.ts) — nothing in this app persists it to
         // localStorage, so reading straight from IndexedDB is the sole
         // source of truth.
-        const lastSession = await get("drplay_last_session");
+        const lastSession = await get<PersistedPlayerSession>("drplay_last_session");
 
-        const rawBuffer = await get("drplay_buffer_seconds");
+        const rawBuffer = await get<unknown>("drplay_buffer_seconds");
         const validBuffer = (typeof rawBuffer === "number" && Number.isFinite(rawBuffer) && rawBuffer > 0)
           ? rawBuffer
           : undefined;
@@ -162,8 +191,7 @@ export const usePlayer = (accessToken: string | null) => {
               if (!streamUrl) {
                 const ext = lastSession.track.originalName?.split('.').pop()?.toLowerCase();
                 streamUrl = await invoke<string>("get_stream_url", { 
-                  fileId: lastSession.track.id, 
-                  bitrate: lastSession.track.bitrate, 
+                  fileId: lastSession.track.id,
                   bufferSeconds: validBuffer ?? bufferSeconds,
                   ext
                 });
@@ -174,8 +202,8 @@ export const usePlayer = (accessToken: string | null) => {
           }
           if (isIntentStale(myId)) return;
 
-          const savedQueue = await get('drplay_queue');
-          const savedPlayMode = await get('drplay_playmode');
+          const savedQueue = await get<unknown>('drplay_queue');
+          const savedPlayMode = await get<unknown>('drplay_playmode');
           if (isIntentStale(myId)) return;
 
           const restoredTrack: Track = {
@@ -186,7 +214,7 @@ export const usePlayer = (accessToken: string | null) => {
           };
           setCurrentTrack(restoredTrack);
 
-          if (savedQueue && Array.isArray(savedQueue) && savedQueue.length > 0) {
+          if (isTrackArray(savedQueue) && savedQueue.length > 0) {
             setOriginalQueue(savedQueue);
             if (savedPlayMode === 'shuffle') {
               setPlaybackQueue(shuffleQueuePinning(savedQueue, restoredTrack));
@@ -196,7 +224,7 @@ export const usePlayer = (accessToken: string | null) => {
           } else {
             setPlaybackQueue([restoredTrack]);
           }
-          if (savedPlayMode) setPlayMode(savedPlayMode);
+          if (isPlayMode(savedPlayMode)) setPlayMode(savedPlayMode);
           triggerReload();
         }
       } catch (e) {
@@ -206,7 +234,7 @@ export const usePlayer = (accessToken: string | null) => {
     loadSession();
   }, []);
 
-  const handlePlayTrack = async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: any[], activeTab?: string) => {
+  const handlePlayTrack = async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: DriveItem[], activeTab?: string) => {
 
     if (!accessToken) return;
 

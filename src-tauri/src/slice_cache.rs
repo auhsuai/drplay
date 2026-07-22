@@ -177,6 +177,11 @@ struct InflightGuard {
 
 impl Drop for InflightGuard {
     fn drop(&mut self) {
+        // If the leader future is cancelled or panics before publishing data,
+        // wake every follower so it returns "fetch failed" instead of waiting
+        // forever on an entry that this guard is about to remove.
+        self.entry.notify.notify_waiters();
+
         // Fast path: best-effort synchronous removal.
         if let Ok(mut guard) = self.inflight.try_write() {
             if guard.get(&self.key).map(|e| Arc::ptr_eq(e, &self.entry)).unwrap_or(false) {
@@ -295,6 +300,39 @@ mod tests {
             current.is_some() && Arc::ptr_eq(current.unwrap(), &new_entry),
             "stale InflightGuard removed a newer entry for the same key"
         );
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_leader_wakes_waiters() {
+        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
+        let key = ("cancel-test".to_string(), 0u64);
+        let entry = Arc::new(InflightEntry {
+            notify: Arc::new(Notify::new()),
+            data: RwLock::new(None),
+        });
+        cache.inflight.write().await.insert(key.clone(), entry.clone());
+
+        let waiter_entry = entry.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let waiter = tokio::spawn(async move {
+            let notified = waiter_entry.notify.notified();
+            let _ = ready_tx.send(());
+            notified.await;
+            waiter_entry.data.read().await.clone()
+        });
+        ready_rx.await.expect("waiter failed before registering");
+
+        drop(InflightGuard {
+            inflight: cache.inflight.clone(),
+            key,
+            entry,
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("waiter was not notified after leader cancellation")
+            .expect("waiter task panicked");
+        assert!(result.is_none());
     }
 
     #[tokio::test]

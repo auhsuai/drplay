@@ -171,8 +171,13 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
 
   // Tauri listeners
   useEffect(() => {
+    let cancelled = false;
     let rateLimitRetryTimeout: ReturnType<typeof setTimeout> | null = null;
     const unlistenFns: (() => void)[] = [];
+    const registerUnlisten = (unlisten: () => void) => {
+      if (cancelled) unlisten();
+      else unlistenFns.push(unlisten);
+    };
 
     listen('token-expired', async () => {
       console.warn('[Player] Token expired mid-stream, auto refreshing...');
@@ -196,7 +201,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
           dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.auth_expired', 'Phiên đăng nhập hết hạn, vui lòng đăng nhập lại') } });
         }
       }
-    }).then(fn => { unlistenFns.push(fn); }).catch((err) => {
+    }).then(registerUnlisten).catch((err) => {
       captureError({ level: 'warn', source: 'playback-control', message: `Tauri event listener registration failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'listener' });
     });
 
@@ -211,11 +216,12 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
           await performRetry(track);
         }
       }, DRIVE_QUOTA_RETRY_MS);
-    }).then(fn => { unlistenFns.push(fn); }).catch((err) => {
+    }).then(registerUnlisten).catch((err) => {
       captureError({ level: 'warn', source: 'playback-control', message: `Tauri event listener registration failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'listener' });
     });
 
     return () => {
+      cancelled = true;
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
       for (const fn of unlistenFns) fn();
     };

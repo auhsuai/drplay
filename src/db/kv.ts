@@ -1,6 +1,6 @@
 import { db } from './db';
 
-export async function get<T = any>(key: string): Promise<T | undefined> {
+export async function get<T = unknown>(key: string): Promise<T | undefined> {
   const row = await db.kv.get(key);
   return row?.value as T | undefined;
 }

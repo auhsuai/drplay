@@ -4,6 +4,10 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { SongCard } from './SongCard';
 import type { DriveItem } from '../../../App';
 
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+
 function makeItem(over: Partial<DriveItem> = {}): DriveItem {
   return {
     id: 'track-1',
@@ -72,6 +76,21 @@ describe('SongCard', () => {
     const { container } = render(<SongCard {...baseProps} item={item} onPlay={onPlay} />);
     fireEvent.click(container.querySelector('.cursor-pointer')!);
     expect(onPlay).toHaveBeenCalledWith(item.trackInfo);
+  });
+
+  it('uses the latest callback after a parent rerender', () => {
+    const firstOnPlay = vi.fn();
+    const latestOnPlay = vi.fn();
+    const item = makeItem();
+    const { container, rerender } = render(
+      <SongCard {...baseProps} item={item} onPlay={firstOnPlay} />,
+    );
+
+    rerender(<SongCard {...baseProps} item={item} onPlay={latestOnPlay} />);
+    fireEvent.click(container.querySelector('.cursor-pointer')!);
+
+    expect(firstOnPlay).not.toHaveBeenCalled();
+    expect(latestOnPlay).toHaveBeenCalledWith(item.trackInfo);
   });
 
   it('shows the file size when available', () => {

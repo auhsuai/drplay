@@ -73,6 +73,7 @@ export function ErrorLogSection() {
   const [copied, setCopied] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const copiedResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
 
   useEffect(() => {
@@ -94,6 +95,14 @@ export function ErrorLogSection() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (copiedResetTimeoutRef.current) {
+        clearTimeout(copiedResetTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -126,7 +135,11 @@ export function ErrorLogSection() {
       const ok = await copyToClipboard(text);
       if (ok) {
         setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        if (copiedResetTimeoutRef.current) clearTimeout(copiedResetTimeoutRef.current);
+        copiedResetTimeoutRef.current = setTimeout(() => {
+          copiedResetTimeoutRef.current = null;
+          setCopied(false);
+        }, 2000);
       } else {
         showErrorToast(t("settings.error_log_copy_error") || "Could not copy to clipboard.");
       }

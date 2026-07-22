@@ -161,10 +161,10 @@ describe("ErrorLogSection", () => {
     await screen.findByText("boom day A");
 
     fireEvent.click(screen.getByRole("button", { name: /Copy Report/i }));
+    expect(await screen.findByText(/Copied!/i)).toBeTruthy();
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledTimes(1);
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledWith(KEY_A);
     expect(exportErrorLogsSanitizedMock).not.toHaveBeenCalled();
-    await new Promise((r) => setTimeout(r, 0));
     expect(clipboardWriteTextMock).toHaveBeenCalledWith("day report text");
   });
 
@@ -180,7 +180,6 @@ describe("ErrorLogSection", () => {
     fireEvent.click(screen.getByRole("button", { name: /Copy Report/i }));
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledTimes(1);
     await screen.findByText(/Copied!/i);
-    await new Promise((r) => setTimeout(r, 0));
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(
       "2023-11-14T22:13:20.000Z [error] Player: boom"
     );

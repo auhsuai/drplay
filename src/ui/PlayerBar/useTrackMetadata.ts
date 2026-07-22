@@ -42,28 +42,34 @@ export function useTrackMetadata(params: UseTrackMetadataParams): TrackMetadataA
   const [isLiked, setIsLiked] = useState(false);
   const tauriBufferEndRef = useRef<number | null>(null);
 
-  // Sync like status when track changes
+  // Sync once on track/user/favorite changes. The previous pair of effects ran
+  // the same Dexie query twice on every track change and allowed an older query
+  // to overwrite the state for a newer track if it resolved later.
   useEffect(() => {
-    if (currentTrack) {
-      // fallback: assume not-liked on error
-      isFavorite(currentTrack.id).then(setIsLiked).catch(() => setIsLiked(false));
-    }
-  }, [currentTrack?.id]);
+    let cancelled = false;
+    const trackId = currentTrack?.id;
 
-  // Listen to global favorite updates
-  useEffect(() => {
-    const handleFavoritesUpdated = () => {
-      if (currentTrack) {
-        // fallback: assume not-liked on error
-      isFavorite(currentTrack.id).then(setIsLiked).catch(() => setIsLiked(false));
+    const syncFavoriteState = () => {
+      if (!trackId) {
+        setIsLiked(false);
+        return;
       }
+      void isFavorite(trackId)
+        .then((liked) => {
+          if (!cancelled) setIsLiked(liked);
+        })
+        .catch(() => {
+          if (!cancelled) setIsLiked(false);
+        });
     };
-    handleFavoritesUpdated();
-    window.addEventListener('favorites-updated', handleFavoritesUpdated);
-    window.addEventListener('user-changed', handleFavoritesUpdated);
+
+    syncFavoriteState();
+    window.addEventListener('favorites-updated', syncFavoriteState);
+    window.addEventListener('user-changed', syncFavoriteState);
     return () => {
-      window.removeEventListener('favorites-updated', handleFavoritesUpdated);
-      window.removeEventListener('user-changed', handleFavoritesUpdated);
+      cancelled = true;
+      window.removeEventListener('favorites-updated', syncFavoriteState);
+      window.removeEventListener('user-changed', syncFavoriteState);
     };
   }, [currentTrack?.id]);
 

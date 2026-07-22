@@ -304,11 +304,12 @@ export const MainContent = React.memo(function MainContent({
   // in lib.rs); no R2, no cover art, no network fetch. Every other tab (Home,
   // Liked Songs, Playlists) keeps showing the plain Drive filename.
   const tagMetadataRef = useRef<Map<string, DbTagMetadata>>(new Map());
+  const tagLookupAttemptedRef = useRef<Set<string>>(new Set());
   const [, forceTagRerender] = useState(0);
 
   React.useEffect(() => {
     const trackItems = currentItems.filter(
-      i => !i.isFolder && i.trackInfo?.id && !tagMetadataRef.current.has(i.trackInfo.id)
+      (item) => !item.isFolder && item.trackInfo?.id && !tagLookupAttemptedRef.current.has(item.trackInfo.id)
     );
     if (trackItems.length === 0) return;
 
@@ -328,6 +329,10 @@ export const MainContent = React.memo(function MainContent({
       size: item.trackInfo!.size ?? 0,
       name: item.trackInfo!.originalName ?? 'audio.mp3',
     }));
+    // Cache both hits and misses. The local DB is read-only during a session, so
+    // repeatedly invoking Rust for the same known-missing row only adds IPC and
+    // SQLite work without any chance of producing a different answer.
+    items.forEach(({ id }) => tagLookupAttemptedRef.current.add(id));
 
     // Diagnostic-only: user reports that individual FILE rows (needing this
     // tag lookup) visibly display slower than FOLDER rows (which need no
@@ -353,7 +358,6 @@ export const MainContent = React.memo(function MainContent({
           kind: 'slow-ipc-roundtrip',
         });
       }
-      if (cancelled) return;
       let gotAny = false;
       for (const [id, data] of Object.entries(results)) {
         if (data?.title) {
@@ -365,9 +369,10 @@ export const MainContent = React.memo(function MainContent({
           gotAny = true;
         }
       }
-      if (gotAny) forceTagRerender(n => n + 1);
+      if (gotAny && !cancelled) forceTagRerender(n => n + 1);
     }).catch(e => {
-      // No DB / no matches / IPC unavailable — silently keep filenames.
+      // Transient IPC/DB failure may recover, so allow a later render to retry.
+      items.forEach(({ id }) => tagLookupAttemptedRef.current.delete(id));
       console.warn('[MainContent] tag-lookup-batch-failed', { count: items.length, error: String(e) });
     });
 

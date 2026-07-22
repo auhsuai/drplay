@@ -733,17 +733,18 @@ async fn handle_stream(
     let sema = PREFETCH_SEMAPHORE.clone();
 
     tokio::spawn(async move {
-        // Respect concurrency cap: wait for a permit but stay responsive
-        // to cancellation — a cancelled task returns before acquiring so
-        // we don't pile up waiters behind the semaphore.
-        {
-            tokio::select! {
-                biased;
-                _ = cancel_for_task.notified() => return,
-                _ = disconnect_rx.changed() => return,
-                _ = sema.acquire_owned() => {}
-            }
-        }
+        // Respect the concurrency cap for the ENTIRE prefetch task. The permit
+        // must be bound outside `select!`; matching it as `_` would drop it as
+        // soon as the branch finished and make the semaphore ineffective.
+        let _permit = tokio::select! {
+            biased;
+            _ = cancel_for_task.notified() => return,
+            _ = disconnect_rx.changed() => return,
+            result = sema.acquire_owned() => match result {
+                Ok(permit) => permit,
+                Err(_) => return,
+            },
+        };
 
         // Remove this task's cancel entry from the global map when it exits,
         // but only if it is still the current entry (a newer request replaces it).
@@ -834,6 +835,7 @@ async fn handle_stream(
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size))
+        .header(header::CONTENT_LENGTH, desired_total.to_string())
         .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response body").into_response())
 }

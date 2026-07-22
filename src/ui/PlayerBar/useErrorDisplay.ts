@@ -17,35 +17,50 @@ export function useErrorDisplay(params: UseErrorDisplayParams): ErrorDisplayAPI 
   const { errorInfo, dispatch, rateLimitUntilRef } = params;
 
   const [toastSlideIn, setToastSlideIn] = useState(false);
-  const toastIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const slideInTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastDismissRef = useRef<(() => void) | null>(null);
 
-  const clearToastTimer = () => {
-    if (toastIntervalRef.current) {
-      clearInterval(toastIntervalRef.current);
-      toastIntervalRef.current = null;
-    }
+  const clearAutoDismissTimer = () => {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
       toastTimeoutRef.current = null;
     }
   };
 
+  const clearToastTimers = () => {
+    clearAutoDismissTimer();
+    if (slideInTimeoutRef.current) {
+      clearTimeout(slideInTimeoutRef.current);
+      slideInTimeoutRef.current = null;
+    }
+    if (clearErrorTimeoutRef.current) {
+      clearTimeout(clearErrorTimeoutRef.current);
+      clearErrorTimeoutRef.current = null;
+    }
+  };
+
   const startToastTimer = (dismiss: () => void) => {
-    clearToastTimer();
+    clearAutoDismissTimer();
     toastTimeoutRef.current = setTimeout(dismiss, TOAST_DURATION * 1000);
   };
 
   const dismissToast = useCallback(() => {
-    clearToastTimer();
+    clearToastTimers();
     setToastSlideIn(false);
-    setTimeout(() => dispatch({ type: 'CLEAR_ERROR' }), TOAST_DISMISS_DELAY_MS);
+    clearErrorTimeoutRef.current = setTimeout(() => {
+      clearErrorTimeoutRef.current = null;
+      dispatch({ type: 'CLEAR_ERROR' });
+    }, TOAST_DISMISS_DELAY_MS);
   }, [dispatch]);
 
   useEffect(() => {
     if (errorInfo && toastTypes.includes(errorInfo.type)) {
-      setTimeout(() => setToastSlideIn(true), TOAST_SLIDE_IN_MS);
+      slideInTimeoutRef.current = setTimeout(() => {
+        slideInTimeoutRef.current = null;
+        setToastSlideIn(true);
+      }, TOAST_SLIDE_IN_MS);
       toastDismissRef.current = dismissToast;
 
       if (document.visibilityState === 'visible') {
@@ -62,16 +77,15 @@ export function useErrorDisplay(params: UseErrorDisplayParams): ErrorDisplayAPI 
           if (stillRelevant) {
             startToastTimer(dismissToast);
           } else {
-            clearToastTimer();
             dismissToast();
           }
         } else {
-          clearToastTimer();
+          clearAutoDismissTimer();
         }
       };
       document.addEventListener('visibilitychange', onVisibility);
       return () => {
-        clearToastTimer();
+        clearToastTimers();
         document.removeEventListener('visibilitychange', onVisibility);
         toastDismissRef.current = null;
       };
