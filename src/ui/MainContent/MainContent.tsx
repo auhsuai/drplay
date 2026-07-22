@@ -111,7 +111,7 @@ export const MainContent = React.memo(function MainContent({
   }, [currentItems, onPlay]);
 
   return (
-    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300">
+    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto overscroll-contain relative transition-colors duration-300">
       {showBulkMoveScreen && token && (
         <FolderSelectionScreen token={token} onCancel={() => setShowBulkMoveScreen(false)}
           onSelectFolder={handleBulkMove} title="Chọn thư mục đích" />

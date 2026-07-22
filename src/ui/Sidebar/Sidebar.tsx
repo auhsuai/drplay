@@ -84,7 +84,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
         </button>
       </div>
 
-      <div className="flex-1 px-4 overflow-y-auto space-y-1 pb-4 custom-scrollbar overflow-x-hidden">
+      <div className="flex-1 px-4 overflow-y-auto overscroll-contain space-y-1 pb-4 custom-scrollbar overflow-x-hidden">
         <div className={`overflow-hidden transition-all duration-300 ${isCreating && isSidebarOpen ? 'max-h-20 opacity-100 mb-2' : 'max-h-0 opacity-0 m-0'}`}>
           <form onSubmit={handleCreate}>
             <input 

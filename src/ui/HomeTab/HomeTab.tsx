@@ -151,7 +151,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   const heavyItems = heavy.length > 0 ? heavy.slice(0, 5) : [];
 
   return (
-    <main className="flex-1 bg-white dark:bg-[#0A0A0A] overflow-y-auto custom-scrollbar transition-colors duration-300">
+    <main className="flex-1 bg-white dark:bg-[#0A0A0A] overflow-y-auto overscroll-contain custom-scrollbar transition-colors duration-300">
       <div className="max-w-6xl mx-auto p-8 pb-32">
         <header className="mb-10 mt-4 flex flex-col gap-1">
            <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
@@ -411,7 +411,7 @@ function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], on
         </div>
       </div>
       
-      <div ref={parentRef} className="flex-1 overflow-y-auto px-8 pt-4 pb-24 min-h-0 custom-scrollbar">
+      <div ref={parentRef} className="flex-1 overflow-y-auto overscroll-contain px-8 pt-4 pb-24 min-h-0 custom-scrollbar">
         <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const track = filteredItems[virtualRow.index];

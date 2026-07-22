@@ -51,7 +51,7 @@ export function SettingsTab({
   };
 
   return (
-    <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto px-8 py-10 relative transition-colors duration-300">
+    <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto overscroll-contain px-8 py-10 relative transition-colors duration-300">
       {/* Signature Top Gradient */}
       <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-[#4285F4]/10 to-transparent pointer-events-none" />
 

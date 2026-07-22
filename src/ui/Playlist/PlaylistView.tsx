@@ -138,7 +138,7 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
   };
 
   return (
-    <main ref={scrollRef} className="flex-1 overflow-y-auto bg-white dark:bg-[#121212] flex flex-col relative transition-colors duration-300">
+    <main ref={scrollRef} className="flex-1 overflow-y-auto overscroll-contain bg-white dark:bg-[#121212] flex flex-col relative transition-colors duration-300">
       {/* Header Gradient */}
       <div className="absolute top-0 left-0 right-0 h-80 bg-gradient-to-b from-[#4285F4]/40 to-transparent pointer-events-none opacity-50 dark:opacity-20" />
       

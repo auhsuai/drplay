@@ -121,12 +121,7 @@ export function SongCard({
   const duration = dbMetadata?.duration ?? 0;
 
   return (
-    <div
-      className="relative w-full"
-      style={{
-        contain: 'layout style',
-      }}
-    >
+    <div className="relative w-full">
       <div
         ref={cardRef}
         onClick={() => {
@@ -148,16 +143,17 @@ export function SongCard({
           setContextMenuPos({ x: e.clientX, y: e.clientY });
           setIsContextMenuOpen(true);
         }}
-        className={`p-4 rounded-xl transition-[transform,background-color] duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full ${
+        className="group w-full rounded-xl cursor-pointer"
+      >
+      <div className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${
           isFlashOn
             ? 'bg-white dark:bg-[#383a40] shadow-lg shadow-black/5'
             : isSelected
               ? 'bg-[#4285F4]/10 dark:bg-[#4285F4]/20 hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30'
               : isPlaying
-                ? 'bg-[#F8F9FA] dark:bg-[#2a2b2f] shadow-sm hover:bg-white dark:hover:bg-[#383a40] hover:-translate-y-0.5'
-                : 'bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:-translate-y-1'
-        }`}
-      >
+                ? 'bg-[#F8F9FA] dark:bg-[#2a2b2f] shadow-sm hover:bg-white dark:hover:bg-[#383a40]'
+                : 'bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'
+        }`}>
       {isSelectionMode && (
         <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
           {isSelected ? (
@@ -227,6 +223,7 @@ export function SongCard({
           />
         </div>
       )}
+    </div>
     </div>
     </div>
   );
