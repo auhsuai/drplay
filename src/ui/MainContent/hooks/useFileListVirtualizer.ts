@@ -38,6 +38,14 @@ export function useFileListVirtualizer({
     estimateSize: () => 92,
     overscan: 2,
     getItemKey: (index: number) => currentItems[index].id,
+    // Skip React re-renders for scroll-only position updates (writes
+    // transform/height straight to the DOM via elementsCache/containerRef
+    // instead) -- only re-renders when the visible index range changes.
+    // Set once at mount per the library's own guidance (not meant to be
+    // toggled at runtime). Requires VirtualizedSongList's item wrappers to
+    // stop setting `transform` themselves and the size container to use
+    // `rowVirtualizer.containerRef` instead of an inline `height`.
+    directDomUpdates: true,
   });
 
   // Scroll to top when going from empty to populated

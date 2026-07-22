@@ -67,6 +67,13 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 56,
     overscan: 3,
+    // Fixed-height rows positioned via the `transform` computed below from
+    // `virtualRow.start` -- no `measureElement` ref here, so this doesn't
+    // get the full containerRef/elementsCache rewiring (see HomeTab.tsx for
+    // the fuller rationale). `directDomUpdates` still gates `rerender()` to
+    // only fire when the visible index range changes, which is a real win
+    // on its own and doesn't touch item positioning.
+    directDomUpdates: true,
   });
 
   if (!playlist) return null;

@@ -51,9 +51,9 @@ export function VirtualizedSongList({
 
   return (
     <div
+      ref={rowVirtualizer.containerRef}
       style={{
         position: "relative",
-        height: `${rowVirtualizer.getTotalSize()}px`,
         transform: "translateZ(0)",
       }}
     >
@@ -71,7 +71,6 @@ export function VirtualizedSongList({
                 top: 0,
                 left: 0,
                 width: "100%",
-                transform: `translateY(${virtualRow.start}px)`,
                 willChange: "transform",
               }}
             >
@@ -90,7 +89,6 @@ export function VirtualizedSongList({
               top: 0,
               left: 0,
               width: "100%",
-              transform: `translateY(${virtualRow.start}px)`,
               willChange: "transform",
             }}
           >

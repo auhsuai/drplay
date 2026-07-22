@@ -6,7 +6,20 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async ({ command }) => ({
-  plugins: [react()],
+  plugins: [
+    react({
+      babel: {
+        // React Compiler 1.0 (stable, Oct 2025): build-time auto-memoization.
+        // Directly relevant here -- this app's history includes multiple
+        // React.memo-related virtualization bugs (see git log for
+        // VirtualizedSongList/SongCard), and the compiler's automatic,
+        // correctness-verified memoization reduces the need to hand-roll
+        // React.memo/useMemo/useCallback in places like that. Compatible
+        // with React 17+, no version prerequisite beyond what's already used.
+        plugins: [["babel-plugin-react-compiler", {}]],
+      },
+    }),
+  ],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

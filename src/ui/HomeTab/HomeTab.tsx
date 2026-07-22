@@ -332,6 +332,14 @@ function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], on
     getScrollElement: () => parentRef.current,
     estimateSize: () => 92,
     overscan: 3,
+    // Rows here are fixed-height (no `measureElement` ref, unlike the main
+    // My Drive list) and stay positioned via the `transform` computed below
+    // from `virtualRow.start` -- so this doesn't get the full
+    // containerRef/elementsCache rewiring. `directDomUpdates` still gates
+    // `rerender()` to only fire when the visible index range actually
+    // changes (not on every scroll-offset tick), which is a real win on its
+    // own and safe here since it doesn't touch item positioning at all.
+    directDomUpdates: true,
   });
 
   return (
