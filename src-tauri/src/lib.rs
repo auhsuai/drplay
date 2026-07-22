@@ -1,514 +1,56 @@
-use oauth2::basic::BasicClient;
-use oauth2::reqwest::{async_http_client, http_client};
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    RedirectUrl, Scope, TokenResponse, TokenUrl, RefreshToken
-};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::time::Instant;
-use tauri::command;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
+use std::sync::LazyLock;
+use std::time::Duration;
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
-use std::sync::LazyLock;
 
+pub mod commands;
+pub mod protocol;
+pub mod slice_cache;
+mod proxy;
+
+// --- Stream URL / buffer sizing constants (shared with commands/misc.rs) ---
+pub(crate) const STREAM_URL_TTL_SECS: u64 = 86_400;
+const DEFAULT_BUFFER_SECONDS_F64: f64 = 180.0;
+pub(crate) const NOMINAL_BYTES_PER_SEC: u64 = 320_000 / 8;
+pub(crate) const MIN_BUFFER_BYTES: u64 = 5 * 1024 * 1024;
+pub(crate) const MAX_BUFFER_BYTES: u64 = 500 * 1024 * 1024;
+const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
+
+// --- Globals ---
 pub static GLOBAL_STREAM_TOKEN: LazyLock<tokio::sync::Mutex<String>> =
     LazyLock::new(|| tokio::sync::Mutex::new(String::new()));
 pub static GLOBAL_TOKEN_NOTIFY: LazyLock<std::sync::Arc<tokio::sync::Notify>> =
     LazyLock::new(|| std::sync::Arc::new(tokio::sync::Notify::new()));
-
-// --- Named constants for the stream URL / buffer sizing (no magic numbers) ---
-// Signed-URL lifetime: 24h. Shared by `get_stream_url` and the `/stream`
-// redirect in protocol.rs so the two signers stay in sync.
-pub(crate) const STREAM_URL_TTL_SECS: u64 = 86_400;
-// Fallback buffer seconds when the frontend omits `buffer_seconds`.
-const DEFAULT_BUFFER_SECONDS_F64: f64 = 180.0;
-// Nominal decode rate used to size the prefetch window: 320 kbit/s audio
-// => 320_000/8 = 40_000 bytes/s.
-const NOMINAL_BYTES_PER_SEC: u64 = 320_000 / 8;
-const MIN_BUFFER_BYTES: u64 = 5 * 1024 * 1024;
-const MAX_BUFFER_BYTES: u64 = 500 * 1024 * 1024;
-// Default prefetch window (seconds) when the user has not changed the setting.
-// MUST match the frontend's own default (usePlayer.ts `useState(300)`) — the
-// frontend pushes its resolved value via `update_buffer_settings` shortly
-// after startup, but keeping this constant in sync too closes the brief
-// window between process start and that first sync (e.g. a stream started
-// before the frontend's effect has run).
-const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
-
-pub mod protocol;
-pub mod slice_cache;
-
-// NOTE: this app streams audio straight from Google Drive — there is no
-// Cloudflare R2 integration and no cover-art pipeline (removed along with the
-// `r2` and `thumbnail` modules; see protocol.rs). There IS a local read-only
-// SQLite tag lookup (`get_local_metadata_batch` below) used ONLY to show real
-// title/artist tags for rows in the "My Drive" list — everywhere else in the
-// UI (Home, Liked Songs, Playlists, the player bar) still shows the Drive
-// filename, never a DB tag.
-
-#[command]
-async fn update_stream_token(token: String) -> Result<(), String> {
-    *GLOBAL_STREAM_TOKEN.lock().await = token;
-    GLOBAL_TOKEN_NOTIFY.notify_waiters();
-    Ok(())
-}
-
-#[command]
-async fn login_google_native() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        const CREDENTIALS_JSON: &str = include_str!("../../wa_credential.json");
-        let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).map_err(|e| format!("Invalid wa_credential.json: {}", e))?;
-        let client_id = ClientId::new(creds["installed"]["client_id"].as_str().ok_or("Missing client_id in wa_credential.json")?.to_string());
-        let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().ok_or("Missing client_secret in wa_credential.json")?.to_string());
-        let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).map_err(|e| format!("invalid AuthUrl: {e:?}"))?;
-        let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).map_err(|e| format!("invalid TokenUrl: {e:?}"))?;
-
-        // 1. Dynamic Port Binding
-        let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| format!("Failed to start server: {}", e))?;
-        let port = server.server_addr().to_ip().ok_or("server address has no IP")?.port();
-        let redirect_uri = format!("http://127.0.0.1:{}", port);
-
-        let client = BasicClient::new(
-            client_id,
-            Some(client_secret),
-            auth_url,
-            Some(token_url),
-        )
-            .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).map_err(|e| format!("invalid RedirectUrl: {e:?}"))?);
-
-        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-        let (auth_url, csrf_token) = client
-            .authorize_url(CsrfToken::new_random)
-            .add_scope(Scope::new("https://www.googleapis.com/auth/drive".to_string()))
-            .add_scope(Scope::new("https://www.googleapis.com/auth/drive.appdata".to_string()))
-            .add_scope(Scope::new("email".to_string()))
-            .add_scope(Scope::new("profile".to_string()))
-            .add_extra_param("access_type", "offline")
-            .add_extra_param("prompt", "consent")
-            .set_pkce_challenge(pkce_challenge)
-            .url();
-
-        open::that(auth_url.as_str()).map_err(|e| format!("Failed to open browser: {}", e))?;
-
-        // 2. Timeout (5 minutes)
-        let timeout = std::time::Duration::from_secs(300);
-        let start_time = std::time::Instant::now();
-
-        while start_time.elapsed() < timeout {
-            // Check for requests every 500ms
-            if let Ok(Some(request)) = server.recv_timeout(std::time::Duration::from_millis(500)) {
-                let url = format!("{}{}", redirect_uri, request.url());
-                let parsed_url = url::Url::parse(&url).map_err(|e| format!("Invalid redirect URL: {}", e))?;
-
-                let code = parsed_url.query_pairs().find(|(key, _)| key == "code");
-                let state = parsed_url.query_pairs().find(|(key, _)| key == "state");
-                let error = parsed_url.query_pairs().find(|(key, _)| key == "error");
-
-                if error.is_some() {
-                    let response = tiny_http::Response::from_string("<html><body><script>window.close();</script></body></html>")
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
-                    let _ = request.respond(response);
-                    return Err("User cancelled authorization".to_string());
-                }
-
-                if let (Some((_, code)), Some((_, state))) = (code, state) {
-                    if state.into_owned() != *csrf_token.secret() {
-                        let response = tiny_http::Response::from_string("CSRF Token Mismatch!");
-                        let _ = request.respond(response);
-                        return Err("CSRF Token Mismatch".to_string());
-                    }
-
-                    // 3. Auto-close HTML Response
-                    let html_response = r#"
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <meta charset="utf-8">
-                            <title>Đăng nhập thành công</title>
-                            <style>
-                                body { font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8f9fa; color: #202124; }
-                                .container { text-align: center; padding: 40px; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-                                h1 { font-size: 24px; margin-bottom: 12px; }
-                                p { color: #5f6368; }
-                            </style>
-                        </head>
-                        <body>
-                            <div class="container">
-                                <h1>Đăng nhập thành công!</h1>
-                                <p>Cửa sổ này sẽ tự động đóng lại trong giây lát.</p>
-                                <p>Nếu không, bạn có thể tự đóng cửa sổ này.</p>
-                            </div>
-                            <script>
-                                setTimeout(() => window.close(), 100);
-                            </script>
-                        </body>
-                        </html>
-                    "#;
-
-                    let response = tiny_http::Response::from_string(html_response)
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
-                    let _ = request.respond(response);
-
-                    let token_result = client
-                        .exchange_code(AuthorizationCode::new(code.into_owned()))
-                        .set_pkce_verifier(pkce_verifier)
-                        .request(http_client);
-
-                    match token_result {
-                        Ok(token) => {
-                            let access_token = token.access_token().secret().to_string();
-                            let refresh_token = token.refresh_token().map(|t| t.secret().to_string());
-                            return Ok(serde_json::json!({
-                                "access_token": access_token,
-                                "refresh_token": refresh_token
-                            }));
-                        }
-                        Err(e) => {
-                            return Err(format!("Failed to exchange token: {:?}", e));
-                        }
-                    }
-                } else {
-                    let response = tiny_http::Response::from_string("No code provided.");
-                    let _ = request.respond(response);
-                    return Err("Authorization failed: no code returned.".to_string());
-                }
-            }
-        }
-
-        Err("Authorization timeout: user did not complete login within 5 minutes.".to_string())
-    }).await.map_err(|e| format!("Task panicked: {}", e))?
-}
-
-#[command]
-async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
-    const CREDENTIALS_JSON: &str = include_str!("../../wa_credential.json");
-    let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).map_err(|e| format!("Invalid wa_credential.json: {}", e))?;
-    let client_id = ClientId::new(creds["installed"]["client_id"].as_str().ok_or("Missing client_id in wa_credential.json")?.to_string());
-    let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().ok_or("Missing client_secret in wa_credential.json")?.to_string());
-    let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
-
-    let client = BasicClient::new(
-        client_id,
-        Some(client_secret),
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
-        Some(token_url),
-    );
-
-    let token_result = client
-        .exchange_refresh_token(&RefreshToken::new(refresh_token))
-        .request_async(async_http_client)
-        .await
-        .map_err(|e| format!("Failed to refresh token: {:?}", e))?;
-
-    let access_token = token_result.access_token().secret().to_string();
-    let new_refresh_token = token_result.refresh_token().map(|t| t.secret().to_string());
-    let expires_in = token_result.expires_in().map(|d| d.as_secs());
-
-    Ok(serde_json::json!({
-        "access_token": access_token,
-        "refresh_token": new_refresh_token,
-        "expires_in": expires_in
-    }))
-}
-
-fn build_stream_url(file_id: &str, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<&str>) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let ext_str = ext.unwrap_or("");
-    let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
-
-    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + STREAM_URL_TTL_SECS;
-    let payload = format!("{}:{}:{}", file_id, ext_str, exp);
-    // PANIC: PROXY_SECRET is initialized at startup in run() before any command handler runs.
-    // If it's somehow not set, this is a fatal programming error — panic is appropriate.
-    let secret = crate::PROXY_SECRET.get().expect("PROXY_SECRET not initialized — run() must be called first");
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC key from PROXY_SECRET");
-    mac.update(payload.as_bytes());
-    let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
-
-    if let Some(b) = bitrate {
-        let buf = buffer_seconds.unwrap_or(DEFAULT_BUFFER_SECONDS_F64);
-        format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig)
-    } else {
-        format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig)
-    }
-}
-
-#[tauri::command]
-async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
-    let start = Instant::now();
-    let result = build_stream_url(&file_id, bitrate, buffer_seconds, ext.as_deref());
-    let dur = start.elapsed();
-    diag_log("get_stream_url", dur);
-    Ok(result)
-}
-
-#[tauri::command]
-fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    use tauri_plugin_fs::FsExt;
-    let scope = app.fs_scope();
-    scope
-        .allow_directory(path, true)
-        .map_err(|e| format!("failed to extend fs scope for download dir: {}", e))?;
-    Ok(())
-}
-
-pub fn buffer_bytes_for_seconds(seconds: u64) -> u64 {
-    let bytes = seconds * NOMINAL_BYTES_PER_SEC;
-    bytes.clamp(MIN_BUFFER_BYTES, MAX_BUFFER_BYTES)
-}
-
-#[tauri::command]
-fn update_buffer_settings(seconds: usize) {
-    GLOBAL_BUFFER_SECONDS.store(seconds, Ordering::SeqCst);
-}
-
-// --- Local (DB-only) tag lookup for the "My Drive" list ---------------------
-// Read-only: never writes to the DB, never touches R2, never serves cover art.
-// If `music_database.db` is missing or lacks the expected columns, every call
-// below degrades gracefully to `None` and the frontend falls back to the
-// Drive filename — this is optional enrichment, not a hard dependency.
-
-#[derive(serde::Serialize, Clone)]
-struct LocalMetadata {
-    id: String,
-    title: String,
-    artist: String,
-    album: String,
-    duration: f64,
-    file_type: String,
-}
-
-pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
-    if let Ok(mut exe_path) = std::env::current_exe() {
-        exe_path.pop();
-        let path = exe_path.join("music_database.db");
-        if path.exists() { return Some(path); }
-    }
-    if std::path::Path::new("music_database.db").exists() {
-        Some(std::path::PathBuf::from("music_database.db"))
-    } else if std::path::Path::new("../music_database.db").exists() {
-        Some(std::path::PathBuf::from("../music_database.db"))
-    } else {
-        None
-    }
-}
-
-// Dedup by file size (Drive doesn't give us a stable local row id), then
-// prefer whichever candidate's file_path/title actually matches the file name
-// — mirrors how the frontend already identifies a track (size + name).
-fn get_local_metadata_internal(
-    size: i64,
-    name: &str,
-    conn: &rusqlite::Connection,
-) -> Option<LocalMetadata> {
-    let has_file_type = HAS_FILE_TYPE.get_or_init(|| {
-        conn.prepare("SELECT file_type FROM tracks LIMIT 1").is_ok()
-    });
-
-    let query = if *has_file_type {
-        "SELECT title, artist, album, duration, file_type, id, file_path FROM tracks WHERE size_bytes = ?"
-    } else {
-        "SELECT title, artist, album, duration, '', id, file_path FROM tracks WHERE size_bytes = ?"
-    };
-
-    let mut stmt = conn.prepare(query).ok()?;
-    let mut rows = stmt.query([size]).ok()?;
-
-    let mut first_match = None;
-    while let Ok(Some(row)) = rows.next() {
-        let file_path: String = row.get(6).unwrap_or_default();
-        let meta = LocalMetadata {
-            title: row.get(0).unwrap_or_default(),
-            artist: row.get(1).unwrap_or_default(),
-            album: row.get(2).unwrap_or_default(),
-            duration: row.get(3).unwrap_or_default(),
-            file_type: row.get(4).unwrap_or_default(),
-            id: row.get(5).unwrap_or_default(),
-        };
-
-        if file_path.contains(name) || meta.title.contains(name) || name.contains(&meta.title) {
-            return Some(meta);
-        }
-        if first_match.is_none() {
-            first_match = Some(meta);
-        }
-    }
-
-    first_match
-}
-
-#[derive(serde::Deserialize)]
-struct LocalMetadataQuery {
-    /// Caller-supplied correlation key (this app's Drive file id) — never
-    /// used for the DB lookup itself (that's `size`+`name`, see
-    /// `get_local_metadata_internal`), just echoed back as the result map's
-    /// key so the frontend can match each result to its row without relying
-    /// on response-array ordering matching the request-array ordering.
-    id: String,
-    size: i64,
-    name: String,
-}
-
-// Shared bound for the local-tag-lookup SQLite pool's real capacity AND
-// get_local_metadata_batch's concurrency limit — one named constant instead
-// of two independently-drifting magic numbers (see the pool construction in
-// `run()`'s `.setup()` closure, and `DB_LOOKUP_SEMAPHORE` right below).
-const DB_POOL_MAX_SIZE: u32 = 10;
-
-// Explicit Tokio Semaphore gating how many get_local_metadata_batch lookups
-// run concurrently, sized to match the SQLite pool's own real capacity. See
-// the PERF NOTE on get_local_metadata_batch below for the full reasoning.
-static DB_LOOKUP_SEMAPHORE: LazyLock<tokio::sync::Semaphore> =
-    LazyLock::new(|| tokio::sync::Semaphore::new(DB_POOL_MAX_SIZE as usize));
-
-// Batched version of the old per-track `get_local_metadata` command. The
-// "My Drive" list previously called that command once per uncached VISIBLE
-// row (throttled 6-wide on the frontend) — up to `itemsPerPage` (50) IPC
-// round-trips just to paint one page. Tauri's `invoke` bridge has real
-// per-call overhead (JSON serialize + copy across the JS/native boundary +
-// deserialize; see e.g. the "IPC is not free, batch intelligently" guidance
-// widely given for Tauri/Electron-style webview IPC), so collapsing this
-// into ONE call with all of a page's uncached rows removes N-1 round-trips
-// for a batch that's always small and bounded (<=50 items, well below any
-// payload size where batching itself becomes a problem — this is not the
-// "ship 120k rows over IPC" anti-pattern, just the ordinary N+1-avoidance
-// pattern also known from GraphQL's DataLoader: collect the keys the caller
-// actually needs, fetch them in one query pass, return a keyed map).
-//
-// PERF NOTE (regression found and fixed after a user report of slower
-// folder-load times, then hardened again on request to use a proper,
-// explicit concurrency primitive instead of an implicit one): the first
-// version of this batch ran every item SEQUENTIALLY on a single checked-out
-// connection inside one spawn_blocking. That's strictly cheaper on IPC
-// overhead than the old per-item version, but it gave up the real
-// concurrency the old version had — `tracks` has no index on `size_bytes`
-// (every lookup is a full table scan), and the old 6-wide-throttled frontend
-// loop meant up to 6 *separate* r2d2 connections could scan concurrently
-// across multiple OS threads. Collapsing all of that onto one connection
-// made every scan for a page fully serial on a single core, which for a
-// non-trivial library can be slower in wall-clock terms than the IPC
-// round-trips it was saving.
-//
-// The immediate fix spawned one task per item and let r2d2's own
-// `pool.get()` block/queue once its (implicit, default) max_size connections
-// were checked out -- that worked, but tied this command's concurrency to a
-// pool default that isn't actually configured as a concurrency control
-// anywhere, and eagerly spawned up to `items.len()` blocking-pool OS threads
-// even though only `max_size` of them could ever do anything at once.
-//
-// This version uses `DB_LOOKUP_SEMAPHORE`, an explicit `tokio::sync::
-// Semaphore` sized to `DB_POOL_MAX_SIZE` (the SAME constant the pool below
-// is built with, so the two can't silently drift apart) -- the standard
-// Tokio pattern for bounding concurrent access to a shared/pooled resource
-// (see `tokio::sync::Semaphore`'s own docs, whose canonical example acquires
-// an owned permit in the accept loop *before* spawning each task, moves it
-// into the task, and drops it when that task's work is done; this command
-// does the same with the borrowed `.acquire()` form since the semaphore here
-// is a `'static` global, not something that needs `Arc`-shared ownership).
-// Only ever spawns as many blocking tasks as can usefully run at once.
-// Verified the exact shape (acquire-before-spawn, permit held across the
-// spawned closure, results collected into a HashMap keyed by id rather than
-// array position) in an isolated crate with a real `tokio::sync::Semaphore`
-// behind a `static LazyLock`, since this sandbox cannot compile the full
-// Tauri app: with 10 permits and 50 items, real concurrency (>1, <=10) was
-// observed and every item still produced a correctly-keyed result.
-//
-// `async fn` + `spawn_blocking` per task (matching `login_google_native`'s
-// use of spawn_blocking) so each blocking r2d2 checkout + rusqlite query
-// runs on the blocking thread pool, never a Tokio async worker thread.
-//
-// MUST return `Result<T, E>`: Tauri 2 requires any async command that takes
-// a reference-typed input (`tauri::State<'_, _>` borrows from the invoke
-// message) to return `Result` — its own `AsyncCommandMustReturnResult` trait
-// bound only has an impl for `Result<A, B>`. This never actually returns
-// `Err` in practice (every internal failure already degrades to a partial
-// map, by design) — the wrapper exists purely to satisfy this compile-time
-// requirement, not to signal a new error case.
-#[tauri::command]
-async fn get_local_metadata_batch(
-    items: Vec<LocalMetadataQuery>,
-    pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> Result<HashMap<String, LocalMetadata>, String> {
-    let start = Instant::now();
-    let item_count = items.len();
-    let mut tasks = Vec::with_capacity(item_count);
-    for item in items {
-        // Acquire a permit BEFORE spawning — bounds how many blocking tasks
-        // are even started at once (rather than spawning all `item_count` of
-        // them and having most sit idle waiting on a permit from inside).
-        // `DB_LOOKUP_SEMAPHORE` is a `'static` global, so the borrowed
-        // `.acquire()` permit is itself `'static` and Send, and can be moved
-        // into the spawned closure below just like an owned permit could.
-        let permit = match DB_LOOKUP_SEMAPHORE.acquire().await {
-            Ok(p) => p,
-            // Never actually happens (nothing ever calls `.close()` on this
-            // semaphore), but skip rather than panic if it somehow did.
-            Err(_) => continue,
-        };
-        let pool = (*pool).clone();
-        tasks.push(tauri::async_runtime::spawn_blocking(move || {
-            let _permit = permit; // held for this task's duration, released on drop
-            let conn = pool.get().ok()?;
-            get_local_metadata_internal(item.size, &item.name, &conn).map(|meta| (item.id, meta))
-        }));
-    }
-
-    let mut results = HashMap::with_capacity(item_count);
-    for task in tasks {
-        if let Ok(Some((id, meta))) = task.await {
-            results.insert(id, meta);
-        }
-    }
-    diag_log("get_local_metadata_batch", start.elapsed());
-    Ok(results)
-}
-
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
-// Diagnostic: call counter for IPC timing
-// Always log during profiling — removed the modulo-50 sampling.
-fn diag_log(module: &str, dur: std::time::Duration) {
-    static DIAG_COUNT: AtomicU64 = AtomicU64::new(0);
-    let c = DIAG_COUNT.fetch_add(1, Ordering::Relaxed);
-    eprintln!("[PERF] {} took {:?} (call #{})", module, dur, c);
-}
-
-mod proxy;
 
 pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(DEFAULT_BUFFER_SECONDS_USIZE);
 pub static GLOBAL_SLICE_CACHE: std::sync::OnceLock<slice_cache::SliceCache> =
     std::sync::OnceLock::new();
-static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
+pub(crate) static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
-
-#[tauri::command]
-async fn clear_stream_token() -> Result<(), String> {
-    crate::GLOBAL_STREAM_TOKEN.lock().await.clear();
-    Ok(())
-}
-
-#[tauri::command]
-fn update_minimize_to_tray(minimize: bool) {
-    MINIMIZE_TO_TRAY.store(minimize, Ordering::SeqCst);
-}
-
-#[tauri::command]
-async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
-    // No-op: this app no longer keeps any local metadata/cover cache on the
-    // Rust side (the cover-art/R2/SQLite pipeline was removed). Kept as a
-    // command so the frontend's "clear cache on root-folder switch" call
-    // sites don't need to special-case its absence.
-    Ok(())
-}
-
 pub static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
-static HAS_FILE_TYPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+// Re-export commands for the invoke handler
+pub use commands::auth::{login_google_native, refresh_google_token};
+pub use commands::metadata::{get_local_metadata_batch, get_db_path, get_local_metadata_internal, LocalMetadata, LocalMetadataQuery};
+pub use commands::misc::{
+    buffer_bytes_for_seconds, build_stream_url, get_stream_url, register_download_path,
+    update_buffer_settings, update_stream_token, clear_stream_token,
+    update_minimize_to_tray, clear_local_cache,
+};
+
+const DB_POOL_MAX_SIZE: u32 = 10;
+
+// Diagnostic IPC timing logger
+pub fn diag_log(module: &str, dur: Duration) {
+    static DIAG_COUNT: AtomicU64 = AtomicU64::new(0);
+    let c = DIAG_COUNT.fetch_add(1, Ordering::Relaxed);
+    eprintln!("[PERF] {} took {:?} (call #{})", module, dur, c);
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -531,40 +73,13 @@ pub fn run() {
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
 
-            // Best-effort, read-only SQLite pool for the local tag lookup
-            // (`get_local_metadata_batch`). If `music_database.db` doesn't exist,
-            // `SqliteConnectionManager::file` will happily create an empty one
-            // with no `tracks` table — `get_local_metadata_internal` already
-            // degrades to `None` in that case, so this is never fatal.
+            // Best-effort SQLite pool for local tag lookup
             {
                 use r2d2_sqlite::SqliteConnectionManager;
                 use r2d2::Pool;
                 let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
                 let manager = SqliteConnectionManager::file(&db_path);
-                // Explicit max_size (was `Pool::new(manager)`, silently relying
-                // on r2d2's own default of 10) so this pool's real capacity and
-                // DB_LOOKUP_SEMAPHORE's permit count are the same named constant
-                // instead of two independently-drifting magic numbers.
                 if let Ok(pool) = Pool::builder().max_size(DB_POOL_MAX_SIZE).build(manager) {
-                    // Best-effort index creation for get_local_metadata_batch's
-                    // `WHERE size_bytes = ?` / dedup-by-id lookups. This existed
-                    // before (commit 50f22b0 added idx_tracks_size_bytes,
-                    // 36ffce8 added idx_tracks_id) specifically because every
-                    // lookup was a full table scan without it, then was removed
-                    // as unintentional collateral damage during the R2/SQLite
-                    // cover-art pipeline removal (commit 6c25c9b deleted the
-                    // whole surrounding block, not a deliberate call that the
-                    // index was no longer needed) and never restored when the
-                    // DB-only tag lookup came back. Confirmed still missing via
-                    // real timing data from get_local_metadata_batch's own
-                    // diag_log: ~83-101ms for a batch of up to 50 items on a
-                    // real user's multi-GB tracks table -- consistent with scan
-                    // cost, not the sub-millisecond-to-low-single-digit-ms an
-                    // indexed lookup would take. `IF NOT EXISTS` makes this
-                    // idempotent/safe on every startup; failure (fresh install
-                    // with no `tracks` table yet, locked file, etc.) is logged
-                    // and non-fatal -- get_local_metadata_internal already
-                    // degrades to `None` if the table doesn't exist regardless.
                     if let Ok(conn) = pool.get() {
                         if let Err(e) = conn.execute_batch(
                             "CREATE INDEX IF NOT EXISTS idx_tracks_size_bytes ON tracks(size_bytes); \
@@ -622,7 +137,7 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                if !IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) && MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
+                if !IS_QUITTING.load(Ordering::SeqCst) && MINIMIZE_TO_TRAY.load(Ordering::SeqCst) {
                     let _ = window.hide();
                     api.prevent_close();
                 }
@@ -636,7 +151,8 @@ pub fn run() {
             get_stream_url,
             update_buffer_settings,
             get_local_metadata_batch,
-            update_stream_token, clear_stream_token,
+            update_stream_token,
+            clear_stream_token,
             update_minimize_to_tray,
             clear_local_cache,
         ])
@@ -651,17 +167,18 @@ pub fn run() {
     };
 
     app.run(|_app_handle, event| match event {
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                IS_QUITTING.store(true, Ordering::SeqCst);
-            }
-            _ => {}
-        });
+        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+            IS_QUITTING.store(true, Ordering::SeqCst);
+        }
+        _ => {}
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use commands::metadata::get_local_metadata_internal;
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -677,22 +194,17 @@ mod tests {
         conn
     }
 
-    // Dedup by size: a track of the same byte size is matched, preferring a
-    // name/title match, else the first row.
     #[test]
     fn dedup_by_size_prefers_name() {
         let conn = setup();
         conn.execute(
             "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
             rusqlite::params!["AAA", "Song A", "Artist A", 200.0, "/content/drive/v1/files/AAA", 1000i64],
-        )
-        .unwrap();
+        ).unwrap();
         conn.execute(
             "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
             rusqlite::params!["BBB", "Song B", "Artist B", 200.0, "/content/drive/v1/files/BBB", 1000i64],
-        )
-        .unwrap();
-
+        ).unwrap();
         let m = get_local_metadata_internal(1000, "Song A", &conn).unwrap();
         assert_eq!(m.id, "AAA");
         assert_eq!(m.artist, "Artist A");
@@ -704,9 +216,7 @@ mod tests {
         conn.execute(
             "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
             rusqlite::params!["ZZZ", "My Song", "Someone", 200.0, "/content/drive/v1/files/ZZZ?alt=media", 1000i64],
-        )
-        .unwrap();
-
+        ).unwrap();
         let m = get_local_metadata_internal(1000, "My Song", &conn).unwrap();
         assert_eq!(m.id, "ZZZ");
     }
@@ -717,9 +227,7 @@ mod tests {
         conn.execute(
             "INSERT INTO tracks (id, title, artist, duration, file_path, size_bytes) VALUES (?1,?2,?3,?4,?5,?6)",
             rusqlite::params!["ONLY", "Unrelated Name", "Artist", 200.0, "/content/drive/v1/files/ONLY", 2000i64],
-        )
-        .unwrap();
-
+        ).unwrap();
         let m = get_local_metadata_internal(2000, "totally-different-name.mp3", &conn).unwrap();
         assert_eq!(m.id, "ONLY");
     }

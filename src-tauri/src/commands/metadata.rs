@@ -28,7 +28,7 @@ static DB_LOOKUP_SEMAPHORE: LazyLock<tokio::sync::Semaphore> =
 
 static HAS_FILE_TYPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
+pub fn get_db_path() -> Option<std::path::PathBuf> {
     if let Ok(mut exe_path) = std::env::current_exe() {
         exe_path.pop();
         let path = exe_path.join("music_database.db");
