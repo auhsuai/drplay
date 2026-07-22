@@ -28,9 +28,16 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-keepawake = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-oauth2 = "4.4.2"
+# v5 (up from 4.4.2): v4's removed `oauth2::reqwest::http_client`/
+# `async_http_client` helpers built their HTTP client with default settings,
+# which follow redirects during the code/token exchange -- v5's own docs
+# call this out as an SSRF risk and require the caller to build an explicit
+# client instead (see src-tauri/src/commands/auth.rs). "reqwest-blocking" is
+# a separate opt-in feature in v5 (not part of its default feature set,
+# unlike v4) needed for the sync client used during the code exchange.
+oauth2 = { version = "5", features = ["reqwest-blocking"] }
 url = "2.5.0"
-reqwest = { version = "0.12.4", features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12.4", features = ["json", "stream", "rustls-tls", "blocking"] }
 open = "5.1.2"
 # OS-keychain-backed storage for the OAuth refresh token (Windows Credential
 # Manager / macOS Keychain / Linux Secret Service), replacing plaintext
