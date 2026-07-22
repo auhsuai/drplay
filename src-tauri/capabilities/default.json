@@ -25,6 +25,7 @@
       "identifier": "http:default",
       "allow": [{ "url": "https://*.googleapis.com/*" }, { "url": "https://*.googleusercontent.com/*" }]
     },
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "log:default"
   ]
 }

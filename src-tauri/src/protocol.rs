@@ -39,7 +39,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                             .status(StatusCode::BAD_REQUEST)
                             .body(Vec::new())
                             .unwrap_or_else(|e| {
-                                eprintln!("[protocol] failed to build BAD_REQUEST (invalid URI) response: {e}");
+                                log::error!("[protocol] failed to build BAD_REQUEST (invalid URI) response: {e}");
                                 Response::new(Vec::new())
                             }),
                     );
@@ -59,7 +59,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                         .header("Access-Control-Allow-Headers", "*")
                         .body(Vec::new())
                         .unwrap_or_else(|e| {
-                            eprintln!("[protocol] failed to build OPTIONS response: {e}");
+                            log::error!("[protocol] failed to build OPTIONS response: {e}");
                             Response::new(Vec::new())
                         })
                 );
@@ -133,7 +133,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
             }
 
             responder.respond(Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap_or_else(|e| {
-                eprintln!("[protocol] failed to build 404 response: {e}");
+                log::error!("[protocol] failed to build 404 response: {e}");
                 Response::new(Vec::new())
             }));
         });

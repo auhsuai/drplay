@@ -79,7 +79,12 @@ describe('fetchWithAuth', () => {
     setAccessToken('old');
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_token') return 'rt';
-      if (cmd === 'refresh_google_token') throw new Error('invalid_grant: revoked');
+      // Real shape refresh_google_token now rejects with (AppError in
+      // src-tauri/src/error.rs) -- a plain {kind, message} object, not an
+      // Error instance. Using the real shape here (instead of `new
+      // Error(...)`) is what actually exercises getValidToken's
+      // getErrorMessage()-based extraction rather than masking a regression.
+      if (cmd === 'refresh_google_token') throw { kind: 'Auth', message: 'Failed to refresh token: invalid_grant: revoked' };
       throw new Error(`[test] unexpected invoke("${cmd}")`);
     });
 
@@ -140,10 +145,38 @@ describe('fetchWithAuth', () => {
 
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'get_token') return 'rt';
-      if (cmd === 'refresh_google_token') throw new Error('invalid_grant');
+      // Real post-migration shape -- see the other refresh_google_token
+      // mock above for why this isn't `new Error(...)`.
+      if (cmd === 'refresh_google_token') throw { kind: 'Auth', message: 'Failed to refresh token: invalid_grant' };
       throw new Error(`[test] unexpected invoke("${cmd}")`);
     });
     const fail = await getValidToken(true);
     expect(fail).toBeNull();
+  });
+
+  it('classifies invalid_grant from the AppError shape and dispatches auth-logout (not a retry)', async () => {
+    const dispatchSpy = vi.fn();
+    (globalThis as unknown as { window: { dispatchEvent: (e: Event) => void } }).window = {
+      dispatchEvent: dispatchSpy,
+    };
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_token') return 'rt';
+      if (cmd === 'refresh_google_token') throw { kind: 'Auth', message: 'Failed to refresh token: invalid_grant' };
+      throw new Error(`[test] unexpected invoke("${cmd}")`);
+    });
+
+    const result = await getValidToken(true);
+
+    expect(result).toBeNull();
+    // The regression this guards against: every branch of getValidToken's
+    // catch returns null (see above), so a null return alone doesn't prove
+    // invalid_grant was classified correctly. If getErrorMessage() ever
+    // stopped extracting `.message` from this {kind, message} rejection
+    // (e.g. a future revert to bare `String(err)`), the "invalid_grant"
+    // substring check would silently stop matching ("[object Object]"
+    // contains no such text), misclassifying this as 'unknown' and calling
+    // scheduleRetryRefresh() forever instead of logging out. Asserting the
+    // actual dispatched event catches that; a bare null-check would not.
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'auth-logout' }));
   });
 });

@@ -1,4 +1,5 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use hmac::{Hmac, Mac};
@@ -6,7 +7,7 @@ use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::command;
 
-use crate::{STREAM_URL_TTL_SECS, NOMINAL_BYTES_PER_SEC, MIN_BUFFER_BYTES, MAX_BUFFER_BYTES};
+use crate::{STREAM_URL_TTL_SECS, NOMINAL_BYTES_PER_SEC, MIN_BUFFER_BYTES, MAX_BUFFER_BYTES, AppError};
 
 pub fn buffer_bytes_for_seconds(seconds: u64) -> u64 {
     let bytes = seconds * NOMINAL_BYTES_PER_SEC;
@@ -28,7 +29,7 @@ pub fn build_stream_url(file_id: &str, ext: Option<&str>) -> String {
 }
 
 #[command]
-pub async fn get_stream_url(file_id: String, _bitrate: Option<f64>, _buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
+pub async fn get_stream_url(file_id: String, _bitrate: Option<f64>, _buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, AppError> {
     let start = Instant::now();
     let result = build_stream_url(&file_id, ext.as_deref());
     crate::diag_log("get_stream_url", start.elapsed());
@@ -36,27 +37,34 @@ pub async fn get_stream_url(file_id: String, _bitrate: Option<f64>, _buffer_seco
 }
 
 #[command]
-pub fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+pub fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), AppError> {
     use tauri_plugin_fs::FsExt;
     let scope = app.fs_scope();
-    scope.allow_directory(path, true).map_err(|e| format!("failed to extend fs scope for download dir: {}", e))?;
+    scope.allow_directory(path, true).map_err(|e| AppError::Io(format!("failed to extend fs scope for download dir: {}", e)))?;
     Ok(())
 }
 
 #[command]
-pub fn update_buffer_settings(seconds: usize) {
-    crate::GLOBAL_BUFFER_SECONDS.store(seconds, Ordering::SeqCst);
+pub fn update_buffer_settings(seconds: usize, buffer_seconds: tauri::State<'_, Arc<AtomicUsize>>) {
+    // `tauri::State<T>` params are injected by the framework from whatever
+    // was passed to `app.manage(...)` in lib.rs's `run()` -- invisible to
+    // the frontend's `invoke("update_buffer_settings", { seconds })` call,
+    // which is unchanged. This is the same shared Arc the Axum proxy's
+    // background prefetch loop reads (see proxy/stream.rs), replacing the
+    // old crate::GLOBAL_BUFFER_SECONDS static (see lib.rs's doc comment
+    // above MINIMIZE_TO_TRAY for the full rationale).
+    buffer_seconds.store(seconds, Ordering::SeqCst);
 }
 
 #[command]
-pub async fn update_stream_token(token: String) -> Result<(), String> {
+pub async fn update_stream_token(token: String) -> Result<(), AppError> {
     *crate::GLOBAL_STREAM_TOKEN.lock().await = token;
     crate::GLOBAL_TOKEN_NOTIFY.notify_waiters();
     Ok(())
 }
 
 #[command]
-pub async fn clear_stream_token() -> Result<(), String> {
+pub async fn clear_stream_token() -> Result<(), AppError> {
     crate::GLOBAL_STREAM_TOKEN.lock().await.clear();
     Ok(())
 }
@@ -67,6 +75,6 @@ pub fn update_minimize_to_tray(minimize: bool) {
 }
 
 #[command]
-pub async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
+pub async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), AppError> {
     Ok(())
 }

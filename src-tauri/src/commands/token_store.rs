@@ -13,45 +13,47 @@
 //! restart (a fresh refresh-token exchange re-establishes it immediately).
 use tauri::command;
 
+use crate::AppError;
+
 /// Keychain "service" namespace. Paired with an `account` string
 /// (currently only "refresh_token") to form the OS credential's identity.
 const SERVICE_NAME: &str = "drplay";
 
 #[command]
-pub async fn store_token(account: String, value: String) -> Result<(), String> {
+pub async fn store_token(account: String, value: String) -> Result<(), AppError> {
     tauri::async_runtime::spawn_blocking(move || {
-        let entry = keyring::Entry::new(SERVICE_NAME, &account).map_err(|e| e.to_string())?;
-        entry.set_password(&value).map_err(|e| e.to_string())
+        let entry = keyring::Entry::new(SERVICE_NAME, &account).map_err(|e| AppError::Keychain(e.to_string()))?;
+        entry.set_password(&value).map_err(|e| AppError::Keychain(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task panicked: {e}"))?
+    .map_err(|e| AppError::TaskPanicked(format!("Task panicked: {e}")))?
 }
 
 #[command]
-pub async fn get_token(account: String) -> Result<Option<String>, String> {
+pub async fn get_token(account: String) -> Result<Option<String>, AppError> {
     tauri::async_runtime::spawn_blocking(move || {
-        let entry = keyring::Entry::new(SERVICE_NAME, &account).map_err(|e| e.to_string())?;
+        let entry = keyring::Entry::new(SERVICE_NAME, &account).map_err(|e| AppError::Keychain(e.to_string()))?;
         match entry.get_password() {
             Ok(pw) => Ok(Some(pw)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(AppError::Keychain(e.to_string())),
         }
     })
     .await
-    .map_err(|e| format!("Task panicked: {e}"))?
+    .map_err(|e| AppError::TaskPanicked(format!("Task panicked: {e}")))?
 }
 
 #[command]
-pub async fn clear_token(account: String) -> Result<(), String> {
+pub async fn clear_token(account: String) -> Result<(), AppError> {
     tauri::async_runtime::spawn_blocking(move || {
-        let entry = keyring::Entry::new(SERVICE_NAME, &account).map_err(|e| e.to_string())?;
+        let entry = keyring::Entry::new(SERVICE_NAME, &account).map_err(|e| AppError::Keychain(e.to_string()))?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             // Already absent -- logout/clear should be idempotent, not an error.
             Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(AppError::Keychain(e.to_string())),
         }
     })
     .await
-    .map_err(|e| format!("Task panicked: {e}"))?
+    .map_err(|e| AppError::TaskPanicked(format!("Task panicked: {e}")))?
 }

@@ -26,8 +26,25 @@ tauri-plugin-http = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-keepawake = "0.1.0"
+# First-party Tauri plugin (github.com/tauri-apps/plugins-workspace), not the
+# third-party `tauri-plugin-tracing` crate that was also considered -- that
+# one is a single-maintainer community crate (~21k downloads, created 2025)
+# bundling flamegraph/CPU-profiling/OpenTelemetry features this app has no
+# use for. `log` is the plain, stable, first-party facade (`log::info!` etc.)
+# that replaces every `eprintln!`/`println!` call site below with leveled,
+# filterable, optionally-persisted logging -- see targets/level config in
+# lib.rs's `run()`.
+tauri-plugin-log = "2"
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Structured command errors (src-tauri/src/error.rs's `AppError`): derives
+# `Display`/`std::error::Error` from `#[error("...")]` per variant so
+# `AppError` still formats as the plain message text everywhere Rust code
+# does `.to_string()`/`{e}` on it (e.g. log::error! call sites), while serde
+# (already a dependency above) handles the `{kind, message}` JSON shape sent
+# to the frontend.
+thiserror = "2"
 # v5 (up from 4.4.2): v4's removed `oauth2::reqwest::http_client`/
 # `async_http_client` helpers built their HTTP client with default settings,
 # which follow redirects during the code/token exchange -- v5's own docs
@@ -49,8 +66,10 @@ r2d2_sqlite = "0.24.0"
 # Narrowed from "full": grepped every `tokio::` call site in src/ and only
 # these submodules are actually used (sync primitives, the proxy's own
 # TcpListener, time::sleep/timeout, spawn/join/select/pin + #[tokio::test]).
-# No tokio::fs, tokio::io, tokio::process, or tokio::signal usage anywhere.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
+# `fs` added for commands/download.rs's streaming-to-disk download (writes
+# each fetched chunk directly to a file instead of buffering in memory);
+# no tokio::process or tokio::signal usage anywhere.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "fs", "io-util"] }
 tiny_http = "0.12.0"
 hmac = "0.12.1"
 sha2 = "0.10.8"

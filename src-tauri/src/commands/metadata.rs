@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use tauri::command;
 
+use crate::AppError;
+
 #[derive(serde::Serialize, Clone)]
 pub struct LocalMetadata {
     pub id: String,
@@ -80,7 +82,7 @@ pub fn get_local_metadata_internal(
 pub async fn get_local_metadata_batch(
     items: Vec<LocalMetadataQuery>,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-) -> Result<HashMap<String, LocalMetadata>, String> {
+) -> Result<HashMap<String, LocalMetadata>, AppError> {
     let start = Instant::now();
     let item_count = items.len();
     let mut tasks = Vec::with_capacity(item_count);

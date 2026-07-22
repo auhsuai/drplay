@@ -7,6 +7,7 @@ import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
 import { showErrorToast } from "../utils/simpleToast";
+import { isAppError } from "../utils/appError";
 
 
 type PlayMode = 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
@@ -43,6 +44,11 @@ function isIntentStale(myId: number): boolean {
 }
 
 function classifyPlayerError(err: unknown): { name: string; message: string } {
+  // get_stream_url (src-tauri/src/commands/misc.rs) now types its Err side
+  // as AppError -- a {kind, message} object, not an Error instance -- so
+  // check that shape first or every invoke() failure logged here would
+  // fall through to the generic "UnknownError"/"Unknown error".
+  if (isAppError(err)) return { name: err.kind, message: err.message };
   if (err instanceof Error) return { name: err.name, message: err.message };
   if (typeof err === "string") return { name: "Error", message: err };
   return { name: "UnknownError", message: "Unknown error" };

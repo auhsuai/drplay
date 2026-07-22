@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getErrorMessage } from "./appError";
 
 const prefetchedStreams = new Map<string, string>();
 const MAX_CACHE = 200; // ~40KB max (200 bytes/URL for signed stream URLs)
@@ -49,9 +50,14 @@ export async function prefetchVisibleTracks(trackIds: string[]) {
         cacheSet(id, url);
       }
     } catch (error) {
+      // get_stream_url's Err side (src-tauri/src/commands/misc.rs) now
+      // types as AppError -- rejects with a {kind, message} object rather
+      // than an Error instance, so `error instanceof Error` alone would
+      // always miss and this would silently degrade to "unknown" forever.
+      const message = getErrorMessage(error);
       let kind: "timeout" | "network" | "unknown" = "unknown";
-      if (error instanceof Error && /timeout/i.test(error.message)) kind = "timeout";
-      else if (error instanceof Error && /network|fetch|connection/i.test(error.message)) kind = "network";
+      if (/timeout/i.test(message)) kind = "timeout";
+      else if (/network|fetch|connection/i.test(message)) kind = "network";
       console.warn("[streamPrefetcher] prefetch failed", { fileId: id, kind, error });
     }
   });

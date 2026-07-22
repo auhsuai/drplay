@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { getCurrentSessionId } from "./sessionGuard";
 import { getAccessToken, setAccessToken, getTokenIssuedAt, getRefreshToken, storeRefreshToken } from "./tokenStore";
+import { getErrorMessage } from "./appError";
 
 export class TokenRefreshError extends Error {
   constructor(
@@ -40,8 +41,12 @@ function classifyRequestError(err: unknown): 'network' | 'timeout' {
 }
 
 // Classify a Tauri invoke() rejection for observability (no secrets logged).
+// `refresh_google_token`/`update_stream_token` now reject with a structured
+// `{kind, message}` object (see src-tauri/src/error.rs's AppError) rather
+// than a bare string or Error instance -- getErrorMessage() handles all
+// three shapes so this classification keeps working either way.
 function classifyInvokeError(err: unknown): 'network' | 'timeout' | 'unknown' {
-  const errStr = err instanceof Error ? err.message : String(err);
+  const errStr = getErrorMessage(err);
   if (/timeout/i.test(errStr)) return 'timeout';
   if (/failed to fetch|unreachable|network/i.test(errStr)) return 'network';
   return 'unknown';
@@ -130,7 +135,14 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
       try {
         tokenData = await invoke<RefreshTokenResponse>("refresh_google_token", { refreshToken });
       } catch (err: unknown) {
-        const errStr = String(err);
+        // refresh_google_token now rejects with a structured
+        // `{kind, message}` object (src-tauri/src/error.rs's AppError), not
+        // a bare string -- `String(err)` on that plain object would produce
+        // "[object Object]" and silently break every branch below,
+        // including the invalid_grant -> logout path. getErrorMessage()
+        // extracts `.message` correctly (also handles the pre-migration
+        // string/Error shapes, so this stays correct either way).
+        const errStr = getErrorMessage(err);
         if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {
           throw new TokenRefreshError('Network unreachable', 'network');
         } else if (errStr.includes("invalid_grant")) {

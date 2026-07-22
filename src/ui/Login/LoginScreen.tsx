@@ -4,13 +4,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { showErrorToast } from "../../utils/simpleToast";
 import { GoogleTokenResponse } from "../../hooks/useAuth";
+import { getErrorMessage, isAppError } from "../../utils/appError";
 
 const LOGIN_MODULE = "LoginScreen";
 
 // Classify a login error for observability. Returns name + message only.
 function classifyLoginError(err: unknown): string {
-  const name = err instanceof Error ? err.name : typeof err;
-  const message = err instanceof Error ? err.message : String(err);
+  const name = isAppError(err) ? err.kind : err instanceof Error ? err.name : typeof err;
+  const message = getErrorMessage(err);
   return `${name}: ${message}`;
 }
 
@@ -56,7 +57,12 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       onLogin(tokenData);
     } catch (error) {
       setIsLoading(false);
-      const errStr = String(error);
+      // login_google_native now rejects with a structured {kind, message}
+      // object (src-tauri/src/error.rs's AppError), not a bare string --
+      // getErrorMessage() extracts `.message` so these substring checks
+      // keep matching the same text they always did (see that file's module
+      // doc for the exact strings this depends on).
+      const errStr = getErrorMessage(error);
       if (errStr.includes('User denied access')) {
         console.info('[Auth] User cancelled login');
       } else if (errStr.includes('timeout') || errStr.includes('timed out')) {

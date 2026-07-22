@@ -7,6 +7,7 @@ import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, 
 import { getAccessToken, setAccessToken as setStoredAccessToken, getRefreshToken, storeRefreshToken, clearRefreshToken } from "../utils/tokenStore";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
 import { showErrorToast } from "../utils/simpleToast";
+import { isAppError } from "../utils/appError";
 
 const AUTH_MODULE = "useAuth";
 
@@ -24,8 +25,14 @@ export interface GoogleTokenResponse {
 
 // Standardize error context so every catch logs the module + subtype and never
 // leaks the access token. Token values are never passed into these helpers.
+// Several of the invoke() calls below (update_stream_token, clear_stream_token,
+// clear_local_cache) now reject with a structured {kind, message} object
+// (src-tauri/src/error.rs's AppError) rather than an Error instance -- this
+// is logging-only (no behavior branches on the text), but still worth
+// reading `.message` correctly instead of falling through to the generic
+// "[non-Error thrown] [object Object]" for every failure.
 const classifyError = (e: unknown): string =>
-  e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
+  isAppError(e) ? `[${e.kind}] ${e.message}` : e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
 const classifyInvokeError = (e: unknown): string => {
   const msg = classifyError(e);
