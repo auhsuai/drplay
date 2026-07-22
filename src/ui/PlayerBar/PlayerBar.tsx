@@ -25,6 +25,12 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   // 1. Player state
   const [playerState, dispatch] = useReducer(playerReducer, initialPlayerState);
   const { error: errorInfo, manualResume } = playerState;
+  // manualResume: the browser blocked autoplay (NotAllowedError, e.g. after
+  // restoring a session or returning from background) and is waiting for a
+  // direct user gesture before it will play again. `isPlaying` (from the
+  // parent usePlayer hook) is NOT reset when this happens, so without this
+  // check the main button would show a misleading "Pause" icon while the
+  // audio element is actually silent/blocked.
 
   // 2. Shared refs — created once, passed to hooks
   const isPlayingRef = useRef(isPlaying);
@@ -223,13 +229,15 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             <SkipBack className="w-5 h-5" />
           </button>
           
-          <button 
-            onClick={errorInfo && bannerTypes.includes(errorInfo.type) ? playbackControl.handleRetry : onTogglePlay}
+          <button
+            onClick={manualResume ? playbackControl.handleManualResume : errorInfo && bannerTypes.includes(errorInfo.type) ? playbackControl.handleRetry : onTogglePlay}
             className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
             disabled={!currentTrack || isDownloading}
           >
-            {isDownloading || (isBuffering && isPlaying && !errorInfo) ? (
+            {isDownloading || (isBuffering && isPlaying && !errorInfo && !manualResume) ? (
               <Loader2 className="w-5 h-5 animate-spin" />
+            ) : manualResume ? (
+              <Play className="w-5 h-5 ml-0.5" />
             ) : errorInfo && bannerTypes.includes(errorInfo.type) ? (
               <RefreshCw className="w-5 h-5" />
             ) : isPlaying ? (
@@ -318,6 +326,23 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         onError={audioEngine.handleAudioError}
         onEnded={audioEngine.handleEnded}
       />
+
+      {/* Manual-resume banner: browser blocked autoplay (NotAllowedError) and
+          is waiting for a direct user gesture. Guarded on !errorInfo since
+          the two states are not expected to be shown at once. */}
+      {manualResume && !errorInfo && createPortal(
+        <div
+          className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 cursor-pointer select-none"
+          onClick={playbackControl.handleManualResume}
+        >
+          <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
+            <Play className="w-5 h-5 shrink-0 text-[#4285F4]" />
+            <span className="font-medium truncate">{t('player.tap_to_resume', 'Trình duyệt đã chặn tự động phát — nhấn để tiếp tục')}</span>
+          </div>
+          <div className="w-1.5 self-stretch bg-[#4285F4]" />
+        </div>,
+        document.getElementById('content-area')!
+      )}
 
       {/* Error UI Portal */}
       {errorInfo && (toastTypes.includes(errorInfo.type) || bannerTypes.includes(errorInfo.type)) && createPortal(
