@@ -8,59 +8,24 @@ import { set as idbSet } from '../../db/kv';
 import { PlayerAction, AudioRefs } from './types';
 import { decideDecodeFailure, isProxyStreamUrl } from './streamError';
 import type { TFunction } from 'i18next';
+import { classifyAudioError, captureRetryFailure } from './utils/audioUtils';
+import {
+  ENDED_THRESHOLD_SEC,
+  SUPPRESS_ENDED_SAFETY_MS,
+  LOAD_METADATA_TIMEOUT_MS,
+  CANPLAY_TIMEOUT_MS,
+  HEAD_PROBE_TIMEOUT_MS,
+  HEAD_PROBE_MAX_ATTEMPTS,
+  HEAD_PROBE_BACKOFF_BASE_MS,
+  RATE_LIMIT_COOLDOWN_MS,
+  TOKEN_RECENCY_WINDOW_MS,
+  RATE_LIMIT_RETRY_MIN_MS,
+  RATE_LIMIT_RETRY_MAX_MS,
+} from './utils/audioConstants';
+import { useBufferingState } from './hooks/useBufferingState';
 
 const AUDIO_MODULE = 'useAudioEngine';
 const AUDIO_LOG = '[Player]';
-
-// Threshold (seconds) within which an `ended` event is treated as "truly at the
-// end of the track". An `ended` firing while currentTime is far from duration is
-// a spurious/early-ended event (e.g. caused by a mid-track src reload) and must
-// NOT trigger a track skip.
-const ENDED_THRESHOLD_SEC = 1.0;
-
-// Safety window (ms) after a programmatic reload during which any stray `ended`
-// event is suppressed. Guarantees the suppress flag cannot stay stuck forever
-// even if `canplay` never fires.
-const SUPPRESS_ENDED_SAFETY_MS = 15000;
-
-// --- Named timeouts / backoffs (no magic numbers) ---
-// How long to wait for `loadedmetadata` / `canplay` after (re)loading a source.
-const LOAD_METADATA_TIMEOUT_MS = 10_000;
-const CANPLAY_TIMEOUT_MS = 30_000;
-// HEAD probe against the proxy used to distinguish transient vs permanent errors.
-const HEAD_PROBE_TIMEOUT_MS = 5_000;
-const HEAD_PROBE_MAX_ATTEMPTS = 3;
-const HEAD_PROBE_BACKOFF_BASE_MS = 500;
-// Cooldown applied when the proxy reports a rate-limited (429) state.
-const RATE_LIMIT_COOLDOWN_MS = 300_000;
-// Window after a token refresh during which a decode error is retried (the proxy
-// may still be recovering) instead of being treated as definitive.
-const TOKEN_RECENCY_WINDOW_MS = 15_000;
-// Bounds (ms) for the backoff before auto-retrying after a rate-limited state.
-const RATE_LIMIT_RETRY_MIN_MS = 5_000;
-const RATE_LIMIT_RETRY_MAX_MS = 60_000;
-
-// Classify an audio-engine error for observability. Only surface the
-// message/name — never log tokens, URLs, or signed stream credentials.
-function classifyAudioError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message || err.name || 'Unknown audio error';
-  }
-  if (typeof err === 'string') return err;
-  return 'Unknown audio error';
-}
-
-// Fire-and-forget retry helper: `performRetry` already surfaces the failure to
-// the UI, but swallowing its rejection with `.catch(() => {})` hides the failure
-// from the persisted error log. Capture it (sanitized, no secrets) instead.
-function captureRetryFailure(where: string, e: unknown): void {
-  captureError({
-    level: 'warn',
-    source: 'audio-engine',
-    message: `${where}: retry failed (${classifyAudioError(e)})`,
-    kind: 'retry',
-  });
-}
 
 export interface AudioEngineAPI {
   audioRefs: AudioRefs;
@@ -129,52 +94,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   //    ms sau. `handleCanPlay`/pause/đổi bài dùng `immediate: true` để ẩn
   //    ngay vì đó là tín hiệu dứt khoát (đã sẵn sàng phát / người dùng chủ
   //    động dừng), không phải "có một ít dữ liệu vừa tới".
-  // Watchdog qua `timeupdate` bắt các stall mà `waiting` không phát (MDN/hls.js).
-  const MIN_BUFFERING_VISIBLE_MS = 400;
-  const isBufferingRef = useRef(false);
-  const bufferingShownAtRef = useRef<number | null>(null);
-  const bufferingDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hideBufferingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stallWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const applyBuffering = (v: boolean, opts?: { immediate?: boolean }) => {
-    if (hideBufferingTimeoutRef.current) {
-      clearTimeout(hideBufferingTimeoutRef.current);
-      hideBufferingTimeoutRef.current = null;
-    }
-
-    if (v) {
-      if (isBufferingRef.current) return;
-      isBufferingRef.current = true;
-      bufferingShownAtRef.current = Date.now();
-      setIsBuffering(true);
-      return;
-    }
-
-    if (!isBufferingRef.current) return;
-    const shownAt = bufferingShownAtRef.current;
-    const elapsed = shownAt !== null ? Date.now() - shownAt : MIN_BUFFERING_VISIBLE_MS;
-
-    if (opts?.immediate || elapsed >= MIN_BUFFERING_VISIBLE_MS) {
-      isBufferingRef.current = false;
-      bufferingShownAtRef.current = null;
-      setIsBuffering(false);
-    } else {
-      const remaining = MIN_BUFFERING_VISIBLE_MS - elapsed;
-      hideBufferingTimeoutRef.current = setTimeout(() => {
-        hideBufferingTimeoutRef.current = null;
-        isBufferingRef.current = false;
-        bufferingShownAtRef.current = null;
-        setIsBuffering(false);
-      }, remaining);
-    }
-  };
-  const clearBufferingTimers = () => {
-    if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
-    if (hideBufferingTimeoutRef.current) { clearTimeout(hideBufferingTimeoutRef.current); hideBufferingTimeoutRef.current = null; }
-    if (stallWatchdogRef.current) { clearTimeout(stallWatchdogRef.current); stallWatchdogRef.current = null; }
-  };
-
   const audioRefs: AudioRefs = { audioRef };
 
   // Single audio element — see AudioRefs. Kept as a function (rather than
@@ -184,6 +103,10 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const getActiveAudio = useCallback(() => {
     return audioRef.current;
   }, []);
+
+  // Buffering spinner with hysteresis (ExoPlayer/Shaka-style dual-threshold)
+  const { isBufferingRef, applyBuffering, clearBufferingTimers, bufferingDelayRef, stallWatchdogRef } =
+    useBufferingState(setIsBuffering);
 
   const clearRetryTimeout = () => {
     if (retryTimeoutRef.current) {
@@ -689,9 +612,6 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       applyBuffering(false, { immediate: true });
     }
   }, [isPlaying, currentTrack?.id]);
-
-  // Unmount cleanup for buffering timers.
-  useEffect(() => clearBufferingTimers, []);
 
   return {
     audioRefs,

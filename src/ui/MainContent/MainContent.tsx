@@ -1,18 +1,22 @@
-import React, { useState, useMemo, useRef } from "react";
-import { useVirtualizer, type ReactVirtualizer } from '@tanstack/react-virtual';
-import { invoke } from "@tauri-apps/api/core";
+import React, { useState } from "react";
 import { Track, DriveItem } from "../../App";
-import { FolderPlus, Trash2, ArrowLeft, Loader2, Search, CheckSquare, Square, X, Check, FolderOutput } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
-import { deleteFile, moveFile } from "../../utils/driveApi";
 
 import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
-import { normalizeText } from "../../utils/normalizeText";
-import type { DbTagMetadata } from "./components/SongCard";
-
-
+import { useTagLookup } from "./hooks/useTagLookup";
+import { useBulkOperations } from "./hooks/useBulkOperations";
+import { useFolderSearch } from "./hooks/useFolderSearch";
+import { useFileListVirtualizer } from "./hooks/useFileListVirtualizer";
+import { useKeyboardSearch } from "./hooks/useKeyboardSearch";
+import { useCreateFolder } from "./hooks/useCreateFolder";
+import { VirtualizedSongList } from "./components/VirtualizedSongList";
+import { PaginationBar } from "./components/PaginationBar";
+import { Toolbar } from "./components/Toolbar";
+import { BulkDeleteConfirmModal } from "./components/BulkDeleteConfirmModal";
+import { NewFolderModal } from "./components/NewFolderModal";
 
 interface MainContentProps {
   activeTab: string;
@@ -35,715 +39,99 @@ interface MainContentProps {
   onSortChange?: (option: string) => void;
 }
 
-import { createFolder } from '../../utils/driveApi';
-import { db } from '../../db/db';
-import { SongCard } from './components/SongCard';
-import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
-import { NewFolderModal } from './components/NewFolderModal';
-import { showErrorToast } from '../../utils/simpleToast';
-import { captureError } from '../../utils/errorLog';
-
-function useDebouncedLiveQuery<T>(
-  querier: () => Promise<T>,
-  deps: React.DependencyList,
-  delayMs = 100
-): T | undefined {
-  const [result, setResult] = React.useState<T>();
-  const querierRef = React.useRef(querier);
-  querierRef.current = querier;
-  React.useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      const data = await querierRef.current();
-      if (!cancelled) setResult(data);
-    }, delayMs);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, deps);
-  return result;
-}
-
-export const MainContent = React.memo(function MainContent({ 
-  activeTab, 
-  onPlay, 
-  items, 
-  isLoading, 
-  onOpenFolder, 
-  onBack, 
-  hasHistory, 
-  folderHistory, 
-  currentFolderName, 
-  currentFolderId, 
-  onBreadcrumbClick, 
-  token, 
-  highlightedFileId, 
-  onRefresh, 
-  onRemoveItem,
-  currentTrack,
-  sortOption = "name_natural",
-  onSortChange
+export const MainContent = React.memo(function MainContent({
+  activeTab, onPlay, items, isLoading, onOpenFolder, onBack,
+  hasHistory, folderHistory, currentFolderName, currentFolderId,
+  onBreadcrumbClick, token, highlightedFileId, onRefresh, onRemoveItem,
+  currentTrack, sortOption = "name_natural", onSortChange,
 }: MainContentProps) {
   const { t } = useTranslation();
-  const isInitialMount = React.useRef(true);
-  React.useEffect(() => {
-    isInitialMount.current = false;
-  }, []);
-  const [showNewFolderModal, setShowNewFolderModal] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
-  const [showSortMenu, setShowSortMenu] = useState(false);
+  const mainRef = React.useRef<HTMLElement>(null);
+
+  // Modal / UI state
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkMoveScreen, setShowBulkMoveScreen] = useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [isBulkOperating, setIsBulkOperating] = useState(false);
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false);
+  const [showSortMenu, setShowSortMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const searchInputRef = React.useRef<HTMLInputElement>(null);
-  const mainRef = React.useRef<HTMLElement>(null);
-  const itemsPerPage = 50;
   const [currentPage, setCurrentPage] = useState(1);
-  const [isEditingPage, setIsEditingPage] = useState(false);
-  const [pageInputValue, setPageInputValue] = useState("");
-  const pageInputRef = React.useRef<HTMLInputElement>(null);
+  const itemsPerPage = 50;
 
-  // Reset page when folder, search, or sort changes
-  React.useEffect(() => {
-    setCurrentPage(1);
-  }, [currentFolderId, searchQuery, sortOption]);
+  // Reset search on folder change
+  React.useEffect(() => { setSearchQuery(""); }, [currentFolderId]);
 
-  // Reset highlight and search on folder change
+  // Enable-selection-mode event
   React.useEffect(() => {
-    setSearchQuery("");
-  }, [currentFolderId]);
-
-  React.useEffect(() => {
-    const handleEnableSelection = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail?.id) {
-        setIsSelectionMode(true);
-        setSelectedIds(new Set([customEvent.detail.id]));
-      }
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent;
+      if (ce.detail?.id) { setIsSelectionMode(true); setSelectedIds(new Set([ce.detail.id])); }
     };
-    window.addEventListener('enable-selection-mode', handleEnableSelection);
-    return () => window.removeEventListener('enable-selection-mode', handleEnableSelection);
+    window.addEventListener('enable-selection-mode', handler);
+    return () => window.removeEventListener('enable-selection-mode', handler);
   }, []);
 
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        e.preventDefault();
-        if (document.activeElement === searchInputRef.current) {
-          searchInputRef.current?.blur();
-          setSearchQuery("");
-        } else {
-          searchInputRef.current?.focus();
-        }
-      }
-      if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
-        searchInputRef.current?.blur();
-        setSearchQuery("");
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  // Keyboard search (Ctrl+F)
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+  useKeyboardSearch({ searchInputRef, setSearchQuery });
 
-  const prevFolderRef = React.useRef(currentFolderId);
-
-  React.useEffect(() => {
-    if (mainRef.current) {
-      const isFolderChange = currentFolderId !== prevFolderRef.current;
-      
-      if (isFolderChange && !highlightedFileId) {
-        mainRef.current.scrollTo({ top: 0, behavior: 'smooth' });
-      }
-      
-      prevFolderRef.current = currentFolderId;
-    }
-  }, [currentFolderId]);
-
-  const allFiles = useDebouncedLiveQuery(async () => {
-    if (!searchQuery) return undefined;
-    const files = await db.files.toArray();
-    return files.map(f => ({
-      id: f.id,
-      parentId: f.parentId,
-      name: f.name,
-      isFolder: f.isFolder,
-      size: f.size,
-      modifiedTime: f.modifiedTime,
-    }));
-  }, [searchQuery], 100);
-
-  const parentMap = React.useMemo(() => {
-    if (!allFiles) return new Map<string, string>();
-    const map = new Map<string, string>();
-    allFiles.forEach(f => map.set(f.id, f.parentId));
-    return map;
-  }, [allFiles]);
-
-  const globalSearchItemsRaw = React.useMemo(() => {
-    if (!searchQuery || !allFiles) return [];
-    const query = normalizeText(searchQuery);
-
-    const matches = allFiles.filter(f => normalizeText(f.name).includes(query));
-
-    if (!currentFolderId || currentFolderId === 'root' || currentFolderId === '') {
-      return matches;
-    }
-
-    return matches.filter(f => {
-      let current: string | undefined = f.parentId;
-      while (current) {
-        if (current === currentFolderId) return true;
-        current = parentMap.get(current);
-      }
-      return false;
-    });
-  }, [searchQuery, allFiles, currentFolderId, parentMap]);
-
-  const globalSearchItems = React.useMemo(() => {
-    if (!globalSearchItemsRaw) return [];
-    
-    const mapped = globalSearchItemsRaw.map(file => {
-      const title = file.isFolder ? file.name : file.name.replace(/\.[^/.]+$/, "");
-      return {
-        id: file.id,
-        title,
-        isFolder: file.isFolder,
-        size: file.size,
-        modifiedTime: file.modifiedTime,
-        trackInfo: file.isFolder ? undefined : {
-          id: file.id,
-          title,
-          artist: "",
-          streamUrl: "",
-          size: file.size,
-          originalName: file.name,
-          parentId: file.parentId,
-          parentName: "Search Result",
-        }
-      };
-    });
-    
-    return mapped.sort((a, b) => {
-      if (a.isFolder && !b.isFolder) return -1;
-      if (!a.isFolder && b.isFolder) return 1;
-      return a.title.localeCompare(b.title, undefined, { numeric: true });
-    });
-  }, [globalSearchItemsRaw]);
-
-  const filteredItems = searchQuery ? globalSearchItems : items;
-  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
-  const currentItems = useMemo(
-    () => filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage),
-    [filteredItems, currentPage, itemsPerPage]
-  );
-
-  // `directDomUpdates: true` (an opt-in perf optimization that lets the
-  // virtualizer write row positions straight to the DOM, bypassing React's
-  // own render for scroll-only updates) was removed after 3 rounds of
-  // reported/fixed-but-recurring "blank/misplaced row" symptoms that
-  // resurfaced even after correcting a real, documented requirement
-  // violation for that mode (missing `top: 0` anchor). Rather than keep
-  // chasing individual requirements of an advanced, opt-in feature this
-  // app's actual list sizes (capped at `itemsPerPage` = 50 rows) don't need
-  // the performance benefit of, reverted to the library's own default,
-  // React-driven update path -- the standard usage the vast majority of
-  // this library's users rely on, and the one with by far the most
-  // real-world mileage. Positions are now set directly in each row's JSX
-  // style (see `transform: translateY(...)` below) instead of being
-  // written imperatively outside React's render.
-  const rowVirtualizer = useVirtualizer({
-    count: currentItems.length,
-    getScrollElement: () => mainRef.current,
-    estimateSize: () => 92,
-    overscan: 2,
-    getItemKey: (index: number) => currentItems[index].id,
+  // Search pipeline
+  const { filteredItems, currentItems, totalPages } = useFolderSearch({
+    items, currentFolderId, currentPage, itemsPerPage, searchQuery,
   });
 
-  const prevItemsLengthRef = React.useRef(currentItems.length);
+  // Virtualizer + scroll logic
+  const { rowVirtualizer } = useFileListVirtualizer({
+    currentItems, currentFolderId, searchQuery, sortOption,
+    highlightedFileId, filteredItems, itemsPerPage, currentPage, setCurrentPage,
+    scrollContainerRef: mainRef,
+  });
 
-  React.useEffect(() => {
-    if (prevItemsLengthRef.current === 0 && currentItems.length > 0) {
-      rowVirtualizer.measure();
-      rowVirtualizer.scrollToIndex(0, { align: 'start' });
-    }
-    prevItemsLengthRef.current = currentItems.length;
-  }, [currentItems.length, rowVirtualizer]);
+  // Clear prefetch caches on folder change
+  React.useEffect(() => { clearPrefetchedStreams(); clearNextTrackPrefetches(); }, [currentFolderId]);
 
-  React.useEffect(() => {
-    if (highlightedFileId && filteredItems.length > 0) {
-      const index = filteredItems.findIndex(item => item.id === highlightedFileId.id);
-      if (index !== -1) {
-        const targetPage = Math.floor(index / itemsPerPage) + 1;
-        if (targetPage !== currentPage) {
-          setCurrentPage(targetPage);
-          // Same stale-measurement-cache issue as the pagination buttons
-          // below (see their handlers for the full explanation) -- jumping
-          // to a different page here swaps in an entirely different set of
-          // items too.
-          rowVirtualizer.measure();
-          setTimeout(() => {
-            const pageIndex = index % itemsPerPage;
-            rowVirtualizer.scrollToIndex(pageIndex, { align: 'center' });
-          }, 50);
-        } else {
-          const pageIndex = index % itemsPerPage;
-          rowVirtualizer.scrollToIndex(pageIndex, { align: 'center' });
-        }
-      }
-    }
-  }, [highlightedFileId, currentPage, filteredItems, rowVirtualizer]);
+  // Tag lookup
+  const { tagMetadataRef } = useTagLookup({ currentItems });
 
-  React.useEffect(() => {
-    clearPrefetchedStreams();
-    clearNextTrackPrefetches();
-  }, [currentFolderId]);
+  // Bulk operations
+  const { handleBulkDelete, handleBulkMove, handleBulkMoveClick, handleBulkDeleteClick } =
+    useBulkOperations({ token, currentFolderId, selectedIds, setSelectedIds,
+      setIsSelectionMode, setShowBulkDeleteConfirm, setShowBulkMoveScreen,
+      isBulkOperating, setIsBulkOperating, onRemoveItem, t });
 
-  // DB tag lookup — ONLY for rows visible in this "My Drive" list. Reads real
-  // title/artist tags from the local SQLite DB (see get_local_metadata_batch
-  // in lib.rs); no R2, no cover art, no network fetch. Every other tab (Home,
-  // Liked Songs, Playlists) keeps showing the plain Drive filename.
-  const tagMetadataRef = useRef<Map<string, DbTagMetadata>>(new Map());
-  const tagLookupAttemptedRef = useRef<Set<string>>(new Set());
-  const [, forceTagRerender] = useState(0);
+  // Create folder
+  const { handleCreateFolder, isCreating } = useCreateFolder({ token, currentFolderId, onRefresh, setShowNewFolderModal });
 
-  React.useEffect(() => {
-    const trackItems = currentItems.filter(
-      (item) => !item.isFolder && item.trackInfo?.id && !tagLookupAttemptedRef.current.has(item.trackInfo.id)
-    );
-    if (trackItems.length === 0) return;
-
-    // One batched IPC call for the whole page instead of one invoke() per
-    // uncached row (was throttled 6-wide, so up to ceil(50/6)=9 sequential
-    // waves of round-trips for a full 50-item page). Tauri's invoke bridge
-    // has real per-call serialize/copy/deserialize overhead, so N separate
-    // small calls cost strictly more than 1 call carrying all N lookups —
-    // this is the same N+1 pattern GraphQL's DataLoader batches away, just
-    // applied to a Tauri command instead of a resolver. Bounded and safe to
-    // send in one shot: currentItems is already paginated to `itemsPerPage`
-    // (50) rows, nowhere near the payload sizes where batching itself would
-    // become the bottleneck.
-    let cancelled = false;
-    const items = trackItems.map(item => ({
-      id: item.trackInfo!.id,
-      size: item.trackInfo!.size ?? 0,
-      name: item.trackInfo!.originalName ?? 'audio.mp3',
-    }));
-    // Cache both hits and misses. The local DB is read-only during a session, so
-    // repeatedly invoking Rust for the same known-missing row only adds IPC and
-    // SQLite work without any chance of producing a different answer.
-    items.forEach(({ id }) => tagLookupAttemptedRef.current.add(id));
-
-    // Diagnostic-only: user reports that individual FILE rows (needing this
-    // tag lookup) visibly display slower than FOLDER rows (which need no
-    // lookup at all, just the Drive listing). The Rust side's own diag_log
-    // already showed 83-101ms INSIDE get_local_metadata_batch -- but that
-    // only covers the Rust function body, not IPC serialize/dispatch/
-    // deserialize overhead on top of it. Measuring the FULL round-trip here
-    // (JS call to JS resolution) to see whether that overhead is small (Rust
-    // number ~= what the user perceives) or itself a meaningful, separate
-    // contributor.
-    const invokeStartedAt = performance.now();
-    invoke<Record<string, { title?: string; artist?: string; duration?: number }>>(
-      'get_local_metadata_batch',
-      { items }
-    ).then(results => {
-      const roundTripMs = Math.round(performance.now() - invokeStartedAt);
-      const matchedCount = Object.values(results).filter(r => r?.title).length;
-      if (roundTripMs > 150) {
-        captureError({
-          level: 'warn',
-          source: 'MainContent/tag-lookup-batch',
-          message: `get_local_metadata_batch round-trip took ${roundTripMs}ms for ${items.length} item(s) (${matchedCount} matched) — this is the FULL JS-to-JS round-trip including IPC overhead, compare against the Rust-side [PERF] terminal number for the same call`,
-          kind: 'slow-ipc-roundtrip',
-        });
-      }
-      let gotAny = false;
-      for (const [id, data] of Object.entries(results)) {
-        if (data?.title) {
-          tagMetadataRef.current.set(id, {
-            title: data.title,
-            artist: data.artist || '',
-            duration: data.duration || 0,
-          });
-          gotAny = true;
-        }
-      }
-      if (gotAny && !cancelled) forceTagRerender(n => n + 1);
-    }).catch(e => {
-      // Transient IPC/DB failure may recover, so allow a later render to retry.
-      items.forEach(({ id }) => tagLookupAttemptedRef.current.delete(id));
-      console.warn('[MainContent] tag-lookup-batch-failed', { count: items.length, error: String(e) });
-    });
-
-    return () => { cancelled = true; };
-  }, [currentItems]);
-
+  // Play handler
   const handlePlay = React.useCallback((t: Track) => {
     const queue = currentItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
     onPlay(t, queue);
   }, [currentItems, onPlay]);
 
-  // Stable references so they don't defeat VirtualizedSongList's React.memo —
-  // a fresh inline arrow function on every MainContent render would make the
-  // memo comparison always see "changed props" and re-render the (expensive,
-  // virtualized) list unconditionally. `setShowBulkMoveScreen`/
-  // `setShowBulkDeleteConfirm` are useState setters, which React guarantees
-  // are stable across renders, so these callbacks never need to change.
-  const handleBulkMoveClick = React.useCallback(() => setShowBulkMoveScreen(true), []);
-  const handleBulkDeleteClick = React.useCallback(() => setShowBulkDeleteConfirm(true), []);
-
-  const handleCreateFolder = async (folderName: string) => {
-    if (!token) return;
-    setIsCreating(true);
-    try {
-      const res = await createFolder(token, folderName, currentFolderId);
-      if (res && res.id) {
-        await db.files.put({
-          id: res.id,
-          name: res.name || folderName,
-          parentId: currentFolderId,
-          mimeType: 'application/vnd.google-apps.folder',
-          isFolder: true,
-          trashed: false,
-          modifiedTime: new Date().toISOString()
-        });
-      }
-      setShowNewFolderModal(false);
-      onRefresh();
-    } catch (e) {
-      console.error("[MainContent] create-folder: Failed to create folder", e);
-      showErrorToast(t('drive.create_folder_error') || "Failed to create folder");
-      throw e;
-    } finally {
-      setIsCreating(false);
-    }
-  };
-
-  const handleBulkDelete = async () => {
-    if (!token || selectedIds.size === 0) return;
-    
-    const itemsToDelete = Array.from(selectedIds);
-    
-    setSelectedIds(new Set());
-    setIsSelectionMode(false);
-    setShowBulkDeleteConfirm(false);
-
-    setIsBulkOperating(true);
-    const deletedIds: string[] = [];
-    const failedIds: string[] = [];
-    try {
-      for (const id of itemsToDelete) {
-        try {
-          await deleteFile(token, id);
-          deletedIds.push(id);
-        } catch (e) {
-          failedIds.push(id);
-          console.error(`[MainContent] bulk-delete: Failed to delete item ${id}`, e);
-        }
-      }
-      if (deletedIds.length > 0) {
-        await db.files.bulkDelete(deletedIds);
-        if (onRemoveItem) deletedIds.forEach(id => onRemoveItem(id));
-      }
-      if (failedIds.length > 0) {
-        showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
-      }
-    } catch (e) {
-      console.error("[MainContent] bulk-delete: Unexpected error during bulk delete", e);
-      showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
-    } finally {
-      setIsBulkOperating(false);
-    }
-  };
-
-  const handleBulkMove = async (destinationFolderId: string) => {
-    if (!token || selectedIds.size === 0) return;
-    
-    const itemsToMove = Array.from(selectedIds);
-
-    setSelectedIds(new Set());
-    setIsSelectionMode(false);
-    setShowBulkMoveScreen(false);
-
-    setIsBulkOperating(true);
-    const movedIds: string[] = [];
-    const failedIds: string[] = [];
-    try {
-      for (const id of itemsToMove) {
-        try {
-          await moveFile(token, id, currentFolderId, destinationFolderId);
-          movedIds.push(id);
-        } catch (e) {
-          failedIds.push(id);
-          console.error(`[MainContent] bulk-move: Failed to move item ${id}`, e);
-        }
-      }
-      for (const id of movedIds) {
-        await db.files.update(id, { parentId: destinationFolderId });
-      }
-      if (onRemoveItem && movedIds.length > 0) movedIds.forEach(id => onRemoveItem(id));
-      if (failedIds.length > 0) {
-        showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
-      }
-    } catch (e) {
-      console.error("[MainContent] bulk-move: Unexpected error during bulk move", e);
-      showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
-    } finally {
-      setIsBulkOperating(false);
-    }
-  };
-
-  const baseSortOption = sortOption.replace(' desc', '');
-  const sortOptions = [
-    { id: 'name', label: t('sort.name', 'A-Z') },
-    { id: 'modifiedTime', label: t('sort.date', 'Ngày') },
-    { id: 'size', label: t('sort.size', 'Kích thước') },
-  ];
-  const currentSortLabel = sortOptions.find(opt => opt.id === baseSortOption)?.label || t('drive.sort', 'Sort');
-
   return (
     <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300">
       {showBulkMoveScreen && token && (
-        <FolderSelectionScreen
-          token={token}
-          onCancel={() => setShowBulkMoveScreen(false)}
-          onSelectFolder={handleBulkMove}
-          title="Chọn thư mục đích"
-        />
+        <FolderSelectionScreen token={token} onCancel={() => setShowBulkMoveScreen(false)}
+          onSelectFolder={handleBulkMove} title="Chọn thư mục đích" />
       )}
-      <div className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
-        <div className="flex items-center justify-between">
-          {isSelectionMode ? (
-            <div className="flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-left-4 duration-300">
-              <button
-                onClick={() => {
-                  setIsSelectionMode(false);
-                  setSelectedIds(new Set());
-                }}
-                className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors mr-2 shrink-0"
-              >
-                <X className="w-5 h-5 text-gray-700 dark:text-gray-300" />
-              </button>
-              <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold text-lg truncate">
-                {t('drive.items_selected', '{{count}} mục đã chọn', { count: selectedIds.size })}
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <button 
-                onClick={onBack}
-                disabled={!hasHistory}
-                className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors mr-2 shrink-0"
-              >
-                <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
-              </button>
-              
-              {folderHistory.map((folder, index) => (
-                <div key={folder.id} className="flex items-center">
-                  <span className="text-gray-400 mx-1">/</span>
-                  <button 
-                    onClick={() => onBreadcrumbClick(folder.id, folder.name, index)}
-                    className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] dark:hover:text-[#4285F4] hover:bg-[#4285F4]/5 px-2 py-1 rounded-md transition-colors truncate max-w-[150px]"
-                    title={folder.name}
-                  >
-                    {folder.name}
-                  </button>
-                </div>
-              ))}
-              <div className="flex items-center">
-                {folderHistory.length > 0 && <span className="text-gray-400 mx-1">/</span>}
-                <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={currentFolderName}>
-                  {currentFolderName}
-                </span>
-              </div>
-            </div>
-          )}
-          
-          {isSelectionMode ? (
-            <div className="flex items-center gap-3 animate-in fade-in slide-in-from-right-4 duration-300">
-              <button
-                onClick={() => {
-                  setSelectedIds(prev => {
-                    if (prev.size === filteredItems.length) {
-                      return new Set();
-                    } else {
-                      return new Set(filteredItems.map(i => i.id));
-                    }
-                  });
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
-              >
-                {selectedIds.size === filteredItems.length ? <Square className="w-4 h-4" /> : <CheckSquare className="w-4 h-4" />}
-                <span className="hidden sm:inline">{t('drive.select_all', 'Chọn tất cả')}</span>
-              </button>
-              
-              <button
-                onClick={() => {
-                  setShowBulkMoveScreen(true);
-                }}
-                disabled={selectedIds.size === 0 || isBulkOperating}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <FolderOutput className="w-4 h-4" />
-                <span className="hidden sm:inline">{t('drive.bulk_move', 'Di chuyển')}</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setShowBulkDeleteConfirm(true);
-                }}
-                disabled={selectedIds.size === 0 || isBulkOperating}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isBulkOperating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                <span className="hidden sm:inline">{t('drive.delete', 'Xóa')}</span>
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3 shrink-0">
-            {/* Search Input */}
-            <div className="relative">
-              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder={t('search_placeholder', 'Tìm kiếm...')}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-[#4285F4]/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Sort Dropdown */}
-            {token && (
-              <div className="relative">
-                <div
-                  onClick={() => setShowSortMenu(!showSortMenu)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm [&:active:not(:has(.arrow-btn:active))]:scale-95 cursor-pointer select-none"
-                >
-                  <div 
-                    className="arrow-btn p-1 -ml-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (sortOption.endsWith(' desc')) {
-                        onSortChange?.(sortOption.replace(' desc', ''));
-                      } else {
-                        onSortChange?.(sortOption + ' desc');
-                      }
-                    }}
-                    title="Toggle Order"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 relative">
-                      <style>
-                        {`
-                          @keyframes fillUp { 
-                            from { clip-path: inset(100% 0 0 0); } 
-                            to { clip-path: inset(0 0 0 0); } 
-                          }
-                          @keyframes drainUp { 
-                            from { clip-path: inset(0 0 0 0); } 
-                            to { clip-path: inset(0 0 100% 0); } 
-                          }
-                          @keyframes fillDown { 
-                            from { clip-path: inset(0 0 100% 0); } 
-                            to { clip-path: inset(0 0 0 0); } 
-                          }
-                          @keyframes drainDown { 
-                            from { clip-path: inset(0 0 0 0); } 
-                            to { clip-path: inset(100% 0 0 0); } 
-                          }
-                          
-                          .anim-fill-up { animation: fillUp 300ms ease-in-out forwards; }
-                          .anim-drain-up { animation: drainUp 300ms ease-in-out forwards; }
-                          .anim-fill-down { animation: fillDown 300ms ease-in-out forwards; }
-                          .anim-drain-down { animation: drainDown 300ms ease-in-out forwards; }
-                        `}
-                      </style>
-                      
-                      {/* White UP Arrow (Inverse animated) */}
-                      <g className={`stroke-white ${isInitialMount.current ? (!sortOption.endsWith(' desc') ? 'opacity-0' : '') : (!sortOption.endsWith(' desc') ? 'anim-drain-up' : 'anim-fill-up')}`}>
-                        <path d="m3 8 4-4 4 4"/>
-                        <path d="M7 4v16"/>
-                      </g>
-
-                      {/* Blue UP Arrow */}
-                      <g className={`stroke-[#4285F4] ${isInitialMount.current ? (!sortOption.endsWith(' desc') ? '' : 'opacity-0') : (!sortOption.endsWith(' desc') ? 'anim-fill-up' : 'anim-drain-up')}`}>
-                        <path d="m3 8 4-4 4 4"/>
-                        <path d="M7 4v16"/>
-                      </g>
-                      
-                      {/* White DOWN Arrow (Inverse animated) */}
-                      <g className={`stroke-white ${isInitialMount.current ? (sortOption.endsWith(' desc') ? 'opacity-0' : '') : (sortOption.endsWith(' desc') ? 'anim-drain-down' : 'anim-fill-down')}`}>
-                        <path d="m21 16-4 4-4-4"/>
-                        <path d="M17 20V4"/>
-                      </g>
-
-                      {/* Blue DOWN Arrow */}
-                      <g className={`stroke-[#4285F4] ${isInitialMount.current ? (sortOption.endsWith(' desc') ? '' : 'opacity-0') : (sortOption.endsWith(' desc') ? 'anim-fill-down' : 'anim-drain-down')}`}>
-                        <path d="m21 16-4 4-4-4"/>
-                        <path d="M17 20V4"/>
-                      </g>
-                    </svg>
-                  </div>
-                  <div className="hidden sm:grid text-center pr-1">
-                    <span className="col-start-1 row-start-1 visible place-self-center">{currentSortLabel}</span>
-                    {sortOptions.map(opt => (
-                      <span key={opt.id} className="col-start-1 row-start-1 invisible pointer-events-none select-none" aria-hidden="true">
-                        {opt.label}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {showSortMenu && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)}></div>
-                    <div className="absolute right-0 mt-2 w-32 bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                      {sortOptions.map((opt) => (
-                        <button
-                          key={opt.id}
-                          onClick={() => {
-                            let newOpt = opt.id;
-                            if (opt.id === 'modifiedTime') newOpt = 'modifiedTime desc';
-                            
-                            onSortChange?.(newOpt);
-                            setShowSortMenu(false);
-                          }}
-                          className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-[#4285F4] dark:hover:text-[#4285F4] ${baseSortOption === opt.id ? 'text-[#4285F4] font-medium' : 'text-gray-700 dark:text-gray-300'}`}
-                        >
-                          {opt.label}
-                          {baseSortOption === opt.id && <Check className="w-4 h-4" />}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {token && (
-              <button 
-                onClick={() => setShowNewFolderModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-lg transition-colors shadow-sm active:scale-95"
-              >
-                <FolderPlus className="w-4 h-4" />
-                <span className="hidden sm:inline">{t('drive.new_folder') || 'New Folder'}</span>
-              </button>
-            )}
-          </div>
-          )}
-        </div>
-      </div>
-        
+      <Toolbar
+        isSelectionMode={isSelectionMode} selectedIds={selectedIds}
+        filteredCount={filteredItems.length} hasHistory={hasHistory}
+        folderHistory={folderHistory} currentFolderName={currentFolderName}
+        searchQuery={searchQuery} searchInputRef={searchInputRef}
+        sortOption={sortOption} showSortMenu={showSortMenu}
+        isBulkOperating={isBulkOperating} token={token}
+        onCancelSelection={() => { setIsSelectionMode(false); setSelectedIds(new Set()); }}
+        onSelectAll={() => setSelectedIds(prev => prev.size === filteredItems.length ? new Set() : new Set(filteredItems.map(i => i.id)))}
+        onSearchChange={setSearchQuery} onBack={onBack}
+        onBreadcrumbClick={onBreadcrumbClick} onSortChange={onSortChange}
+        onToggleSortMenu={() => setShowSortMenu(s => !s)}
+        onNewFolder={() => setShowNewFolderModal(true)}
+        onBulkMove={() => setShowBulkMoveScreen(true)}
+        onBulkDelete={() => setShowBulkDeleteConfirm(true)}
+      />
       <div className="px-8 pb-6 pt-4 min-h-[calc(100%-140px)]">
         {activeTab === "Settings" ? (
           <div className="text-gray-500">Settings page coming soon...</div>
@@ -759,289 +147,28 @@ export const MainContent = React.memo(function MainContent({
         ) : (
           <>
             <VirtualizedSongList
-              items={currentItems}
-              rowVirtualizer={rowVirtualizer}
-              onPlay={handlePlay}
-              onOpenFolder={onOpenFolder}
-              token={token}
-              currentFolderId={currentFolderId}
-              currentFolderName={currentFolderName}
-              folderHistory={folderHistory}
-              highlightedFileId={highlightedFileId}
-              isPlaying={currentTrack?.id}
-              onRefresh={onRefresh}
-              onRemoveItem={onRemoveItem}
-              isSelectionMode={isSelectionMode}
-              selectedIds={selectedIds}
-              setSelectedIds={setSelectedIds}
-              setIsSelectionMode={setIsSelectionMode}
-              onBulkMoveClick={handleBulkMoveClick}
-              onBulkDeleteClick={handleBulkDeleteClick}
+              items={currentItems} rowVirtualizer={rowVirtualizer}
+              onPlay={handlePlay} onOpenFolder={onOpenFolder} token={token}
+              currentFolderId={currentFolderId} currentFolderName={currentFolderName}
+              folderHistory={folderHistory} highlightedFileId={highlightedFileId}
+              isPlaying={currentTrack?.id} onRefresh={onRefresh} onRemoveItem={onRemoveItem}
+              isSelectionMode={isSelectionMode} selectedIds={selectedIds}
+              setSelectedIds={setSelectedIds} setIsSelectionMode={setIsSelectionMode}
+              onBulkMoveClick={handleBulkMoveClick} onBulkDeleteClick={handleBulkDeleteClick}
               tagMetadataMap={tagMetadataRef.current}
             />
-
-          {totalPages > 1 && (
-            <div className={`sticky bottom-0 w-full flex justify-center items-end pb-0 pt-6 pointer-events-none ${isEditingPage ? 'z-50' : 'z-20'}`}>
-              <div className="flex items-center justify-center gap-3 sm:gap-6 pointer-events-auto pb-1 w-full max-w-[400px]">
-                <div className="flex justify-end">
-                  <button 
-                    disabled={currentPage === 1}
-                    onClick={() => {
-                      setCurrentPage(p => p - 1);
-                      // measure() BEFORE scrollToIndex: a page change swaps in an
-                      // entirely different set of items (all-new getItemKey ids),
-                      // so the PREVIOUS page's cached per-index measurements are
-                      // meaningless for the new one. Without this, the virtualizer
-                      // can compute which indices fall in the visible range using
-                      // stale size data, so some rows near/after the viewport
-                      // fold never get a virtual entry at all -- exactly the
-                      // reported "blank gap, top rows fine, rows further down are
-                      // not" pattern, and why an unrelated re-render (e.g.
-                      // pressing play, which changes an isPlaying prop) happens to
-                      // "fix" it -- that re-render is what finally triggers a real
-                      // remeasurement. Documented gotcha, see TanStack/virtual#425.
-                      rowVirtualizer.measure();
-                      setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
-                    }}
-                    className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
-                  >
-                    {t('playlist.prev', 'Previous')}
-                  </button>
-                </div>
-                
-                <div className="flex justify-center relative">
-                  {isEditingPage && (
-                    <div 
-                      className="fixed inset-0 cursor-default bg-transparent"
-                      style={{ zIndex: -1 }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setIsEditingPage(false);
-                      }}
-                    />
-                  )}
-                  
-                  <div 
-                    className={`flex items-center text-sm font-medium text-gray-900 dark:text-white tracking-wider text-center drop-shadow-md transition-colors ${!isEditingPage ? 'cursor-pointer hover:text-[#4285F4]' : ''}`}
-                    onClick={() => {
-                      if (!isEditingPage) {
-                        setIsEditingPage(true);
-                        setPageInputValue(currentPage.toString());
-                        setTimeout(() => pageInputRef.current?.focus(), 0);
-                      }
-                    }}
-                  >
-                    <input
-                      ref={pageInputRef}
-                      type="text"
-                      readOnly={!isEditingPage}
-                      value={isEditingPage ? pageInputValue : currentPage}
-                      onChange={(e) => isEditingPage && setPageInputValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          const newPage = parseInt(pageInputValue.trim(), 10);
-                          if (!isNaN(newPage) && newPage >= 1 && newPage <= totalPages) {
-                            setCurrentPage(newPage);
-                            // See the Previous/Next handlers' comment -- same
-                            // stale-measurement-cache fix, needed here too.
-                            rowVirtualizer.measure();
-                            setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
-                          }
-                          setIsEditingPage(false);
-                        }
-                        if (e.key === 'Escape') {
-                          setIsEditingPage(false);
-                        }
-                      }}
-                      className={`text-right bg-transparent outline-none p-0 m-0 text-inherit font-inherit ${!isEditingPage ? 'cursor-pointer pointer-events-none' : ''}`}
-                      style={{ 
-                        width: `${Math.max(1, (isEditingPage ? pageInputValue : currentPage.toString()).length)}ch`,
-                        caretColor: isEditingPage ? 'inherit' : 'transparent' 
-                      }}
-                    />
-                    <span className="whitespace-pre"> / {totalPages}</span>
-                  </div>
-                </div>
-
-                <div className="flex justify-start">
-                  <button 
-                    disabled={currentPage === totalPages}
-                    onClick={() => {
-                      setCurrentPage(p => p + 1);
-                      // See the Previous button's handler above for the full
-                      // explanation of why measure() is needed here.
-                      rowVirtualizer.measure();
-                      setTimeout(() => rowVirtualizer.scrollToIndex(0, { align: 'start' }), 0);
-                    }}
-                    className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
-                  >
-                    {t('playlist.next', 'Next')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+            <PaginationBar currentPage={currentPage} totalPages={totalPages}
+              rowVirtualizer={rowVirtualizer} onPageChange={setCurrentPage} />
           </>
         )}
       </div>
-
       <BulkDeleteConfirmModal
-        isOpen={showBulkDeleteConfirm}
-        onClose={() => setShowBulkDeleteConfirm(false)}
-        onConfirm={handleBulkDelete}
-        isOperating={isBulkOperating}
-        selectedCount={selectedIds.size}
-      />
-
+        isOpen={showBulkDeleteConfirm} onClose={() => setShowBulkDeleteConfirm(false)}
+        onConfirm={handleBulkDelete} isOperating={isBulkOperating}
+        selectedCount={selectedIds.size} />
       <NewFolderModal
-        isOpen={showNewFolderModal}
-        onClose={() => setShowNewFolderModal(false)}
-        onCreate={handleCreateFolder}
-        isCreating={isCreating}
-      />
+        isOpen={showNewFolderModal} onClose={() => setShowNewFolderModal(false)}
+        onCreate={handleCreateFolder} isCreating={isCreating} />
     </main>
   );
 });
-
-function VirtualizedSongList({
-  items,
-  rowVirtualizer,
-  onPlay,
-  onOpenFolder,
-  token,
-  currentFolderId,
-  currentFolderName,
-  folderHistory,
-  highlightedFileId,
-  isPlaying,
-  onRefresh,
-  onRemoveItem,
-  isSelectionMode,
-  selectedIds,
-  setSelectedIds,
-  setIsSelectionMode,
-  onBulkMoveClick,
-  onBulkDeleteClick,
-  tagMetadataMap,
-}: {
-  items: DriveItem[];
-  rowVirtualizer: ReactVirtualizer<HTMLElement, Element>;
-  onPlay: (track: Track) => void;
-  onOpenFolder: (id: string, name: string) => void;
-  token: string | null;
-  currentFolderId: string;
-  currentFolderName: string;
-  folderHistory: { id: string; name: string }[];
-  highlightedFileId: { id: string; ts: number } | null | undefined;
-  isPlaying: string | undefined;
-  onRefresh: () => void;
-  onRemoveItem?: (id: string) => void;
-  isSelectionMode: boolean;
-  selectedIds: Set<string>;
-  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
-  onBulkMoveClick: () => void;
-  onBulkDeleteClick: () => void;
-  tagMetadataMap?: Map<string, DbTagMetadata>;
-}) {
-  const virtualItems = rowVirtualizer.getVirtualItems();
-
-  return (
-    <div
-      style={{
-        position: 'relative',
-        height: `${rowVirtualizer.getTotalSize()}px`,
-        transform: 'translateZ(0)',
-      }}
-    >
-      {virtualItems.map((virtualRow) => {
-        const item = items[virtualRow.index];
-        // `item` can be transiently undefined: the virtualizer (especially
-        // with `directDomUpdates: true`, which lets it update DOM positions
-        // outside React's normal render cycle for scroll performance) can
-        // compute virtual rows for an index before `items` (currentItems,
-        // derived from the Dexie-backed `dbFiles` live query) has caught up
-        // to a just-changed length/order -- e.g. right when a background
-        // Drive page finishes and the coalesced bulkPut fires the live
-        // query's one extra re-sort. Rendering `null` here (the previous
-        // behavior) left a literal blank gap exactly where a row should be
-        // until the next render reconciles -- reported by a user as "a gap
-        // where a file should be, and it's slow to fill in". Rendering a
-        // same-sized placeholder instead keeps the slot visually occupied
-        // (matching `estimateSize: 92`) so a transient mismatch is
-        // invisible instead of a jarring hole, while still registering
-        // with `measureElement` so the virtualizer's own measurement isn't
-        // thrown off by skipping the slot.
-        if (!item) {
-          return (
-            <div
-              key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={rowVirtualizer.measureElement}
-              className="pb-2"
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                transform: `translateY(${virtualRow.start}px)`,
-                willChange: 'transform',
-              }}
-            >
-              <div className="h-[76px] rounded-xl bg-gray-100 dark:bg-[#1a1b1e] animate-pulse" />
-            </div>
-          );
-        }
-        return (
-          <div
-            key={virtualRow.key}
-            data-index={virtualRow.index}
-            ref={rowVirtualizer.measureElement}
-            className="pb-2"
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              transform: `translateY(${virtualRow.start}px)`,
-              willChange: 'transform',
-            }}
-          >
-            <SongCard
-              item={item}
-              onPlay={onPlay}
-              onOpenFolder={onOpenFolder}
-              token={token}
-              currentFolderId={currentFolderId}
-              currentFolderName={currentFolderName}
-              folderHistory={folderHistory}
-              dbMetadata={tagMetadataMap?.get(item.trackInfo?.id ?? '')}
-              isHighlighted={item.id === highlightedFileId?.id}
-              highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
-              isPlaying={item.trackInfo?.id === isPlaying}
-              onRefresh={onRefresh}
-              onRemoveItem={onRemoveItem}
-              isSelectionMode={isSelectionMode}
-              isSelected={selectedIds.has(item.id)}
-              onToggleSelection={() => {
-                setSelectedIds(prev => {
-                  const next = new Set(prev);
-                  if (next.has(item.id)) next.delete(item.id);
-                  else next.add(item.id);
-                  return next;
-                });
-              }}
-              onEnableSelectionMode={() => {
-                setIsSelectionMode(true);
-                setSelectedIds(new Set([item.id]));
-              }}
-              onBulkMoveClick={onBulkMoveClick}
-              onBulkDeleteClick={onBulkDeleteClick}
-            />
-          </div>
-        );
-      })}
-    </div>
-  );
-}
