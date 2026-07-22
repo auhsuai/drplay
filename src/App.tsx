@@ -849,10 +849,17 @@ function App() {
           </div>
         )}
         
-        {/* Unfocused Overlay */}
-        {!isFocused && (
-          <div className="fixed inset-0 z-[10001] bg-black/10 dark:bg-black/30 pointer-events-none transition-opacity duration-300" />
-        )}
+        {/* Unfocused Overlay — rendered always (not conditionally) to avoid
+            triggering a full MainContent re-render on focus change, which was
+            the original workaround for a Tauri/WebView2 paint-suppression bug
+            where virtualized rows outside the initial viewport never painted
+            until an Alt+Tab forced a full-window repaint. Keeping the overlay
+            mounted (opacity toggled via CSS) lets focus changes go through CSS
+            transitions instead of React re-render — same visual effect, no
+            hidden dependency. */}
+        <div
+          className={`fixed inset-0 z-[10001] pointer-events-none transition-opacity duration-300 ${isFocused ? 'opacity-0' : 'opacity-100 bg-black/10 dark:bg-black/30'}`}
+        />
 
         <div id="toast-root" />
       </div>

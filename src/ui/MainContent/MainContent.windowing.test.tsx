@@ -4,6 +4,17 @@ import { render, screen, cleanup } from '@testing-library/react';
 import { MainContent } from './MainContent';
 import type { DriveItem } from '../../App';
 
+class ResizeObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+vi.stubGlobal('requestAnimationFrame', ((fn: FrameRequestCallback) => {
+  setTimeout(() => fn(0), 0);
+  return 0;
+}) as typeof requestAnimationFrame);
+
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: vi.fn(() => ({
     getVirtualItems: () => Array.from({ length: 12 }, (_, i) => ({
@@ -14,6 +25,7 @@ vi.mock('@tanstack/react-virtual', () => ({
       lane: 0,
     })),
     getTotalSize: () => 50 * 92,
+    measure: vi.fn(),
     measureElement: vi.fn(),
     scrollToIndex: vi.fn(),
     containerRef: { current: document.createElement('div') },

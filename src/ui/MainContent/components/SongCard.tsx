@@ -124,8 +124,7 @@ export const SongCard = React.memo(function SongCard({
     <div
       className="relative group/card w-full"
       style={{
-        contentVisibility: 'auto' as any,
-        containIntrinsicSize: 'auto 92px' as any,
+        contain: 'layout style' as any,
       }}
     >
       <div

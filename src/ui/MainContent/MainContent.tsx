@@ -260,6 +260,16 @@ export const MainContent = React.memo(function MainContent({
     getItemKey: (index: number) => currentItems[index].id,
   });
 
+  const prevItemsLengthRef = React.useRef(currentItems.length);
+
+  React.useEffect(() => {
+    if (prevItemsLengthRef.current === 0 && currentItems.length > 0) {
+      rowVirtualizer.measure();
+      rowVirtualizer.scrollToIndex(0, { align: 'start' });
+    }
+    prevItemsLengthRef.current = currentItems.length;
+  }, [currentItems.length, rowVirtualizer]);
+
   React.useEffect(() => {
     if (highlightedFileId && filteredItems.length > 0) {
       const index = filteredItems.findIndex(item => item.id === highlightedFileId.id);
@@ -488,7 +498,7 @@ export const MainContent = React.memo(function MainContent({
   const currentSortLabel = sortOptions.find(opt => opt.id === baseSortOption)?.label || t('drive.sort', 'Sort');
 
   return (
-    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300" style={{ contain: 'layout style paint' }}>
+    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300">
       {showBulkMoveScreen && token && (
         <FolderSelectionScreen
           token={token}
@@ -889,7 +899,7 @@ export const MainContent = React.memo(function MainContent({
   );
 });
 
-const VirtualizedSongList = React.memo(function VirtualizedSongList({
+function VirtualizedSongList({
   items,
   rowVirtualizer,
   onPlay,
@@ -937,6 +947,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
       style={{
         position: 'relative',
         height: `${rowVirtualizer.getTotalSize()}px`,
+        transform: 'translateZ(0)',
       }}
     >
       {virtualItems.map((virtualRow) => {
@@ -970,6 +981,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
                 left: 0,
                 width: '100%',
                 transform: `translateY(${virtualRow.start}px)`,
+                willChange: 'transform',
               }}
             >
               <div className="h-[76px] rounded-xl bg-gray-100 dark:bg-[#1a1b1e] animate-pulse" />
@@ -988,11 +1000,12 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
               left: 0,
               width: '100%',
               transform: `translateY(${virtualRow.start}px)`,
+              willChange: 'transform',
             }}
           >
             <SongCard
               item={item}
-              onPlay={(track) => onPlay(track)}
+              onPlay={onPlay}
               onOpenFolder={onOpenFolder}
               token={token}
               currentFolderId={currentFolderId}
@@ -1026,4 +1039,4 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
       })}
     </div>
   );
-});
+}
