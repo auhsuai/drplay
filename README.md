@@ -23,7 +23,7 @@ on your own machine.
 When you hit play, the file is not pushed through a developer's server and bounced back to you.
 Instead, the app spins up a **local proxy** (`drplay.localhost`) that acts like a virtual drive —
 it pulls data straight from Google Drive and serves it back to the player on your machine
-(`src-tauri/src/proxy.rs`, `src-tauri/src/protocol.rs`). The result is the shortest possible
+(`src-tauri/src/proxy/`, `src-tauri/src/protocol.rs`). The result is the shortest possible
 media path: Drive → your machine → your speakers.
 
 Your library, playlists, liked songs, listening history, and metadata cache are all stored in
@@ -55,8 +55,8 @@ never silently scans your whole account (`src/hooks/useDrive.ts`,
 
 Compared to Chromium-based desktop apps (Electron), DrPlay — on Tauri + Rust — uses far less
 RAM and CPU, launches in a blink, and ships a much smaller binary. The dependency list is kept
-lean too: only what's truly needed, like React, Dexie, `music-metadata`, and `i18next`
-(`package.json`). No hidden runtimes, no bloated transitive dependencies.
+lean too: only what's truly needed, like React, Dexie, and `i18next` (`package.json`). No hidden
+runtimes, no bloated transitive dependencies.
 
 ---
 
@@ -68,14 +68,16 @@ lean too: only what's truly needed, like React, Dexie, `music-metadata`, and `i1
 - **Smooth playback** — play/pause, seek, volume, and a full-featured PlayerBar (`src/ui/PlayerBar/`).
 - **Local streaming with buffer & prefetch** — plays even on shaky connections, by preloading
   visible tracks (`src/utils/streamPrefetcher.ts`, `src/utils/safeAudio.ts`).
-- **Crossfade** — transition between tracks smoothly instead of cutting abruptly.
-- **Playlists** — create, edit, delete, and manage your playlists (`src/ui/Playlist/PlaylistView.tsx`).
+- **Playlists** — create, edit, delete, and manage your playlists, each with a custom cover
+  image you crop yourself (`src/ui/Playlist/PlaylistView.tsx`, `src/ui/components/ImageCropperModal.tsx`).
 - **Liked songs** — mark and revisit your favorites, stored fully on-device.
-- **Cover & metadata** — automatically reads ID3 tags and generates cover thumbnails saved
-  locally (`src/utils/metadata.ts`, `src-tauri/src/thumbnail.rs`).
+- **Local tag lookup** — a local SQLite database (populated outside the app) supplies real
+  title/artist/duration for files in the My Drive list (`src-tauri/src/commands/metadata.rs`,
+  `src/ui/MainContent/hooks/useTagLookup.ts`). Everywhere else, files show their plain Drive
+  filename.
 - **Trash** — view, restore, or permanently delete files right from Drive (`src/ui/Settings/TrashScreen.tsx`).
 - **Library sync** — a background worker syncs changes with Drive via page tokens
-  (`src/workers/proSync.worker.ts`, `src/workers/scanner.worker.ts`).
+  (`src/workers/proSync.worker.ts`).
 - **Customization** — light/dark theme, multi-language (i18n), download path, minimize-to-tray
   (`src/ui/Settings/SettingsTab.tsx`, `src/hooks/useTheme.ts`, `src/i18n.ts`).
 
@@ -90,7 +92,7 @@ lean too: only what's truly needed, like React, Dexie, `music-metadata`, and `i1
                 │  Tauri IPC / local fetch
 ┌───────────────▼─────────────────────────────┐
 │  Backend  · Rust / Tauri  (src-tauri/)       │  OAuth, proxy stream,
-│  lib.rs · proxy.rs · protocol.rs · thumbnail │  thumbnails, crossfade
+│  lib.rs · proxy/ · protocol.rs · commands/   │  local tag lookup
 └───────────────┬─────────────────────────────┘
                 │  HTTPS (Google APIs only)
         ┌───────▼────────────────┐
@@ -103,7 +105,8 @@ Local storage:  IndexedDB (Dexie) · localStorage
 The code splits cleanly into two layers: the React frontend (`src/`) and the Rust system layer
 (`src-tauri/`). Core logic lives in the `utils` layer, which concentrates most calls from the UI
 and hooks — keeping the code maintainable and consistent. The Rust side packages authentication,
-streaming, and cover handling into a tightly cohesive module with few external dependencies.
+streaming, and the local tag-lookup database into a tightly cohesive module with few external
+dependencies.
 
 ---
 
