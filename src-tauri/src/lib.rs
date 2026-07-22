@@ -41,8 +41,9 @@ pub use commands::misc::{
     update_buffer_settings, update_stream_token, clear_stream_token,
     update_minimize_to_tray, clear_local_cache,
 };
+pub use commands::token_store::{store_token, get_token, clear_token};
 
-const DB_POOL_MAX_SIZE: u32 = 10;
+pub(crate) const DB_POOL_MAX_SIZE: u32 = 10;
 
 // Diagnostic IPC timing logger
 pub fn diag_log(module: &str, dur: Duration) {
@@ -154,6 +155,9 @@ pub fn run() {
             clear_stream_token,
             update_minimize_to_tray,
             clear_local_cache,
+            store_token,
+            get_token,
+            clear_token,
         ])
         .build(tauri::generate_context!());
 

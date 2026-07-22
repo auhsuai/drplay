@@ -21,10 +21,8 @@ pub struct LocalMetadataQuery {
     pub name: String,
 }
 
-const DB_POOL_MAX_SIZE: u32 = 10;
-
 static DB_LOOKUP_SEMAPHORE: LazyLock<tokio::sync::Semaphore> =
-    LazyLock::new(|| tokio::sync::Semaphore::new(DB_POOL_MAX_SIZE as usize));
+    LazyLock::new(|| tokio::sync::Semaphore::new(crate::DB_POOL_MAX_SIZE as usize));
 
 static HAS_FILE_TYPE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
