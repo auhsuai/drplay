@@ -17,7 +17,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
 use super::backoff::{compute_cooldown_secs, equal_jitter, full_jitter};
-use super::cache::{CacheStore, TrackMeta};
+use super::cache::TrackMeta;
 use super::constants::{
     DEFAULT_TOTAL_SIZE_FALLBACK, FALLBACK_CONTENT_TYPE,
     FETCH_RETRY_ATTEMPTS, FETCH_RETRY_BASE_BACKOFF_SECS,

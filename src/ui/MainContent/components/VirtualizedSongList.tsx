@@ -26,7 +26,7 @@ interface VirtualizedSongListProps {
   tagMetadataMap?: Map<string, DbTagMetadata>;
 }
 
-export const VirtualizedSongList = React.memo(function VirtualizedSongList({
+export function VirtualizedSongList({
   items,
   rowVirtualizer,
   onPlay,
@@ -130,4 +130,4 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
       })}
     </div>
   );
-});
+}

@@ -1,7 +1,6 @@
 use axum::extract::FromRef;
 use reqwest::Client;
 use serde::Deserialize;
-use std::sync::Arc;
 
 use super::cache::CacheStore;
 

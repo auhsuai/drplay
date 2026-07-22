@@ -8,7 +8,7 @@ pub mod stream;
 pub mod types;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, LazyLock};
 
 use reqwest::Client;
@@ -73,7 +73,7 @@ mod tests {
 
     use super::stream::now_epoch_secs;
     use super::backoff::{compute_cooldown_secs, equal_jitter, full_jitter};
-    use super::cache::{TrackMeta, CacheStore};
+    use super::cache::{TrackMeta, CacheStore, new_cache_store};
     use super::content_type::content_type_for_ext;
     use super::drive_error::{classify_drive_error, extract_drive_reason, drive_err_response, DriveErr};
     use super::range::parse_multi_range;
@@ -152,7 +152,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_track_cache_is_bounded_and_evicts() {
-        let cache = cache::new_cache_store();
+        let cache = new_cache_store();
         let cap = TRACK_CACHE_MAX_ENTRIES;
 
         for i in 0..(cap * 5) {

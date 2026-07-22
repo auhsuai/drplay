@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use hmac::{Hmac, Mac};
@@ -6,7 +6,7 @@ use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::command;
 
-use crate::{STREAM_URL_TTL_SECS, NOMINAL_BYTES_PER_SEC, MIN_BUFFER_BYTES, MAX_BUFFER_BYTES, DEFAULT_BUFFER_SECONDS_F64};
+use crate::{STREAM_URL_TTL_SECS, NOMINAL_BYTES_PER_SEC, MIN_BUFFER_BYTES, MAX_BUFFER_BYTES};
 
 pub fn buffer_bytes_for_seconds(seconds: u64) -> u64 {
     let bytes = seconds * NOMINAL_BYTES_PER_SEC;

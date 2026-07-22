@@ -13,7 +13,6 @@ mod proxy;
 
 // --- Stream URL / buffer sizing constants (shared with commands/misc.rs) ---
 pub(crate) const STREAM_URL_TTL_SECS: u64 = 86_400;
-const DEFAULT_BUFFER_SECONDS_F64: f64 = 180.0;
 pub(crate) const NOMINAL_BYTES_PER_SEC: u64 = 320_000 / 8;
 pub(crate) const MIN_BUFFER_BYTES: u64 = 5 * 1024 * 1024;
 pub(crate) const MAX_BUFFER_BYTES: u64 = 500 * 1024 * 1024;
