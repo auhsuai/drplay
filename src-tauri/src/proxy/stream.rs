@@ -139,7 +139,7 @@ pub async fn handle_options() -> Response {
         .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
         .body(axum::body::Body::empty())
         .unwrap_or_else(|e| {
-            eprintln!("[proxy] failed to build OPTIONS response: {e}");
+            log::error!("[proxy] failed to build OPTIONS response: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "").into_response()
         })
 }
@@ -246,7 +246,11 @@ pub async fn handle_stream(
     // Override Drive's Content-Type using extension from signed URL
     let resolved_content_type = match query.ext.as_deref().and_then(content_type_for_ext) {
         Some(ct) => {
-            eprintln!("[proxy] content-type override: ext={} -> {}", query.ext.as_deref().unwrap_or(""), ct);
+            // debug, not info: fires on every single stream request that
+            // carries a recognized extension (i.e. almost all of them) --
+            // routine, not something worth surfacing at the default
+            // production log level.
+            log::debug!("[proxy] content-type override: ext={} -> {}", query.ext.as_deref().unwrap_or(""), ct);
             ct.to_string()
         }
         None => content_type,
@@ -287,10 +291,11 @@ pub async fn handle_stream(
         }))).await;
     }
 
-    let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
-        Some(c) => c,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Cache not initialized").into_response(),
-    };
+    // Was `match crate::GLOBAL_SLICE_CACHE.get() { Some(c) => c, None => return ... }`
+    // -- now guaranteed present via AppState (constructed eagerly in lib.rs's
+    // run(), before this Axum server can even be reached), so the
+    // "not initialized" branch is no longer a real possibility to guard.
+    let slice_cache = state.slice_cache.clone();
 
     // Align to SLICE_SIZE boundaries
     let slice_start = (start / crate::slice_cache::SLICE_SIZE) * crate::slice_cache::SLICE_SIZE;
@@ -353,42 +358,72 @@ pub async fn handle_stream(
             let fetch_end_slice = fetch_start + (count as u64) * crate::slice_cache::SLICE_SIZE;
             let fetch_end_byte = fetch_end_slice.min(total_size).saturating_sub(1);
 
-            // Fetch batch from Drive (with retry)
-            let mut last_err = None;
-            let mut batch_data = None;
-            for attempt in 0..FETCH_RETRY_ATTEMPTS {
-                match fetch_range_from_drive(
-                    &fetch_client, &fetch_api_url, &fetch_token,
-                    fetch_start, fetch_end_byte,
-                ).await {
-                    Ok(data) => {
-                        batch_data = Some(data);
-                        break;
+            // Fetch batch from Drive (with retry), deduplicated against any
+            // other concurrent caller -- this request's own background
+            // prefetch task below, or a different concurrent stream request
+            // for the same track -- already fetching the SAME (track_id,
+            // fetch_start) batch. Previously this called
+            // fetch_range_from_drive/batch_insert directly with no dedup at
+            // all; see SliceCache::get_or_fetch's doc comment for the exact
+            // guarantee (and its documented limit: dedup is keyed on the
+            // batch's start offset, not a full range-lock, so two callers
+            // whose find_missing_run results only partially overlap still
+            // aren't deduped against each other).
+            let fetch_result = {
+                let fetch_client = fetch_client.clone();
+                let fetch_api_url = fetch_api_url.clone();
+                let fetch_token = fetch_token.clone();
+                let track_id_for_fetch = track_id.clone();
+                let slice_cache_for_fetch = slice_cache.clone();
+                slice_cache.get_or_fetch(&track_id, fetch_start, move || async move {
+                    let mut last_err = None;
+                    for attempt in 0..FETCH_RETRY_ATTEMPTS {
+                        match fetch_range_from_drive(
+                            &fetch_client, &fetch_api_url, &fetch_token,
+                            fetch_start, fetch_end_byte,
+                        ).await {
+                            Ok(data) => {
+                                // Cache slices [1..count] as a side effect;
+                                // return slice 0's bytes for get_or_fetch to
+                                // cache itself under (track_id, fetch_start)
+                                // -- avoids double-inserting that one slice.
+                                let first_len = (crate::slice_cache::SLICE_SIZE as usize).min(data.len());
+                                let first_chunk = data[..first_len].to_vec();
+                                if data.len() > first_len {
+                                    let rest = data[first_len..].to_vec();
+                                    slice_cache_for_fetch.batch_insert(
+                                        &track_id_for_fetch,
+                                        fetch_start + crate::slice_cache::SLICE_SIZE,
+                                        rest,
+                                    ).await;
+                                }
+                                return Ok(first_chunk);
+                            }
+                            Err(DriveErr::Rate) => {
+                                let delay = Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS));
+                                tokio::time::sleep(full_jitter(delay)).await;
+                                last_err = Some(DriveErr::Rate);
+                            }
+                            Err(DriveErr::Auth) => return Err(DriveErr::Auth),
+                            Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => return Err(e),
+                            Err(e) => {
+                                let delay = Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS));
+                                tokio::time::sleep(full_jitter(delay)).await;
+                                last_err = Some(e);
+                            }
+                        }
                     }
-                    Err(DriveErr::Rate) => {
-                        let delay = Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS));
-                        tokio::time::sleep(full_jitter(delay)).await;
-                        last_err = Some(DriveErr::Rate);
-                    }
-                    Err(DriveErr::Auth) => {
-                        last_err = Some(DriveErr::Auth);
-                        break;
-                    }
-                    Err(e @ (DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota)) => {
-                        last_err = Some(e);
-                        break;
-                    }
-                    Err(e) => {
-                        let delay = Duration::from_secs(FETCH_RETRY_BASE_BACKOFF_SECS.checked_shl(attempt).unwrap_or(FETCH_RETRY_BASE_BACKOFF_SECS));
-                        tokio::time::sleep(full_jitter(delay)).await;
-                        last_err = Some(e);
-                    }
-                }
-            }
+                    Err(last_err.unwrap_or(DriveErr::Upstream))
+                }).await
+            };
 
-            match batch_data {
-                Some(data) => {
-                    slice_cache.batch_insert(&track_id, fetch_start, data).await;
+            match fetch_result {
+                Ok(_first_chunk) => {
+                    // No manual batch_insert here anymore: slice 0 was just
+                    // cached by get_or_fetch itself (leader) or was already
+                    // cached by whichever caller WAS the leader (waiter);
+                    // slices [1..count] were cached by the closure above as
+                    // a side effect (leader) or already present (waiter).
 
                     for i in 0..count {
                         let slice_offset = fetch_start + (i as u64) * crate::slice_cache::SLICE_SIZE;
@@ -432,9 +467,8 @@ pub async fn handle_stream(
                     super::FAIL_COUNT.store(0, Ordering::Relaxed);
                     current_offset = fetch_end_slice;
                 }
-                None => {
-                    let err = last_err.unwrap_or(DriveErr::Upstream);
-                    eprintln!("[proxy] batch-fetch-fail: {:?}", err);
+                Err(err) => {
+                    log::warn!("[proxy] batch-fetch-fail: {:?}", err);
 
                     match err {
                         DriveErr::NotFound | DriveErr::AccessDenied | DriveErr::DownloadQuota => {
@@ -454,7 +488,7 @@ pub async fn handle_stream(
                             }
                             let deadline = retry_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(RETRY_DEADLINE_SECS));
                             if Instant::now() >= *deadline {
-                                eprintln!("[proxy] batch-fetch-retry-exhausted (5s)");
+                                log::error!("[proxy] batch-fetch-retry-exhausted (5s)");
                                 break;
                             }
                             tokio::time::sleep(Duration::from_millis(STREAM_RETRY_DELAY_MS)).await;
@@ -473,6 +507,13 @@ pub async fn handle_stream(
     let bg_id = query.id.clone();
     let bg_total = total_size;
     let bg_start = actual_end + 1;
+    // Captured the same way as bg_client/bg_url/bg_token above -- this task
+    // is an independently spawned closure, so it needs its own clone of
+    // whatever it reads from `state` rather than reusing the outer
+    // `slice_cache` binding from the main loop above (which was itself
+    // `move`d into that separate spawn already).
+    let bg_slice_cache = state.slice_cache.clone();
+    let bg_buffer_seconds = state.buffer_seconds.clone();
 
     let cancel = Arc::new(tokio::sync::Notify::new());
     {
@@ -515,12 +556,12 @@ pub async fn handle_stream(
         }
         let _guard = CancelGuard { id: bg_id_for_task.clone(), signal: cancel_for_task.clone() };
 
-        let slice_cache = match crate::GLOBAL_SLICE_CACHE.get() {
-            Some(c) => c,
-            None => return,
-        };
+        // Was `match crate::GLOBAL_SLICE_CACHE.get() {...}` / a direct
+        // `crate::GLOBAL_BUFFER_SECONDS.load(...)` -- now the Arcs captured
+        // above, threaded through AppState instead of ambient globals.
+        let slice_cache = bg_slice_cache;
         let max_bytes = {
-            let seconds = crate::GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
+            let seconds = bg_buffer_seconds.load(Ordering::Relaxed) as u64;
             crate::buffer_bytes_for_seconds(seconds)
         };
         let max_offset = bg_start + max_bytes;
@@ -538,9 +579,41 @@ pub async fn handle_stream(
                 continue;
             }
             let batch_end = (first_missing + (count as u64) * crate::slice_cache::SLICE_SIZE).min(bg_total);
-            match fetch_range_from_drive(&bg_client, &bg_url, &bg_token, first_missing, batch_end - 1).await {
-                Ok(data) => {
-                    slice_cache.batch_insert(&bg_id_for_task, first_missing, data).await;
+            // Deduplicated the same way as the main response loop above --
+            // this is the OTHER concurrent caller that gap was about: the
+            // main loop for one request and this request's own prefetch
+            // task can otherwise both race to fetch the same (track_id,
+            // offset) batch when a new stream request's range overlaps
+            // territory an earlier request's still-running prefetch has
+            // already claimed but not yet cached.
+            let fetch_result = {
+                let bg_client = bg_client.clone();
+                let bg_url = bg_url.clone();
+                let bg_token = bg_token.clone();
+                let bg_id_for_fetch = bg_id_for_task.clone();
+                let slice_cache_for_fetch = slice_cache.clone();
+                slice_cache.get_or_fetch(&bg_id_for_task, first_missing, move || async move {
+                    let data = fetch_range_from_drive(&bg_client, &bg_url, &bg_token, first_missing, batch_end - 1).await?;
+                    // Same first-slice/rest split as the main loop: cache
+                    // [1..count] as a side effect, return slice 0 for
+                    // get_or_fetch to cache itself.
+                    let first_len = (crate::slice_cache::SLICE_SIZE as usize).min(data.len());
+                    let first_chunk = data[..first_len].to_vec();
+                    if data.len() > first_len {
+                        let rest = data[first_len..].to_vec();
+                        slice_cache_for_fetch.batch_insert(
+                            &bg_id_for_fetch,
+                            first_missing + crate::slice_cache::SLICE_SIZE,
+                            rest,
+                        ).await;
+                    }
+                    Ok(first_chunk)
+                }).await
+            };
+            match fetch_result {
+                Ok(_first_chunk) => {
+                    // No manual batch_insert here anymore -- see the main
+                    // response loop's comment above for why.
                     if let Some(app) = crate::APP_HANDLE.get() {
                         let _ = app.emit("buffer-status", BufferState {
                             track_id: bg_id_for_task.clone(),
@@ -551,7 +624,13 @@ pub async fn handle_stream(
                     }
                 }
                 Err(e) => {
-                    eprintln!("[proxy] prefetch-batch-fail at {first_missing}: {e:?}");
+                    // warn, not error: this is the background read-ahead
+                    // task, not the response the user is currently
+                    // listening to (see the main fetch loop above) -- a
+                    // failure here just means later seeks/continued
+                    // playback may have to fetch on demand instead of
+                    // hitting a warm cache.
+                    log::warn!("[proxy] prefetch-batch-fail at {first_missing}: {e:?}");
                     if matches!(e, DriveErr::Rate) {
                         tokio::time::sleep(full_jitter(Duration::from_secs(PREFETCH_RATE_LIMIT_SLEEP_SECS))).await;
                     }

@@ -8,7 +8,7 @@ pub mod stream;
 pub mod types;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::{Arc, LazyLock};
 
 use reqwest::Client;
@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 use self::constants::REQUEST_TIMEOUT;
 use self::types::AppState;
+use crate::slice_cache::SliceCache;
 
 // Global state
 pub static GLOBAL_BACKOFF_UNTIL: AtomicU64 = AtomicU64::new(0);
@@ -34,18 +35,25 @@ static PREFETCH_CANCEL: LazyLock<Arc<Mutex<HashMap<String, Arc<tokio::sync::Noti
 static PREFETCH_SEMAPHORE: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
 
-pub fn start_proxy() {
+/// `slice_cache`/`buffer_seconds`: constructed once in lib.rs's `run()` and
+/// handed both here (for the Axum handlers, via `AppState`) and to
+/// `app.manage(...)` (for Tauri commands, via `tauri::State`) -- the same
+/// shared `Arc`s reach both frameworks instead of each side reaching for its
+/// own `crate::`-level static. See AppState's doc comment in types.rs.
+pub fn start_proxy(slice_cache: Arc<SliceCache>, buffer_seconds: Arc<AtomicUsize>) {
     tauri::async_runtime::spawn(async move {
         let client = match Client::builder().timeout(REQUEST_TIMEOUT).build() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[proxy] reqwest client build failed (timeout={REQUEST_TIMEOUT:?}): {e}");
+                log::error!("[proxy] reqwest client build failed (timeout={REQUEST_TIMEOUT:?}): {e}");
                 Client::new()
             }
         };
         let state = AppState {
             client,
             cache_store: cache::new_cache_store(),
+            slice_cache,
+            buffer_seconds,
         };
 
         let app = axum::Router::new()
@@ -55,10 +63,10 @@ pub fn start_proxy() {
         if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:0").await {
             if let Ok(addr) = listener.local_addr() {
                 crate::PROXY_PORT.store(addr.port(), std::sync::atomic::Ordering::SeqCst);
-                println!("Proxy server bound to port {}", addr.port());
+                log::info!("Proxy server bound to port {}", addr.port());
             }
             if let Err(e) = axum::serve(listener, app).await {
-                eprintln!("Proxy server error: {}", e);
+                log::error!("Proxy server error: {}", e);
             }
         }
     });

@@ -41,32 +41,52 @@ impl SliceCache {
     /// standalone test crate (verify_slice_cache) before relying on it here,
     /// since this sandbox cannot compile the full Tauri app to test in place.
     ///
-    /// NOTE for whoever wires this back into src-tauri/src/proxy/stream.rs:
-    /// as of this rewrite, `get_or_fetch` has zero production callers --
-    /// `handle_stream`'s cache-miss paths (both the main response loop and
-    /// the background prefetch loop) call `fetch_range_from_drive` and
-    /// `batch_insert` directly, with no dedup against two concurrent fetches
-    /// for the same (track_id, offset). That gap is a separate, pre-existing
-    /// finding, reported to the project owner rather than silently patched
-    /// into the hot path as part of this cache-internals simplification.
-    pub async fn get_or_fetch<F, Fut>(
+    /// Generic over the error type `E` (previously hardcoded to `String`) so
+    /// callers can propagate a structured error -- e.g. proxy/stream.rs uses
+    /// `DriveErr` here instead of a stringified copy, so its retry/backoff
+    /// logic can still match on `DriveErr::Rate` vs `DriveErr::NotFound` etc.
+    /// after a dedup wait, not just after a fresh fetch. Bound is exactly
+    /// what moka's `try_get_with` itself requires (it wraps the leader's Err
+    /// in `Arc<E>` to hand the identical value to every waiter) -- verified
+    /// against the exact pinned moka commit in a standalone crate before
+    /// relying on it here, same as the dedup behavior above.
+    ///
+    /// Wired into src-tauri/src/proxy/stream.rs's two cache-miss paths (main
+    /// response loop + background prefetch loop): each one fetches a whole
+    /// multi-slice batch in one Drive request (see `PREFETCH_BATCH_SLICES`),
+    /// then calls this with the batch's *first* offset as the dedup key, its
+    /// fetcher closure re-entrantly calling `batch_insert` for the remaining
+    /// slices as a side effect before returning the first slice's bytes for
+    /// this method to cache itself. That re-entrant call (from within one
+    /// key's try_get_with init future, into the same cache for *different*
+    /// keys) is also verified safe against the pinned moka commit. This
+    /// dedupes the common overlap case (two callers landing on the same
+    /// batch-start offset) but is not a full range-lock: two callers whose
+    /// `find_missing_run` results start at different, only partially
+    /// overlapping offsets within the same underlying gap are still not
+    /// deduped against each other -- accepted as out of scope; a precise
+    /// fix would need an interval-tree-based in-flight tracker, considerably
+    /// more complex than warranted for a "reduce wasted Drive calls" gap
+    /// that never risked correctness even before this change.
+    pub async fn get_or_fetch<F, Fut, E>(
         &self,
         track_id: &str,
         offset: u64,
         fetcher: F,
-    ) -> Result<Arc<Vec<u8>>, String>
+    ) -> Result<Arc<Vec<u8>>, E>
     where
         F: FnOnce() -> Fut + Send,
-        Fut: Future<Output = Result<Vec<u8>, String>> + Send,
+        Fut: Future<Output = Result<Vec<u8>, E>> + Send,
+        E: Clone + Send + Sync + 'static,
     {
         let key = (track_id.to_string(), offset);
         self.cache
             .try_get_with(key, async move {
                 let data = fetcher().await?;
-                Ok::<Arc<Vec<u8>>, String>(Arc::new(data))
+                Ok::<Arc<Vec<u8>>, E>(Arc::new(data))
             })
             .await
-            .map_err(|e: Arc<String>| (*e).to_string())
+            .map_err(|e: Arc<E>| (*e).clone())
     }
 
     pub async fn find_missing_run(
@@ -170,14 +190,20 @@ mod tests {
         let c2 = cache.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let t1 = tokio::spawn(async move {
+            // Explicit `String` (this test is about generic dedup behavior,
+            // not about any specific error type -- `get_or_fetch` became
+            // generic over `E` when this got wired into proxy/stream.rs with
+            // `DriveErr`, and neither closure here pins a type on its own
+            // now that `E` isn't hardcoded, so it needs an explicit
+            // annotation to compile).
             c1.get_or_fetch("t", 0, || async {
                 rx.await.unwrap();
-                Ok(vec![4u8; SLICE_SIZE as usize])
+                Ok::<Vec<u8>, String>(vec![4u8; SLICE_SIZE as usize])
             })
             .await
         });
         let t2 = tokio::spawn(async move {
-            c2.get_or_fetch("t", 0, || async { panic!("should not be called") })
+            c2.get_or_fetch::<_, _, String>("t", 0, || async { panic!("should not be called") })
                 .await
         });
         tx.send(()).ok();
@@ -220,7 +246,10 @@ mod tests {
         leader_started_rx.await.expect("leader never started");
 
         let t2 = tokio::spawn(async move {
-            c2.get_or_fetch("t", 0, || async {
+            // Explicit turbofish: this closure never returns a value (always
+            // panics), so nothing else pins `E` for this independent
+            // get_or_fetch call -- match the leader's `String` above.
+            c2.get_or_fetch::<_, _, String>("t", 0, || async {
                 panic!("should not be called -- leader should have served this waiter")
             })
             .await
@@ -248,7 +277,9 @@ mod tests {
         let c2 = cache.clone();
 
         let leader = tokio::spawn(async move {
-            c1.get_or_fetch("t", 0, || async {
+            // Explicit turbofish: `unreachable!()` diverges (type `!`) and
+            // never pins `E` on its own now that get_or_fetch is generic.
+            c1.get_or_fetch::<_, _, String>("t", 0, || async {
                 std::future::pending::<()>().await;
                 unreachable!();
             })
@@ -260,7 +291,7 @@ mod tests {
 
         let waiter = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            c2.get_or_fetch("t", 0, || async { Ok(vec![9u8; SLICE_SIZE as usize]) }),
+            c2.get_or_fetch("t", 0, || async { Ok::<Vec<u8>, String>(vec![9u8; SLICE_SIZE as usize]) }),
         )
         .await
         .expect("waiter hung after the leader was cancelled instead of being promoted to retry");
