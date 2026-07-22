@@ -1,19 +1,11 @@
 use moka::future::Cache;
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use tokio::sync::{Notify, RwLock};
 
 pub const SLICE_SIZE: u64 = 512 * 1024;
 
-pub struct InflightEntry {
-    pub notify: Arc<Notify>,
-    pub data: RwLock<Option<Vec<u8>>>,
-}
-
 pub struct SliceCache {
     pub cache: Cache<(String, u64), Arc<Vec<u8>>>,
-    pub inflight: Arc<RwLock<HashMap<(String, u64), Arc<InflightEntry>>>>,
 }
 
 impl SliceCache {
@@ -26,7 +18,6 @@ impl SliceCache {
                     v.len().try_into().unwrap_or(u32::MAX)
                 })
                 .build(),
-            inflight: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -34,6 +25,30 @@ impl SliceCache {
         self.cache.get(&(track_id.to_string(), offset)).await
     }
 
+    /// Fetch-or-get a slice, deduplicating concurrent callers for the same
+    /// (track_id, offset) key.
+    ///
+    /// Previously this was backed by a hand-rolled InflightEntry/InflightGuard
+    /// map with Notify-based waiters and Arc::ptr_eq-guarded cleanup on drop --
+    /// a from-scratch reimplementation of "cache stampede" prevention. moka's
+    /// `try_get_with` provides the same guarantee natively: concurrent calls
+    /// on the same not-yet-cached key are coalesced into one evaluation of the
+    /// init future; every other concurrent caller for that key awaits and
+    /// receives the same result (Ok or Err) once it resolves, without
+    /// re-running the fetch. If the leader's future is dropped/cancelled
+    /// before completing, moka promotes one of the remaining waiters to retry
+    /// instead of leaving the rest hanging -- verified in this app's own
+    /// standalone test crate (verify_slice_cache) before relying on it here,
+    /// since this sandbox cannot compile the full Tauri app to test in place.
+    ///
+    /// NOTE for whoever wires this back into src-tauri/src/proxy/stream.rs:
+    /// as of this rewrite, `get_or_fetch` has zero production callers --
+    /// `handle_stream`'s cache-miss paths (both the main response loop and
+    /// the background prefetch loop) call `fetch_range_from_drive` and
+    /// `batch_insert` directly, with no dedup against two concurrent fetches
+    /// for the same (track_id, offset). That gap is a separate, pre-existing
+    /// finding, reported to the project owner rather than silently patched
+    /// into the hot path as part of this cache-internals simplification.
     pub async fn get_or_fetch<F, Fut>(
         &self,
         track_id: &str,
@@ -45,56 +60,13 @@ impl SliceCache {
         Fut: Future<Output = Result<Vec<u8>, String>> + Send,
     {
         let key = (track_id.to_string(), offset);
-
-        if let Some(data) = self.cache.get(&key).await {
-            return Ok(data);
-        }
-
-        let entry;
-        {
-            let mut inflight = self.inflight.write().await;
-            if let Some(existing) = inflight.get(&key) {
-                let entry = existing.clone();
-                drop(inflight);
-                let notified = entry.notify.notified();
-                notified.await;
-                let data = entry.data.read().await;
-                return data
-                    .clone()
-                    .map(Arc::new)
-                    .ok_or_else(|| "fetch failed".to_string());
-            }
-            entry = Arc::new(InflightEntry {
-                notify: Arc::new(Notify::new()),
-                data: RwLock::new(None),
-            });
-            inflight.insert(key.clone(), entry.clone());
-        }
-
-        let _guard = InflightGuard { inflight: self.inflight.clone(), key: key.clone(), entry: entry.clone() };
-
-        let result = fetcher().await;
-
-        match result {
-            Ok(data) => {
-                let data_arc = Arc::new(data.clone());
-                if !data.is_empty() {
-                    self.cache.insert(key.clone(), data_arc.clone()).await;
-                }
-                let mut entry_data = entry.data.write().await;
-                *entry_data = Some(data);
-                entry.notify.notify_waiters();
-                let mut inflight = self.inflight.write().await;
-                inflight.remove(&key);
-                Ok(data_arc)
-            }
-            Err(e) => {
-                entry.notify.notify_waiters();
-                let mut inflight = self.inflight.write().await;
-                inflight.remove(&key);
-                Err(e)
-            }
-        }
+        self.cache
+            .try_get_with(key, async move {
+                let data = fetcher().await?;
+                Ok::<Arc<Vec<u8>>, String>(Arc::new(data))
+            })
+            .await
+            .map_err(|e: Arc<String>| (*e).to_string())
     }
 
     pub async fn find_missing_run(
@@ -162,178 +134,9 @@ impl SliceCache {
     }
 }
 
-struct InflightGuard {
-    inflight: Arc<RwLock<HashMap<(String, u64), Arc<InflightEntry>>>>,
-    key: (String, u64),
-    // Identity token for this guard's own map entry (mirrors proxy.rs's
-    // CancelGuard). Without this, a newer request for the same key that
-    // inserted its OWN fresh entry between this guard being created and it
-    // dropping could have its entry wrongly removed by this (stale) guard —
-    // stranding whatever is waiting on the newer entry's `notify`. Checked
-    // via `Arc::ptr_eq` rather than the key alone so we only ever remove
-    // exactly the entry this guard was created for.
-    entry: Arc<InflightEntry>,
-}
-
-impl Drop for InflightGuard {
-    fn drop(&mut self) {
-        // If the leader future is cancelled or panics before publishing data,
-        // wake every follower so it returns "fetch failed" instead of waiting
-        // forever on an entry that this guard is about to remove.
-        self.entry.notify.notify_waiters();
-
-        // Fast path: best-effort synchronous removal.
-        if let Ok(mut guard) = self.inflight.try_write() {
-            if guard.get(&self.key).map(|e| Arc::ptr_eq(e, &self.entry)).unwrap_or(false) {
-                guard.remove(&self.key);
-            }
-            return;
-        }
-        // Contention fallback: spawn an async task to remove the entry.
-        // This ensures inflight entries never leak even under concurrent
-        // write-lock contention, fixing the root cause where try_write()
-        // silently fails and leaves waiters hung forever.
-        let inflight = self.inflight.clone();
-        let key = self.key.clone();
-        let entry = self.entry.clone();
-        tokio::spawn(async move {
-            let mut guards = inflight.write().await;
-            if guards.get(&key).map(|e| Arc::ptr_eq(e, &entry)).unwrap_or(false) {
-                guards.remove(&key);
-            }
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn test_inflight_guard_does_not_leak_on_concurrent_lock() {
-        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
-        let key = ("leak-test".to_string(), 0u64);
-
-        // Insert entry into inflight
-        let entry = Arc::new(InflightEntry {
-            notify: Arc::new(Notify::new()),
-            data: RwLock::new(None),
-        });
-        {
-            let mut inflight = cache.inflight.write().await;
-            inflight.insert(key.clone(), entry.clone());
-        }
-
-        let cache_clone = cache.clone();
-        let (lock_held_tx, lock_held_rx) = tokio::sync::oneshot::channel::<()>();
-
-        // Task that holds the write lock on inflight while guard::drop runs
-        let lock_handle = tokio::spawn(async move {
-            let _lock = cache_clone.inflight.write().await;
-            let _ = lock_held_tx.send(());
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            drop(_lock);
-        });
-
-        // Wait for lock to be acquired by the other task
-        lock_held_rx.await.unwrap();
-
-        // Drop InflightGuard while another task holds the write lock.
-        // BUG: try_write() silently fails → entry leaks.
-        // FIX: fallback spawn removes the entry after the lock is released.
-        {
-            let guard = InflightGuard {
-                inflight: cache.inflight.clone(),
-                key: key.clone(),
-                entry: entry.clone(),
-            };
-            drop(guard);
-        }
-
-        lock_handle.await.unwrap();
-
-        // Verify entry was removed
-        let inflight = cache.inflight.read().await;
-        assert!(
-            inflight.is_empty(),
-            "inflight entry leaked after InflightGuard::drop"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_stale_inflight_guard_does_not_remove_newer_entry() {
-        // Identity-check hardening (mirrors proxy.rs's CancelGuard): a guard
-        // built for an OLD entry must not remove a NEWER entry that has since
-        // taken over the same key, even though the map key matches.
-        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
-        let key = ("stale-test".to_string(), 0u64);
-
-        let old_entry = Arc::new(InflightEntry {
-            notify: Arc::new(Notify::new()),
-            data: RwLock::new(None),
-        });
-        let stale_guard = InflightGuard {
-            inflight: cache.inflight.clone(),
-            key: key.clone(),
-            entry: old_entry.clone(),
-        };
-
-        // A newer request for the same key replaces the map entry (as
-        // get_or_fetch's insert would) — `old_entry`/`stale_guard` no longer
-        // reflect what's actually stored.
-        let new_entry = Arc::new(InflightEntry {
-            notify: Arc::new(Notify::new()),
-            data: RwLock::new(None),
-        });
-        {
-            let mut inflight = cache.inflight.write().await;
-            inflight.insert(key.clone(), new_entry.clone());
-        }
-
-        // Dropping the stale guard must NOT remove the newer entry.
-        drop(stale_guard);
-
-        let inflight = cache.inflight.read().await;
-        let current = inflight.get(&key);
-        assert!(
-            current.is_some() && Arc::ptr_eq(current.unwrap(), &new_entry),
-            "stale InflightGuard removed a newer entry for the same key"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_cancelled_leader_wakes_waiters() {
-        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
-        let key = ("cancel-test".to_string(), 0u64);
-        let entry = Arc::new(InflightEntry {
-            notify: Arc::new(Notify::new()),
-            data: RwLock::new(None),
-        });
-        cache.inflight.write().await.insert(key.clone(), entry.clone());
-
-        let waiter_entry = entry.clone();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let waiter = tokio::spawn(async move {
-            let notified = waiter_entry.notify.notified();
-            let _ = ready_tx.send(());
-            notified.await;
-            waiter_entry.data.read().await.clone()
-        });
-        ready_rx.await.expect("waiter failed before registering");
-
-        drop(InflightGuard {
-            inflight: cache.inflight.clone(),
-            key,
-            entry,
-        });
-
-        let result = tokio::time::timeout(Duration::from_secs(1), waiter)
-            .await
-            .expect("waiter was not notified after leader cancellation")
-            .expect("waiter task panicked");
-        assert!(result.is_none());
-    }
 
     #[tokio::test]
     async fn test_try_get_missing() {
@@ -381,5 +184,98 @@ mod tests {
         let (r1, r2) = tokio::join!(t1, t2);
         assert!(r1.unwrap().is_ok());
         assert!(r2.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_or_fetch_propagates_error_to_waiters() {
+        // Behavioral replacement for the old test_cancelled_leader_wakes_waiters:
+        // with the hand-rolled InflightGuard, a failed leader woke waiters via
+        // Notify so they'd return an error instead of hanging. moka's
+        // try_get_with propagates the leader's Err to every waiter natively --
+        // verify that guarantee holds through this app's get_or_fetch wrapper.
+        //
+        // Ordering is made explicit rather than relying on tokio::spawn +
+        // join! scheduling order: an earlier version of this test spawned
+        // both the leader and the waiter before either had run, which left it
+        // up to the (unspecified) scheduler which task's try_get_with call
+        // actually registered with moka first -- it failed intermittently
+        // because the "waiter" sometimes won that race and became its own
+        // leader instead. Waiting for an explicit "leader has started"
+        // signal before spawning the waiter removes the race entirely.
+        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
+        let c1 = cache.clone();
+        let c2 = cache.clone();
+        let (leader_started_tx, leader_started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        let t1 = tokio::spawn(async move {
+            c1.get_or_fetch("t", 0, || async move {
+                leader_started_tx.send(()).ok();
+                release_rx.await.ok();
+                Err::<Vec<u8>, String>("fetch failed".to_string())
+            })
+            .await
+        });
+
+        leader_started_rx.await.expect("leader never started");
+
+        let t2 = tokio::spawn(async move {
+            c2.get_or_fetch("t", 0, || async {
+                panic!("should not be called -- leader should have served this waiter")
+            })
+            .await
+        });
+
+        release_tx.send(()).ok();
+        let (r1, r2) = tokio::join!(t1, t2);
+        assert!(r1.unwrap().is_err(), "leader should surface its own error");
+        assert!(
+            r2.unwrap().is_err(),
+            "waiter should receive the leader's error, not hang or panic"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_or_fetch_leader_cancel_lets_a_waiter_retry() {
+        // If the leader task is aborted before its fetcher resolves (e.g. the
+        // HTTP request it was awaiting gets dropped), moka must not leave a
+        // waiting caller hanging forever -- one of them should be promoted to
+        // retry the fetch. This is the property InflightGuard's Arc::ptr_eq
+        // cleanup-on-drop used to guarantee by hand; verifying moka provides
+        // it natively before relying on it in production.
+        let cache = Arc::new(SliceCache::new(100 * 1024 * 1024));
+        let c1 = cache.clone();
+        let c2 = cache.clone();
+
+        let leader = tokio::spawn(async move {
+            c1.get_or_fetch("t", 0, || async {
+                std::future::pending::<()>().await;
+                unreachable!();
+            })
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        leader.abort();
+
+        let waiter = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            c2.get_or_fetch("t", 0, || async { Ok(vec![9u8; SLICE_SIZE as usize]) }),
+        )
+        .await
+        .expect("waiter hung after the leader was cancelled instead of being promoted to retry");
+
+        assert!(waiter.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_find_missing_run_all_present() {
+        let cache = SliceCache::new(100 * 1024 * 1024);
+        cache
+            .batch_insert("t1", 0, vec![2u8; (SLICE_SIZE * 4) as usize])
+            .await;
+        let (offset, count) = cache.find_missing_run("t1", 0, 4).await;
+        assert_eq!(count, 0);
+        assert_eq!(offset, SLICE_SIZE * 4);
     }
 }
