@@ -37,7 +37,6 @@ export interface CallbackRefs {
   onPrevTrackRef: React.MutableRefObject<() => void>;
   onTogglePlayModeRef: React.MutableRefObject<() => void>;
   handleManualResumeRef: React.MutableRefObject<(() => void) | null>;
-  toastDismissRef: React.MutableRefObject<(() => void) | null>;
 }
 
 export const MAX_CONSECUTIVE_AUTO_SKIP = 3;

@@ -399,7 +399,6 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
     onPrevTrackRef,
     onTogglePlayModeRef,
     handleManualResumeRef,
-    toastDismissRef: { current: null },
   };
 
   return {

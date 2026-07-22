@@ -32,7 +32,6 @@ export async function fetchFolderContents(
   sortOption: string,
   onStart: () => void,
   onDone: () => void,
-  _guard?: { start: () => number; isLatest: (id: number) => boolean },
 ): Promise<void> {
   let fetchCompleted = true;
   const fetchStartedAt = performance.now();

@@ -9,6 +9,5 @@ describe('Dexie storage schema', () => {
     expect(await kvGet('drplay_buffer_seconds')).toBe(1400);
     expect(db.playlists).toBeDefined();
     expect(db.recentTracks).toBeDefined();
-    expect(db.metadataCache).toBeDefined();
   });
 });

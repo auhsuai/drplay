@@ -10,7 +10,6 @@ export interface DriveFile {
   modifiedTime?: string;
   trashed: boolean;
   isFolder: boolean;
-  metadata?: unknown; // For future ID3 tag caching
 }
 
 export interface SyncState {
@@ -33,7 +32,6 @@ export interface PlaylistRow { id: string; name: string; createdAt: number; trac
 export interface RecentTrackRow { id: string; track: Track; userEmail: string; createdAt: number; }
 export interface PlayCountRow { id: string; track: Track; count: number; userEmail: string; }
 export interface FolderVisitRow { id: string; name: string; count: number; lastVisited: number; userEmail: string; }
-export interface MetadataCacheRow { key: string; entry: unknown; }
 // `favorites` rows are a Track plus the two fields addFavorite() stamps on
 // (userEmail, createdAt) — was `Table<any, string>`, which meant Dexie gave
 // zero compile-time protection against writing a malformed row here. Every
@@ -51,7 +49,6 @@ export class DriveDatabase extends Dexie {
   recentTracks!: Table<RecentTrackRow, string>;
   playCounts!: Table<PlayCountRow, string>;
   folderVisits!: Table<FolderVisitRow, string>;
-  metadataCache!: Table<MetadataCacheRow, string>;
 
   constructor() {
     super('DrPlayDriveDB');
@@ -84,6 +81,15 @@ export class DriveDatabase extends Dexie {
       playCounts: 'id, userEmail',
       folderVisits: 'id, userEmail',
       metadataCache: 'key'
+    });
+
+    // Version 5 drops `metadataCache`: nothing in the app has written to it
+    // since the old R2/SQLite tag-cache pipeline that populated it was
+    // removed (see utils/cache.ts's comment on clearAppCache for the fuller
+    // history). Dexie requires an explicit `null` to drop a table on
+    // upgrade rather than just omitting it.
+    this.version(5).stores({
+      metadataCache: null
     });
   }
 }

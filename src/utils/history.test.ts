@@ -24,7 +24,6 @@ async function clearAll() {
   await db.recentTracks.clear();
   await db.playCounts.clear();
   await db.folderVisits.clear();
-  await db.metadataCache.clear();
 }
 
 describe('history (Dexie-backed)', () => {
