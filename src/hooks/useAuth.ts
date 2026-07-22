@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker, stopProSyncWorker, setTokenRefreshHandler, updateWorkerToken } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
+import { getAccessToken, setAccessToken as setStoredAccessToken, getRefreshToken, storeRefreshToken, clearRefreshToken } from "../utils/tokenStore";
 import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
 import { showErrorToast } from "../utils/simpleToast";
 
@@ -42,24 +43,30 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // multiple times (double navigation / redundant revoke calls).
   const isLoggingOutRef = useRef(false);
 
-  // Initialize token from localStorage
+  // Restore session from the OS keychain (refresh token) rather than
+  // localStorage. There is no persisted access token to restore -- it lives
+  // in memory only (src/utils/tokenStore.ts) and is always re-derived from a
+  // fresh refresh-token exchange on startup. See AUDIT.md S1 for why: the
+  // refresh token is long-lived and was previously sitting in plaintext
+  // localStorage, readable by any process running as the same OS user.
   useEffect(() => {
-    const savedToken = localStorage.getItem("drplay_access_token");
-    if (savedToken) {
-      setAccessToken(savedToken);
-      setIsLoggedIn(true);
-      // Push the restored token to the Rust proxy before any playback can start.
-      invoke("update_stream_token", { token: savedToken }).catch(e =>
-        console.error(`[${AUTH_MODULE}] Restored token push to Rust proxy failed (update_stream_token init)`, classifyInvokeError(e))
-      );
-      const issueTime = parseInt(localStorage.getItem("drplay_token_time") || "", 10);
-      // Corrupt/missing token_time -> treat as expired and refresh promptly
-      // (scheduleProactiveRefresh clamps the minimum to 5s).
-      const remainingSec = Number.isFinite(issueTime) && issueTime > 0
-        ? 3600 - (Date.now() - issueTime) / 1000
-        : 0;
-      scheduleProactiveRefresh(remainingSec > 0 ? remainingSec : 0);
-    }
+    let cancelled = false;
+    (async () => {
+      const refreshToken = await getRefreshToken();
+      if (cancelled || !refreshToken) return;
+      try {
+        // forceRefresh=true: getValidToken() sees no in-memory access token
+        // yet anyway, but forcing makes the intent explicit and matches the
+        // "always start from a fresh exchange" design.
+        const freshToken = await getValidToken(true);
+        if (cancelled || !freshToken) return;
+        setAccessToken(freshToken);
+        setIsLoggedIn(true);
+      } catch (e) {
+        console.warn(`[${AUTH_MODULE}] Startup refresh-token exchange failed`, classifyError(e));
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const handleLoginSuccess = (tokenData: GoogleTokenResponse) => {
@@ -67,19 +74,20 @@ export const useAuth = (onLogoutExt?: () => void) => {
       console.error(`[${AUTH_MODULE}] Login aborted: malformed token response (missing access_token) — no token leaked`);
       return;
     }
-    localStorage.setItem("drplay_access_token", tokenData.access_token);
-    localStorage.setItem("drplay_token_time", Date.now().toString());
+    setStoredAccessToken(tokenData.access_token);
     if (tokenData.refresh_token) {
-      localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
+      storeRefreshToken(tokenData.refresh_token).catch(e =>
+        console.error(`[${AUTH_MODULE}] Failed to persist refresh token to OS keychain`, classifyError(e))
+      );
     }
     setAccessToken(tokenData.access_token);
     setIsLoggedIn(true);
-    
+
     // CRITICAL: Send token to Rust backend proxy immediately
     invoke("update_stream_token", { token: tokenData.access_token }).catch(e =>
       console.error(`[${AUTH_MODULE}] Login token push to Rust proxy failed (update_stream_token update)`, classifyInvokeError(e))
     );
-    
+
     scheduleProactiveRefresh(tokenData.expires_in || 3600);
   };
 
@@ -90,11 +98,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
       invalidateCurrentSession();
       stopProSyncWorker();
 
-      const tokenToRevoke = localStorage.getItem("drplay_access_token");
+      const tokenToRevoke = getAccessToken();
 
-      localStorage.removeItem("drplay_access_token");
-      localStorage.removeItem("drplay_refresh_token");
-      localStorage.removeItem("drplay_token_time");
+      setStoredAccessToken(null);
+      await clearRefreshToken();
       localStorage.removeItem("drplay_current_user_email");
       setIsLoggedIn(false);
       setAccessToken(null);
@@ -129,7 +136,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       handleLogout().catch(err => console.error(`[${AUTH_MODULE}] Logout failed`, classifyError(err)));
     };
     window.addEventListener('auth-logout', handleAuthLogout);
-    
+
     // Listen for token expiration from Rust proxy
     let unlistenFn: (() => void) | null = null;
     let listenerCancelled = false;
@@ -154,7 +161,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         console.warn(`[${AUTH_MODULE}] token-expired listener registration failed`, classifyError(err));
       }
     });
-    
+
     return () => {
       listenerCancelled = true;
       window.removeEventListener('auth-logout', handleAuthLogout);
@@ -174,10 +181,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
       });
 
       startProSyncWorker(accessToken);
-      
+
       // Chạy đồng bộ định kỳ mỗi 2 phút
       const syncInterval = setInterval(() => {
-        const latestToken = localStorage.getItem("drplay_access_token");
+        const latestToken = getAccessToken();
         if (latestToken) startProSyncWorker(latestToken);
       }, 2 * 60 * 1000);
 
@@ -217,7 +224,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
             console.error(`[${AUTH_MODULE}] Failed to fetch user profile (best-effort) — profile may be incomplete`, err);
           }
         });
-        
+
       return () => {
         clearInterval(syncInterval);
         stopProSyncWorker();

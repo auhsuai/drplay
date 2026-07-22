@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { getCurrentSessionId } from "./sessionGuard";
+import { getAccessToken, setAccessToken, getTokenIssuedAt, getRefreshToken, storeRefreshToken } from "./tokenStore";
 
 export class TokenRefreshError extends Error {
   constructor(
@@ -92,18 +93,6 @@ export async function revokeGoogleToken(token: string): Promise<void> {
   }
 }
 
-function getStoredTokenTime(): number {
-  const raw = localStorage.getItem('drplay_token_time');
-  const parsed = parseInt(raw || '', 10);
-  
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > Date.now() + 86_400_000) {
-    console.warn('[Auth] Invalid token_time detected, forcing refresh');
-    return 0;
-  }
-  
-  return parsed;
-}
-
 function scheduleRetryRefresh() {
   if (refreshTimerId) clearTimeout(refreshTimerId);
   const RETRY_DELAY = 30_000;
@@ -113,12 +102,15 @@ function scheduleRetryRefresh() {
 }
 
 export const getValidToken = async (forceRefresh: boolean = false): Promise<string | null> => {
-  const token = localStorage.getItem("drplay_access_token");
-  const issueTime = getStoredTokenTime();
-  const isExpired = Date.now() - issueTime > 50 * 60 * 1000;
+  const token = getAccessToken();
+  const issueTime = getTokenIssuedAt();
+  // issueTime is only ever set by setAccessToken() below with Date.now(), so
+  // (unlike the old localStorage-parsed value) there's no "corrupt string"
+  // case to defend against here -- 0 simply means "no token yet".
+  const isExpired = issueTime === 0 || Date.now() - issueTime > 50 * 60 * 1000;
 
   if (isExpired || !token || forceRefresh) {
-    const refreshToken = localStorage.getItem("drplay_refresh_token");
+    const refreshToken = await getRefreshToken();
     if (!refreshToken) {
       window.dispatchEvent(new CustomEvent('auth-logout'));
       return null;
@@ -156,11 +148,18 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
         refreshSubscribers.forEach(sub => sub.resolve(''));
         return '';
       }
-      
-      localStorage.setItem("drplay_access_token", tokenData.access_token);
-      localStorage.setItem("drplay_token_time", Date.now().toString());
+
+      setAccessToken(tokenData.access_token);
       if (tokenData.refresh_token) {
-        localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
+        try {
+          await storeRefreshToken(tokenData.refresh_token);
+        } catch (e) {
+          // Best-effort: Google rotated the refresh token but persisting the
+          // new one to the OS keychain failed. The in-memory access token is
+          // still valid for the rest of this session; only a future restart
+          // would be affected (falls back to needing a fresh login then).
+          console.warn('[Auth] Failed to persist rotated refresh token to OS keychain', e);
+        }
       }
 
       // Await so the Rust proxy has the fresh token BEFORE we resolve waiters /
@@ -169,8 +168,8 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
       try {
         await invoke("update_stream_token", { token: tokenData.access_token });
       } catch (e) {
-        // Best-effort: the fresh token is already persisted to localStorage, so a
-        // proxy update failure must NOT block playback or reject waiters. Classify
+        // Best-effort: the fresh token is already set in-memory, so a proxy
+        // update failure must NOT block playback or reject waiters. Classify
         // for observability and continue.
         const kind = classifyInvokeError(e);
         console.warn("[Auth] Stream proxy token update failed (best-effort, continuing)", kind);
@@ -178,12 +177,12 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
 
       scheduleProactiveRefresh(tokenData.expires_in || 3600);
       window.dispatchEvent(new CustomEvent('token-updated', { detail: { token: tokenData.access_token } }));
-      
+
       refreshSubscribers.forEach(sub => sub.resolve(tokenData.access_token));
       return tokenData.access_token;
     } catch (err: unknown) {
       refreshSubscribers.forEach(sub => sub.reject(err instanceof Error ? err : new Error(String(err))));
-      
+
       if (err instanceof TokenRefreshError) {
         if (err.kind === 'invalid_grant') {
           window.dispatchEvent(new CustomEvent('auth-logout'));
@@ -205,7 +204,7 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
 };
 
 export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {}): Promise<Response> => {
-  let token = localStorage.getItem("drplay_access_token");
+  let token = getAccessToken();
 
   // Ensure headers exist and attach token
   const headers = new Headers(options.headers);

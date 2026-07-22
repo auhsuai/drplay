@@ -2,6 +2,7 @@ import React from 'react';
 import { Track } from '../../../App';
 import { captureError } from '../../../utils/errorLog';
 import { getValidToken } from '../../../utils/apiClient';
+import { getTokenIssuedAt } from '../../../utils/tokenStore';
 import { invoke } from '@tauri-apps/api/core';
 import { PlayerAction } from '../types';
 import { decideDecodeFailure, isProxyStreamUrl } from '../streamError';
@@ -153,8 +154,8 @@ export function useAudioErrorRecovery(params: UseAudioErrorRecoveryParams): {
       return;
     }
     if (decision.isDefinitiveFormatError) {
-      const tokenTime = Number(localStorage.getItem('drplay_token_time'));
-      if (Number.isFinite(tokenTime) && Date.now() - tokenTime < TOKEN_RECENCY_WINDOW_MS) {
+      const tokenTime = getTokenIssuedAt();
+      if (tokenTime > 0 && Date.now() - tokenTime < TOKEN_RECENCY_WINDOW_MS) {
         const track = currentTrackRef.current;
         if (track?.streamUrl) { performRetry(track).catch(e => captureRetryFailure('format-error-retry', e)); return; }
       }
