@@ -122,7 +122,7 @@ export function SongCard({
 
   return (
     <div
-      className="relative group/card w-full"
+      className="relative w-full"
       style={{
         contain: 'layout style',
       }}
@@ -148,14 +148,14 @@ export function SongCard({
           setContextMenuPos({ x: e.clientX, y: e.clientY });
           setIsContextMenuOpen(true);
         }}
-        className={`p-3.5 rounded-2xl transition-[transform,box-shadow,background-color] duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full ${
+        className={`p-4 rounded-2xl transition-[transform,box-shadow,background-color] duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full ${
           isFlashOn
             ? 'bg-white dark:bg-[#383a40] shadow-lg shadow-black/5'
             : isSelected
               ? 'bg-[#4285F4]/10 dark:bg-[#4285F4]/20 hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30'
               : isPlaying
-                ? 'bg-[#F8F9FA] dark:bg-[#2a2b2f] shadow-sm group-hover/card:bg-white dark:group-hover/card:bg-[#383a40] group-hover/card:-translate-y-0.5'
-                : 'bg-[#F8F9FA] dark:bg-[#202124] group-hover/card:bg-white dark:group-hover/card:bg-[#2a2b2f] group-hover/card:shadow-lg group-hover/card:shadow-black/5 group-hover/card:-translate-y-1'
+                ? 'bg-[#F8F9FA] dark:bg-[#2a2b2f] shadow-sm hover:bg-white dark:hover:bg-[#383a40] hover:-translate-y-0.5'
+                : 'bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1'
         }`}
       >
       {isSelectionMode && (
