@@ -73,12 +73,10 @@ mod tests {
 
     use super::stream::now_epoch_secs;
     use super::backoff::{compute_cooldown_secs, equal_jitter, full_jitter};
-    use super::cache::{TrackMeta, CacheStore, new_cache_store};
+    use super::cache::{TrackMeta, CacheStore, new_cache_store, TRACK_CACHE_MAX_ENTRIES};
     use super::content_type::content_type_for_ext;
     use super::drive_error::{classify_drive_error, extract_drive_reason, drive_err_response, DriveErr};
     use super::range::parse_multi_range;
-
-    const TRACK_CACHE_MAX_ENTRIES: u64 = 2000;
 
     #[test]
     fn full_jitter_stays_within_0_and_delay() {

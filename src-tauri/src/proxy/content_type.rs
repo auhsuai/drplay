@@ -31,6 +31,12 @@ pub fn content_type_for_ext(ext: &str) -> Option<&'static str> {
 pub fn trim_cached_slice(chunk: &mut Vec<u8>, skip: usize, remaining: usize) {
     if skip < chunk.len() {
         chunk.drain(..skip);
+    } else {
+        // skip >= chunk.len(): this whole slice is before the requested
+        // window (e.g. skip lands exactly on a slice boundary) — none of it
+        // belongs in the response, so clear it instead of returning the
+        // untouched chunk as stale leading data.
+        chunk.clear();
     }
     if remaining < chunk.len() {
         chunk.truncate(remaining);

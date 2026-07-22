@@ -22,7 +22,7 @@ pub type CacheStore = moka::future::Cache<String, Arc<Mutex<TrackMeta>>>;
 /// entry count bounded (LRU + TinyLFU admission), and `time_to_idle` drops
 /// entries that have not been touched in a while. The async `moka::future`
 /// API is the same one used elsewhere in this codebase (see `slice_cache.rs`).
-const TRACK_CACHE_MAX_ENTRIES: u64 = 2000;
+pub(crate) const TRACK_CACHE_MAX_ENTRIES: u64 = 2000;
 const TRACK_CACHE_IDLE_TTL: Duration = Duration::from_secs(30 * 60); // 30 min
 
 pub fn new_cache_store() -> CacheStore {

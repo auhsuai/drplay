@@ -51,7 +51,7 @@ pub async fn fetch_range_from_drive(
         .map_err(|_| DriveErr::Upstream)?;
 
     let status = resp.status();
-    if !status.is_success() && status != 206 {
+    if !status.is_success() && status != StatusCode::PARTIAL_CONTENT {
         let code = status.as_u16();
         let body = resp.text().await.unwrap_or_default();
         return Err(classify_drive_error(code, &body));
@@ -104,7 +104,7 @@ pub async fn get_total_size(
         .await
         .map_err(|_| DriveErr::Upstream)?;
     let status = resp.status();
-    if !status.is_success() && status != 206 {
+    if !status.is_success() && status != StatusCode::PARTIAL_CONTENT {
         let code = status.as_u16();
         let body = resp.text().await.unwrap_or_default();
         return Err(classify_drive_error(code, &body));
@@ -570,8 +570,13 @@ pub async fn handle_stream(
         });
     let body = axum::body::Body::from_stream(stream);
 
+    // RFC 9110 §14.2: a response to a request with no Range header is a full
+    // representation and must be 200 OK, not 206. Mirrors the HEAD branch
+    // above, which already gets this right.
+    let get_status = if range_str.is_some() { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK };
+
     Response::builder()
-        .status(StatusCode::PARTIAL_CONTENT)
+        .status(get_status)
         .header(header::CONTENT_TYPE, resolved_content_type)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
