@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
+import { join } from "@tauri-apps/api/path";
 import { Track } from "../../../../App";
-import { getValidToken } from "../../../../utils/apiClient";
 import { getEffectiveDownloadPath } from "../../../../utils/downloadPath";
 
 export function useDownload(track?: Track) {
@@ -30,31 +31,17 @@ export function useDownload(track?: Track) {
     setIsDownloadingFile(true);
     setShowDownloadDialog(false);
     try {
-      const freshToken = await getValidToken();
-      if (!freshToken) throw new Error("No valid token");
-      const downloadUrl = `https://www.googleapis.com/drive/v3/files/${track.id}?alt=media`;
-      const response = await fetch(downloadUrl, {
-        headers: { Authorization: `Bearer ${freshToken}` }
-      });
-      if (!response.ok) throw new Error("Fetch failed");
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
+      // Streams the file straight to disk via a Rust command instead of
+      // buffering the whole file as a Blob in renderer memory first (the
+      // previous approach here) -- keeps memory bounded regardless of file
+      // size, which matters for large lossless FLAC tracks.
+      const dir = await getEffectiveDownloadPath();
       const base = downloadFileName.trim() || 'audio';
       const ext = track.originalName?.includes('.') ? track.originalName.slice(track.originalName.lastIndexOf('.')) : '.mp3';
-      a.download = `${base}${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      try {
-        const dir = await getEffectiveDownloadPath();
-        setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${dir}\\${a.download}`);
-      } catch {
-        setDownloadMessage(t('menu.download_complete', 'Tải xuống hoàn tất!'));
-      }
+      const filename = `${base}${ext}`;
+      const destPath = await join(dir, filename);
+      await invoke("download_file_to_disk", { fileId: track.id, destPath });
+      setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${destPath}`);
     } catch {
       setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
     } finally {
