@@ -13,17 +13,11 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 
   try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    ta.style.top = "-9999px";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    return ok;
+    // navigator.clipboard is reliably available in Tauri's WebView2/WKWebView/
+    // WebKitGTK — document.execCommand("copy") is deprecated (MDN: "This
+    // feature is no longer recommended") and unnecessary here.
+    await navigator.clipboard.writeText(text);
+    return true;
   } catch (err) {
     console.error("[copyToClipboard] fallback failed", {
       module: "copyToClipboard",

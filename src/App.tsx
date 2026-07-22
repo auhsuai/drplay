@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
 import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
@@ -19,6 +18,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { LoginScreen } from "./ui/Login/LoginScreen";
 
 import { getValidToken } from "./utils/apiClient";
+import { getAccessToken } from "./utils/tokenStore";
 import { sortDriveItems } from "./utils/sortDriveItems";
 import { fetchFolderContents } from "./utils/fetchFolderContents";
 import { useAuth } from "./hooks/useAuth";
@@ -26,7 +26,6 @@ import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
 import { useLocateFile } from "./hooks/useLocateFile";
-import { RateLimitModal } from "./ui/components/RateLimitModal";
 
 export type Track = {
   id: string; title: string; artist: string; streamUrl: string;
@@ -50,7 +49,10 @@ function App() {
   useEffect(() => {
     const handleFocus = () => {
       setIsFocused(true);
-      if (localStorage.getItem("drplay_access_token") && localStorage.getItem("drplay_refresh_token"))
+      // getAccessToken() (in-memory, see utils/tokenStore.ts) is a reasonable
+      // proxy for "we have an active session" -- getValidToken() itself
+      // handles the actual expiry/refresh-token lookup safely either way.
+      if (getAccessToken())
         getValidToken().catch(e => console.warn("[Auth] Focus refresh failed", e));
     };
     const handleBlur = () => setIsFocused(false);
@@ -79,13 +81,6 @@ function App() {
     sortOption, setSortOption, handleOpenFolder, handleBack, handleBreadcrumbClick,
     handleSelectRootFolder,
   } = useDrive(isLoggedIn, accessToken);
-
-  const [showRateLimitModal, setShowRateLimitModal] = useState(false);
-  useEffect(() => {
-    let fn: (() => void) | null = null; let cancelled = false;
-    listen('drive-quota-exceeded', () => setShowRateLimitModal(true)).then(f => { if (cancelled) f(); else fn = f; });
-    return () => { cancelled = true; fn?.(); };
-  }, []);
 
   const { currentTrack, isPlaying, isDownloading, playMode,
     handlePlayTrack: playerPlayTrack, handleNextTrack, handlePrevTrack,
@@ -189,11 +184,6 @@ function App() {
           <PlayerBar currentTrack={currentTrack} loadNonce={loadNonce} isPlaying={isPlaying} onTogglePlay={handleTogglePlay} onNextTrack={handleNextTrack} onPrevTrack={handlePrevTrack} isDownloading={isDownloading} playMode={playMode} onTogglePlayMode={handleTogglePlayMode} />
         </div>
       </div>
-
-      {showRateLimitModal && (
-        <RateLimitModal onClose={() => setShowRateLimitModal(false)}
-          onGoHome={() => { handleTabChange("Home"); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
-      )}
 
       <div className={`fixed inset-0 z-[10001] pointer-events-none transition-opacity duration-300 ${isFocused ? 'opacity-0' : 'opacity-100 bg-black/10 dark:bg-black/30'}`} />
       <div id="toast-root" />

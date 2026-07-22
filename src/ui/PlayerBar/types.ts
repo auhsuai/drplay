@@ -42,7 +42,7 @@ export interface CallbackRefs {
 
 export const MAX_CONSECUTIVE_AUTO_SKIP = 3;
 
-export const toastTypes: string[] = ['rate_limited', 'drive_quota_exceeded'];
+export const toastTypes: string[] = ['rate_limited', 'download_quota'];
 export const bannerTypes: string[] = ['network_disconnected', 'network_interrupted', 'auth_expired', 'format_error'];
 export const TOAST_DURATION = 10;
 // Delay (s) before a toast auto-dismisses (used by useErrorDisplay).

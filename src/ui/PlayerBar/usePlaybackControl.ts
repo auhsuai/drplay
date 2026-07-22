@@ -10,8 +10,6 @@ import type { TFunction } from 'i18next';
 // Debounce (ms) before clearing the manual next/prev transition lock so rapid
 // double-fires aren't dropped and the lock can't stick if a click handler throws.
 const TRANSITION_RESET_MS = 200;
-// Delay (ms) before auto-retrying after a Drive quota-exceeded event.
-const DRIVE_QUOTA_RETRY_MS = 30_000;
 
 interface UsePlaybackControlParams {
   currentTrack: Track | null;
@@ -172,7 +170,6 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   // Tauri listeners
   useEffect(() => {
     let cancelled = false;
-    let rateLimitRetryTimeout: ReturnType<typeof setTimeout> | null = null;
     const unlistenFns: (() => void)[] = [];
     const registerUnlisten = (unlisten: () => void) => {
       if (cancelled) unlisten();
@@ -205,24 +202,8 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       captureError({ level: 'warn', source: 'playback-control', message: `Tauri event listener registration failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'listener' });
     });
 
-    listen('drive-quota-exceeded', () => {
-      console.warn('[Player] Google Drive API quota exceeded');
-      errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
-      dispatch({ type: 'ERROR', error: { type: 'drive_quota_exceeded', text: t('player.drive_quota_exceeded', 'Google Drive đã vượt quá giới hạn, đang thử lại...') } });
-      if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
-      rateLimitRetryTimeout = setTimeout(async () => {
-        const track = currentTrackRef.current;
-        if (track?.streamUrl) {
-          await performRetry(track);
-        }
-      }, DRIVE_QUOTA_RETRY_MS);
-    }).then(registerUnlisten).catch((err) => {
-      captureError({ level: 'warn', source: 'playback-control', message: `Tauri event listener registration failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'listener' });
-    });
-
     return () => {
       cancelled = true;
-      if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
       for (const fn of unlistenFns) fn();
     };
   }, []);

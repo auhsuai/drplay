@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useErrorDisplay } from './useErrorDisplay';
 
 const driveQuotaError = {
-  type: 'drive_quota_exceeded',
+  type: 'download_quota',
   text: 'Drive quota exceeded',
 };
 

@@ -15,7 +15,7 @@ import { useErrorDisplay } from './useErrorDisplay';
 import { useProgressUI } from './useProgressUI';
 
 function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; className?: string }) {
-  const Icon = type === 'rate_limited' || type === 'drive_quota_exceeded' || type === 'download_quota' ? CloudOff : type === 'file_deleted' || type === 'format_error' || type === 'access_denied' ? FileWarning : WifiOff;
+  const Icon = type === 'rate_limited' || type === 'download_quota' ? CloudOff : type === 'file_deleted' || type === 'format_error' || type === 'access_denied' ? FileWarning : WifiOff;
   return <Icon className={`${className} text-[#4285F4]`} />;
 }
 

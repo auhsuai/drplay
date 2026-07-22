@@ -1,5 +1,10 @@
 import type { DriveItem } from '../App';
 
+// Module-level singleton: options never vary, so there's no reason to
+// allocate a fresh Intl.Collator on every sortDriveItems() call (which
+// happens on every folder-content re-render via App.tsx's useMemo).
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 export function sortDriveItems(
   dbFiles: any[],
   sortOption: string,
@@ -26,7 +31,6 @@ export function sortDriveItems(
     };
   });
 
-  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   return items.sort((a, b) => {
     if (a.isFolder && !b.isFolder) return -1;
     if (!a.isFolder && b.isFolder) return 1;

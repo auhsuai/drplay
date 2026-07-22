@@ -40,7 +40,7 @@ interface MainContentProps {
 }
 
 export const MainContent = React.memo(function MainContent({
-  activeTab, onPlay, items, isLoading, onOpenFolder, onBack,
+  onPlay, items, isLoading, onOpenFolder, onBack,
   hasHistory, folderHistory, currentFolderName, currentFolderId,
   onBreadcrumbClick, token, highlightedFileId, onRefresh, onRemoveItem,
   currentTrack, sortOption = "name_natural", onSortChange,
@@ -133,9 +133,7 @@ export const MainContent = React.memo(function MainContent({
         onBulkDelete={() => setShowBulkDeleteConfirm(true)}
       />
       <div className="px-8 pb-6 pt-4 min-h-[calc(100%-140px)]">
-        {activeTab === "Settings" ? (
-          <div className="text-gray-500">Settings page coming soon...</div>
-        ) : isLoading ? (
+        {isLoading ? (
           <div className="flex flex-col items-center justify-center h-[50vh] text-[#4285F4]">
             <Loader2 className="animate-spin h-10 w-10 mb-4 stroke-[1.5]" />
             <span className="text-base font-medium">{t('loading', 'Loading...')}</span>

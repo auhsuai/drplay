@@ -247,6 +247,13 @@ export const usePlayer = (accessToken: string | null) => {
 
     // Update playback queue based on context
     let targetTrack = { ...track };
+    // Tracks the queue whose ORDER should drive next-track prefetch below.
+    // Defaults to the raw contextQueue (used as-is when isNavigation
+    // short-circuits this whole block); reassigned once the real resolved
+    // queue is known so prefetch always warms the actual next track instead
+    // of the pre-shuffle order (bug fix: this previously stayed pinned to
+    // contextQueue even in shuffle mode, so prefetch warmed the wrong track).
+    let prefetchQueue: Track[] | undefined = contextQueue;
     if (!isNavigation) {
       let newOriginalQueue: Track[] = [];
       if (contextQueue && contextQueue.length > 0) {
@@ -264,6 +271,7 @@ export const usePlayer = (accessToken: string | null) => {
           const shuffled = shuffleQueuePinning(newOriginalQueue, track);
           setPlaybackQueue(shuffled);
           targetTrack = shuffled[0];
+          prefetchQueue = shuffled;
         } else {
           setPlaybackQueue(newOriginalQueue);
           const trackIndex = newOriginalQueue.findIndex(t => t.id === track.id);
@@ -272,6 +280,7 @@ export const usePlayer = (accessToken: string | null) => {
           } else {
             targetTrack = {...track, queueItemId: crypto.randomUUID()};
           }
+          prefetchQueue = newOriginalQueue;
         }
       } else {
         if (!targetTrack.queueItemId) {
@@ -332,7 +341,7 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(true);
       setIsDownloading(false);
 
-      maybePrefetchNextTrack(contextQueue, targetTrack);
+      maybePrefetchNextTrack(prefetchQueue, targetTrack);
       return;
     }
 
@@ -362,7 +371,7 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(true);
       setIsDownloading(false);
 
-      maybePrefetchNextTrack(contextQueue, targetTrack);
+      maybePrefetchNextTrack(prefetchQueue, targetTrack);
     } catch (e) {
       if (isIntentStale(myId)) return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));

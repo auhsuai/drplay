@@ -70,9 +70,9 @@ export function useErrorDisplay(params: UseErrorDisplayParams): ErrorDisplayAPI 
       const onVisibility = () => {
         if (document.visibilityState === 'visible') {
           const stillRelevant = (
-            errorInfo.type === 'drive_quota_exceeded' ||
+            errorInfo.type === 'download_quota' ||
             (errorInfo.type === 'rate_limited' && Date.now() < rateLimitUntilRef.current) ||
-            (errorInfo.type !== 'rate_limited' && errorInfo.type !== 'drive_quota_exceeded' && !navigator.onLine)
+            (errorInfo.type !== 'rate_limited' && errorInfo.type !== 'download_quota' && !navigator.onLine)
           );
           if (stillRelevant) {
             startToastTimer(dismissToast);

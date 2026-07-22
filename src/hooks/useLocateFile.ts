@@ -23,8 +23,9 @@ export function useLocateFile(params: UseLocateFileParams) {
   } = params;
 
   useEffect(() => {
-    const handleLocateFile = async (e: any) => {
-      let { fileId } = e.detail || {};
+    const handleLocateFile = async (e: Event) => {
+      const detail = (e as CustomEvent<{ fileId?: string }>).detail;
+      let { fileId } = detail || {};
       if (!fileId || !accessToken) return;
 
       if (fileId.startsWith('drive_')) fileId = fileId.replace('drive_', '');
