@@ -264,14 +264,16 @@ pub async fn handle_stream(
         let real_end = end.min(total_size.saturating_sub(1));
         let status = if range_str.is_some() { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK };
 
-        return Response::builder()
+        let mut head_builder = Response::builder()
             .status(status)
             .header(header::CONTENT_TYPE, resolved_content_type)
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size))
-            .header(header::CONTENT_LENGTH, (real_end - start + 1).to_string())
-            .body(axum::body::Body::empty())
+            .header(header::CONTENT_LENGTH, (real_end - start + 1).to_string());
+        if status == StatusCode::PARTIAL_CONTENT {
+            head_builder = head_builder.header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, real_end, total_size));
+        }
+        return head_builder.body(axum::body::Body::empty())
             .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build HEAD body").into_response());
     }
 
@@ -650,17 +652,19 @@ pub async fn handle_stream(
     let body = axum::body::Body::from_stream(stream);
 
     // RFC 9110 §14.2: a response to a request with no Range header is a full
-    // representation and must be 200 OK, not 206. Mirrors the HEAD branch
-    // above, which already gets this right.
+    // representation and must be 200 OK, not 206. Content-Range is only valid
+    // for 206 Partial Content — do NOT send it on 200 OK.
     let get_status = if range_str.is_some() { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK };
 
-    Response::builder()
+    let mut resp_builder = Response::builder()
         .status(get_status)
         .header(header::CONTENT_TYPE, resolved_content_type)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size))
-        .header(header::CONTENT_LENGTH, desired_total.to_string())
-        .body(body)
+        .header(header::CONTENT_LENGTH, desired_total.to_string());
+    if get_status == StatusCode::PARTIAL_CONTENT {
+        resp_builder = resp_builder.header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", actual_start, actual_end, total_size));
+    }
+    resp_builder.body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response body").into_response())
 }

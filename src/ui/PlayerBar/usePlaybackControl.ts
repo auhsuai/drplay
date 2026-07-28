@@ -14,6 +14,7 @@ const TRANSITION_RESET_MS = 200;
 interface UsePlaybackControlParams {
   currentTrack: Track | null;
   isPlaying: boolean;
+  lockSystemPauseRef: React.MutableRefObject<() => void>;
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
@@ -43,7 +44,7 @@ export interface PlaybackControlAPI {
 }
 
 export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackControlAPI {
-  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef } = params;
+  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef, lockSystemPauseRef } = params;
 
   const { error: errorInfo, pendingResumeTime } = playerState;
   const currentTrackRef = useRef(currentTrack);
@@ -65,6 +66,14 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   const isAutoTransitioningRef = useRef(false);
   const consecutiveAutoSkipRef = useRef(0);
   const formatRetryCountRef = useRef(0);
+
+  const lockSystemPause = useCallback(() => {
+    isTransitioningRef.current = true;
+    setTimeout(() => { isTransitioningRef.current = false; }, TRANSITION_RESET_MS);
+  }, []);
+
+  // Set synchronously during render so earlier hooks (useAudioEngine) can access it
+  lockSystemPauseRef.current = lockSystemPause;
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;

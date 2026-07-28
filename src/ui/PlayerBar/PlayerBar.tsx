@@ -38,6 +38,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   const onNextTrackRef = useRef(onNextTrack);
   const onPrevTrackRef = useRef(onPrevTrack);
   const rateLimitUntilRef = useRef(0);
+  const lockSystemPauseRef = useRef<() => void>(() => {});
 
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressFillRef = useRef<HTMLDivElement>(null);
@@ -97,6 +98,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     rateLimitUntilRef,
     setDuration,
     setIsBuffering,
+    lockSystemPauseRef,
   });
 
   const { audioRefs: { audioRef } } = audioEngine;
@@ -135,6 +137,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     lastKnownPositionRef: audioEngine.lastKnownPositionRef,
     errorPositionRef: audioEngine.errorPositionRef,
     rateLimitUntilRef,
+    lockSystemPauseRef,
   });
 
   // useKeyboard — needs audio engine + playback control

@@ -76,6 +76,7 @@ sha2 = "0.10.8"
 axum = "0.7.5"
 tokio-stream = "0.1.15"
 bytes = "1.6.0"
+
 uuid = { version = "1.8.0", features = ["v4"] }
 rand = "0.8"
 # Pinned to an explicit commit (not `branch = "main"`) so a future

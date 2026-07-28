@@ -25,11 +25,12 @@ interface UseAudioLoaderParams {
   dispatch: React.Dispatch<PlayerAction>;
   t: TFunction;
   clearRetryTimeout: () => void;
+  lockSystemPauseRef: React.MutableRefObject<() => void>;
 }
 
 export function useAudioLoader(params: UseAudioLoaderParams): AudioLoaderAPI {
   const { audioRef, isPlayingRef, errorPositionRef, retryCountRef,
-    onNextTrackRefForEnded, dispatch, t, clearRetryTimeout } = params;
+    onNextTrackRefForEnded, dispatch, t, clearRetryTimeout, lockSystemPauseRef } = params;
 
   const resumeHandlerRef = React.useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
   const resumeSeekRef = React.useRef<{ audio: HTMLAudioElement; handler: () => void } | null>(null);
@@ -74,6 +75,7 @@ export function useAudioLoader(params: UseAudioLoaderParams): AudioLoaderAPI {
     cleanupResumeHandlers();
     isProgrammaticActionRef.current = true;
     armSuppressEnded();
+    lockSystemPauseRef.current();
 
     try {
       safePause(audio);

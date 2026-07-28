@@ -46,12 +46,13 @@ interface UseAudioEngineParams {
   rateLimitUntilRef: React.MutableRefObject<number>;
   setDuration: React.Dispatch<React.SetStateAction<number>>;
   setIsBuffering: React.Dispatch<React.SetStateAction<boolean>>;
+  lockSystemPauseRef: React.MutableRefObject<() => void>;
 }
 
 export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t,
     isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume,
-    rateLimitUntilRef, setDuration, setIsBuffering } = params;
+    rateLimitUntilRef, setDuration, setIsBuffering, lockSystemPauseRef } = params;
 
   // --- Core refs ---
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -81,6 +82,7 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
   const { loadNormalAudio, performRetry, cleanupResumeHandlers, suppressEndedRef } = useAudioLoader({
     audioRef, isPlayingRef, errorPositionRef, retryCountRef, currentTrackRef,
     onNextTrackRefForEnded, dispatch, t, clearRetryTimeout,
+    lockSystemPauseRef,
   });
 
   // --- Error recovery ---
