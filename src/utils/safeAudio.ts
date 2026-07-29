@@ -1,3 +1,5 @@
+/** @deprecated Native Rust audio player replaces HTML5 Audio. This module is kept
+ *  for reference and potential non-player audio use. Do not use for playback. */
 let currentPlayPromise: Promise<void> | null = null;
 let currentPlayAudio: HTMLAudioElement | null = null;
 

@@ -1,208 +1,85 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Track } from '../../App';
-import { safePlay } from '../../utils/safeAudio';
-import { set as idbSet } from '../../db/kv';
-import { PlayerAction, AudioRefs } from './types';
-import { classifyAudioError } from './utils/audioUtils';
-import { ENDED_THRESHOLD_SEC } from './utils/audioConstants';
-import { useBufferingState } from './hooks/useBufferingState';
-import { useAudioLoader } from './hooks/useAudioLoader';
-import { useAudioErrorRecovery } from './hooks/useAudioErrorRecovery';
-import type { TFunction } from 'i18next';
 
-const AUDIO_MODULE = 'useAudioEngine';
-const AUDIO_LOG = '[Player]';
+export interface PlaybackState {
+  isPlaying: boolean;
+  position: number;
+  duration: number;
+  fileId: string | null;
+}
 
 export interface AudioEngineAPI {
-  audioRefs: AudioRefs;
-  getActiveAudio: () => HTMLAudioElement | null;
-  loadNormalAudio: (track: Track, position: number | null, cancellationCheck?: () => boolean) => Promise<HTMLAudioElement>;
-  performRetry: (track: Track) => Promise<void>;
-  handleEnded: (event?: React.SyntheticEvent<HTMLAudioElement>) => void;
-  handleAudioError: () => Promise<void>;
-  handleTimeUpdate: () => void;
-  handleLoadedMetadata: () => void;
-  handleCanPlay: () => void;
-  handleWaiting: () => void;
-  handlePlaying: () => void;
-  lastKnownPositionRef: React.MutableRefObject<number>;
-  errorPositionRef: React.MutableRefObject<number | null>;
-  restoredAudioTrackIdRef: React.MutableRefObject<string | null>;
-  retryCountRef: React.MutableRefObject<number>;
-  retryTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
+  play: (track: Track, position?: number) => Promise<void>;
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
+  seek: (position: number) => Promise<void>;
+  setVolume: (volume: number) => Promise<void>;
+  stop: () => Promise<void>;
+  playbackState: PlaybackState;
 }
 
-interface UseAudioEngineParams {
-  currentTrack: Track | null;
-  isPlaying: boolean;
-  playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
-  loadNonce: number | undefined;
-  dispatch: React.Dispatch<PlayerAction>;
-  t: TFunction;
-  isPlayingRef: React.MutableRefObject<boolean>;
-  errorInfoRef: React.MutableRefObject<{ type: string; text: string } | null>;
-  onNextTrackRefForEnded: React.MutableRefObject<(isAutoSkip?: boolean) => void>;
-  manualResume: boolean;
-  rateLimitUntilRef: React.MutableRefObject<number>;
-  setDuration: React.Dispatch<React.SetStateAction<number>>;
-  setIsBuffering: React.Dispatch<React.SetStateAction<boolean>>;
-  lockSystemPauseRef: React.MutableRefObject<() => void>;
-}
+export function useAudioEngine(): AudioEngineAPI {
+  const [playbackState, setPlaybackState] = useState<PlaybackState>({
+    isPlaying: false,
+    position: 0,
+    duration: 0,
+    fileId: null,
+  });
 
-export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
-  const { currentTrack, isPlaying, playMode, loadNonce, dispatch, t,
-    isPlayingRef, errorInfoRef, onNextTrackRefForEnded, manualResume,
-    rateLimitUntilRef, setDuration, setIsBuffering, lockSystemPauseRef } = params;
+  useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+    let cancelled = false;
 
-  // --- Core refs ---
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const retryCountRef = useRef(0);
-  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastKnownPositionRef = useRef(0);
-  const errorPositionRef = useRef<number | null>(null);
-  const lastSaveTimeRef = useRef(0);
-  const restoredAudioTrackIdRef = useRef<string | null>(null);
-  const currentTrackRef = useRef(currentTrack);
-  currentTrackRef.current = currentTrack;
+    listen<{ position: number; duration: number; is_playing: boolean; file_id?: string }>(
+      'playback_time_update',
+      (event) => {
+        if (cancelled) return;
+        setPlaybackState({
+          position: event.payload.position,
+          duration: event.payload.duration,
+          isPlaying: event.payload.is_playing,
+          fileId: event.payload.file_id ?? null,
+        });
+      }
+    ).then(fn => {
+      if (cancelled) { fn(); return; }
+      unlistenFn = fn;
+    });
 
-  const audioRefs: AudioRefs = { audioRef };
-
-  const getActiveAudio = useCallback(() => audioRef.current, []);
-
-  // --- Buffering ---
-  const { isBufferingRef, applyBuffering, clearBufferingTimers, bufferingDelayRef, stallWatchdogRef } =
-    useBufferingState(setIsBuffering);
-
-  // --- Retry timeout helper ---
-  const clearRetryTimeout = useCallback(() => {
-    if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
   }, []);
 
-  // --- Audio loading ---
-  const { loadNormalAudio, performRetry, cleanupResumeHandlers, suppressEndedRef } = useAudioLoader({
-    audioRef, isPlayingRef, errorPositionRef, retryCountRef, currentTrackRef,
-    onNextTrackRefForEnded, dispatch, t, clearRetryTimeout,
-    lockSystemPauseRef,
-  });
+  const play = useCallback(async (track: Track, position: number = 0) => {
+    const ext = track.originalName?.split('.').pop()?.toLowerCase();
+    const dur = track.restoreDuration ?? null;
+    await invoke('native_play', { fileId: track.id, position, ext: ext ?? null, duration: dur });
+  }, []);
 
-  // --- Error recovery ---
-  const { handleAudioError } = useAudioErrorRecovery({
-    currentTrack, currentTrackRef, errorInfoRef, onNextTrackRefForEnded,
-    dispatch, t, clearRetryTimeout, retryTimeoutRef, rateLimitUntilRef,
-    lastKnownPositionRef, errorPositionRef, retryCountRef,
-    getActiveAudio, performRetry,
-  });
+  const pause = useCallback(async () => {
+    await invoke('native_pause');
+  }, []);
 
-  // --- Event handlers ---
-  const handleEnded = (event?: React.SyntheticEvent<HTMLAudioElement>) => {
-    if (manualResume) return;
-    if (suppressEndedRef.current) {
-      console.warn(`${AUDIO_LOG} suppressed stray ended event during reload`);
-      return;
-    }
-    const active = getActiveAudio();
-    const target = event?.currentTarget ?? active;
-    if (!active || target !== active) {
-      console.warn(`${AUDIO_LOG} ignored ended on non-active audio element`);
-      return;
-    }
-    const duration = active.duration;
-    const currentTime = active.currentTime;
-    const isRealEnd = active.ended && isFinite(duration) && duration > 0 &&
-      isFinite(currentTime) && currentTime >= duration - ENDED_THRESHOLD_SEC;
-    if (!isRealEnd) {
-      console.warn(`${AUDIO_LOG} ignored spurious ended (not at track end)`, { currentTime, duration, threshold: ENDED_THRESHOLD_SEC });
-      return;
-    }
-    if (playMode === 'repeat-one') {
-      active.currentTime = 0;
-      safePlay(active).catch(e => console.error(`${AUDIO_LOG} replay-failed`, classifyAudioError(e)));
-    } else {
-      onNextTrackRefForEnded.current();
-    }
-  };
+  const resume = useCallback(async () => {
+    await invoke('native_resume');
+  }, []);
 
-  const handleWaiting = () => {
-    if (!isPlayingRef.current || errorInfoRef.current) return;
-    if (bufferingDelayRef.current || isBufferingRef.current) return;
-    bufferingDelayRef.current = setTimeout(() => {
-      bufferingDelayRef.current = null;
-      if (isPlayingRef.current && !errorInfoRef.current) applyBuffering(true);
-    }, 500);
-  };
+  const seek = useCallback(async (position: number) => {
+    await invoke('native_seek', { position });
+  }, []);
 
-  const handlePlaying = () => { clearBufferingTimers(); applyBuffering(false); };
+  const setVolume = useCallback(async (volume: number) => {
+    await invoke('native_set_volume', { volume });
+  }, []);
 
-  const handleTimeUpdate = () => {
-    const audio = getActiveAudio();
-    if (!audio) return;
-    const time = audio.currentTime;
-    if (time > 0 && isFinite(time)) lastKnownPositionRef.current = time;
-    if (bufferingDelayRef.current) { clearTimeout(bufferingDelayRef.current); bufferingDelayRef.current = null; }
-    if (isBufferingRef.current) applyBuffering(false);
-    if (stallWatchdogRef.current) clearTimeout(stallWatchdogRef.current);
-    if (isPlayingRef.current) {
-      stallWatchdogRef.current = setTimeout(() => {
-        const a = getActiveAudio();
-        if (a && !a.paused && !a.ended && isPlayingRef.current && !errorInfoRef.current) applyBuffering(true);
-      }, 2000);
-    }
-    const now = Date.now();
-    if (now - lastSaveTimeRef.current > 2000 && currentTrack) {
-      idbSet('drplay_last_session', { track: currentTrack, time, duration: audio.duration || 0 })
-        .catch(e => console.warn(`[${AUDIO_MODULE}] session-save-failed`, classifyAudioError(e)));
-      lastSaveTimeRef.current = now;
-    }
-  };
+  const stop = useCallback(async () => {
+    await invoke('native_stop');
+    setPlaybackState({ isPlaying: false, position: 0, duration: 0, fileId: null });
+  }, []);
 
-  const handleLoadedMetadata = () => {
-    const audio = getActiveAudio();
-    if (audio) setDuration(audio.duration);
-  };
-
-  const handleCanPlay = () => {
-    const audio = getActiveAudio();
-    retryCountRef.current = 0;
-    clearRetryTimeout();
-    clearBufferingTimers();
-    applyBuffering(false, { immediate: true });
-    if (errorInfoRef.current) dispatch({ type: 'CLEAR_ERROR' });
-    if (!audio) return;
-    if (currentTrack && currentTrack.restoreTime !== undefined && restoredAudioTrackIdRef.current !== currentTrack.id) {
-      const t2 = currentTrack.restoreTime;
-      if (isFinite(t2)) audio.currentTime = t2;
-      restoredAudioTrackIdRef.current = currentTrack.id;
-    }
-  };
-
-  // --- Effects ---
-  useEffect(() => { if (audioRef.current) audioRef.current.volume = 0.5; }, []);
-
-  useEffect(() => {
-    if (!currentTrack?.streamUrl) return;
-    let cancelled = false;
-    const position = currentTrack.restoreTime ?? null;
-    loadNormalAudio(currentTrack, position, () => cancelled).then(() => {
-      if (!cancelled) dispatch({ type: 'PLAY_SUCCESS' });
-    }).catch(err => {
-      if (err.message === 'Cancelled') return;
-      console.warn('[Player] loadNormalAudio error', err);
-      if (err.name === 'NotAllowedError') dispatch({ type: 'BLOCKED', time: getActiveAudio()?.currentTime ?? 0 });
-    });
-    return () => { cancelled = true; };
-  }, [loadNonce]);
-
-  useEffect(() => cleanupResumeHandlers, []);
-
-  useEffect(() => {
-    if (!isPlaying) { clearBufferingTimers(); applyBuffering(false, { immediate: true }); }
-  }, [isPlaying, currentTrack?.id]);
-
-  return {
-    audioRefs, getActiveAudio, loadNormalAudio, performRetry,
-    handleEnded, handleAudioError, handleTimeUpdate, handleLoadedMetadata,
-    handleCanPlay, handleWaiting, handlePlaying,
-    lastKnownPositionRef, errorPositionRef, restoredAudioTrackIdRef,
-    retryCountRef, retryTimeoutRef,
-  };
+  return { play, pause, resume, seek, setVolume, stop, playbackState };
 }

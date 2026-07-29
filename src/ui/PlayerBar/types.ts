@@ -27,10 +27,6 @@ export interface PlayerBarProps {
   onTogglePlayMode: () => void;
 }
 
-export interface AudioRefs {
-  audioRef: React.RefObject<HTMLAudioElement | null>;
-}
-
 export interface CallbackRefs {
   onTogglePlayRef: React.MutableRefObject<() => void>;
   onNextTrackRef: React.MutableRefObject<() => void>;

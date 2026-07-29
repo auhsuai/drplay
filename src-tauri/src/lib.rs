@@ -8,6 +8,7 @@ use tauri::Manager;
 
 pub mod commands;
 pub mod error;
+pub mod player;
 pub mod protocol;
 pub mod slice_cache;
 mod proxy;
@@ -61,6 +62,10 @@ pub use commands::misc::{
 };
 pub use commands::token_store::{store_token, get_token, clear_token};
 pub use commands::download::download_file_to_disk;
+pub use commands::player::{
+    native_play, native_pause, native_resume, native_seek,
+    native_set_volume, native_stop, native_get_playback_state,
+};
 
 pub(crate) const DB_POOL_MAX_SIZE: u32 = 10;
 
@@ -71,7 +76,7 @@ pub fn diag_log(module: &str, dur: Duration) {
     // debug, not info: fires on every get_stream_url/get_local_metadata_batch
     // IPC call (i.e. every track load), too frequent for the default
     // production log level.
-    log::debug!("[PERF] {} took {:?} (call #{})", module, dur, c);
+    log::debug!(target: "perf", "[PERF] {} took {:?} (call #{})", module, dur, c);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -105,6 +110,14 @@ pub fn run() {
                 // small for end users while still capturing every warn!/
                 // error! from the proxy/auth paths).
                 .level(if cfg!(debug_assertions) { log::LevelFilter::Debug } else { log::LevelFilter::Info })
+                .level_for("h2", log::LevelFilter::Warn)
+                .level_for("hyper", log::LevelFilter::Warn)
+                .level_for("hyper_util", log::LevelFilter::Warn)
+                .level_for("reqwest", log::LevelFilter::Warn)
+                .level_for("stream_download", log::LevelFilter::Warn)
+                .level_for("tracing", log::LevelFilter::Warn)
+                .level_for("keyring", log::LevelFilter::Warn)
+                .level_for("perf", log::LevelFilter::Info)
                 .build(),
         )
         .plugin(tauri_plugin_http::init())
@@ -115,6 +128,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
+
+            // Initialize native audio player
+            player::init_player();
+            player::start_progress_ticker(app.handle().clone());
 
             // Best-effort SQLite pool for local tag lookup
             {
@@ -202,6 +219,13 @@ pub fn run() {
             get_token,
             clear_token,
             download_file_to_disk,
+            native_play,
+            native_pause,
+            native_resume,
+            native_seek,
+            native_set_volume,
+            native_stop,
+            native_get_playback_state,
         ])
         .build(tauri::generate_context!());
 

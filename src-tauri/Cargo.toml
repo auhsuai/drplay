@@ -79,6 +79,12 @@ bytes = "1.6.0"
 
 uuid = { version = "1.8.0", features = ["v4"] }
 rand = "0.8"
+once_cell = "1"
+futures = "0.3"
+rodio = { version = "0.21", features = ["symphonia-all"] }
+symphonia = { version = "0.5", features = ["mp3", "flac", "vorbis", "wav", "aac", "isomp4", "ogg"] }
+symphonia-bundle-mp3 = "0.5"
+symphonia-format-isomp4 = "0.5"
 # Pinned to an explicit commit (not `branch = "main"`) so a future
 # `cargo update` can't silently move to a different, unreviewed commit --
 # `branch = "main"` re-resolves to whatever main's HEAD is at update time,

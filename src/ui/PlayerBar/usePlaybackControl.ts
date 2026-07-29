@@ -1,20 +1,17 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { Track } from '../../App';
 import { listen } from '@tauri-apps/api/event';
-import { safePlay, safePause } from '../../utils/safeAudio';
 import { getValidToken } from '../../utils/apiClient';
 import { captureError } from '../../utils/errorLog';
 import { PlayerAction, MAX_CONSECUTIVE_AUTO_SKIP, CallbackRefs } from './types';
+import { AudioEngineAPI } from './useAudioEngine';
 import type { TFunction } from 'i18next';
 
-// Debounce (ms) before clearing the manual next/prev transition lock so rapid
-// double-fires aren't dropped and the lock can't stick if a click handler throws.
 const TRANSITION_RESET_MS = 200;
 
 interface UsePlaybackControlParams {
   currentTrack: Track | null;
   isPlaying: boolean;
-  lockSystemPauseRef: React.MutableRefObject<() => void>;
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
@@ -24,12 +21,7 @@ interface UsePlaybackControlParams {
   dispatch: React.Dispatch<PlayerAction>;
   t: TFunction;
   playerState: { error: { type: string; text: string } | null; manualResume: boolean; pendingResumeTime: number | null };
-  getActiveAudio: () => HTMLAudioElement | null;
-  loadNormalAudio: (track: Track, position: number | null, cancellationCheck?: () => boolean) => Promise<HTMLAudioElement>;
-  performRetry: (track: Track) => Promise<void>;
-  audioRef: React.RefObject<HTMLAudioElement | null>;
-  lastKnownPositionRef: React.MutableRefObject<number>;
-  errorPositionRef: React.MutableRefObject<number | null>;
+  engine: AudioEngineAPI;
   rateLimitUntilRef: React.MutableRefObject<number>;
 }
 
@@ -44,18 +36,13 @@ export interface PlaybackControlAPI {
 }
 
 export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackControlAPI {
-  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, dispatch, t, playerState, getActiveAudio, loadNormalAudio, performRetry, audioRef, lastKnownPositionRef, errorPositionRef, rateLimitUntilRef, lockSystemPauseRef } = params;
+  const { currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, onNextTrackRef, onPrevTrackRef, onTogglePlayMode, dispatch, t, playerState, engine, rateLimitUntilRef } = params;
 
   const { error: errorInfo, pendingResumeTime } = playerState;
   const currentTrackRef = useRef(currentTrack);
   currentTrackRef.current = currentTrack;
+  const currentTrackIdRef = useRef(currentTrack?.id);
 
-  // onNextTrackRef/onPrevTrackRef are created ONCE in PlayerBar.tsx (before
-  // useAudioEngine is called, due to a circular hook ordering dependency) and
-  // passed in here. They are the single source of truth for next/prev — synced
-  // in the effect below and reused by mediaSession + callbackRefs so every
-  // consumer (useAudioEngine auto-advance, useKeyboard, media keys) reads the
-  // same ref object whose .current is always the current handleNextClick/handlePrevClick.
   const onTogglePlayRef = useRef(onTogglePlay);
   const onTogglePlayModeRef = useRef(onTogglePlayMode);
   const isPlayingRef = useRef(isPlaying);
@@ -66,14 +53,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   const isAutoTransitioningRef = useRef(false);
   const consecutiveAutoSkipRef = useRef(0);
   const formatRetryCountRef = useRef(0);
-
-  const lockSystemPause = useCallback(() => {
-    isTransitioningRef.current = true;
-    setTimeout(() => { isTransitioningRef.current = false; }, TRANSITION_RESET_MS);
-  }, []);
-
-  // Set synchronously during render so earlier hooks (useAudioEngine) can access it
-  lockSystemPauseRef.current = lockSystemPause;
+  const lastKnownPositionRef = useRef(0);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -82,6 +62,14 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   useEffect(() => {
     errorInfoRef.current = errorInfo;
   }, [errorInfo]);
+
+  useEffect(() => {
+    const trackId = currentTrackRef.current?.id;
+    if (trackId && trackId !== currentTrackIdRef.current) {
+      currentTrackIdRef.current = trackId;
+      dispatch({ type: 'PLAY_SUCCESS' });
+    }
+  }, [currentTrack?.id]);
 
   const handleNextClick = (isAutoSkip = false) => {
     if (isAutoSkip) {
@@ -128,7 +116,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   };
 
   const handleRetry = useCallback(async () => {
-    if (!currentTrack?.streamUrl) return;
+    if (!currentTrack?.id) return;
     if (errorInfoRef.current?.type === 'format_error') {
       formatRetryCountRef.current += 1;
       if (formatRetryCountRef.current >= 2) {
@@ -137,38 +125,31 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
         onNextTrackRef.current();
         return;
       }
-      const pos = errorPositionRef.current;
-      errorPositionRef.current = null;
       dispatch({ type: 'CLEAR_ERROR' });
       try {
-        await loadNormalAudio(currentTrack, pos);
+        await engine.play(currentTrack, 0);
         formatRetryCountRef.current = 0;
         return;
       } catch {
-        // loadNormalAudio failed — handleAudioError will dispatch format_error again
+        // engine.play failed — dispatch format_error again
       }
     }
-    await performRetry(currentTrack);
-  }, [currentTrack, performRetry, loadNormalAudio, dispatch, t]);
+    await engine.play(currentTrack, 0);
+  }, [currentTrack, engine, dispatch, t]);
 
   async function handleManualResume() {
-    if (!currentTrack?.streamUrl || pendingResumeTime === null) return;
+    if (!currentTrack?.id || pendingResumeTime === null) return;
     const resumeTime = pendingResumeTime;
     if (!isFinite(resumeTime) || resumeTime < 0) {
       dispatch({ type: 'BLOCKED', time: null });
       return;
     }
     try {
-      await loadNormalAudio(currentTrack, resumeTime);
+      await engine.play(currentTrack, resumeTime);
       dispatch({ type: 'RESUMED' });
-    } catch (err: unknown) {
-      const errName = (typeof err === 'object' && err !== null && 'name' in err) ? (err as { name: string }).name : undefined;
-      captureError({ level: 'error', source: 'playback-control', message: `Manual resume failed (${errName ?? 'unknown'})`, kind: 'resume' });
-      if (errName === 'NotAllowedError') {
-        dispatch({ type: 'BLOCKED', time: resumeTime });
-      } else {
-        dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
-      }
+    } catch {
+      captureError({ level: 'error', source: 'playback-control', message: 'Manual resume failed', kind: 'resume' });
+      dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });
     }
   }
 
@@ -186,20 +167,11 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
     };
 
     listen('token-expired', async () => {
-      console.warn('[Player] Token expired mid-stream, auto refreshing...');
       try {
         await getValidToken(true);
-        // getValidToken -> update_stream_token wakes the Rust proxy waiter, which
-        // retries the in-flight request with the fresh token. If that succeeds the
-        // <audio> element never errors, so a reload here would only cause a needless
-        // stutter. Only reload when the element has actually errored (proxy retry
-        // timed out / still failing).
         const track = currentTrackRef.current;
-        const audioEl = getActiveAudio();
-        if (track?.streamUrl && audioEl?.error) {
-          const pos = audioEl.currentTime;
-          const safePos = (pos && isFinite(pos) && pos > 0) ? pos : null;
-          await loadNormalAudio(track, safePos);
+        if (track?.id) {
+          await engine.play(track, lastKnownPositionRef.current);
         }
       } catch (err) {
         captureError({ level: 'error', source: 'playback-control', message: `Token refresh on 'token-expired' failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'auth' });
@@ -215,7 +187,7 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       cancelled = true;
       for (const fn of unlistenFns) fn();
     };
-  }, []);
+  }, [engine, dispatch, t]);
 
   // Online/Offline
   useEffect(() => {
@@ -224,29 +196,29 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       if (errType !== 'network_disconnected' && errType !== 'network_interrupted') return;
       if (!isPlayingRef.current) return;
       const track = currentTrackRef.current;
-      if (!track?.streamUrl) return;
+      if (!track?.id) return;
       try {
-        await performRetry(track);
+        await engine.play(track, Math.max(0, lastKnownPositionRef.current - 0.5));
       } catch (err) {
-        captureError({ level: 'error', source: 'playback-control', message: `performRetry on 'online' failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'retry' });
+        captureError({ level: 'error', source: 'playback-control', message: `retry on 'online' failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'retry' });
       }
     };
 
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
-  }, []);
+  }, [engine]);
 
   useEffect(() => {
     const handleOffline = () => {
       if (isPlayingRef.current && currentTrackRef.current) {
-        errorPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
+        lastKnownPositionRef.current = Math.max(0, lastKnownPositionRef.current - 0.5);
       }
     };
     window.addEventListener('offline', handleOffline);
     return () => window.removeEventListener('offline', handleOffline);
   }, []);
 
-  // isPlaying bridge effect — play/pause audio
+  // isPlaying bridge effect — play/pause via native commands
   useEffect(() => {
     if (rateLimitUntilRef.current && Date.now() < rateLimitUntilRef.current) {
       if (!errorInfoRef.current || errorInfoRef.current.type !== 'rate_limited') {
@@ -256,36 +228,20 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
     }
     if (isPlaying) {
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-      const active = getActiveAudio();
-      if (active && !active.error) {
-        safePlay(active).catch(e => {
-          if (e.name === 'NotAllowedError') {
-            dispatch({ type: 'BLOCKED', time: active.currentTime || null });
-          } else if (e.name !== 'AbortError') {
-            console.error('[Player] safePlay failed', e);
-          }
-        });
-      }
+      engine.resume().catch(() => {});
     } else {
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-      const active = getActiveAudio();
-      if (active) safePause(active);
+      engine.pause().catch(() => {});
     }
   }, [isPlaying]);
 
   // Media Session API
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
-      // This app streams straight from Drive with no cover-art pipeline, so
-      // MediaSession artwork always falls back to the app icon (Windows
-      // taskbar / lock-screen media controls always show something instead
-      // of a blank placeholder).
       const artwork: MediaImage[] = [{ src: '/sample.png', sizes: '512x512', type: 'image/png' }];
 
       navigator.mediaSession.metadata = new MediaMetadata({
         title: currentTrack.title || currentTrack.originalName || 'Unknown Title',
-        // No tag database, so there is no real artist — show the app name in
-        // the OS media widget instead of leaving it blank.
         artist: 'DrPlay',
         artwork,
       });
@@ -305,94 +261,6 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       }
     };
   }, [currentTrack]);
-
-  // player-stop
-  useEffect(() => {
-    const handlePlayerStop = () => {
-      const el = audioRef.current;
-      if (el) {
-        safePause(el);
-        el.removeAttribute('src');
-        el.load();
-      }
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'paused';
-        navigator.mediaSession.metadata = null;
-      }
-    };
-    window.addEventListener('player-stop', handlePlayerStop);
-    return () => window.removeEventListener('player-stop', handlePlayerStop);
-  }, []);
-
-  // Bluetooth / Device disconnect auto-pause
-  useEffect(() => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-
-    let lastDeviceCount = 0;
-    let cancelled = false;
-    const checkDevices = async (): Promise<number> => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        return devices.filter(d => d.kind === 'audiooutput').length;
-      } catch {
-        return -1; // permission denied or error
-      }
-    };
-
-    checkDevices()
-      .then(count => { if (!cancelled) lastDeviceCount = count; })
-      .catch((err) => {
-        captureError({ level: 'warn', source: 'playback-control', message: `checkDevices failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'device' });
-      });
-
-    const handleDeviceChange = async () => {
-      const newCount = await checkDevices();
-      if (newCount === -1 || lastDeviceCount === -1) {
-        lastDeviceCount = newCount;
-        return;
-      }
-      if (newCount < lastDeviceCount) {
-        if (isPlayingRef.current) {
-          onTogglePlayRef.current();
-        }
-      }
-      lastDeviceCount = newCount;
-    };
-
-    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
-    return () => {
-      cancelled = true;
-      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
-    };
-  }, []);
-
-  // Audio focus sync (OS-level pause/play)
-  useEffect(() => {
-    const el = audioRef.current;
-    if (!el) return;
-
-    const handleSystemPause = () => {
-      if (isTransitioningRef.current) return;
-      if (isPlayingRef.current) {
-        onTogglePlayRef.current();
-      }
-    };
-
-    const handleSystemPlay = () => {
-      if (isTransitioningRef.current) return;
-      if (!isPlayingRef.current) {
-        onTogglePlayRef.current();
-      }
-    };
-
-    el.addEventListener('pause', handleSystemPause);
-    el.addEventListener('play', handleSystemPlay);
-
-    return () => {
-      el.removeEventListener('pause', handleSystemPause);
-      el.removeEventListener('play', handleSystemPlay);
-    };
-  }, []);
 
   // Ref syncing
   useEffect(() => {

@@ -19,26 +19,17 @@ function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; cla
   return <Icon className={`${className} text-[#4285F4]`} />;
 }
 
-function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode }: PlayerBarProps) {
+function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, playMode, onTogglePlayMode }: PlayerBarProps) {
   const { t } = useTranslation();
 
   // 1. Player state
   const [playerState, dispatch] = useReducer(playerReducer, initialPlayerState);
   const { error: errorInfo, manualResume } = playerState;
-  // manualResume: the browser blocked autoplay (NotAllowedError, e.g. after
-  // restoring a session or returning from background) and is waiting for a
-  // direct user gesture before it will play again. `isPlaying` (from the
-  // parent usePlayer hook) is NOT reset when this happens, so without this
-  // check the main button would show a misleading "Pause" icon while the
-  // audio element is actually silent/blocked.
 
   // 2. Shared refs — created once, passed to hooks
-  const isPlayingRef = useRef(isPlaying);
-  const errorInfoRef = useRef(errorInfo);
   const onNextTrackRef = useRef(onNextTrack);
   const onPrevTrackRef = useRef(onPrevTrack);
   const rateLimitUntilRef = useRef(0);
-  const lockSystemPauseRef = useRef<() => void>(() => {});
 
   const progressBarRef = useRef<HTMLDivElement>(null);
   const progressFillRef = useRef<HTMLDivElement>(null);
@@ -46,12 +37,8 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   const currentTimeTextRef = useRef<HTMLSpanElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
-  useEffect(() => { errorInfoRef.current = errorInfo; }, [errorInfo]);
-
   // 3. Shared state
   const [duration, setDuration] = useState(0);
-  const [isBuffering, setIsBuffering] = useState(false);
 
   // 4. Volume state
   const [volume, setVolume] = useState(1);
@@ -65,8 +52,27 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     volumeTimeoutRef.current = setTimeout(() => setIsVolumeActive(false), 300);
   }, []);
 
-  // 4. Hooks — ordered by dependency
-  // useTrackMetadata uses DOM refs for progress/track restore
+  // 5. Audio engine — native Rust backend
+  const audioEngine = useAudioEngine();
+
+  // Sync duration from playbackState
+  useEffect(() => {
+    if (audioEngine.playbackState.duration > 0) {
+      setDuration(audioEngine.playbackState.duration);
+    }
+  }, [audioEngine.playbackState.duration]);
+
+  // Play track via native engine when currentTrack changes
+  const lastPlayedTrackIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (currentTrack && isPlaying && currentTrack.id !== lastPlayedTrackIdRef.current) {
+      lastPlayedTrackIdRef.current = currentTrack.id;
+      const position = currentTrack.restoreTime ?? 0;
+      audioEngine.play(currentTrack, position).catch(e => console.error('[play]', e));
+    }
+  }, [currentTrack?.id, isPlaying]);
+
+  // 6. Track metadata
   const trackMetadata = useTrackMetadata({
     currentTrack,
     dispatch,
@@ -76,48 +82,26 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     setDuration,
   });
 
-  // useErrorDisplay — needs rateLimitUntilRef (audioEngine sets it later)
+  // 7. Error display
   const errorDisplay = useErrorDisplay({
     errorInfo,
     dispatch,
     rateLimitUntilRef,
   });
 
-  // useAudioEngine — core audio engine
-  const audioEngine = useAudioEngine({
-    currentTrack,
-    isPlaying,
-    playMode,
-    loadNonce,
-    dispatch,
-    t,
-    isPlayingRef,
-    errorInfoRef,
-    onNextTrackRefForEnded: onNextTrackRef,
-    manualResume,
-    rateLimitUntilRef,
-    setDuration,
-    setIsBuffering,
-    lockSystemPauseRef,
-  });
-
-  const { audioRefs: { audioRef } } = audioEngine;
-
-  // useProgressUI — needs getActiveAudio, audioRef from audioEngine
+  // 8. Progress UI — uses engine + playbackState
   const progressUI = useProgressUI({
-    getActiveAudio: audioEngine.getActiveAudio,
-    currentTrack,
-    audioRef,
+    playbackState: audioEngine.playbackState,
+    engine: audioEngine,
     progressBarRef,
     progressFillRef,
     currentTimeTextRef,
     volumeBarRef,
     setVolume,
     setIsMuted,
-    duration,
   });
 
-  // usePlaybackControl — needs audio engine API
+  // 9. Playback control — uses engine for native commands
   const playbackControl = usePlaybackControl({
     currentTrack,
     isPlaying,
@@ -130,19 +114,13 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     dispatch,
     t,
     playerState,
-    getActiveAudio: audioEngine.getActiveAudio,
-    loadNormalAudio: audioEngine.loadNormalAudio,
-    performRetry: audioEngine.performRetry,
-    audioRef,
-    lastKnownPositionRef: audioEngine.lastKnownPositionRef,
-    errorPositionRef: audioEngine.errorPositionRef,
+    engine: audioEngine,
     rateLimitUntilRef,
-    lockSystemPauseRef,
   });
 
-  // useKeyboard — needs audio engine + playback control
+  // 10. Keyboard shortcuts — uses engine for seek
   useKeyboard({
-    getActiveAudio: audioEngine.getActiveAudio,
+    engine: audioEngine,
     onTogglePlayRef: playbackControl.callbackRefs.onTogglePlayRef,
     onNextTrackRef,
     onPrevTrackRef,
@@ -152,12 +130,11 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     setIsVolumeActive: triggerVolumeActive,
   });
 
-  // 5. Volume sync effect
+  // 11. Volume sync — send to native backend
   useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume;
-  }, [volume, isMuted, currentTrack]);
+    audioEngine.setVolume(isMuted ? 0 : volume);
+  }, [volume, isMuted]);
 
-  // 6. Volume timeout cleanup
   useEffect(() => {
     return () => {
       if (volumeTimeoutRef.current) clearTimeout(volumeTimeoutRef.current);
@@ -237,7 +214,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
             disabled={!currentTrack || isDownloading}
           >
-            {isDownloading || (isBuffering && isPlaying && !errorInfo && !manualResume) ? (
+            {isDownloading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
             ) : manualResume ? (
               <Play className="w-5 h-5 ml-0.5" />
@@ -315,24 +292,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         </div>
       </div>
 
-      {/* Hidden Audio Element */}
-      <audio
-        id="drplay-audio"
-        ref={audioRef}
-        preload="auto"
-        onTimeUpdate={audioEngine.handleTimeUpdate}
-        onProgress={audioEngine.handleTimeUpdate}
-        onLoadedMetadata={audioEngine.handleLoadedMetadata}
-        onCanPlay={audioEngine.handleCanPlay}
-        onWaiting={audioEngine.handleWaiting}
-        onPlaying={audioEngine.handlePlaying}
-        onError={audioEngine.handleAudioError}
-        onEnded={audioEngine.handleEnded}
-      />
-
-      {/* Manual-resume banner: browser blocked autoplay (NotAllowedError) and
-          is waiting for a direct user gesture. Guarded on !errorInfo since
-          the two states are not expected to be shown at once. */}
+      {/* Manual-resume banner */}
       {manualResume && !errorInfo && createPortal(
         <div
           className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 cursor-pointer select-none"
