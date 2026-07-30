@@ -149,9 +149,12 @@ export class AudioController {
 
     try {
       await newAudio.play();
-    } catch (e) {
+    } catch (e: any) {
       console.warn("Autoplay prevented or stream error", e);
-      usePlayerStore.getState().setIsPlaying(false);
+      // Prevent resetting isPlaying if the user already clicked another track (interruption)
+      if (e.name !== 'AbortError' && this.currentTrackId === track.id) {
+        usePlayerStore.getState().setIsPlaying(false);
+      }
     }
   }
 
@@ -175,8 +178,11 @@ export class AudioController {
 
     try {
       await audio.play();
-    } catch (e) {
+    } catch (e: any) {
       console.warn("Retry autoplay failed", e);
+      if (e.name !== 'AbortError') {
+        // Only warn for real errors, AbortError is normal during fast switching
+      }
     }
   }
 
