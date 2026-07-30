@@ -902,7 +902,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
             key={virtualRow.key}
             data-index={virtualRow.index}
             ref={rowVirtualizer.measureElement}
-            className="pb-2"
+            className="pb-3"
             style={{
               position: 'absolute',
               left: 0,

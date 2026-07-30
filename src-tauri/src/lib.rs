@@ -514,14 +514,14 @@ fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
-    {
+    let (cache, buffer) = {
         let seconds = GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
         let max_bytes = buffer_bytes_for_seconds(seconds);
-        GLOBAL_SLICE_CACHE
-            .set(slice_cache::SliceCache::new(max_bytes))
-            .ok();
-    }
-    proxy::start_proxy();
+        let cache = std::sync::Arc::new(slice_cache::SliceCache::new(max_bytes));
+        let buffer = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(DEFAULT_BUFFER_SECONDS_USIZE));
+        (cache, buffer)
+    };
+    proxy::start_proxy(cache, buffer);
     let app_result = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
