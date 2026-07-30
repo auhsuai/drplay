@@ -353,17 +353,16 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
       // Mint a fresh signed URL (busts the cached redirect) and resume from the
       // last position instead of showing a misleading network banner.
       const track = currentTrackRef.current;
-      const isProxyStream = isProxyStreamUrl(track?.streamUrl);
 
-      if (track && isProxyStream && retryCountRef.current < 3) {
+      if (track && retryCountRef.current < 3) {
         try {
-          const freshUrl = await invoke<string>('get_stream_url', { fileId: track.id });
+          const freshUrl = `/drive-stream/${track.id}`;
           const freshTrack = { ...track, streamUrl: freshUrl };
           currentTrackRef.current = freshTrack;
           performRetry(freshTrack).catch(e => captureRetryFailure('network-url-refresh', e));
           return;
         } catch (e) {
-          captureError({ level: 'warn', source: 'audio-engine', message: `get_stream_url refresh after MEDIA_ERR_NETWORK failed (${classifyAudioError(e)})`, kind: 'network' });
+          captureError({ level: 'warn', source: 'audio-engine', message: `refresh after MEDIA_ERR_NETWORK failed (${classifyAudioError(e)})`, kind: 'network' });
         }
       }
 
@@ -455,18 +454,16 @@ export function useAudioEngine(params: UseAudioEngineParams): AudioEngineAPI {
     }
 
     if (errorType === 'url-expired') {
-      // The signed stream URL expired (e.g. paused past the exp window). Mint a
-      // fresh signed URL and retry silently instead of showing a network banner.
       const track = currentTrackRef.current;
       if (track) {
         try {
-          const freshUrl = await invoke<string>('get_stream_url', { fileId: track.id });
+          const freshUrl = `/drive-stream/${track.id}`;
           const freshTrack = { ...track, streamUrl: freshUrl };
           currentTrackRef.current = freshTrack;
           performRetry(freshTrack).catch(e => captureRetryFailure('url-expired', e));
           return;
         } catch (e) {
-          captureError({ level: 'warn', source: 'audio-engine', message: `get_stream_url regenerate after url-expired failed (${classifyAudioError(e)})`, kind: 'url-expired' });
+          captureError({ level: 'warn', source: 'audio-engine', message: `regenerate after url-expired failed (${classifyAudioError(e)})`, kind: 'url-expired' });
         }
       }
       dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.network_interrupted', 'Mạng không ổn định hoặc mất kết nối, vui lòng kiểm tra lại') } });

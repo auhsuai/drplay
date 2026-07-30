@@ -1,5 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
-
 const prefetchedStreams = new Map<string, string>();
 const MAX_CACHE = 200; // ~40KB max (200 bytes/URL for signed stream URLs)
 
@@ -42,10 +40,9 @@ export async function prefetchVisibleTracks(trackIds: string[]) {
 
   await runWithConcurrencyLimit(uncached, 5, async (id) => {
     try {
-      const url = await invoke<string>("get_stream_url", { fileId: id });
-      if (typeof url === "string" && url.length > 0) {
-        cacheSet(id, url);
-      }
+      // Vì đã bỏ proxy, ta gán trực tiếp URL ảo
+      const url = `/drive-stream/${id}`;
+      cacheSet(id, url);
     } catch (error) {
       let kind: "timeout" | "network" | "unknown" = "unknown";
       if (error instanceof Error && /timeout/i.test(error.message)) kind = "timeout";

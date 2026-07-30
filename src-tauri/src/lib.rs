@@ -10,38 +10,10 @@ use tauri::command;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
-use std::sync::LazyLock;
-
-pub static GLOBAL_STREAM_TOKEN: LazyLock<tokio::sync::Mutex<String>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(String::new()));
-pub static GLOBAL_TOKEN_NOTIFY: LazyLock<std::sync::Arc<tokio::sync::Notify>> =
-    LazyLock::new(|| std::sync::Arc::new(tokio::sync::Notify::new()));
-
-// --- Named constants for the stream URL / buffer sizing (no magic numbers) ---
-// Signed-URL lifetime: 24h. Shared by `get_stream_url` and the `/stream`
-// redirect in protocol.rs so the two signers stay in sync.
-pub(crate) const STREAM_URL_TTL_SECS: u64 = 86_400;
-// Fallback buffer seconds when the frontend omits `buffer_seconds`.
-const DEFAULT_BUFFER_SECONDS_F64: f64 = 180.0;
-// Nominal decode rate used to size the prefetch window: 320 kbit/s audio
-// => 320_000/8 = 40_000 bytes/s.
-const NOMINAL_BYTES_PER_SEC: u64 = 320_000 / 8;
-const MIN_BUFFER_BYTES: u64 = 5 * 1024 * 1024;
-const MAX_BUFFER_BYTES: u64 = 500 * 1024 * 1024;
-// Default prefetch window (seconds) when the user has not changed the setting.
-const DEFAULT_BUFFER_SECONDS_USIZE: usize = 300;
 
 pub mod protocol;
-pub mod slice_cache;
 pub mod r2;
 mod thumbnail;
-
-#[command]
-async fn update_stream_token(token: String) -> Result<(), String> {
-    *GLOBAL_STREAM_TOKEN.lock().await = token;
-    GLOBAL_TOKEN_NOTIFY.notify_waiters();
-    Ok(())
-}
 
 #[command]
 async fn login_google_native() -> Result<Value, String> {
@@ -201,40 +173,6 @@ async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
     }))
 }
 
-fn build_stream_url(file_id: &str, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<&str>) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let ext_str = ext.unwrap_or("");
-    let ext_param = if ext_str.is_empty() { String::new() } else { format!("&ext={}", ext_str) };
-
-    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + STREAM_URL_TTL_SECS;
-    let payload = format!("{}:{}:{}", file_id, ext_str, exp);
-    // PANIC: PROXY_SECRET is initialized at startup in run() before any command handler runs.
-    // If it's somehow not set, this is a fatal programming error — panic is appropriate.
-    let secret = crate::PROXY_SECRET.get().expect("PROXY_SECRET not initialized — run() must be called first");
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC key from PROXY_SECRET");
-    mac.update(payload.as_bytes());
-    let sig = mac.finalize().into_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>();
-
-    if let Some(b) = bitrate {
-        let buf = buffer_seconds.unwrap_or(DEFAULT_BUFFER_SECONDS_F64);
-        format!("http://drplay.localhost/stream?id={}&bitrate={}&buffer={}{}&exp={}&sig={}", file_id, b, buf, ext_param, exp, sig)
-    } else {
-        format!("http://drplay.localhost/stream?id={}{}&exp={}&sig={}", file_id, ext_param, exp, sig)
-    }
-}
-
-#[tauri::command]
-async fn get_stream_url(file_id: String, bitrate: Option<f64>, buffer_seconds: Option<f64>, ext: Option<String>) -> Result<String, String> {
-    let start = Instant::now();
-    let result = build_stream_url(&file_id, bitrate, buffer_seconds, ext.as_deref());
-    let dur = start.elapsed();
-    diag_log("get_stream_url", dur);
-    Ok(result)
-}
-
 #[tauri::command]
 fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     use tauri_plugin_fs::FsExt;
@@ -243,16 +181,6 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
         .allow_directory(path, true)
         .map_err(|e| format!("failed to extend fs scope for download dir: {}", e))?;
     Ok(())
-}
-
-pub fn buffer_bytes_for_seconds(seconds: u64) -> u64 {
-    let bytes = seconds * NOMINAL_BYTES_PER_SEC;
-    bytes.clamp(MIN_BUFFER_BYTES, MAX_BUFFER_BYTES)
-}
-
-#[tauri::command]
-fn update_buffer_settings(seconds: usize) {
-    GLOBAL_BUFFER_SECONDS.store(seconds, Ordering::SeqCst);
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -419,16 +347,16 @@ fn get_track_data(
     size: i64,
     name: String,
     pool: tauri::State<'_, r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>,
-    bitrate: Option<f64>,
-    buffer_seconds: Option<f64>,
-    ext: Option<String>,
+    _bitrate: Option<f64>,
+    _buffer_seconds: Option<f64>,
+    _ext: Option<String>,
     #[allow(unused_variables)]
     _app_handle: tauri::AppHandle,
 ) -> Option<TrackDataBundle> {
     let start = Instant::now();
     let conn = pool.get().ok()?;
     let meta = get_local_metadata_internal(size, &name, &conn)?;
-    let stream_url = build_stream_url(&file_id, bitrate, buffer_seconds, ext.as_deref());
+    let stream_url = format!("/drive-stream/{}", file_id);
     let dur = start.elapsed();
     diag_log("get_track_data", dur);
     Some(TrackDataBundle { metadata: meta, stream_url })
@@ -458,7 +386,7 @@ async fn update_track_duration_in_db(
     Ok(())
 }
 
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering, AtomicU16, AtomicU64};
+use std::sync::atomic::{AtomicBool, Ordering, AtomicU64};
 // Diagnostic: call counter for IPC timing
 // Always log during profiling — removed the modulo-50 sampling.
 fn diag_log(module: &str, dur: std::time::Duration) {
@@ -467,21 +395,8 @@ fn diag_log(module: &str, dur: std::time::Duration) {
     eprintln!("[PERF] {} took {:?} (call #{})", module, dur, c);
 }
 
-mod proxy;
-
-pub static PROXY_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-pub static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
-pub(crate) static GLOBAL_BUFFER_SECONDS: AtomicUsize = AtomicUsize::new(DEFAULT_BUFFER_SECONDS_USIZE);
-pub static GLOBAL_SLICE_CACHE: std::sync::OnceLock<slice_cache::SliceCache> =
-    std::sync::OnceLock::new();
 static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static IS_QUITTING: AtomicBool = AtomicBool::new(false);
-
-#[tauri::command]
-async fn clear_stream_token() -> Result<(), String> {
-    crate::GLOBAL_STREAM_TOKEN.lock().await.clear();
-    Ok(())
-}
 
 #[tauri::command]
 fn update_minimize_to_tray(minimize: bool) {
@@ -513,15 +428,6 @@ fn configure_sqlite_durability(conn: &rusqlite::Connection) -> Result<(), String
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    crate::PROXY_SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string());
-    let (cache, buffer) = {
-        let seconds = GLOBAL_BUFFER_SECONDS.load(Ordering::Relaxed) as u64;
-        let max_bytes = buffer_bytes_for_seconds(seconds);
-        let cache = std::sync::Arc::new(slice_cache::SliceCache::new(max_bytes));
-        let buffer = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(DEFAULT_BUFFER_SECONDS_USIZE));
-        (cache, buffer)
-    };
-    proxy::start_proxy(cache, buffer);
     let app_result = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
@@ -671,11 +577,8 @@ pub fn run() {
             login_google_native,
             refresh_google_token,
             register_download_path,
-            get_stream_url,
             get_track_data,
-            update_buffer_settings,
             get_local_metadata,
-            update_stream_token, clear_stream_token,
             update_minimize_to_tray,
             verify_track_exists,
             update_track_duration_in_db,

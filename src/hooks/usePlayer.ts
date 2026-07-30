@@ -119,13 +119,7 @@ export const usePlayer = (accessToken: string | null) => {
             try {
               streamUrl = getPrefetchedStreamUrl(lastSession.track.id) || '';
               if (!streamUrl) {
-                const ext = lastSession.track.originalName?.split('.').pop()?.toLowerCase();
-                streamUrl = await invoke<string>("get_stream_url", { 
-                  fileId: lastSession.track.id, 
-                  bitrate: lastSession.track.bitrate, 
-                  bufferSeconds: validBuffer ?? 1400,
-                  ext
-                });
+                streamUrl = `/drive-stream/${lastSession.track.id}`;
               }
             } catch (e) {
               console.warn(`[usePlayer] session-restore-stream-fail`, classifyPlayerError(e));
@@ -253,12 +247,7 @@ export const usePlayer = (accessToken: string | null) => {
       if (url) {
         prefetchNextTrackAudio(url);
       } else {
-        const ext = next.originalName?.split('.').pop()?.toLowerCase();
-        invoke<string>("get_stream_url", { fileId: next.id, ext })
-          .then(url => { if (url) prefetchNextTrackAudio(url); })
-          .catch(err => {
-            console.warn(`[usePlayer] next-track-prefetch-fail`, { fileId: next.id, ...classifyPlayerError(err) });
-          });
+        prefetchNextTrackAudio(`/drive-stream/${next.id}`);
       }
     };
 
@@ -303,18 +292,8 @@ export const usePlayer = (accessToken: string | null) => {
         return;
       }
 
-      const ext = targetTrack.originalName?.split('.').pop()?.toLowerCase();
-      const streamUrl = await invoke<string>("get_stream_url", {
-        fileId: targetTrack.id,
-        bufferSeconds,
-        ext,
-      });
-
+      const streamUrl = `/drive-stream/${targetTrack.id}`;
       if (isIntentStale(myId)) return;
-      if (!streamUrl) {
-        setIsDownloading(false);
-        return;
-      }
 
       setCurrentTrack({ ...targetTrack, streamUrl });
       triggerReload();
@@ -408,8 +387,7 @@ export const usePlayer = (accessToken: string | null) => {
             console.warn(`[usePlayer] bitrate-resume-fail`, classifyPlayerError(e));
           }
 
-          const ext = currentTrack.originalName?.split('.').pop()?.toLowerCase();
-          const url = await invoke<string>("get_stream_url", { fileId: currentTrack.id, bitrate, bufferSeconds, ext });
+          const url = `/drive-stream/${currentTrack.id}`;
           if (isIntentStale(myId)) return;
           
           setCurrentTrack(prev => prev ? { ...prev, streamUrl: url } : prev);

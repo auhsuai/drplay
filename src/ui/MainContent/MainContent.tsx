@@ -471,9 +471,9 @@ export const MainContent = React.memo(function MainContent({
         />
       )}
       <div className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           {isSelectionMode ? (
-            <div className="flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-left-4 duration-300">
+            <div className="flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-left-4 duration-300 flex-1 min-w-0">
               <button
                 onClick={() => {
                   setIsSelectionMode(false);
@@ -488,32 +488,34 @@ export const MainContent = React.memo(function MainContent({
               </span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-sm font-medium">
+            <div className="flex items-center gap-2 text-sm font-medium flex-1 min-w-0">
               <button 
                 onClick={onBack}
                 disabled={!hasHistory}
-                className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors mr-2 shrink-0"
+                className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors shrink-0"
               >
                 <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
               </button>
               
-              {folderHistory.map((folder, index) => (
-                <div key={folder.id} className="flex items-center">
-                  <span className="text-gray-400 mx-1">/</span>
-                  <button 
-                    onClick={() => onBreadcrumbClick(folder.id, folder.name, index)}
-                    className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] dark:hover:text-[#4285F4] hover:bg-[#4285F4]/5 px-2 py-1 rounded-md transition-colors truncate max-w-[150px]"
-                    title={folder.name}
-                  >
-                    {folder.name}
-                  </button>
+              <div className="flex items-center overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0">
+                {folderHistory.map((folder, index) => (
+                  <div key={folder.id} className="flex items-center shrink-0">
+                    <span className="text-gray-400 mx-1">/</span>
+                    <button 
+                      onClick={() => onBreadcrumbClick(folder.id, folder.name, index)}
+                      className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] dark:hover:text-[#4285F4] hover:bg-[#4285F4]/5 px-2 py-1 rounded-md transition-colors truncate max-w-[150px]"
+                      title={folder.name}
+                    >
+                      {folder.name}
+                    </button>
+                  </div>
+                ))}
+                <div className="flex items-center shrink-0">
+                  {folderHistory.length > 0 && <span className="text-gray-400 mx-1">/</span>}
+                  <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={currentFolderName}>
+                    {currentFolderName}
+                  </span>
                 </div>
-              ))}
-              <div className="flex items-center">
-                {folderHistory.length > 0 && <span className="text-gray-400 mx-1">/</span>}
-                <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={currentFolderName}>
-                  {currentFolderName}
-                </span>
               </div>
             </div>
           )}
