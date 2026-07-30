@@ -1,9 +1,10 @@
 import { useRef, useState, useEffect, useReducer, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, RefreshCw } from "lucide-react";
+import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Heart, RefreshCw, ListMusic } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from '../components/MoreMenu';
 import { formatTime } from "../../utils/formatTime";
+import { set as idbSet } from "../../db/kv";
 
 import { initialPlayerState, playerReducer } from './playerReducer';
 import { PlayerBarProps, toastTypes, bannerTypes } from './types';
@@ -13,13 +14,15 @@ import { useKeyboard } from './useKeyboard';
 import { useTrackMetadata } from './useTrackMetadata';
 import { useErrorDisplay } from './useErrorDisplay';
 import { useProgressUI } from './useProgressUI';
+import { QueuePanel } from './QueuePanel';
+import { FullPlayer } from './FullPlayer';
 
 function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; className?: string }) {
   const Icon = type === 'rate_limited' || type === 'download_quota' ? CloudOff : type === 'file_deleted' || type === 'format_error' || type === 'access_denied' ? FileWarning : WifiOff;
   return <Icon className={`${className} text-[#4285F4]`} />;
 }
 
-function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, playMode, onTogglePlayMode }: PlayerBarProps) {
+function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, playMode, onTogglePlayMode, playbackQueue, onPlayTrack, onRemoveTrack, onReorderQueue }: PlayerBarProps) {
   const { t } = useTranslation();
 
   // 1. Player state
@@ -55,22 +58,13 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   // 5. Audio engine — native Rust backend
   const audioEngine = useAudioEngine();
 
-  // Sync duration from playbackState
+  // Sync duration from playbackState — only when it matches the current track
   useEffect(() => {
-    if (audioEngine.playbackState.duration > 0) {
-      setDuration(audioEngine.playbackState.duration);
+    const ps = audioEngine.playbackState;
+    if (ps.duration > 0 && ps.fileId === (currentTrack?.id ?? null)) {
+      setDuration(ps.duration);
     }
-  }, [audioEngine.playbackState.duration]);
-
-  // Play track via native engine when currentTrack changes
-  const lastPlayedTrackIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (currentTrack && isPlaying && currentTrack.id !== lastPlayedTrackIdRef.current) {
-      lastPlayedTrackIdRef.current = currentTrack.id;
-      const position = currentTrack.restoreTime ?? 0;
-      audioEngine.play(currentTrack, position).catch(e => console.error('[play]', e));
-    }
-  }, [currentTrack?.id, isPlaying]);
+  }, [audioEngine.playbackState.duration, audioEngine.playbackState.fileId, currentTrack?.id]);
 
   // 6. Track metadata
   const trackMetadata = useTrackMetadata({
@@ -101,6 +95,19 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     setIsMuted,
   });
 
+  // Play track via native engine when currentTrack changes
+  const lastPlayedTrackIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (currentTrack && isPlaying && currentTrack.id !== lastPlayedTrackIdRef.current) {
+      lastPlayedTrackIdRef.current = currentTrack.id;
+      const position = currentTrack.restoreTime ?? 0;
+      if (position > 0) {
+        progressUI.blockTickerUpdates(2000);
+      }
+      audioEngine.play(currentTrack, position).catch(e => console.error('[play]', e));
+    }
+  }, [currentTrack?.id, isPlaying]);
+
   // 9. Playback control — uses engine for native commands
   const playbackControl = usePlaybackControl({
     currentTrack,
@@ -130,6 +137,70 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     setIsVolumeActive: triggerVolumeActive,
   });
 
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const [isFullPlayerOpen, setIsFullPlayerOpen] = useState(false);
+
+  const lastTapRef = useRef(0);
+
+  const handleAlbumArtDoubleTap = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 300 && now - lastTapRef.current > 0) {
+      trackMetadata.toggleFavorite();
+      lastTapRef.current = 0;
+    } else {
+      lastTapRef.current = now;
+    }
+  }, [trackMetadata.toggleFavorite]);
+
+  const [isVolumeExpanded, setIsVolumeExpanded] = useState(false);
+
+  const handleVolumeIconClick = useCallback(() => {
+    setIsVolumeExpanded(true);
+    if (volumeTimeoutRef.current) clearTimeout(volumeTimeoutRef.current);
+    volumeTimeoutRef.current = setTimeout(() => setIsVolumeExpanded(false), 2000);
+  }, []);
+
+  // Click outside volume to close
+  useEffect(() => {
+    if (!isVolumeExpanded) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (volumeBarRef.current && !volumeBarRef.current.contains(e.target as Node)) {
+        setIsVolumeExpanded(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isVolumeExpanded]);
+
+  // Touch gesture handlers
+  const touchStartXRef = useRef(0);
+  const touchStartYRef = useRef(0);
+  const SWIPE_THRESHOLD = 50;
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const deltaX = e.changedTouches[0].clientX - touchStartXRef.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartYRef.current;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+
+    if (absX > absY && absX > SWIPE_THRESHOLD) {
+      if (deltaX > 0) {
+        onPrevTrack();
+      } else {
+        onNextTrack();
+      }
+    } else if (absY > absX && absY > SWIPE_THRESHOLD && deltaY < 0) {
+      setIsFullPlayerOpen(true);
+    } else if (absY > absX && absY > SWIPE_THRESHOLD && deltaY > 0 && isFullPlayerOpen) {
+      setIsFullPlayerOpen(false);
+    }
+  };
+
   // 11. Volume sync — send to native backend
   useEffect(() => {
     audioEngine.setVolume(isMuted ? 0 : volume);
@@ -141,25 +212,71 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     };
   }, []);
 
+  // 12. Session persistence — saves current track + position to IndexedDB
+  //     so usePlayer.ts can restore playback on next app launch.
+  //     (usePlayer.ts reads drplay_last_session but has never written it.)
+  useEffect(() => {
+    if (currentTrack) {
+      const dur = audioEngine.playbackState.duration || currentTrack.restoreDuration || 0;
+      idbSet("drplay_last_session", {
+        track: currentTrack,
+        time: 0,
+        duration: dur,
+      }).catch(e => console.warn('[session] save-on-track-change failed', e));
+    }
+  }, [currentTrack?.id]);
+
+  useEffect(() => {
+    if (!currentTrack || !isPlaying) return;
+    const interval = setInterval(() => {
+      const track = currentTrack;
+      const pos = audioEngine.playbackState.position;
+      const dur = audioEngine.playbackState.duration || track.restoreDuration || 0;
+      idbSet("drplay_last_session", { track, time: pos, duration: dur })
+        .catch(e => console.warn('[session] periodic-save failed', e));
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [currentTrack?.id, isPlaying]);
+
+  const sessionRef = useRef({ track: currentTrack, time: 0, duration: 0 });
+  sessionRef.current = { track: currentTrack, time: audioEngine.playbackState.position, duration: audioEngine.playbackState.duration || (currentTrack?.restoreDuration ?? 0) };
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const s = sessionRef.current;
+      if (s.track) {
+        idbSet("drplay_last_session", s).catch(e => console.warn('[session] beforeunload-save failed', e));
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
   const toggleMute = useCallback(() => {
     setIsMuted(prev => !prev);
   }, []);
 
   const renderVolumeIcon = () => {
-    if (isMuted || volume === 0) return <VolumeX className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors" onClick={toggleMute} />;
-    if (volume < 0.33) return <Volume className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors" onClick={toggleMute} />;
-    if (volume < 0.66) return <Volume1 className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors" onClick={toggleMute} />;
-    return <Volume2 className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors" onClick={toggleMute} />;
+    const iconProps = {
+      onClick: handleVolumeIconClick,
+      onDoubleClick: toggleMute,
+      onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); toggleMute(); }
+    };
+    if (isMuted || volume === 0) return <VolumeX className={`w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors ${isVolumeExpanded ? 'text-[#4285F4]' : ''}`} {...iconProps} />;
+    if (volume < 0.33) return <Volume className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors" {...iconProps} />;
+    if (volume < 0.66) return <Volume1 className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors" {...iconProps} />;
+    return <Volume2 className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer transition-colors" {...iconProps} />;
   };
 
   const volumePercent = isMuted ? 0 : volume * 100;
 
   return (
-    <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
+    <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       {/* Track Info (Left) */}
       <div className="flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2">
         <div
-          className="flex items-center gap-2 sm:gap-4 py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl min-w-0 flex-1 max-w-[320px]"
+          className="flex items-center gap-2 sm:gap-4 py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl min-w-0 flex-1 max-w-[320px] cursor-pointer"
+          onClick={() => setIsFullPlayerOpen(true)}
           onContextMenu={(e) => {
             e.preventDefault();
             if (currentTrack?.id) {
@@ -173,13 +290,16 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             }
           }}
         >
-          <div className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden ${currentTrack ? 'bg-gray-200 dark:bg-[#121212] text-gray-400' : 'bg-gray-200 dark:bg-[#121212]'}`}>
+          <div
+            className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden ${currentTrack ? 'bg-gray-200 dark:bg-[#121212] text-gray-400' : 'bg-gray-200 dark:bg-[#121212]'}`}
+            onClick={handleAlbumArtDoubleTap}
+          >
             {currentTrack ? (
               <Music className="w-6 h-6 opacity-80" />
             ) : null}
           </div>
           <div className="overflow-hidden flex-1">
-            <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
+            <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate animate-fade-slide-in" key={currentTrack?.id ?? 'no-track'}>
               {currentTrack ? trackMetadata.realTitle : t('player.no_track')}
             </h4>
           </div>
@@ -189,7 +309,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
           <div className="hidden lg:flex items-center gap-1 shrink-0 ml-2">
             <button 
               onClick={trackMetadata.toggleFavorite}
-              className={`transition-all duration-200 hover:scale-110 p-1 ${trackMetadata.isLiked ? 'text-[#4285F4]' : 'text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
+              className={`transition-all duration-200 active:scale-75 p-1 ${trackMetadata.isLiked ? 'text-[#4285F4] animate-like-bounce' : 'text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
               <Heart className="w-5 h-5" fill={trackMetadata.isLiked ? "currentColor" : "none"} />
             </button>
@@ -203,14 +323,17 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         <div className="flex w-full mb-1 items-center justify-center gap-3 sm:gap-6">
           <button 
             onClick={playbackControl.handlePrevClick}
-            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-            disabled={!currentTrack}
+            onPointerDown={playbackControl.handlePrevPointerDown}
+            onPointerUp={playbackControl.handleLongPressRelease}
+            onPointerLeave={playbackControl.handleLongPressRelease}
+            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 select-none"
+            disabled={!currentTrack || isDownloading}
           >
             <SkipBack className="w-5 h-5" />
           </button>
           
           <button
-            onClick={manualResume ? playbackControl.handleManualResume : errorInfo && bannerTypes.includes(errorInfo.type) ? playbackControl.handleRetry : onTogglePlay}
+            onClick={manualResume ? playbackControl.handleManualResume : errorInfo && bannerTypes.includes(errorInfo.type) ? playbackControl.handleRetry : playbackControl.handleTogglePlayDebounced}
             className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
             disabled={!currentTrack || isDownloading}
           >
@@ -229,8 +352,11 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
 
           <button 
             onClick={() => playbackControl.handleNextClick()}
-            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-            disabled={!currentTrack}
+            onPointerDown={playbackControl.handleNextPointerDown}
+            onPointerUp={playbackControl.handleLongPressRelease}
+            onPointerLeave={playbackControl.handleLongPressRelease}
+            className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 select-none"
+            disabled={!currentTrack || isDownloading}
           >
             <SkipForward className="w-5 h-5" />
           </button>
@@ -258,10 +384,20 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             ref={progressBarRef}
             className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
             onPointerDown={progressUI.handlePointerDown}
+            onPointerMove={progressUI.handlePointerMove}
+            onPointerLeave={progressUI.handlePointerLeave}
           >
+            {progressUI.hoverTime !== null && (
+              <div 
+                className="absolute bottom-full mb-2 bg-[#2a2b2f] text-white text-xs py-1 px-2 rounded shadow-lg pointer-events-none whitespace-nowrap z-50"
+                style={{ left: `${progressUI.hoverPercent}%`, transform: 'translateX(-50%)' }}
+              >
+                {formatTime(progressUI.hoverTime)}
+              </div>
+            )}
             <div
               ref={bufferFillRef}
-              className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
+              className="absolute inset-0 overflow-hidden rounded-full pointer-events-none opacity-60"
             ></div>
             
             <div 
@@ -290,6 +426,13 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             <div className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 ${isVolumeActive ? '!opacity-100' : ''} transition-opacity shrink-0`}></div>
           </div>
         </div>
+        <button
+          onClick={() => setIsQueueOpen(true)}
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white p-1.5 rounded-full transition-all hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"
+          disabled={!currentTrack}
+        >
+          <ListMusic className="w-5 h-5" />
+        </button>
       </div>
 
       {/* Manual-resume banner */}
@@ -326,6 +469,41 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             <div className="w-1.5 self-stretch bg-[#4285F4]" />
           </div>
         ),
+        document.getElementById('content-area')!
+      )}
+
+      {isQueueOpen && createPortal(
+        <QueuePanel
+          isOpen={isQueueOpen}
+          onClose={() => setIsQueueOpen(false)}
+          queue={playbackQueue}
+          currentTrack={currentTrack}
+          onPlayTrack={(track) => {
+            setIsQueueOpen(false);
+            onPlayTrack(track);
+          }}
+          onRemoveTrack={onRemoveTrack}
+          onReorder={onReorderQueue}
+        />,
+        document.getElementById('content-area')!
+      )}
+
+      {isFullPlayerOpen && createPortal(
+        <FullPlayer
+          currentTrack={currentTrack}
+          isPlaying={isPlaying}
+          position={audioEngine.playbackState.position}
+          duration={audioEngine.playbackState.duration}
+          isLiked={trackMetadata.isLiked}
+          playMode={playMode}
+          onTogglePlay={onTogglePlay}
+          onNextTrack={onNextTrack}
+          onPrevTrack={onPrevTrack}
+          onTogglePlayMode={onTogglePlayMode}
+          onToggleFavorite={trackMetadata.toggleFavorite}
+          onSeek={(time: number) => audioEngine.seek(time)}
+          onMinimize={() => setIsFullPlayerOpen(false)}
+        />,
         document.getElementById('content-area')!
       )}
     </div>

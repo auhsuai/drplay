@@ -25,6 +25,10 @@ export interface PlayerBarProps {
   loadNonce?: number;
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   onTogglePlayMode: () => void;
+  playbackQueue: Track[];
+  onPlayTrack: (track: Track) => void;
+  onRemoveTrack: (trackId: string) => void;
+  onReorderQueue: (fromIndex: number, toIndex: number) => void;
 }
 
 export interface CallbackRefs {

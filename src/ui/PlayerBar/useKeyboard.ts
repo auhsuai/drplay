@@ -27,6 +27,8 @@ interface UseKeyboardParams {
 export function useKeyboard(params: UseKeyboardParams): void {
   const { engine, onTogglePlayRef, onNextTrackRef, onPrevTrackRef, onTogglePlayModeRef, setVolume, setIsMuted, setIsVolumeActive } = params;
 
+  const lastActionTimeRef = useRef(0);
+  const KEYBOARD_DEBOUNCE_MS = 100;
   const arrowSeekBaseRef = useRef<number | null>(null);
   const lastSeekTimestampRef = useRef(0);
   const volumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,6 +51,10 @@ export function useKeyboard(params: UseKeyboardParams): void {
         return;
       }
 
+      const now = Date.now()
+      if (now - lastActionTimeRef.current < KEYBOARD_DEBOUNCE_MS) return
+      lastActionTimeRef.current = now
+
       switch (e.key) {
         case 'ArrowLeft':
           e.preventDefault();
@@ -62,7 +68,7 @@ export function useKeyboard(params: UseKeyboardParams): void {
             lastSeekTimestampRef.current = now;
             const newTime = Math.max(0, arrowSeekBaseRef.current - ARROW_SEEK_STEP_SEC);
             arrowSeekBaseRef.current = newTime;
-            engine.seek(newTime);
+            engine.seek(newTime, 400);
           }
           break;
         case 'ArrowRight':
@@ -78,7 +84,7 @@ export function useKeyboard(params: UseKeyboardParams): void {
             lastSeekTimestampRef.current = now;
             const newTime = Math.min(dur && dur > 0 ? dur : Infinity, arrowSeekBaseRef.current + ARROW_SEEK_STEP_SEC);
             arrowSeekBaseRef.current = newTime;
-            engine.seek(newTime);
+            engine.seek(newTime, 400);
           }
           break;
         case 'ArrowUp':

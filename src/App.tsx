@@ -84,7 +84,8 @@ function App() {
 
   const { currentTrack, isPlaying, isDownloading, playMode,
     handlePlayTrack: playerPlayTrack, handleNextTrack, handlePrevTrack,
-    handleTogglePlay, handleTogglePlayMode, loadNonce } = usePlayer(accessToken);
+    handleTogglePlay, handleTogglePlayMode, loadNonce,
+    playbackQueue, removeFromQueue, reorderQueue } = usePlayer(accessToken);
 
   const dbFiles = useLiveQuery(
     () => currentFolderId ? db.files.where('parentId').equals(currentFolderId).toArray() : Promise.resolve([] as any[]),
@@ -97,6 +98,8 @@ function App() {
 
   const handlePlayTrack = (track: Track, contextQueue?: Track[], isNavigation = false) =>
     playerPlayTrack(track, contextQueue, isNavigation, driveItems, activeTab);
+
+  const playTrack = (track: Track) => handlePlayTrack(track, undefined, true);
 
   const [showFolderSelection, setShowFolderSelection] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -181,7 +184,7 @@ function App() {
               <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300"><h1 className="text-2xl text-gray-500">Coming Soon: {activeTab}</h1></main>
             )}
           </Suspense>
-          <PlayerBar currentTrack={currentTrack} loadNonce={loadNonce} isPlaying={isPlaying} onTogglePlay={handleTogglePlay} onNextTrack={handleNextTrack} onPrevTrack={handlePrevTrack} isDownloading={isDownloading} playMode={playMode} onTogglePlayMode={handleTogglePlayMode} />
+          <PlayerBar currentTrack={currentTrack} loadNonce={loadNonce} isPlaying={isPlaying} onTogglePlay={handleTogglePlay} onNextTrack={handleNextTrack} onPrevTrack={handlePrevTrack} isDownloading={isDownloading} playMode={playMode} onTogglePlayMode={handleTogglePlayMode} playbackQueue={playbackQueue} onPlayTrack={playTrack} onRemoveTrack={removeFromQueue} onReorderQueue={reorderQueue} />
         </div>
       </div>
 

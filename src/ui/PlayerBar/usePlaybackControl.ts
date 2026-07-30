@@ -9,6 +9,10 @@ import type { TFunction } from 'i18next';
 
 const TRANSITION_RESET_MS = 200;
 
+const TOGGLE_DEBOUNCE_MS = 300;
+const LONG_PRESS_SEEK_DELAY_MS = 500;
+const SEEK_STEP_SEC = 5;
+
 interface UsePlaybackControlParams {
   currentTrack: Track | null;
   isPlaying: boolean;
@@ -28,6 +32,10 @@ interface UsePlaybackControlParams {
 export interface PlaybackControlAPI {
   handleNextClick: (isAutoSkip?: boolean) => void;
   handlePrevClick: () => void;
+  handleTogglePlayDebounced: () => void;
+  handleNextPointerDown: () => void;
+  handlePrevPointerDown: () => void;
+  handleLongPressRelease: () => void;
   handleManualResume: () => Promise<void>;
   handleRetry: () => Promise<void>;
   callbackRefs: CallbackRefs;
@@ -54,6 +62,9 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   const consecutiveAutoSkipRef = useRef(0);
   const formatRetryCountRef = useRef(0);
   const lastKnownPositionRef = useRef(0);
+  const lastToggleTimeRef = useRef(0);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seekIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -114,6 +125,51 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
       setTimeout(() => { isTransitioningRef.current = false; }, TRANSITION_RESET_MS);
     }
   };
+
+  const handleTogglePlayDebounced = useCallback(() => {
+    const now = Date.now();
+    if (now - lastToggleTimeRef.current < TOGGLE_DEBOUNCE_MS) return;
+    lastToggleTimeRef.current = now;
+    onTogglePlay();
+  }, [onTogglePlay]);
+
+  const handleNextPointerDown = useCallback(() => {
+    longPressTimerRef.current = setTimeout(() => {
+      seekIntervalRef.current = setInterval(() => {
+        const ps = engine.playbackState
+        const newPos = Math.min(ps.duration || (ps.position + 10), ps.position + SEEK_STEP_SEC)
+        engine.seek(newPos, 400)
+      }, 250)
+    }, LONG_PRESS_SEEK_DELAY_MS)
+  }, [engine])
+
+  const handlePrevPointerDown = useCallback(() => {
+    longPressTimerRef.current = setTimeout(() => {
+      seekIntervalRef.current = setInterval(() => {
+        const ps = engine.playbackState
+        const newPos = Math.max(0, ps.position - SEEK_STEP_SEC)
+        engine.seek(newPos, 400)
+      }, 250)
+    }, LONG_PRESS_SEEK_DELAY_MS)
+  }, [engine])
+
+  const handleLongPressRelease = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+    if (seekIntervalRef.current) {
+      clearInterval(seekIntervalRef.current)
+      seekIntervalRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+      if (seekIntervalRef.current) clearInterval(seekIntervalRef.current)
+    }
+  }, [])
 
   const handleRetry = useCallback(async () => {
     if (!currentTrack?.id) return;
@@ -281,6 +337,10 @@ export function usePlaybackControl(params: UsePlaybackControlParams): PlaybackCo
   return {
     handleNextClick,
     handlePrevClick,
+    handleTogglePlayDebounced,
+    handleNextPointerDown,
+    handlePrevPointerDown,
+    handleLongPressRelease,
     handleManualResume,
     handleRetry,
     callbackRefs,

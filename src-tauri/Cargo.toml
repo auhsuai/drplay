@@ -82,7 +82,7 @@ rand = "0.8"
 once_cell = "1"
 futures = "0.3"
 rodio = { version = "0.21", features = ["symphonia-all"] }
-symphonia = { version = "0.5", features = ["mp3", "flac", "vorbis", "wav", "aac", "isomp4", "ogg"] }
+symphonia = { version = "0.5", features = ["default", "mp3", "flac", "vorbis", "wav", "aac", "isomp4", "ogg"] }
 symphonia-bundle-mp3 = "0.5"
 symphonia-format-isomp4 = "0.5"
 # Pinned to an explicit commit (not `branch = "main"`) so a future

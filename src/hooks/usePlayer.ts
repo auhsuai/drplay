@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { get, set as idbSet } from "../db/kv";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
@@ -400,10 +400,12 @@ export const usePlayer = (accessToken: string | null) => {
 
     if (currentIndex < playbackQueue.length - 1) {
       handlePlayTrack(playbackQueue[currentIndex + 1], undefined, true);
+    } else if (playMode === 'repeat-one') {
+      handlePlayTrack(playbackQueue[currentIndex], undefined, true);
+    } else if (playMode === 'repeat-all' || playMode === 'shuffle') {
+      handlePlayTrack(playbackQueue[0], undefined, true);
     } else {
-      if (playMode === 'repeat-all' || playMode === 'shuffle') {
-        handlePlayTrack(playbackQueue[0], undefined, true);
-      }
+      setIsPlaying(false);
     }
   };
 
@@ -486,6 +488,20 @@ export const usePlayer = (accessToken: string | null) => {
     });
   };
 
+  const removeFromQueue = useCallback((trackId: string) => {
+    setPlaybackQueue(prev => prev.filter(t => t.id !== trackId))
+    setOriginalQueue(prev => prev.filter(t => t.id !== trackId))
+  }, [])
+
+  const reorderQueue = useCallback((fromIndex: number, toIndex: number) => {
+    setPlaybackQueue(prev => {
+      const next = [...prev]
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      return next
+    })
+  }, [])
+
   return {
     currentTrack,
     setCurrentTrack,
@@ -501,6 +517,8 @@ export const usePlayer = (accessToken: string | null) => {
     handleNextTrack,
     handlePrevTrack,
     handleTogglePlay,
-    handleTogglePlayMode
-  };
+    handleTogglePlayMode,
+    removeFromQueue,
+    reorderQueue,
+  }
 };
