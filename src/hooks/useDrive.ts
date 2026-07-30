@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { recordFolderVisit } from "../utils/history";
 import { getAppConfig, saveAppConfig } from "../utils/driveApi";
 import { getValidToken } from "../utils/apiClient";
+import { useDriveStore } from "../store/driveStore";
 
 const DRIVE_MODULE = "useDrive";
 
@@ -13,14 +14,13 @@ const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
 export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
-  // App Root Folder (Music Library Root)
-  const [appRootFolder, setAppRootFolder] = useState<string | null>(null);
-
-  // Current navigated folder
-  const [currentFolderId, setCurrentFolderId] = useState("root");
-  const [folderHistory, setFolderHistory] = useState<{ id: string, name: string }[]>([]);
-  const [currentFolderName, setCurrentFolderName] = useState<string>("My Drive");
-  const [sortOption, setSortOption] = useState<string>('name');
+  const {
+    appRootFolder, setAppRootFolder,
+    currentFolderId, setCurrentFolderId,
+    currentFolderName, setCurrentFolderName,
+    folderHistory, setFolderHistory,
+    sortOption, setSortOption
+  } = useDriveStore();
 
   // Gate the nav-state persistence effect until initApp has finished restoring.
   // Prevents the placeholder currentFolderId="root" (set before hydration) from
@@ -189,15 +189,15 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     }
   }, [currentFolderId, currentFolderName, folderHistory, isLoggedIn, appRootFolder]);
 
-  const handleOpenFolder = (folderId: string, folderName: string) => {
+  const handleOpenFolder = useCallback((folderId: string, folderName: string) => {
     if (folderId === currentFolderId) return;
     setFolderHistory(prev => [...prev, { id: currentFolderId, name: currentFolderName }]);
     setCurrentFolderId(folderId);
     setCurrentFolderName(folderName);
     recordFolderVisit(folderId, folderName);
-  };
+  }, [currentFolderId, currentFolderName, setFolderHistory, setCurrentFolderId, setCurrentFolderName]);
 
-  const handleBack = () => {
+  const handleBack = useCallback(() => {
     if (folderHistory.length > 0) {
       const newHistory = [...folderHistory];
       const previousFolder = newHistory.pop();
@@ -205,16 +205,16 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       setCurrentFolderId(previousFolder?.id || appRootFolder || "root");
       setCurrentFolderName(previousFolder?.name || "My Drive");
     }
-  };
+  }, [folderHistory, appRootFolder, setFolderHistory, setCurrentFolderId, setCurrentFolderName]);
 
-  const handleBreadcrumbClick = (id: string, name: string, index: number) => {
+  const handleBreadcrumbClick = useCallback((id: string, name: string, index: number) => {
     const newHistory = folderHistory.slice(0, index);
     setFolderHistory(newHistory);
     setCurrentFolderId(id);
     setCurrentFolderName(name);
-  };
+  }, [folderHistory, setFolderHistory, setCurrentFolderId, setCurrentFolderName]);
 
-  const handleSelectRootFolder = async (folderId: string) => {
+  const handleSelectRootFolder = useCallback(async (folderId: string) => {
     localStorage.setItem("drplay_root_folder", folderId);
     setAppRootFolder(folderId);
     setCurrentFolderId(folderId);
@@ -237,7 +237,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     } catch (e) {
       console.error(`[${DRIVE_MODULE}] root-select-cleanup-failed — failed to clear db or save config (best-effort)`, classifyError(e));
     }
-  };
+  }, [setAppRootFolder, setCurrentFolderId, setCurrentFolderName, setFolderHistory]);
 
   return {
     appRootFolder,

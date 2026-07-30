@@ -172,7 +172,9 @@ export const SongCard = React.memo(function SongCard({
       }
     };
 
-    fetchMetadata();
+    const timerId = setTimeout(() => {
+      fetchMetadata();
+    }, 150); // Debounce: only fetch if card is visible for 150ms (avoids IPC spam when scrolling fast)
 
     const handleMetadataUpdated = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -189,6 +191,7 @@ export const SongCard = React.memo(function SongCard({
 
     return () => {
       isMounted = false;
+      clearTimeout(timerId);
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       window.removeEventListener('metadata-updated', handleMetadataUpdated);
@@ -238,7 +241,7 @@ export const SongCard = React.memo(function SongCard({
       )}
       <div className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-500' : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!bg-[#4285F4]/10 !text-[#4285F4]' : 'text-gray-400'}`}`}>
         {coverUrl && !item.isFolder ? (
-          <img src={coverUrl} alt="cover" loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
+          <img src={coverUrl} alt="cover" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
         ) : item.isFolder ? (
           <Folder className="w-6 h-6" fill="currentColor" />
         ) : (

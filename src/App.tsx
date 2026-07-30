@@ -26,10 +26,10 @@ import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
 
 import { useServiceWorker } from "./hooks/useServiceWorker";
-import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
+import { useAppGlobalEvents } from './hooks/useAppGlobalEvents';
+import { useDriveStore } from './store/driveStore';
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
-import { useDriveSync } from "./hooks/useDriveSync";
 
 export type Track = {
   id: string;
@@ -127,15 +127,9 @@ function App() {
     handleSelectRootFolder
   } = useDrive(isLoggedIn, accessToken);
 
-  // Drive Sync Logic
-  const { driveItems, isLoadingTracks, setIsLoadingTracks } = useDriveSync(
-    isLoggedIn, 
-    accessToken, 
-    currentFolderId, 
-    currentFolderName, 
-    sortOption
-  );
 
+  const setIsLoadingTracks = useDriveStore(state => state.setIsLoadingTracks);
+  const isLoadingTracks = useDriveStore(state => state.isLoadingTracks);
   // Locate File Logic
   const { highlightedFileId } = useLocateFile(
     accessToken,
@@ -169,7 +163,7 @@ function App() {
   }, []);
 
   const handlePlayTrack = (track: Track, contextQueue?: Track[], isNavigation: boolean = false) => {
-    playerPlayTrack(track, contextQueue, isNavigation, driveItems, activeTab);
+    playerPlayTrack(track, contextQueue, isNavigation, [], activeTab);
   };
 
   const [showFolderSelection, setShowFolderSelection] = useState(false);
@@ -243,9 +237,7 @@ function App() {
             ) : activeTab === "My Drive" ? (
               <MainContent
                 activeTab={activeTab}
-                onPlay={(t: Track, c?: Track[]) => { handlePlayTrack(t, c); }}
-                currentTrack={currentTrack}
-                items={driveItems}
+                onPlay={handlePlayTrack}
                 isLoading={isLoadingTracks}
                 onOpenFolder={handleOpenFolder}
                 onBack={handleBack}

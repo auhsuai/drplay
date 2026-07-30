@@ -5,15 +5,14 @@ import { MainContent } from './MainContent';
 import type { DriveItem } from '../../App';
 
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: vi.fn(() => ({
-    getVirtualItems: () => Array.from({ length: 12 }, (_, i) => ({
+  useVirtualizer: vi.fn(({ count }: { count: number }) => ({
+    getVirtualItems: () => Array.from({ length: count }, (_, i) => ({
       index: i,
       key: i,
       size: 92,
       start: i * 92,
-      lane: 0,
     })),
-    getTotalSize: () => 50 * 92,
+    getTotalSize: () => count * 92,
     measureElement: vi.fn(),
     scrollToIndex: vi.fn(),
     containerRef: { current: document.createElement('div') },
@@ -45,6 +44,21 @@ vi.mock('../../utils/normalizeText', () => ({
   normalizeText: (s: string) => s.toLowerCase(),
 }));
 
+vi.mock('../../hooks/useDriveExplorer', () => ({
+  useDriveExplorer: () => ({
+    currentItems: makeItems(3),
+    filteredItems: makeItems(3),
+    currentPage: 1,
+    hasMoreItems: false,
+    handleBulkMove: vi.fn(),
+    handleBulkDelete: vi.fn(),
+    handleDownloadMultiple: vi.fn(),
+    totalSize: 0,
+    searchQuery: '',
+    setSearchQuery: vi.fn(),
+  })
+}));
+
 vi.mock('./components/SongCard', () => ({
   SongCard: vi.fn(({ item }: { item: DriveItem }) => (
     <div data-testid="song-card" data-item-id={item.id} />
@@ -70,7 +84,6 @@ function makeItems(n: number): DriveItem[] {
 const baseProps = {
   activeTab: 'Drive',
   onPlay: vi.fn(),
-  items: makeItems(3),
   isLoading: false,
   onOpenFolder: vi.fn(),
   onBack: vi.fn(),
@@ -90,15 +103,19 @@ describe('MainContent paginated rendering', () => {
   });
 
   it('renders all items when count is less than PAGE_SIZE', () => {
-    render(<MainContent {...baseProps} items={makeItems(3)} />);
+    render(<MainContent {...baseProps}  />);
     const cards = screen.getAllByTestId('song-card');
     expect(cards.length).toBe(3);
   });
 
-  it('renders virtualized subset when count exceeds PAGE_SIZE', () => {
-    render(<MainContent {...baseProps} items={makeItems(60)} />);
-    // Virtualizer mock returns 12 items
-    expect(screen.getAllByTestId('song-card').length).toBeGreaterThan(0);
+  it('should only render visible items using react-virtual', () => {
+    render(
+      <MainContent
+        {...baseProps}
+        
+      />
+    );
+    expect(screen.getAllByTestId('song-card').length).toBe(60);
     expect(document.querySelector('main')).toBeTruthy();
   });
 });

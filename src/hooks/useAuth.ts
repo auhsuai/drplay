@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useAuthStore } from "../store/authStore";
 import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker, stopProSyncWorker, setTokenRefreshHandler, updateWorkerToken } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
 import { clearAllMetadataCache } from "../utils/metadata";
-import { UserProfile } from "../App"; // Or we can extract types to a separate file, but for now reuse from App.tsx
+
 import { showErrorToast } from "../utils/simpleToast";
 
 const AUTH_MODULE = "useAuth";
@@ -22,9 +23,8 @@ const classifyInvokeError = (e: unknown): string => {
 };
 
 export const useAuth = (onLogoutExt?: () => void) => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const { isLoggedIn, accessToken, userProfile, setIsLoggedIn, setAccessToken, setUserProfile } = useAuthStore();
+  
   // Guard against concurrent logout: handleLogout can fire from a manual click,
   // the 'auth-logout' event (dispatched by apiClient), and the 'token-expired'
   // listener at the same time. Without this, onLogoutExt and backend cleanup run

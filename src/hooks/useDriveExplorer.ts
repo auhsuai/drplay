@@ -7,9 +7,15 @@ import { deleteFile, moveFile, createFolder } from '../utils/driveApi';
 import { showErrorToast } from '../utils/simpleToast';
 import { t } from 'i18next';
 
+import { useLiveQuery } from 'dexie-react-hooks';
+import { metadataCache } from '../utils/metadata';
+import { getFolderAudioQuery } from '../utils/audioQuery';
+import { fetchWithAuth } from '../utils/apiClient';
+import { useDriveStore } from '../store/driveStore';
+
 export function useDriveExplorer(
-  items: DriveItem[],
   currentFolderId: string,
+  currentFolderName: string,
   token: string | null,
   onRefresh: () => void,
   onRemoveItem?: (id: string) => void,
@@ -106,6 +112,134 @@ export function useDriveExplorer(
       return a.title.localeCompare(b.title, undefined, { numeric: true });
     });
   }, [globalSearchItemsRaw]);
+
+  const dbFiles = useLiveQuery(
+    () => {
+      if (!currentFolderId) return Promise.resolve<any[]>([]);
+      return db.files.where('parentId').equals(currentFolderId).toArray()
+    },
+    [currentFolderId]
+  );
+
+  const setIsLoadingTracks = useDriveStore(state => state.setIsLoadingTracks);
+
+  // On-Demand Fetching: Kéo nóng 1 trang từ Drive nếu thư mục chưa có trong Dexie
+  useEffect(() => {
+    if (!token || !currentFolderId || currentFolderId === '') return;
+    
+    // Nếu có dữ liệu rồi thì fetch ngầm (không hiện spinner)
+    // Nếu chưa có (dbFiles undefined hoặc = 0), hiện spinner.
+    let isMounted = true;
+    
+    const fetchOnDemand = async () => {
+      try {
+        const count = await db.files.where('parentId').equals(currentFolderId).count();
+        if (count === 0) setIsLoadingTracks(true);
+
+        const q = getFolderAudioQuery(currentFolderId);
+        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,parents,size,modifiedTime)&pageSize=100`;
+        const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
+        
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          if (data.files && data.files.length > 0) {
+            const filesToInsert = data.files.map((f: any) => ({
+              id: f.id,
+              name: f.name,
+              mimeType: f.mimeType,
+              parentId: currentFolderId,
+              size: f.size ? parseInt(f.size, 10) : undefined,
+              modifiedTime: f.modifiedTime,
+              trashed: false,
+              isFolder: f.mimeType === 'application/vnd.google-apps.folder',
+            }));
+            await db.files.bulkPut(filesToInsert);
+          }
+        }
+      } catch (err) {
+        console.warn('[OnDemandFetch] error:', err);
+      } finally {
+        if (isMounted) setIsLoadingTracks(false);
+      }
+    };
+    
+    fetchOnDemand();
+    return () => { isMounted = false; };
+  }, [currentFolderId, token, setIsLoadingTracks]);
+
+  const items = useMemo(() => {
+    if (!dbFiles) return [];
+    const _items: DriveItem[] = dbFiles.map(file => {
+      const title = file.isFolder ? file.name : file.name.replace(/\.[^/.]+$/, "");
+      return {
+        id: file.id,
+        title,
+        isFolder: file.isFolder,
+        size: file.size,
+        modifiedTime: file.modifiedTime,
+        trackInfo: file.isFolder ? undefined : {
+          id: file.id,
+          title,
+          artist: "",
+          streamUrl: "",
+          size: file.size,
+          originalName: file.name,
+          parentId: file.parentId,
+          parentName: currentFolderName,
+        }
+      };
+    });
+
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    return _items.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      
+      switch (sortOption) {
+        case 'name': {
+          const titleA = metadataCache[a.id]?.title || a.title;
+          const titleB = metadataCache[b.id]?.title || b.title;
+          return collator.compare(titleA, titleB);
+        }
+        case 'name desc': {
+          const titleA = metadataCache[a.id]?.title || a.title;
+          const titleB = metadataCache[b.id]?.title || b.title;
+          return collator.compare(titleB, titleA);
+        }
+        case 'modifiedTime': {
+          const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+          const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+          if (timeA === timeB) return collator.compare(a.title, b.title);
+          return timeA - timeB;
+        }
+        case 'modifiedTime desc': {
+          const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+          const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+          if (timeA === timeB) return collator.compare(a.title, b.title);
+          return timeB - timeA;
+        }
+        case 'size': {
+          const diff = (a.size || 0) - (b.size || 0);
+          if (diff === 0) return collator.compare(a.title, b.title);
+          return diff;
+        }
+        case 'size desc': {
+          const diff = (b.size || 0) - (a.size || 0);
+          if (diff === 0) return collator.compare(a.title, b.title);
+          return diff;
+        }
+        default: {
+          const titleA = metadataCache[a.id]?.title || a.title;
+          const titleB = metadataCache[b.id]?.title || b.title;
+          return collator.compare(titleA, titleB);
+        }
+      }
+    });
+  }, [dbFiles, sortOption, currentFolderName]);
+
+  useEffect(() => {
+    // cover prefetches are handled by useCoverPrefetch in MainContent
+  }, [items, token]);
 
   const filteredItems = searchQuery ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / itemsPerPage);

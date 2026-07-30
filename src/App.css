@@ -2,11 +2,15 @@
 @import "tw-animate-css";
 
 @custom-variant dark (&:where(.dark, .dark *));
-body {
+html, body {
   background-color: #ffffff;
   color: #111827; /* gray-900 */
   user-select: none;
   -webkit-user-select: none;
+  /* Prevent rubber-banding / overscroll bounce on touchpads/touchscreens */
+  overscroll-behavior: none;
+  /* Prevent the entire app window from scrolling */
+  overflow: hidden;
   --player-bg-solid: #f3f4f6;
   --player-bg-fade: rgba(243, 244, 246, 0.85);
 }

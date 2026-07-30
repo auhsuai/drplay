@@ -24,7 +24,8 @@
     "react-dom": "^19.1.0",
     "react-easy-crop": "^6.0.2",
     "strtok3": "^10.3.5",
-    "tauri-plugin-keepawake-api": "^0.1.0"
+    "tauri-plugin-keepawake-api": "^0.1.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.1",

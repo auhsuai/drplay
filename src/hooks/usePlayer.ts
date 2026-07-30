@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { set as idbSet } from "../db/kv";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
@@ -8,21 +8,26 @@ import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
 import { showErrorToast } from "../utils/simpleToast";
-import { beginPlaybackIntent, isIntentStale, classifyPlayerError } from "./player/utils";
+import { classifyPlayerError } from "./player/utils";
 import { usePlayerSession } from "./player/usePlayerSession";
 import { usePlayerQueue } from "./player/usePlayerQueue";
 
+import { usePlayerStore } from "../store/playerStore";
+
 export const usePlayer = (accessToken: string | null) => {
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
-  const [loadNonce, setLoadNonce] = useState(0);
-  const triggerReload = useCallback(() => setLoadNonce(n => n + 1), []);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [playMode, setPlayMode] = useState<'normal' | 'shuffle' | 'repeat-all' | 'repeat-one'>('normal');
-  const [originalQueue, setOriginalQueue] = useState<Track[]>([]);
-  const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
-  const [bufferSeconds, setBufferSeconds] = useState(1400);
+  const {
+    currentTrack, setCurrentTrack,
+    loadNonce, triggerReload,
+    isPlaying, setIsPlaying,
+    isDownloading, setIsDownloading,
+    playMode, setPlayMode,
+    originalQueue, setOriginalQueue,
+    playbackQueue, setPlaybackQueue,
+    bufferSeconds, setBufferSeconds
+  } = usePlayerStore();
+  
   const initialBufferRef = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Load session from IDB
   usePlayerSession(setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, setBufferSeconds, triggerReload);
@@ -75,6 +80,8 @@ export const usePlayer = (accessToken: string | null) => {
   const handlePlayTrack = useCallback(async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: any[], activeTab?: string) => {
     if (!accessToken) return;
 
+    const { currentTrack, isPlaying } = usePlayerStore.getState();
+
     if (currentTrack?.id === track.id && !isNavigation) {
       if (!isPlaying) setIsPlaying(true);
       return;
@@ -85,7 +92,13 @@ export const usePlayer = (accessToken: string | null) => {
       targetTrack = updateQueueContext(track, contextQueue, driveItems, activeTab);
     }
 
-    const myId = beginPlaybackIntent();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
     setIsPlaying(false);
     setIsDownloading(true);
 
@@ -102,11 +115,11 @@ export const usePlayer = (accessToken: string | null) => {
     const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
     try {
-      const freshToken = await getValidToken().catch(e => {
+      const freshToken = await getValidToken(false, signal).catch(e => {
+        if (e.name === 'AbortError') throw e;
         console.warn(`[usePlayer] token-refresh-fail`, classifyPlayerError(e));
         return null;
       });
-      if (isIntentStale(myId)) return;
       
       if (!freshToken) {
         setIsDownloading(false);
@@ -121,27 +134,37 @@ export const usePlayer = (accessToken: string | null) => {
 
       maybePrefetchNextTrack(contextQueue, targetTrack);
 
-      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName).then(metadata => {
-        if (metadata.duration && !isIntentStale(myId)) {
+      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName, signal).then(metadata => {
+        if (metadata.duration && !signal.aborted) {
           setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
         }
-      }).catch(e => console.warn(`[usePlayer] metadata-prefetch-fail`, classifyPlayerError(e)));
+      }).catch(e => {
+        if (e.name !== 'AbortError') {
+           console.warn(`[usePlayer] metadata-prefetch-fail`, classifyPlayerError(e));
+        }
+      });
       
-    } catch (e) {
-      if (isIntentStale(myId)) return;
+    } catch (e: any) {
+      if (e.name === 'AbortError') return;
       console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
       showErrorToast("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
     } finally {
-      if (!isIntentStale(myId)) {
+      if (!signal.aborted) {
         setIsDownloading(false);
       }
     }
-  }, [accessToken, currentTrack, isPlaying, triggerReload, updateQueueContext]);
+  }, [accessToken, triggerReload, updateQueueContext, setIsPlaying, setIsDownloading, setCurrentTrack]);
 
   const handleTogglePlay = useCallback(async () => {
     if (currentTrack) {
       if (!currentTrack.streamUrl && !isPlaying) {
-        const myId = beginPlaybackIntent();
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+        }
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+        const signal = abortController.signal;
+
         const prefetchedUrl = getPrefetchedStreamUrl(currentTrack.id);
         
         if (prefetchedUrl) {
@@ -153,36 +176,35 @@ export const usePlayer = (accessToken: string | null) => {
 
         setIsDownloading(true);
         try {
-          const freshToken = await getValidToken();
-          if (isIntentStale(myId)) return;
+          const freshToken = await getValidToken(false, signal);
           if (!freshToken) {
             setIsDownloading(false);
             return;
           }
           try {
-            await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName);
-          } catch (e) {
-            console.warn(`[usePlayer] bitrate-resume-fail`, classifyPlayerError(e));
+            await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName, signal);
+          } catch (e: any) {
+            if (e.name !== 'AbortError') console.warn(`[usePlayer] bitrate-resume-fail`, classifyPlayerError(e));
           }
 
           const url = `/drive-stream/${currentTrack.id}`;
-          if (isIntentStale(myId)) return;
           
           setCurrentTrack(prev => prev ? { ...prev, streamUrl: url } : prev);
           triggerReload();
           setIsPlaying(true);
-        } catch (e) {
-          if (isIntentStale(myId)) return;
+        } catch (e: any) {
+          if (e.name === 'AbortError') return;
           console.error(`[usePlayer] stream-url-resume-fail`, classifyPlayerError(e));
           showErrorToast("Could not start playback. Please try another track.");
         } finally {
-          if (!isIntentStale(myId)) setIsDownloading(false);
+          if (!signal.aborted) setIsDownloading(false);
         }
       } else {
-        setIsPlaying(!isPlaying);
+        const { isPlaying: currentIsPlaying } = usePlayerStore.getState();
+        setIsPlaying(!currentIsPlaying);
       }
     }
-  }, [currentTrack, isPlaying, triggerReload]);
+  }, [currentTrack, triggerReload, setIsDownloading, setCurrentTrack, setIsPlaying]);
 
   return {
     currentTrack, setCurrentTrack, loadNonce, triggerReload,

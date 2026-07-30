@@ -106,7 +106,9 @@ function scheduleRetryRefresh() {
   }, RETRY_DELAY);
 }
 
-export const getValidToken = async (forceRefresh: boolean = false): Promise<string | null> => {
+export const getValidToken = async (forceRefresh: boolean = false, signal?: AbortSignal): Promise<string | null> => {
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
   const token = localStorage.getItem("drplay_access_token");
   const issueTime = getStoredTokenTime();
   const isExpired = Date.now() - issueTime > 50 * 60 * 1000;
@@ -117,6 +119,8 @@ export const getValidToken = async (forceRefresh: boolean = false): Promise<stri
       window.dispatchEvent(new CustomEvent('auth-logout'));
       return null;
     }
+
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
     if (isRefreshing) {
       return new Promise((resolve, reject) => {

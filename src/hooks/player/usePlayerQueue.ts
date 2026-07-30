@@ -8,9 +8,9 @@ export function usePlayerQueue(
   playbackQueue: Track[],
   originalQueue: Track[],
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one',
-  setPlaybackQueue: React.Dispatch<React.SetStateAction<Track[]>>,
-  setOriginalQueue: React.Dispatch<React.SetStateAction<Track[]>>,
-  setPlayMode: React.Dispatch<React.SetStateAction<'normal' | 'shuffle' | 'repeat-all' | 'repeat-one'>>,
+  setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
+  setOriginalQueue: (queue: Track[]) => void,
+  setPlayMode: (mode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one' | ((prev: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one') => 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one')) => void,
   handlePlayTrack: (track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: any[], activeTab?: string) => void
 ) {
 

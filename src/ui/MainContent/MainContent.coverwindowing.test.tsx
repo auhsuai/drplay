@@ -46,15 +46,6 @@ vi.mock('../../utils/normalizeText', () => ({
   normalizeText: (s: string) => s.toLowerCase(),
 }));
 
-// Capture the coverUrl prop MainContent passes down to each SongCard.
-const receivedCoverUrls: Array<string | null | undefined> = [];
-vi.mock('./components/SongCard', () => ({
-  SongCard: vi.fn(({ item, coverUrl }: { item: DriveItem; coverUrl?: string | null }) => {
-    receivedCoverUrls.push(coverUrl);
-    return <div data-testid="song-card" data-item-id={item.id} />;
-  }),
-}));
-
 function makeItems(n: number): DriveItem[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `id${i}`,
@@ -71,10 +62,34 @@ function makeItems(n: number): DriveItem[] {
   }));
 }
 
+vi.mock('../../hooks/useDriveExplorer', () => ({
+  useDriveExplorer: () => ({
+    currentItems: makeItems(3),
+    filteredItems: makeItems(3),
+    currentPage: 1,
+    hasMoreItems: false,
+    handleBulkMove: vi.fn(),
+    handleBulkDelete: vi.fn(),
+    handleDownloadMultiple: vi.fn(),
+    totalSize: 0,
+    searchQuery: '',
+    setSearchQuery: vi.fn(),
+  })
+}));
+
+// Capture the coverUrl prop MainContent passes down to each SongCard.
+const receivedCoverUrls: Array<string | null | undefined> = [];
+vi.mock('./components/SongCard', () => ({
+  SongCard: vi.fn(({ item, coverUrl }: { item: DriveItem; coverUrl?: string | null }) => {
+    receivedCoverUrls.push(coverUrl);
+    return <div data-testid="song-card" data-item-id={item.id} />;
+  }),
+}));
+
 const baseProps = {
   activeTab: 'Drive',
   onPlay: vi.fn(),
-  items: makeItems(3),
+  
   isLoading: false,
   onOpenFolder: vi.fn(),
   onBack: vi.fn(),
@@ -98,11 +113,11 @@ describe('MainContent cover windowing layer', () => {
   });
 
   it('coverUrl may be passed from batch fetch layer or undefined (mock)', () => {
-    render(<MainContent {...baseProps} items={makeItems(3)} />);
+    render(<MainContent {...baseProps} />);
     const cards = screen.getAllByTestId('song-card');
     expect(cards.length).toBe(3);
     // With invoke mocked to return null, coverUrl will be undefined,
     // but the batch-fetch effect should fire without error.
-    expect(() => render(<MainContent {...baseProps} items={makeItems(3)} />)).not.toThrow();
+    expect(() => render(<MainContent {...baseProps} />)).not.toThrow();
   });
 });

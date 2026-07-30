@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from "react";
-import { useVirtualizer, type ReactVirtualizer } from '@tanstack/react-virtual';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Track, DriveItem } from "../../App";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -22,7 +22,6 @@ import { PaginationControls } from "./components/PaginationControls";
 interface MainContentProps {
   activeTab: string;
   onPlay: (track: Track, contextQueue?: Track[]) => void;
-  items: DriveItem[];
   isLoading: boolean;
   onOpenFolder: (id: string, name: string) => void;
   onBack: () => void;
@@ -43,7 +42,6 @@ interface MainContentProps {
 export const MainContent = React.memo(function MainContent({ 
   activeTab, 
   onPlay, 
-  items, 
   isLoading, 
   onOpenFolder, 
   onBack, 
@@ -70,8 +68,8 @@ export const MainContent = React.memo(function MainContent({
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = React.useState(false);
 
   const explorer = useDriveExplorer(
-    items,
     currentFolderId,
+    currentFolderName,
     token,
     onRefresh,
     onRemoveItem,
@@ -130,16 +128,8 @@ export const MainContent = React.memo(function MainContent({
     }
   }, [currentFolderId, highlightedFileId]);
 
-  // Virtualizer
-  const rowVirtualizer = useVirtualizer({
-    count: explorer.currentItems.length,
-    getScrollElement: () => mainRef.current,
-    estimateSize: () => 92,
-    overscan: 2,
-    getItemKey: (index: number) => explorer.currentItems[index].id,
-    useFlushSync: false,
-    directDomUpdates: true,
-  });
+  // Virtualizer is now isolated inside VirtualizedSongList
+  const virtualizedListRef = useRef<{ scrollToIndex: (index: number, options?: any) => void }>(null);
 
   // Handle highlight scrolling
   useEffect(() => {
@@ -151,15 +141,15 @@ export const MainContent = React.memo(function MainContent({
           explorer.setCurrentPage(targetPage);
           setTimeout(() => {
             const pageIndex = index % explorer.itemsPerPage;
-            rowVirtualizer.scrollToIndex(pageIndex, { align: 'center' });
+            virtualizedListRef.current?.scrollToIndex(pageIndex, { align: 'center' });
           }, 50);
         } else {
           const pageIndex = index % explorer.itemsPerPage;
-          rowVirtualizer.scrollToIndex(pageIndex, { align: 'center' });
+          virtualizedListRef.current?.scrollToIndex(pageIndex, { align: 'center' });
         }
       }
     }
-  }, [highlightedFileId, explorer.currentPage, explorer.filteredItems, rowVirtualizer, explorer]);
+  }, [highlightedFileId, explorer.currentPage, explorer.filteredItems, explorer]);
 
   useEffect(() => {
     clearPrefetchedStreams();
@@ -167,12 +157,15 @@ export const MainContent = React.memo(function MainContent({
   }, [currentFolderId]);
 
   const handlePlay = useCallback((t: Track) => {
-    const queue = explorer.currentItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
+    const queue = explorer.filteredItems.filter(f => !f.isFolder && f.trackInfo).map(f => f.trackInfo!);
     onPlay(t, queue);
-  }, [explorer.currentItems, onPlay]);
+  }, [explorer.filteredItems, onPlay]);
+
+  const handleBulkMoveClick = useCallback(() => setShowBulkMoveScreen(true), []);
+  const handleBulkDeleteClick = useCallback(() => setShowBulkDeleteConfirm(true), []);
 
   return (
-    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto relative transition-colors duration-300" style={{ contain: 'layout style paint' }}>
+    <main ref={mainRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto overscroll-none relative transition-colors duration-300" style={{ contain: 'layout style paint' }}>
       {showBulkMoveScreen && token && (
         <FolderSelectionScreen
           token={token}
@@ -216,8 +209,8 @@ export const MainContent = React.memo(function MainContent({
               return new Set(explorer.filteredItems.map(i => i.id));
             });
           }}
-          onBulkMoveClick={() => setShowBulkMoveScreen(true)}
-          onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
+          onBulkMoveClick={handleBulkMoveClick}
+          onBulkDeleteClick={handleBulkDeleteClick}
         />
       </div>
         
@@ -236,8 +229,9 @@ export const MainContent = React.memo(function MainContent({
         ) : (
           <>
             <VirtualizedSongList
+              ref={virtualizedListRef}
+              scrollElementRef={mainRef}
               items={explorer.currentItems}
-              rowVirtualizer={rowVirtualizer}
               onPlay={handlePlay}
               onOpenFolder={onOpenFolder}
               token={token}
@@ -252,8 +246,8 @@ export const MainContent = React.memo(function MainContent({
               selectedIds={explorer.selectedIds}
               setSelectedIds={explorer.setSelectedIds}
               setIsSelectionMode={explorer.setIsSelectionMode}
-              onBulkMoveClick={() => setShowBulkMoveScreen(true)}
-              onBulkDeleteClick={() => setShowBulkDeleteConfirm(true)}
+              onBulkMoveClick={handleBulkMoveClick}
+              onBulkDeleteClick={handleBulkDeleteClick}
               coverUrlMap={coverUrlsRef.current}
             />
 
@@ -261,7 +255,7 @@ export const MainContent = React.memo(function MainContent({
               currentPage={explorer.currentPage}
               totalPages={explorer.totalPages}
               setCurrentPage={explorer.setCurrentPage}
-              rowVirtualizer={rowVirtualizer}
+              onScrollTop={() => virtualizedListRef.current?.scrollToIndex(0, { align: 'start' })}
             />
           </>
         )}
@@ -285,9 +279,9 @@ export const MainContent = React.memo(function MainContent({
   );
 });
 
-const VirtualizedSongList = React.memo(function VirtualizedSongList({
+const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSongList({
   items,
-  rowVirtualizer,
+  scrollElementRef,
   onPlay,
   onOpenFolder,
   token,
@@ -307,7 +301,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
   coverUrlMap,
 }: {
   items: DriveItem[];
-  rowVirtualizer: ReactVirtualizer<HTMLElement, Element>;
+  scrollElementRef: React.RefObject<HTMLElement | null>;
   onPlay: (track: Track) => void;
   onOpenFolder: (id: string, name: string) => void;
   token: string | null;
@@ -325,15 +319,31 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
   onBulkMoveClick: () => void;
   onBulkDeleteClick: () => void;
   coverUrlMap?: Map<string, string>;
-}) {
+}, ref: React.ForwardedRef<{ scrollToIndex: (index: number, options?: any) => void }>) {
+  const rowVirtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize: () => 92,
+    overscan: 15,
+    getItemKey: (index: number) => items[index].id,
+    useFlushSync: false,
+  });
+
+  React.useImperativeHandle(ref, () => ({
+    scrollToIndex: (index, options) => {
+      rowVirtualizer.scrollToIndex(index, options);
+    }
+  }));
+
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
     <div
-      ref={rowVirtualizer.containerRef}
       style={{
         position: 'relative',
         width: '100%',
+        height: `${rowVirtualizer.getTotalSize()}px`,
+        pointerEvents: rowVirtualizer.isScrolling ? 'none' : 'auto',
       }}
     >
       {virtualItems.map((virtualRow) => {
@@ -343,17 +353,19 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
           <div
             key={virtualRow.key}
             data-index={virtualRow.index}
-            ref={rowVirtualizer.measureElement}
             className="pb-3"
             style={{
               position: 'absolute',
+              top: 0,
               left: 0,
               width: '100%',
+              height: `${virtualRow.size}px`,
+              transform: `translateY(${virtualRow.start}px)`,
             }}
           >
             <SongCard
               item={item}
-              onPlay={(track) => onPlay(track)}
+              onPlay={onPlay}
               onOpenFolder={onOpenFolder}
               token={token}
               currentFolderId={currentFolderId}
@@ -362,7 +374,7 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
               coverUrl={coverUrlMap?.get(item.trackInfo?.id ?? '')}
               isHighlighted={item.id === highlightedFileId?.id}
               highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
-              isPlaying={item.trackInfo?.id === isPlaying}
+              isPlaying={!!isPlaying && item.trackInfo?.id === isPlaying}
               onRefresh={onRefresh}
               onRemoveItem={onRemoveItem}
               isSelectionMode={isSelectionMode}
@@ -387,4 +399,4 @@ const VirtualizedSongList = React.memo(function VirtualizedSongList({
       })}
     </div>
   );
-});
+}));
