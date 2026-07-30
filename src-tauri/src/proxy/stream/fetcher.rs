@@ -68,8 +68,15 @@ pub fn spawn_fetcher(
                 &track_id, current_offset, PREFETCH_BATCH_SLICES,
             ).await;
 
+            if fetch_start > current_offset {
+                // A background prefetcher just inserted the slice at current_offset
+                // into the cache between our try_get and find_missing_run calls.
+                // Go back to the top of the loop so the cache-hit path can SEND it,
+                // otherwise we would skip sending this slice and corrupt the stream!
+                continue;
+            }
+
             if count == 0 {
-                current_offset += crate::slice_cache::SLICE_SIZE;
                 continue;
             }
 
