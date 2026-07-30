@@ -129,37 +129,6 @@ fn query_cover_url(
     Some(path)
 }
 
-// Async priority 0: if the DB row carries an R2 object key (cover_url/thumb_url),
-// fetch the bytes directly from R2 server-side. Keeps R2 credentials off the JS
-// layer — the webview still only sees http://drplay.localhost/cover?...
-async fn handle_cover_get_r2(
-    raw_id: &str,
-    _thumb: bool,
-    pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
-) -> Option<(String, Bytes)> {
-    let (cover_url, thumb_url) = match pool.and_then(|p| query_cover_url(p, raw_id)) {
-        Some(v) => v,
-        None => return None,
-    };
-    // Legacy DB rows sometimes have cover_url/thumb_url SWAPPED or store a
-    // bogus value (e.g. the file extension "mp3") in one of the columns.
-    // Accept whichever column holds a valid R2 key ("covers/..."); the webview
-    // scales the full image down for thumbnails, so either key works.
-    let key = cover_url.as_ref().filter(|k| k.starts_with("covers/"))
-        .or_else(|| thumb_url.as_ref().filter(|k| k.starts_with("covers/")));
-    let key = match key {
-        Some(k) if !k.trim().is_empty() => k,
-        _ => return None,
-    };
-    match crate::r2::get_cover_bytes(key).await {
-        Ok(data) => {
-            let etag = format!("\"{:x}\"", md5::compute(&data));
-            Some((etag, Bytes::from(data)))
-        }
-        Err(_e) => None
-    }
-}
-
 async fn handle_cover_get<R: tauri::Runtime>(
     raw_id: &str,
     thumb: bool,
@@ -221,16 +190,6 @@ async fn handle_cover_get<R: tauri::Runtime>(
 
     // Steps 1-3 wrapped in a labeled block for single cleanup point.
     let result = 'fetch: {
-        // Step 1: R2 object storage (server-side fetch of cover_url/thumb_url).
-        if let Some(r2_result) = handle_cover_get_r2(raw_id, thumb, pool).await {
-            COVER_CACHE.insert(cache_key.clone(), r2_result.clone()).await;
-            if let Ok(mut r) = recorder.lock() {
-                r.record(raw_id);
-            }
-            eprintln!("[PERF] handle_cover_get {} source=R2 took {:?}", raw_id, _start.elapsed());
-            break 'fetch Ok((r2_result.0, r2_result.1, "image/jpeg"));
-        }
-
         // Step 2: SQLite blob fallback — only for ids without drive_ prefix (legacy records)
         if let Some(pool) = pool {
             if !raw_id.starts_with(crate::thumbnail::PREFIX) {

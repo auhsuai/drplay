@@ -12,7 +12,6 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Manager;
 
 pub mod protocol;
-pub mod r2;
 mod thumbnail;
 
 #[command]
