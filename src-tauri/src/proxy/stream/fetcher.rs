@@ -150,6 +150,12 @@ pub fn spawn_fetcher(
                                     return;
                                 }
                             }
+                            // Advance current_offset only when a slice is successfully sent
+                            current_offset = slice_offset + crate::slice_cache::SLICE_SIZE;
+                        } else {
+                            // If we waited for a background prefetcher and it fetched fewer slices
+                            // than our `count`, we must stop here. The outer loop will fetch the rest.
+                            break;
                         }
                     }
 
@@ -169,7 +175,6 @@ pub fn spawn_fetcher(
                     retry_deadline = None;
                     crate::proxy::GLOBAL_BACKOFF_UNTIL.store(0, Ordering::Release);
                     crate::proxy::FAIL_COUNT.store(0, Ordering::Relaxed);
-                    current_offset = fetch_end_slice;
                 }
                 Err(err) => {
                     log::warn!("[proxy] batch-fetch-fail: {:?}", err);
