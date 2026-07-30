@@ -8,6 +8,7 @@ import greetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { PremiumCard } from "./components/PremiumCard";
 import { FullRecentView } from "./components/FullRecentView";
+import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 
 export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: { 
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
@@ -99,13 +100,16 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
     if (ids.length > 0) prefetchVisibleTracks(ids);
   }, [recent, heavy, discover, recentlyAdded]);
 
+  const visibleCount = useResponsiveItems();
+
   if (showFullRecent) {
     return <FullRecentView recent={recent} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} />;
   }
 
-  const quickAccess = recent.slice(0, 5);
-  const discoverItems = discover.length > 0 ? discover : [];
-  const heavyItems = heavy.length > 0 ? heavy.slice(0, 5) : [];
+  const quickAccess = recent.slice(0, visibleCount);
+  const discoverItems = discover.length > 0 ? discover.slice(0, visibleCount) : [];
+  const heavyItems = heavy.length > 0 ? heavy.slice(0, visibleCount) : [];
+  const recentlyAddedItems = recentlyAdded.length > 0 ? recentlyAdded.slice(0, visibleCount) : [];
 
   return (
     <main className="flex-1 bg-white dark:bg-[#0A0A0A] overflow-y-auto custom-scrollbar transition-colors duration-300">
@@ -130,7 +134,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {quickAccess.map((track, index) => {
-                const isOverlay = index === 4 && recent.length > 4;
+                const isOverlay = index === visibleCount - 1 && recent.length > visibleCount;
                 return (
                   <PremiumCard 
                     key={track.id} 
@@ -153,8 +157,8 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
               Recently Added to Drive
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {recentlyAdded.slice(0, 5).map(track => (
-                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, recentlyAdded)} token={token} />
+              {recentlyAddedItems.map(track => (
+                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, recentlyAddedItems)} token={token} />
               ))}
             </div>
           </div>
