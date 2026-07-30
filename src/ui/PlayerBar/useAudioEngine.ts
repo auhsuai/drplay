@@ -4,7 +4,7 @@ import { safePlay, safePause } from '../../utils/safeAudio';
 import { updateTrackDuration } from '../../utils/metadata';
 import { captureError } from '../../utils/errorLog';
 import { getValidToken } from '../../utils/apiClient';
-import { invoke } from '@tauri-apps/api/core';
+
 import { set as idbSet } from '../../db/kv';
 import { PlayerAction, AudioRefs } from './types';
 import { decideDecodeFailure, isProxyStreamUrl } from './streamError';

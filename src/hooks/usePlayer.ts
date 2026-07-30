@@ -371,7 +371,7 @@ export const usePlayer = (accessToken: string | null) => {
 
         setIsDownloading(true);
         try {
-          let bitrate = undefined;
+
           const freshToken = await getValidToken();
           if (isIntentStale(myId)) return;
           
@@ -380,9 +380,8 @@ export const usePlayer = (accessToken: string | null) => {
             return;
           }
           try {
-            const metadata = await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName);
+            await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName);
             if (isIntentStale(myId)) return;
-            bitrate = metadata.bitrate;
           } catch (e) {
             console.warn(`[usePlayer] bitrate-resume-fail`, classifyPlayerError(e));
           }
