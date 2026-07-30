@@ -503,7 +503,7 @@ export const MainContent = React.memo(function MainContent({
                     <span className="text-gray-400 mx-1">/</span>
                     <button 
                       onClick={() => onBreadcrumbClick(folder.id, folder.name, index)}
-                      className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] dark:hover:text-[#4285F4] hover:bg-[#4285F4]/5 px-2 py-1 rounded-md transition-colors truncate max-w-[150px]"
+                      className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] transition-colors truncate max-w-[150px]"
                       title={folder.name}
                     >
                       {folder.name}
