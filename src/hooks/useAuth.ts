@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useShallow } from 'zustand/react/shallow';
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "../store/authStore";
 import { listen } from "@tauri-apps/api/event";
@@ -23,7 +24,14 @@ const classifyInvokeError = (e: unknown): string => {
 };
 
 export const useAuth = (onLogoutExt?: () => void) => {
-  const { isLoggedIn, accessToken, userProfile, setIsLoggedIn, setAccessToken, setUserProfile } = useAuthStore();
+  const { isLoggedIn, accessToken, userProfile, setIsLoggedIn, setAccessToken, setUserProfile } = useAuthStore(useShallow(state => ({
+    isLoggedIn: state.isLoggedIn,
+    accessToken: state.accessToken,
+    userProfile: state.userProfile,
+    setIsLoggedIn: state.setIsLoggedIn,
+    setAccessToken: state.setAccessToken,
+    setUserProfile: state.setUserProfile
+  })));
   
   // Guard against concurrent logout: handleLogout can fire from a manual click,
   // the 'auth-logout' event (dispatched by apiClient), and the 'token-expired'

@@ -44,13 +44,11 @@ interface SongCardProps {
   isPlaying?: boolean;
   isSelectionMode?: boolean;
   isSelected?: boolean;
-  onToggleSelection?: () => void;
-  onEnableSelectionMode?: () => void;
+  onToggleSelection?: (id: string) => void;
+  onEnableSelectionMode?: (id: string) => void;
   hideMenu?: boolean;
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
-  /** Windowing-injected cover. When provided the card MUST NOT self-fetch. */
-  coverUrl?: string | null;
 }
 
 export const SongCard = React.memo(function SongCard({ 
@@ -72,17 +70,16 @@ export const SongCard = React.memo(function SongCard({
   onEnableSelectionMode,
   hideMenu,
   onBulkMoveClick,
-  onBulkDeleteClick,
-  coverUrl: injectedCoverUrl
+  onBulkDeleteClick
 }: SongCardProps) {
   const { t } = useTranslation();
   const [coverUrl, setCoverUrl] = useState<string | null>(() => {
-    if (injectedCoverUrl !== undefined) return injectedCoverUrl;
     return coverImageCache.get(item.id) ?? null;
   });
   const metadataRef = useRef({ title: item.title, artist: null as string | null, duration: 0, size: 0 });
   const [, forceRender] = useState(0);
   const cardRef = React.useRef<HTMLDivElement>(null);
+  const imgRef = React.useRef<HTMLImageElement>(null);
   const [isFlashOn, setIsFlashOn] = useState(false);
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
@@ -118,15 +115,8 @@ export const SongCard = React.memo(function SongCard({
     }
   }, [isHighlighted, highlightTrigger]);
 
-  // Keep the injected cover in sync when the windowing layer provides/clears it.
   React.useEffect(() => {
-    if (typeof injectedCoverUrl === 'string') {
-      setCoverUrl(injectedCoverUrl);
-    }
-  }, [injectedCoverUrl]);
-
-  React.useEffect(() => {
-    if (!shouldFetch || item.isFolder || !token) return;
+    if (item.isFolder || !token) return;
 
     const controller = new AbortController();
     let isMounted = true;
@@ -134,10 +124,8 @@ export const SongCard = React.memo(function SongCard({
 
       const fetchMetadata = async () => {
         try {
-        performance.mark(`meta-fetch-${item.id}`);
-        const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
-        performance.measure(`meta-fetch-${item.id}`, `meta-fetch-${item.id}`);
-        if (!isMounted) return;
+          const metadata = await getTrackMetadata(item.id, token, item.trackInfo?.size, item.trackInfo?.originalName, controller.signal);
+          if (!isMounted) return;
         const newMeta = {
           title: metadata.title || item.title,
           artist: metadata.artist || null,
@@ -157,14 +145,12 @@ export const SongCard = React.memo(function SongCard({
             if (oldest !== undefined) coverImageCache.delete(oldest);
           }
         }
-        if (typeof injectedCoverUrl !== 'string') {
-          if (metadata.coverUrl) {
-            setCoverUrl(metadata.coverUrl);
-          } else if (metadata.pictureData && metadata.pictureFormat) {
-            const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
-            objectUrl = URL.createObjectURL(blob);
-            setCoverUrl(objectUrl);
-          }
+        if (metadata.coverUrl) {
+          setCoverUrl(metadata.coverUrl);
+        } else if (metadata.pictureData && metadata.pictureFormat) {
+          const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
+          objectUrl = URL.createObjectURL(blob);
+          setCoverUrl(objectUrl);
         }
       } catch (e) {
         const { name, message } = classifyCardError(e);
@@ -194,9 +180,12 @@ export const SongCard = React.memo(function SongCard({
       clearTimeout(timerId);
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (imgRef.current) {
+        imgRef.current.src = "";
+      }
       window.removeEventListener('metadata-updated', handleMetadataUpdated);
     };
-  }, [item.id, token, injectedCoverUrl, shouldFetch]);
+  }, [item.id, token, shouldFetch]);
 
   return (
     <div className="relative w-full">
@@ -204,7 +193,7 @@ export const SongCard = React.memo(function SongCard({
         ref={cardRef}
         onClick={() => {
           if (isSelectionMode) {
-            onToggleSelection?.();
+            onToggleSelection?.(item.id);
           } else {
             item.isFolder ? onOpenFolder(item.id, metadataRef.current.title) : onPlay({
               ...item.trackInfo!,
@@ -241,7 +230,7 @@ export const SongCard = React.memo(function SongCard({
       )}
       <div className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-500' : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!bg-[#4285F4]/10 !text-[#4285F4]' : 'text-gray-400'}`}`}>
         {coverUrl && !item.isFolder ? (
-          <img src={coverUrl} alt="cover" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
+          <img ref={imgRef} src={coverUrl} alt="cover" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
         ) : item.isFolder ? (
           <Folder className="w-6 h-6" fill="currentColor" />
         ) : (
@@ -295,7 +284,7 @@ export const SongCard = React.memo(function SongCard({
             anchorPoint={contextMenuPos}
             onOpenChange={setIsThreeDotsMenuOpen}
             onSelectMultiple={() => {
-              onEnableSelectionMode?.();
+              onEnableSelectionMode?.(item.id);
             }}
             isBulkSelected={isSelectionMode && isSelected}
             onBulkMoveClick={onBulkMoveClick}
@@ -309,7 +298,6 @@ export const SongCard = React.memo(function SongCard({
   );
 }, (prev, next) => {
   return prev.item.id === next.item.id &&
-         prev.coverUrl === next.coverUrl &&
          prev.isPlaying === next.isPlaying &&
          prev.isSelected === next.isSelected &&
          prev.isSelectionMode === next.isSelectionMode &&

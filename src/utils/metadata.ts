@@ -74,7 +74,7 @@ async function putCacheEntry(key: string, entry: CacheEntry): Promise<void> {
 }
 
 export const metadataCache: Record<string, CachedMetadata> = {};
-const MAX_MEM_CACHE = 300; // ~90KB max (300 bytes/entry for metadata title+artist+duration)
+const MAX_MEM_CACHE = 1000; // ~300KB max (300 bytes/entry for metadata title+artist+duration)
 const memCacheKeys: string[] = [];
 
 function setMetadataCache(fileId: string, entry: CachedMetadata) {

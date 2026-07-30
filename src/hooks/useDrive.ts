@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback } from "react";
+import { useShallow } from 'zustand/react/shallow';
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { recordFolderVisit } from "../utils/history";
@@ -20,7 +21,13 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     currentFolderName, setCurrentFolderName,
     folderHistory, setFolderHistory,
     sortOption, setSortOption
-  } = useDriveStore();
+  } = useDriveStore(useShallow(state => ({
+    appRootFolder: state.appRootFolder, setAppRootFolder: state.setAppRootFolder,
+    currentFolderId: state.currentFolderId, setCurrentFolderId: state.setCurrentFolderId,
+    currentFolderName: state.currentFolderName, setCurrentFolderName: state.setCurrentFolderName,
+    folderHistory: state.folderHistory, setFolderHistory: state.setFolderHistory,
+    sortOption: state.sortOption, setSortOption: state.setSortOption
+  })));
 
   // Gate the nav-state persistence effect until initApp has finished restoring.
   // Prevents the placeholder currentFolderId="root" (set before hydration) from

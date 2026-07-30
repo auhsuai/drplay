@@ -13,7 +13,6 @@ import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 
 import { useDriveExplorer } from "../../hooks/useDriveExplorer";
-import { useCoverPrefetch } from "../../hooks/useCoverPrefetch";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
@@ -75,8 +74,6 @@ export const MainContent = React.memo(function MainContent({
     onRemoveItem,
     sortOption
   );
-
-  const coverUrlsRef = useCoverPrefetch(explorer.currentItems);
 
   useEffect(() => {
     isInitialMount.current = false;
@@ -248,7 +245,6 @@ export const MainContent = React.memo(function MainContent({
               setIsSelectionMode={explorer.setIsSelectionMode}
               onBulkMoveClick={handleBulkMoveClick}
               onBulkDeleteClick={handleBulkDeleteClick}
-              coverUrlMap={coverUrlsRef.current}
             />
 
             <PaginationControls
@@ -298,7 +294,6 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
   setIsSelectionMode,
   onBulkMoveClick,
   onBulkDeleteClick,
-  coverUrlMap,
 }: {
   items: DriveItem[];
   scrollElementRef: React.RefObject<HTMLElement | null>;
@@ -318,7 +313,6 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
   setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
   onBulkMoveClick: () => void;
   onBulkDeleteClick: () => void;
-  coverUrlMap?: Map<string, string>;
 }, ref: React.ForwardedRef<{ scrollToIndex: (index: number, options?: any) => void }>) {
   const rowVirtualizer = useVirtualizer({
     count: items.length,
@@ -336,6 +330,20 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
   }));
 
   const virtualItems = rowVirtualizer.getVirtualItems();
+
+  const handleToggleSelection = React.useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, [setSelectedIds]);
+
+  const handleEnableSelectionMode = React.useCallback((id: string) => {
+    setIsSelectionMode(true);
+    setSelectedIds(new Set([id]));
+  }, [setIsSelectionMode, setSelectedIds]);
 
   return (
     <div
@@ -371,7 +379,6 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
               currentFolderId={currentFolderId}
               currentFolderName={currentFolderName}
               folderHistory={folderHistory}
-              coverUrl={coverUrlMap?.get(item.trackInfo?.id ?? '')}
               isHighlighted={item.id === highlightedFileId?.id}
               highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
               isPlaying={!!isPlaying && item.trackInfo?.id === isPlaying}
@@ -379,18 +386,8 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
               onRemoveItem={onRemoveItem}
               isSelectionMode={isSelectionMode}
               isSelected={selectedIds.has(item.id)}
-              onToggleSelection={() => {
-                setSelectedIds(prev => {
-                  const next = new Set(prev);
-                  if (next.has(item.id)) next.delete(item.id);
-                  else next.add(item.id);
-                  return next;
-                });
-              }}
-              onEnableSelectionMode={() => {
-                setIsSelectionMode(true);
-                setSelectedIds(new Set([item.id]));
-              }}
+              onToggleSelection={handleToggleSelection}
+              onEnableSelectionMode={handleEnableSelectionMode}
               onBulkMoveClick={onBulkMoveClick}
               onBulkDeleteClick={onBulkDeleteClick}
             />

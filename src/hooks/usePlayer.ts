@@ -1,8 +1,10 @@
 import { useEffect, useRef, useCallback } from "react";
+import { useShallow } from 'zustand/react/shallow';
 import { invoke } from "@tauri-apps/api/core";
 import { set as idbSet } from "../db/kv";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
 import { Track } from "../App";
+import { recordPlay } from "../utils/history";
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
@@ -24,7 +26,16 @@ export const usePlayer = (accessToken: string | null) => {
     originalQueue, setOriginalQueue,
     playbackQueue, setPlaybackQueue,
     bufferSeconds, setBufferSeconds
-  } = usePlayerStore();
+  } = usePlayerStore(useShallow(state => ({
+    currentTrack: state.currentTrack, setCurrentTrack: state.setCurrentTrack,
+    loadNonce: state.loadNonce, triggerReload: state.triggerReload,
+    isPlaying: state.isPlaying, setIsPlaying: state.setIsPlaying,
+    isDownloading: state.isDownloading, setIsDownloading: state.setIsDownloading,
+    playMode: state.playMode, setPlayMode: state.setPlayMode,
+    originalQueue: state.originalQueue, setOriginalQueue: state.setOriginalQueue,
+    playbackQueue: state.playbackQueue, setPlaybackQueue: state.setPlaybackQueue,
+    bufferSeconds: state.bufferSeconds, setBufferSeconds: state.setBufferSeconds
+  })));
   
   const initialBufferRef = useRef(true);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -131,6 +142,8 @@ export const usePlayer = (accessToken: string | null) => {
       triggerReload();
       setIsPlaying(true);
       setIsDownloading(false);
+
+      recordPlay(targetTrack).catch(e => console.warn(`[usePlayer] recordPlay-fail`, classifyPlayerError(e)));
 
       maybePrefetchNextTrack(contextQueue, targetTrack);
 

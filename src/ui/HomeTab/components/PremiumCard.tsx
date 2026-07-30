@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Track } from '../../../App';
 import { getTrackMetadata } from '../../../utils/metadata';
 import { Play, Music, MoreHorizontal } from 'lucide-react';
@@ -12,6 +12,7 @@ export const getFillColor = (str: string) => {
 };
 
 export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onPlay: () => void, token: string | null, isOverlayBtn?: boolean }) {
+  const imgRef = useRef<HTMLImageElement>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const fillColor = getFillColor(track.id);
   const [title, setTitle] = useState(track.title);
@@ -39,6 +40,7 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
       isMounted = false; 
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (imgRef.current) imgRef.current.src = "";
     };
   }, [track.id, token]);
   
@@ -52,7 +54,7 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
         className="w-full aspect-square rounded-2xl mb-4 relative overflow-hidden flex items-center justify-center shadow-sm"
       >
         {coverUrl ? (
-          <img src={coverUrl} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+          <img ref={imgRef} src={coverUrl} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
         ) : (
           <Music className="w-12 h-12 text-white opacity-80 group-hover:scale-110 transition-transform duration-700" />
         )}

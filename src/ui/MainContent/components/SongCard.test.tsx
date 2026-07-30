@@ -55,28 +55,16 @@ describe('SongCard coverUrl prop', () => {
     cleanup();
   });
 
-  it('fetches metadata even when coverUrl prop is provided (just skips cover)', async () => {
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} coverUrl="http://injected/cover" />);
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
-    await screen.findByText('Fetched Title');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
-  });
-
-  it('self-fetches when no coverUrl prop is given', async () => {
+  it('self-fetches on mount', async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
-    // Cover eventually shows from fetched metadata.
+    await screen.findByText('Fetched Title');
     await screen.findByAltText('cover');
     expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
   });
 
-  it('fetches metadata when injectedCoverUrl is null', async () => {
-    render(<SongCard {...baseProps} item={makeItem()} coverUrl={null} />);
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    await screen.findByAltText('cover');
-  });
+
 
   it('caches and reuses coverUrl from cache on remount', async () => {
     const { unmount, container } = render(<SongCard {...baseProps} item={makeItem()} />);
@@ -108,10 +96,10 @@ describe('SongCard coverUrl prop', () => {
       pictureFormat: undefined,
     } as never);
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} coverUrl="http://injected/cover" />
+      <SongCard {...baseProps} item={makeItem()} />
     );
     await screen.findByText('Updated Title');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/2');
     mockedFetch.mockClear();
     mockedFetch.mockResolvedValue({
       title: 'Re-fetched Title',
@@ -123,6 +111,6 @@ describe('SongCard coverUrl prop', () => {
     window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
     await screen.findByText('Re-fetched Title');
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://injected/cover');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/3');
   });
 });

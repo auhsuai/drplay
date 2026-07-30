@@ -42,45 +42,15 @@ export function useDriveExplorer(
   }, [currentFolderId]);
 
   // Global search data loading
-  const allFiles = useDebouncedLiveQuery(async () => {
+  const globalSearchItemsRaw = useDebouncedLiveQuery(async () => {
     if (!searchQuery) return undefined;
-    const files = await db.files.toArray();
-    return files.map(f => ({
-      id: f.id,
-      parentId: f.parentId,
-      name: f.name,
-      isFolder: f.isFolder,
-      size: f.size,
-      modifiedTime: f.modifiedTime,
-    }));
-  }, [searchQuery], 100);
-
-  const parentMap = useMemo(() => {
-    if (!allFiles) return new Map<string, string>();
-    const map = new Map<string, string>();
-    allFiles.forEach(f => map.set(f.id, f.parentId));
-    return map;
-  }, [allFiles]);
-
-  const globalSearchItemsRaw = useMemo(() => {
-    if (!searchQuery || !allFiles) return [];
     const query = normalizeText(searchQuery);
-
-    const matches = allFiles.filter(f => normalizeText(f.name).includes(query));
-
-    if (!currentFolderId || currentFolderId === 'root' || currentFolderId === '') {
-      return matches;
-    }
-
-    return matches.filter(f => {
-      let current: string | undefined = f.parentId;
-      while (current) {
-        if (current === currentFolderId) return true;
-        current = parentMap.get(current);
-      }
-      return false;
-    });
-  }, [searchQuery, allFiles, currentFolderId, parentMap]);
+    const matches = await db.files
+      .filter(f => normalizeText(f.name).includes(query))
+      .limit(100)
+      .toArray();
+    return matches;
+  }, [searchQuery], 150);
 
   const globalSearchItems = useMemo(() => {
     if (!globalSearchItemsRaw) return [];
@@ -137,24 +107,36 @@ export function useDriveExplorer(
         if (count === 0) setIsLoadingTracks(true);
 
         const q = getFolderAudioQuery(currentFolderId);
-        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,parents,size,modifiedTime)&pageSize=100`;
-        const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
-        
-        if (res.ok && isMounted) {
+        let hasMore = true;
+        let pageToken: string | undefined = undefined;
+        let allFetchedFiles: any[] = [];
+
+        while (hasMore && isMounted) {
+          const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ''}`;
+          const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
+          
+          if (!res.ok) break;
           const data = await res.json();
-          if (data.files && data.files.length > 0) {
-            const filesToInsert = data.files.map((f: any) => ({
-              id: f.id,
-              name: f.name,
-              mimeType: f.mimeType,
-              parentId: currentFolderId,
-              size: f.size ? parseInt(f.size, 10) : undefined,
-              modifiedTime: f.modifiedTime,
-              trashed: false,
-              isFolder: f.mimeType === 'application/vnd.google-apps.folder',
-            }));
-            await db.files.bulkPut(filesToInsert);
+          if (data.files) {
+            allFetchedFiles.push(...data.files);
           }
+          
+          pageToken = data.nextPageToken;
+          if (!pageToken) hasMore = false;
+        }
+
+        if (isMounted && allFetchedFiles.length > 0) {
+          const filesToInsert = allFetchedFiles.map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType,
+            parentId: currentFolderId,
+            size: f.size ? parseInt(f.size, 10) : undefined,
+            modifiedTime: f.modifiedTime,
+            trashed: false,
+            isFolder: f.mimeType === 'application/vnd.google-apps.folder',
+          }));
+          await db.files.bulkPut(filesToInsert);
         }
       } catch (err) {
         console.warn('[OnDemandFetch] error:', err);
