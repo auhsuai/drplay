@@ -4,7 +4,7 @@
 //
 // Runs before `tauri dev` and `tauri build`. Safe to run repeatedly; skips
 // silently if the source config is missing (e.g. on a clean clone without keys).
-import { existsSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,10 +14,10 @@ const src = join(root, "src-tauri", "r2_config.json");
 
 if (!existsSync(src)) {
   console.warn(
-    "[copy-r2-config] src-tauri/r2_config.json not found (gitignored) — skipping. " +
+    "[copy-r2-config] src-tauri/r2_config.json not found (gitignored) — creating dummy config for Tauri bundler. " +
       "The R2 cover proxy will fall back to local/legacy sources until a config is provided.",
   );
-  process.exit(0);
+  writeFileSync(src, JSON.stringify({ dummy: true }));
 }
 
 const targets = [
