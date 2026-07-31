@@ -1,7 +1,17 @@
 import { db } from "../db/db";
 import { invoke } from "@tauri-apps/api/core";
+import { captureError } from './errorLog';
 
 const META_MODULE = "metadata";
+const METADATA_LRU_KEY = '__drplay_metadata_lru';
+const METADATA_KEY_PREFIX = 'metadata_';
+const UNKNOWN_ARTIST = 'Unknown Artist';
+const FALLBACK_AUDIO_FILENAME = 'audio.mp3';
+const METADATA_UPDATED_EVENT = 'metadata-updated';
+const IPC_GET_LOCAL_METADATA = 'get_local_metadata';
+const IPC_VERIFY_TRACK_EXISTS = 'verify_track_exists';
+const IPC_UPDATE_TRACK_DURATION = 'update_track_duration_in_db';
+const COVER_URL_BASE = 'http://drplay.localhost/cover';
 
 function classifyMetaError(err: unknown): { name: string; message: string } {
   if (err instanceof Error) {
@@ -13,10 +23,10 @@ function classifyMetaError(err: unknown): { name: string; message: string } {
 const MAX_LRU_CACHE = 100;
 let lruKeys: string[] = [];
 try {
-  const stored = localStorage.getItem('__drplay_metadata_lru');
+  const stored = localStorage.getItem(METADATA_LRU_KEY);
   if (stored) lruKeys = JSON.parse(stored);
-} catch (e) {
-  console.warn(`[${META_MODULE}] lru-load-failed`, classifyMetaError(e));
+} catch (e: unknown) {
+  captureError({ level: 'warn', source: META_MODULE, message: `lru-load-failed: ${classifyMetaError(e).message}` });
 }
 
 function updateLRU(key: string) {
@@ -26,14 +36,14 @@ function updateLRU(key: string) {
   while (lruKeys.length > MAX_LRU_CACHE) {
     const oldest = lruKeys.shift();
     if (oldest) {
-      db.metadataCache.delete(oldest).catch(e => console.error(`[${META_MODULE}] lru-delete-failed`, classifyMetaError(e)));
+      db.metadataCache.delete(oldest).catch(e => captureError({ level: 'error', source: META_MODULE, message: `lru-delete-failed: ${classifyMetaError(e).message}` }));
     }
   }
   
   try {
-    localStorage.setItem('__drplay_metadata_lru', JSON.stringify(lruKeys));
-  } catch (e) {
-    console.warn(`[${META_MODULE}] lru-save-failed`, classifyMetaError(e));
+    localStorage.setItem(METADATA_LRU_KEY, JSON.stringify(lruKeys));
+  } catch (e: unknown) {
+    captureError({ level: 'warn', source: META_MODULE, message: `lru-save-failed: ${classifyMetaError(e).message}` });
   }
 }
 
@@ -93,7 +103,7 @@ function setMetadataCache(fileId: string, entry: CachedMetadata) {
 export function cacheTrackMetadata(fileId: string, entry: CachedMetadata): CachedMetadata {
   const stored: CachedMetadata = { ...entry, pictureDataFull: null };
   setMetadataCache(fileId, stored);
-  setCache(`metadata_${fileId}`, stored, true).catch((e) => console.warn(`[${META_MODULE}] cache-set-failed`, classifyMetaError(e)));
+  setCache(`${METADATA_KEY_PREFIX}${fileId}`, stored, true).catch((e) => captureError({ level: 'warn', source: META_MODULE, message: `cache-set-failed: ${classifyMetaError(e).message}` }));
   return entry;
 }
 
@@ -109,15 +119,15 @@ async function setCache(
 ): Promise<void> {
   if (newEntry.dbId && !skipVerify) {
     try {
-      const exists = await invoke<boolean>('verify_track_exists', { dbId: newEntry.dbId });
+      const exists = await invoke<boolean>(IPC_VERIFY_TRACK_EXISTS, { dbId: newEntry.dbId });
       if (!exists) {
         newEntry.dbId = undefined;
         newEntry.v = Math.min(newEntry.v ?? 0, 9);
         newEntry.coverUrl = undefined;
         newEntry.fullCoverUrl = undefined;
       }
-      } catch (e) {
-        console.warn(`[${META_MODULE}] verify-track-exists-failed`, classifyMetaError(e), { dbId: newEntry.dbId });
+      } catch (e: unknown) {
+        captureError({ level: 'warn', source: META_MODULE, message: `verify-track-exists-failed (dbId=${String(newEntry.dbId)}): ${classifyMetaError(e).message}` });
       }
     }
 
@@ -150,48 +160,48 @@ async function getTrackMetadataImpl(
   }
 
   const safeSize = size ?? 0;
-  const safeName = name ?? 'audio.mp3';
+  const safeName = name ?? FALLBACK_AUDIO_FILENAME;
 
   // 0. IDB Check
   if (!forceNetwork) {
     try {
-      const cached = await getCacheEntry(`metadata_${fileId}`);
+      const cached = await getCacheEntry(`${METADATA_KEY_PREFIX}${fileId}`);
       if (cached && cached.data && cached.data.v >= 9) {
         setMetadataCache(fileId, cached.data);
         return cached.data;
       }
-    } catch (e) {
-      console.warn(`[${META_MODULE}] idb-read-failed`, classifyMetaError(e), { fileId });
+    } catch (e: unknown) {
+      captureError({ level: 'warn', source: META_MODULE, message: `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}` });
     }
   }
 
   // 1. Dedup check
   if (!forceNetwork) {
     try {
-      const local = await invoke<{ id: string; title: string; artist: string; album: string; duration: number; has_cover: boolean; file_type: string } | null>('get_local_metadata', {
+      const local = await invoke<{ id: string; title: string; artist: string; album: string; duration: number; has_cover: boolean; file_type: string } | null>(IPC_GET_LOCAL_METADATA, {
         size: Number(safeSize),
         name: safeName,
       });
       if (local?.id) {
         const entry = {
           title: local.title || safeName.replace(/\.[^.]+$/, ''),
-          artist: local.artist || 'Unknown Artist',
+          artist: local.artist || UNKNOWN_ARTIST,
           album: local.album,
           duration: local.duration,
           durationEstimated: false,
           pictureData: null,
           pictureDataFull: null,
           dbId: local.id,
-          coverUrl: local.has_cover ? `http://drplay.localhost/cover?id=${local.id}&thumb=true&v=2` : undefined,
-          fullCoverUrl: local.has_cover ? `http://drplay.localhost/cover?id=${local.id}&thumb=false&v=2` : undefined,
+          coverUrl: local.has_cover ? `${COVER_URL_BASE}?id=${local.id}&thumb=true&v=2` : undefined,
+          fullCoverUrl: local.has_cover ? `${COVER_URL_BASE}?id=${local.id}&thumb=false&v=2` : undefined,
           size: safeSize,
           v: 10,
         };
         setMetadataCache(fileId, entry);
         return entry;
       }
-    } catch (e) {
-      console.warn(`[${META_MODULE}] local-metadata-failed`, classifyMetaError(e), { fileId, size: safeSize, name: safeName });
+    } catch (e: unknown) {
+      captureError({ level: 'warn', source: META_MODULE, message: `local-metadata-failed (fileId=${fileId}, size=${safeSize}, name=${safeName}): ${classifyMetaError(e).message}` });
     }
   }
 
@@ -203,7 +213,7 @@ async function getTrackMetadataImpl(
   // Fallback: v:9 placeholder (no cover data)
   const entry: CachedMetadata = {
     title: safeName.replace(/\.[^.]+$/, ''),
-    artist: 'Unknown Artist',
+    artist: UNKNOWN_ARTIST,
     duration: 0,
     durationEstimated: true,
     pictureData: null,
@@ -261,7 +271,7 @@ export async function updateTrackDuration(fileId: string, accurateDuration: numb
     metadataCache[fileId].duration = accurateDuration;
     metadataCache[fileId].durationEstimated = false;
   }
-  const key = `metadata_${fileId}`;
+  const key = `${METADATA_KEY_PREFIX}${fileId}`;
   const entry = await getCacheEntry(key);
   if (entry?.data) {
     entry.data.duration = accurateDuration;
@@ -271,11 +281,11 @@ export async function updateTrackDuration(fileId: string, accurateDuration: numb
 
     if (entry.data.dbId) {
       try {
-        await invoke('update_track_duration_in_db', { dbId: entry.data.dbId, duration: accurateDuration });
-      } catch (e) {
-        console.error(`[${META_MODULE}] duration-sync-failed`, classifyMetaError(e));
+        await invoke(IPC_UPDATE_TRACK_DURATION, { dbId: entry.data.dbId, duration: accurateDuration });
+      } catch (e: unknown) {
+        captureError({ level: 'error', source: META_MODULE, message: `duration-sync-failed: ${classifyMetaError(e).message}` });
       }
     }
-    window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId } }));
+    window.dispatchEvent(new CustomEvent(METADATA_UPDATED_EVENT, { detail: { fileId } }));
   }
 }

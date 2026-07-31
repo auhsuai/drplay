@@ -6,12 +6,20 @@ import { normalizeText } from '../utils/normalizeText';
 import { deleteFile, moveFile, createFolder } from '../utils/driveApi';
 import { showErrorToast } from '../utils/simpleToast';
 import { t } from 'i18next';
+import { captureError } from '../utils/errorLog';
 
 import { useLiveQuery } from 'dexie-react-hooks';
 import { metadataCache } from '../utils/metadata';
 import { getFolderAudioQuery } from '../utils/audioQuery';
 import { fetchWithAuth } from '../utils/apiClient';
 import { useDriveStore } from '../store/driveStore';
+
+const MODULE = 'useDriveExplorer';
+const GOOGLE_FOLDER_MIME = 'application/vnd.google-apps.folder';
+const GLOBAL_SEARCH_LIMIT = 100;
+const DRIVE_PAGE_SIZE = 1000;
+const DEBOUNCE_DELAY_MS = 150;
+const SEARCH_RESULT_LABEL = 'Search Result';
 
 export function useDriveExplorer(
   currentFolderId: string,
@@ -47,10 +55,10 @@ export function useDriveExplorer(
     const query = normalizeText(searchQuery);
     const matches = await db.files
       .filter(f => normalizeText(f.name).includes(query))
-      .limit(100)
+      .limit(GLOBAL_SEARCH_LIMIT)
       .toArray();
     return matches;
-  }, [searchQuery], 150);
+  }, [searchQuery], DEBOUNCE_DELAY_MS);
 
   const globalSearchItems = useMemo(() => {
     if (!globalSearchItemsRaw) return [];
@@ -71,7 +79,7 @@ export function useDriveExplorer(
           size: file.size,
           originalName: file.name,
           parentId: file.parentId,
-          parentName: "Search Result",
+          parentName: SEARCH_RESULT_LABEL,
         }
       };
     });
@@ -111,11 +119,11 @@ export function useDriveExplorer(
         let pageToken: string | undefined = undefined;
 
         while (hasMore && isMounted) {
-          const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ''}`;
+          const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)&pageSize=${DRIVE_PAGE_SIZE}${pageToken ? `&pageToken=${pageToken}` : ''}`;
           const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
 
           if (!res.ok) {
-            console.warn(`[OnDemandFetch] Drive API error: HTTP ${res.status} (folder=${currentFolderId})`);
+            captureError({ level: 'warn', source: MODULE, message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
             break;
           }
           const data = await res.json();
@@ -131,12 +139,12 @@ export function useDriveExplorer(
               size: f.size ? parseInt(f.size, 10) : undefined,
               modifiedTime: f.modifiedTime,
               trashed: false,
-              isFolder: f.mimeType === 'application/vnd.google-apps.folder',
+              isFolder: f.mimeType === GOOGLE_FOLDER_MIME,
             }));
             try {
               await db.files.bulkPut(filesToInsert);
             } catch (dbErr) {
-              console.error(`[OnDemandFetch] Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}):`, dbErr);
+              captureError({ level: 'error', source: MODULE, message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
               break;
             }
           }
@@ -146,10 +154,9 @@ export function useDriveExplorer(
         }
       } catch (err) {
         if (err instanceof TypeError) {
-          // Network-level failure from fetch (DNS, offline, CORS, aborted).
-          console.warn(`[OnDemandFetch] network error (folder=${currentFolderId}):`, err);
+          captureError({ level: 'warn', source: MODULE, message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}` });
         } else {
-          console.error(`[OnDemandFetch] unexpected error (folder=${currentFolderId}):`, err);
+          captureError({ level: 'error', source: MODULE, message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}` });
         }
       } finally {
         if (isMounted) setIsLoadingTracks(false);
@@ -252,7 +259,7 @@ export function useDriveExplorer(
           id: res.id,
           name: res.name || folderName,
           parentId: currentFolderId,
-          mimeType: 'application/vnd.google-apps.folder',
+          mimeType: GOOGLE_FOLDER_MIME,
           isFolder: true,
           trashed: false,
           modifiedTime: new Date().toISOString()
@@ -260,8 +267,8 @@ export function useDriveExplorer(
       }
       onRefresh();
       onComplete();
-    } catch (e) {
-      console.error("[useDriveExplorer] create-folder: Failed to create folder", e);
+    } catch (e: unknown) {
+      captureError({ level: 'error', source: MODULE, message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.create_folder_error') || "Failed to create folder");
     } finally {
       setIsCreatingFolder(false);
@@ -283,9 +290,9 @@ export function useDriveExplorer(
         try {
           await deleteFile(token, id);
           deletedIds.push(id);
-        } catch (e) {
+        } catch (e: unknown) {
           failedIds.push(id);
-          console.error(`[useDriveExplorer] bulk-delete: Failed to delete item ${id}`, e);
+          captureError({ level: 'error', source: MODULE, message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
         }
       }
       if (deletedIds.length > 0) {
@@ -295,8 +302,8 @@ export function useDriveExplorer(
       if (failedIds.length > 0) {
         showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
       }
-    } catch (e) {
-      console.error("[useDriveExplorer] bulk-delete: Unexpected error", e);
+    } catch (e: unknown) {
+      captureError({ level: 'error', source: MODULE, message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
     } finally {
       setIsBulkOperating(false);
@@ -319,9 +326,9 @@ export function useDriveExplorer(
         try {
           await moveFile(token, id, currentFolderId, destinationFolderId);
           movedIds.push(id);
-        } catch (e) {
+        } catch (e: unknown) {
           failedIds.push(id);
-          console.error(`[useDriveExplorer] bulk-move: Failed to move item ${id}`, e);
+          captureError({ level: 'error', source: MODULE, message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
         }
       }
       for (const id of movedIds) {
@@ -331,8 +338,8 @@ export function useDriveExplorer(
       if (failedIds.length > 0) {
         showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
       }
-    } catch (e) {
-      console.error("[useDriveExplorer] bulk-move: Unexpected error", e);
+    } catch (e: unknown) {
+      captureError({ level: 'error', source: MODULE, message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
     } finally {
       setIsBulkOperating(false);

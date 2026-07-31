@@ -1,5 +1,6 @@
 import { fetchWithAuth } from './apiClient';
 import { getAudioFilesQuery } from './audioQuery';
+import { captureError } from './errorLog';
 
 // Google Drive API resilience layer.
 // Official guidance (developers.google.com/workspace/drive/api/guides/limits):
@@ -7,6 +8,9 @@ import { getAudioFilesQuery } from './audioQuery';
 // backoff + jitter; honor the Retry-After header when present. 4xx (400/401/404)
 // are NOT retried here — 401 refresh is handled inside fetchWithAuth.
 const DRIVE_MODULE = "driveApi";
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const CONFIG_FILENAME = 'drplay_config.json';
+const APP_DATA_FOLDER = 'appDataFolder';
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1000;
@@ -85,7 +89,7 @@ export async function driveFetch(
 export async function createFolder(token: string, name: string, parentId: string): Promise<any> {
   const metadata = {
     name: name,
-    mimeType: 'application/vnd.google-apps.folder',
+    mimeType: FOLDER_MIME,
     parents: [parentId]
   };
 
@@ -166,10 +170,7 @@ export async function moveFile(token: string, fileId: string, currentParentId: s
       errData?.error?.message && typeof errData.error.message === "string"
         ? errData.error.message
         : null;
-    console.error(`[${DRIVE_MODULE}] move-file-failed`, {
-      status: response.status,
-      message: detail,
-    });
+    captureError({ level: 'error', source: DRIVE_MODULE, message: `move-file-failed (status=${response.status}): ${detail ?? 'no detail'}` });
     throw new Error(`Failed to move file (${response.status})`);
   }
   return response.json();
@@ -247,7 +248,7 @@ export async function searchFolders(token: string, query: string, signal?: Abort
 
 // List immediate folder children (subfolders only, not trashed).
 export async function listFolderChildren(token: string, folderId: string, signal?: AbortSignal): Promise<any[]> {
-  const q = `'${folderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder'`;
+  const q = `'${folderId}' in parents and trashed=false and mimeType='${FOLDER_MIME}'`;
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name`;
   const response = await driveFetch(url, {
     headers: { 'Authorization': `Bearer ${token}` },
@@ -305,7 +306,7 @@ export async function getTrashedFiles(token: string, query: string, signal?: Abo
 
 // App Configuration in appDataFolder
 export async function getAppConfig(token: string): Promise<any> {
-  const q = "name = 'drplay_config.json' and 'appDataFolder' in parents";
+  const q = `name = '${CONFIG_FILENAME}' and '${APP_DATA_FOLDER}' in parents`;
   const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
   
   try {
@@ -327,8 +328,8 @@ export async function getAppConfig(token: string): Promise<any> {
         return await downloadRes.json();
       }
     }
-  } catch (e) {
-    console.error(`[${DRIVE_MODULE}] get-config-failed`, classifyDriveError(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: DRIVE_MODULE, message: `get-config-failed: ${classifyDriveError(e)}` });
   }
   return null;
 }
@@ -340,7 +341,7 @@ export async function getAppConfig(token: string): Promise<any> {
 let saveConfigChain: Promise<unknown> = Promise.resolve();
 
 async function saveAppConfigInternal(token: string, config: any): Promise<boolean> {
-  const q = "name = 'drplay_config.json' and 'appDataFolder' in parents";
+  const q = `name = '${CONFIG_FILENAME}' and '${APP_DATA_FOLDER}' in parents`;
   const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
 
   try {
@@ -361,9 +362,9 @@ async function saveAppConfigInternal(token: string, config: any): Promise<boolea
     const close_delim = `\r\n--${boundary}--`;
 
     const metadata = {
-      name: 'drplay_config.json',
+      name: CONFIG_FILENAME,
       mimeType: 'application/json',
-      ...(fileId ? {} : { parents: ['appDataFolder'] })
+      ...(fileId ? {} : { parents: [APP_DATA_FOLDER] })
     };
 
     const multipartRequestBody =
@@ -389,12 +390,12 @@ async function saveAppConfigInternal(token: string, config: any): Promise<boolea
     });
 
     if (!uploadRes.ok) {
-      console.error(`[${DRIVE_MODULE}] save-config-upload-failed`, { status: uploadRes.status });
+      captureError({ level: 'error', source: DRIVE_MODULE, message: `save-config-upload-failed (status=${uploadRes.status})` });
       return false;
     }
     return true;
-  } catch (e) {
-    console.error(`[${DRIVE_MODULE}] save-config-failed`, classifyDriveError(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: DRIVE_MODULE, message: `save-config-failed: ${classifyDriveError(e)}` });
     return false;
   }
 }
