@@ -43,11 +43,15 @@ export const usePlayer = (accessToken: string | null) => {
   // Load session from IDB
   usePlayerSession(setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, triggerReload);
 
+  const handlePlayTrackRef = useRef<typeof handlePlayTrack>(undefined);
+  const stableHandlePlayTrack = useCallback((track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: unknown[], activeTab?: string) => {
+    handlePlayTrackRef.current?.(track, contextQueue, isNavigation, driveItems, activeTab);
+  }, []);
+
   // Initialize queue handlers
   const { handleNextTrack, handlePrevTrack, handleTogglePlayMode, updateQueueContext } = usePlayerQueue(
     currentTrack, playbackQueue, originalQueue, playMode, setPlaybackQueue, setOriginalQueue, setPlayMode, 
-    // handlePlayTrack will be passed via wrapper to avoid dependency issues
-    (t, c, i, d, a) => handlePlayTrack(t, c, i, d, a)
+    stableHandlePlayTrack
   );
 
   // Keep system awake
@@ -79,6 +83,15 @@ export const usePlayer = (accessToken: string | null) => {
     return () => window.removeEventListener(PLAYER_STOP_EVENT, handleStop);
   }, []);
 
+  const createAbortSignal = (): AbortSignal => {
+    abortControllerRef.current?.abort();
+    const ctrl = new AbortController();
+    abortControllerRef.current = ctrl;
+    return ctrl.signal;
+  };
+
+  useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
+
   const handlePlayTrack = useCallback(async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: unknown[], activeTab?: string) => {
     if (!accessToken) return;
 
@@ -94,12 +107,7 @@ export const usePlayer = (accessToken: string | null) => {
       targetTrack = updateQueueContext(track, contextQueue, driveItems, activeTab);
     }
 
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
+    const signal = createAbortSignal();
 
     setIsPlaying(false);
     setIsDownloading(true);
@@ -162,16 +170,12 @@ export const usePlayer = (accessToken: string | null) => {
       }
     }
   }, [accessToken, triggerReload, updateQueueContext, setIsPlaying, setIsDownloading, setCurrentTrack]);
+  handlePlayTrackRef.current = handlePlayTrack;
 
   const handleTogglePlay = useCallback(async () => {
     if (currentTrack) {
       if (!currentTrack.streamUrl && !isPlaying) {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-        const abortController = new AbortController();
-        abortControllerRef.current = abortController;
-        const signal = abortController.signal;
+        const signal = createAbortSignal();
 
         const prefetchedUrl = getPrefetchedStreamUrl(currentTrack.id);
         
