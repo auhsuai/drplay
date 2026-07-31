@@ -41,6 +41,7 @@ export function useLocateFile(
   const pendingEnsuredFileId = useRef<string | null>(null);
 
   useEffect(() => {
+    let mounted = true;
     const handleLocateFile = async (ev: Event) => {
       let fileId = (ev as CustomEvent<{ fileId: string }>).detail?.fileId;
       if (!fileId || !accessToken) return;
@@ -124,6 +125,7 @@ export function useLocateFile(
           });
           if (response.ok) {
             const data = await response.json();
+            if (!mounted) return;
             if (data.parents && data.parents.length > 0) {
               parentId = data.parents[0];
             }
@@ -134,6 +136,7 @@ export function useLocateFile(
 
         if (!parentId) {
           const fileInfo = await db.files.get(fileId);
+          if (!mounted) return;
           if (fileInfo && fileInfo.parentId) {
             parentId = fileInfo.parentId;
           }
@@ -148,6 +151,7 @@ export function useLocateFile(
           folderName = MY_DRIVE_LABEL;
         } else {
           const parentInfo = await db.files.get(parentId);
+          if (!mounted) return;
           if (parentInfo) {
             folderName = parentInfo.name;
           } else {
@@ -156,6 +160,7 @@ export function useLocateFile(
               });
               if (pRes.ok) {
                 const pData = await pRes.json();
+                if (!mounted) return;
                 folderName = pData.name;
               }
           }
@@ -168,6 +173,7 @@ export function useLocateFile(
         }
 
         const newHistory = await rebuildHistory(parentId);
+        if (!mounted) return;
         
         setFolderHistory(newHistory);
         pendingEnsuredFileId.current = fileId;
@@ -179,12 +185,15 @@ export function useLocateFile(
       } catch (err: unknown) {
         captureError({ level: 'error', source: 'useLocateFile', message: `Locate file failed: ${classifyAppError(err)}` });
       } finally {
-        setIsLoadingTracks(false);
+        if (mounted) setIsLoadingTracks(false);
       }
     };
 
     window.addEventListener(EVENT_LOCATE_FILE, handleLocateFile);
-    return () => window.removeEventListener(EVENT_LOCATE_FILE, handleLocateFile);
+    return () => {
+      mounted = false;
+      window.removeEventListener(EVENT_LOCATE_FILE, handleLocateFile);
+    };
   }, [accessToken, currentFolderId, setActiveTab, setCurrentFolderId, setCurrentFolderName, setFolderHistory, setIsLoadingTracks]);
 
   return { highlightedFileId, pendingEnsuredFileId };

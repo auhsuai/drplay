@@ -15,11 +15,13 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
 
   useEffect(() => {
+    let ignore = false;
     if (isMenuOpen) {
-      getPlaylists().then(setPlaylists).catch((err: unknown) => captureError({ level: 'error', source: 'useMenuPlaylists', message: `Failed to load playlists: ${err instanceof Error ? err.message : String(err)}` }));
+      getPlaylists().then(data => { if (!ignore) setPlaylists(data); }).catch((err: unknown) => captureError({ level: 'error', source: 'useMenuPlaylists', message: `Failed to load playlists: ${err instanceof Error ? err.message : String(err)}` }));
     } else {
       setShowPlaylistsSubmenu(false);
     }
+    return () => { ignore = true; };
   }, [isMenuOpen]);
 
   useEffect(() => {

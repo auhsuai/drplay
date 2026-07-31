@@ -10,7 +10,6 @@ export function useServiceWorker() {
   useEffect(() => {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register(SW_SCOPE).then(reg => {
-        console.log('[SW] Registered', reg);
         const token = localStorage.getItem(TOKEN_STORAGE_KEY);
         if (token && reg.active) {
           reg.active.postMessage({ type: MSG_UPDATE_TOKEN, token });
