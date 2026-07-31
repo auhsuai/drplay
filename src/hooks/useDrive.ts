@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { recordFolderVisit } from "../utils/history";
 import { getAppConfig, saveAppConfig } from "../utils/driveApi";
-import { getValidToken } from "../utils/apiClient";
+import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 
@@ -15,6 +15,8 @@ const LS_CURRENT_FOLDER_NAME = 'drplay_current_folder_name';
 const LS_FOLDER_HISTORY = 'drplay_folder_history';
 const DB_NAV_STATE_KEY = 'drplay_nav_state';
 const ROOT_VERIFY_TIMEOUT_MS = 15_000;
+const GD_ROOT_ID = 'root';
+const GD_MY_DRIVE_LABEL = 'My Drive';
 
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
@@ -35,7 +37,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   })));
 
   // Gate the nav-state persistence effect until initApp has finished restoring.
-  // Prevents the placeholder currentFolderId="root" (set before hydration) from
+  // Prevents the placeholder currentFolderId=GD_ROOT_ID (set before hydration) from
   // being persisted and racing with the restore read, which would make the app
   // open the real Google Drive root instead of the configured app root folder.
   const hydratedRef = useRef(false);
@@ -72,7 +74,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   localRoot = remoteConfig.rootFolderId;
                 }
                 const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
-                const verifyRes = await fetch(verifyUrl, {
+                const verifyRes = await fetchWithAuth(verifyUrl, {
                   headers: { Authorization: `Bearer ${freshToken}` },
                   signal: AbortSignal.any([controller.signal, AbortSignal.timeout(ROOT_VERIFY_TIMEOUT_MS)]),
                 });
@@ -123,24 +125,30 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
             const state = await db.syncState.get(DB_NAV_STATE_KEY);
             if (cancelled) return;
             if (state && state.value) {
-              const raw = state.value as Record<string, unknown> | null | undefined;
-              if (raw && typeof raw.id === 'string') {
-                const sv = {
-                  id: raw.id,
-                  name: typeof raw.name === 'string' ? raw.name : 'My Drive',
-                  history: Array.isArray(raw.history)
-                    ? raw.history as { id: string; name: string }[]
-                    : [],
-                };
-                const savedId = sv.id;
-                const suspectRoot = savedId === 'root' && localRoot !== 'root';
-                const restoredId = suspectRoot && localRoot ? localRoot : savedId;
-                setCurrentFolderId(restoredId);
-                setCurrentFolderName(restoredId === localRoot || restoredId === 'root' ? "My Drive" : sv.name);
-                setFolderHistory(suspectRoot ? [] : sv.history);
+              const raw = state.value;
+              if (raw && typeof raw === 'object' && 'id' in raw) {
+                const obj = raw as Record<string, unknown>;
+                if (typeof obj.id === 'string') {
+                  const sv = {
+                    id: obj.id,
+                    name: typeof obj.name === 'string' ? obj.name : GD_MY_DRIVE_LABEL,
+                    history: Array.isArray(obj.history)
+                      ? obj.history as { id: string; name: string }[]
+                      : [],
+                  };
+                  const savedId = sv.id;
+                  const suspectRoot = savedId === GD_ROOT_ID && localRoot !== GD_ROOT_ID;
+                  const restoredId = suspectRoot && localRoot ? localRoot : savedId;
+                  setCurrentFolderId(restoredId);
+                  setCurrentFolderName(restoredId === localRoot || restoredId === GD_ROOT_ID ? GD_MY_DRIVE_LABEL : sv.name);
+                  setFolderHistory(suspectRoot ? [] : sv.history);
+                } else {
+                  setCurrentFolderId(localRoot);
+                  setCurrentFolderName(GD_MY_DRIVE_LABEL);
+                }
               } else {
                 setCurrentFolderId(localRoot);
-                setCurrentFolderName("My Drive");
+                setCurrentFolderName(GD_MY_DRIVE_LABEL);
               }
             } else {
               const savedCurrentId = localStorage.getItem(LS_CURRENT_FOLDER_ID);
@@ -149,7 +157,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
               if (savedCurrentId && savedCurrentName && savedHistoryStr) {
                 setCurrentFolderId(savedCurrentId);
-                setCurrentFolderName(savedCurrentId === 'root' ? "My Drive" : savedCurrentName);
+                setCurrentFolderName(savedCurrentId === GD_ROOT_ID ? GD_MY_DRIVE_LABEL : savedCurrentName);
                 try {
                   setFolderHistory(JSON.parse(savedHistoryStr));
                 } catch (e: unknown) {
@@ -158,14 +166,14 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                 }
               } else {
                 setCurrentFolderId(localRoot);
-                setCurrentFolderName("My Drive");
+                setCurrentFolderName(GD_MY_DRIVE_LABEL);
               }
             }
           } catch (e: unknown) {
             if (cancelled) return;
             captureError({ level: 'warn', source: 'useDrive', message: `nav-state-restore-failed: ${classifyError(e)}` });
             setCurrentFolderId(localRoot);
-            setCurrentFolderName("My Drive");
+            setCurrentFolderName(GD_MY_DRIVE_LABEL);
           }
         } else {
           setAppRootFolder(null);
@@ -195,7 +203,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       cancelled = true;
       controller.abort();
     };
-  }, [isLoggedIn, accessToken]);
+  }, [isLoggedIn, accessToken, setSortOption]);
 
   // Save folder navigation state whenever it changes
   useEffect(() => {
@@ -225,8 +233,8 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       const newHistory = [...folderHistory];
       const previousFolder = newHistory.pop();
       setFolderHistory(newHistory);
-      setCurrentFolderId(previousFolder?.id || appRootFolder || "root");
-      setCurrentFolderName(previousFolder?.name || "My Drive");
+      setCurrentFolderId(previousFolder?.id || appRootFolder || GD_ROOT_ID);
+      setCurrentFolderName(previousFolder?.name || GD_MY_DRIVE_LABEL);
     }
   }, [folderHistory, appRootFolder, setFolderHistory, setCurrentFolderId, setCurrentFolderName]);
 
@@ -241,7 +249,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     localStorage.setItem(LS_ROOT_FOLDER, folderId);
     setAppRootFolder(folderId);
     setCurrentFolderId(folderId);
-    setCurrentFolderName("My Drive");
+    setCurrentFolderName(GD_MY_DRIVE_LABEL);
     setFolderHistory([]);
     try {
       await db.files.clear();
@@ -249,7 +257,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       const freshToken = await getValidToken();
       if (freshToken) {
         try {
-          const saved = await saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: "My Drive", updatedAt: Date.now() });
+          const saved = await saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: GD_MY_DRIVE_LABEL, updatedAt: Date.now() });
           if (!saved) {
             captureError({ level: 'warn', source: 'useDrive', message: 'save-config-unsaved: app config was not persisted to Drive' });
           }
