@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useShallow } from 'zustand/react/shallow';
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "../store/authStore";
@@ -26,6 +26,8 @@ const LS_REFRESH_TOKEN = 'drplay_refresh_token';
 const LS_TOKEN_TIME = 'drplay_token_time';
 const LS_USER_EMAIL = 'drplay_current_user_email';
 
+const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
+
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
@@ -50,6 +52,8 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // listener at the same time. Without this, onLogoutExt and backend cleanup run
   // multiple times (double navigation / redundant revoke calls).
   const isLoggingOutRef = useRef(false);
+  const onLogoutExtRef = useRef(onLogoutExt);
+  onLogoutExtRef.current = onLogoutExt;
 
   // Initialize token from localStorage
   useEffect(() => {
@@ -92,7 +96,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
     scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_SECONDS);
   };
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     if (isLoggingOutRef.current) return;
     isLoggingOutRef.current = true;
     try {
@@ -127,16 +131,19 @@ export const useAuth = (onLogoutExt?: () => void) => {
         }
       }
 
-      if (onLogoutExt) onLogoutExt();
+      onLogoutExtRef.current?.();
     } finally {
       isLoggingOutRef.current = false;
     }
-  };
+  }, [setIsLoggedIn, setAccessToken, setUserProfile]);
+
+  const handleLogoutRef = useRef(handleLogout);
+  handleLogoutRef.current = handleLogout;
 
   // Listen for auth-logout event from apiClient
   useEffect(() => {
     const handleAuthLogout = () => {
-      handleLogout().catch((err: unknown) => captureError({ level: 'error', source: AUTH_MODULE, message: `Logout failed: ${classifyError(err)}` }));
+      handleLogoutRef.current().catch((err: unknown) => captureError({ level: 'error', source: AUTH_MODULE, message: `Logout failed: ${classifyError(err)}` }));
     };
     window.addEventListener('auth-logout', handleAuthLogout);
 
@@ -193,7 +200,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
       const handleTokenUpdated = (e: Event) => {
         const detail = (e as CustomEvent).detail;
-        if (detail?.token) {
+        if (typeof detail?.token === 'string') {
           updateWorkerToken(detail.token);
         }
       };
@@ -203,7 +210,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       const controller = new AbortController();
       void (async () => {
         try {
-          const res = await fetchWithAuth('https://www.googleapis.com/oauth2/v2/userinfo', {
+          const res = await fetchWithAuth(GOOGLE_USERINFO_URL, {
             headers: { Authorization: `Bearer ${accessToken}` },
             signal: controller.signal,
           });
