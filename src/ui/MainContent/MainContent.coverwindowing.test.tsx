@@ -80,7 +80,6 @@ vi.mock('../../hooks/useDriveExplorer', () => ({
     handleCreateFolder: vi.fn(),
     handleBulkDelete: vi.fn(),
     handleBulkMove: vi.fn(),
-    itemsPerPage: 50,
   })
 }));
 

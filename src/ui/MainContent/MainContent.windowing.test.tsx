@@ -91,7 +91,6 @@ function makeExplorerState(items: DriveItem[]) {
     handleCreateFolder: vi.fn(),
     handleBulkDelete: vi.fn(),
     handleBulkMove: vi.fn(),
-    itemsPerPage: 50,
   };
 }
 

@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { DriveItem } from '../App';
 import { useDebouncedLiveQuery } from './useDebouncedLiveQuery';
-import { db } from '../db/db';
+import { db, DriveFile } from '../db/db';
 import { normalizeText } from '../utils/normalizeText';
 import { deleteFile, moveFile, createFolder } from '../utils/driveApi';
 import { showErrorToast } from '../utils/simpleToast';
@@ -14,8 +14,16 @@ import { getFolderAudioQuery } from '../utils/audioQuery';
 import { fetchWithAuth } from '../utils/apiClient';
 import { useDriveStore } from '../store/driveStore';
 
-const MODULE = 'useDriveExplorer';
+interface DriveApiFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  modifiedTime?: string;
+}
+
 const GOOGLE_FOLDER_MIME = 'application/vnd.google-apps.folder';
+export const ITEMS_PER_PAGE = 50;
 const GLOBAL_SEARCH_LIMIT = 100;
 const DRIVE_PAGE_SIZE = 1000;
 const DEBOUNCE_DELAY_MS = 150;
@@ -31,7 +39,8 @@ export function useDriveExplorer(
 ) {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 50;
+
+  const stripExt = (name: string, isFolder: boolean) => isFolder ? name : name.replace(/\.[^/.]+$/, "");
 
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -64,7 +73,7 @@ export function useDriveExplorer(
     if (!globalSearchItemsRaw) return [];
     
     const mapped = globalSearchItemsRaw.map(file => {
-      const title = file.isFolder ? file.name : file.name.replace(/\.[^/.]+$/, "");
+      const title = stripExt(file.name, file.isFolder);
       return {
         id: file.id,
         title,
@@ -93,7 +102,7 @@ export function useDriveExplorer(
 
   const dbFiles = useLiveQuery(
     () => {
-      if (!currentFolderId) return Promise.resolve<any[]>([]);
+      if (!currentFolderId) return Promise.resolve<DriveFile[]>([]);
       return db.files.where('parentId').equals(currentFolderId).toArray()
     },
     [currentFolderId]
@@ -123,7 +132,7 @@ export function useDriveExplorer(
           const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
 
           if (!res.ok) {
-            captureError({ level: 'warn', source: MODULE, message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
+            captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
             break;
           }
           const data = await res.json();
@@ -131,7 +140,7 @@ export function useDriveExplorer(
           // Write each page to Dexie immediately instead of accumulating all
           // pages in memory (mirrors proSync.worker.ts full-sync pattern).
           if (isMounted && Array.isArray(data.files) && data.files.length > 0) {
-            const filesToInsert = data.files.map((f: any) => ({
+            const filesToInsert = data.files.map((f: DriveApiFile) => ({
               id: f.id,
               name: f.name,
               mimeType: f.mimeType,
@@ -144,7 +153,7 @@ export function useDriveExplorer(
             try {
               await db.files.bulkPut(filesToInsert);
             } catch (dbErr) {
-              captureError({ level: 'error', source: MODULE, message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
+              captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
               break;
             }
           }
@@ -154,9 +163,9 @@ export function useDriveExplorer(
         }
       } catch (err) {
         if (err instanceof TypeError) {
-          captureError({ level: 'warn', source: MODULE, message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}` });
+          captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}` });
         } else {
-          captureError({ level: 'error', source: MODULE, message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}` });
+          captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}` });
         }
       } finally {
         if (isMounted) setIsLoadingTracks(false);
@@ -170,7 +179,7 @@ export function useDriveExplorer(
   const items = useMemo(() => {
     if (!dbFiles) return [];
     const _items: DriveItem[] = dbFiles.map(file => {
-      const title = file.isFolder ? file.name : file.name.replace(/\.[^/.]+$/, "");
+      const title = stripExt(file.name, file.isFolder);
       return {
         id: file.id,
         title,
@@ -237,16 +246,12 @@ export function useDriveExplorer(
     });
   }, [dbFiles, sortOption, currentFolderName]);
 
-  useEffect(() => {
-    // cover prefetches are handled by useCoverPrefetch in MainContent
-  }, [items, token]);
-
   const filteredItems = searchQuery ? globalSearchItems : items;
-  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
+  const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);
   
   const currentItems = useMemo(
-    () => filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage),
-    [filteredItems, currentPage, itemsPerPage]
+    () => filteredItems.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE),
+    [filteredItems, currentPage, ITEMS_PER_PAGE]
   );
 
   const handleCreateFolder = async (folderName: string, onComplete: () => void) => {
@@ -268,7 +273,7 @@ export function useDriveExplorer(
       onRefresh();
       onComplete();
     } catch (e: unknown) {
-      captureError({ level: 'error', source: MODULE, message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}` });
+      captureError({ level: 'error', source: 'useDriveExplorer', message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.create_folder_error') || "Failed to create folder");
     } finally {
       setIsCreatingFolder(false);
@@ -278,7 +283,7 @@ export function useDriveExplorer(
   const handleBulkDelete = async (onComplete: () => void) => {
     if (!token || selectedIds.size === 0) return;
     
-    const itemsToDelete = Array.from(selectedIds);
+    const itemsToDelete = [...selectedIds];
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);
@@ -292,7 +297,7 @@ export function useDriveExplorer(
           deletedIds.push(id);
         } catch (e: unknown) {
           failedIds.push(id);
-          captureError({ level: 'error', source: MODULE, message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
+          captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
         }
       }
       if (deletedIds.length > 0) {
@@ -303,7 +308,7 @@ export function useDriveExplorer(
         showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
       }
     } catch (e: unknown) {
-      captureError({ level: 'error', source: MODULE, message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}` });
+      captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
     } finally {
       setIsBulkOperating(false);
@@ -314,7 +319,7 @@ export function useDriveExplorer(
   const handleBulkMove = async (destinationFolderId: string, onComplete: () => void) => {
     if (!token || selectedIds.size === 0) return;
     
-    const itemsToMove = Array.from(selectedIds);
+    const itemsToMove = [...selectedIds];
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);
@@ -328,7 +333,7 @@ export function useDriveExplorer(
           movedIds.push(id);
         } catch (e: unknown) {
           failedIds.push(id);
-          captureError({ level: 'error', source: MODULE, message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
+          captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
         }
       }
       for (const id of movedIds) {
@@ -339,7 +344,7 @@ export function useDriveExplorer(
         showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
       }
     } catch (e: unknown) {
-      captureError({ level: 'error', source: MODULE, message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}` });
+      captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
     } finally {
       setIsBulkOperating(false);
@@ -364,6 +369,5 @@ export function useDriveExplorer(
     handleCreateFolder,
     handleBulkDelete,
     handleBulkMove,
-    itemsPerPage
   };
 }

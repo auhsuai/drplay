@@ -12,7 +12,7 @@ import { SongCard } from './components/SongCard';
 import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 
-import { useDriveExplorer } from "../../hooks/useDriveExplorer";
+import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
@@ -133,15 +133,15 @@ export const MainContent = React.memo(function MainContent({
     if (highlightedFileId && explorer.filteredItems.length > 0) {
       const index = explorer.filteredItems.findIndex(item => item.id === highlightedFileId.id);
       if (index !== -1) {
-        const targetPage = Math.floor(index / explorer.itemsPerPage) + 1;
+        const targetPage = Math.floor(index / ITEMS_PER_PAGE) + 1;
         if (targetPage !== explorer.currentPage) {
           explorer.setCurrentPage(targetPage);
           setTimeout(() => {
-            const pageIndex = index % explorer.itemsPerPage;
+            const pageIndex = index % ITEMS_PER_PAGE;
             virtualizedListRef.current?.scrollToIndex(pageIndex, { align: 'center' });
           }, 50);
         } else {
-          const pageIndex = index % explorer.itemsPerPage;
+          const pageIndex = index % ITEMS_PER_PAGE;
           virtualizedListRef.current?.scrollToIndex(pageIndex, { align: 'center' });
         }
       }
