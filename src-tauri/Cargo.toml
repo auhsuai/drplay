@@ -47,6 +47,15 @@ r2d2 = "0.8"
 r2d2_sqlite = "0.24.0"
 
 bytes = "1.6.0"
+
+# Direct access to the WebView2 COM API to set MemoryUsageTargetLevel when the
+# window goes inactive (wry's WebViewExtWindows is not reachable through
+# tauri::webview::PlatformWebview, whose fields are private). Versions match
+# the ones already in Cargo.lock via tauri/wry — no new crate graph nodes.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38.2"
+windows-core = "0.61.2"
+
 uuid = { version = "1.8.0", features = ["v4"] }
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
 walkdir = "2.5.0"

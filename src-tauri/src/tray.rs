@@ -35,6 +35,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    crate::memory::apply_window_activity(&window, crate::memory::WindowActivityEvent::ShownFromTray);
                 }
             }
             _ => {}
@@ -50,6 +51,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    crate::memory::apply_window_activity(&window, crate::memory::WindowActivityEvent::ShownFromTray);
                 }
             }
         })

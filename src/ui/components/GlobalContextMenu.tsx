@@ -110,7 +110,14 @@ export function GlobalContextMenu() {
       const originalName = sanitizeFilename(driveItem.trackInfo?.originalName || `${driveItem.title}.mp3`);
       const savePath = `${downloadDirPath}\\${originalName}`;
       
-      await invoke("plugin:fs|write_file", { path: savePath, data: Array.from(uint8Array) });
+      // tauri-plugin-fs v2 (2.5.1): write_file reads the target path from a request
+      // header and takes the bytes as the raw invoke body. Passing the Uint8Array as
+      // the top-level arg keeps the IPC on the octet-stream path (no Array.from /
+      // JSON number-array, ~8x the file size in peak memory). See plugin-fs guest-js
+      // writeFile() binding for the identical wire shape.
+      await invoke("plugin:fs|write_file", uint8Array, {
+        headers: { path: encodeURIComponent(savePath) },
+      });
       setDownloadingState('success');
       setTimeout(() => setDownloadingState('idle'), 3000);
       setData(null);

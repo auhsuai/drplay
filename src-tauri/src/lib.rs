@@ -7,9 +7,11 @@ mod thumbnail;
 mod auth;
 mod db;
 mod tray;
+mod memory;
 
 use auth::{login_google_native, refresh_google_token};
 use db::metadata::{get_local_metadata, get_track_data, verify_track_exists, update_track_duration_in_db, clear_local_cache};
+use memory::{apply_window_activity, WindowActivityEvent};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 
 pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
@@ -51,6 +53,12 @@ pub fn diag_log(module: &str, dur: std::time::Duration) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivityEvent) {
+    if let Some(webview_window) = window.get_webview_window("main") {
+        apply_window_activity(&webview_window, event);
+    }
+}
+
 pub fn run() {
     let app_result = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_http::init())
@@ -88,8 +96,21 @@ pub fn run() {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if !IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) && MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
                     let _ = window.hide();
+                    apply_window_activity_for_window(window, WindowActivityEvent::HiddenToTray);
                     api.prevent_close();
                 }
+            }
+            tauri::WindowEvent::Focused(focused) => {
+                let event = if *focused { WindowActivityEvent::Focused } else { WindowActivityEvent::Unfocused };
+                apply_window_activity_for_window(window, event);
+            }
+            tauri::WindowEvent::Resized(size) => {
+                let event = if size.width == 0 || size.height == 0 {
+                    WindowActivityEvent::Minimized
+                } else {
+                    WindowActivityEvent::ResizedToNormal
+                };
+                apply_window_activity_for_window(window, event);
             }
             _ => {}
         })

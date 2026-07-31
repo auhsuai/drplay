@@ -15,6 +15,7 @@ import { usePlayerSession } from "./player/usePlayerSession";
 import { usePlayerQueue } from "./player/usePlayerQueue";
 
 import { usePlayerStore } from "../store/playerStore";
+import { AudioController } from "../lib/AudioController";
 
 export const usePlayer = (accessToken: string | null) => {
   const {
@@ -79,6 +80,9 @@ export const usePlayer = (accessToken: string | null) => {
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
+      // B3: release the real audio elements (buffers, src, pending retry)
+      // before clearing the store state.
+      AudioController.getInstance().release();
       setCurrentTrack(null);
       setIsPlaying(false);
       setOriginalQueue([]);

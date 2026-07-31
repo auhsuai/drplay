@@ -43,6 +43,20 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
     headers: { Range: 'bytes=0-524287' },
     signal: controller.signal,
   })
+    .then((response) => {
+      if (!response.ok) return;
+      const logCancelError = (err: unknown) => {
+        console.warn('[nextTrackPrefetcher] prefetch-body-cancel-fail', {
+          url: streamUrl.slice(0, 16) + '…',
+          err,
+        });
+      };
+      try {
+        void response.body?.cancel().catch(logCancelError);
+      } catch (err) {
+        logCancelError(err);
+      }
+    })
     .catch((err) => {
       const kind = classifyError(err);
       console.warn('[nextTrackPrefetcher] prefetch-fail', {

@@ -53,3 +53,82 @@ describe('nextTrackPrefetcher LRU', () => {
     warnSpy.mockRestore();
   });
 });
+
+describe('nextTrackPrefetcher body release (#7)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    clearNextTrackPrefetches();
+  });
+
+  it('#7 cancels the prefetch response body exactly once', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const body = { cancel } as unknown as ReadableStream<Uint8Array>;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({ ok: true, body } as unknown as Response);
+
+    prefetchNextTrackAudio('https://x/warm');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    fetchSpy.mockRestore();
+  });
+
+  it('#7 does not cancel the body when response is not ok', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const body = { cancel } as unknown as ReadableStream<Uint8Array>;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({
+        ok: false,
+        status: 404,
+        body,
+      } as unknown as Response);
+
+    prefetchNextTrackAudio('https://x/missing');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(cancel).not.toHaveBeenCalled();
+
+    fetchSpy.mockRestore();
+  });
+
+  it('#7 does not crash when response body is null', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({ ok: true, body: null } as unknown as Response);
+
+    prefetchNextTrackAudio('https://x/empty-body');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    fetchSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('#7 logs with truncated url and does not crash when cancel fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cancel = vi.fn().mockRejectedValue(new Error('cancel failed'));
+    const body = { cancel } as unknown as ReadableStream<Uint8Array>;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({ ok: true, body } as unknown as Response);
+
+    prefetchNextTrackAudio('https://x/cancel-fail');
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalled();
+    const [message, payload] = warnSpy.mock.calls[0] as [string, { url: string }];
+    expect(message).toContain('prefetch-body-cancel-fail');
+    expect(payload.url.length).toBeLessThanOrEqual(17);
+    expect(payload.url).not.toContain('cancel-fail');
+
+    fetchSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
