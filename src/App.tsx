@@ -1,4 +1,4 @@
-import { useState, useCallback, Suspense, useEffect } from "react";
+import React, { useState, useCallback, Suspense, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
@@ -7,7 +7,8 @@ import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScree
 import { TrashScreen } from "./ui/Settings/TrashScreen";
 import { GlobalContextMenu } from "./ui/components/GlobalContextMenu";
 import { RateLimitModal } from "./ui/components/RateLimitModal";
-import React from "react";
+import { captureError } from "./utils/errorLog";
+import { useShallow } from 'zustand/react/shallow';
 
 const MainContent = React.lazy(() => import('./ui/MainContent/MainContent').then(module => ({ default: module.MainContent })));
 const HomeTab = React.lazy(() => import('./ui/HomeTab/HomeTab').then(module => ({ default: module.HomeTab })));
@@ -67,23 +68,13 @@ export type UserProfile = {
   picture: string;
 };
 
-const APP_MODULE = "App";
-
-function classifyAppError(err: unknown): string {
-  const msg =
-    err instanceof Error
-      ? err.message
-      : typeof err === "string"
-        ? err
-        : "unknown-error";
-  const m = msg.toLowerCase();
-  if (m.includes("timeout") || m.includes("aborterror")) return "timeout";
-  if (m.includes("network") || m.includes("failed to fetch") || m.includes("unreachable"))
-    return "network";
-  const statusMatch = m.match(/\((\d{3})\)/);
-  if (statusMatch) return `http-${statusMatch[1]}`;
-  return "unknown";
-}
+const LS_ROOT_FOLDER = 'drplay_root_folder';
+const LS_CURRENT_FOLDER_ID = 'drplay_current_folder_id';
+const LS_CURRENT_FOLDER_NAME = 'drplay_current_folder_name';
+const LS_FOLDER_HISTORY = 'drplay_folder_history';
+const LS_SORT_OPTION = 'drplay_sort_option';
+const LS_MINIMIZE_TO_TRAY = 'drplay_minimize_to_tray';
+const DB_NAV_STATE_KEY = 'drplay_nav_state';
 
 function App() {
   const [activeTab, setActiveTab] = useState("Home");
@@ -98,12 +89,12 @@ function App() {
   useTauriEvents(setShowRateLimitModal);
 
   const { isLoggedIn, accessToken, userProfile, handleLoginSuccess, handleLogout } = useAuth(() => {
-    localStorage.removeItem("drplay_root_folder");
-    localStorage.removeItem("drplay_current_folder_id");
-    localStorage.removeItem("drplay_current_folder_name");
-    localStorage.removeItem("drplay_folder_history");
-    db.syncState.delete("drplay_nav_state").catch((e) => console.warn(`[${APP_MODULE}] logout-cleanup-failed`, classifyAppError(e)));
-    kvDel('drplay_last_session').catch((e) => console.warn(`[${APP_MODULE}] logout-cleanup-failed`, classifyAppError(e)));
+    localStorage.removeItem(LS_ROOT_FOLDER);
+    localStorage.removeItem(LS_CURRENT_FOLDER_ID);
+    localStorage.removeItem(LS_CURRENT_FOLDER_NAME);
+    localStorage.removeItem(LS_FOLDER_HISTORY);
+    db.syncState.delete(DB_NAV_STATE_KEY).catch((e) => captureError({ source: 'App', message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'logout-cleanup-failed' }));
+    kvDel('drplay_last_session').catch((e) => captureError({ source: 'App', message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'logout-cleanup-failed' }));
     setAppRootFolder(null);
   });
 
@@ -128,8 +119,10 @@ function App() {
   } = useDrive(isLoggedIn, accessToken);
 
 
-  const setIsLoadingTracks = useDriveStore(state => state.setIsLoadingTracks);
-  const isLoadingTracks = useDriveStore(state => state.isLoadingTracks);
+  const { setIsLoadingTracks, isLoadingTracks } = useDriveStore(useShallow(s => ({
+    setIsLoadingTracks: s.setIsLoadingTracks,
+    isLoadingTracks: s.isLoadingTracks,
+  })));
   // Locate File Logic
   const { highlightedFileId } = useLocateFile(
     accessToken,
@@ -170,13 +163,13 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(() => {
-    const saved = localStorage.getItem("drplay_minimize_to_tray");
+    const saved = localStorage.getItem(LS_MINIMIZE_TO_TRAY);
     return saved !== null ? saved === "true" : true;
   });
 
   useEffect(() => {
-    localStorage.setItem("drplay_minimize_to_tray", String(minimizeToTray));
-    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch((e) => console.warn(`[${APP_MODULE}] minimize-to-tray-failed`, classifyAppError(e)));
+    localStorage.setItem(LS_MINIMIZE_TO_TRAY, String(minimizeToTray));
+    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch((e) => captureError({ source: 'App', message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'minimize-to-tray-failed' }));
   }, [minimizeToTray]);
 
   const handleTabChange = useCallback((tab: string) => {
@@ -196,7 +189,7 @@ function App() {
       {/* Folder Selection Overlay */}
       {(isLoggedIn && (!appRootFolder || showFolderSelection)) && (
         <FolderSelectionScreen
-          token={accessToken!}
+          token={accessToken ?? ''}
           onSelectFolder={(folderId) => {
             handleSelectRootFolder(folderId);
             setShowFolderSelection(false);
@@ -253,7 +246,7 @@ function App() {
                 sortOption={sortOption}
                 onSortChange={(val) => {
                   setSortOption(val);
-                  localStorage.setItem("drplay_sort_option", val);
+                  localStorage.setItem(LS_SORT_OPTION, val);
                 }}
               />
             ) : activeTab === "Liked Songs" ? (
