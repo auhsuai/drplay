@@ -1,4 +1,10 @@
+import { captureError } from './errorLog';
+
 const IMAGE_LOAD_TIMEOUT_MS = 10000;
+const CANVAS_SIZE = 64;
+const SAMPLE_STEP = 16;
+const DARKEN_FACTOR = 0.5;
+const BG_ALPHA = 0.8;
 
 // P0-2 regression: decoding a cover image + running 4 quadrant getImageData
 // loops is expensive. getPalette was called on EVERY cover load (every track
@@ -51,7 +57,7 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (!ctx) return reject(new Error("No canvas context"));
 
-      const size = 64;
+      const size = CANVAS_SIZE;
       canvas.width = size;
       canvas.height = size;
       ctx.drawImage(img, 0, 0, size, size);
@@ -70,7 +76,7 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
           { r: 0, g: 0, b: 0, n: 0 }, // BR
         ];
         // Sample every 4th pixel (RGBA = 4 bytes) -> step 16 bytes.
-        for (let i = 0; i < imgData.length; i += 16) {
+        for (let i = 0; i < imgData.length; i += SAMPLE_STEP) {
           const p = i / 4;
           const x = p % size;
           const y = (p / size) | 0;
@@ -81,18 +87,18 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
           sum[q].n++;
         }
 
-        const darken = 0.5; // Darken slightly more for rich background
+        const darken = DARKEN_FACTOR;
         const palette = sum.map((s) => {
           if (s.n === 0) return 'rgba(0,0,0,0.8)';
           const r = Math.floor((s.r / s.n) * darken);
           const g = Math.floor((s.g / s.n) * darken);
           const b = Math.floor((s.b / s.n) * darken);
-          return `rgba(${r}, ${g}, ${b}, 0.8)`; // Add slight transparency for better blending
+          return `rgba(${r}, ${g}, ${b}, ${BG_ALPHA})`;
         });
         setPaletteCached(imgUrl, palette);
         resolve(palette);
-      } catch (e) {
-        console.warn('[color] getPalette canvas error', e);
+      } catch (e: unknown) {
+        captureError({ level: 'warn', source: 'color', message: `getPalette canvas error: ${e instanceof Error ? e.message : String(e)}` });
         reject(e);
       }
     });

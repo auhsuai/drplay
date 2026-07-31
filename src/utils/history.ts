@@ -1,13 +1,21 @@
 import Dexie from 'dexie';
 import { db } from '../db/db';
 import { Track } from '../App';
+import { captureError } from './errorLog';
 
 const RECENT_CAP = 1000;
 const PLAY_COUNT_CAP = 1000;
 const FOLDER_VISIT_CAP = 1000;
+const HEAVY_ROTATION_LIMIT = 10;
+const RANDOM_DISCOVERIES_LIMIT = 12;
+const MOST_VISITED_FOLDERS_LIMIT = 4;
+const QUALITY_THRESHOLD = 9;
+const DEFAULT_USER_EMAIL = 'default';
+const TOKEN_KEY_EMAIL = 'drplay_current_user_email';
+const HISTORY_MODULE = 'history';
 
 function currentUserEmail(): string {
-  return localStorage.getItem('drplay_current_user_email') || 'default';
+  return localStorage.getItem(TOKEN_KEY_EMAIL) || DEFAULT_USER_EMAIL;
 }
 
 export interface PlayCountEntry {
@@ -37,8 +45,8 @@ export async function recordPlay(track: Track) {
     const nextCount = (countRow?.count || 0) + 1;
     await db.playCounts.put({ id: track.id, track, count: nextCount, userEmail: email });
     await prunePlayCounts(email);
-  } catch (e) {
-    console.error('[history] recordPlay-failed', e instanceof Error ? e.message : String(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'recordPlay-failed' });
   }
 
   window.dispatchEvent(new Event('recent-updated'));
@@ -62,9 +70,9 @@ async function prunePlayCounts(email: string): Promise<void> {
     const evict = await range.limit(excess).toArray();
     if (evict.length === 0) return;
     await db.playCounts.bulkDelete(evict.map((r) => r.id));
-  } catch (e) {
+  } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    console.error('[history] playCounts-prune-failed', e instanceof Error ? e.message : String(e));
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'playCounts-prune-failed' });
   }
 }
 
@@ -94,9 +102,9 @@ async function pruneRecentTracks(email: string): Promise<void> {
       .where('[userEmail+createdAt]')
       .between([email, Dexie.minKey], [email, cutoff.createdAt], false, false)
       .delete();
-  } catch (e) {
+  } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    console.error('[history] recentTracks-prune-failed', e instanceof Error ? e.message : String(e));
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'recentTracks-prune-failed' });
   }
 }
 
@@ -113,8 +121,8 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
       deduped.push(row.track);
     }
     return deduped.slice(0, RECENT_CAP);
-  } catch (e) {
-    console.error('[history] getRecentlyPlayed-failed', e instanceof Error ? e.message : String(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'getRecentlyPlayed-failed' });
     return [];
   }
 }
@@ -129,11 +137,11 @@ export async function getHeavyRotation(): Promise<Track[]> {
       .where('[userEmail+count]')
       .between([email, Dexie.minKey], [email, Dexie.maxKey])
       .reverse()
-      .limit(10)
+      .limit(HEAVY_ROTATION_LIMIT)
       .toArray();
     return rows.map((row) => row.track);
-  } catch (e) {
-    console.error('[history] getHeavyRotation-failed', e instanceof Error ? e.message : String(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'getHeavyRotation-failed' });
     return [];
   }
 }
@@ -144,7 +152,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
     const keys = rows
       .filter((r) => {
         const entry = r.entry as { data?: { v: number } } | undefined;
-        return entry && entry.data && entry.data.v >= 9;
+        return entry && entry.data && entry.data.v >= QUALITY_THRESHOLD;
       })
       .map((r) => r.key as string)
       .filter((k) => typeof k === 'string' && k.startsWith('metadata_'));
@@ -155,7 +163,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    const selectedKeys = shuffled.slice(0, 12);
+    const selectedKeys = shuffled.slice(0, RANDOM_DISCOVERIES_LIMIT);
 
     const tracks: Track[] = [];
     for (const key of selectedKeys) {
@@ -168,8 +176,8 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
       });
     }
     return tracks;
-  } catch (e) {
-    console.error('[history] getRandomDiscoveries-failed', e instanceof Error ? e.message : String(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'getRandomDiscoveries-failed' });
     return [];
   }
 }
@@ -184,8 +192,8 @@ export async function recordFolderVisit(folderId: string, folderName: string) {
     const count = (existing?.count || 0) + 1;
     await db.folderVisits.put({ id: folderId, name: folderName, count, lastVisited: now, userEmail: email });
     await pruneFolderVisits(email);
-  } catch (e) {
-    console.error('[history] recordFolderVisit-failed', e instanceof Error ? e.message : String(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'recordFolderVisit-failed' });
   }
 }
 
@@ -206,9 +214,9 @@ async function pruneFolderVisits(email: string): Promise<void> {
     const evict = await range.limit(excess).toArray();
     if (evict.length === 0) return;
     await db.folderVisits.bulkDelete(evict.map((r) => r.id));
-  } catch (e) {
+  } catch (e: unknown) {
     // Prune failure must not lose the visit record — log with context only.
-    console.error('[history] folderVisits-prune-failed', e instanceof Error ? e.message : String(e));
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'folderVisits-prune-failed' });
   }
 }
 
@@ -218,10 +226,10 @@ export async function getMostVisitedFolders(): Promise<FolderVisitEntry[]> {
     const rows = await db.folderVisits.where('userEmail').equals(email).toArray();
     return rows
       .sort((a, b) => b.count - a.count || b.lastVisited - a.lastVisited)
-      .slice(0, 4)
+      .slice(0, MOST_VISITED_FOLDERS_LIMIT)
       .map((r) => ({ id: r.id, name: r.name, count: r.count, lastVisited: r.lastVisited }));
-  } catch (e) {
-    console.error('[history] getMostVisitedFolders-failed', e instanceof Error ? e.message : String(e));
+  } catch (e: unknown) {
+    captureError({ level: 'error', source: HISTORY_MODULE, message: 'getMostVisitedFolders-failed' });
     return [];
   }
 }

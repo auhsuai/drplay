@@ -16,6 +16,7 @@
 // shape that the worker test asserts.
 
 import { sanitizeString } from '../utils/logger';
+import { captureError } from '../utils/errorLog';
 
 export type WorkerErrorKind = 'network' | 'timeout' | 'abort' | 'parse' | 'unknown';
 
@@ -124,6 +125,5 @@ export function logWorkerError(
   // we never throw while logging and never silently drop the message if the
   // sanitizer itself fails.
   const safeLine = safeSanitize(line);
-  if (level === 'warn') console.warn(safeLine);
-  else console.error(safeLine);
+  void captureError({ level, source: module, message: safeLine });
 }

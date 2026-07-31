@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { deleteFile } from '../utils/driveApi';
 import { db } from '../db/db';
 import { showErrorToast } from '../utils/simpleToast';
+import { captureError } from '../utils/errorLog';
 import { DriveItem } from '../App';
 import { TFunction } from 'i18next';
 
@@ -27,8 +28,8 @@ export function useMenuDelete(t: TFunction) {
       onClose?.();
       if (onRemoveItem) onRemoveItem(deleteDriveItem.id);
       else if (onRefresh) onRefresh();
-    } catch (e) {
-      console.error("[useMenuDelete] Failed to delete item", e);
+    } catch (e: unknown) {
+      captureError({ level: 'error', source: 'useMenuDelete', message: `Failed to delete item: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.delete_error', 'Failed to delete item'));
     } finally {
       setIsDeleting(false);

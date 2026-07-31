@@ -4,9 +4,15 @@ import {
   clearNextTrackPrefetches,
 } from './nextTrackPrefetcher';
 
+vi.mock('./errorLog', () => ({
+  captureError: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { captureError } from './errorLog';
+
 describe('nextTrackPrefetcher LRU', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     clearNextTrackPrefetches();
   });
 
@@ -38,25 +44,24 @@ describe('nextTrackPrefetcher LRU', () => {
   it('classifies and logs fetch failures without full url', async () => {
     const err = new TypeError('Failed to fetch');
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(err);
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     prefetchNextTrackAudio('https://x/secret-token-1234567890');
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(warnSpy).toHaveBeenCalled();
-    const logged = warnSpy.mock.calls[0][1] as { url: string; kind: string };
-    expect(logged.url.length).toBeLessThanOrEqual(17);
-    expect(logged.url).not.toContain('secret-token-1234567890');
-    expect(['timeout', 'network', 'unknown']).toContain(logged.kind);
+    expect(captureError).toHaveBeenCalled();
+    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    expect(callArg.level).toBe('warn');
+    expect(callArg.source).toBe('nextTrackPrefetcher');
+    expect(callArg.message).not.toContain('secret-token-1234567890');
+    expect(callArg.message).toContain('network');
 
     fetchSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 });
 
 describe('nextTrackPrefetcher body release (#7)', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     clearNextTrackPrefetches();
   });
 
@@ -95,7 +100,6 @@ describe('nextTrackPrefetcher body release (#7)', () => {
   });
 
   it('#7 does not crash when response body is null', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue({ ok: true, body: null } as unknown as Response);
@@ -103,14 +107,12 @@ describe('nextTrackPrefetcher body release (#7)', () => {
     prefetchNextTrackAudio('https://x/empty-body');
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(warnSpy).not.toHaveBeenCalled();
+    expect(captureError).not.toHaveBeenCalled();
 
     fetchSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it('#7 logs with truncated url and does not crash when cancel fails', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const cancel = vi.fn().mockRejectedValue(new Error('cancel failed'));
     const body = { cancel } as unknown as ReadableStream<Uint8Array>;
     const fetchSpy = vi
@@ -122,13 +124,13 @@ describe('nextTrackPrefetcher body release (#7)', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalled();
-    const [message, payload] = warnSpy.mock.calls[0] as [string, { url: string }];
-    expect(message).toContain('prefetch-body-cancel-fail');
-    expect(payload.url.length).toBeLessThanOrEqual(17);
-    expect(payload.url).not.toContain('cancel-fail');
+    expect(captureError).toHaveBeenCalled();
+    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    expect(callArg.level).toBe('warn');
+    expect(callArg.source).toBe('nextTrackPrefetcher');
+    expect(callArg.message).toContain('Prefetch body cancel failed');
+    expect(callArg.message).not.toContain('cancel-fail');
 
     fetchSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 });

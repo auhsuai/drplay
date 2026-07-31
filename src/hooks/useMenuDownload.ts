@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { getValidToken } from '../utils/apiClient';
 import { getEffectiveDownloadPath } from '../utils/downloadPath';
+import { captureError } from '../utils/errorLog';
 import { Track } from '../App';
 import { TFunction } from 'i18next';
 
@@ -101,10 +102,10 @@ export function useMenuDownload(t: TFunction) {
       try {
         const dir = await getEffectiveDownloadPath();
         setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${dir}\\${finalFileName}`);
-      } catch (e) {
+      } catch (e: unknown) {
         setDownloadMessage(t('menu.download_complete', 'Tải xuống hoàn tất!'));
       }
-    } catch (err) {
+    } catch (err: unknown) {
       // Duck-typed name extraction: DOMException is NOT instanceof Error in
       // some environments (jsdom), yet carries a reliable .name ('AbortError'
       // for cancels, 'TimeoutError' for AbortSignal.timeout).
@@ -115,15 +116,15 @@ export function useMenuDownload(t: TFunction) {
         // Deliberate cancel (unmount / superseded download): the component may
         // already be gone, so do NOT touch state — and do not surface a
         // failure message for a user-initiated cancel. Log for visibility.
-        console.warn('[useMenuDownload] download-aborted — download was cancelled (unmount or superseded)');
+        captureError({ level: 'warn', source: 'useMenuDownload', message: 'Download aborted — download was cancelled (unmount or superseded)' });
         return;
       }
       if (errName === 'TimeoutError') {
-        console.error(`[useMenuDownload] download-timeout — no response within ${DOWNLOAD_TIMEOUT_MS}ms`);
+        captureError({ level: 'error', source: 'useMenuDownload', message: `Download timeout — no response within ${DOWNLOAD_TIMEOUT_MS}ms` });
         setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
         return;
       }
-      console.error('[useMenuDownload] download-failed', errName || err);
+      captureError({ level: 'error', source: 'useMenuDownload', message: `Download failed: ${errName || String(err)}` });
       setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
     } finally {
       setIsDownloadingFile(false);

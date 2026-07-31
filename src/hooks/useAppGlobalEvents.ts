@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getValidToken } from '../utils/apiClient';
+import { captureError } from '../utils/errorLog';
 
 export function useAppGlobalEvents(handleLogout: () => void) {
   const [isFocused, setIsFocused] = useState(true);
@@ -12,7 +13,7 @@ export function useAppGlobalEvents(handleLogout: () => void) {
       // next play doesn't hit the proxy with an expired token. Guard on
       // refresh_token presence to avoid triggering the logout path when signed out.
       if (localStorage.getItem("drplay_access_token") && localStorage.getItem("drplay_refresh_token")) {
-        getValidToken().catch(e => console.warn("[Auth] Focus refresh failed", e));
+        getValidToken().catch(e => captureError({ level: 'warn', source: 'useAppGlobalEvents', message: `Focus refresh failed: ${e instanceof Error ? e.message : String(e)}` }));
       }
     };
     

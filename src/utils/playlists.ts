@@ -1,6 +1,7 @@
 import { db } from '../db/db';
 import { Track } from '../App';
 import { showErrorToast } from './simpleToast';
+import { captureError } from './errorLog';
 
 export interface Playlist {
   id: string;
@@ -12,6 +13,8 @@ export interface Playlist {
 }
 
 const PLAYLIST_MODULE = "playlists";
+const DEFAULT_USER_EMAIL = 'default';
+const TOKEN_KEY_EMAIL = 'drplay_current_user_email';
 
 // Derive a short, safe classification from an error's name/message ONLY.
 // We never log the error object or its stack — those can leak file ids, user
@@ -28,7 +31,7 @@ function classifyPlaylistError(err: unknown): { name: string; message: string } 
 }
 
 function getUserEmail(): string {
-  return localStorage.getItem('drplay_current_user_email') || 'default';
+  return localStorage.getItem(TOKEN_KEY_EMAIL) || DEFAULT_USER_EMAIL;
 }
 
 async function loadPlaylists(): Promise<Playlist[]> {
@@ -47,8 +50,12 @@ async function loadPlaylists(): Promise<Playlist[]> {
 export async function getPlaylists(): Promise<Playlist[]> {
   try {
     return await loadPlaylists();
-  } catch (e) {
-    console.error(`[${PLAYLIST_MODULE}] get-failed`, classifyPlaylistError(e));
+  } catch (e: unknown) {
+    captureError({
+      level: 'error',
+      source: PLAYLIST_MODULE,
+      message: `get-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+    });
     return [];
   }
 }
@@ -66,8 +73,12 @@ export async function createPlaylist(name: string): Promise<Playlist | null> {
     await db.playlists.put(newPlaylist);
     window.dispatchEvent(new CustomEvent('playlists-updated'));
     return newPlaylist;
-  } catch (e) {
-    console.error(`[${PLAYLIST_MODULE}] create-failed`, classifyPlaylistError(e));
+  } catch (e: unknown) {
+    captureError({
+      level: 'error',
+      source: PLAYLIST_MODULE,
+      message: `create-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+    });
     showErrorToast("Failed to create playlist");
     return null;
   }
@@ -77,8 +88,12 @@ export async function deletePlaylist(id: string): Promise<void> {
   try {
     await db.playlists.delete(id);
     window.dispatchEvent(new CustomEvent('playlists-updated'));
-  } catch (e) {
-    console.error(`[${PLAYLIST_MODULE}] delete-failed`, classifyPlaylistError(e));
+  } catch (e: unknown) {
+    captureError({
+      level: 'error',
+      source: PLAYLIST_MODULE,
+      message: `delete-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+    });
     showErrorToast("Failed to delete playlist");
   }
 }
@@ -91,8 +106,12 @@ export async function updatePlaylist(id: string, updates: Partial<Playlist>): Pr
     await db.playlists.put(updated);
     window.dispatchEvent(new CustomEvent('playlists-updated'));
     return updated;
-  } catch (e) {
-    console.error(`[${PLAYLIST_MODULE}] update-failed`, classifyPlaylistError(e));
+  } catch (e: unknown) {
+    captureError({
+      level: 'error',
+      source: PLAYLIST_MODULE,
+      message: `update-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+    });
     showErrorToast("Failed to update playlist");
     return null;
   }
@@ -108,8 +127,12 @@ export async function addTrackToPlaylist(playlistId: string, track: Track): Prom
         window.dispatchEvent(new CustomEvent('playlists-updated'));
       }
     }
-  } catch (e) {
-    console.error(`[${PLAYLIST_MODULE}] add-track-failed`, classifyPlaylistError(e));
+  } catch (e: unknown) {
+    captureError({
+      level: 'error',
+      source: PLAYLIST_MODULE,
+      message: `add-track-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+    });
     showErrorToast("Failed to add track to playlist");
   }
 }
@@ -122,8 +145,12 @@ export async function removeTrackFromPlaylist(playlistId: string, trackId: strin
       await db.playlists.put(playlist);
       window.dispatchEvent(new CustomEvent('playlists-updated'));
     }
-  } catch (e) {
-    console.error(`[${PLAYLIST_MODULE}] remove-track-failed`, classifyPlaylistError(e));
+  } catch (e: unknown) {
+    captureError({
+      level: 'error',
+      source: PLAYLIST_MODULE,
+      message: `remove-track-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+    });
     showErrorToast("Failed to remove track from playlist");
   }
 }
@@ -140,8 +167,12 @@ export async function getPlaylistById(id: string): Promise<Playlist | null> {
       tracks: row.tracks ?? [],
       coverImage: row.coverImage
     };
-  } catch (e) {
-    console.error(`[${PLAYLIST_MODULE}] get-by-id-failed`, classifyPlaylistError(e));
+  } catch (e: unknown) {
+    captureError({
+      level: 'error',
+      source: PLAYLIST_MODULE,
+      message: `get-by-id-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+    });
     return null;
   }
 }

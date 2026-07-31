@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { db } from '../db/db';
 import { fetchWithAuth } from '../utils/apiClient';
+import { captureError } from '../utils/errorLog';
+
+const HISTORY_LIMIT = 20;
+const HIGHLIGHT_DURATION_MS = 5000;
+const ROOT_FOLDER_ID = 'root';
+const MY_DRIVE_LABEL = 'My Drive';
+const DRIVE_ID_PREFIX = 'drive_';
+const EVENT_LOCATE_FILE = 'locate-file';
+const STORAGE_KEY_ROOT = 'drplay_root_folder';
+const UNKNOWN_FOLDER = 'Unknown Folder';
 
 function classifyAppError(err: unknown): string {
   const msg =
@@ -31,23 +41,23 @@ export function useLocateFile(
   const pendingEnsuredFileId = useRef<string | null>(null);
 
   useEffect(() => {
-    const handleLocateFile = async (e: any) => {
-      let { fileId } = e.detail || {};
+    const handleLocateFile = async (ev: Event) => {
+      let fileId = (ev as CustomEvent<{ fileId: string }>).detail?.fileId;
       if (!fileId || !accessToken) return;
       
-      if (fileId.startsWith('drive_')) {
-        fileId = fileId.replace('drive_', '');
+      if (fileId.startsWith(DRIVE_ID_PREFIX)) {
+        fileId = fileId.replace(DRIVE_ID_PREFIX, '');
       }
 
       const rebuildHistory = async (targetFolderId: string): Promise<{ id: string, name: string }[]> => {
-        const rootRaw = localStorage.getItem("drplay_root_folder");
-        const rootId = rootRaw || 'root';
+        const rootRaw = localStorage.getItem(STORAGE_KEY_ROOT);
+        const rootId = rootRaw || ROOT_FOLDER_ID;
         
         let current = targetFolderId;
         const newHistory: { id: string, name: string }[] = [];
-        let limit = 20; 
+        let limit = HISTORY_LIMIT; 
         
-        while (current !== rootId && current !== 'root' && limit > 0) {
+        while (current !== rootId && current !== ROOT_FOLDER_ID && limit > 0) {
           limit--;
           
           let pId: string | undefined;
@@ -64,16 +74,16 @@ export function useLocateFile(
                   pId = data.parents[0];
                 }
               }
-            } catch (e) {
-              console.warn(`[useLocateFile] Failed to get parents via API`, classifyAppError(e));
+            } catch (e: unknown) {
+              captureError({ level: 'warn', source: 'useLocateFile', message: `Failed to get parents via API: ${classifyAppError(e)}` });
             }
             if (!pId) break;
           } else {
             pId = folderInfo.parentId;
           }
 
-          if (pId === rootId || pId === 'root') {
-            newHistory.unshift({ id: pId, name: "My Drive" });
+          if (pId === rootId || pId === ROOT_FOLDER_ID) {
+            newHistory.unshift({ id: pId, name: MY_DRIVE_LABEL });
             break;
           }
 
@@ -87,11 +97,11 @@ export function useLocateFile(
                 const pData = await pRes.json();
                 newHistory.unshift({ id: pId, name: pData.name });
               } else {
-                newHistory.unshift({ id: pId, name: "Unknown Folder" });
+                newHistory.unshift({ id: pId, name: UNKNOWN_FOLDER });
               }
-            } catch (e) {
-              console.warn(`[useLocateFile] parent-name-fetch-failed`, classifyAppError(e));
-              newHistory.unshift({ id: pId, name: "Unknown Folder" });
+            } catch (e: unknown) {
+              captureError({ level: 'warn', source: 'useLocateFile', message: `Parent name fetch failed: ${classifyAppError(e)}` });
+              newHistory.unshift({ id: pId, name: UNKNOWN_FOLDER });
             }
           } else {
             newHistory.unshift({ id: parentInfo.id, name: parentInfo.name });
@@ -106,7 +116,7 @@ export function useLocateFile(
 
       try {
         let parentId: string | null = null;
-        let folderName = "Unknown Folder";
+        let folderName = UNKNOWN_FOLDER;
         
         try {
           const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
@@ -118,8 +128,8 @@ export function useLocateFile(
               parentId = data.parents[0];
             }
           }
-        } catch (e) {
-          console.warn(`[useLocateFile] locate-parent-api-failed`, classifyAppError(e));
+        } catch (e: unknown) {
+          captureError({ level: 'warn', source: 'useLocateFile', message: `Locate parent API failed: ${classifyAppError(e)}` });
         }
 
         if (!parentId) {
@@ -131,11 +141,11 @@ export function useLocateFile(
         
         if (!parentId) throw new Error("Could not determine parent folder");
         
-        const rootRaw = localStorage.getItem("drplay_root_folder");
-        const rootId = rootRaw || 'root';
+        const rootRaw = localStorage.getItem(STORAGE_KEY_ROOT);
+        const rootId = rootRaw || ROOT_FOLDER_ID;
         
-        if (parentId === rootId || parentId === 'root') {
-          folderName = "My Drive";
+        if (parentId === rootId || parentId === ROOT_FOLDER_ID) {
+          folderName = MY_DRIVE_LABEL;
         } else {
           const parentInfo = await db.files.get(parentId);
           if (parentInfo) {
@@ -153,7 +163,7 @@ export function useLocateFile(
 
         if (parentId === currentFolderId) {
           setHighlightedFileId({ id: fileId, ts: Date.now() });
-          setTimeout(() => setHighlightedFileId(null), 5000);
+          setTimeout(() => setHighlightedFileId(null), HIGHLIGHT_DURATION_MS);
           return;
         }
 
@@ -165,16 +175,16 @@ export function useLocateFile(
         setCurrentFolderName(folderName);
         setHighlightedFileId({id: fileId, ts: Date.now()});
 
-        setTimeout(() => setHighlightedFileId(null), 5000);
-      } catch (err) {
-        console.error(`[useLocateFile] Locate file failed`, classifyAppError(err));
+        setTimeout(() => setHighlightedFileId(null), HIGHLIGHT_DURATION_MS);
+      } catch (err: unknown) {
+        captureError({ level: 'error', source: 'useLocateFile', message: `Locate file failed: ${classifyAppError(err)}` });
       } finally {
         setIsLoadingTracks(false);
       }
     };
 
-    window.addEventListener('locate-file', handleLocateFile);
-    return () => window.removeEventListener('locate-file', handleLocateFile);
+    window.addEventListener(EVENT_LOCATE_FILE, handleLocateFile);
+    return () => window.removeEventListener(EVENT_LOCATE_FILE, handleLocateFile);
   }, [accessToken, currentFolderId, setActiveTab, setCurrentFolderId, setCurrentFolderName, setFolderHistory, setIsLoadingTracks]);
 
   return { highlightedFileId, pendingEnsuredFileId };

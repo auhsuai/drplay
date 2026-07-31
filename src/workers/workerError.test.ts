@@ -1,9 +1,15 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   classifyWorkerError,
   logWorkerError,
   WorkerAbortError,
 } from './workerError';
+
+vi.mock('../utils/errorLog', () => ({
+  captureError: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { captureError } from '../utils/errorLog';
 
 describe('classifyWorkerError', () => {
   it('classifies an AbortSignal.timeout rejection as timeout', () => {
@@ -47,42 +53,38 @@ describe('WorkerAbortError', () => {
 
 describe('logWorkerError', () => {
   beforeEach(() => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   it('includes module, timestamp and classified kind in the line', () => {
     logWorkerError('proSync/files', { status: 500 }, new Error('server down'), 'error');
-    expect(console.error).toHaveBeenCalledTimes(1);
-    const line = (console.error as any).mock.calls[0][0] as string;
-    expect(line).toMatch(/\[proSync\/files\] unknown: server down/);
-    expect(line).toMatch(/status=500/);
-    // ISO timestamp prefix
-    expect(line).toMatch(/^\[\d{4}-\d{2}-\d{2}T/);
+    expect(captureError).toHaveBeenCalledTimes(1);
+    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    expect(callArg.level).toBe('error');
+    expect(callArg.source).toBe('proSync/files');
+    expect(callArg.message).toMatch(/\[proSync\/files\] unknown: server down/);
+    expect(callArg.message).toMatch(/status=500/);
+    expect(callArg.message).toMatch(/^\[\d{4}-\d{2}-\d{2}T/);
   });
 
   it('redacts auth tokens and file ids from the message', () => {
     const err = new Error('request failed with Bearer ya29.secret-token and ?id=1RoFd1kOvoIn');
     logWorkerError('scanner/list', {}, err, 'error');
-    const line = (console.error as any).mock.calls[0][0] as string;
-    expect(line).not.toContain('ya29.secret-token');
-    expect(line).toContain('[REDACTED]');
-    expect(line).toContain('id=[REDACTED_ID]');
+    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    expect(callArg.message).not.toContain('ya29.secret-token');
+    expect(callArg.message).toContain('[REDACTED]');
+    expect(callArg.message).toContain('id=[REDACTED_ID]');
   });
 
   it('does not leak a raw token passed via context', () => {
     logWorkerError('scanner/list', { token: 'ya29.leaky' }, new Error('oops'), 'warn');
-    const line = (console.warn as any).mock.calls[0][0] as string;
-    expect(line).not.toContain('ya29.leaky');
+    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    expect(callArg.message).not.toContain('ya29.leaky');
   });
 
   it('uses warn level for non-error severity', () => {
     logWorkerError('scanner/cache', { fileId: 'abc' }, new Error('miss'), 'warn');
-    expect(console.warn).toHaveBeenCalledTimes(1);
-    expect(console.error).not.toHaveBeenCalled();
+    expect(captureError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(captureError).mock.calls[0][0].level).toBe('warn');
   });
 });

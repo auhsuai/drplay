@@ -1,3 +1,5 @@
+import { captureError } from './errorLog';
+
 const MAX_CONCURRENT = 3;
 const PREFETCH_TIMEOUT_MS = 15000;
 
@@ -46,9 +48,10 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
     .then((response) => {
       if (!response.ok) return;
       const logCancelError = (err: unknown) => {
-        console.warn('[nextTrackPrefetcher] prefetch-body-cancel-fail', {
-          url: streamUrl.slice(0, 16) + '…',
-          err,
+        captureError({
+          level: 'warn',
+          source: 'nextTrackPrefetcher',
+          message: `Prefetch body cancel failed: ${err instanceof Error ? err.message : String(err)}`,
         });
       };
       try {
@@ -57,12 +60,12 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
         logCancelError(err);
       }
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       const kind = classifyError(err);
-      console.warn('[nextTrackPrefetcher] prefetch-fail', {
-        url: streamUrl.slice(0, 16) + '…',
-        kind,
-        err,
+      captureError({
+        level: 'warn',
+        source: 'nextTrackPrefetcher',
+        message: `Prefetch failed (${kind}): ${err instanceof Error ? err.message : String(err)}`,
       });
     })
     .finally(() => {

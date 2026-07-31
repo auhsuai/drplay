@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getValidToken } from '../utils/apiClient';
 import { getTrackMetadata } from '../utils/metadata';
+import { captureError } from '../utils/errorLog';
 
 function classifyAppError(err: unknown): string {
   const msg =
@@ -71,10 +72,10 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
             signal,
           }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => {
             if (errName(err) === 'AbortError') {
-              console.warn('[App] cover-upload-aborted', { dbId: event.payload.dbId, thumb: true });
+              captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload aborted for ${event.payload.dbId} (thumb)` });
               return;
             }
-            console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: true, err });
+            captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload failed for ${event.payload.dbId}: ${err instanceof Error ? err.message : String(err)}` });
           });
         }
         if (meta.pictureDataFull) {
@@ -84,16 +85,16 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
             signal,
           }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => {
             if (errName(err) === 'AbortError') {
-              console.warn('[App] cover-upload-aborted', { dbId: event.payload.dbId, thumb: false });
+              captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload aborted for ${event.payload.dbId} (full)` });
               return;
             }
-            console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: false, err });
+            captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload failed for ${event.payload.dbId} (full): ${err instanceof Error ? err.message : String(err)}` });
           });
         }
 
         window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: event.payload.driveFileId } }));
-      } catch (e) {
-        console.warn(`[useTauriEvents] repair-thumbnail-failed`, { driveFileId: event.payload.driveFileId, error: classifyAppError(e) });
+      } catch (e: unknown) {
+        captureError({ level: 'warn', source: 'useTauriEvents', message: `Repair thumbnail failed for ${event.payload.driveFileId}: ${classifyAppError(e)}` });
       }
     }).then(fn => {
       if (cancelled) { fn(); return; }

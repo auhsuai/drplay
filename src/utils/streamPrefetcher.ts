@@ -1,3 +1,5 @@
+import { captureError } from './errorLog';
+
 const prefetchedStreams = new Map<string, string>();
 const MAX_CACHE = 200; // ~40KB max (200 bytes/URL for signed stream URLs)
 
@@ -43,11 +45,8 @@ export async function prefetchVisibleTracks(trackIds: string[]) {
       // Vì đã bỏ proxy, ta gán trực tiếp URL ảo
       const url = `/drive-stream/${id}`;
       cacheSet(id, url);
-    } catch (error) {
-      let kind: "timeout" | "network" | "unknown" = "unknown";
-      if (error instanceof Error && /timeout/i.test(error.message)) kind = "timeout";
-      else if (error instanceof Error && /network|fetch|connection/i.test(error.message)) kind = "network";
-      console.warn("[streamPrefetcher] prefetch failed", { fileId: id, kind, error });
+    } catch (error: unknown) {
+      captureError({ level: 'warn', source: 'streamPrefetcher', message: `Prefetch failed for ${id}: ${error instanceof Error ? error.message : String(error)}` });
     }
   });
 }

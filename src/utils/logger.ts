@@ -45,7 +45,7 @@ export const sanitizeArg = (arg: any): any => {
       if (SENSITIVE_PATTERNS.some(({ re }) => { re.lastIndex = 0; return re.test(str); })) {
          return JSON.parse(sanitizeString(str));
       }
-    } catch(e) {
+    } catch(e: unknown) {
       // Ignore circular structures
     }
   }
