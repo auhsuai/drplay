@@ -13,12 +13,14 @@ export function useServiceWorker() {
         console.error('[SW] Registration failed', err);
       });
 
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
+      const handleControllerChange = () => {
         const token = localStorage.getItem('drplay_access_token');
         if (token && navigator.serviceWorker.controller) {
           navigator.serviceWorker.controller.postMessage({ type: 'UPDATE_TOKEN', token });
         }
-      });
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
+      return () => navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
     }
   }, []);
 

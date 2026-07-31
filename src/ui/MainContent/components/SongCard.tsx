@@ -80,6 +80,13 @@ export const SongCard = React.memo(function SongCard({
   const [, forceRender] = useState(0);
   const cardRef = React.useRef<HTMLDivElement>(null);
   const imgRef = React.useRef<HTMLImageElement>(null);
+  const blobUrlRef = React.useRef<string | null>(null);
+  const releaseBlobUrl = React.useCallback(() => {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+  }, []);
   const [isFlashOn, setIsFlashOn] = useState(false);
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
@@ -120,7 +127,6 @@ export const SongCard = React.memo(function SongCard({
 
     const controller = new AbortController();
     let isMounted = true;
-    let objectUrl: string | null = null;
 
       const fetchMetadata = async () => {
         try {
@@ -149,8 +155,9 @@ export const SongCard = React.memo(function SongCard({
           setCoverUrl(metadata.coverUrl);
         } else if (metadata.pictureData && metadata.pictureFormat) {
           const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
-          objectUrl = URL.createObjectURL(blob);
-          setCoverUrl(objectUrl);
+          releaseBlobUrl();
+          blobUrlRef.current = URL.createObjectURL(blob);
+          setCoverUrl(blobUrlRef.current);
         }
       } catch (e) {
         const { name, message } = classifyCardError(e);
@@ -165,10 +172,6 @@ export const SongCard = React.memo(function SongCard({
     const handleMetadataUpdated = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (customEvent.detail?.fileId === item.id) {
-        if (objectUrl) {
-          URL.revokeObjectURL(objectUrl);
-          objectUrl = null;
-        }
         fetchMetadata();
       }
     };
@@ -179,7 +182,7 @@ export const SongCard = React.memo(function SongCard({
       isMounted = false;
       clearTimeout(timerId);
       controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      releaseBlobUrl();
       if (imgRef.current) {
         imgRef.current.src = "";
       }

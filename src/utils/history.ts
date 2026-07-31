@@ -1,7 +1,10 @@
+import Dexie from 'dexie';
 import { db } from '../db/db';
 import { Track } from '../App';
 
 const RECENT_CAP = 1000;
+const PLAY_COUNT_CAP = 1000;
+const FOLDER_VISIT_CAP = 1000;
 
 function currentUserEmail(): string {
   return localStorage.getItem('drplay_current_user_email') || 'default';
@@ -27,16 +30,74 @@ export async function recordPlay(track: Track) {
       await db.recentTracks.delete(existing[0].id);
     }
     await db.recentTracks.put({ id: track.id, track, userEmail: email, createdAt: Date.now() });
+    await pruneRecentTracks(email);
 
     const countRows = await db.playCounts.where('userEmail').equals(email).and((r) => r.id === track.id).toArray();
     const countRow = countRows[0];
     const nextCount = (countRow?.count || 0) + 1;
     await db.playCounts.put({ id: track.id, track, count: nextCount, userEmail: email });
+    await prunePlayCounts(email);
   } catch (e) {
     console.error('[history] recordPlay-failed', e instanceof Error ? e.message : String(e));
   }
 
   window.dispatchEvent(new Event('recent-updated'));
+}
+
+// Keeps playCounts bounded at PLAY_COUNT_CAP rows per user on disk. Rows are
+// one-per-track upserts keyed by track id, so growth equals the number of
+// distinct tracks ever played — without a cap the table (and every full-table
+// read in getHeavyRotation) grows forever. Runs after every play: evicts the
+// least-played rows first via the [userEmail+count] index (schema v6) — those
+// are exactly the rows a top-10 by count read would never return. When under
+// the cap this is a no-op after one count().
+async function prunePlayCounts(email: string): Promise<void> {
+  try {
+    const range = db.playCounts
+      .where('[userEmail+count]')
+      .between([email, Dexie.minKey], [email, Dexie.maxKey]);
+    const total = await range.count();
+    const excess = total - PLAY_COUNT_CAP;
+    if (excess <= 0) return;
+    const evict = await range.limit(excess).toArray();
+    if (evict.length === 0) return;
+    await db.playCounts.bulkDelete(evict.map((r) => r.id));
+  } catch (e) {
+    // Prune failure must not lose the play record — log with context only.
+    console.error('[history] playCounts-prune-failed', e instanceof Error ? e.message : String(e));
+  }
+}
+
+// Keeps recentTracks bounded at RECENT_CAP per user on disk (the read path
+// already caps at RECENT_CAP, but rows were never pruned at write time, so
+// the table grew unbounded over time). Runs on every write: each new unique
+// track adds at most one row (recordPlay dedupes by id), so steady-state the
+// excess above the cap is tiny and only a handful of oldest rows are evicted.
+// Uses the [userEmail+createdAt] index (schema v5): a native range count plus
+// a short offset skip — never reads the whole table. When the table is under
+// the cap this is a no-op after one count().
+async function pruneRecentTracks(email: string): Promise<void> {
+  try {
+    const range = db.recentTracks
+      .where('[userEmail+createdAt]')
+      .between([email, Dexie.minKey], [email, Dexie.maxKey]);
+    const total = await range.count();
+    const excess = total - RECENT_CAP;
+    if (excess <= 0) return;
+    // 0-based: the first row to keep is the excess-th oldest. Only skip
+    // `excess` entries (small in practice) instead of offset(RECENT_CAP).
+    const cutoff = await range.offset(excess).first();
+    if (!cutoff) return;
+    // Exclusive upper bound: rows sharing the cutoff's exact timestamp are as
+    // recent as the cutoff row (incl. the just-written play) and must survive.
+    await db.recentTracks
+      .where('[userEmail+createdAt]')
+      .between([email, Dexie.minKey], [email, cutoff.createdAt], false, false)
+      .delete();
+  } catch (e) {
+    // Prune failure must not lose the play record — log with context only.
+    console.error('[history] recentTracks-prune-failed', e instanceof Error ? e.message : String(e));
+  }
 }
 
 export async function getRecentlyPlayed(): Promise<Track[]> {
@@ -61,11 +122,16 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
 export async function getHeavyRotation(): Promise<Track[]> {
   const email = currentUserEmail();
   try {
-    const rows = await db.playCounts.where('userEmail').equals(email).toArray();
-    return rows
-      .sort((a, b) => b.count - a.count)
-      .map((row) => row.track)
-      .slice(0, 10);
+    // Top 10 by count straight from the [userEmail+count] index (schema v6):
+    // a reversed compound range capped at 10 — never materializes the whole
+    // table in memory (previously every call loaded every playCounts row).
+    const rows = await db.playCounts
+      .where('[userEmail+count]')
+      .between([email, Dexie.minKey], [email, Dexie.maxKey])
+      .reverse()
+      .limit(10)
+      .toArray();
+    return rows.map((row) => row.track);
   } catch (e) {
     console.error('[history] getHeavyRotation-failed', e instanceof Error ? e.message : String(e));
     return [];
@@ -117,8 +183,32 @@ export async function recordFolderVisit(folderId: string, folderName: string) {
     const now = Date.now();
     const count = (existing?.count || 0) + 1;
     await db.folderVisits.put({ id: folderId, name: folderName, count, lastVisited: now, userEmail: email });
+    await pruneFolderVisits(email);
   } catch (e) {
     console.error('[history] recordFolderVisit-failed', e instanceof Error ? e.message : String(e));
+  }
+}
+
+// Keeps folderVisits bounded at FOLDER_VISIT_CAP rows per user on disk. Rows
+// are one-per-folder upserts keyed by folder id, so growth equals the number
+// of distinct folders ever visited — unbounded otherwise. Runs after every
+// visit: evicts the least-visited rows first via the [userEmail+count] index
+// (schema v6) — those are never top-4 candidates for getMostVisitedFolders.
+// When under the cap this is a no-op after one count().
+async function pruneFolderVisits(email: string): Promise<void> {
+  try {
+    const range = db.folderVisits
+      .where('[userEmail+count]')
+      .between([email, Dexie.minKey], [email, Dexie.maxKey]);
+    const total = await range.count();
+    const excess = total - FOLDER_VISIT_CAP;
+    if (excess <= 0) return;
+    const evict = await range.limit(excess).toArray();
+    if (evict.length === 0) return;
+    await db.folderVisits.bulkDelete(evict.map((r) => r.id));
+  } catch (e) {
+    // Prune failure must not lose the visit record — log with context only.
+    console.error('[history] folderVisits-prune-failed', e instanceof Error ? e.message : String(e));
   }
 }
 

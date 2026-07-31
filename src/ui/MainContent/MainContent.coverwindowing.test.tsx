@@ -64,16 +64,23 @@ function makeItems(n: number): DriveItem[] {
 
 vi.mock('../../hooks/useDriveExplorer', () => ({
   useDriveExplorer: () => ({
-    currentItems: makeItems(3),
-    filteredItems: makeItems(3),
-    currentPage: 1,
-    hasMoreItems: false,
-    handleBulkMove: vi.fn(),
-    handleBulkDelete: vi.fn(),
-    handleDownloadMultiple: vi.fn(),
-    totalSize: 0,
     searchQuery: '',
     setSearchQuery: vi.fn(),
+    currentPage: 1,
+    setCurrentPage: vi.fn(),
+    totalPages: 1,
+    currentItems: makeItems(3),
+    filteredItems: makeItems(3),
+    isSelectionMode: false,
+    setIsSelectionMode: vi.fn(),
+    selectedIds: new Set<string>(),
+    setSelectedIds: vi.fn(),
+    isCreatingFolder: false,
+    isBulkOperating: false,
+    handleCreateFolder: vi.fn(),
+    handleBulkDelete: vi.fn(),
+    handleBulkMove: vi.fn(),
+    itemsPerPage: 50,
   })
 }));
 

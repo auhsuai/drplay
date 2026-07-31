@@ -109,37 +109,48 @@ export function useDriveExplorer(
         const q = getFolderAudioQuery(currentFolderId);
         let hasMore = true;
         let pageToken: string | undefined = undefined;
-        let allFetchedFiles: any[] = [];
 
         while (hasMore && isMounted) {
           const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ''}`;
           const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
-          
-          if (!res.ok) break;
-          const data = await res.json();
-          if (data.files) {
-            allFetchedFiles.push(...data.files);
+
+          if (!res.ok) {
+            console.warn(`[OnDemandFetch] Drive API error: HTTP ${res.status} (folder=${currentFolderId})`);
+            break;
           }
-          
+          const data = await res.json();
+
+          // Write each page to Dexie immediately instead of accumulating all
+          // pages in memory (mirrors proSync.worker.ts full-sync pattern).
+          if (isMounted && Array.isArray(data.files) && data.files.length > 0) {
+            const filesToInsert = data.files.map((f: any) => ({
+              id: f.id,
+              name: f.name,
+              mimeType: f.mimeType,
+              parentId: currentFolderId,
+              size: f.size ? parseInt(f.size, 10) : undefined,
+              modifiedTime: f.modifiedTime,
+              trashed: false,
+              isFolder: f.mimeType === 'application/vnd.google-apps.folder',
+            }));
+            try {
+              await db.files.bulkPut(filesToInsert);
+            } catch (dbErr) {
+              console.error(`[OnDemandFetch] Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}):`, dbErr);
+              break;
+            }
+          }
+
           pageToken = data.nextPageToken;
           if (!pageToken) hasMore = false;
         }
-
-        if (isMounted && allFetchedFiles.length > 0) {
-          const filesToInsert = allFetchedFiles.map((f: any) => ({
-            id: f.id,
-            name: f.name,
-            mimeType: f.mimeType,
-            parentId: currentFolderId,
-            size: f.size ? parseInt(f.size, 10) : undefined,
-            modifiedTime: f.modifiedTime,
-            trashed: false,
-            isFolder: f.mimeType === 'application/vnd.google-apps.folder',
-          }));
-          await db.files.bulkPut(filesToInsert);
-        }
       } catch (err) {
-        console.warn('[OnDemandFetch] error:', err);
+        if (err instanceof TypeError) {
+          // Network-level failure from fetch (DNS, offline, CORS, aborted).
+          console.warn(`[OnDemandFetch] network error (folder=${currentFolderId}):`, err);
+        } else {
+          console.error(`[OnDemandFetch] unexpected error (folder=${currentFolderId}):`, err);
+        }
       } finally {
         if (isMounted) setIsLoadingTracks(false);
       }

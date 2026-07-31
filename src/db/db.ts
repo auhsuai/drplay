@@ -78,6 +78,42 @@ export class DriveDatabase extends Dexie {
       folderVisits: 'id, userEmail',
       metadataCache: 'key'
     });
+
+    // Version 5 adds a compound [userEmail+createdAt] index on recentTracks
+    // so write-time pruning (history.ts RECENT_CAP) can delete stale rows per
+    // user without reading the whole table. Adding an index preserves data
+    // (only primary-key changes would clear it).
+    this.version(5).stores({
+      files: 'id, parentId, name, isFolder',
+      syncState: 'key',
+      favorites: 'id, userEmail',
+      errorLogs: 'id, ts',
+      kv: 'key',
+      playlists: 'id, userEmail',
+      recentTracks: 'id, userEmail, createdAt, [userEmail+createdAt]',
+      playCounts: 'id, userEmail',
+      folderVisits: 'id, userEmail',
+      metadataCache: 'key'
+    });
+
+    // Version 6 adds compound [userEmail+count] indexes on playCounts and
+    // folderVisits so write-time caps (history.ts PLAY_COUNT_CAP /
+    // FOLDER_VISIT_CAP) can evict the least-played / least-visited rows per
+    // user without reading the whole table, and so getHeavyRotation can read
+    // the top 10 by count straight from the index. Adding indexes preserves
+    // data (only primary-key changes would clear it).
+    this.version(6).stores({
+      files: 'id, parentId, name, isFolder',
+      syncState: 'key',
+      favorites: 'id, userEmail',
+      errorLogs: 'id, ts',
+      kv: 'key',
+      playlists: 'id, userEmail',
+      recentTracks: 'id, userEmail, createdAt, [userEmail+createdAt]',
+      playCounts: 'id, userEmail, [userEmail+count]',
+      folderVisits: 'id, userEmail, [userEmail+count]',
+      metadataCache: 'key'
+    });
   }
 }
 

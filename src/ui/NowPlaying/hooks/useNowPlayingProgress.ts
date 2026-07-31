@@ -3,6 +3,7 @@ import { Track } from "../../../App";
 import { formatTime } from "../../../utils/formatTime";
 import { renderBufferFromBytes } from '../../../utils/bufferedRange';
 import { listen } from '@tauri-apps/api/event';
+import { AudioController } from "../../../lib/AudioController";
 
 export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolean) {
   const [duration, setDuration] = useState(0);
@@ -13,15 +14,21 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
   const bufferFillRef = useRef<HTMLDivElement>(null);
   const currentTimeTextRef = useRef<HTMLSpanElement>(null);
   const tauriBufferEndRef = useRef<number | null>(null);
+  // Mirror of `duration` used by the event-driven progress handler so it never
+  // needs to be re-created when the duration state changes.
+  const durationRef = useRef(0);
 
   // Initialize UI on track change
   useEffect(() => {
     if (currentTrack) {
       if (currentTrack.restoreTime !== undefined) {
-         setDuration(currentTrack.restoreDuration || 0);
+         const restoredDuration = currentTrack.restoreDuration || 0;
+         durationRef.current = restoredDuration;
+         setDuration(restoredDuration);
          if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(currentTrack.restoreTime);
          if (progressFillRef.current) progressFillRef.current.style.width = `${(currentTrack.restoreTime / (currentTrack.restoreDuration || 1)) * 100}%`;
       } else {
+         durationRef.current = 0;
          setDuration(0);
          if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = '0:00';
          if (progressFillRef.current) progressFillRef.current.style.width = '0%';
@@ -30,21 +37,27 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     }
   }, [currentTrack?.id, currentTrack?.streamUrl]);
 
-  // Sync duration with audio element
+  // Sync duration with AudioController. The audio element is NOT in the DOM —
+  // it lives inside the AudioController singleton, so its event system (and
+  // getters) is the only source of truth for the real duration.
   useEffect(() => {
-    const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
-    if (!audio) return;
+    const audio = AudioController.getInstance();
 
-    const updateDuration = () => setDuration(audio.duration || 0);
+    const unsubDuration = audio.on('durationchange', ({ duration }) => {
+      const d = duration || 0;
+      durationRef.current = d;
+      setDuration(d);
+    });
 
-    audio.addEventListener('durationchange', updateDuration);
-    audio.addEventListener('loadedmetadata', updateDuration);
-
-    setDuration(audio.duration || 0);
+    // Seed with whatever metadata the active element already has.
+    const initialDuration = audio.getDuration();
+    if (initialDuration > 0 && initialDuration !== durationRef.current) {
+      durationRef.current = initialDuration;
+      setDuration(initialDuration);
+    }
 
     return () => {
-      audio.removeEventListener('durationchange', updateDuration);
-      audio.removeEventListener('loadedmetadata', updateDuration);
+      unsubDuration();
     };
   }, [currentTrack]);
 
@@ -77,50 +90,46 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     };
   }, [currentTrack?.id]);
 
-  // Realtime progress sync with audio element
+  // Realtime progress sync with AudioController events
   useEffect(() => {
     if (!isOpen) return;
     let lastTimeText = "";
     let lastProgressWidth = "";
-    const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
-    
-    const updateProgressUI = () => {
-      if (audio && !isDraggingRef.current && progressFillRef.current && currentTimeTextRef.current) {
-        const time = audio.currentTime;
+    const audio = AudioController.getInstance();
 
-        // Prevent UI jump to 0:00 when waiting for track to restore (sync with PlayerBar)
-        if (currentTrack && currentTrack.restoreTime !== undefined && time === 0 && currentTrack.restoreTime > 1) {
-          return;
+    const updateProgressUI = ({ currentTime, duration }: { currentTime: number; duration: number }) => {
+      if (isDraggingRef.current || !progressFillRef.current || !currentTimeTextRef.current) return;
+      const time = currentTime;
+
+      // Prevent UI jump to 0:00 when waiting for track to restore (sync with PlayerBar)
+      if (currentTrack && currentTrack.restoreTime !== undefined && time === 0 && currentTrack.restoreTime > 1) {
+        return;
+      }
+
+      const dur = duration || durationRef.current;
+      if (dur > 0) {
+        const progressPercent = (time / dur) * 100;
+        const newWidth = `${progressPercent}%`;
+        
+        if (Math.abs(parseFloat(lastProgressWidth) - progressPercent) > 0.05 || lastProgressWidth === "") {
+          progressFillRef.current.style.width = newWidth;
+          lastProgressWidth = newWidth;
         }
-
-        const dur = audio.duration || duration;
-        if (dur > 0) {
-          const progressPercent = (time / dur) * 100;
-          const newWidth = `${progressPercent}%`;
-          
-          if (Math.abs(parseFloat(lastProgressWidth) - progressPercent) > 0.05 || lastProgressWidth === "") {
-            progressFillRef.current.style.width = newWidth;
-            lastProgressWidth = newWidth;
-          }
-          
-          const newTimeText = formatTime(time);
-          if (lastTimeText !== newTimeText) {
-            currentTimeTextRef.current.textContent = newTimeText;
-            lastTimeText = newTimeText;
-          }
+        
+        const newTimeText = formatTime(time);
+        if (lastTimeText !== newTimeText) {
+          currentTimeTextRef.current.textContent = newTimeText;
+          lastTimeText = newTimeText;
         }
       }
     };
 
-    if (audio) {
-      audio.addEventListener('timeupdate', updateProgressUI);
-      updateProgressUI();
-      
-      return () => {
-        audio.removeEventListener('timeupdate', updateProgressUI);
-      };
-    }
-  }, [isOpen, duration, currentTrack]);
+    const unsubTime = audio.on('timeupdate', updateProgressUI);
+
+    return () => {
+      unsubTime();
+    };
+  }, [isOpen, currentTrack]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!progressBarRef.current) return;
@@ -147,10 +156,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
       setIsDragging(false);
       isDraggingRef.current = false;
       const finalTime = updateTimeUI(clientX);
-      const audio = document.getElementById('drplay-audio') as HTMLAudioElement;
-      if (audio) {
-        audio.currentTime = finalTime;
-      }
+      AudioController.getInstance().seek(finalTime);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerCancel);

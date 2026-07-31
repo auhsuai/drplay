@@ -1,8 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getValidToken } from '../utils/apiClient';
 import { getEffectiveDownloadPath } from '../utils/downloadPath';
 import { Track } from '../App';
 import { TFunction } from 'i18next';
+
+// Delay the object URL revoke so the engine gets a chance to schedule the
+// download (it runs on a later tick). Revoking synchronously after a.click()
+// can free the URL before the download starts, yielding empty/corrupt files
+// on some engines (MDN URL.revokeObjectURL: "avoid freeing the object URL
+// too early"; Koine #623 / techbloat 2026-05 recommend ~1s).
+const REVOKE_DELAY_MS = 1000;
+
+// The download buffers the ENTIRE file into RAM via response.blob(), so an
+// unresponsive server would hold the bytes (and memory) forever. 5 minutes is
+// generous for legit multi-hundred-MB audio files yet still bounds the
+// pathological case. AbortSignal.timeout rejects with a DOMException named
+// 'TimeoutError' (MDN AbortSignal.timeout, Baseline 2024). Same pattern as
+// fetchWithAuth / useDrive.ts.
+const DOWNLOAD_TIMEOUT_MS = 300_000;
 
 export function useMenuDownload(t: TFunction) {
   const [isDownloadingFile, setIsDownloadingFile] = useState(false);
@@ -10,6 +25,17 @@ export function useMenuDownload(t: TFunction) {
   const [downloadFileName, setDownloadFileName] = useState("");
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadTrack, setDownloadTrack] = useState<Track | null>(null);
+
+  // Abort the in-flight download when the component unmounts (or a newer
+  // download supersedes it). Without a signal the fetch and its RAM-buffered
+  // blob survive the component and keep consuming memory.
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (downloadMessage) {
@@ -31,16 +57,29 @@ export function useMenuDownload(t: TFunction) {
     if (isDownloadingFile || !downloadTrack) return;
     setIsDownloadingFile(true);
     setShowDownloadDialog(false);
-    
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    // Merge the cancel signal with a bounded timeout so a stalled server
+    // cannot hold the RAM-buffered blob forever (MDN AbortSignal.any /
+    // AbortSignal.timeout; same pattern as useDrive.ts:72).
+    const signal = typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([controller.signal, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)])
+      : controller.signal;
+
     try {
-      const freshToken = await getValidToken();
+      const freshToken = await getValidToken(false, signal);
       if (!freshToken) throw new Error("No valid token");
 
       const downloadUrl = `https://www.googleapis.com/drive/v3/files/${downloadTrack.id}?alt=media`;
       const response = await fetch(downloadUrl, {
         headers: {
           Authorization: `Bearer ${freshToken}`
-        }
+        },
+        signal
       });
       
       if (!response.ok) throw new Error("Fetch failed");
@@ -56,7 +95,7 @@ export function useMenuDownload(t: TFunction) {
       a.download = finalFileName;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
+      setTimeout(() => window.URL.revokeObjectURL(url), REVOKE_DELAY_MS);
       document.body.removeChild(a);
       
       try {
@@ -66,7 +105,25 @@ export function useMenuDownload(t: TFunction) {
         setDownloadMessage(t('menu.download_complete', 'Tải xuống hoàn tất!'));
       }
     } catch (err) {
-      console.error('[useMenuDownload] Failed to download file', err);
+      // Duck-typed name extraction: DOMException is NOT instanceof Error in
+      // some environments (jsdom), yet carries a reliable .name ('AbortError'
+      // for cancels, 'TimeoutError' for AbortSignal.timeout).
+      const errName = err && typeof err === 'object' && typeof (err as { name?: unknown }).name === 'string'
+        ? (err as { name: string }).name
+        : '';
+      if (errName === 'AbortError') {
+        // Deliberate cancel (unmount / superseded download): the component may
+        // already be gone, so do NOT touch state — and do not surface a
+        // failure message for a user-initiated cancel. Log for visibility.
+        console.warn('[useMenuDownload] download-aborted — download was cancelled (unmount or superseded)');
+        return;
+      }
+      if (errName === 'TimeoutError') {
+        console.error(`[useMenuDownload] download-timeout — no response within ${DOWNLOAD_TIMEOUT_MS}ms`);
+        setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
+        return;
+      }
+      console.error('[useMenuDownload] download-failed', errName || err);
       setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
     } finally {
       setIsDownloadingFile(false);

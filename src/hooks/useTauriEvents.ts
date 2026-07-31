@@ -19,11 +19,30 @@ function classifyAppError(err: unknown): string {
   return "unknown";
 }
 
+// Cover thumbnails are uploaded to the local proxy server; 30s is generous for
+// a multi-MB full-size cover yet still bounds a stalled upload. AbortSignal.timeout
+// rejects with a 'TimeoutError' DOMException; AbortController.abort() with an
+// 'AbortError' (MDN AbortSignal.timeout / AbortSignal.any, Baseline 2024). Same
+// pattern as useMenuDownload.ts / useDrive.ts.
+const COVER_UPLOAD_TIMEOUT_MS = 30_000;
+
+// Duck-typed name extraction: DOMException is NOT instanceof Error in some
+// environments (jsdom), yet carries a reliable .name ('AbortError' for
+// deliberate cancels). Same rationale as useMenuDownload.ts.
+function errName(err: unknown): string {
+  return err && typeof err === 'object' && typeof (err as { name?: unknown }).name === 'string'
+    ? (err as { name: string }).name
+    : '';
+}
+
 export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
   useEffect(() => {
     let quotaFn: (() => void) | null = null;
     let repairFn: (() => void) | null = null;
     let cancelled = false;
+    // Cancel in-flight cover uploads on unmount. Without a signal a stalled
+    // upload would keep its resources after the component is gone.
+    const controller = new AbortController();
 
     listen('drive-quota-exceeded', () => {
       setShowRateLimitModal(true);
@@ -39,17 +58,37 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
 
         const meta = await getTrackMetadata(event.payload.driveFileId, token, undefined, undefined, undefined, true);
 
+        // Merge the unmount-cancel signal with a bounded timeout so a stalled
+        // upload cannot hang the handler (MDN AbortSignal.any / timeout).
+        const signal = typeof AbortSignal.any === 'function'
+          ? AbortSignal.any([controller.signal, AbortSignal.timeout(COVER_UPLOAD_TIMEOUT_MS)])
+          : controller.signal;
+
         if (meta.pictureData) {
           await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=true`, {
             method: 'POST',
             body: meta.pictureData as any,
-          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: true, err }));
+            signal,
+          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => {
+            if (errName(err) === 'AbortError') {
+              console.warn('[App] cover-upload-aborted', { dbId: event.payload.dbId, thumb: true });
+              return;
+            }
+            console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: true, err });
+          });
         }
         if (meta.pictureDataFull) {
           await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=false`, {
             method: 'POST',
             body: meta.pictureDataFull as any,
-          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: false, err }));
+            signal,
+          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => {
+            if (errName(err) === 'AbortError') {
+              console.warn('[App] cover-upload-aborted', { dbId: event.payload.dbId, thumb: false });
+              return;
+            }
+            console.warn('[App] cover-upload-failed', { dbId: event.payload.dbId, thumb: false, err });
+          });
         }
 
         window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: event.payload.driveFileId } }));
@@ -63,6 +102,7 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
 
     return () => {
       cancelled = true;
+      controller.abort();
       quotaFn?.();
       repairFn?.();
     };

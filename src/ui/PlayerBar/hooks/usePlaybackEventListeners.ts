@@ -28,6 +28,7 @@ export function usePlaybackEventListeners(
 ) {
   // Tauri listeners (token expired, drive quota)
   useEffect(() => {
+    let cancelled = false;
     let rateLimitRetryTimeout: ReturnType<typeof setTimeout> | null = null;
     const unlistenFns: (() => void)[] = [];
 
@@ -35,6 +36,7 @@ export function usePlaybackEventListeners(
       console.warn('[Player] Token expired mid-stream, auto refreshing...');
       try {
         await getValidToken(true);
+        if (cancelled) return;
         const track = currentTrackRef.current;
         const audioEl = getActiveAudio();
         if (track?.streamUrl && audioEl?.error) {
@@ -44,6 +46,7 @@ export function usePlaybackEventListeners(
         }
       } catch (err) {
         captureError({ level: 'error', source: 'playback-control', message: `Token refresh failed (${err instanceof Error ? err.name : 'unknown'})`, kind: 'auth' });
+        if (cancelled) return;
         if (!errorInfoRef.current) {
           dispatch({ type: 'ERROR', error: { type: 'network_interrupted', text: t('player.auth_expired', 'Phiên đăng nhập hết hạn, vui lòng đăng nhập lại') } });
         }
@@ -61,6 +64,7 @@ export function usePlaybackEventListeners(
         const track = currentTrackRef.current;
         if (track?.streamUrl) {
           await performRetry(track);
+          if (cancelled) return;
         }
       }, DRIVE_QUOTA_RETRY_MS);
     }).then(fn => { unlistenFns.push(fn); }).catch(() => {
@@ -68,6 +72,7 @@ export function usePlaybackEventListeners(
     });
 
     return () => {
+      cancelled = true;
       if (rateLimitRetryTimeout) clearTimeout(rateLimitRetryTimeout);
       for (const fn of unlistenFns) fn();
     };

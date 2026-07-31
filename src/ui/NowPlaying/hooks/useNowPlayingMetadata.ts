@@ -25,6 +25,13 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
       let objectUrl: string | null = null;
       const controller = new AbortController();
 
+      const revokeCoverUrl = () => {
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+        }
+      };
+
       getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName, controller.signal)
         .then(metadata => {
           if (isCancelled) return;
@@ -50,10 +57,12 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
           } else if ((metadata.pictureDataFull || metadata.pictureData) && metadata.pictureFormat) {
             const data = metadata.pictureDataFull || metadata.pictureData;
             const blob = new Blob([new Uint8Array(data!)], { type: metadata.pictureFormat });
-            objectUrl = URL.createObjectURL(blob);
-            setCoverUrl(objectUrl);
-            
-            getPalette(objectUrl)
+            const coverObjectUrl = URL.createObjectURL(blob);
+            objectUrl = coverObjectUrl;
+            setCoverUrl(coverObjectUrl);
+
+            Promise.resolve()
+              .then(() => getPalette(coverObjectUrl))
               .then(colors => {
                 if (isCancelled) return;
                 setBgColor(colors[0]);
@@ -65,7 +74,8 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
                   setBgPalette([]);
                 }
                 console.warn('[NowPlaying] palette-failed', { trackId: currentTrack?.id, err: classifyNowPlayingError(err) });
-              });
+              })
+              .finally(() => revokeCoverUrl());
           } else {
             setBgColor('');
             setBgPalette([]);
@@ -82,7 +92,6 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
       return () => {
         isCancelled = true;
         controller.abort();
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
         setBgColor('');
         setBgPalette([]);
       };

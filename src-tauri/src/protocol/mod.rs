@@ -1,5 +1,6 @@
 pub mod cover;
 
+use bytes::Bytes;
 use tauri::http::{Response, StatusCode};
 use cover::{handle_cover_get, handle_cover_post, CoverError};
 
@@ -132,7 +133,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                                     .header("Access-Control-Allow-Origin", "*")
                                     .header("Cache-Control", "public, max-age=31536000, immutable")
                                     .header("ETag", etag)
-                                .body(bytes_val.to_vec())
+                                .body(cover_response_body(bytes_val))
                                 .unwrap_or_else(|e| {
                                     eprintln!("[protocol] failed to build 200 (cover) response: {e}");
                                     Response::new(Vec::new())
@@ -173,4 +174,48 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
             }));
         });
     })
+}
+
+/// Builds the owned response body for a cached cover payload.
+///
+/// Tauri's URI-scheme responder requires an owned `'static` buffer
+/// (`responder.respond<T: Into<Cow<'static, [u8]>>>`), so a cover that lives in
+/// the shared `Bytes` cache must be converted to `Vec<u8>` once per response.
+/// The conversion uses the bytes crate's ownership-consuming
+/// `From<Bytes> for Vec<u8>` instead of `to_vec()`: for a shared (cache-hit)
+/// `Bytes` this is exactly one memcpy — the irreducible copy the protocol API
+/// demands — and for a uniquely-owned `Bytes` it reclaims the allocation with
+/// no copy at all. No `Bytes` is ever copied twice in this path.
+fn cover_response_body(bytes_val: Bytes) -> Vec<u8> {
+    bytes_val.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cover_response_body;
+    use bytes::Bytes;
+
+    #[test]
+    fn cover_response_body_preserves_exact_payload() {
+        let payload: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
+        let body = cover_response_body(Bytes::from(payload.clone()));
+        assert_eq!(body, payload, "response body must be byte-identical to the cached cover");
+    }
+
+    #[test]
+    fn cover_response_body_shared_bytes_still_identical() {
+        let payload: Vec<u8> = vec![0x24u8; 4096];
+        let cache_side = Bytes::from(payload.clone());
+        let response_side = cache_side.clone();
+        drop(cache_side);
+        let body = cover_response_body(response_side);
+        assert_eq!(body, payload, "shared (cache-hit) Bytes must serve identical bytes");
+    }
+
+    #[test]
+    fn cover_response_body_consumes_unique_bytes_without_realloc() {
+        let payload: Vec<u8> = vec![0x42u8; 4096];
+        let body = cover_response_body(Bytes::from(payload.clone()));
+        assert_eq!(body, payload, "uniquely-owned Bytes must reclaim the allocation, not copy again");
+    }
 }

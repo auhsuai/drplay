@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Track } from '../../../App';
 import { getTrackMetadata } from '../../../utils/metadata';
 import { Play, Music, MoreHorizontal } from 'lucide-react';
@@ -14,6 +14,13 @@ export const getFillColor = (str: string) => {
 export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onPlay: () => void, token: string | null, isOverlayBtn?: boolean }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
+  const releaseBlobUrl = useCallback(() => {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+  }, []);
   const fillColor = getFillColor(track.id);
   const [title, setTitle] = useState(track.title);
   const [artist, setArtist] = useState(track.artist);
@@ -23,7 +30,6 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
     if (!token) return;
     const controller = new AbortController();
     let isMounted = true;
-    let objectUrl: string | null = null;
     getTrackMetadata(track.id, token, track.size, track.originalName, controller.signal).then(meta => {
       if (!isMounted) return;
       if (meta.title) setTitle(meta.title);
@@ -32,14 +38,15 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
         setCoverUrl(meta.coverUrl);
       } else if (meta.pictureData && meta.pictureFormat) {
         const blob = new Blob([new Uint8Array(meta.pictureData)], { type: meta.pictureFormat });
-        objectUrl = URL.createObjectURL(blob);
-        setCoverUrl(objectUrl);
+        releaseBlobUrl();
+        blobUrlRef.current = URL.createObjectURL(blob);
+        setCoverUrl(blobUrlRef.current);
       }
     }).catch(err => console.warn('[HomeTab] Failed to load cover metadata for track', track.id, err));
     return () => { 
       isMounted = false; 
       controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      releaseBlobUrl();
       if (imgRef.current) imgRef.current.src = "";
     };
   }, [track.id, token]);

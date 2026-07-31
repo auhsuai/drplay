@@ -4,6 +4,7 @@ import { captureError } from '../utils/errorLog';
 
 type AudioEventMap = {
   timeupdate: { currentTime: number; duration: number };
+  durationchange: { duration: number };
   buffering: { isBuffering: boolean };
   error: { message: string; code: string };
   ended: void;
@@ -21,11 +22,23 @@ export class AudioController {
   
   private currentTrackId: string | null = null;
   private retryCount = 0;
+  // B1: pending retry timer + monotonic change token. playTrack()/release()
+  // bump the token and clear the timer so a stale retry scheduled for the
+  // previous track can never touch the current track.
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private changeToken = 0;
   private volume = 1;
   private muted = false;
   private listeners: { [K in keyof AudioEventMap]?: AudioEventHandler<K>[] } = {};
   
   private lastTimeUpdate = 0;
+
+  // Retained reference to every native listener attached by setupAudio(),
+  // keyed by element then event type. Anonymous handlers are unreachable and
+  // can never be removeEventListener'd (MDN); holding the reference here makes
+  // a future teardown able to detach them. WeakMap so the table itself never
+  // keeps an element alive.
+  private readonly elementListeners = new WeakMap<HTMLAudioElement, Record<string, EventListener>>();
 
   private constructor() {
     this.audio1 = new Audio();
@@ -47,45 +60,65 @@ export class AudioController {
     return this.activeIndex === 0 ? this.audio1 : this.audio2;
   }
 
+  private clearRetryTimer() {
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
   private setupAudio(audio: HTMLAudioElement) {
-    audio.addEventListener('timeupdate', () => {
+    // Handlers are held as named properties (not inline anonymous closures)
+    // so each reference is retained in this.elementListeners and removable.
+    // Behaviour is identical to the previous inline arrows.
+    const handlers: Record<string, EventListener> = {};
+
+    handlers.timeupdate = () => {
       if (audio !== this.activeAudio) return;
       const now = performance.now();
       if (now - this.lastTimeUpdate > 200) { 
         this.lastTimeUpdate = now;
         this.emit('timeupdate', { currentTime: audio.currentTime, duration: audio.duration || 0 });
       }
-    });
+    };
 
-    audio.addEventListener('waiting', () => {
+    // Surface metadata readiness so consumers can render the real duration
+    // even before the first timeupdate (e.g. paused with metadata loaded).
+    handlers.durationchange = () => {
+      if (audio === this.activeAudio) {
+        this.emit('durationchange', { duration: audio.duration || 0 });
+      }
+    };
+
+    handlers.waiting = () => {
       if (audio === this.activeAudio) {
         this.emit('buffering', { isBuffering: true });
       }
-    });
+    };
 
-    audio.addEventListener('playing', () => {
+    handlers.playing = () => {
       if (audio === this.activeAudio) {
         this.emit('buffering', { isBuffering: false });
         this.emit('play', undefined as void);
         usePlayerStore.getState().setIsPlaying(true);
       }
-    });
+    };
 
-    audio.addEventListener('pause', () => {
+    handlers.pause = () => {
       if (audio === this.activeAudio) {
         this.emit('pause', undefined as void);
         usePlayerStore.getState().setIsPlaying(false);
       }
-    });
+    };
 
-    audio.addEventListener('ended', () => {
+    handlers.ended = () => {
       if (audio === this.activeAudio) {
         if (audio.duration && audio.currentTime < audio.duration - 1) return;
         this.emit('ended', undefined as void);
       }
-    });
+    };
 
-    audio.addEventListener('error', () => {
+    handlers.error = () => {
       if (audio !== this.activeAudio) return;
       this.retryCount++;
       captureError({ level: 'error', source: 'AudioController', message: `Audio error (attempt ${this.retryCount})` });
@@ -93,12 +126,27 @@ export class AudioController {
       if (this.retryCount < 3 && this.currentTrackId) {
         this.emit('error', { message: 'Mạng không ổn định, đang thử lại...', code: 'network_interrupted' });
         const pos = audio.currentTime;
-        setTimeout(() => this.retry(pos), 2000);
+        // B1: capture track id + change token at schedule time; when the timer
+        // fires, a stale retry (track switched in between) is a no-op.
+        const trackId = this.currentTrackId;
+        const token = this.changeToken;
+        this.clearRetryTimer();
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null;
+          this.retry(pos, trackId, token);
+        }, 2000);
       } else {
+        // B1: giving up — no zombie retry may fire later.
+        this.clearRetryTimer();
         this.emit('error', { message: 'File lỗi định dạng, đang bỏ qua...', code: 'format_error' });
         this.emit('ended', undefined as void); 
       }
-    });
+    };
+
+    for (const [type, handler] of Object.entries(handlers)) {
+      audio.addEventListener(type, handler);
+    }
+    this.elementListeners.set(audio, handlers);
   }
 
   public on<K extends keyof AudioEventMap>(event: K, handler: AudioEventHandler<K>) {
@@ -117,6 +165,10 @@ export class AudioController {
   }
 
   public async playTrack(track: Track, startTime?: number) {
+    // B1: any pending retry from the previous track must not fire on this one.
+    this.changeToken++;
+    this.clearRetryTimer();
+
     if (this.currentTrackId === track.id) {
       if (this.activeAudio.paused) {
         this.activeAudio.play().catch(e => console.warn(e));
@@ -130,6 +182,9 @@ export class AudioController {
     const oldAudio = this.activeAudio;
     oldAudio.pause();
     oldAudio.removeAttribute('src');
+    // B2: MDN 3-step release — load() after removeAttribute('src') so the
+    // old element's buffers/decoder are actually freed.
+    oldAudio.load();
 
     this.activeIndex = this.activeIndex === 0 ? 1 : 0;
     const newAudio = this.activeAudio;
@@ -158,12 +213,17 @@ export class AudioController {
     }
   }
 
-  private async retry(position: number) {
-    if (!this.currentTrackId) return;
+  private async retry(position: number, trackId: string, token: number) {
+    // B1: stale retry — the track changed (or was released) while the timer
+    // was pending. Never touch the current track with the old track's intent.
+    if (token !== this.changeToken) return;
+    if (!this.currentTrackId || this.currentTrackId !== trackId) return;
     const audio = this.activeAudio;
     const src = audio.src;
     audio.pause();
     audio.removeAttribute('src');
+    // B2: MDN 3-step release before pointing the element at a new source.
+    audio.load();
     
     // Strip old query params and add new retry param
     const baseUrl = src.split('?')[0];
@@ -230,5 +290,36 @@ export class AudioController {
     const inactiveAudio = this.activeIndex === 0 ? this.audio2 : this.audio1;
     inactiveAudio.src = url;
     inactiveAudio.load();
+  }
+
+  // B3: fully release audio resources (logout / player-stop). Each element is
+  // handled independently so one throwing element cannot leave the others
+  // (or the state) unreleased.
+  // NOTE: the 6 native listeners per element (setupAudio) are intentionally
+  // NOT detached here. release() runs on logout, but the app does not reload:
+  // the singleton instance and its 2 elements are reused after re-login
+  // (useAuth.handleLogout -> 'player-stop' -> release(); the next login calls
+  // playTrack on the SAME elements). Detaching the listeners here would leave
+  // the reused elements silent — no timeupdate/pause/ended/error emission —
+  // breaking progress, isPlaying, retry and session-save. The handlers are
+  // retained as named references in this.elementListeners, so a real teardown
+  // path (if one is ever introduced) can remove them.
+  public release() {
+    this.clearRetryTimer();
+    this.changeToken++;
+    this.currentTrackId = null;
+    this.retryCount = 0;
+
+    for (const el of [this.audio1, this.audio2]) {
+      try {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+      } catch (err) {
+        console.warn(
+          `[AudioController] release-element-failed at ${new Date().toISOString()}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
   }
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { MainContent } from './MainContent';
 import type { DriveItem } from '../../App';
@@ -44,19 +44,10 @@ vi.mock('../../utils/normalizeText', () => ({
   normalizeText: (s: string) => s.toLowerCase(),
 }));
 
+const { useDriveExplorerMock } = vi.hoisted(() => ({ useDriveExplorerMock: vi.fn() }));
+
 vi.mock('../../hooks/useDriveExplorer', () => ({
-  useDriveExplorer: () => ({
-    currentItems: makeItems(3),
-    filteredItems: makeItems(3),
-    currentPage: 1,
-    hasMoreItems: false,
-    handleBulkMove: vi.fn(),
-    handleBulkDelete: vi.fn(),
-    handleDownloadMultiple: vi.fn(),
-    totalSize: 0,
-    searchQuery: '',
-    setSearchQuery: vi.fn(),
-  })
+  useDriveExplorer: useDriveExplorerMock,
 }));
 
 vi.mock('./components/SongCard', () => ({
@@ -81,6 +72,29 @@ function makeItems(n: number): DriveItem[] {
   }));
 }
 
+// Mirrors the return shape of the real useDriveExplorer hook (src/hooks/useDriveExplorer.ts).
+function makeExplorerState(items: DriveItem[]) {
+  return {
+    searchQuery: '',
+    setSearchQuery: vi.fn(),
+    currentPage: 1,
+    setCurrentPage: vi.fn(),
+    totalPages: 1,
+    currentItems: items,
+    filteredItems: items,
+    isSelectionMode: false,
+    setIsSelectionMode: vi.fn(),
+    selectedIds: new Set<string>(),
+    setSelectedIds: vi.fn(),
+    isCreatingFolder: false,
+    isBulkOperating: false,
+    handleCreateFolder: vi.fn(),
+    handleBulkDelete: vi.fn(),
+    handleBulkMove: vi.fn(),
+    itemsPerPage: 50,
+  };
+}
+
 const baseProps = {
   activeTab: 'Drive',
   onPlay: vi.fn(),
@@ -98,6 +112,10 @@ const baseProps = {
 };
 
 describe('MainContent paginated rendering', () => {
+  beforeEach(() => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
   afterEach(() => {
     cleanup();
   });
@@ -109,6 +127,7 @@ describe('MainContent paginated rendering', () => {
   });
 
   it('should only render visible items using react-virtual', () => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(60)));
     render(
       <MainContent
         {...baseProps}
