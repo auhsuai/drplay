@@ -6,11 +6,16 @@ import { recordFolderVisit } from "../utils/history";
 import { getAppConfig, saveAppConfig } from "../utils/driveApi";
 import { getValidToken } from "../utils/apiClient";
 import { useDriveStore } from "../store/driveStore";
+import { captureError } from "../utils/errorLog";
 
-const DRIVE_MODULE = "useDrive";
+const LS_SORT_OPTION = 'drplay_sort_option';
+const LS_ROOT_FOLDER = 'drplay_root_folder';
+const LS_CURRENT_FOLDER_ID = 'drplay_current_folder_id';
+const LS_CURRENT_FOLDER_NAME = 'drplay_current_folder_name';
+const LS_FOLDER_HISTORY = 'drplay_folder_history';
+const DB_NAV_STATE_KEY = 'drplay_nav_state';
+const ROOT_VERIFY_TIMEOUT_MS = 15_000;
 
-// Standardize error context so every catch logs the module + subtype and never
-// leaks the access token. Token values are never passed into these helpers.
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
@@ -48,12 +53,12 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       // hydratedRef.current=false forever and the app would silently stop
       // persisting navigation state.
       try {
-        const savedSort = localStorage.getItem("drplay_sort_option");
+        const savedSort = localStorage.getItem(LS_SORT_OPTION);
         if (savedSort) {
           setSortOption(savedSort);
         }
 
-        let localRoot = localStorage.getItem("drplay_root_folder");
+        let localRoot = localStorage.getItem(LS_ROOT_FOLDER);
 
         if (isLoggedIn && accessToken) {
           try {
@@ -69,31 +74,31 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                 const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
                 const verifyRes = await fetch(verifyUrl, {
                   headers: { Authorization: `Bearer ${freshToken}` },
-                  signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+                  signal: AbortSignal.any([controller.signal, AbortSignal.timeout(ROOT_VERIFY_TIMEOUT_MS)]),
                 });
                 if (cancelled) return;
                 if (!verifyRes.ok) {
-                  console.warn(`[${DRIVE_MODULE}] verify-root-inaccessible — saved root folder no longer accessible, need re-select`);
+                  captureError({ level: 'warn', source: 'useDrive', message: 'verify-root-inaccessible: saved root no longer accessible' });
                   localRoot = null;
                 } else {
                   const verifyData = await verifyRes.json();
                   if (verifyData.mimeType !== 'application/vnd.google-apps.folder') {
-                    console.warn(`[${DRIVE_MODULE}] verify-root-not-folder — saved root is not a folder, need re-select`);
+                    captureError({ level: 'warn', source: 'useDrive', message: 'verify-root-not-folder: saved root is not a folder' });
                     localRoot = null;
                   } else if (verifyData.driveId) {
-                    console.warn(`[${DRIVE_MODULE}] verify-root-shared-drive — saved root is a Shared Drive folder, falling back to My Drive`);
+                    captureError({ level: 'warn', source: 'useDrive', message: 'verify-root-shared-drive: saved root is a Shared Drive folder' });
                     localRoot = null;
                   }
                 }
                 if (localRoot) {
-                  if (remoteConfig.rootFolderId !== localStorage.getItem("drplay_root_folder")) {
-                    localStorage.setItem("drplay_root_folder", localRoot);
+                  if (remoteConfig.rootFolderId !== localStorage.getItem(LS_ROOT_FOLDER)) {
+                    localStorage.setItem(LS_ROOT_FOLDER, localRoot);
                   }
                   try {
                     await db.files.clear();
                     await invoke("clear_local_cache");
-                  } catch (e) {
-                    console.warn(`[${DRIVE_MODULE}] clear-cache-failed — failed to clear local cache on root folder change (best-effort)`, classifyError(e));
+                  } catch (e: unknown) {
+                    captureError({ level: 'warn', source: 'useDrive', message: `clear-cache-failed: ${classifyError(e)}` });
                   }
                 }
               } else if (!localRoot) {
@@ -102,9 +107,9 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
             } else {
               localRoot = null;
             }
-          } catch (e) {
+          } catch (e: unknown) {
             if (cancelled) return;
-            console.error(`[${DRIVE_MODULE}] sync-config-failed — failed to sync config (best-effort)`, classifyError(e));
+            captureError({ level: 'error', source: 'useDrive', message: `sync-config-failed: ${classifyError(e)}` });
             localRoot = null;
           }
         }
@@ -115,51 +120,62 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
           setAppRootFolder(localRoot);
 
           try {
-            const state = await db.syncState.get("drplay_nav_state");
+            const state = await db.syncState.get(DB_NAV_STATE_KEY);
             if (cancelled) return;
             if (state && state.value) {
-              const sv = state.value as { id: string; name: string; history: { id: string; name: string }[] };
-              const savedId = sv.id;
-              const suspectRoot = savedId === 'root' && localRoot !== 'root';
-              const restoredId = suspectRoot ? localRoot! : savedId;
-              setCurrentFolderId(restoredId);
-              setCurrentFolderName(restoredId === localRoot || restoredId === 'root' ? "My Drive" : sv.name);
-              setFolderHistory(suspectRoot ? [] : (sv.history || []));
+              const raw = state.value as Record<string, unknown> | null | undefined;
+              if (raw && typeof raw.id === 'string') {
+                const sv = {
+                  id: raw.id,
+                  name: typeof raw.name === 'string' ? raw.name : 'My Drive',
+                  history: Array.isArray(raw.history)
+                    ? raw.history as { id: string; name: string }[]
+                    : [],
+                };
+                const savedId = sv.id;
+                const suspectRoot = savedId === 'root' && localRoot !== 'root';
+                const restoredId = suspectRoot && localRoot ? localRoot : savedId;
+                setCurrentFolderId(restoredId);
+                setCurrentFolderName(restoredId === localRoot || restoredId === 'root' ? "My Drive" : sv.name);
+                setFolderHistory(suspectRoot ? [] : sv.history);
+              } else {
+                setCurrentFolderId(localRoot);
+                setCurrentFolderName("My Drive");
+              }
             } else {
-              const savedCurrentId = localStorage.getItem("drplay_current_folder_id");
-              const savedCurrentName = localStorage.getItem("drplay_current_folder_name");
-              const savedHistoryStr = localStorage.getItem("drplay_folder_history");
+              const savedCurrentId = localStorage.getItem(LS_CURRENT_FOLDER_ID);
+              const savedCurrentName = localStorage.getItem(LS_CURRENT_FOLDER_NAME);
+              const savedHistoryStr = localStorage.getItem(LS_FOLDER_HISTORY);
 
               if (savedCurrentId && savedCurrentName && savedHistoryStr) {
                 setCurrentFolderId(savedCurrentId);
                 setCurrentFolderName(savedCurrentId === 'root' ? "My Drive" : savedCurrentName);
                 try {
                   setFolderHistory(JSON.parse(savedHistoryStr));
-                } catch (e) {
-                  // Silent before; now logged with context and falls back to [].
-                  console.warn(`[${DRIVE_MODULE}] nav-state-parse — corrupt localStorage folder history, falling back to []`, classifyError(e));
+                } catch (e: unknown) {
+                  captureError({ level: 'warn', source: 'useDrive', message: `nav-state-parse: corrupt localStorage folder history, ${classifyError(e)}` });
                   setFolderHistory([]);
                 }
               } else {
-                setCurrentFolderId(localRoot!);
+                setCurrentFolderId(localRoot);
                 setCurrentFolderName("My Drive");
               }
             }
-          } catch (e) {
+          } catch (e: unknown) {
             if (cancelled) return;
-            console.warn(`[${DRIVE_MODULE}] nav-state-restore-failed — failed to restore nav state, falling back to local root (best-effort)`, classifyError(e));
-            setCurrentFolderId(localRoot!);
+            captureError({ level: 'warn', source: 'useDrive', message: `nav-state-restore-failed: ${classifyError(e)}` });
+            setCurrentFolderId(localRoot);
             setCurrentFolderName("My Drive");
           }
         } else {
           setAppRootFolder(null);
         }
-      } catch (e) {
+      } catch (e: unknown) {
         // Unexpected throw from initApp (e.g. an unhandled rejection). Fall back
         // to a safe state so the app is not stuck without an app root folder and
         // hydration still completes in the finally below.
         if (cancelled) return;
-        console.error(`[${DRIVE_MODULE}] init-app-unexpected — unexpected error during init, falling back to no root folder`, classifyError(e));
+        captureError({ level: 'error', source: 'useDrive', message: `init-app-unexpected: ${classifyError(e)}` });
         setAppRootFolder(null);
       } finally {
         // Hydration safety: always flip to true unless the effect was cleaned up
@@ -173,7 +189,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
     // Defensive net: initApp's own try/finally already guarantees hydration, but
     // this catch logs any rejection that escapes initApp instead of swallowing it.
-    initApp().catch(e => console.error(`[${DRIVE_MODULE}] init-app-failed`, classifyError(e)));
+    initApp().catch(e => captureError({ level: 'error', source: 'useDrive', message: `init-app-failed: ${classifyError(e)}` }));
 
     return () => {
       cancelled = true;
@@ -186,13 +202,13 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     if (!hydratedRef.current) return;
     if (isLoggedIn && appRootFolder) {
       db.syncState.put({
-        key: "drplay_nav_state",
+        key: DB_NAV_STATE_KEY,
         value: {
           id: currentFolderId,
           name: currentFolderName,
           history: folderHistory
         }
-      }).catch(e => console.error(`[${DRIVE_MODULE}] nav-state-save-failed`, classifyError(e)));
+      }).catch((e: unknown) => captureError({ level: 'error', source: 'useDrive', message: `nav-state-save-failed: ${classifyError(e)}` }));
     }
   }, [currentFolderId, currentFolderName, folderHistory, isLoggedIn, appRootFolder]);
 
@@ -222,7 +238,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   }, [folderHistory, setFolderHistory, setCurrentFolderId, setCurrentFolderName]);
 
   const handleSelectRootFolder = useCallback(async (folderId: string) => {
-    localStorage.setItem("drplay_root_folder", folderId);
+    localStorage.setItem(LS_ROOT_FOLDER, folderId);
     setAppRootFolder(folderId);
     setCurrentFolderId(folderId);
     setCurrentFolderName("My Drive");
@@ -235,14 +251,14 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
         try {
           const saved = await saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: "My Drive", updatedAt: Date.now() });
           if (!saved) {
-            console.warn(`[${DRIVE_MODULE}] save-config-unsaved — app config was not persisted to Drive (save returned false), continuing with local root`);
+            captureError({ level: 'warn', source: 'useDrive', message: 'save-config-unsaved: app config was not persisted to Drive' });
           }
-        } catch (err) {
-          console.error(`[${DRIVE_MODULE}] save-config-failed — failed to save app config (best-effort)`, classifyError(err));
+        } catch (err: unknown) {
+          captureError({ level: 'error', source: 'useDrive', message: `save-config-failed: ${classifyError(err)}` });
         }
       }
-    } catch (e) {
-      console.error(`[${DRIVE_MODULE}] root-select-cleanup-failed — failed to clear db or save config (best-effort)`, classifyError(e));
+    } catch (e: unknown) {
+      captureError({ level: 'error', source: 'useDrive', message: `root-select-cleanup-failed: ${classifyError(e)}` });
     }
   }, [setAppRootFolder, setCurrentFolderId, setCurrentFolderName, setFolderHistory]);
 

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { captureError } from "./errorLog";
 import { getCurrentSessionId } from "./sessionGuard";
 
 export class TokenRefreshError extends Error {
@@ -12,13 +13,19 @@ export class TokenRefreshError extends Error {
   }
 }
 
-const CLIENT_MODULE = "Auth";
 
 const MAX_SAFE_TIMEOUT = 2_147_483_647; // 32-bit signed int limit (~24.8 days); larger values overflow and fire immediately
 
 // Every outbound network call must be bounded so a stalled server cannot hang
 // the caller indefinitely (checklist: "no timeout on network calls").
 const FETCH_TIMEOUT_MS = 15_000;
+
+const PROACTIVE_REFRESH_MARGIN_SEC = 300;
+const PROACTIVE_REFRESH_MIN_MS = 5000;
+const TOKEN_EXPIRY_MS = 50 * 60 * 1000;
+const TOKEN_TIME_MAX_FUTURE_MS = 86_400_000;
+const RETRY_DELAY_MS = 30_000;
+const DEFAULT_EXPIRES_IN_SEC = 3600;
 
 // Classify a failed Request/fetch rejection. Per spec a timeout via
 // AbortSignal.timeout() rejects with a DOMException named 'TimeoutError';
@@ -56,18 +63,18 @@ export const stopProactiveRefresh = () => {
 
 export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
   stopProactiveRefresh();
-  const safeExpires = Number.isFinite(expiresInSeconds) ? expiresInSeconds : 3600;
+  const safeExpires = Number.isFinite(expiresInSeconds) ? expiresInSeconds : DEFAULT_EXPIRES_IN_SEC;
   // Refresh 5 min before expiry so the timer always fires before getValidToken's
   // 50-min "isExpired" threshold treats the token as stale on a play attempt.
   const refreshInMs = Math.min(
-    Math.max((safeExpires - 300) * 1000, 5000),
+    Math.max((safeExpires - PROACTIVE_REFRESH_MARGIN_SEC) * 1000, PROACTIVE_REFRESH_MIN_MS),
     MAX_SAFE_TIMEOUT
   );
   refreshTimerId = setTimeout(async () => {
     try {
       await getValidToken(true);
-    } catch (e) {
-      console.warn("[Auth] Proactive refresh failed", e);
+    } catch (e: unknown) {
+      captureError({ level: 'warn', source: 'apiClient', message: `Proactive refresh failed: ${e instanceof Error ? e.message : String(e)}` });
     }
   }, refreshInMs);
 };
@@ -81,8 +88,8 @@ export async function revokeGoogleToken(token: string): Promise<void> {
       body: `token=${encodeURIComponent(token)}`,
       signal: AbortSignal.timeout(5000),
     });
-  } catch (err) {
-    console.warn('[Auth] Revoke token failed (non-blocking)', err);
+  } catch (err: unknown) {
+    captureError({ level: 'warn', source: 'apiClient', message: `Revoke token failed (non-blocking): ${err instanceof Error ? err.message : String(err)}` });
   }
 }
 
@@ -90,8 +97,8 @@ function getStoredTokenTime(): number {
   const raw = localStorage.getItem('drplay_token_time');
   const parsed = parseInt(raw || '', 10);
   
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > Date.now() + 86_400_000) {
-    console.warn('[Auth] Invalid token_time detected, forcing refresh');
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > Date.now() + TOKEN_TIME_MAX_FUTURE_MS) {
+    captureError({ level: 'warn', source: 'apiClient', message: 'Invalid token_time detected, forcing refresh' });
     return 0;
   }
   
@@ -100,10 +107,9 @@ function getStoredTokenTime(): number {
 
 function scheduleRetryRefresh() {
   if (refreshTimerId) clearTimeout(refreshTimerId);
-  const RETRY_DELAY = 30_000;
   refreshTimerId = setTimeout(() => {
-    getValidToken(true).catch(e => console.warn(`[${CLIENT_MODULE}] retry-refresh-failed`, classifyRequestError(e)));
-  }, RETRY_DELAY);
+    getValidToken(true).catch(() => captureError({ level: 'warn', source: 'apiClient', message: 'retry-refresh-failed' }));
+  }, RETRY_DELAY_MS);
 }
 
 export const getValidToken = async (forceRefresh: boolean = false, signal?: AbortSignal): Promise<string | null> => {
@@ -111,7 +117,7 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
 
   const token = localStorage.getItem("drplay_access_token");
   const issueTime = getStoredTokenTime();
-  const isExpired = Date.now() - issueTime > 50 * 60 * 1000;
+  const isExpired = Date.now() - issueTime > TOKEN_EXPIRY_MS;
 
   if (isExpired || !token || forceRefresh) {
     const refreshToken = localStorage.getItem("drplay_refresh_token");
@@ -132,9 +138,9 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
     const mySessionId = getCurrentSessionId();
 
     try {
-      let tokenData;
+      let tokenData: { access_token?: string; refresh_token?: string; expires_in?: number } | null;
       try {
-        tokenData = await invoke<any>("refresh_google_token", { refreshToken });
+        tokenData = await invoke("refresh_google_token", { refreshToken }) as typeof tokenData;
       } catch (err: unknown) {
         const errStr = String(err);
         if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {
@@ -149,13 +155,14 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
       if (!tokenData || typeof tokenData.access_token !== 'string' || tokenData.access_token.length === 0) {
         throw new TokenRefreshError('Malformed refresh response: missing access_token', 'unknown');
       }
+      const accessToken = tokenData.access_token;
 
       if (mySessionId !== getCurrentSessionId()) {
         refreshSubscribers.forEach(sub => sub.resolve(''));
         return '';
       }
       
-      localStorage.setItem("drplay_access_token", tokenData.access_token);
+      localStorage.setItem("drplay_access_token", accessToken);
       localStorage.setItem("drplay_token_time", Date.now().toString());
       if (tokenData.refresh_token) {
         localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
@@ -165,20 +172,20 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
       // trigger any reload. Otherwise the next stream request can race an
       // un-updated proxy token and 401. Also wakes proxy waiters via notify.
       try {
-        await invoke("update_stream_token", { token: tokenData.access_token });
-      } catch (e) {
+        await invoke("update_stream_token", { token: accessToken });
+      } catch (e: unknown) {
         // Best-effort: the fresh token is already persisted to localStorage, so a
         // proxy update failure must NOT block playback or reject waiters. Classify
         // for observability and continue.
         const kind = classifyInvokeError(e);
-        console.warn("[Auth] Stream proxy token update failed (best-effort, continuing)", kind);
+        captureError({ level: 'warn', source: 'apiClient', message: `Stream proxy token update failed (best-effort): ${kind}` });
       }
 
-      scheduleProactiveRefresh(tokenData.expires_in || 3600);
-      window.dispatchEvent(new CustomEvent('token-updated', { detail: { token: tokenData.access_token } }));
+      scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_IN_SEC);
+      window.dispatchEvent(new CustomEvent('token-updated', { detail: { token: accessToken } }));
       
-      refreshSubscribers.forEach(sub => sub.resolve(tokenData.access_token));
-      return tokenData.access_token;
+      refreshSubscribers.forEach(sub => sub.resolve(accessToken));
+      return accessToken;
     } catch (err: unknown) {
       refreshSubscribers.forEach(sub => sub.reject(err instanceof Error ? err : new Error(String(err))));
       
@@ -186,7 +193,7 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
         if (err.kind === 'invalid_grant') {
           window.dispatchEvent(new CustomEvent('auth-logout'));
         } else {
-          console.warn('[Auth] Refresh tạm thời thất bại, sẽ thử lại', err.kind);
+          captureError({ level: 'warn', source: 'apiClient', message: `Token refresh failed (${err.kind}), will retry` });
           scheduleRetryRefresh();
         }
       } else {
@@ -235,7 +242,7 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
       try {
         // Retry also uses the same bounded signal so it cannot hang either.
         return await fetch(url, { ...options, headers: retryHeaders, signal });
-      } catch (err) {
+      } catch (err: unknown) {
         // Retry failed: classify and throw a clear, typed error. We do NOT
         // swallow it (caller must know) and we do NOT hang.
         const kind = classifyRequestError(err);

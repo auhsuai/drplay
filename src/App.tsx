@@ -191,7 +191,7 @@ function App() {
   return (
     <div className="relative flex flex-col h-screen overflow-hidden bg-white dark:bg-[#121212] transition-colors duration-300">
       {/* Login Overlay */}
-      {!isLoggedIn && <LoginScreen onLogin={handleLoginSuccess} />}
+      {!isLoggedIn && <LoginScreen onLogin={(token) => handleLoginSuccess({ access_token: token })} />}
 
       {/* Folder Selection Overlay */}
       {(isLoggedIn && (!appRootFolder || showFolderSelection)) && (
