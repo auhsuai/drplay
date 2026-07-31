@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { UserProfile } from '../App';
+import type { UserProfile } from '../types';
 
 interface AuthState {
   isLoggedIn: boolean;

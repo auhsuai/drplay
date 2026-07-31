@@ -1,12 +1,12 @@
 import { create } from 'zustand';
-import { Track } from '../App';
+import type { Track, PlayMode } from '../types';
 
 interface PlayerState {
   currentTrack: Track | null;
   loadNonce: number;
   isPlaying: boolean;
   isDownloading: boolean;
-  playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
+  playMode: PlayMode;
   originalQueue: Track[];
   playbackQueue: Track[];
   
@@ -14,7 +14,7 @@ interface PlayerState {
   triggerReload: () => void;
   setIsPlaying: (isPlaying: boolean | ((prev: boolean) => boolean)) => void;
   setIsDownloading: (isDownloading: boolean) => void;
-  setPlayMode: (mode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one' | ((prev: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one') => 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one')) => void;
+  setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void;
   setOriginalQueue: (queue: Track[]) => void;
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void;
 }

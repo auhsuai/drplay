@@ -81,7 +81,7 @@ export function usePlayerSession(
           } else {
             setPlaybackQueue([restoredTrack]);
           }
-          if (savedPlayMode) setPlayMode(savedPlayMode);
+          if (savedPlayMode) setPlayMode(savedPlayMode as 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one');
           triggerReload();
         }
       } catch (e: any) {

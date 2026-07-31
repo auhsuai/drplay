@@ -3,17 +3,19 @@ import { getTrackMetadata } from '../utils/metadata';
 import { getAudioFilesQuery } from '../utils/audioQuery';
 import { classifyWorkerError, logWorkerError } from './workerError';
 
+interface DriveFileItem { id: string; name?: string; mimeType?: string; size?: string; parents?: string[]; md5Checksum?: string; createdTime?: string; modifiedTime?: string; trashed?: boolean; }
+
 // Limit to 20 concurrent threads to maximize scan speed
 const MAX_CONCURRENT = 20;
 const SCANNER_FETCH_TIMEOUT_MS = 30000;
 
 // Listen for messages from the main thread
-self.onmessage = async (e: MessageEvent) => {
+self.addEventListener('message', async (e: MessageEvent) => {
   const { token } = e.data;
   if (!token) return;
 
   await startScanner(token);
-};
+});
 
 async function startScanner(token: string) {
   let pageToken: string | undefined = undefined;
@@ -65,7 +67,7 @@ async function startScanner(token: string) {
         break;
       }
 
-      let data: { files?: any[]; nextPageToken?: string };
+      let data: { files?: DriveFileItem[]; nextPageToken?: string };
       try {
         data = await res.json();
       } catch (err) {
@@ -90,7 +92,12 @@ async function startScanner(token: string) {
           // YIELD MECHANISM:
           // Allow the worker's event loop to breathe, process pending messages,
           // and run Garbage Collection before the next heavy parse cycle.
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          const sched = (globalThis as typeof globalThis & { scheduler?: { yield(): Promise<void> } }).scheduler;
+          if (sched?.yield) {
+            await sched.yield();
+          } else {
+            await new Promise(r => setTimeout(r, 0));
+          }
         }
       }
 

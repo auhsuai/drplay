@@ -2,6 +2,14 @@ import { db } from '../db/db';
 import { getAudioQuery, isAudioFile } from '../utils/audioQuery';
 import { classifyWorkerError, logWorkerError, WorkerAbortError } from './workerError';
 
+interface DriveFile {
+  id?: string; name?: string; mimeType?: string; size?: string;
+  parents?: string[]; trashed?: boolean; createdTime?: string;
+  modifiedTime?: string; md5Checksum?: string;
+}
+interface DriveChangesList { changes?: DriveChange[]; nextPageToken?: string; newStartPageToken?: string; }
+interface DriveChange { file?: DriveFile; fileId?: string; removed?: boolean; changeType?: string; }
+
 let isBusy = false;
 let currentToken: string | null = null;
 let tokenRefreshResolver: ((value: boolean) => void) | null = null;
@@ -10,7 +18,7 @@ const MAX_SYNC_RETRIES = 3;
 const SYNC_FETCH_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_TIMEOUT_MS = 15000;
 
-function toSize(raw: any): number | undefined {
+function toSize(raw: string | undefined | null): number | undefined {
   if (raw === undefined || raw === null || raw === '') return undefined;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) ? n : undefined;
@@ -30,7 +38,7 @@ async function waitForTokenRefresh(timeoutMs = TOKEN_REFRESH_TIMEOUT_MS): Promis
   });
 }
 
-self.onmessage = async (e: MessageEvent) => {
+self.addEventListener('message', async (e: MessageEvent) => {
   const { type, token } = e.data;
 
   if (type === 'token') {
@@ -43,7 +51,8 @@ self.onmessage = async (e: MessageEvent) => {
   }
 
   if (type !== 'sync') return;
-  if (!token || isBusy) return;
+  if (isBusy) { self.postMessage({ type: 'SYNC_BUSY' }); return; }
+  if (!token) { self.postMessage({ type: 'SYNC_NO_TOKEN' }); return; }
 
   currentToken = token;
   isBusy = true;
@@ -52,7 +61,7 @@ self.onmessage = async (e: MessageEvent) => {
   } finally {
     isBusy = false;
   }
-};
+});
 
 // fetch() wrapper that applies the shared timeout and classifies transport
 // failures (network / timeout / abort). HTTP status is still the caller's job.
@@ -79,7 +88,7 @@ async function fetchDrive(ctx: string, token: string, url: URL): Promise<Respons
 
 // Parse a Drive JSON response, surfacing malformed bodies as a logged failure
 // instead of an unhandled rejection that aborts the whole sync.
-async function parseDriveJson(ctx: string, res: Response): Promise<any> {
+async function parseDriveJson<T = Record<string, unknown>>(ctx: string, res: Response): Promise<T> {
   try {
     return await res.json();
   } catch (err) {
@@ -133,7 +142,7 @@ async function performFullSync() {
         return;
       }
       if (tokenRes.ok) {
-        const tokenData = await parseDriveJson('startPageToken', tokenRes);
+        const tokenData = await parseDriveJson<{ startPageToken: string }>('startPageToken', tokenRes);
         startToken = tokenData.startPageToken;
       }
     } catch (err) {
@@ -167,12 +176,12 @@ async function performFullSync() {
           break;
         }
 
-        const data = await parseDriveJson('files', res);
+        const data = await parseDriveJson<{ files?: DriveFile[]; nextPageToken?: string }>('files', res);
 
-        const filesToInsert = (data.files || []).map((f: any) => ({
-          id: f.id,
-          name: f.name,
-          mimeType: f.mimeType,
+        const filesToInsert = (data.files || []).map((f: DriveFile) => ({
+          id: f.id!,
+          name: f.name!,
+          mimeType: f.mimeType!,
           parentId: f.parents && f.parents.length > 0 ? f.parents[0] : 'root',
           size: toSize(f.size),
           modifiedTime: f.modifiedTime,
@@ -190,7 +199,7 @@ async function performFullSync() {
           }
         }
 
-        pageToken = data.nextPageToken;
+      pageToken = data.nextPageToken ?? '';
       } while (pageToken);
     } catch (err) {
       if (err instanceof WorkerAbortError) return;
@@ -246,7 +255,7 @@ async function performDeltaSync(startPageToken: string) {
         break;
       }
 
-      const data = await parseDriveJson('changes', res);
+      const data = await parseDriveJson<DriveChangesList>('changes', res);
 
       const changes = data.changes || [];
       let hasValidChanges = false;
@@ -254,19 +263,20 @@ async function performDeltaSync(startPageToken: string) {
       for (const change of changes) {
         try {
           if (change.removed || (change.file && change.file.trashed)) {
-            await db.files.delete(change.fileId);
+            await db.files.delete(change.fileId!);
             hasValidChanges = true;
           } else if (change.file) {
-            const isFolder = change.file.mimeType === 'application/vnd.google-apps.folder';
+            const file = change.file;
+            const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
 
-            if (isFolder || isAudioFile(change.file.mimeType, change.file.name)) {
+            if (isFolder || isAudioFile(file.mimeType!, file.name!)) {
               await db.files.put({
-                id: change.file.id,
-                name: change.file.name,
-                mimeType: change.file.mimeType,
-                parentId: change.file.parents && change.file.parents.length > 0 ? change.file.parents[0] : 'root',
-                size: toSize(change.file.size),
-                modifiedTime: change.file.modifiedTime,
+                id: file.id!,
+                name: file.name!,
+                mimeType: file.mimeType!,
+                parentId: file.parents && file.parents.length > 0 ? file.parents[0] : 'root',
+                size: toSize(file.size),
+                modifiedTime: file.modifiedTime,
                 trashed: false,
                 isFolder,
               });
@@ -282,7 +292,7 @@ async function performDeltaSync(startPageToken: string) {
       if (data.newStartPageToken) {
         newStartPageToken = data.newStartPageToken;
       }
-      pageToken = data.nextPageToken;
+      pageToken = data.nextPageToken ?? '';
 
       if (hasValidChanges) {
         self.postMessage({ type: 'SYNC_PROGRESS' });

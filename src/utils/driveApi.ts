@@ -17,6 +17,21 @@ const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 32000;
 const DEFAULT_TIMEOUT_MS = 20000;
 
+export interface DriveFileItem {
+  id: string; name: string; mimeType: string; size?: string;
+  parents?: string[]; trashed?: boolean; createdTime?: string;
+  modifiedTime?: string; md5Checksum?: string; capabilities?: Record<string, boolean>;
+}
+export interface DriveFilesListResponse {
+  files?: DriveFileItem[]; nextPageToken?: string; incompleteSearch?: boolean;
+}
+export interface DriveFolderItem {
+  id: string; name: string; mimeType: string;
+}
+export interface DriveFoldersListResponse {
+  files?: DriveFolderItem[]; nextPageToken?: string;
+}
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // Derive a short, safe classification tag from an error's message ONLY.
@@ -86,7 +101,7 @@ export async function driveFetch(
   throw lastErr instanceof Error ? lastErr : new Error('Drive request failed after retries');
 }
 
-export async function createFolder(token: string, name: string, parentId: string): Promise<any> {
+export async function createFolder(token: string, name: string, parentId: string): Promise<DriveFileItem> {
   const metadata = {
     name: name,
     mimeType: FOLDER_MIME,
@@ -108,7 +123,7 @@ export async function createFolder(token: string, name: string, parentId: string
   return response.json();
 }
 
-export async function deleteFile(token: string, fileId: string): Promise<any> {
+export async function deleteFile(token: string, fileId: string): Promise<DriveFileItem> {
   // Move to trash instead of permanent delete for safety
   const metadata = {
     trashed: true,
@@ -132,7 +147,7 @@ export async function deleteFile(token: string, fileId: string): Promise<any> {
   return response.json();
 }
 
-export async function moveFile(token: string, fileId: string, currentParentId: string, newParentId: string): Promise<any> {
+export async function moveFile(token: string, fileId: string, currentParentId: string, newParentId: string): Promise<DriveFileItem | { success: boolean }> {
   // First, get the actual parents of the file to ensure we remove it from all of them
   const getResponse = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
     headers: {
@@ -176,7 +191,7 @@ export async function moveFile(token: string, fileId: string, currentParentId: s
   return response.json();
 }
 
-export async function restoreFile(token: string, fileId: string): Promise<any> {
+export async function restoreFile(token: string, fileId: string): Promise<DriveFileItem> {
   const metadata = {
     trashed: false,
     appProperties: {
@@ -199,7 +214,7 @@ export async function restoreFile(token: string, fileId: string): Promise<any> {
   return response.json();
 }
 
-export async function permanentlyDeleteFile(token: string, fileId: string): Promise<any> {
+export async function permanentlyDeleteFile(token: string, fileId: string): Promise<boolean> {
   const response = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
     method: 'DELETE',
     headers: {
@@ -213,7 +228,7 @@ export async function permanentlyDeleteFile(token: string, fileId: string): Prom
   return true;
 }
 
-export async function getRecentlyAddedAudioFiles(token: string): Promise<any[]> {
+export async function getRecentlyAddedAudioFiles(token: string): Promise<DriveFileItem[]> {
   const q = getAudioFilesQuery();
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=5`;
   
@@ -233,7 +248,7 @@ export async function getRecentlyAddedAudioFiles(token: string): Promise<any[]> 
 
 // Search for folders matching a fully-built Drive query string.
 // `query` must already be a valid Drive q-expression (e.g. escaped/quoted).
-export async function searchFolders(token: string, query: string, signal?: AbortSignal): Promise<any[]> {
+export async function searchFolders(token: string, query: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&orderBy=name&pageSize=30`;
   const response = await driveFetch(url, {
     headers: { 'Authorization': `Bearer ${token}` },
@@ -247,7 +262,7 @@ export async function searchFolders(token: string, query: string, signal?: Abort
 }
 
 // List immediate folder children (subfolders only, not trashed).
-export async function listFolderChildren(token: string, folderId: string, signal?: AbortSignal): Promise<any[]> {
+export async function listFolderChildren(token: string, folderId: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
   const q = `'${folderId}' in parents and trashed=false and mimeType='${FOLDER_MIME}'`;
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name`;
   const response = await driveFetch(url, {
@@ -291,7 +306,7 @@ export async function getFileName(token: string, fileId: string, signal?: AbortS
 }
 
 // Fetch trashed items matching a fully-built Drive query string.
-export async function getTrashedFiles(token: string, query: string, signal?: AbortSignal): Promise<any[]> {
+export async function getTrashedFiles(token: string, query: string, signal?: AbortSignal): Promise<DriveFileItem[]> {
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType)&orderBy=folder,name`;
   const response = await driveFetch(url, {
     headers: { 'Authorization': `Bearer ${token}` },
@@ -305,7 +320,7 @@ export async function getTrashedFiles(token: string, query: string, signal?: Abo
 }
 
 // App Configuration in appDataFolder
-export async function getAppConfig(token: string): Promise<any> {
+export async function getAppConfig(token: string): Promise<Record<string, unknown> | null> {
   const q = `name = '${CONFIG_FILENAME}' and '${APP_DATA_FOLDER}' in parents`;
   const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
   
@@ -334,13 +349,24 @@ export async function getAppConfig(token: string): Promise<any> {
   return null;
 }
 
-// Serialize config writes with a promise-chain mutex. Two concurrent saves
+// Serialize config writes with a simple async lock. Two concurrent saves
 // would otherwise both search (find nothing), both POST, and create duplicate
 // drplay_config.json files in appDataFolder (Drive has no conditional upsert).
-// Chaining forces the 2nd save to observe the file the 1st created → PATCH.
-let saveConfigChain: Promise<unknown> = Promise.resolve();
+let saveConfigLock = false;
 
-async function saveAppConfigInternal(token: string, config: any): Promise<boolean> {
+async function withSaveConfigLock<T>(fn: () => Promise<T>): Promise<T> {
+  while (saveConfigLock) {
+    await new Promise(r => setTimeout(r, 50));
+  }
+  saveConfigLock = true;
+  try {
+    return await fn();
+  } finally {
+    saveConfigLock = false;
+  }
+}
+
+async function saveAppConfigInternal(token: string, config: unknown): Promise<boolean> {
   const q = `name = '${CONFIG_FILENAME}' and '${APP_DATA_FOLDER}' in parents`;
   const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
 
@@ -400,10 +426,6 @@ async function saveAppConfigInternal(token: string, config: any): Promise<boolea
   }
 }
 
-export function saveAppConfig(token: string, config: any): Promise<boolean> {
-  const run = saveConfigChain.then(() => saveAppConfigInternal(token, config));
-  // Keep the chain alive even if a save fails, and swallow here to avoid an
-  // unhandled rejection; the real result/rejection is returned to the caller.
-  saveConfigChain = run.catch(() => {});
-  return run;
+export async function saveAppConfig(token: string, config: unknown): Promise<boolean> {
+  return withSaveConfigLock(() => saveAppConfigInternal(token, config));
 }

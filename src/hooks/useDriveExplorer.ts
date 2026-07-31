@@ -117,6 +117,7 @@ export function useDriveExplorer(
     // Nếu có dữ liệu rồi thì fetch ngầm (không hiện spinner)
     // Nếu chưa có (dbFiles undefined hoặc = 0), hiện spinner.
     let isMounted = true;
+    const abortController = new AbortController();
     
     const fetchOnDemand = async () => {
       try {
@@ -127,41 +128,71 @@ export function useDriveExplorer(
         let hasMore = true;
         let pageToken: string | undefined = undefined;
 
-        while (hasMore && isMounted) {
+        while (hasMore && isMounted && !abortController.signal.aborted) {
           const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)&pageSize=${DRIVE_PAGE_SIZE}${pageToken ? `&pageToken=${pageToken}` : ''}`;
-          const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` } });
-
-          if (!res.ok) {
-            captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
-            break;
-          }
-          const data = await res.json();
-
-          // Write each page to Dexie immediately instead of accumulating all
-          // pages in memory (mirrors proSync.worker.ts full-sync pattern).
-          if (isMounted && Array.isArray(data.files) && data.files.length > 0) {
-            const filesToInsert = data.files.map((f: DriveApiFile) => ({
-              id: f.id,
-              name: f.name,
-              mimeType: f.mimeType,
-              parentId: currentFolderId,
-              size: f.size ? parseInt(f.size, 10) : undefined,
-              modifiedTime: f.modifiedTime,
-              trashed: false,
-              isFolder: f.mimeType === GOOGLE_FOLDER_MIME,
-            }));
+          
+          let pageOk = false;
+          let retries = 0;
+          
+          while (retries < 3 && !pageOk && !abortController.signal.aborted) {
             try {
-              await db.files.bulkPut(filesToInsert);
-            } catch (dbErr) {
-              captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
+              const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` }, signal: abortController.signal });
+              if (abortController.signal.aborted) break;
+
+              if (!res.ok) {
+                captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
+                break;
+              }
+              const data = await res.json();
+              if (abortController.signal.aborted) break;
+
+              // Write each page to Dexie immediately instead of accumulating all
+              // pages in memory (mirrors proSync.worker.ts full-sync pattern).
+              if (isMounted && Array.isArray(data.files) && data.files.length > 0) {
+                const filesToInsert = data.files.map((f: DriveApiFile) => ({
+                  id: f.id,
+                  name: f.name,
+                  mimeType: f.mimeType,
+                  parentId: currentFolderId,
+                  size: f.size ? parseInt(f.size, 10) : undefined,
+                  modifiedTime: f.modifiedTime,
+                  trashed: false,
+                  isFolder: f.mimeType === GOOGLE_FOLDER_MIME,
+                }));
+                try {
+                  await db.files.bulkPut(filesToInsert);
+                } catch (dbErr) {
+                  captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
+                  break;
+                }
+              }
+
+              pageToken = data.nextPageToken;
+              if (!pageToken) hasMore = false;
+              pageOk = true;
+              retries = 0;
+            } catch (err) {
+              if (abortController.signal.aborted) break;
+              
+              if (retries < 2 && (err instanceof TypeError || (err instanceof DOMException && err.name === 'TimeoutError'))) {
+                retries++;
+                await new Promise(r => setTimeout(r, 1000 * retries));
+                continue;
+              }
+              
+              if (err instanceof TypeError) {
+                captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}` });
+              } else {
+                captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}` });
+              }
               break;
             }
           }
-
-          pageToken = data.nextPageToken;
-          if (!pageToken) hasMore = false;
+          
+          if (!pageOk) break;
         }
       } catch (err) {
+        if (abortController.signal.aborted) return;
         if (err instanceof TypeError) {
           captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}` });
         } else {
@@ -173,7 +204,10 @@ export function useDriveExplorer(
     };
     
     fetchOnDemand();
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+      abortController.abort();
+    };
   }, [currentFolderId, token, setIsLoadingTracks]);
 
   const items = useMemo(() => {

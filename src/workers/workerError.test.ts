@@ -72,7 +72,7 @@ describe('logWorkerError', () => {
     logWorkerError('scanner/list', {}, err, 'error');
     const callArg = vi.mocked(captureError).mock.calls[0][0];
     expect(callArg.message).not.toContain('ya29.secret-token');
-    expect(callArg.message).toContain('[REDACTED]');
+    expect(callArg.message).toContain('[REDACTED_TOKEN]');
     expect(callArg.message).toContain('id=[REDACTED_ID]');
   });
 

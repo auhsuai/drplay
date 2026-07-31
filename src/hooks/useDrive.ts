@@ -70,8 +70,9 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               const remoteConfig = await getAppConfig(freshToken);
               if (cancelled) return;
               if (remoteConfig && remoteConfig.rootFolderId) {
-                if (remoteConfig.rootFolderId !== localRoot) {
-                  localRoot = remoteConfig.rootFolderId;
+                const rootId = String(remoteConfig.rootFolderId);
+                if (rootId !== localRoot) {
+                  localRoot = rootId;
                 }
                 const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
                 const verifyRes = await fetchWithAuth(verifyUrl, {
@@ -121,6 +122,11 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
         if (localRoot) {
           setAppRootFolder(localRoot);
 
+          const fallbackToRoot = () => {
+            setCurrentFolderId(localRoot);
+            setCurrentFolderName(GD_MY_DRIVE_LABEL);
+          };
+
           try {
             const state = await db.syncState.get(DB_NAV_STATE_KEY);
             if (cancelled) return;
@@ -133,7 +139,8 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                     id: obj.id,
                     name: typeof obj.name === 'string' ? obj.name : GD_MY_DRIVE_LABEL,
                     history: Array.isArray(obj.history)
-                      ? obj.history as { id: string; name: string }[]
+                      ? obj.history.filter((x: unknown): x is { id: string; name: string } =>
+                          typeof x === 'object' && x !== null && typeof (x as Record<string, unknown>).id === 'string')
                       : [],
                   };
                   const savedId = sv.id;
@@ -143,12 +150,10 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   setCurrentFolderName(restoredId === localRoot || restoredId === GD_ROOT_ID ? GD_MY_DRIVE_LABEL : sv.name);
                   setFolderHistory(suspectRoot ? [] : sv.history);
                 } else {
-                  setCurrentFolderId(localRoot);
-                  setCurrentFolderName(GD_MY_DRIVE_LABEL);
+                  fallbackToRoot();
                 }
               } else {
-                setCurrentFolderId(localRoot);
-                setCurrentFolderName(GD_MY_DRIVE_LABEL);
+                fallbackToRoot();
               }
             } else {
               const savedCurrentId = localStorage.getItem(LS_CURRENT_FOLDER_ID);
@@ -165,15 +170,13 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   setFolderHistory([]);
                 }
               } else {
-                setCurrentFolderId(localRoot);
-                setCurrentFolderName(GD_MY_DRIVE_LABEL);
+                fallbackToRoot();
               }
             }
           } catch (e: unknown) {
             if (cancelled) return;
             captureError({ level: 'warn', source: 'useDrive', message: `nav-state-restore-failed: ${classifyError(e)}` });
-            setCurrentFolderId(localRoot);
-            setCurrentFolderName(GD_MY_DRIVE_LABEL);
+            fallbackToRoot();
           }
         } else {
           setAppRootFolder(null);

@@ -246,22 +246,18 @@ export async function getTrackMetadata(
 
   inflightMetadata.set(fileId, promise);
 
-  promise.catch(() => {
-    /* suppressed — callers handle their own errors via the returned promise */
+  promise.catch((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn('[metadata] getTrackMetadata failed', { fileId, error: msg });
   });
 
-  const timeoutId = setTimeout(() => {
+  const cleanup = () => {
     if (inflightMetadata.get(fileId) === promise) {
       inflightMetadata.delete(fileId);
     }
-  }, INFLIGHT_TIMEOUT);
-
-  promise.finally(() => {
-    clearTimeout(timeoutId);
-    if (inflightMetadata.get(fileId) === promise) {
-      inflightMetadata.delete(fileId);
-    }
-  });
+  };
+  AbortSignal.timeout(INFLIGHT_TIMEOUT).addEventListener('abort', cleanup, { once: true });
+  promise.finally(cleanup);
 
   return promise;
 }

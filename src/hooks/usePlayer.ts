@@ -95,10 +95,10 @@ export const usePlayer = (accessToken: string | null) => {
   const handlePlayTrack = useCallback(async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: unknown[], activeTab?: string) => {
     if (!accessToken) return;
 
-    const { currentTrack, isPlaying } = usePlayerStore.getState();
+    const { currentTrack } = usePlayerStore.getState();
 
     if (currentTrack?.id === track.id && !isNavigation) {
-      if (!isPlaying) setIsPlaying(true);
+      if (!usePlayerStore.getState().isPlaying) usePlayerStore.getState().setIsPlaying(true);
       return;
     }
 

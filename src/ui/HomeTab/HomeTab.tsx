@@ -81,7 +81,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
             artist: "",
             streamUrl: "",
             originalName: f.name,
-            size: f.size
+            size: f.size ? parseInt(f.size, 10) : undefined
           }));
           setRecentlyAdded(tracks);
         }).catch(err => console.warn('[HomeTab] Failed to load recently-added files from Drive', err));

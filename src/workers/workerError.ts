@@ -7,13 +7,8 @@
 //
 // NOTE: workers run in a separate global scope where initLogger() (called in
 // main.tsx) is never invoked, so the global console is NOT monkeypatched with
-// the sanitizer. We therefore redact inline here. The final assembled `line`
-// is additionally passed through the canonical `sanitizeString` from
-// src/utils/logger.ts (the 2026 reference standard) so worker logs share the
-// exact same redaction semantics as the main thread. The local `sanitize`
-// below is kept only for the context-key scrubbing `SENSITIVE_KEYS` behavior
-// (logger.ts has no field-name awareness) and the `Bearer -> [REDACTED]`
-// shape that the worker test asserts.
+// the sanitizer. We therefore redact inline here using the canonical
+// `sanitizeString` from src/utils/logger.ts as a single source of truth.
 
 import { sanitizeString } from '../utils/logger';
 import { captureError } from '../utils/errorLog';
@@ -27,35 +22,6 @@ export class WorkerAbortError extends Error {
     super(message);
     this.name = 'WorkerAbortError';
   }
-}
-
-// Keep in sync with src/utils/logger.ts patterns. The regex portion duplicates
-// logger.ts on purpose: logWorkerError must keep working even if logger.ts is
-// not importable, and the context-key scrubbing / `[REDACTED]` Bearer shape
-// below are not covered by logger.ts's `sanitizeString`.
-const SENSITIVE_PATTERNS: RegExp[] = [
-  /http:\/\/127\.0\.0\.1:\d+\/[^\s"']*/g,
-  /https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[^\s"']*/g,
-  /([?&])id=[a-zA-Z0-9_-]+/g,
-  /([?&])access_token=[a-zA-Z0-9._-]+/g,
-  /Bearer\s+[a-zA-Z0-9._-]+/g,
-];
-
-function sanitize(value: string): string {
-  let out = value;
-  for (const pattern of SENSITIVE_PATTERNS) {
-    // `g` flag advances lastIndex; reset so repeated calls never miss a match.
-    pattern.lastIndex = 0;
-    out = out.replace(pattern, (_match, group1?: string) => {
-      if (group1 === '?' || group1 === '&') {
-        return out.includes('access_token')
-          ? `${group1}access_token=[REDACTED]`
-          : `${group1}id=[REDACTED_ID]`;
-      }
-      return '[REDACTED]';
-    });
-  }
-  return out;
 }
 
 // Thin, throw-safe wrapper around logger.ts's canonical sanitizer. If
@@ -115,15 +81,15 @@ export function logWorkerError(
 ): void {
   const kind = classifyWorkerError(err);
   const rawMessage = err instanceof Error ? err.message : String(err);
-  const message = sanitize(rawMessage);
+  const message = safeSanitize(rawMessage);
   // Context values (e.g. a token passed by mistake) must also be scrubbed so
   // secrets never reach the logs through the structured fields.
-  const ctxStr = sanitize(formatContext(context));
+  const ctxStr = safeSanitize(formatContext(context));
   const line = `[${timestamp()}] [${module}] ${kind}: ${message}${ctxStr ? ' | ' + ctxStr : ''}`;
   // Final line goes through the canonical 2026 sanitizer from logger.ts as a
   // single source of truth for link/id/token redaction. safeSanitize guarantees
   // we never throw while logging and never silently drop the message if the
   // sanitizer itself fails.
   const safeLine = safeSanitize(line);
-  void captureError({ level, source: module, message: safeLine });
+  try { captureError({ level, source: module, message: safeLine }); } catch { /* logging must never throw */ }
 }

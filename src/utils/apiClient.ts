@@ -13,6 +13,7 @@ export class TokenRefreshError extends Error {
   }
 }
 
+type TokenData = { access_token?: string; refresh_token?: string; expires_in?: number } | null;
 
 const MAX_SAFE_TIMEOUT = 2_147_483_647; // 32-bit signed int limit (~24.8 days); larger values overflow and fire immediately
 
@@ -138,9 +139,9 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
     const mySessionId = getCurrentSessionId();
 
     try {
-      let tokenData: { access_token?: string; refresh_token?: string; expires_in?: number } | null;
+      let tokenData: TokenData;
       try {
-        tokenData = await invoke("refresh_google_token", { refreshToken }) as typeof tokenData;
+        tokenData = await invoke<TokenData>("refresh_google_token", { refreshToken });
       } catch (err: unknown) {
         const errStr = String(err);
         if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {

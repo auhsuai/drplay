@@ -32,21 +32,8 @@ import { useDriveStore } from './store/driveStore';
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
 
-export type Track = {
-  id: string;
-  title: string;
-  artist: string;
-  streamUrl: string;
-  size?: number;
-  originalName?: string;
-  restoreTime?: number;
-  restoreDuration?: number;
-  parentId?: string;
-  parentName?: string;
-  coverUrl?: string;
-  dbId?: string;
-  queueItemId?: string;
-};
+import type { Track, UserProfile } from './types';
+export type { Track, UserProfile };
 
 export type DriveItem = {
   id: string;
@@ -62,11 +49,8 @@ export type BreadcrumbItem = {
   name: string;
 };
 
-export type UserProfile = {
-  name: string;
-  email: string;
-  picture: string;
-};
+
+
 
 const LS_ROOT_FOLDER = 'drplay_root_folder';
 const LS_CURRENT_FOLDER_ID = 'drplay_current_folder_id';

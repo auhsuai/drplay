@@ -7,19 +7,15 @@ export function getPrefetchedStreamUrl(fileId: string): string | undefined {
   return prefetchedStreams.get(fileId);
 }
 
-async function runWithConcurrencyLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
-  const results: Promise<void>[] = [];
-  const executing = new Set<Promise<void>>();
-
-  for (const item of items) {
-    const p = fn(item).finally(() => executing.delete(p));
-    executing.add(p);
-    results.push(p);
-    if (executing.size >= limit) {
-      await Promise.race(executing);
+async function runWithConcurrencyLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    const chunkResults = await Promise.allSettled(chunk.map(fn));
+    for (const r of chunkResults) {
+      if (r.status === 'fulfilled') results.push(r.value);
     }
   }
-  await Promise.allSettled(results);
 }
 
 function cacheSet(fileId: string, url: string) {
