@@ -136,7 +136,8 @@ export const NowPlayingView = memo(function NowPlayingView({
                 >
                   <div 
                     ref={bufferFillRef}
-                    className="absolute left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-full pointer-events-none transform-gpu will-change-[width]"
+                    data-testid="buffer-fill"
+                    className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
                   ></div>
                   
                   <div 

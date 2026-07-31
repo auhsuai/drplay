@@ -4,6 +4,7 @@ import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Vol
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from '../components/MoreMenu';
 import { formatTime } from "../../utils/formatTime";
+import { updateBufferBar, clearBufferBar } from "../../utils/bufferedRange";
 import { AudioController } from "../../lib/AudioController";
 import { PlayerBarProps } from './types';
 
@@ -31,6 +32,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
 
   // Refs for high-performance DOM updates
   const progressFillRef = useRef<HTMLDivElement>(null);
+  const bufferFillRef = useRef<HTMLDivElement>(null);
   const currentTimeTextRef = useRef<HTMLSpanElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
@@ -55,17 +57,29 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       if (progressFillRef.current && duration > 0) {
         progressFillRef.current.style.width = `${(currentTime / duration) * 100}%`;
       }
+      // Buffer bar fallback: the last native `progress` event can fire with
+      // buffered still empty before a small/fast file finishes loading (no
+      // further progress event ever fires). timeupdate (~4/s) re-reads the
+      // real buffered state so the bar cannot stay empty once it's full.
+      // DOM-only — no React re-render.
+      updateBufferBar(bufferFillRef.current, audio.getBuffered());
     });
 
     const unsubBuf = audio.on('buffering', ({ isBuffering }) => setIsBuffering(isBuffering));
     const unsubErr = audio.on('error', (err) => setErrorInfo(err));
     const unsubEnded = audio.on('ended', () => onNextTrack(true));
+    // Buffer bar: the native `progress` event fires whenever audio.buffered
+    // grows (paused or playing) — the industry-standard source (MDN).
+    const unsubProgress = audio.on('progress', () => {
+      updateBufferBar(bufferFillRef.current, audio.getBuffered());
+    });
 
     return () => {
       unsubTime();
       unsubBuf();
       unsubErr();
       unsubEnded();
+      unsubProgress();
     };
   }, [onNextTrack]);
 
@@ -138,6 +152,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
 
   // Sync initial UI state from restored session data
   useEffect(() => {
+    if (bufferFillRef.current) clearBufferBar(bufferFillRef.current);
     if (currentTrack) {
       if (currentTrack.restoreDuration) setDuration(currentTrack.restoreDuration);
       
@@ -319,6 +334,11 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
             onPointerDown={handlePointerDown}
           >
+            <div 
+              ref={bufferFillRef}
+              data-testid="buffer-fill"
+              className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
+            ></div>
             <div 
               ref={progressFillRef}
               className={`absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width]`}

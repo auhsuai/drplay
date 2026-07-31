@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Track } from "../../../App";
 import { formatTime } from "../../../utils/formatTime";
-import { renderBufferFromBytes } from '../../../utils/bufferedRange';
-import { listen } from '@tauri-apps/api/event';
+import { updateBufferBar, clearBufferBar } from '../../../utils/bufferedRange';
 import { AudioController } from "../../../lib/AudioController";
 
 export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolean) {
@@ -13,7 +12,6 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
   const progressFillRef = useRef<HTMLDivElement>(null);
   const bufferFillRef = useRef<HTMLDivElement>(null);
   const currentTimeTextRef = useRef<HTMLSpanElement>(null);
-  const tauriBufferEndRef = useRef<number | null>(null);
   // Mirror of `duration` used by the event-driven progress handler so it never
   // needs to be re-created when the duration state changes.
   const durationRef = useRef(0);
@@ -33,7 +31,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
          if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = '0:00';
          if (progressFillRef.current) progressFillRef.current.style.width = '0%';
       }
-      if (bufferFillRef.current) bufferFillRef.current.innerHTML = '';
+      if (bufferFillRef.current) clearBufferBar(bufferFillRef.current);
     }
   }, [currentTrack?.id, currentTrack?.streamUrl]);
 
@@ -61,32 +59,21 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     };
   }, [currentTrack]);
 
-  // Buffer sync with backend Tauri event
+  // Buffer sync with the native media buffering state. The Service Worker
+  // passthrough stream populates HTMLMediaElement.buffered normally, and the
+  // browser fires the native `progress` event whenever buffered data grows
+  // (paused or playing). AudioController re-emits it (throttled), so we render
+  // the buffer bar from `audio.buffered` — the industry-standard source.
   useEffect(() => {
-    tauriBufferEndRef.current = null;
-    let bufferFn: (() => void) | null = null;
-    let bufferCancelled = false;
-    listen<{
-      track_id: string;
-      buffer_start_byte: number;
-      buffer_end_byte: number;
-      total_size_byte: number;
-    }>('buffer-status', (event) => {
-      if (currentTrack && event.payload.track_id === currentTrack.id) {
-        const { buffer_start_byte, buffer_end_byte, total_size_byte } = event.payload;
-        if (total_size_byte > 0) {
-          tauriBufferEndRef.current = (buffer_end_byte / total_size_byte) * 100;
-          renderBufferFromBytes(bufferFillRef.current, buffer_start_byte, buffer_end_byte, total_size_byte);
-        }
-      }
-    }).then(fn => {
-      if (bufferCancelled) { fn(); return; }
-      bufferFn = fn;
+    if (!currentTrack) return;
+    const audio = AudioController.getInstance();
+
+    const unsubProgress = audio.on('progress', () => {
+      updateBufferBar(bufferFillRef.current, audio.getBuffered());
     });
 
     return () => {
-      bufferCancelled = true;
-      bufferFn?.();
+      unsubProgress();
     };
   }, [currentTrack?.id]);
 
@@ -122,6 +109,13 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
           lastTimeText = newTimeText;
         }
       }
+
+      // Buffer bar fallback: the last native `progress` event can fire with
+      // buffered still empty before a small/fast file finishes loading (no
+      // further progress event ever fires). timeupdate (~4/s) re-reads the
+      // real buffered state so the bar cannot stay empty once it's full.
+      // DOM-only — no React re-render.
+      updateBufferBar(bufferFillRef.current, audio.getBuffered());
     };
 
     const unsubTime = audio.on('timeupdate', updateProgressUI);

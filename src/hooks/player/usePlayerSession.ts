@@ -12,7 +12,6 @@ export function usePlayerSession(
   setOriginalQueue: (queue: Track[]) => void,
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
   setPlayMode: (mode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one' | ((prev: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one') => 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one')) => void,
-  setBufferSeconds: (seconds: number) => void,
   triggerReload: () => void
 ) {
   useEffect(() => {
@@ -31,12 +30,6 @@ export function usePlayerSession(
         } else {
           lastSession = await get("drplay_last_session");
         }
-
-        const rawBuffer = await get("drplay_buffer_seconds");
-        const validBuffer = (typeof rawBuffer === "number" && Number.isFinite(rawBuffer) && rawBuffer > 0)
-          ? rawBuffer
-          : undefined;
-        if (validBuffer !== undefined) setBufferSeconds(validBuffer);
 
         if (lastSession && lastSession.track) {
           if (signal.aborted) {
@@ -98,7 +91,7 @@ export function usePlayerSession(
     };
     loadSession(controller.signal);
     return () => controller.abort();
-  }, [setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, setBufferSeconds, triggerReload]);
+  }, [setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, triggerReload]);
 
   // Save session event-driven (Industry Standard)
   useEffect(() => {

@@ -9,7 +9,6 @@ interface PlayerState {
   playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
   originalQueue: Track[];
   playbackQueue: Track[];
-  bufferSeconds: number;
   
   setCurrentTrack: (track: Track | null | ((prev: Track | null) => Track | null)) => void;
   triggerReload: () => void;
@@ -18,7 +17,6 @@ interface PlayerState {
   setPlayMode: (mode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one' | ((prev: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one') => 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one')) => void;
   setOriginalQueue: (queue: Track[]) => void;
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void;
-  setBufferSeconds: (seconds: number) => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set) => ({
@@ -29,7 +27,6 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   playMode: 'normal',
   originalQueue: [],
   playbackQueue: [],
-  bufferSeconds: 1400,
 
   setCurrentTrack: (track) => set((state) => ({ currentTrack: typeof track === 'function' ? track(state.currentTrack) : track })),
   triggerReload: () => set((state) => ({ loadNonce: state.loadNonce + 1 })),
@@ -38,5 +35,4 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   setPlayMode: (playMode) => set((state) => ({ playMode: typeof playMode === 'function' ? playMode(state.playMode) : playMode })),
   setOriginalQueue: (originalQueue) => set({ originalQueue }),
   setPlaybackQueue: (queue) => set((state) => ({ playbackQueue: typeof queue === 'function' ? queue(state.playbackQueue) : queue })),
-  setBufferSeconds: (bufferSeconds) => set({ bufferSeconds }),
 }));

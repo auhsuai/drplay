@@ -5,15 +5,12 @@ import type { Track } from '../../../App';
 import { formatTime } from '../../../utils/formatTime';
 import { useNowPlayingProgress } from './useNowPlayingProgress';
 
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
-}));
-
 const { fakeController } = vi.hoisted(() => {
   type Handler = (payload: any) => void;
   const fakeController = {
     on: vi.fn(),
     getDuration: vi.fn(() => 0),
+    getBuffered: vi.fn(),
     seek: vi.fn(),
     _handlers: {} as Record<string, Handler[]>,
     _emit(event: string, payload?: any) {
@@ -22,6 +19,18 @@ const { fakeController } = vi.hoisted(() => {
   };
   return { fakeController };
 });
+
+function setBuffered(ranges: Array<[number, number]>, duration = 1000, currentTime = 10) {
+  fakeController.getBuffered.mockReturnValue({
+    duration,
+    currentTime,
+    buffered: {
+      length: ranges.length,
+      start: (i: number) => ranges[i][0],
+      end: (i: number) => ranges[i][1],
+    } as TimeRanges,
+  });
+}
 
 function installFakeOn() {
   fakeController.on.mockImplementation((event: string, handler: (payload: any) => void) => {
@@ -55,6 +64,7 @@ function Harness({ track, isOpen }: { track: Track | null; isOpen: boolean }) {
     duration,
     progressBarRef,
     progressFillRef,
+    bufferFillRef,
     currentTimeTextRef,
     handlePointerDown,
   } = useNowPlayingProgress(track, isOpen);
@@ -67,6 +77,7 @@ function Harness({ track, isOpen }: { track: Track | null; isOpen: boolean }) {
         data-testid="bar"
         onPointerDown={handlePointerDown}
       >
+        <div ref={bufferFillRef} data-testid="buffer"></div>
         <div ref={progressFillRef} data-testid="fill" style={{ width: '0%' }}></div>
       </div>
     </div>
@@ -77,8 +88,10 @@ beforeEach(() => {
   fakeController.on.mockClear();
   fakeController.seek.mockClear();
   fakeController.getDuration.mockClear();
+  fakeController.getBuffered.mockClear();
   installFakeOn();
   fakeController.getDuration.mockReturnValue(0);
+  setBuffered([]);
   fakeController._handlers = {};
 });
 
@@ -138,19 +151,76 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
     expect(fakeController.seek).toHaveBeenCalledWith(120);
   });
 
-  it('unsubscribes both timeupdate and durationchange handlers on unmount (no listener leak)', () => {
+  it('BUG regression: buffer bar renders audio.buffered segments when AudioController emits progress', () => {
+    render(<Harness track={makeTrack()} isOpen={true} />);
+    const buffer = screen.getByTestId('buffer');
+    expect(buffer.childElementCount).toBe(0);
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('progress');
+    });
+
+    expect(buffer.childElementCount).toBe(1);
+    const seg = buffer.children[0] as HTMLElement;
+    expect(seg.style.left).toBe('0%');
+    expect(seg.style.width).toBe('30%');
+  });
+
+  it('BUG regression: buffer bar shows multiple segments for a forward-seek non-contiguous buffered state', () => {
+    render(<Harness track={makeTrack()} isOpen={true} />);
+    const buffer = screen.getByTestId('buffer');
+
+    setBuffered([[0, 30], [500, 510]], 1000, 505);
+    act(() => {
+      fakeController._emit('progress');
+    });
+
+    expect(buffer.childElementCount).toBe(2);
+    expect((buffer.children[0] as HTMLElement).style.left).toBe('0%');
+    expect((buffer.children[0] as HTMLElement).style.width).toBe('3%');
+    expect((buffer.children[1] as HTMLElement).style.left).toBe('50%');
+    expect((buffer.children[1] as HTMLElement).style.width).toBe('1%');
+  });
+
+  it('BUG regression: buffer bar clears when buffered data becomes empty', () => {
+    render(<Harness track={makeTrack()} isOpen={true} />);
+    const buffer = screen.getByTestId('buffer');
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('progress');
+    });
+    expect(buffer.childElementCount).toBe(1);
+
+    setBuffered([], 1000, 10);
+    act(() => {
+      fakeController._emit('progress');
+    });
+    expect(buffer.childElementCount).toBe(0);
+  });
+
+  it('subscribes to progress events even when the view is closed (buffer populates before opening)', () => {
+    render(<Harness track={makeTrack()} isOpen={false} />);
+    expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
+  });
+
+  it('unsubscribes timeupdate, durationchange and progress handlers on unmount (no listener leak)', () => {
     const { unmount } = render(<Harness track={makeTrack()} isOpen={true} />);
     expect(fakeController._handlers['timeupdate']).toHaveLength(1);
     expect(fakeController._handlers['durationchange']).toHaveLength(1);
+    expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
 
     unmount();
 
     expect(fakeController._handlers['timeupdate'] ?? []).toHaveLength(0);
     expect(fakeController._handlers['durationchange'] ?? []).toHaveLength(0);
+    expect(fakeController._handlers['progress'] ?? []).toHaveLength(0);
   });
 
-  it('does not subscribe to realtime timeupdate when the view is closed', () => {
+  it('does not subscribe to realtime timeupdate when the view is closed, but still subscribes progress', () => {
     render(<Harness track={makeTrack()} isOpen={false} />);
     expect(fakeController._handlers['timeupdate'] ?? []).toHaveLength(0);
+    expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
   });
 });

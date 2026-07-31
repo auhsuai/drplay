@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useShallow } from 'zustand/react/shallow';
-import { invoke } from "@tauri-apps/api/core";
 import { set as idbSet } from "../db/kv";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
 import { Track } from "../App";
@@ -10,12 +9,15 @@ import { getValidToken } from "../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
 import { showErrorToast } from "../utils/simpleToast";
-import { classifyPlayerError } from "./player/utils";
+import { captureError } from "../utils/errorLog";
 import { usePlayerSession } from "./player/usePlayerSession";
 import { usePlayerQueue } from "./player/usePlayerQueue";
 
 import { usePlayerStore } from "../store/playerStore";
 import { AudioController } from "../lib/AudioController";
+
+const PLAYER_STOP_EVENT = 'player-stop';
+const DRIVE_STREAM_PREFIX = '/drive-stream/';
 
 export const usePlayer = (accessToken: string | null) => {
   const {
@@ -26,7 +28,6 @@ export const usePlayer = (accessToken: string | null) => {
     playMode, setPlayMode,
     originalQueue, setOriginalQueue,
     playbackQueue, setPlaybackQueue,
-    bufferSeconds, setBufferSeconds
   } = usePlayerStore(useShallow(state => ({
     currentTrack: state.currentTrack, setCurrentTrack: state.setCurrentTrack,
     loadNonce: state.loadNonce, triggerReload: state.triggerReload,
@@ -35,14 +36,12 @@ export const usePlayer = (accessToken: string | null) => {
     playMode: state.playMode, setPlayMode: state.setPlayMode,
     originalQueue: state.originalQueue, setOriginalQueue: state.setOriginalQueue,
     playbackQueue: state.playbackQueue, setPlaybackQueue: state.setPlaybackQueue,
-    bufferSeconds: state.bufferSeconds, setBufferSeconds: state.setBufferSeconds
   })));
   
-  const initialBufferRef = useRef(true);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Load session from IDB
-  usePlayerSession(setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, setBufferSeconds, triggerReload);
+  usePlayerSession(setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, triggerReload);
 
   // Initialize queue handlers
   const { handleNextTrack, handlePrevTrack, handleTogglePlayMode, updateQueueContext } = usePlayerQueue(
@@ -51,30 +50,18 @@ export const usePlayer = (accessToken: string | null) => {
     (t, c, i, d, a) => handlePlayTrack(t, c, i, d, a)
   );
 
-  // Persist buffer setting changes
-  useEffect(() => {
-    if (initialBufferRef.current) {
-      initialBufferRef.current = false;
-      return;
-    }
-    idbSet("drplay_buffer_seconds", bufferSeconds);
-    invoke("update_buffer_settings", { seconds: bufferSeconds }).catch(e => {
-      console.warn(`[usePlayer] buffer-settings-failed`, { seconds: bufferSeconds, error: classifyPlayerError(e).message });
-    });
-  }, [bufferSeconds]);
-
   // Keep system awake
   useEffect(() => {
     if (isPlaying) {
-      keepAwakeStart({ display: false, idle: false, sleep: true }).catch(e => console.warn(`[usePlayer] keep-awake-failed`, classifyPlayerError(e)));
+      keepAwakeStart({ display: false, idle: false, sleep: true }).catch((e: unknown) => { captureError({ level: 'warn', source: 'usePlayer', message: `keep-awake-failed: ${e instanceof Error ? e.message : String(e)}` }); });
     } else {
-      keepAwakeStop().catch(e => console.warn(`[usePlayer] keep-awake-release-failed`, classifyPlayerError(e)));
+      keepAwakeStop().catch((e: unknown) => { captureError({ level: 'warn', source: 'usePlayer', message: `keep-awake-release-failed: ${e instanceof Error ? e.message : String(e)}` }); });
     }
   }, [isPlaying]);
 
   // Persist playMode
   useEffect(() => {
-    idbSet('drplay_playmode', playMode).catch(e => console.warn(`[usePlayer] playmode-save-fail`, classifyPlayerError(e)));
+    idbSet('drplay_playmode', playMode).catch((e: unknown) => { captureError({ level: 'warn', source: 'usePlayer', message: `playmode-save-fail: ${e instanceof Error ? e.message : String(e)}` }); });
   }, [playMode]);
 
   // Cleanup on logout
@@ -88,11 +75,11 @@ export const usePlayer = (accessToken: string | null) => {
       setOriginalQueue([]);
       setPlaybackQueue([]);
     };
-    window.addEventListener('player-stop', handleStop);
-    return () => window.removeEventListener('player-stop', handleStop);
+    window.addEventListener(PLAYER_STOP_EVENT, handleStop);
+    return () => window.removeEventListener(PLAYER_STOP_EVENT, handleStop);
   }, []);
 
-  const handlePlayTrack = useCallback(async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: any[], activeTab?: string) => {
+  const handlePlayTrack = useCallback(async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: unknown[], activeTab?: string) => {
     if (!accessToken) return;
 
     const { currentTrack, isPlaying } = usePlayerStore.getState();
@@ -117,22 +104,23 @@ export const usePlayer = (accessToken: string | null) => {
     setIsPlaying(false);
     setIsDownloading(true);
 
-    const maybePrefetchNextTrack = (queue: Track[] | undefined, current: Track) => {
+    // Fire-and-forget: prefetch the next track's audio for gapless playback.
+    const scheduleNextTrackPrefetch = (queue: Track[] | undefined, current: Track): void => {
       if (!queue || queue.length < 2) return;
       const idx = queue.findIndex(item => item.queueItemId ? item.queueItemId === current.queueItemId : item.id === current.id);
       if (idx === -1 || idx >= queue.length - 1) return;
       const next = queue[idx + 1];
       const url = getPrefetchedStreamUrl(next.id);
       if (url) prefetchNextTrackAudio(url);
-      else prefetchNextTrackAudio(`/drive-stream/${next.id}`);
+      else prefetchNextTrackAudio(`${DRIVE_STREAM_PREFIX}${next.id}`);
     };
 
     const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
     try {
-      const freshToken = await getValidToken(false, signal).catch(e => {
-        if (e.name === 'AbortError') throw e;
-        console.warn(`[usePlayer] token-refresh-fail`, classifyPlayerError(e));
+      const freshToken = await getValidToken(false, signal).catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === 'AbortError') throw e;
+        captureError({ level: 'warn', source: 'usePlayer', message: `token-refresh-fail: ${e instanceof Error ? e.message : String(e)}` });
         return null;
       });
       
@@ -141,29 +129,32 @@ export const usePlayer = (accessToken: string | null) => {
         return;
       }
 
-      const streamUrl = prefetchedUrl || `/drive-stream/${targetTrack.id}`;
+      const streamUrl = prefetchedUrl || `${DRIVE_STREAM_PREFIX}${targetTrack.id}`;
       setCurrentTrack({ ...targetTrack, streamUrl });
       triggerReload();
       setIsPlaying(true);
       setIsDownloading(false);
 
-      recordPlay(targetTrack).catch(e => console.warn(`[usePlayer] recordPlay-fail`, classifyPlayerError(e)));
+      recordPlay(targetTrack).catch((e: unknown) => { captureError({ level: 'warn', source: 'usePlayer', message: `recordPlay-fail: ${e instanceof Error ? e.message : String(e)}` }); });
 
-      maybePrefetchNextTrack(contextQueue, targetTrack);
+      scheduleNextTrackPrefetch(contextQueue, targetTrack);
 
-      getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName, signal).then(metadata => {
-        if (metadata.duration && !signal.aborted) {
-          setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
+      void (async () => {
+        try {
+          const metadata = await getTrackMetadata(targetTrack.id, freshToken, targetTrack.size, targetTrack.originalName, signal);
+          if (metadata.duration && !signal.aborted) {
+            setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
+          }
+        } catch (e: unknown) {
+          if (!(e instanceof DOMException && e.name === 'AbortError')) {
+            captureError({ level: 'warn', source: 'usePlayer', message: `metadata-prefetch-fail: ${e instanceof Error ? e.message : String(e)}` });
+          }
         }
-      }).catch(e => {
-        if (e.name !== 'AbortError') {
-           console.warn(`[usePlayer] metadata-prefetch-fail`, classifyPlayerError(e));
-        }
-      });
+      })();
       
-    } catch (e: any) {
-      if (e.name === 'AbortError') return;
-      console.error(`[usePlayer] network-playback-error`, classifyPlayerError(e));
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      captureError({ level: 'error', source: 'usePlayer', message: `network-playback-error: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
     } finally {
       if (!signal.aborted) {
@@ -200,18 +191,20 @@ export const usePlayer = (accessToken: string | null) => {
           }
           try {
             await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName, signal);
-          } catch (e: any) {
-            if (e.name !== 'AbortError') console.warn(`[usePlayer] bitrate-resume-fail`, classifyPlayerError(e));
+          } catch (e: unknown) {
+            if (!(e instanceof DOMException && e.name === 'AbortError')) {
+              captureError({ level: 'warn', source: 'usePlayer', message: `bitrate-resume-fail: ${e instanceof Error ? e.message : String(e)}` });
+            }
           }
 
-          const url = `/drive-stream/${currentTrack.id}`;
+          const url = `${DRIVE_STREAM_PREFIX}${currentTrack.id}`;
           
           setCurrentTrack(prev => prev ? { ...prev, streamUrl: url } : prev);
           triggerReload();
           setIsPlaying(true);
-        } catch (e: any) {
-          if (e.name === 'AbortError') return;
-          console.error(`[usePlayer] stream-url-resume-fail`, classifyPlayerError(e));
+        } catch (e: unknown) {
+          if (e instanceof DOMException && e.name === 'AbortError') return;
+          captureError({ level: 'error', source: 'usePlayer', message: `stream-url-resume-fail: ${e instanceof Error ? e.message : String(e)}` });
           showErrorToast("Could not start playback. Please try another track.");
         } finally {
           if (!signal.aborted) setIsDownloading(false);
@@ -226,7 +219,6 @@ export const usePlayer = (accessToken: string | null) => {
   return {
     currentTrack, setCurrentTrack, loadNonce, triggerReload,
     isPlaying, setIsPlaying, isDownloading, playbackQueue, playMode,
-    bufferSeconds, setBufferSeconds,
     handlePlayTrack, handleNextTrack, handlePrevTrack,
     handleTogglePlay, handleTogglePlayMode
   };

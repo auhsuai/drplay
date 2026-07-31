@@ -1,11 +1,19 @@
 import { Track } from '../App';
 import { usePlayerStore } from '../store/playerStore';
 import { captureError } from '../utils/errorLog';
+import type { BufferedSource } from '../utils/bufferedRange';
 
 type AudioEventMap = {
   timeupdate: { currentTime: number; duration: number };
   durationchange: { duration: number };
   buffering: { isBuffering: boolean };
+  /** Native `progress` event — buffered data grew. Consumers re-read
+   *  `getBuffered()` to render the buffer bar (audio.buffered only changes
+   *  while a `progress` event fires). Throttled to ~5/s. Also re-emitted from
+   *  seeked/loadeddata/suspend/durationchange because for a small/fast file the
+   *  LAST native `progress` can fire with buffered empty — those discrete
+   *  events are the only proof the final buffer state settled. */
+  progress: void;
   error: { message: string; code: string };
   ended: void;
   play: void;
@@ -15,6 +23,11 @@ type AudioEventMap = {
 type AudioEventHandler<K extends keyof AudioEventMap> = (payload: AudioEventMap[K]) => void;
 
 export class AudioController {
+  private static readonly THROTTLE_MS = 200;
+  private static readonly RETRY_DELAY_MS = 2000;
+  private static readonly MAX_RETRIES = 3;
+  private static readonly ENDED_THRESHOLD_SECONDS = 1;
+
   private static instance: AudioController;
   private audio1: HTMLAudioElement;
   private audio2: HTMLAudioElement;
@@ -32,6 +45,7 @@ export class AudioController {
   private listeners: { [K in keyof AudioEventMap]?: AudioEventHandler<K>[] } = {};
   
   private lastTimeUpdate = 0;
+  private lastProgressEmit = 0;
 
   // Retained reference to every native listener attached by setupAudio(),
   // keyed by element then event type. Anonymous handlers are unreachable and
@@ -44,7 +58,7 @@ export class AudioController {
     this.audio1 = new Audio();
     this.audio2 = new Audio();
     
-    // Đảm bảo audio có thể phát qua streaming (Tauri schema `/drive-stream`)
+    // Attach listeners so the elements can play via the /drive-stream SW proxy
     this.setupAudio(this.audio1);
     this.setupAudio(this.audio2);
   }
@@ -67,6 +81,10 @@ export class AudioController {
     }
   }
 
+  private async safePlay(audio: HTMLAudioElement): Promise<void> {
+    try { await audio.play(); } catch { /* autoplay policy — silent */ }
+  }
+
   private setupAudio(audio: HTMLAudioElement) {
     // Handlers are held as named properties (not inline anonymous closures)
     // so each reference is retained in this.elementListeners and removable.
@@ -76,7 +94,7 @@ export class AudioController {
     handlers.timeupdate = () => {
       if (audio !== this.activeAudio) return;
       const now = performance.now();
-      if (now - this.lastTimeUpdate > 200) { 
+      if (now - this.lastTimeUpdate > AudioController.THROTTLE_MS) { 
         this.lastTimeUpdate = now;
         this.emit('timeupdate', { currentTime: audio.currentTime, duration: audio.duration || 0 });
       }
@@ -87,6 +105,45 @@ export class AudioController {
     handlers.durationchange = () => {
       if (audio === this.activeAudio) {
         this.emit('durationchange', { duration: audio.duration || 0 });
+        this.emit('progress', undefined);
+      }
+    };
+
+    // Buffer-bar reliability beyond `progress`: for a small/fast file the LAST
+    // native progress event can fire with buffered still empty, then loading
+    // finishes with NO further progress event — the bar would stay empty even
+    // though buffered is full (race). These discrete events prove the buffered
+    // state may have changed, so re-emit `progress` so consumers re-read
+    // getBuffered(). They fire rarely -> no throttle (no DOM churn).
+    handlers.seeked = () => {
+      if (audio === this.activeAudio) {
+        this.emit('progress', undefined);
+      }
+    };
+
+    handlers.loadeddata = () => {
+      if (audio === this.activeAudio) {
+        this.emit('progress', undefined);
+      }
+    };
+
+    handlers.suspend = () => {
+      if (audio === this.activeAudio) {
+        this.emit('progress', undefined);
+      }
+    };
+
+    // Native `progress` fires periodically while the media resource loads —
+    // this is when audio.buffered grows (paused OR playing, unlike timeupdate
+    // which only fires during playback). Throttled to ~5/s to avoid DOM churn
+    // in buffer-bar consumers. The sentinel `=== 0` guarantees the FIRST
+    // event always emits, even when the throttle clock is at t=0 (fake timers).
+    handlers.progress = () => {
+      if (audio !== this.activeAudio) return;
+      const now = performance.now();
+      if (this.lastProgressEmit === 0 || now - this.lastProgressEmit > AudioController.THROTTLE_MS) {
+        this.lastProgressEmit = now;
+        this.emit('progress', undefined);
       }
     };
 
@@ -99,22 +156,22 @@ export class AudioController {
     handlers.playing = () => {
       if (audio === this.activeAudio) {
         this.emit('buffering', { isBuffering: false });
-        this.emit('play', undefined as void);
+        this.emit('play', undefined);
         usePlayerStore.getState().setIsPlaying(true);
       }
     };
 
     handlers.pause = () => {
       if (audio === this.activeAudio) {
-        this.emit('pause', undefined as void);
+        this.emit('pause', undefined);
         usePlayerStore.getState().setIsPlaying(false);
       }
     };
 
     handlers.ended = () => {
       if (audio === this.activeAudio) {
-        if (audio.duration && audio.currentTime < audio.duration - 1) return;
-        this.emit('ended', undefined as void);
+        if (audio.duration && audio.currentTime < audio.duration - AudioController.ENDED_THRESHOLD_SECONDS) return;
+        this.emit('ended', undefined);
       }
     };
 
@@ -123,7 +180,7 @@ export class AudioController {
       this.retryCount++;
       captureError({ level: 'error', source: 'AudioController', message: `Audio error (attempt ${this.retryCount})` });
       
-      if (this.retryCount < 3 && this.currentTrackId) {
+      if (this.retryCount < AudioController.MAX_RETRIES && this.currentTrackId) {
         this.emit('error', { message: 'Mạng không ổn định, đang thử lại...', code: 'network_interrupted' });
         const pos = audio.currentTime;
         // B1: capture track id + change token at schedule time; when the timer
@@ -134,12 +191,12 @@ export class AudioController {
         this.retryTimer = setTimeout(() => {
           this.retryTimer = null;
           this.retry(pos, trackId, token);
-        }, 2000);
+        }, AudioController.RETRY_DELAY_MS);
       } else {
         // B1: giving up — no zombie retry may fire later.
         this.clearRetryTimer();
         this.emit('error', { message: 'File lỗi định dạng, đang bỏ qua...', code: 'format_error' });
-        this.emit('ended', undefined as void); 
+        this.emit('ended', undefined); 
       }
     };
 
@@ -149,11 +206,17 @@ export class AudioController {
     this.elementListeners.set(audio, handlers);
   }
 
+  private getHandlers<K extends keyof AudioEventMap>(event: K): AudioEventHandler<K>[] {
+    const list = this.listeners[event];
+    return list ? list as AudioEventHandler<K>[] : (this.listeners[event] = []) as AudioEventHandler<K>[];
+  }
+
   public on<K extends keyof AudioEventMap>(event: K, handler: AudioEventHandler<K>) {
-    if (!this.listeners[event]) (this.listeners[event] as any) = [];
-    (this.listeners[event] as any).push(handler);
+    const list = this.getHandlers(event);
+    list.push(handler);
     return () => {
-      (this.listeners[event] as any) = (this.listeners[event] as any).filter((h: any) => h !== handler);
+      const idx = list.indexOf(handler);
+      if (idx >= 0) list.splice(idx, 1);
     };
   }
 
@@ -171,7 +234,7 @@ export class AudioController {
 
     if (this.currentTrackId === track.id) {
       if (this.activeAudio.paused) {
-        this.activeAudio.play().catch(e => console.warn(e));
+        this.safePlay(this.activeAudio);
       }
       return;
     }
@@ -204,10 +267,8 @@ export class AudioController {
 
     try {
       await newAudio.play();
-    } catch (e: any) {
-      console.warn("Autoplay prevented or stream error", e);
-      // Prevent resetting isPlaying if the user already clicked another track (interruption)
-      if (e.name !== 'AbortError' && this.currentTrackId === track.id) {
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name !== 'AbortError' && this.currentTrackId === track.id) {
         usePlayerStore.getState().setIsPlaying(false);
       }
     }
@@ -238,18 +299,15 @@ export class AudioController {
 
     try {
       await audio.play();
-    } catch (e: any) {
-      console.warn("Retry autoplay failed", e);
-      if (e.name !== 'AbortError') {
-        // Only warn for real errors, AbortError is normal during fast switching
-      }
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name !== 'AbortError') captureError({ level: 'warn', source: 'AudioController', message: `Retry autoplay failed (${e.name})` });
     }
   }
 
   public togglePlay() {
     if (!this.currentTrackId) return;
     if (this.activeAudio.paused) {
-      this.activeAudio.play().catch(e => console.warn(e));
+      this.safePlay(this.activeAudio);
     } else {
       this.activeAudio.pause();
     }
@@ -268,15 +326,13 @@ export class AudioController {
   public setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(1, vol));
     if (!this.muted) {
-      this.audio1.volume = this.volume;
-      this.audio2.volume = this.volume;
+      for (const a of [this.audio1, this.audio2]) a.volume = this.volume;
     }
   }
 
   public toggleMute() {
     this.muted = !this.muted;
-    this.audio1.volume = this.muted ? 0 : this.volume;
-    this.audio2.volume = this.muted ? 0 : this.volume;
+    for (const a of [this.audio1, this.audio2]) a.volume = this.muted ? 0 : this.volume;
     return this.muted;
   }
 
@@ -284,6 +340,16 @@ export class AudioController {
   public isMuted() { return this.muted; }
   public getCurrentTime() { return this.activeAudio.currentTime; }
   public getDuration() { return this.activeAudio.duration || 0; }
+
+  /**
+   * Snapshot of the ACTIVE element's buffering state, for buffer-bar rendering.
+   * `audio.buffered` only changes while a native `progress` event fires, so
+   * consumers should call this from a `progress` handler (MDN pattern).
+   */
+  public getBuffered(): BufferedSource {
+    const audio = this.activeAudio;
+    return { duration: audio.duration, currentTime: audio.currentTime, buffered: audio.buffered };
+  }
   
   // Expose prefetch for gapless if needed
   public preloadTrack(url: string) {
@@ -295,7 +361,7 @@ export class AudioController {
   // B3: fully release audio resources (logout / player-stop). Each element is
   // handled independently so one throwing element cannot leave the others
   // (or the state) unreleased.
-  // NOTE: the 6 native listeners per element (setupAudio) are intentionally
+  // NOTE: the 11 native listeners per element (setupAudio) are intentionally
   // NOT detached here. release() runs on logout, but the app does not reload:
   // the singleton instance and its 2 elements are reused after re-login
   // (useAuth.handleLogout -> 'player-stop' -> release(); the next login calls
@@ -316,9 +382,7 @@ export class AudioController {
         el.removeAttribute('src');
         el.load();
       } catch (err) {
-        console.warn(
-          `[AudioController] release-element-failed at ${new Date().toISOString()}: ${err instanceof Error ? err.message : String(err)}`
-        );
+        captureError({ level: 'warn', source: 'AudioController', message: `release-element-failed: ${err instanceof Error ? err.message : String(err)}` });
       }
     }
   }

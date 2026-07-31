@@ -80,6 +80,14 @@ function fireLoadedMetadata(audio: FakeAudio) {
   for (const fn of audio._listeners['loadedmetadata'] ?? []) fn(new Event('loadedmetadata'));
 }
 
+function fireProgress(audio: FakeAudio) {
+  for (const fn of audio._listeners['progress'] ?? []) fn(new Event('progress'));
+}
+
+function fireNative(audio: FakeAudio, type: string) {
+  for (const fn of audio._listeners[type] ?? []) fn(new Event(type));
+}
+
 describe('AudioController retry lifecycle', () => {
   let AudioControllerClass: typeof import('../lib/AudioController').AudioController;
 
@@ -175,6 +183,43 @@ describe('AudioController retry lifecycle', () => {
     expect(audio.src).not.toContain('retry=');
   });
 
+  it('safePlay: calls audio.play() when resuming a paused track (same-track path)', async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack(trackA);
+    const audio = audioElements[1];
+
+    audio.paused = true;
+    audio.play.mockClear();
+
+    await ctrl.playTrack(trackA);
+    expect(audio.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('safePlay: calls audio.play() when toggling play on a paused track', async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack(trackA);
+    const audio = audioElements[1];
+
+    audio.paused = true;
+    audio.play.mockClear();
+
+    ctrl.togglePlay();
+    expect(audio.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('safePlay: playTrack for a new track calls audio.play() on the new element', async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack(trackA);
+    const audio1 = audioElements[1]; // active after first playTrack
+    audio1.play.mockClear();
+
+    await ctrl.playTrack(trackB);
+    const audio2 = audioElements[0]; // active after flip
+
+    expect(audio2.play).toHaveBeenCalledTimes(1);
+    expect(audio1.play).not.toHaveBeenCalled(); // old element not played again
+  });
+
   it('B2 regression: old audio gets load() immediately after removeAttribute("src") when switching tracks', async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
@@ -228,9 +273,9 @@ describe('AudioController retry lifecycle', () => {
   });
 
   describe('AudioController event-listener lifecycle', () => {
-    it('registers exactly 6 native listeners, one per event type, on each element', async () => {
+    it('registers exactly 11 native listeners, one per event type, on each element', async () => {
       AudioControllerClass.getInstance();
-      const expected = ['timeupdate', 'durationchange', 'waiting', 'playing', 'pause', 'ended', 'error'];
+      const expected = ['timeupdate', 'durationchange', 'waiting', 'playing', 'pause', 'ended', 'error', 'progress', 'seeked', 'loadeddata', 'suspend'];
       expect(audioElements).toHaveLength(2);
       for (const el of audioElements) {
         expect(Object.keys(el._listeners).sort()).toEqual([...expected].sort());
@@ -274,6 +319,85 @@ describe('AudioController retry lifecycle', () => {
           expect(el._listeners[type]).toHaveLength(1);
         }
       }
+    });
+  });
+
+  describe('AudioController buffer progress events', () => {
+    beforeEach(() => {
+      // progress-throttle assertions compare real wall-clock deltas between
+      // synchronous event dispatches, so real timers keep them deterministic.
+      vi.useRealTimers();
+    });
+
+    it('emits progress when the ACTIVE element fires a native progress event', async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      const progressHandler = vi.fn();
+      ctrl.on('progress', progressHandler);
+
+      await ctrl.playTrack(trackA);
+      const active = audioElements[1]; // playTrack flips activeIndex 0 -> 1
+      fireProgress(active);
+      expect(progressHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores native progress events from the INACTIVE element', async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      const progressHandler = vi.fn();
+      ctrl.on('progress', progressHandler);
+
+      await ctrl.playTrack(trackA);
+      const inactive = audioElements[0];
+      fireProgress(inactive);
+      expect(progressHandler).not.toHaveBeenCalled();
+    });
+
+    it('throttles progress emission (max ~5/s) but always emits the first event', async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      const progressHandler = vi.fn();
+      ctrl.on('progress', progressHandler);
+
+      await ctrl.playTrack(trackA);
+      const active = audioElements[1];
+
+      fireProgress(active); // first event -> always emitted (even at t=0)
+      fireProgress(active); // inside throttle window -> suppressed
+      expect(progressHandler).toHaveBeenCalledTimes(1);
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      fireProgress(active); // outside throttle window -> emitted
+      expect(progressHandler).toHaveBeenCalledTimes(2);
+    });
+
+    it('re-emits progress when seeked/loadeddata/suspend/durationchange fire on the ACTIVE element (buffered may have changed while the last progress event read it empty)', async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      const progressHandler = vi.fn();
+      ctrl.on('progress', progressHandler);
+
+      await ctrl.playTrack(trackA);
+      const active = audioElements[1];
+
+      fireNative(active, 'seeked');
+      fireNative(active, 'loadeddata');
+      fireNative(active, 'suspend');
+      fireNative(active, 'durationchange');
+
+      expect(progressHandler).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not re-emit progress from seeked/loadeddata/suspend/durationchange on the INACTIVE element', async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      const progressHandler = vi.fn();
+      ctrl.on('progress', progressHandler);
+
+      await ctrl.playTrack(trackA);
+      const inactive = audioElements[0];
+
+      fireNative(inactive, 'seeked');
+      fireNative(inactive, 'loadeddata');
+      fireNative(inactive, 'suspend');
+      fireNative(inactive, 'durationchange');
+
+      expect(progressHandler).not.toHaveBeenCalled();
     });
   });
 });

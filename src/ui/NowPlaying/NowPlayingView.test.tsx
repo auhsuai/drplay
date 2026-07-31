@@ -1,0 +1,175 @@
+// @vitest-environment jsdom
+import type { ComponentProps } from 'react';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Track } from '../../App';
+import { NowPlayingView } from './NowPlayingView';
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+}));
+
+vi.mock('lucide-react', () => {
+  const icons = [
+    'Music', 'ChevronDown', 'Play', 'Pause', 'SkipBack', 'SkipForward',
+    'Repeat', 'Repeat1', 'Shuffle',
+  ];
+  const Stub = () => null;
+  return Object.fromEntries(icons.map((n) => [n, Stub]));
+});
+
+vi.mock('./hooks/useNowPlayingMetadata', () => ({
+  useNowPlayingMetadata: () => ({
+    coverUrl: null,
+    realTitle: 'Song',
+    realArtist: 'Artist',
+    bgColor: '',
+    bgPalette: [],
+  }),
+}));
+
+const { fakeController } = vi.hoisted(() => {
+  type Handler = (payload: any) => void;
+  const fakeController = {
+    on: vi.fn(),
+    getDuration: vi.fn(() => 0),
+    getCurrentTime: vi.fn(() => 0),
+    getBuffered: vi.fn(),
+    seek: vi.fn(),
+    _handlers: {} as Record<string, Handler[]>,
+    _emit(event: string, payload?: any) {
+      for (const h of fakeController._handlers[event] ?? []) h(payload);
+    },
+  };
+  return { fakeController };
+});
+
+function installFakeOn() {
+  fakeController.on.mockImplementation((event: string, handler: (payload: any) => void) => {
+    (fakeController._handlers[event] ??= []).push(handler);
+    return () => {
+      fakeController._handlers[event] = (fakeController._handlers[event] ?? []).filter((h) => h !== handler);
+    };
+  });
+}
+
+vi.mock('../../lib/AudioController', () => ({
+  AudioController: { getInstance: () => fakeController },
+}));
+
+function setBuffered(ranges: Array<[number, number]>, duration = 1000, currentTime = 10) {
+  fakeController.getBuffered.mockReturnValue({
+    duration,
+    currentTime,
+    buffered: {
+      length: ranges.length,
+      start: (i: number) => ranges[i][0],
+      end: (i: number) => ranges[i][1],
+    } as TimeRanges,
+  });
+}
+
+function makeTrack(overrides: Partial<Track> = {}): Track {
+  return {
+    id: 'track-1',
+    title: 'Song',
+    artist: 'Artist',
+    streamUrl: '/drive-stream/track-1',
+    ...overrides,
+  };
+}
+
+type ViewProps = ComponentProps<typeof NowPlayingView>;
+
+function renderView(overrides: Partial<ViewProps> = {}) {
+  return render(
+    <NowPlayingView
+      currentTrack={makeTrack()}
+      isPlaying={false}
+      onTogglePlay={vi.fn()}
+      onNextTrack={vi.fn()}
+      onPrevTrack={vi.fn()}
+      playMode="normal"
+      onTogglePlayMode={vi.fn()}
+      onBack={vi.fn()}
+      isOpen={true}
+      token={null}
+      {...overrides}
+    />
+  );
+}
+
+beforeEach(() => {
+  fakeController.on.mockClear();
+  fakeController.getDuration.mockClear();
+  fakeController.getCurrentTime.mockClear();
+  fakeController.getBuffered.mockClear();
+  fakeController.seek.mockClear();
+  installFakeOn();
+  fakeController.getDuration.mockReturnValue(0);
+  setBuffered([]);
+  fakeController._handlers = {};
+});
+
+afterEach(() => {
+  cleanup();
+  fakeController._handlers = {};
+});
+
+describe('NowPlayingView buffer bar', () => {
+  it('BUG regression: buffer container is pinned full-width and transparent (segment children own the background)', () => {
+    renderView();
+    const buffer = screen.getByTestId('buffer-fill');
+
+    // Container must be pinned to the full progress-bar track (inset-0 / w-full
+    // / right-0) — never a shrink-to-fit `absolute left-0` box whose width
+    // computes to 0 (CSS2.1 §10.3.7), collapsing the child % segments.
+    expect(buffer.className).toMatch(/\b(inset-0|w-full)\b|\bright-0\b/);
+    // Container must be transparent — the buffered segment children created by
+    // updateBufferBar() (bg-gray-400) are the visible part.
+    expect(buffer.className).not.toMatch(/\bbg-/);
+  });
+
+  it('BUG regression: emitting progress renders a visible segment child (bg-gray-400) inside the transparent container', () => {
+    renderView();
+    const buffer = screen.getByTestId('buffer-fill');
+    expect(buffer.childElementCount).toBe(0);
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('progress');
+    });
+
+    expect(buffer.childElementCount).toBe(1);
+    const seg = buffer.children[0] as HTMLElement;
+    // The segment — not the container — carries the visible buffer background.
+    expect(seg.className).toMatch(/\bbg-gray-400\b/);
+    expect(seg.style.left).toBe('0%');
+    expect(seg.style.width).toBe('30%');
+  });
+
+  it('BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)', () => {
+    renderView();
+    const buffer = screen.getByTestId('buffer-fill');
+    expect(buffer.childElementCount).toBe(0);
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('timeupdate', { currentTime: 10, duration: 1000 });
+    });
+
+    expect(buffer.childElementCount).toBe(1);
+    const seg = buffer.children[0] as HTMLElement;
+    expect(seg.style.left).toBe('0%');
+    expect(seg.style.width).toBe('30%');
+  });
+
+  it('unsubscribes the progress handler on unmount (no listener leak)', () => {
+    const { unmount } = renderView();
+    expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
+
+    unmount();
+
+    expect(fakeController._handlers['progress'] ?? []).toHaveLength(0);
+  });
+});

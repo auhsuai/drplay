@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { getBufferedRangePct, updateBufferBar, renderBufferFromBytes } from './bufferedRange';
+import { updateBufferBar } from './bufferedRange';
 
 function makeAudio(opts: {
   duration: number;
@@ -19,57 +19,6 @@ function makeAudio(opts: {
     buffered,
   } as unknown as HTMLMediaElement;
 }
-
-describe('getBufferedRangePct', () => {
-  const DUR = 1000;
-
-  it('normal contiguous buffering [0,30] at currentTime 10', () => {
-    const audio = makeAudio({ duration: DUR, currentTime: 10, ranges: [[0, 30]] });
-    const range = getBufferedRangePct(audio);
-    expect(range).not.toBeNull();
-    expect(range!.left).toBeCloseTo(0, 5);
-    expect(range!.width).toBeCloseTo((30 / DUR) * 100, 5);
-  });
-
-  it('forward seek gap: ranges [[0,30],[500,510]] at currentTime 505 uses second range', () => {
-    const audio = makeAudio({ duration: DUR, currentTime: 505, ranges: [[0, 30], [500, 510]] });
-    const range = getBufferedRangePct(audio);
-    expect(range).not.toBeNull();
-    expect(range!.left).toBeCloseTo((500 / DUR) * 100, 5);
-    expect(range!.width).toBeCloseTo((10 / DUR) * 100, 5);
-  });
-
-  it('playhead in gap falls back to nearest range by distance', () => {
-    // currentTime 200 sits between [0,30] (dist 170) and [500,510] (dist 300),
-    // so the nearest fallback is [0,30] (left 0, width 3). Note: a "prefer the
-    // upcoming range" policy would instead pick [500,510].
-    const audio = makeAudio({ duration: DUR, currentTime: 200, ranges: [[0, 30], [500, 510]] });
-    const range = getBufferedRangePct(audio);
-    expect(range).not.toBeNull();
-    expect(range!.left).toBeCloseTo((0 / DUR) * 100, 5);
-    expect(range!.width).toBeCloseTo((30 / DUR) * 100, 5);
-  });
-
-  it('playhead in gap closer to an upcoming range picks that range', () => {
-    // currentTime 480 sits between [0,30] (dist 450) and [500,510] (dist 20),
-    // so the nearest fallback is the upcoming [500,510] range.
-    const audio = makeAudio({ duration: DUR, currentTime: 480, ranges: [[0, 30], [500, 510]] });
-    const range = getBufferedRangePct(audio);
-    expect(range).not.toBeNull();
-    expect(range!.left).toBeCloseTo((500 / DUR) * 100, 5);
-    expect(range!.width).toBeCloseTo((10 / DUR) * 100, 5);
-  });
-
-  it('no buffered data (length 0) returns null', () => {
-    const audio = makeAudio({ duration: DUR, currentTime: 0, ranges: [] });
-    expect(getBufferedRangePct(audio)).toBeNull();
-  });
-
-  it('invalid duration returns null', () => {
-    const audio = makeAudio({ duration: NaN, currentTime: 10, ranges: [[0, 30]] });
-    expect(getBufferedRangePct(audio)).toBeNull();
-  });
-});
 
 describe('updateBufferBar', () => {
   const DUR = 1000;
@@ -130,49 +79,5 @@ describe('updateBufferBar', () => {
   it('null container is a no-op', () => {
     const audio = makeAudio({ duration: DUR, currentTime: 10, ranges: [[0, 30]] });
     expect(() => updateBufferBar(null, audio)).not.toThrow();
-  });
-});
-
-describe('renderBufferFromBytes', () => {
-  it('renders a single segment from start/end byte ratio', () => {
-    const container = document.createElement('div');
-    // 25%..75% of a 1000-byte file => left 25%, width 50%.
-    renderBufferFromBytes(container, 250, 750, 1000);
-    expect(container.childElementCount).toBe(1);
-    const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('25%');
-    expect(seg.style.width).toBe('50%');
-  });
-
-  it('renders from 0 when start byte is 0', () => {
-    const container = document.createElement('div');
-    renderBufferFromBytes(container, 0, 300, 1000);
-    const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('0%');
-    expect(seg.style.width).toBe('30%');
-  });
-
-  it('clears the container on zero/negative total', () => {
-    const container = document.createElement('div');
-    renderBufferFromBytes(container, 0, 300, 1000);
-    expect(container.childElementCount).toBe(1);
-    renderBufferFromBytes(container, 0, 300, 0);
-    expect(container.childElementCount).toBe(0);
-  });
-
-  it('clears the container when end < start', () => {
-    const container = document.createElement('div');
-    renderBufferFromBytes(container, 500, 300, 1000);
-    expect(container.childElementCount).toBe(0);
-  });
-
-  it('reuses the single segment across calls (no child thrash)', () => {
-    const container = document.createElement('div');
-    renderBufferFromBytes(container, 0, 300, 1000);
-    renderBufferFromBytes(container, 100, 600, 1000);
-    expect(container.childElementCount).toBe(1);
-    const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('10%');
-    expect(seg.style.width).toBe('50%');
   });
 });
