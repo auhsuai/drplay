@@ -8,7 +8,7 @@ import { ErrorLogSection } from "./components/ErrorLogSection";
 import { ThemeType } from "../../hooks/useTheme";
 import { clearAppCache } from "../../utils/cache";
 import { open } from "@tauri-apps/plugin-dialog";
-import { showErrorToast } from "../../utils/simpleToast";
+import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { setCustomDownloadPath, getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useEffect, useState } from "react";
@@ -193,7 +193,7 @@ export function SettingsTab({
                 onClick={async () => {
                   try {
                     await clearAppCache();
-                    showErrorToast(t('settings.clear_cache_success', 'Cache cleared successfully!'));
+                    showSuccessToast(t('settings.clear_cache_success', 'Cache cleared successfully!'));
                   } catch (e) {
                     showErrorToast(t('settings.clear_cache_error', 'Failed to clear cache.'));
                   }

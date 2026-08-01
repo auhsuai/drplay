@@ -302,6 +302,10 @@ function App() {
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
       />
+
+      {/* Toast container: simpleToast appends here; must stay mounted for the
+          app's whole lifetime so showErrorToast/showSuccessToast work everywhere */}
+      <div id="toast-root" />
     </div>
   );
 }

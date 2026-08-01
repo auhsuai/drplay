@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
+import { clearAppCache } from "../../utils/cache";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so we stub useTranslation to return
@@ -16,8 +17,10 @@ vi.mock("react-i18next", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const showErrorToast = vi.fn();
+const showSuccessToast = vi.fn();
 vi.mock("../../utils/simpleToast", () => ({
   showErrorToast: (msg: string) => showErrorToast(msg),
+  showSuccessToast: (msg: string) => showSuccessToast(msg),
 }));
 
 vi.mock("../../utils/cache", () => ({ clearAppCache: vi.fn() }));
@@ -48,6 +51,8 @@ const baseProps = {
 };
 
 describe("SettingsTab download path display", () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
     getEffectiveDownloadPath.mockReset();
   });
@@ -77,5 +82,37 @@ describe("SettingsTab download path display", () => {
       expect(el).not.toBeNull();
       expect(el?.textContent).toBe("");
     });
+  });
+});
+
+describe("SettingsTab clear cache button", () => {
+  afterEach(() => cleanup());
+
+  beforeEach(() => {
+    showErrorToast.mockReset();
+    showSuccessToast.mockReset();
+    vi.mocked(clearAppCache).mockReset();
+  });
+
+  it("shows a SUCCESS toast when cache clearing succeeds", async () => {
+    vi.mocked(clearAppCache).mockResolvedValue(undefined);
+    render(<SettingsTab {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
+    await waitFor(() => {
+      expect(showSuccessToast).toHaveBeenCalledWith(
+        "Cache cleared successfully!"
+      );
+    });
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+
+  it("shows an ERROR toast when cache clearing fails", async () => {
+    vi.mocked(clearAppCache).mockRejectedValue(new Error("boom"));
+    render(<SettingsTab {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
+    await waitFor(() => {
+      expect(showErrorToast).toHaveBeenCalledWith("Failed to clear cache.");
+    });
+    expect(showSuccessToast).not.toHaveBeenCalled();
   });
 });
