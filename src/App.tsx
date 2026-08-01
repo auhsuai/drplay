@@ -17,8 +17,8 @@ const SettingsTab = React.lazy(() => import('./ui/Settings/SettingsTab').then(mo
 import "./App.css";
 
 import { db } from './db/db';
-import { del as kvDel } from './db/kv';
 import { LoginScreen } from "./ui/Login/LoginScreen";
+import { clearSessionState } from "./utils/sessionCleanup";
 
 import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
@@ -77,7 +77,7 @@ function App() {
     localStorage.removeItem(LS_CURRENT_FOLDER_NAME);
     localStorage.removeItem(LS_FOLDER_HISTORY);
     db.syncState.delete(DB_NAV_STATE_KEY).catch((e) => captureError({ source: 'App', message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'logout-cleanup-failed' }));
-    kvDel('drplay_last_session').catch((e) => captureError({ source: 'App', message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'logout-cleanup-failed' }));
+    clearSessionState();
     setAppRootFolder(null);
   });
 

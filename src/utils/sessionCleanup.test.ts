@@ -1,0 +1,72 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SESSION_CLEANUP_KEYS, clearSessionState } from './sessionCleanup';
+import { del as kvDel } from '../db/kv';
+import { captureError } from './errorLog';
+
+vi.mock('../db/kv', () => ({ del: vi.fn() }));
+vi.mock('./errorLog', () => ({ captureError: vi.fn() }));
+
+const kvDelMock = vi.mocked(kvDel);
+const captureErrorMock = vi.mocked(captureError);
+
+beforeEach(() => {
+  kvDelMock.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+  localStorage.clear();
+});
+
+describe('clearSessionState', () => {
+  it('removes drplay_last_session from localStorage', () => {
+    localStorage.setItem(
+      SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
+      JSON.stringify({ track: { id: 'old-track' }, time: 12, duration: 180 })
+    );
+
+    clearSessionState();
+
+    expect(
+      localStorage.getItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage)
+    ).toBeNull();
+  });
+
+  it('calls kvDel for last_session, playmode and queue', () => {
+    clearSessionState();
+
+    expect(kvDelMock).toHaveBeenCalledTimes(3);
+    expect(kvDelMock).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.lastSessionKv);
+    expect(kvDelMock).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.playModeKv);
+    expect(kvDelMock).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.queueKv);
+  });
+
+  it('captures the failure via captureError when a kvDel rejects, without throwing', async () => {
+    kvDelMock.mockRejectedValueOnce(new Error('kv-store-unavailable'));
+
+    expect(() => clearSessionState()).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(captureErrorMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'sessionCleanup',
+        kind: 'logout-cleanup-failed',
+        message: expect.stringContaining('kv-store-unavailable'),
+      })
+    );
+  });
+
+  it('is a safe no-op when no session keys exist yet', async () => {
+    expect(() => clearSessionState()).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(captureErrorMock).not.toHaveBeenCalled();
+    });
+
+    expect(kvDelMock).toHaveBeenCalledTimes(3);
+  });
+});

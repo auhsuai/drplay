@@ -16,6 +16,13 @@ const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 32000;
 const DEFAULT_TIMEOUT_MS = 20000;
+// Drive files.list caps each request at 1000 results (docs: values above 1000
+// are coerced to 1000). We aggregate pages so large folders/searches are never
+// silently truncated in the UI.
+const PAGINATION_PAGE_SIZE = 1000;
+// Worst-case safety cap: 10 pages = up to 10,000 results per call. Guards
+// against a misbehaving server that keeps issuing nextPageToken forever.
+const MAX_PAGINATION_PAGES = 10;
 
 export interface DriveFileItem {
   id: string; name: string; mimeType: string; size?: string;
@@ -78,9 +85,16 @@ export async function driveFetch(
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      // Fresh timeout signal per attempt (an aborted signal cannot be reused);
-      // a caller-supplied signal takes precedence and is preserved across retries.
-      const signal = options.signal ?? AbortSignal.timeout(timeoutMs);
+      // Fresh timeout signal per attempt (an aborted signal cannot be reused).
+      // A caller-supplied signal must NOT disable the timeout — merge both via
+      // AbortSignal.any (same pattern as apiClient.fetchWithAuth) so a stalled
+      // network still fails after timeoutMs; fall back to the timeout alone on
+      // runtimes lacking AbortSignal.any.
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const signal =
+        options.signal && typeof AbortSignal.any === 'function'
+          ? AbortSignal.any([options.signal, timeoutSignal])
+          : timeoutSignal;
       const res = await fetchWithAuth(url, { ...options, signal });
 
       if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_RETRIES) {
@@ -89,6 +103,13 @@ export async function driveFetch(
       }
       return res;
     } catch (err) {
+      // User-initiated cancel (unmount / navigation / folder switch) must NOT
+      // be retried: re-firing an aborted request only wastes network and
+      // prolongs spinners. A timeout fired on OUR merged signal (caller signal
+      // NOT aborted) is still retryable — a stalled network is transient.
+      if (options.signal?.aborted === true) {
+        throw err;
+      }
       // Network failure or timeout (AbortError) — transient, retry with backoff.
       lastErr = err;
       if (attempt < MAX_RETRIES) {
@@ -246,34 +267,53 @@ export async function getRecentlyAddedAudioFiles(token: string): Promise<DriveFi
   return data.files || [];
 }
 
+// Aggregate ALL pages of a Drive files.list query. Drive caps each request at
+// PAGINATION_PAGE_SIZE and signals more results via nextPageToken
+// (developers.google.com/workspace/drive/api/reference/rest/v3/files/list).
+// The official samples always include nextPageToken in the `fields` mask — a
+// partial-response mask without it silently drops the token, so the caller
+// MUST pass a fields string that contains it. Break (not throw) if the caller
+// aborts between pages; per-request aborts still reject via driveFetch.
+async function fetchAllFolderPages(
+  token: string,
+  query: string,
+  fields: string,
+  failureLabel: string,
+  signal?: AbortSignal
+): Promise<DriveFolderItem[]> {
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=name&pageSize=${PAGINATION_PAGE_SIZE}`;
+  const all: DriveFolderItem[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
+    if (signal?.aborted) break;
+    const url = pageToken
+      ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}`
+      : baseUrl;
+    const response = await driveFetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      signal
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to ${failureLabel} (${response.status})`);
+    }
+    const data = (await response.json()) as DriveFoldersListResponse;
+    if (data.files) all.push(...data.files);
+    pageToken = data.nextPageToken;
+    if (!pageToken) break;
+  }
+  return all;
+}
+
 // Search for folders matching a fully-built Drive query string.
 // `query` must already be a valid Drive q-expression (e.g. escaped/quoted).
 export async function searchFolders(token: string, query: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&orderBy=name&pageSize=30`;
-  const response = await driveFetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` },
-    signal
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to search folders (${response.status})`);
-  }
-  const data = await response.json();
-  return data.files || [];
+  return fetchAllFolderPages(token, query, 'nextPageToken,files(id,name)', 'search folders', signal);
 }
 
 // List immediate folder children (subfolders only, not trashed).
 export async function listFolderChildren(token: string, folderId: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
   const q = `'${folderId}' in parents and trashed=false and mimeType='${FOLDER_MIME}'`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&orderBy=name`;
-  const response = await driveFetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` },
-    signal
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to list folder children (${response.status})`);
-  }
-  const data = await response.json();
-  return data.files || [];
+  return fetchAllFolderPages(token, q, 'nextPageToken,files(id,name)', 'list folder children', signal);
 }
 
 // Return the parent ids of a file/folder. Returns null when the Drive request
