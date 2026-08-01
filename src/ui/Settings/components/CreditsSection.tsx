@@ -83,7 +83,7 @@ export function CreditsSection() {
               {label}
             </span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <button
               onClick={handleCopy(index, display)}
               className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
@@ -96,9 +96,9 @@ export function CreditsSection() {
               onClick={handleOpen(url)}
               aria-label={t("settings.open_link") || "Open link"}
               title={t("settings.open_link") || "Open link"}
-              className="p-2 rounded-full text-gray-400 hover:text-[#4285F4] hover:bg-gray-100 dark:hover:bg-[#33343a] transition-colors"
+              className="text-gray-400 hover:text-[#4285F4] transition-colors"
             >
-              <ExternalLink className="w-4 h-4" aria-hidden="true" />
+              <ExternalLink className="w-5 h-5" aria-hidden="true" />
             </button>
           </div>
         </div>
