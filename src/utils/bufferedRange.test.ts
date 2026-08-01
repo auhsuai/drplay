@@ -77,7 +77,7 @@ describe('updateBufferBar', () => {
 
   it('shrinking visible segment count removes extra segments', () => {
     const container = document.createElement('div');
-    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [50, 200]] });
+    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [4, 200]] });
     updateBufferBar(container, two);
     expect(container.childElementCount).toBe(2);
     const one = makeAudio({ duration: DUR, currentTime: 60, ranges: [[0, 30], [50, 200]] });
@@ -87,7 +87,7 @@ describe('updateBufferBar', () => {
 
   it('empty buffered data clears the container', () => {
     const container = document.createElement('div');
-    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [50, 200]] });
+    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [4, 200]] });
     updateBufferBar(container, two);
     expect(container.childElementCount).toBe(2);
     const empty = makeAudio({ duration: DUR, currentTime: 0, ranges: [] });
@@ -97,7 +97,7 @@ describe('updateBufferBar', () => {
 
   it('invalid duration clears the container', () => {
     const container = document.createElement('div');
-    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [50, 200]] });
+    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [4, 200]] });
     updateBufferBar(container, two);
     const bad = makeAudio({ duration: NaN, currentTime: 10, ranges: [[0, 30]] });
     updateBufferBar(container, bad);
@@ -107,5 +107,35 @@ describe('updateBufferBar', () => {
   it('null container is a no-op', () => {
     const audio = makeAudio({ duration: DUR, currentTime: 10, ranges: [[0, 30]] });
     expect(() => updateBufferBar(null, audio)).not.toThrow();
+  });
+
+  it('BUG regression (round 2): stale pre-seek range fully ahead of the playhead is dropped', () => {
+    const container = document.createElement('div');
+    const audio = makeAudio({ duration: 900, currentTime: 420, ranges: [[720, 750]] });
+    updateBufferBar(container, audio);
+    // [12:00,12:30] was buffered before seeking back to 7:00; it sits entirely
+    // ahead of the playhead, so rendering it would show a phantom segment at
+    // the old position instead of the buffer at the new one.
+    expect(container.childElementCount).toBe(0);
+  });
+
+  it('BUG regression (round 2): range starting exactly at the playhead renders one segment', () => {
+    const container = document.createElement('div');
+    const audio = makeAudio({ duration: 900, currentTime: 420, ranges: [[420, 450]] });
+    updateBufferBar(container, audio);
+    expect(container.childElementCount).toBe(1);
+    const seg = container.children[0] as HTMLElement;
+    expect(seg.style.left).toBe(`${(420 / 900) * 100}%`);
+    expect(seg.style.width).toBe(`${((450 - 420) / 900) * 100}%`);
+  });
+
+  it('BUG regression (round 2): contiguous range spanning the playhead still renders the future part', () => {
+    const container = document.createElement('div');
+    const audio = makeAudio({ duration: 900, currentTime: 420, ranges: [[0, 900]] });
+    updateBufferBar(container, audio);
+    expect(container.childElementCount).toBe(1);
+    const seg = container.children[0] as HTMLElement;
+    expect(seg.style.left).toBe(`${(420 / 900) * 100}%`);
+    expect(seg.style.width).toBe(`${((900 - 420) / 900) * 100}%`);
   });
 });
