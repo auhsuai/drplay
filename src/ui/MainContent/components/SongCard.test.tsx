@@ -420,3 +420,48 @@ describe('SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG bu
     expect(onPlay).not.toHaveBeenCalled();
   });
 });
+
+describe('SongCard MoreMenu WAI-ARIA APG menu button pattern', () => {
+  beforeEach(() => {
+    coverImageCache.clear();
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: 'Fetched Artist',
+      coverUrl: null,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const triggerButton = (): HTMLButtonElement | null =>
+    document.querySelector('button');
+
+  it('trigger has aria-haspopup="menu" and aria-expanded="false" while closed', () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    const trigger = triggerButton();
+    expect(trigger).not.toBeNull();
+    expect(trigger?.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('opens a dropdown with role="menu" and sets aria-expanded="true"', () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    fireEvent.click(triggerButton() as Element);
+    expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+    expect(triggerButton()?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('Escape closes the menu and resets aria-expanded to "false"', () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    fireEvent.click(triggerButton() as Element);
+    expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(triggerButton()?.getAttribute('aria-expanded')).toBe('false');
+  });
+});

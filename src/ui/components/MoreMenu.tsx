@@ -6,6 +6,7 @@ import { moveFile } from "../../utils/driveApi";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
 import { db } from "../../db/db";
+import { captureError } from "../../utils/errorLog";
 import { showErrorToast } from "../../utils/simpleToast";
 
 // Custom Hooks and Components
@@ -15,6 +16,12 @@ import { useMenuPlaylists } from "../../hooks/useMenuPlaylists";
 import { DownloadDialog } from "./MoreMenu/DownloadDialog";
 import { DeleteConfirmDialog } from "./MoreMenu/DeleteConfirmDialog";
 import { PlaylistsSubmenu } from "./MoreMenu/PlaylistsSubmenu";
+
+const MORE_MENU_MODULE = 'MoreMenu';
+const EVENT_LOCATE_FILE = 'locate-file';
+
+const MENU_ITEM_BASE_CLASS = "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1";
+const MENU_ESTIMATED_HEIGHT_PX = 250;   // estimated dropdown height used to decide open-up vs open-down
 
 interface MoreMenuProps {
   track?: Track;
@@ -83,7 +90,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       await db.files.update(itemId, { parentId: newParentId });
       if (onRemoveItem) onRemoveItem(itemId);
     } catch (e) {
-      console.error("[MoreMenu] move: Failed to move item", e);
+      captureError({ level: 'error', source: MORE_MENU_MODULE, message: `move-failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('drive.move_error', 'Failed to move item'));
       if (onRefresh) onRefresh();
     }
@@ -133,13 +140,23 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       onClose?.();
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsOpen(false);
+        setShowPlaylistsSubmenu(false);
+        onClose?.();
+      }
+    };
+
     if (isMenuOpen) {
       document.addEventListener("mousedown", handleClickOutside);
       window.addEventListener("scroll", handleScroll, true);
+      document.addEventListener("keydown", handleKeyDown);
     }
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
       window.removeEventListener("scroll", handleScroll, true);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isMenuOpen, onClose, setShowPlaylistsSubmenu]);
 
@@ -151,7 +168,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
             <>
               <button
                 onClick={(e) => handleDownloadClick(e, track, setIsOpen)}
-                className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('menu.download_song', 'Download Song')}</span>
@@ -160,7 +177,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
               <button
                 onClick={(e) => { 
                   e.stopPropagation(); 
-                  window.dispatchEvent(new CustomEvent('locate-file', { 
+                  window.dispatchEvent(new CustomEvent(EVENT_LOCATE_FILE, { 
                     detail: { 
                       fileId: track.id,
                       parentId: track.parentId,
@@ -170,7 +187,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                   setIsOpen(false); 
                   onClose?.();
                 }}
-                className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1"
+                className={MENU_ITEM_BASE_CLASS}
               >
                 <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('menu.navigate', 'Navigate')}</span>
@@ -186,7 +203,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 onClick={(e) => { 
                   e.stopPropagation(); setIsOpen(false); onClose?.(); onSelectMultiple?.();
                 }}
-                className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1"
+                className={MENU_ITEM_BASE_CLASS}
               >
                 <CheckSquare className="w-4 h-4 text-gray-400 group-hover:text-[#4285F4]" />
                 {t('menu.select_multiple', 'Đa chọn')}
@@ -200,7 +217,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                     setShowMoveScreen(true); setIsOpen(false); onClose?.(); 
                   }
                 }}
-                className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1"
+                className={MENU_ITEM_BASE_CLASS}
               >
                 <FolderOutput className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('drive.move_to') || 'Move to...'}</span>
@@ -225,7 +242,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
           {track && (
             <button
               onClick={(e) => handleDownloadClick(e, track, setIsOpen)}
-              className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1 disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
               <span className="truncate">{t('menu.download')}</span>
@@ -272,12 +289,14 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
             if (!isOpen) {
               const rect = e.currentTarget.getBoundingClientRect();
               setButtonRect(rect);
-              setOpenUpwards(rect.bottom + 250 > window.innerHeight);
+              setOpenUpwards(rect.bottom + MENU_ESTIMATED_HEIGHT_PX > window.innerHeight);
             }
             setIsOpen(!isOpen); 
           } 
         }}
         disabled={isDownloadingFile}
+        aria-haspopup="menu"
+        aria-expanded={isMenuOpen}
         className={`relative p-2 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-[#4285F4]/40 ${isDownloadingFile ? 'cursor-default opacity-50' : 'text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]'}`}
       >
         {isDownloadingFile ? (
@@ -290,6 +309,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
       {isMenuOpen && createPortal(
         <div 
           ref={dropdownRef}
+          role="menu"
           className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none ${anchorPoint ? '' : (openUpwards ? 'origin-bottom-right' : 'origin-top-right')}`}
           style={getContextMenuStyle()}
           onClick={e => e.stopPropagation()}
