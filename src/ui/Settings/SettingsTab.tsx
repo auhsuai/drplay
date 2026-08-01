@@ -10,6 +10,7 @@ import { clearAppCache } from "../../utils/cache";
 import { open } from "@tauri-apps/plugin-dialog";
 import { showErrorToast } from "../../utils/simpleToast";
 import { setCustomDownloadPath, getEffectiveDownloadPath } from "../../utils/downloadPath";
+import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useEffect, useState } from "react";
 
 interface SettingsTabProps {
@@ -137,8 +138,11 @@ export function SettingsTab({
                 </div>
                 <div className="min-w-0">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.download_location') || 'Download Location'}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 truncate max-w-[280px] sm:max-w-[400px]">
-                    {downloadPath}
+                  <p
+                    title={downloadPath}
+                    className="text-sm text-gray-500 dark:text-gray-400 truncate max-w-[280px] sm:max-w-[400px]"
+                  >
+                    {truncatePathMiddle(downloadPath)}
                   </p>
                 </div>
               </div>
