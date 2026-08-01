@@ -5,7 +5,10 @@
     "connect_button": "Kết nối với Google Drive",
     "error_question": "Có lỗi?",
     "cancel_here": "Hủy ở đây",
-    "cancelled_by_user": "Đã hủy thao tác kết nối."
+    "cancelled_by_user": "Đã hủy thao tác kết nối.",
+    "cancelled": "Đăng nhập đã bị hủy",
+    "timeout_error": "Đăng nhập quá thời gian chờ, vui lòng thử lại.",
+    "failed": "Đăng nhập thất bại, vui lòng thử lại."
   },
   "common": {
     "cancel": "Hủy",

@@ -5,7 +5,10 @@
     "connect_button": "Connect to Google Drive",
     "error_question": "Error?",
     "cancel_here": "Cancel here",
-    "cancelled_by_user": "Connection cancelled."
+    "cancelled_by_user": "Connection cancelled.",
+    "cancelled": "Login cancelled",
+    "timeout_error": "Login timed out, please try again.",
+    "failed": "Login failed, please try again."
   },
   "common": {
     "cancel": "Cancel",

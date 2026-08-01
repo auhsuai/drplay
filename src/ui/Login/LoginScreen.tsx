@@ -3,14 +3,22 @@ import { HardDrive, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { showErrorToast } from "../../utils/simpleToast";
+import { captureError } from "../../utils/errorLog";
 
 const LOGIN_MODULE = "LoginScreen";
+const CANCEL_PROMPT_MS = 5000;
+const TIMEOUT_MATCH = /timeout|timed out/;
 
 // Classify a login error for observability. Returns name + message only.
 function classifyLoginError(err: unknown): string {
   const name = err instanceof Error ? err.name : typeof err;
   const message = err instanceof Error ? err.message : String(err);
   return `${name}: ${message}`;
+}
+
+interface LoginResult {
+  access_token: string;
+  refresh_token?: string;
 }
 
 interface LoginScreenProps {
@@ -27,7 +35,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     if (isLoading) {
       timer = setTimeout(() => {
         setShowCancel(true);
-      }, 5000);
+      }, CANCEL_PROMPT_MS);
     } else {
       setShowCancel(false);
     }
@@ -46,20 +54,37 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     try {
       setIsLoading(true);
       // Call Rust backend directly
-      const token = await invoke<any>("login_google_native");
+      const token = await invoke<LoginResult>("login_google_native");
       setIsLoading(false);
-      onLogin(token);
+      onLogin(token.access_token);
     } catch (error) {
       setIsLoading(false);
       const errStr = String(error);
-      if (errStr.includes('User denied access')) {
-        console.info('[Auth] User cancelled login');
-      } else if (errStr.includes('timeout') || errStr.includes('timed out')) {
-        showErrorToast('Đăng nhập quá thời gian chờ, vui lòng thử lại.');
+      if (errStr.includes('cancel')) {
+        showErrorToast(t('login.cancelled', 'Đăng nhập đã bị hủy'));
+        captureError({
+          level: 'warn',
+          source: LOGIN_MODULE,
+          kind: 'login-cancelled',
+          message: `login-cancelled: ${classifyLoginError(error)}`
+        });
+      } else if (TIMEOUT_MATCH.test(errStr)) {
+        showErrorToast(t('login.timeout_error', 'Đăng nhập quá thời gian chờ, vui lòng thử lại.'));
+        captureError({
+          level: 'warn',
+          source: LOGIN_MODULE,
+          kind: 'login-timeout',
+          message: `login-timeout: ${classifyLoginError(error)}`
+        });
       } else {
-        showErrorToast('Đăng nhập thất bại, vui lòng thử lại.');
+        showErrorToast(t('login.failed', 'Đăng nhập thất bại, vui lòng thử lại.'));
+        captureError({
+          level: 'error',
+          source: LOGIN_MODULE,
+          kind: 'login-failed',
+          message: `login-failed: ${classifyLoginError(error)}`
+        });
       }
-      console.error(`[${LOGIN_MODULE}] login-failed`, classifyLoginError(error));
     }
   };
 
@@ -103,7 +128,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
         {showCancel && (
           <p className="mt-4 text-sm text-gray-500 dark:text-gray-400 animate-in fade-in duration-300">
-            {t('login.error_question', 'Có lỗi?')} <span onClick={handleCancel} className="text-[#4285F4] underline cursor-pointer hover:text-blue-600 transition-colors">{t('login.cancel_here', 'Hủy ở đây')}</span>
+            {t('login.error_question', 'Có lỗi?')} <button type="button" onClick={handleCancel} className="text-[#4285F4] underline cursor-pointer hover:text-blue-600 transition-colors">{t('login.cancel_here', 'Hủy ở đây')}</button>
           </p>
         )}
       </div>
