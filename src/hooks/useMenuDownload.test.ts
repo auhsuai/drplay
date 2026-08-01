@@ -1,12 +1,17 @@
 // @vitest-environment jsdom
 import { act, renderHook } from '@testing-library/react';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MouseEvent } from 'react';
 import type { TFunction } from 'i18next';
 import type { Track } from '../App';
+import { invoke } from '@tauri-apps/api/core';
 import { getValidToken } from '../utils/apiClient';
-import { getEffectiveDownloadPath } from '../utils/downloadPath';
+import { getEffectiveDownloadPath, getCustomDownloadPath } from '../utils/downloadPath';
 import { useMenuDownload } from './useMenuDownload';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
 
 vi.mock('../utils/apiClient', () => ({
   getValidToken: vi.fn(),
@@ -14,36 +19,13 @@ vi.mock('../utils/apiClient', () => ({
 
 vi.mock('../utils/downloadPath', () => ({
   getEffectiveDownloadPath: vi.fn(),
+  getCustomDownloadPath: vi.fn(),
 }));
 
+const mockedInvoke = vi.mocked(invoke);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedGetEffectiveDownloadPath = vi.mocked(getEffectiveDownloadPath);
-
-const BLOB_URL = 'blob:mock-track-url';
-
-// jsdom does NOT implement URL.createObjectURL / revokeObjectURL (both are
-// undefined at runtime) — install observable spies once so the hook's blob URL
-// lifecycle can be asserted.
-beforeAll(() => {
-  if (typeof URL.createObjectURL !== 'function') {
-    Object.defineProperty(URL, 'createObjectURL', {
-      configurable: true,
-      writable: true,
-      value: vi.fn(),
-    });
-  }
-  if (typeof URL.revokeObjectURL !== 'function') {
-    Object.defineProperty(URL, 'revokeObjectURL', {
-      configurable: true,
-      writable: true,
-      value: vi.fn(),
-    });
-  }
-});
-
-let createObjectURLSpy: ReturnType<typeof vi.spyOn>;
-let revokeObjectURLSpy: ReturnType<typeof vi.spyOn>;
-let clickSpy: ReturnType<typeof vi.spyOn>;
+const mockedGetCustomDownloadPath = vi.mocked(getCustomDownloadPath);
 
 // Minimal TFunction: return the Vietnamese fallback, matching how the hook
 // calls t(key, fallback).
@@ -58,6 +40,21 @@ function makeTrack(overrides: Partial<Track> = {}): Track {
     originalName: 'test-song.mp3',
     ...overrides,
   };
+}
+
+const AUDIO_BYTES = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+// Resolve the download fetch with the given bytes (jsdom Response lacks
+// arrayBuffer() reliably, so the mock stands in for the real Response).
+function fetchResolved(bytes: Uint8Array = AUDIO_BYTES): void {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+    ok: true,
+    arrayBuffer: async () => {
+      const buf = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(buf).set(bytes);
+      return buf;
+    },
+  } as unknown as Response);
 }
 
 async function runDownload(track: Track = makeTrack()) {
@@ -75,15 +72,24 @@ async function runDownload(track: Track = makeTrack()) {
   return result;
 }
 
+function writeFileCall(): { bytes: Uint8Array; pathHeader: string } {
+  const call = mockedInvoke.mock.calls.find((c) => c[0] === 'plugin:fs|write_file');
+  expect(call).toBeDefined();
+  const headers = call![2] as { headers: { path: string } };
+  return { bytes: call![1] as Uint8Array, pathHeader: headers.headers.path };
+}
+
+function expectNoWriteFile(): void {
+  expect(mockedInvoke.mock.calls.some((c) => c[0] === 'plugin:fs|write_file')).toBe(false);
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   mockedGetValidToken.mockResolvedValue('test-token');
   mockedGetEffectiveDownloadPath.mockResolvedValue('C:\\Downloads');
-  vi.spyOn(globalThis, 'fetch');
-  createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue(BLOB_URL);
-  revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-  clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  mockedGetCustomDownloadPath.mockReturnValue(null);
+  mockedInvoke.mockImplementation(async () => undefined);
 });
 
 afterEach(() => {
@@ -91,61 +97,144 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('useMenuDownload blob URL lifecycle', () => {
-  it('does NOT revoke the object URL synchronously right after a.click() (B5 regression)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob(['audio-bytes']),
-    } as unknown as Response);
+describe('useMenuDownload writes through plugin:fs|write_file', () => {
+  it('saves the file via plugin:fs|write_file with the effective dir and raw bytes (RC2)', async () => {
+    fetchResolved();
 
     await runDownload();
 
-    // The engine schedules the actual download on a later tick; revoking
-    // synchronously after click() can free the URL before the download starts,
-    // producing empty/corrupt files on some engines (MDN revokeObjectURL).
-    expect(clickSpy).toHaveBeenCalledTimes(1);
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+    const { bytes, pathHeader } = writeFileCall();
+    expect(pathHeader).toBe(encodeURIComponent('C:\\Downloads\\Test Song - Test Artist.mp3'));
+    expect(bytes).toEqual(AUDIO_BYTES);
+    expect(mockedGetCustomDownloadPath).toHaveBeenCalled();
   });
 
-  it('revokes the object URL exactly once after the 1000ms delay (B5 variant)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob(['audio-bytes']),
-    } as unknown as Response);
+  it('shows the real save location ("Đã lưu tại") after a successful write', async () => {
+    fetchResolved();
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain(
+      'Đã lưu tại: C:\\Downloads\\Test Song - Test Artist.mp3'
+    );
+  });
+});
+
+describe('useMenuDownload custom download path (RC2)', () => {
+  it('extends the fs scope via register_download_path BEFORE writing when a custom path is set', async () => {
+    mockedGetCustomDownloadPath.mockReturnValue('C:\\Music');
+    mockedGetEffectiveDownloadPath.mockResolvedValue('C:\\Music');
+    fetchResolved();
 
     await runDownload();
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
-    await act(async () => {
-      // Must match REVOKE_DELAY_MS in useMenuDownload.ts.
-      vi.advanceTimersByTime(1000);
+    const registerIdx = mockedInvoke.mock.calls.findIndex((c) => c[0] === 'register_download_path');
+    const writeIdx = mockedInvoke.mock.calls.findIndex((c) => c[0] === 'plugin:fs|write_file');
+    expect(registerIdx).toBeGreaterThanOrEqual(0);
+    expect(writeIdx).toBeGreaterThan(registerIdx);
+    expect(mockedInvoke.mock.calls[registerIdx]).toEqual(['register_download_path', { path: 'C:\\Music' }]);
+    const { pathHeader } = writeFileCall();
+    expect(pathHeader).toBe(encodeURIComponent('C:\\Music\\Test Song - Test Artist.mp3'));
+  });
+
+  it('does NOT call register_download_path when using the default download dir', async () => {
+    fetchResolved();
+
+    await runDownload();
+
+    expect(mockedInvoke.mock.calls.some((c) => c[0] === 'register_download_path')).toBe(false);
+    expect(mockedInvoke.mock.calls.some((c) => c[0] === 'plugin:fs|write_file')).toBe(true);
+  });
+
+  it('still writes the file when register_download_path fails (scope extend must not block the flow)', async () => {
+    mockedGetCustomDownloadPath.mockReturnValue('C:\\Music');
+    mockedGetEffectiveDownloadPath.mockResolvedValue('C:\\Music');
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'register_download_path') throw new Error('scope denied');
+      return undefined;
     });
+    fetchResolved();
 
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledWith(BLOB_URL);
+    const result = await runDownload();
+
+    const { pathHeader } = writeFileCall();
+    expect(pathHeader).toBe(encodeURIComponent('C:\\Music\\Test Song - Test Artist.mp3'));
+    expect(result.current.downloadMessage).toContain('Đã lưu tại');
   });
+});
 
-  it('does not create/revoke a blob URL and does not crash when the fetch fails (B5 variant)', async () => {
+describe('useMenuDownload error handling', () => {
+  it('shows "Tải xuống thất bại" and does not write when the fetch fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'));
 
     const result = await runDownload();
 
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
     expect(result.current.downloadMessage).toContain('Tải xuống thất bại');
+    expectNoWriteFile();
+  });
+
+  it('does not surface a failure message when the download is deliberately aborted (AbortError)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new DOMException('Aborted', 'AbortError')
+    );
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toBeNull();
+    expectNoWriteFile();
+  });
+
+  it('shows "Tải xuống thất bại" on a timeout (TimeoutError)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new DOMException('Timed out', 'TimeoutError')
+    );
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain('Tải xuống thất bại');
+    expectNoWriteFile();
+  });
+
+  it('shows "Tải xuống thất bại" when the write itself is rejected by the fs plugin', async () => {
+    fetchResolved();
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'plugin:fs|write_file') throw new Error('file exists');
+      return undefined;
+    });
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain('Tải xuống thất bại');
+  });
+});
+
+describe('useMenuDownload filename sanitization (RC2)', () => {
+  it('sanitizes invalid filename characters in the written path', async () => {
+    fetchResolved();
+
+    await runDownload(makeTrack({ title: 'A/B:C*', artist: 'D?E|F' }));
+
+    const { pathHeader } = writeFileCall();
+    expect(pathHeader).toBe(encodeURIComponent('C:\\Downloads\\A_B_C_ - D_E_F.mp3'));
+  });
+
+  it('trims whitespace-only title/artist to the separator-only name (never an empty write target)', async () => {
+    fetchResolved();
+
+    await runDownload(makeTrack({ title: '   ', artist: '  ' }));
+
+    const { pathHeader } = writeFileCall();
+    expect(pathHeader).toBe(encodeURIComponent('C:\\Downloads\\-.mp3'));
   });
 });
 
 describe('useMenuDownload abortable download', () => {
   it('passes an AbortSignal to the download fetch so it can be cancelled (regression: signal was missing)', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob(['audio-bytes']),
-    } as unknown as Response);
+    fetchResolved();
 
     await runDownload();
 
+    const fetchMock = vi.mocked(fetch);
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(init?.signal).toBeDefined();
   });
@@ -186,25 +275,10 @@ describe('useMenuDownload abortable download', () => {
 
   it('bounds the download with AbortSignal.timeout so a stalled server cannot hold the RAM buffer forever', async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob(['audio-bytes']),
-    } as unknown as Response);
+    fetchResolved();
 
     await runDownload();
 
     expect(timeoutSpy).toHaveBeenCalledWith(300_000);
-  });
-
-  it('does not surface a failure message when the download is deliberately aborted (AbortError)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
-      new DOMException('Aborted', 'AbortError')
-    );
-
-    const result = await runDownload();
-
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-    expect(result.current.downloadMessage).toBeNull();
   });
 });

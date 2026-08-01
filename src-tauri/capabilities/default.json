@@ -14,6 +14,7 @@
         { "url": "https://github.com/*" }
       ]
     },
+    "dialog:allow-open",
     "dialog:allow-save",
     "keepawake:allow-start",
     "keepawake:allow-stop",

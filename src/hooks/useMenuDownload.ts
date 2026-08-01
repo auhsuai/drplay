@@ -1,24 +1,30 @@
 import { useState, useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { getValidToken } from '../utils/apiClient';
-import { getEffectiveDownloadPath } from '../utils/downloadPath';
+import { getEffectiveDownloadPath, getCustomDownloadPath } from '../utils/downloadPath';
 import { captureError } from '../utils/errorLog';
 import { Track } from '../App';
 import { TFunction } from 'i18next';
 
-// Delay the object URL revoke so the engine gets a chance to schedule the
-// download (it runs on a later tick). Revoking synchronously after a.click()
-// can free the URL before the download starts, yielding empty/corrupt files
-// on some engines (MDN URL.revokeObjectURL: "avoid freeing the object URL
-// too early"; Koine #623 / techbloat 2026-05 recommend ~1s).
-const REVOKE_DELAY_MS = 1000;
-
-// The download buffers the ENTIRE file into RAM via response.blob(), so an
+// The download buffers the ENTIRE file into RAM via arrayBuffer(), so an
 // unresponsive server would hold the bytes (and memory) forever. 5 minutes is
 // generous for legit multi-hundred-MB audio files yet still bounds the
 // pathological case. AbortSignal.timeout rejects with a DOMException named
 // 'TimeoutError' (MDN AbortSignal.timeout, Baseline 2024). Same pattern as
 // fetchWithAuth / useDrive.ts.
 const DOWNLOAD_TIMEOUT_MS = 300_000;
+
+// Windows forbids these characters in file names; also guard against DOS
+// device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) and trailing dots/spaces.
+// Copied verbatim from the removed GlobalContextMenu.tsx (the last known-good
+// download implementation) so the written name matches what worked before.
+const sanitizeFilename = (name: string): string => {
+  let s = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_');
+  s = s.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i, '_$1$2');
+  s = s.replace(/[\s.]+$/g, '');
+  s = s.slice(0, 255);
+  return s || 'untitled';
+};
 
 export function useMenuDownload(t: TFunction) {
   const [isDownloadingFile, setIsDownloadingFile] = useState(false);
@@ -29,7 +35,7 @@ export function useMenuDownload(t: TFunction) {
 
   // Abort the in-flight download when the component unmounts (or a newer
   // download supersedes it). Without a signal the fetch and its RAM-buffered
-  // blob survive the component and keep consuming memory.
+  // bytes survive the component and keep consuming memory.
   const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -65,7 +71,7 @@ export function useMenuDownload(t: TFunction) {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     // Merge the cancel signal with a bounded timeout so a stalled server
-    // cannot hold the RAM-buffered blob forever (MDN AbortSignal.any /
+    // cannot hold the RAM-buffered bytes forever (MDN AbortSignal.any /
     // AbortSignal.timeout; same pattern as useDrive.ts:72).
     const signal = typeof AbortSignal.any === 'function'
       ? AbortSignal.any([controller.signal, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)])
@@ -82,29 +88,41 @@ export function useMenuDownload(t: TFunction) {
         },
         signal
       });
-      
+
       if (!response.ok) throw new Error("Fetch failed");
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const dir = await getEffectiveDownloadPath();
+      if (getCustomDownloadPath()) {
+        try {
+          // Extend the fs scope so write_file may write outside the base
+          // $DOWNLOAD scope (runtime scope extension, tauri_plugin_fs::FsExt).
+          // If this fails the write itself rejects with a scope error — do
+          // not block the main flow here, let write_file surface it.
+          await invoke("register_download_path", { path: dir });
+        } catch (scopeErr: unknown) {
+          captureError({
+            level: 'warn',
+            source: 'useMenuDownload',
+            message: `Failed to extend fs scope for custom download dir: ${scopeErr instanceof Error ? scopeErr.message : String(scopeErr)}`
+          });
+        }
+      }
       const base = downloadFileName.trim() || 'audio';
       const ext = downloadTrack.originalName?.includes('.') ? downloadTrack.originalName.slice(downloadTrack.originalName.lastIndexOf('.')) : '.mp3';
-      const finalFileName = `${base}${ext}`;
-      a.download = finalFileName;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => window.URL.revokeObjectURL(url), REVOKE_DELAY_MS);
-      document.body.removeChild(a);
-      
-      try {
-        const dir = await getEffectiveDownloadPath();
-        setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${dir}\\${finalFileName}`);
-      } catch (e: unknown) {
-        setDownloadMessage(t('menu.download_complete', 'Tải xuống hoàn tất!'));
-      }
+      const finalFileName = sanitizeFilename(`${base}${ext}`);
+      const savePath = `${dir}\\${finalFileName}`;
+
+      // tauri-plugin-fs v2: write_file reads the target path from a request
+      // header and takes the bytes as the raw invoke body. Passing the
+      // Uint8Array as the top-level arg keeps the IPC on the octet-stream
+      // path (no Array.from / JSON number-array, ~8x the file size in peak
+      // memory). See plugin-fs guest-js writeFile() for the identical shape.
+      await invoke("plugin:fs|write_file", bytes, {
+        headers: { path: encodeURIComponent(savePath) },
+      });
+
+      setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${savePath}`);
     } catch (err: unknown) {
       // Duck-typed name extraction: DOMException is NOT instanceof Error in
       // some environments (jsdom), yet carries a reliable .name ('AbortError'
