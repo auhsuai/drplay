@@ -1,7 +1,70 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect } from 'vitest';
-import { refreshTokenAndRetry, toDriveFileRow } from './proSync.worker';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { delay, fetchDrive, isTransientStatus, isWorkerRequestMessage, isValidDriveFile, partitionValidFiles, refreshTokenAndRetry, toDriveFileRow } from './proSync.worker';
 import type { SyncRetryState } from './proSync.worker';
+
+describe('isValidDriveFile', () => {
+  it('returns true for a file with a non-empty string id', () => {
+    expect(isValidDriveFile({ id: 'abc123', name: 'song.mp3', mimeType: 'audio/mpeg' })).toBe(true);
+  });
+
+  it('returns false for an empty string id', () => {
+    expect(isValidDriveFile({ id: '', name: 'song.mp3', mimeType: 'audio/mpeg' })).toBe(false);
+  });
+
+  it('returns false when id is undefined', () => {
+    expect(isValidDriveFile({ name: 'song.mp3', mimeType: 'audio/mpeg' })).toBe(false);
+    expect(isValidDriveFile({ id: undefined, name: 'song.mp3', mimeType: 'audio/mpeg' })).toBe(false);
+  });
+
+  it('returns false for a non-string id (runtime guard)', () => {
+    const f = { id: 42, name: 'song.mp3', mimeType: 'audio/mpeg' } as unknown as Parameters<typeof isValidDriveFile>[0];
+    expect(isValidDriveFile(f)).toBe(false);
+  });
+});
+
+describe('partitionValidFiles', () => {
+  it('returns every file and skippedCount 0 when all files have an id', () => {
+    const files = [
+      { id: 'a', name: 'a.mp3', mimeType: 'audio/mpeg' },
+      { id: 'b', name: 'b.mp3', mimeType: 'audio/mpeg' },
+    ];
+    const { valid, skippedCount } = partitionValidFiles(files);
+    expect(skippedCount).toBe(0);
+    expect(valid).toHaveLength(2);
+    expect(valid.map((f) => f.id)).toEqual(['a', 'b']);
+  });
+
+  it('keeps valid files and counts files missing an id', () => {
+    const files = [
+      { id: 'a', name: 'a.mp3', mimeType: 'audio/mpeg' },
+      { name: 'no-id.mp3', mimeType: 'audio/mpeg' },
+      { id: '', name: 'empty-id.mp3', mimeType: 'audio/mpeg' },
+      { id: 'b', name: 'b.mp3', mimeType: 'audio/mpeg' },
+    ];
+    const { valid, skippedCount } = partitionValidFiles(files);
+    expect(skippedCount).toBe(2);
+    expect(valid).toHaveLength(2);
+    expect(valid.map((f) => f.id)).toEqual(['a', 'b']);
+  });
+
+  it('returns an empty valid list and skippedCount equal to the input size when no file has an id', () => {
+    const files = [
+      { name: 'no-id-1.mp3', mimeType: 'audio/mpeg' },
+      { name: 'no-id-2.mp3', mimeType: 'audio/mpeg' },
+      { id: '', name: 'empty-id.mp3', mimeType: 'audio/mpeg' },
+    ];
+    const { valid, skippedCount } = partitionValidFiles(files);
+    expect(skippedCount).toBe(3);
+    expect(valid).toEqual([]);
+  });
+
+  it('handles an empty input without side effects', () => {
+    const { valid, skippedCount } = partitionValidFiles([]);
+    expect(skippedCount).toBe(0);
+    expect(valid).toEqual([]);
+  });
+});
 
 describe('toDriveFileRow', () => {
   it('maps a folder to a row with isFolder=true and the folder MIME type', () => {
@@ -173,5 +236,243 @@ describe('refreshTokenAndRetry', () => {
 
     expect(result).toBe(false);
     expect(sent).toEqual([{ type: 'TOKEN_EXPIRED' }]);
+  });
+});
+
+describe('isWorkerRequestMessage', () => {
+  it('accepts a valid sync message', () => {
+    expect(isWorkerRequestMessage({ type: 'sync', token: 'x' })).toBe(true);
+  });
+
+  it('accepts a valid token message', () => {
+    expect(isWorkerRequestMessage({ type: 'token', token: 'x' })).toBe(true);
+  });
+
+  it('rejects a message without a token', () => {
+    expect(isWorkerRequestMessage({ type: 'sync' })).toBe(false);
+    expect(isWorkerRequestMessage({ type: 'token' })).toBe(false);
+  });
+
+  it('rejects a token with the wrong type', () => {
+    expect(isWorkerRequestMessage({ type: 'sync', token: 42 })).toBe(false);
+  });
+
+  it('rejects an unknown message type', () => {
+    expect(isWorkerRequestMessage({ type: 'garbage', token: 'x' })).toBe(false);
+  });
+
+  it('rejects null and undefined', () => {
+    expect(isWorkerRequestMessage(null)).toBe(false);
+    expect(isWorkerRequestMessage(undefined)).toBe(false);
+  });
+
+  it('rejects non-object payloads', () => {
+    expect(isWorkerRequestMessage('sync')).toBe(false);
+    expect(isWorkerRequestMessage(42)).toBe(false);
+  });
+});
+
+describe('isTransientStatus', () => {
+  it('returns true for 429 (rate limit)', () => {
+    expect(isTransientStatus(429)).toBe(true);
+  });
+
+  it('returns true for 5xx server errors', () => {
+    expect(isTransientStatus(500)).toBe(true);
+    expect(isTransientStatus(503)).toBe(true);
+    expect(isTransientStatus(599)).toBe(true);
+  });
+
+  it('returns false for 2xx, 401 and other 4xx', () => {
+    expect(isTransientStatus(200)).toBe(false);
+    expect(isTransientStatus(401)).toBe(false);
+    expect(isTransientStatus(404)).toBe(false);
+    expect(isTransientStatus(418)).toBe(false);
+  });
+});
+
+describe('delay', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('resolves after the requested milliseconds (fake timers, no real wait)', async () => {
+    vi.useFakeTimers();
+    let resolved = false;
+    const pending = delay(1000).then(() => { resolved = true; });
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(resolved).toBe(true);
+  });
+});
+
+describe('fetchDrive transient retry', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function stubFetch(...responses: Response[]) {
+    const mock = vi.fn();
+    responses.forEach((r) => mock.mockResolvedValueOnce(r));
+    vi.stubGlobal('fetch', mock);
+    return mock;
+  }
+
+  it('returns the response on first success without retrying', async () => {
+    const fetchMock = stubFetch(new Response('{}', { status: 200 }));
+    const res = await fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a 429 once and returns the successful second response', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = stubFetch(
+      new Response('{}', { status: 429 }),
+      new Response('{}', { status: 200 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(1000);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries at most MAX_TRANSIENT_RETRIES times (3 attempts total) on persistent 503, then returns the last response', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = stubFetch(
+      new Response('{}', { status: 503 }),
+      new Response('{}', { status: 503 }),
+      new Response('{}', { status: 503 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+    const res = await pending;
+    expect(res.status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a 403 with reason rateLimitExceeded once and returns the successful second response', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = stubFetch(
+      new Response(JSON.stringify({ error: { errors: [{ reason: 'rateLimitExceeded' }], code: 403 } }), { status: 403 }),
+      new Response('{}', { status: 200 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(1000);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a 403 with reason userRateLimitExceeded (per-user Drive limit)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = stubFetch(
+      new Response(JSON.stringify({ error: { errors: [{ domain: 'usageLimits', reason: 'userRateLimitExceeded' }], code: 403 } }), { status: 403 }),
+      new Response('{}', { status: 200 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(1000);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a 403 with a non-rate-limit reason (accessNotConfigured) — one call, response body still usable', async () => {
+    const fetchMock = stubFetch(
+      new Response(JSON.stringify({ error: { errors: [{ reason: 'accessNotConfigured' }], code: 403 } }), { status: 403 })
+    );
+    const res = await fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    expect(res.status).toBe(403);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(res.json()).resolves.toEqual({ error: { errors: [{ reason: 'accessNotConfigured' }], code: 403 } });
+  });
+
+  it('does not retry a 403 whose body is not a JSON rate-limit error', async () => {
+    const fetchMock = stubFetch(new Response('plain text body', { status: 403 }));
+    const res = await fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    expect(res.status).toBe(403);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a 401 — returns it immediately for the call-site token-refresh flow', async () => {
+    const fetchMock = stubFetch(new Response('{}', { status: 401 }));
+    const res = await fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    expect(res.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry other 4xx statuses', async () => {
+    const fetchMock = stubFetch(new Response('{}', { status: 404 }));
+    const res = await fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    expect(res.status).toBe(404);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors the Retry-After header as the retry delay (seconds form)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = stubFetch(
+      new Response('{}', { status: 429, headers: { 'Retry-After': '3' } }),
+      new Response('{}', { status: 200 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps a huge Retry-After at MAX_RETRY_DELAY_MS (8000ms)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = stubFetch(
+      new Response('{}', { status: 503, headers: { 'Retry-After': '99999' } }),
+      new Response('{}', { status: 200 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(8000);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('jitter = 0 when Math.random() is 0 (delay stays exactly at the backoff base)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = stubFetch(
+      new Response('{}', { status: 429 }),
+      new Response('{}', { status: 200 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('jitter stays within 0..RETRY_JITTER_MAX_MS (500ms) for the maximum random value', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.999);
+    const fetchMock = stubFetch(
+      new Response('{}', { status: 429 }),
+      new Response('{}', { status: 200 })
+    );
+    const pending = fetchDrive('files', 'token', new URL('https://drive.test/files'));
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
