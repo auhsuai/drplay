@@ -3,6 +3,9 @@ import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check,
 import { useTranslation } from 'react-i18next';
 import { restoreFile, permanentlyDeleteFile, getTrashedFiles } from '../../utils/driveApi';
 import { showErrorToast, showSuccessToast } from '../../utils/simpleToast';
+import { captureError } from '../../utils/errorLog';
+
+const TRASH_MODULE = 'TrashScreen';
 
 interface TrashScreenProps {
   token: string;
@@ -51,7 +54,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       const files = await getTrashedFiles(token, q);
       setItems(files.map((f: TrashedItem) => ({ id: f.id, name: f.name, mimeType: f.mimeType })));
     } catch (e) {
-      console.error("[Trash] Failed to fetch trashed items", e);
+      captureError({ level: 'error', source: TRASH_MODULE, message: `fetch-trashed-failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('settings.trash_load_error') || "Failed to load trash");
     } finally {
       setIsLoading(false);
@@ -69,7 +72,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setItems(prev => prev.filter(item => item.id !== id));
       window.dispatchEvent(new CustomEvent('refresh-drive'));
     } catch (e) {
-      console.error("[Trash] restore: Failed to restore file", e);
+      captureError({ level: 'error', source: TRASH_MODULE, message: `restore-failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('settings.restore_error') || "Failed to restore file");
     } finally {
       setRestoringId(null);
@@ -88,7 +91,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       showSuccessToast(t('settings.empty_trash_success') || "Trash emptied successfully!");
       onClose();
     } catch (e) {
-      console.error("[Trash] empty-trash: Failed to empty trash", e);
+      captureError({ level: 'error', source: TRASH_MODULE, message: `empty-trash-failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('settings.empty_trash_error') || "Failed to empty trash");
     } finally {
       setIsEmptying(false);
@@ -106,7 +109,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     } catch (e) {
-      console.error("[Trash] bulk-restore: Failed to restore items", e);
+      captureError({ level: 'error', source: TRASH_MODULE, message: `bulk-restore-failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('settings.restore_error') || "Failed to restore items");
     } finally {
       setIsBulkActioning(false);
@@ -123,7 +126,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     } catch (e) {
-      console.error("[Trash] bulk-delete: Failed to delete items", e);
+      captureError({ level: 'error', source: TRASH_MODULE, message: `bulk-delete-failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('settings.empty_trash_error') || "Failed to delete items");
     } finally {
       setIsBulkActioning(false);
