@@ -29,37 +29,65 @@ describe('updateBufferBar', () => {
     updateBufferBar(container, audio);
     expect(container.childElementCount).toBe(1);
     const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('0%');
-    expect(seg.style.width).toBe(`${(30 / DUR) * 100}%`);
+    expect(seg.style.left).toBe(`${(10 / DUR) * 100}%`);
+    expect(seg.style.width).toBe(`${(20 / DUR) * 100}%`);
   });
 
-  it('forward seek with non-contiguous ranges renders BOTH segments', () => {
+  it('BUG regression: backward seek drops the already-played part of the buffered range', () => {
+    const container = document.createElement('div');
+    const audio = makeAudio({ duration: 900, currentTime: 420, ranges: [[0, 900]] });
+    updateBufferBar(container, audio);
+    // Browser still reports the full [0,900] after a backward seek, but the bar
+    // must only show the future part [420,900] — otherwise it looks stuck.
+    expect(container.childElementCount).toBe(1);
+    const seg = container.children[0] as HTMLElement;
+    expect(seg.style.left).toBe(`${(420 / 900) * 100}%`);
+    expect(seg.style.width).toBe(`${((900 - 420) / 900) * 100}%`);
+  });
+
+  it('BUG regression: fully-past ranges are dropped, crossing ranges are clipped to currentTime', () => {
+    const container = document.createElement('div');
+    const audio = makeAudio({ duration: DUR, currentTime: 60, ranges: [[0, 30], [50, 200]] });
+    updateBufferBar(container, audio);
+    // [0,30] ends before currentTime -> dropped; [50,200] -> clipped to [60,200].
+    expect(container.childElementCount).toBe(1);
+    const seg = container.children[0] as HTMLElement;
+    expect(seg.style.left).toBe(`${(60 / DUR) * 100}%`);
+    expect(seg.style.width).toBe(`${(140 / DUR) * 100}%`);
+  });
+
+  it('BUG regression: no visible segments remain when every buffered range is in the past', () => {
+    const container = document.createElement('div');
+    const audio = makeAudio({ duration: DUR, currentTime: 500, ranges: [[0, 100], [200, 300]] });
+    updateBufferBar(container, audio);
+    expect(container.childElementCount).toBe(0);
+  });
+
+  it('forward seek with non-contiguous ranges renders only the future segment', () => {
     const container = document.createElement('div');
     const audio = makeAudio({ duration: DUR, currentTime: 505, ranges: [[0, 30], [500, 510]] });
     updateBufferBar(container, audio);
-    // Both the old [0,30] and the new [500,510] region are shown.
-    expect(container.childElementCount).toBe(2);
-    const first = container.children[0] as HTMLElement;
-    const second = container.children[1] as HTMLElement;
-    expect(first.style.left).toBe('0%');
-    expect(first.style.width).toBe(`${(30 / DUR) * 100}%`);
-    expect(second.style.left).toBe(`${(500 / DUR) * 100}%`);
-    expect(second.style.width).toBe(`${(10 / DUR) * 100}%`);
+    // The pre-seek [0,30] region is fully in the past now; [500,510] is
+    // clipped to currentTime=505, so only [505,510] shows.
+    expect(container.childElementCount).toBe(1);
+    const seg = container.children[0] as HTMLElement;
+    expect(seg.style.left).toBe(`${(505 / DUR) * 100}%`);
+    expect(seg.style.width).toBe(`${(5 / DUR) * 100}%`);
   });
 
-  it('shrinking range count removes extra segments', () => {
+  it('shrinking visible segment count removes extra segments', () => {
     const container = document.createElement('div');
-    const two = makeAudio({ duration: DUR, currentTime: 505, ranges: [[0, 30], [500, 510]] });
+    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [50, 200]] });
     updateBufferBar(container, two);
     expect(container.childElementCount).toBe(2);
-    const one = makeAudio({ duration: DUR, currentTime: 10, ranges: [[0, 30]] });
+    const one = makeAudio({ duration: DUR, currentTime: 60, ranges: [[0, 30], [50, 200]] });
     updateBufferBar(container, one);
     expect(container.childElementCount).toBe(1);
   });
 
   it('empty buffered data clears the container', () => {
     const container = document.createElement('div');
-    const two = makeAudio({ duration: DUR, currentTime: 505, ranges: [[0, 30], [500, 510]] });
+    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [50, 200]] });
     updateBufferBar(container, two);
     expect(container.childElementCount).toBe(2);
     const empty = makeAudio({ duration: DUR, currentTime: 0, ranges: [] });
@@ -69,7 +97,7 @@ describe('updateBufferBar', () => {
 
   it('invalid duration clears the container', () => {
     const container = document.createElement('div');
-    const two = makeAudio({ duration: DUR, currentTime: 505, ranges: [[0, 30], [500, 510]] });
+    const two = makeAudio({ duration: DUR, currentTime: 5, ranges: [[0, 30], [50, 200]] });
     updateBufferBar(container, two);
     const bad = makeAudio({ duration: NaN, currentTime: 10, ranges: [[0, 30]] });
     updateBufferBar(container, bad);

@@ -15,16 +15,19 @@ export interface BufferedSource {
 const BUFFER_SEGMENT_BG = 'bg-gray-400 dark:bg-gray-500';
 
 /**
- * Render the FULL set of buffered ranges as individual absolutely-positioned
- * segments inside `container`.
+ * Render the buffered ranges that lie AHEAD of the playhead as individual
+ * absolutely-positioned segments inside `container`.
  *
- * Shows EVERY buffered TimeRange, so a forward seek that creates a
- * non-contiguous range is reflected accurately: the old buffered region stays
- * visible AND the new one appears at the seek position. This matches the
- * industry-standard multi-segment buffer bar (YouTube/Vimeo, MDN).
+ * Only the FUTURE part of each TimeRange is drawn: after a backward seek the
+ * media element still reports the full pre-seek range in `buffered` (in-memory
+ * cache), so clipping to `currentTime` is what makes the bar actually shrink
+ * to the remaining buffer (YouTube/Spotify behaviour). Fully-past ranges are
+ * dropped instead of rendered. Forward-seek non-contiguous ranges are still
+ * reflected accurately (each range rendered at its own position).
  *
  * Only touches the DOM when needed — child <div>s are created/removed to match
- * buffered.length and repositioned on each call. No React re-render.
+ * the number of VISIBLE segments and repositioned on each call. No React
+ * re-render.
  */
 export function updateBufferBar(
   container: HTMLElement | null,
@@ -39,10 +42,23 @@ export function updateBufferBar(
     return;
   }
 
-  const count = buffered.length;
+  // A non-finite playhead (metadata race) would poison the clipping math with
+  // NaN percentages — fall back to 0 so the full ranges render like before.
+  const currentTime = Number.isFinite(source.currentTime) ? source.currentTime : 0;
 
-  // Sync the number of segment <div>s to the number of buffered ranges.
-  while (container.childElementCount < count) {
+  // Clip each range to the future part; drop ranges fully in the past so the
+  // bar never shows already-played buffer after a backward seek.
+  const visible: Array<[number, number]> = [];
+  for (let i = 0; i < buffered.length; i++) {
+    const start = buffered.start(i);
+    const end = buffered.end(i);
+    if (end <= currentTime) continue;
+    visible.push([Math.max(start, currentTime), end]);
+  }
+
+  // Sync the number of segment <div>s to the number of VISIBLE ranges — the
+  // raw buffered.length may exceed it when past ranges were dropped.
+  while (container.childElementCount < visible.length) {
     const seg = document.createElement('div');
     seg.className = BUFFER_SEGMENT_BG;
     seg.style.position = 'absolute';
@@ -51,14 +67,13 @@ export function updateBufferBar(
     seg.style.pointerEvents = 'none';
     container.appendChild(seg);
   }
-  while (container.childElementCount > count) {
+  while (container.childElementCount > visible.length) {
     const last = container.lastElementChild;
     if (last) container.removeChild(last);
   }
 
-  for (let i = 0; i < count; i++) {
-    const start = buffered.start(i);
-    const end = buffered.end(i);
+  for (let i = 0; i < visible.length; i++) {
+    const [start, end] = visible[i];
     const seg = container.children[i] as HTMLElement;
     const left = (start / dur) * 100;
     const width = ((end - start) / dur) * 100;

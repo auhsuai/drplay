@@ -144,8 +144,9 @@ describe('NowPlayingView buffer bar', () => {
     const seg = buffer.children[0] as HTMLElement;
     // The segment — not the container — carries the visible buffer background.
     expect(seg.className).toMatch(/\bbg-gray-400\b/);
-    expect(seg.style.left).toBe('0%');
-    expect(seg.style.width).toBe('30%');
+    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
+    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
+    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
   });
 
   it('BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)', () => {
@@ -160,8 +161,9 @@ describe('NowPlayingView buffer bar', () => {
 
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('0%');
-    expect(seg.style.width).toBe('30%');
+    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
+    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
+    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
   });
 
   it('unsubscribes the progress handler on unmount (no listener leak)', () => {

@@ -118,8 +118,9 @@ describe('PlayerBar buffer bar', () => {
 
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('0%');
-    expect(seg.style.width).toBe('30%');
+    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
+    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
+    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
   });
 
   it('BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)', () => {
@@ -134,8 +135,9 @@ describe('PlayerBar buffer bar', () => {
 
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('0%');
-    expect(seg.style.width).toBe('30%');
+    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
+    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
+    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
   });
 
   it('BUG regression: buffer container is pinned full-width and transparent (segment children own the background)', () => {
@@ -151,7 +153,7 @@ describe('PlayerBar buffer bar', () => {
     expect(buffer.className).not.toMatch(/\bbg-/);
   });
 
-  it('BUG regression: buffer bar shows multi-segment state for non-contiguous buffered ranges (forward seek)', () => {
+  it('BUG regression: forward seek shows only the future buffered segment (pre-seek past range dropped)', () => {
     renderPlayer();
     const buffer = screen.getByTestId('buffer-fill');
 
@@ -160,10 +162,28 @@ describe('PlayerBar buffer bar', () => {
       fakeController._emit('progress');
     });
 
-    expect(buffer.childElementCount).toBe(2);
-    expect((buffer.children[0] as HTMLElement).style.left).toBe('0%');
-    expect((buffer.children[1] as HTMLElement).style.left).toBe('50%');
-    expect((buffer.children[1] as HTMLElement).style.width).toBe('1%');
+    // Pre-seek [0,30] ends before currentTime=505 -> dropped entirely; [500,510]
+    // is clipped to the future part [505,510]: 50.5% / 0.5% of duration 1000.
+    expect(buffer.childElementCount).toBe(1);
+    expect((buffer.children[0] as HTMLElement).style.left).toBe('50.5%');
+    expect((buffer.children[0] as HTMLElement).style.width).toBe('0.5%');
+  });
+
+  it('BUG regression: a fully-past buffered range is dropped while a range straddling the playhead is clipped', () => {
+    renderPlayer();
+    const buffer = screen.getByTestId('buffer-fill');
+
+    setBuffered([[0, 100], [200, 300]], 1000, 250);
+    act(() => {
+      fakeController._emit('progress');
+    });
+
+    // [0,100] ends before currentTime=250 -> dropped; [200,300] straddles the
+    // playhead -> only the future part [250,300] renders: 25% / 5% of 1000.
+    expect(buffer.childElementCount).toBe(1);
+    const seg = buffer.children[0] as HTMLElement;
+    expect(seg.style.left).toBe('25%');
+    expect(seg.style.width).toBe('5%');
   });
 
   it('clears the buffer bar when switching to a new track', () => {

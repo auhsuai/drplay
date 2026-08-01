@@ -189,11 +189,12 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
 
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    expect(seg.style.left).toBe('0%');
-    expect(seg.style.width).toBe('30%');
+    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
+    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
+    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
   });
 
-  it('BUG regression: buffer bar shows multiple segments for a forward-seek non-contiguous buffered state', () => {
+  it('BUG regression: forward seek shows only the future buffered segment (pre-seek past range dropped)', () => {
     render(<Harness track={makeTrack()} isOpen={true} />);
     const buffer = screen.getByTestId('buffer');
 
@@ -202,11 +203,11 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
       fakeController._emit('progress');
     });
 
-    expect(buffer.childElementCount).toBe(2);
-    expect((buffer.children[0] as HTMLElement).style.left).toBe('0%');
-    expect((buffer.children[0] as HTMLElement).style.width).toBe('3%');
-    expect((buffer.children[1] as HTMLElement).style.left).toBe('50%');
-    expect((buffer.children[1] as HTMLElement).style.width).toBe('1%');
+    // Pre-seek [0,30] ends before currentTime=505 -> dropped entirely; [500,510]
+    // is clipped to the future part [505,510]: 50.5% / 0.5% of duration 1000.
+    expect(buffer.childElementCount).toBe(1);
+    expect((buffer.children[0] as HTMLElement).style.left).toBe('50.5%');
+    expect((buffer.children[0] as HTMLElement).style.width).toBe('0.5%');
   });
 
   it('BUG regression: buffer bar clears when buffered data becomes empty', () => {
