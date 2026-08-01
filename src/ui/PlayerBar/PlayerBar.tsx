@@ -1,11 +1,12 @@
 import { memo, useRef, useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Maximize2, RefreshCw } from "lucide-react";
+import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Maximize2, RefreshCw, Heart } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from '../components/MoreMenu';
 import { formatTime } from "../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from "../../utils/bufferedRange";
 import { captureError } from "../../utils/errorLog";
+import { isFavorite, addFavorite, removeFavorite } from "../../utils/favorites";
 import { AudioController } from "../../lib/AudioController";
 import { PlayerBarProps } from './types';
 
@@ -28,6 +29,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   const [isVolumeActive, setIsVolumeActive] = useState(false);
   const [coverError, setCoverError] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{ message: string, code: string } | null>(null);
+  const [isLiked, setIsLiked] = useState(false);
 
   const toggleMute = useCallback(() => {
     setIsMuted(AudioController.getInstance().toggleMute());
@@ -175,6 +177,30 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     }
   }, [currentTrack]);
 
+  // Check favorite status whenever the current track changes
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentTrack) { setIsLiked(false); return; }
+    isFavorite(currentTrack.id)
+      .then((liked) => { if (!cancelled) setIsLiked(liked); })
+      .catch((e: unknown) => { captureError({ level: 'warn', source: PLAYER_BAR_MODULE, message: `check-favorite-failed: ${e instanceof Error ? e.message : String(e)}` }); });
+    return () => { cancelled = true; };
+  }, [currentTrack?.id]);
+
+  const handleToggleFavorite = async () => {
+    if (!currentTrack) return;
+    try {
+      if (isLiked) {
+        await removeFavorite(currentTrack.id);
+      } else {
+        await addFavorite(currentTrack);
+      }
+      setIsLiked(!isLiked);
+    } catch (e: unknown) {
+      captureError({ level: 'error', source: PLAYER_BAR_MODULE, message: `toggle-favorite-failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
+
   // Volume control
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!progressBarRef.current || duration === 0) return;
@@ -286,6 +312,14 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         </div>
         {currentTrack && (
           <div className="hidden lg:flex items-center gap-1 shrink-0 ml-2">
+            <button
+              type="button"
+              onClick={handleToggleFavorite}
+              aria-label={isLiked ? t('player.remove_favorite', 'Remove from favorites') : t('player.add_favorite', 'Add to favorites')}
+              className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? 'text-[#4285F4]' : 'text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
+            >
+              <Heart className="w-5 h-5" fill={isLiked ? "currentColor" : "none"} />
+            </button>
             <MoreMenu track={currentTrack} isPlayerBarMode={true} />
           </div>
         )}

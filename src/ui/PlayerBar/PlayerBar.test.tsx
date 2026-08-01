@@ -13,11 +13,19 @@ vi.mock('lucide-react', () => {
   const icons = [
     'CloudOff', 'FileWarning', 'WifiOff', 'Play', 'Pause', 'SkipBack', 'SkipForward',
     'Volume2', 'Volume1', 'Volume', 'VolumeX', 'Loader2', 'Music', 'Shuffle',
-    'Repeat', 'Repeat1', 'Maximize2', 'RefreshCw',
+    'Repeat', 'Repeat1', 'Maximize2', 'RefreshCw', 'Heart',
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });
+
+const { isFavorite, addFavorite, removeFavorite } = vi.hoisted(() => ({
+  isFavorite: vi.fn<(trackId: string) => Promise<boolean>>(),
+  addFavorite: vi.fn<(track: Track) => Promise<void>>(),
+  removeFavorite: vi.fn<(trackId: string) => Promise<void>>(),
+}));
+
+vi.mock('../../utils/favorites', () => ({ isFavorite, addFavorite, removeFavorite }));
 
 vi.mock('../components/MoreMenu', () => ({ MoreMenu: () => null }));
 
@@ -98,6 +106,12 @@ beforeEach(() => {
   installFakeOn();
   setBuffered([]);
   fakeController._handlers = {};
+  isFavorite.mockClear();
+  addFavorite.mockClear();
+  removeFavorite.mockClear();
+  isFavorite.mockResolvedValue(false);
+  addFavorite.mockResolvedValue(undefined);
+  removeFavorite.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -280,5 +294,63 @@ describe('PlayerBar seek-drag (parity with useNowPlayingProgress)', () => {
       fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
     });
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PlayerBar favorite (heart) button', () => {
+  it('checks favorite status for the current track and renders the heart button (not liked)', async () => {
+    renderPlayer();
+    const btn = await screen.findByRole('button', { name: 'Add to favorites' });
+    expect(btn).toBeTruthy();
+    expect(isFavorite).toHaveBeenCalledWith('track-1');
+  });
+
+  it('shows the liked state (remove aria-label + filled class) when isFavorite resolves true', async () => {
+    isFavorite.mockResolvedValue(true);
+    renderPlayer();
+    const btn = await screen.findByRole('button', { name: 'Remove from favorites' });
+    expect(btn.className).toContain('text-[#4285F4]');
+  });
+
+  it('calls addFavorite and flips to liked on click when not liked', async () => {
+    renderPlayer();
+    const btn = await screen.findByRole('button', { name: 'Add to favorites' });
+    fireEvent.click(btn);
+    await screen.findByRole('button', { name: 'Remove from favorites' });
+    expect(addFavorite).toHaveBeenCalledTimes(1);
+    expect(addFavorite).toHaveBeenCalledWith(expect.objectContaining({ id: 'track-1' }));
+    expect(removeFavorite).not.toHaveBeenCalled();
+  });
+
+  it('calls removeFavorite on click when already liked', async () => {
+    isFavorite.mockResolvedValue(true);
+    renderPlayer();
+    const btn = await screen.findByRole('button', { name: 'Remove from favorites' });
+    fireEvent.click(btn);
+    await screen.findByRole('button', { name: 'Add to favorites' });
+    expect(removeFavorite).toHaveBeenCalledTimes(1);
+    expect(removeFavorite).toHaveBeenCalledWith('track-1');
+    expect(addFavorite).not.toHaveBeenCalled();
+  });
+
+  it('re-checks favorite status when the track id changes', async () => {
+    const { rerender } = renderPlayer();
+    await screen.findByRole('button', { name: 'Add to favorites' });
+    isFavorite.mockClear();
+
+    rerender(
+      <PlayerBar
+        currentTrack={makeTrack({ id: 'track-2' })}
+        isPlaying={false}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onExpandNowPlaying={vi.fn()}
+      />
+    );
+    await screen.findByRole('button', { name: 'Add to favorites' });
+    expect(isFavorite).toHaveBeenCalledWith('track-2');
   });
 });
