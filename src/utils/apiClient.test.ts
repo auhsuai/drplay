@@ -85,7 +85,6 @@ describe('fetchWithAuth', () => {
 
     expect(res.status).toBe(401);
     expect(fetchSpy).toHaveBeenCalledTimes(1); // no retry attempted
-    expect(invokeMock).not.toHaveBeenCalledWith('update_stream_token', expect.anything());
   });
 
   it('applies AbortSignal.timeout to the request', async () => {

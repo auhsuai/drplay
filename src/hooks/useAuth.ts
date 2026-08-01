@@ -31,12 +31,6 @@ const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
-const classifyInvokeError = (e: unknown): string => {
-  const msg = classifyError(e);
-  const isNetworkOrIpc = /network|connection|timeout|failed to fetch|invoke|ipc/i.test(msg);
-  return `${isNetworkOrIpc ? "network/Rust-IPC error" : "unexpected error"} — ${msg}`;
-};
-
 export const useAuth = (onLogoutExt?: () => void) => {
   const { isLoggedIn, accessToken, userProfile, setIsLoggedIn, setAccessToken, setUserProfile } = useAuthStore(useShallow(state => ({
     isLoggedIn: state.isLoggedIn,
@@ -61,10 +55,6 @@ export const useAuth = (onLogoutExt?: () => void) => {
     if (savedToken) {
       setAccessToken(savedToken);
       setIsLoggedIn(true);
-      // Push the restored token to the Rust proxy before any playback can start.
-      invoke("update_stream_token", { token: savedToken }).catch((e: unknown) =>
-        captureError({ level: 'error', source: AUTH_MODULE, message: `Restored token push to Rust proxy failed (update_stream_token init): ${classifyInvokeError(e)}` })
-      );
       const issueTime = parseInt(localStorage.getItem(LS_TOKEN_TIME) || "", 10);
       // Corrupt/missing token_time -> treat as expired and refresh promptly
       // (scheduleProactiveRefresh clamps the minimum to 5s).
@@ -87,11 +77,6 @@ export const useAuth = (onLogoutExt?: () => void) => {
     }
     setAccessToken(tokenData.access_token);
     setIsLoggedIn(true);
-
-    // CRITICAL: Send token to Rust backend proxy immediately
-    invoke("update_stream_token", { token: tokenData.access_token }).catch((e: unknown) =>
-      captureError({ level: 'error', source: AUTH_MODULE, message: `Login token push to Rust proxy failed (update_stream_token update): ${classifyInvokeError(e)}` })
-    );
 
     scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_SECONDS);
   };

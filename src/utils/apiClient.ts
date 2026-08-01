@@ -40,14 +40,6 @@ function classifyRequestError(err: unknown): 'network' | 'timeout' {
   return 'network';
 }
 
-// Classify a Tauri invoke() rejection for observability (no secrets logged).
-function classifyInvokeError(err: unknown): 'network' | 'timeout' | 'unknown' {
-  const errStr = err instanceof Error ? err.message : String(err);
-  if (/timeout/i.test(errStr)) return 'timeout';
-  if (/failed to fetch|unreachable|network/i.test(errStr)) return 'network';
-  return 'unknown';
-}
-
 let isRefreshing = false;
 let refreshSubscribers: Array<{
   resolve: (token: string) => void;
@@ -167,19 +159,6 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
       localStorage.setItem("drplay_token_time", Date.now().toString());
       if (tokenData.refresh_token) {
         localStorage.setItem("drplay_refresh_token", tokenData.refresh_token);
-      }
-
-      // Await so the Rust proxy has the fresh token BEFORE we resolve waiters /
-      // trigger any reload. Otherwise the next stream request can race an
-      // un-updated proxy token and 401. Also wakes proxy waiters via notify.
-      try {
-        await invoke("update_stream_token", { token: accessToken });
-      } catch (e: unknown) {
-        // Best-effort: the fresh token is already persisted to localStorage, so a
-        // proxy update failure must NOT block playback or reject waiters. Classify
-        // for observability and continue.
-        const kind = classifyInvokeError(e);
-        captureError({ level: 'warn', source: 'apiClient', message: `Stream proxy token update failed (best-effort): ${kind}` });
       }
 
       scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_IN_SEC);
