@@ -1,17 +1,86 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
-import { Track } from '../../../App';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import type { Track } from '../../../App';
 import { useTranslation } from 'react-i18next';
 import { prefetchVisibleTracks } from '../../../utils/streamPrefetcher';
-import { ArrowLeft, Search, ArrowUpDown, X, Check } from 'lucide-react';
+import { ArrowLeft, Search, X } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { SongCard } from '../../MainContent/components/SongCard';
+import { SortDropdown } from '../../components/SortDropdown';
+
+const DEFAULT_SORT_OPTION = 'modifiedTime';
+
+function compareSizeAsc(a: Track, b: Track): number {
+  const sizeA = a.size;
+  const sizeB = b.size;
+  // Why: tracks without a size are pinned to the bottom in both directions,
+  // and pairs without a size keep their relative (filter) order.
+  if (sizeA === undefined && sizeB === undefined) return 0;
+  if (sizeA === undefined) return 1;
+  if (sizeB === undefined) return -1;
+  return sizeA - sizeB;
+}
+
+function compareSizeDesc(a: Track, b: Track): number {
+  const sizeA = a.size;
+  const sizeB = b.size;
+  if (sizeA === undefined && sizeB === undefined) return 0;
+  if (sizeA === undefined) return 1;
+  if (sizeB === undefined) return -1;
+  return sizeB - sizeA;
+}
+
+export function sortRecentTracks(items: Track[], sortOption: string): Track[] {
+  const result = [...items];
+  // Why: Track has no modifiedTime field, so recency is derived from the
+  // original array position — getRecentlyPlayed already returns tracks
+  // newest-first (createdAt desc), and filter() preserves relative order,
+  // so the filtered index is a valid "date" proxy.
+  const indexByTrack = new Map<Track, number>();
+  result.forEach((track, index) => indexByTrack.set(track, index));
+  const byRecency = (a: Track, b: Track) => (indexByTrack.get(a) ?? 0) - (indexByTrack.get(b) ?? 0);
+
+  switch (sortOption) {
+    case 'name':
+      result.sort((a, b) => a.title.localeCompare(b.title));
+      break;
+    case 'name desc':
+      result.sort((a, b) => b.title.localeCompare(a.title));
+      break;
+    case 'size':
+      result.sort(compareSizeAsc);
+      break;
+    case 'size desc':
+      result.sort(compareSizeDesc);
+      break;
+    case 'modifiedTime desc':
+      result.sort((a, b) => byRecency(b, a));
+      break;
+    default:
+      // 'modifiedTime' and any unknown/legacy option (e.g. 'recent') keep
+      // the recency order — newest first, matching the default recent list.
+      result.sort(byRecency);
+      break;
+  }
+  return result;
+}
 
 export function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], onBack: () => void, onPlay: (track: Track, ctx: Track[]) => void, token: string | null }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortOption, setSortOption] = useState('recent');
-  const [showSortMenu, setShowSortMenu] = useState(false);
+  // Why: the default "recent" order (newest first) maps to the Ngày option
+  // without the desc suffix — sortRecentTracks keeps the array order for
+  // 'modifiedTime' and reverses it for 'modifiedTime desc'.
+  const [sortOption, setSortOption] = useState(DEFAULT_SORT_OPTION);
+  // Why: deleting from the MoreMenu removes the Drive file and fires
+  // onRemoveItem, but the parent (HomeTab) only refetches on 'recent-updated'
+  // (dispatched by history.recordPlay), so the deleted track must be removed
+  // from this view's list locally or it would linger until the next play.
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
+
+  const handleRemoveTrack = useCallback((id: string) => {
+    setRemovedIds(prev => [...prev, id]);
+  }, []);
 
   useEffect(() => {
     const ids = recent.map(t => t.id).filter(Boolean);
@@ -19,26 +88,22 @@ export function FullRecentView({ recent, onBack, onPlay, token }: { recent: Trac
   }, [recent]);
   
   const filteredItems = useMemo(() => {
-    let items = [...recent].filter(item => 
-      item.title.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-    if (sortOption === 'recent_asc') {
-      items.reverse();
-    } else if (sortOption === 'name') {
-      items.sort((a, b) => a.title.localeCompare(b.title));
-    } else if (sortOption === 'name desc') {
-      items.sort((a, b) => b.title.localeCompare(a.title));
-    }
-    return items;
-  }, [recent, searchQuery, sortOption]);
+    // Why: search filters first, then sort runs over the filtered subset so
+    // the two never interfere (e.g. "size" cannot re-introduce filtered-out
+    // tracks, and "modifiedTime" still sees a monotonic recency order).
+    const filtered = recent
+      .filter((item) => !removedIds.includes(item.id))
+      .filter((item) =>
+        item.title.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    return sortRecentTracks(filtered, sortOption);
+  }, [recent, searchQuery, sortOption, removedIds]);
 
   const sortOptions = [
-    { id: 'name', label: t('sort.name_asc', 'Tên (A-Z)') },
-    { id: 'name desc', label: t('sort.name_desc', 'Tên (Z-A)') },
-    { id: 'recent', label: t('sort.modified_desc', 'Mới nhất') },
-    { id: 'recent_asc', label: t('sort.modified_asc', 'Cũ nhất') },
+    { id: 'name', label: t('sort.name', 'A-Z') },
+    { id: 'modifiedTime', label: t('sort.date', 'Ngày') },
+    { id: 'size', label: t('sort.size', 'Kích thước') },
   ];
-  const currentSortLabel = sortOptions.find(opt => opt.id === sortOption)?.label || 'Sort';
 
   const rowVirtualizer = useVirtualizer({
     count: filteredItems.length,
@@ -90,36 +155,12 @@ export function FullRecentView({ recent, onBack, onPlay, token }: { recent: Trac
             </div>
 
             {/* Sort Dropdown */}
-            <div className="relative">
-              <button
-                onClick={() => setShowSortMenu(!showSortMenu)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
-              >
-                <ArrowUpDown className="w-4 h-4" />
-                <span className="hidden sm:inline">{currentSortLabel}</span>
-              </button>
-
-              {showSortMenu && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)}></div>
-                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                    {sortOptions.map((opt) => (
-                      <button
-                        key={opt.id}
-                        onClick={() => {
-                          setSortOption(opt.id);
-                          setShowSortMenu(false);
-                        }}
-                        className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-[#4285F4] dark:hover:text-[#4285F4] ${sortOption === opt.id ? 'text-[#4285F4] font-medium' : 'text-gray-700 dark:text-gray-300'}`}
-                      >
-                        {opt.label}
-                        {sortOption === opt.id && <Check className="w-4 h-4" />}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
+            <SortDropdown
+              sortOption={sortOption}
+              onSortChange={setSortOption}
+              options={sortOptions}
+              fallbackLabel="Sort"
+            />
           </div>
         </div>
       </div>
@@ -156,7 +197,8 @@ export function FullRecentView({ recent, onBack, onPlay, token }: { recent: Trac
                   currentFolderName="Recent"
                   folderHistory={[]}
                   onRefresh={() => {}}
-                  hideMenu={true}
+                  onRemoveItem={handleRemoveTrack}
+                  menuVariant="recent"
                 />
               </div>
             );

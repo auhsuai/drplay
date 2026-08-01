@@ -21,9 +21,12 @@ const MORE_MENU_MODULE = 'MoreMenu';
 const EVENT_LOCATE_FILE = 'locate-file';
 
 const MENU_ITEM_BASE_CLASS = "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1";
+const MENU_ITEM_DELETE_CLASS = "w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-all flex items-center gap-2 group mb-1";
 const MENU_ESTIMATED_HEIGHT_PX = 250;   // estimated dropdown height used to decide open-up vs open-down
 
-interface MoreMenuProps {
+export type MoreMenuVariant = 'default' | 'playerbar' | 'recent';
+
+export interface MoreMenuProps {
   track?: Track;
   driveItem?: DriveItem;
   token?: string | null;
@@ -38,12 +41,13 @@ interface MoreMenuProps {
   onOpenChange?: (isOpen: boolean) => void;
   onSelectMultiple?: () => void;
   isPlayerBarMode?: boolean;
+  variant?: MoreMenuVariant;
   isBulkSelected?: boolean;
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
 }
 
-export function MoreMenu({ track, driveItem, token, currentFolderId, currentFolderName, folderHistory, onRefresh, onRemoveItem, forceOpen, onClose, anchorPoint, onOpenChange, onSelectMultiple, isPlayerBarMode, isBulkSelected, onBulkMoveClick, onBulkDeleteClick }: MoreMenuProps) {
+export function MoreMenu({ track, driveItem, token, currentFolderId, currentFolderName, folderHistory, onRefresh, onRemoveItem, forceOpen, onClose, anchorPoint, onOpenChange, onSelectMultiple, isPlayerBarMode, variant, isBulkSelected, onBulkMoveClick, onBulkDeleteClick }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -52,6 +56,10 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
   const [openUpwards, setOpenUpwards] = useState(true);
 
   const isMenuOpen = isOpen || forceOpen;
+  // Why: 'recent' is a third curated mode for the Recent Files view (Delete +
+  // Download Song + Add to Playlist + Navigate). isPlayerBarMode stays as the
+  // legacy switch so PlayerBar does not need to change its call site.
+  const mode: MoreMenuVariant = variant ?? (isPlayerBarMode ? 'playerbar' : 'default');
 
   // -- Hooks --
   const { 
@@ -160,9 +168,23 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
     };
   }, [isMenuOpen, onClose, setShowPlaylistsSubmenu]);
 
+  const handleNavigateClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!track) return;
+    window.dispatchEvent(new CustomEvent(EVENT_LOCATE_FILE, {
+      detail: {
+        fileId: track.id,
+        parentId: track.parentId,
+        parentName: track.parentName
+      }
+    }));
+    setIsOpen(false);
+    onClose?.();
+  };
+
   const renderMenuContent = () => (
     <>
-      {isPlayerBarMode ? (
+      {mode === 'playerbar' ? (
         <>
           {track && (
             <>
@@ -173,20 +195,44 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('menu.download_song', 'Download Song')}</span>
               </button>
-              
+
               <button
-                onClick={(e) => { 
-                  e.stopPropagation(); 
-                  window.dispatchEvent(new CustomEvent(EVENT_LOCATE_FILE, { 
-                    detail: { 
-                      fileId: track.id,
-                      parentId: track.parentId,
-                      parentName: track.parentName
-                    } 
-                  }));
-                  setIsOpen(false); 
-                  onClose?.();
-                }}
+                onClick={handleNavigateClick}
+                className={MENU_ITEM_BASE_CLASS}
+              >
+                <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+                <span className="truncate">{t('menu.navigate', 'Navigate')}</span>
+              </button>
+            </>
+          )}
+        </>
+      ) : mode === 'recent' ? (
+        <>
+          {driveItem && token && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openDeleteConfirm(driveItem); setIsOpen(false); onClose?.();
+              }}
+              className={MENU_ITEM_DELETE_CLASS}
+            >
+              <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+              <span className="truncate">{t('drive.delete') || 'Delete'}</span>
+            </button>
+          )}
+
+          {track && (
+            <>
+              <button
+                onClick={(e) => handleDownloadClick(e, track, setIsOpen)}
+                className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+                <span className="truncate">{t('menu.download_song', 'Download Song')}</span>
+              </button>
+
+              <button
+                onClick={handleNavigateClick}
                 className={MENU_ITEM_BASE_CLASS}
               >
                 <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
@@ -231,7 +277,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                     openDeleteConfirm(driveItem); setIsOpen(false); onClose?.(); 
                   }
                 }}
-                className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-all flex items-center gap-2 group mb-1"
+                className={MENU_ITEM_DELETE_CLASS}
               >
                 <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('drive.delete') || 'Delete'}</span>

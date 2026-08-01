@@ -5,6 +5,7 @@ import { DriveItem, Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
+import type { MoreMenuVariant } from "../../components/MoreMenu";
 
 const SONG_CARD_MODULE = 'SongCard';
 
@@ -50,6 +51,7 @@ interface SongCardProps {
   onToggleSelection?: (id: string) => void;
   onEnableSelectionMode?: (id: string) => void;
   hideMenu?: boolean;
+  menuVariant?: MoreMenuVariant;
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
 }
@@ -72,6 +74,7 @@ export const SongCard = React.memo(function SongCard({
   onToggleSelection, 
   onEnableSelectionMode,
   hideMenu,
+  menuVariant,
   onBulkMoveClick,
   onBulkDeleteClick
 }: SongCardProps) {
@@ -290,6 +293,7 @@ export const SongCard = React.memo(function SongCard({
             folderHistory={folderHistory}
             onRefresh={onRefresh}
             onRemoveItem={onRemoveItem}
+            variant={menuVariant}
             forceOpen={isContextMenuOpen}
             onClose={() => {
               setIsContextMenuOpen(false);

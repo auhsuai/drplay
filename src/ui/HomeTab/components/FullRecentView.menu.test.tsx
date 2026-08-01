@@ -1,0 +1,129 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { FullRecentView } from './FullRecentView';
+import type { Track } from '../../../types';
+
+const mocks = vi.hoisted(() => ({
+  driveApi: {
+    deleteFile: vi.fn(),
+    moveFile: vi.fn(),
+  },
+  db: {
+    files: { delete: vi.fn(), update: vi.fn() },
+  },
+  captureError: vi.fn(),
+  showErrorToast: vi.fn(),
+  getPlaylists: vi.fn(),
+  addTrackToPlaylist: vi.fn(),
+  getTrackMetadata: vi.fn(),
+}));
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, fallback?: string) =>
+      ({
+        'menu.select_multiple': 'Select Multiple',
+        'drive.move_to': 'Move to...',
+        'drive.delete': 'Delete',
+        'menu.download': 'Download',
+        'menu.add_to_playlist': 'Add to Playlist',
+      })[key] ?? fallback ?? key,
+  }),
+}));
+
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: vi.fn(({ count }: { count: number }) => ({
+    getVirtualItems: () => Array.from({ length: count }, (_, i) => ({
+      index: i,
+      key: i,
+      size: 92,
+      start: i * 92,
+    })),
+    getTotalSize: () => count * 92,
+    measureElement: vi.fn(),
+    scrollToIndex: vi.fn(),
+    containerRef: { current: document.createElement('div') },
+  })),
+}));
+
+vi.mock('../../../utils/streamPrefetcher', () => ({
+  prefetchVisibleTracks: vi.fn(),
+}));
+
+vi.mock('../../../utils/metadata', () => ({
+  getTrackMetadata: mocks.getTrackMetadata,
+}));
+
+vi.mock('../../../utils/driveApi', () => mocks.driveApi);
+vi.mock('../../../db/db', () => ({ db: mocks.db }));
+vi.mock('../../../utils/errorLog', () => ({ captureError: mocks.captureError }));
+vi.mock('../../../utils/simpleToast', () => ({ showErrorToast: mocks.showErrorToast }));
+vi.mock('../../../utils/playlists', () => ({
+  getPlaylists: mocks.getPlaylists,
+  addTrackToPlaylist: mocks.addTrackToPlaylist,
+}));
+
+function makeTrack(id: string, title: string): Track {
+  return { id, title, artist: 'Artist', streamUrl: '', parentId: 'parent-1', parentName: 'Folder One' };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.getPlaylists.mockResolvedValue([]);
+  mocks.driveApi.deleteFile.mockResolvedValue({ id: 't1', name: 'x', mimeType: 'audio/mpeg', trashed: true, isFolder: false, parentId: 'p' });
+  mocks.getTrackMetadata.mockResolvedValue({
+    title: '',
+    artist: null,
+    duration: 0,
+    size: 0,
+    coverUrl: null,
+    pictureData: null,
+    pictureFormat: undefined,
+  });
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+function renderRecent(tracks: Track[]) {
+  return render(
+    <FullRecentView recent={tracks} onBack={vi.fn()} onPlay={vi.fn()} token="tok" />,
+  );
+}
+
+describe('FullRecentView menu delete flow', () => {
+  it('shows the 3-dot menu on each recent track card (hideMenu removed)', () => {
+    renderRecent([makeTrack('t1', 'Alpha'), makeTrack('t2', 'Beta')]);
+    const triggers = document.querySelectorAll('[aria-haspopup="menu"]');
+    expect(triggers.length).toBe(2);
+  });
+
+  it('recent menu shows exactly the curated items (no Select Multiple / Move to)', () => {
+    renderRecent([makeTrack('t1', 'Alpha')]);
+    const trigger = document.querySelector('[aria-haspopup="menu"]') as HTMLButtonElement;
+    fireEvent.click(trigger);
+    const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
+    const names = Array.from(menu.querySelectorAll('button')).map((b) => b.textContent?.trim() ?? '');
+    expect(names.sort()).toEqual(['Add to Playlist', 'Delete', 'Download Song', 'Navigate']);
+  });
+
+  it('deleting a track removes it from the visible list (local removal)', async () => {
+    renderRecent([makeTrack('t1', 'Alpha'), makeTrack('t2', 'Beta')]);
+    expect(screen.getByText('Alpha')).toBeTruthy();
+    expect(screen.getByText('Beta')).toBeTruthy();
+
+    const trigger = document.querySelector('[aria-haspopup="menu"]') as HTMLButtonElement;
+    fireEvent.click(trigger);
+    const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
+    fireEvent.click(Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement);
+    expect(screen.getByText('Move to Trash?')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith('tok', 't1'));
+    await waitFor(() => expect(mocks.db.files.delete).toHaveBeenCalledWith('t1'));
+    await waitFor(() => expect(screen.queryByText('Alpha')).toBeNull());
+    expect(screen.getByText('Beta')).toBeTruthy();
+  });
+});
