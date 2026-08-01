@@ -9,7 +9,14 @@ vi.mock('../../../utils/metadata', () => ({
   getTrackMetadata: vi.fn(),
 }));
 
+vi.mock('../../../utils/errorLog', () => ({
+  captureError: vi.fn(),
+}));
+
+import { captureError } from '../../../utils/errorLog';
+
 const mockedFetch = vi.mocked(getTrackMetadata);
+const mockedCaptureError = vi.mocked(captureError);
 
 function makeTrack(over: Partial<Track> = {}): Track {
   return {
@@ -254,5 +261,54 @@ describe('PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(createObjectURLSpy.mock.calls.length).toBe(revokeObjectURLSpy.mock.calls.length);
+  });
+});
+
+describe('PremiumCard metadata rejection handling (abort-skip + captureError)', () => {
+  function deferredRejectable() {
+    let resolve!: (value: never) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<never>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  }
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedCaptureError.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('calls captureError with module context when metadata fetch rejects while mounted (no unhandled rejection)', async () => {
+    mockedFetch.mockRejectedValue(new Error('boom'));
+
+    render(<PremiumCard {...baseProps()} />);
+
+    await waitFor(() => expect(mockedCaptureError).toHaveBeenCalledTimes(1));
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'PremiumCard',
+        message: expect.stringContaining('metadata-load-failed'),
+      })
+    );
+  });
+
+  it('skips captureError when the fetch rejects after unmount (deliberate cleanup abort)', async () => {
+    const d = deferredRejectable();
+    mockedFetch.mockImplementationOnce(() => d.promise);
+
+    const { unmount } = render(<PremiumCard {...baseProps()} />);
+    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+
+    unmount();
+    cleanup();
+
+    await act(async () => { d.reject(new Error('aborted')); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mockedCaptureError).not.toHaveBeenCalled();
   });
 });

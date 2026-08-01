@@ -44,7 +44,10 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
         blobUrlRef.current = URL.createObjectURL(blob);
         setCoverUrl(blobUrlRef.current);
       }
-    }).catch(err => captureError({ level: 'warn', source: PREMIUM_CARD_MODULE, message: 'failed-to-load-cover-metadata: ' + (err instanceof Error ? err.message : String(err)) }));
+    }).catch((e: unknown) => {
+      if (controller.signal.aborted) return;   // deliberate cleanup abort — not an error
+      captureError({ level: 'warn', source: PREMIUM_CARD_MODULE, message: `metadata-load-failed: ${e instanceof Error ? e.message : String(e)}` });
+    });
     return () => { 
       isMounted = false; 
       controller.abort();
