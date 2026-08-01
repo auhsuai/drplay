@@ -523,7 +523,7 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
     expect(card?.className).toContain(FLASH_ON_CLASS);
 
     // (b) back to normal once the single flash duration elapses
-    await act(async () => { vi.advanceTimersByTime(700); });
+    await act(async () => { vi.advanceTimersByTime(400); });
     expect(card?.className).not.toContain(FLASH_ON_CLASS);
     expect(card?.className).toContain(FLASH_OFF_CLASS);
 
@@ -539,12 +539,12 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
     );
     const card = flashCard(container) as HTMLDivElement;
     expect(card.className).toContain(FLASH_ON_CLASS);
-    await act(async () => { vi.advanceTimersByTime(700); });
+    await act(async () => { vi.advanceTimersByTime(400); });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
 
     rerender(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={2} />);
     expect(card.className).toContain(FLASH_ON_CLASS);
-    await act(async () => { vi.advanceTimersByTime(700); });
+    await act(async () => { vi.advanceTimersByTime(400); });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
   });
 
@@ -553,7 +553,7 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
       <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
     );
     const card = flashCard(container) as HTMLDivElement;
-    await act(async () => { vi.advanceTimersByTime(700); });
+    await act(async () => { vi.advanceTimersByTime(400); });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
 
     rerender(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />);
@@ -566,7 +566,7 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
     // off-screen (jsdom default rect is 0,0 — above the header band) → scroll
     render(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />);
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
-    await act(async () => { vi.advanceTimersByTime(700); });
+    await act(async () => { vi.advanceTimersByTime(400); });
     cleanup();
 
     // fully visible (inside header/player window band) → no scroll, still flashes
@@ -582,7 +582,7 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
     expect(scrollIntoView).not.toHaveBeenCalled();
     const card = flashCard(container) as HTMLDivElement;
     expect(card.className).toContain(FLASH_ON_CLASS);
-    await act(async () => { vi.advanceTimersByTime(700); });
+    await act(async () => { vi.advanceTimersByTime(400); });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
   });
 

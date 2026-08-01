@@ -16,7 +16,7 @@ const HEADER_HEIGHT = 160;
 const PLAYER_BAR_HEIGHT = 85;
 // One on→off cycle for the navigate/locate highlight cue. The old
 // implementation toggled isFlashOn 7× every 300ms (≈4 blinks) which looked broken.
-const FLASH_DURATION_MS = 700;
+const FLASH_DURATION_MS = 400;
 
 function formatDuration(seconds: number): string {
   if (!seconds) return "00:00:00";
