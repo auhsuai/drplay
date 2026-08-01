@@ -12,6 +12,14 @@ const IPC_GET_LOCAL_METADATA = 'get_local_metadata';
 const IPC_VERIFY_TRACK_EXISTS = 'verify_track_exists';
 const IPC_UPDATE_TRACK_DURATION = 'update_track_duration_in_db';
 const COVER_URL_BASE = 'http://drplay.localhost/cover';
+const V_PLACEHOLDER = 9;
+const V_LOCAL_DB = 10;
+const SCORE_HAS_DB_ID = 100;
+const FRESH_WRITE_WINDOW_MS = 5_000;
+
+function stripExtension(name: string): string {
+  return name.replace(/\.[^.]+$/, '');
+}
 
 function classifyMetaError(err: unknown): { name: string; message: string } {
   if (err instanceof Error) {
@@ -122,7 +130,7 @@ async function setCache(
       const exists = await invoke<boolean>(IPC_VERIFY_TRACK_EXISTS, { dbId: newEntry.dbId });
       if (!exists) {
         newEntry.dbId = undefined;
-        newEntry.v = Math.min(newEntry.v ?? 0, 9);
+        newEntry.v = Math.min(newEntry.v ?? 0, V_PLACEHOLDER);
         newEntry.coverUrl = undefined;
         newEntry.fullCoverUrl = undefined;
       }
@@ -137,11 +145,11 @@ async function setCache(
 
   if (oldHasDbId && !newHasDbId) return;
 
-  const newScore = newHasDbId ? 100 : (newEntry.v ?? 0);
-  const oldScore = oldHasDbId ? 100 : (existing?.data?.v ?? 0);
+  const newScore = newHasDbId ? SCORE_HAS_DB_ID : (newEntry.v ?? 0);
+  const oldScore = oldHasDbId ? SCORE_HAS_DB_ID : (existing?.data?.v ?? 0);
 
   if (existing && oldScore > newScore) return;
-  if (existing && oldScore === newScore && existing.ts > Date.now() - 5000) return;
+  if (existing && oldScore === newScore && existing.ts > Date.now() - FRESH_WRITE_WINDOW_MS) return;
 
   await putCacheEntry(key, { version: CACHE_VERSION, data: newEntry, ts: Date.now() });
   updateLRU(key);
@@ -155,7 +163,7 @@ async function getTrackMetadataImpl(
   _signal?: AbortSignal,
   forceNetwork: boolean = false,
 ): Promise<CachedMetadata> {
-  if (!forceNetwork && metadataCache[fileId] && metadataCache[fileId].v >= 9) {
+  if (!forceNetwork && metadataCache[fileId] && metadataCache[fileId].v >= V_PLACEHOLDER) {
     return metadataCache[fileId];
   }
 
@@ -166,7 +174,7 @@ async function getTrackMetadataImpl(
   if (!forceNetwork) {
     try {
       const cached = await getCacheEntry(`${METADATA_KEY_PREFIX}${fileId}`);
-      if (cached && cached.data && cached.data.v >= 9) {
+      if (cached && cached.data && cached.data.v >= V_PLACEHOLDER) {
         setMetadataCache(fileId, cached.data);
         return cached.data;
       }
@@ -184,7 +192,7 @@ async function getTrackMetadataImpl(
       });
       if (local?.id) {
         const entry = {
-          title: local.title || safeName.replace(/\.[^.]+$/, ''),
+          title: local.title || stripExtension(safeName),
           artist: local.artist || UNKNOWN_ARTIST,
           album: local.album,
           duration: local.duration,
@@ -195,7 +203,7 @@ async function getTrackMetadataImpl(
           coverUrl: local.has_cover ? `${COVER_URL_BASE}?id=${local.id}&thumb=true&v=2` : undefined,
           fullCoverUrl: local.has_cover ? `${COVER_URL_BASE}?id=${local.id}&thumb=false&v=2` : undefined,
           size: safeSize,
-          v: 10,
+          v: V_LOCAL_DB,
         };
         setMetadataCache(fileId, entry);
         return entry;
@@ -212,13 +220,13 @@ async function getTrackMetadataImpl(
 
   // Fallback: v:9 placeholder (no cover data)
   const entry: CachedMetadata = {
-    title: safeName.replace(/\.[^.]+$/, ''),
+    title: stripExtension(safeName),
     artist: UNKNOWN_ARTIST,
     duration: 0,
     durationEstimated: true,
     pictureData: null,
     pictureDataFull: null,
-    v: 9,
+    v: V_PLACEHOLDER,
   };
   setMetadataCache(fileId, entry);
   return entry;
@@ -234,7 +242,7 @@ export async function getTrackMetadata(
 ): Promise<CachedMetadata> {
   if (!forceNetwork) {
     const cached = metadataCache[fileId];
-    if (cached && cached.v >= 9) return cached;
+    if (cached && cached.v >= V_PLACEHOLDER) return cached;
   }
 
   if (!forceNetwork) {
@@ -246,18 +254,24 @@ export async function getTrackMetadata(
 
   inflightMetadata.set(fileId, promise);
 
-  promise.catch((e: unknown) => {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.warn('[metadata] getTrackMetadata failed', { fileId, error: msg });
-  });
-
   const cleanup = () => {
     if (inflightMetadata.get(fileId) === promise) {
       inflightMetadata.delete(fileId);
     }
   };
   AbortSignal.timeout(INFLIGHT_TIMEOUT).addEventListener('abort', cleanup, { once: true });
-  promise.finally(cleanup);
+
+  promise.then(
+    (result) => {
+      cleanup();
+      return result;
+    },
+    (e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      captureError({ level: 'error', source: META_MODULE, message: `get-track-metadata-failed (fileId=${fileId}): ${msg}` });
+      cleanup();
+    }
+  );
 
   return promise;
 }
