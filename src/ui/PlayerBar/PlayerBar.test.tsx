@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Track } from '../../App';
 import { PlayerBar } from './PlayerBar';
@@ -198,5 +198,67 @@ describe('PlayerBar buffer bar', () => {
     unmount();
 
     expect(fakeController._handlers['progress'] ?? []).toHaveLength(0);
+  });
+});
+
+describe('PlayerBar seek-drag (parity with useNowPlayingProgress)', () => {
+  beforeEach(() => {
+    fakeController.seek.mockClear();
+  });
+
+  function dragBar() {
+    const bar = screen.getByTestId('buffer-fill').parentElement as HTMLElement;
+    const rect = { left: 0, right: 200, top: 0, bottom: 10, width: 200, height: 10, x: 0, y: 0, toJSON: () => {} } as DOMRect;
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue(rect);
+    return bar;
+  }
+
+  it('BUG regression: updates the time text live while dragging (not only on commit)', () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit('timeupdate', { currentTime: 0, duration: 240 });
+    });
+
+    const bar = dragBar();
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    expect(screen.getByText('1:00')).toBeTruthy();
+
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(screen.getByText('2:00')).toBeTruthy();
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+  });
+
+  it('BUG regression: pointercancel commits the seek and removes all window drag listeners (no leak)', () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit('timeupdate', { currentTime: 0, duration: 240 });
+    });
+
+    const bar = dragBar();
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+
+    act(() => {
+      fireEvent.pointerCancel(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+
+    // Listeners removed — a late pointerup must not seek again.
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
   });
 });

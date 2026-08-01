@@ -5,8 +5,11 @@ import { useTranslation } from "react-i18next";
 import { MoreMenu } from '../components/MoreMenu';
 import { formatTime } from "../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from "../../utils/bufferedRange";
+import { captureError } from "../../utils/errorLog";
 import { AudioController } from "../../lib/AudioController";
 import { PlayerBarProps } from './types';
+
+const PLAYER_BAR_MODULE = 'PlayerBar';
 
 // Các helper function nhỏ gọn
 function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; className?: string }) {
@@ -175,12 +178,17 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   // Volume control
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!progressBarRef.current || duration === 0) return;
-    try { progressBarRef.current.setPointerCapture(e.pointerId); } catch {}
+    try {
+      progressBarRef.current.setPointerCapture(e.pointerId);
+    } catch (err) {
+      captureError({ level: 'warn', source: PLAYER_BAR_MODULE, message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}` });
+    }
     
     const bounds = progressBarRef.current.getBoundingClientRect();
     const updateTime = (clientX: number) => {
       const percent = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
       if (progressFillRef.current) progressFillRef.current.style.width = `${percent * 100}%`;
+      if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(percent * duration);
       return percent * duration;
     };
 
@@ -188,7 +196,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     updateTime(e.clientX);
     
     const onMove = (moveEvent: PointerEvent) => updateTime(moveEvent.clientX);
-    const onUp = (upEvent: PointerEvent) => {
+    const commit = (upEvent: PointerEvent) => {
       audio.seek(updateTime(upEvent.clientX));
       // Give the audio engine a small window to flush old timeupdate events
       setTimeout(() => {
@@ -196,10 +204,14 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       }, 150);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
+    const onUp = (upEvent: PointerEvent) => commit(upEvent);
+    const onCancel = (cancelEvent: PointerEvent) => commit(cancelEvent);
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   };
 
   const handleVolumePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
