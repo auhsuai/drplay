@@ -196,6 +196,7 @@ function App() {
           onLogout={handleLogout}
           isSidebarOpen={isSidebarOpen}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          token={accessToken}
         />
 
         <div id="content-area" className="flex-1 relative overflow-hidden flex flex-col">

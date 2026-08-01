@@ -2,10 +2,27 @@ import React, { useState, useEffect } from "react";
 import { Home, HardDrive, Settings, Heart, Plus, ListMusic, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getPlaylists, createPlaylist, Playlist } from "../../utils/playlists";
+import { getDriveStorageQuota, type DriveStorageQuota } from "../../utils/driveApi";
+import { formatBytes } from "../../utils/formatBytes";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 
 const SIDEBAR_MODULE = 'Sidebar';
+// Storage bar width (expanded) — matches the full NavItem row content width
+// (icon w-6 h-6 24px + ml-3 12px + text max-w-[150px] 150px = 186px, inside
+// px-3 24px row padding), so the bar aligns with the Home/My Drive row's
+// icon+text extent. A fixed width (instead of `flex-1`/max-w) is required so
+// the collapsed <-> expanded width transition can animate smoothly between
+// two concrete values.
+const STORAGE_BAR_WIDTH_CLASS = 'w-[186px]';
+
+// Usage fraction at which the quota bar fill and the usage text switch from
+// blue to red. Mirrors Google's behavior of flagging accounts that cross 80%
+// of their storage limit (Stanford UIT docs:
+// uit.stanford.edu/project/google-workspace-optimization/understanding-google-
+// storage-limit-alerts); 0.8 = 80% of the account limit. Exactly at the
+// threshold is still treated as safe (<= threshold, not <).
+const STORAGE_WARNING_THRESHOLD = 0.8;
 
 interface SidebarProps {
   activeTab: string;
@@ -14,13 +31,17 @@ interface SidebarProps {
   onLogout?: () => void;
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
+  token?: string | null;
 }
 
-export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSidebarOpen, onToggleSidebar }: SidebarProps) {
+export type { SidebarProps };
+
+export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSidebarOpen, onToggleSidebar, token }: SidebarProps) {
   const { t } = useTranslation();
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
+  const [quota, setQuota] = useState<DriveStorageQuota | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,6 +55,45 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
       window.removeEventListener('user-changed', handleUpdate);
     };
   }, []);
+
+  // Storage quota: only for a logged-in user (token present). Re-fetched on
+  // 'user-changed' (account switch re-keys Drive storage entirely) and reset
+  // when the token goes away (logout). Failure hides the section silently —
+  // getDriveStorageQuota never throws by contract; the catch is defensive so
+  // a future regression cannot crash the sidebar.
+  useEffect(() => {
+    if (!token) {
+      setQuota(null);
+      return;
+    }
+    let cancelled = false;
+    const loadQuota = () => {
+      getDriveStorageQuota(token)
+        .then(data => { if (!cancelled) setQuota(data); })
+        .catch(err => captureError({ level: 'warn', source: SIDEBAR_MODULE, message: `storage-quota-failed: ${err instanceof Error ? err.message : String(err)}` }));
+    };
+    loadQuota();
+    window.addEventListener('user-changed', loadQuota);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('user-changed', loadQuota);
+    };
+  }, [token]);
+
+  const usageFraction = quota && quota.limit !== null && quota.limit > 0 ? quota.usageInDrive / quota.limit : 0;
+  const isOverThreshold = usageFraction > STORAGE_WARNING_THRESHOLD;
+  // Two-segment fill: the safe zone (0 → threshold) stays blue, and only the
+  // excess above the threshold turns red; the remaining track stays gray.
+  // Clamped so the segments never exceed the track width, even when usage is
+  // past the account limit (the two segments cap at 100% total).
+  const usagePercent = quota && quota.limit !== null && quota.limit > 0
+    ? Math.min(100, Math.round((quota.usageInDrive / quota.limit) * 100))
+    : 0;
+  const thresholdPercent = quota && quota.limit !== null && quota.limit > 0
+    ? Math.round((quota.limit * STORAGE_WARNING_THRESHOLD / quota.limit) * 100)
+    : 0;
+  const safeZonePercent = Math.min(usagePercent, thresholdPercent);
+  const excessPercent = Math.max(0, usagePercent - thresholdPercent);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +172,61 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
           />
         ))}
       </div>
+
+      {token && quota && (isSidebarOpen || quota.limit !== null) && (
+        <div
+          data-testid="storage-quota"
+          title={!isSidebarOpen && quota.limit !== null ? `${formatBytes(quota.usageInDrive)} / ${formatBytes(quota.limit)}` : undefined}
+          className="flex items-center transition-all duration-300 px-4 pb-4"
+        >
+          <div>
+            {quota.limit !== null && (
+              <div data-testid="storage-quota-track" className={`h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full overflow-hidden transition-all duration-300 ease-in-out ml-3 flex items-stretch ${isSidebarOpen ? STORAGE_BAR_WIDTH_CLASS : 'w-11'}`}>
+                <div data-testid="storage-quota-bar" className={`h-full bg-[#4285F4] ${excessPercent > 0 ? 'rounded-l-full' : 'rounded-full'}`} style={{ width: `${safeZonePercent}%` }} />
+                {excessPercent > 0 && (
+                  <div data-testid="storage-quota-bar-red" className="h-full bg-red-500 rounded-r-full" style={{ width: `${excessPercent}%` }} />
+                )}
+              </div>
+            )}
+            {/* Always mounted to reserve fixed space below the track (mt-1.5 + h-4),
+                so the track never jumps when the text appears/disappears. Collapsed:
+                invisible (opacity-0). Enter and exit are both pure CSS TRANSITIONS
+                (NOT tw-animate keyframes — the old animate-out started from the
+                element's current computed style, which was already opacity-0 from
+                the static class, so the whole exit ran invisible; the old
+                animate-in used a different keyframe mechanism, so enter and exit
+                felt mismatched). The same transition-all (present in BOTH states
+                so the browser reads it as the before-change style) fades the text
+                in while gliding down from 8px above (opacity-0 -translate-y-2 →
+                opacity-100 translate-y-0) over 300ms, easing in-out, and runs
+                SIMULTANEOUSLY with the track width transition (no delay) — exit is
+                the exact reverse, so both directions share the same easing and
+                feel. The 300ms is synced with the track's duration-300 (was
+                150ms: the text finished fading while the track/sidebar kept
+                growing for another 150ms → visible stutter on expand). Note:
+                overflow-hidden is ALWAYS present, not only when collapsed — on
+                expand the wrapper is still narrow (track at w-11, growing), and
+                without clipping the text wraps to 2 lines and spills out of the
+                fixed h-4 over the section below (the reported short jank).
+                Limitation: the wrapper's width is squeezed by the shrinking
+                track (no width transition on this element), so the slide is
+                accompanied by a horizontal collapse of the clipped area. */}
+            <div
+              data-testid="storage-quota-text"
+              className={`mt-1.5 h-4 ml-3 overflow-hidden transition-all duration-300 ease-in-out ${isSidebarOpen ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2'}`}
+            >
+              {quota.limit !== null ? (
+                <p className="text-xs">
+                  <span data-testid="storage-quota-usage" className={isOverThreshold ? 'text-red-500' : 'text-[#4285F4]'}>{formatBytes(quota.usageInDrive)}</span>
+                  <span data-testid="storage-quota-limit" className="text-gray-500 dark:text-gray-400">{' / '}{formatBytes(quota.limit)}</span>
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500 dark:text-gray-400">{t('sidebar.storage_unlimited')} {formatBytes(quota.usageInDrive)}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="p-4">
         <NavItem icon={<Settings />} label={t('sidebar.settings')} active={activeTab === "Settings"} onClick={() => onTabChange("Settings")} isSidebarOpen={isSidebarOpen} />

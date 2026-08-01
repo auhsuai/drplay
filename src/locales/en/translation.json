@@ -28,7 +28,8 @@
     "not_authenticated": "Not authenticated",
     "log_out": "Log out",
     "playlists": "Playlists",
-    "new_playlist_placeholder": "My Playlist #1"
+    "new_playlist_placeholder": "My Playlist #1",
+    "storage_unlimited": "Used"
   },
   "folder_selection": {
     "select_root": "Select Root Folder",

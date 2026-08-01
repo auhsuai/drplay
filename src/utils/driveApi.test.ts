@@ -5,6 +5,7 @@ import {
   searchFolders,
   listFolderChildren,
   getTrashedFiles,
+  getDriveStorageQuota,
   type DriveFolderItem,
   type DriveFileItem,
 } from "./driveApi";
@@ -15,7 +16,12 @@ vi.mock("./apiClient", () => ({
   fetchWithAuth: vi.fn(),
 }));
 
+vi.mock("./errorLog", () => ({
+  captureError: vi.fn(),
+}));
+
 import { fetchWithAuth } from "./apiClient";
+import { captureError } from "./errorLog";
 const mockedFetch = vi.mocked(fetchWithAuth);
 
 function makeResponse(status: number): Response {
@@ -436,5 +442,113 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(30);
+  });
+});
+
+// Regression: getDriveStorageQuota (sidebar storage quota display) must reuse
+// driveFetch, parse int64 byte strings, tolerate an absent limit (unlimited),
+// and NEVER throw — the sidebar hides itself on failure.
+describe("getDriveStorageQuota", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fetches about?fields=storageQuota and parses string byte fields", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(200, {
+        storageQuota: {
+          limit: "16106127360",
+          usage: "2576980377",
+          usageInDrive: "2500000000",
+          usageInDriveTrash: "100000000",
+        },
+      })
+    );
+
+    const quota = await getDriveStorageQuota("tok-1");
+
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockedFetch.mock.calls[0];
+    expect(url).toBe("https://www.googleapis.com/drive/v3/about?fields=storageQuota");
+    expect((opts?.headers as Record<string, string>).Authorization).toBe("Bearer tok-1");
+    expect(quota).toEqual({
+      limit: 16106127360,
+      usage: 2576980377,
+      usageInDrive: 2500000000,
+      usageInDriveTrash: 100000000,
+    });
+  });
+
+  it("keeps already-numeric fields and returns limit null when absent (unlimited)", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(200, {
+        storageQuota: { usage: 123456789, usageInDrive: 100000000, usageInDriveTrash: 0 },
+      })
+    );
+
+    const quota = await getDriveStorageQuota("tok-1");
+
+    expect(quota).toEqual({
+      limit: null,
+      usage: 123456789,
+      usageInDrive: 100000000,
+      usageInDriveTrash: 0,
+    });
+  });
+
+  it("returns null + warn captureError on a non-ok response (no retry on 4xx)", async () => {
+    mockedFetch.mockResolvedValueOnce(makeResponse(401));
+
+    const quota = await getDriveStorageQuota("tok-1");
+
+    expect(quota).toBeNull();
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", source: "driveApi" })
+    );
+  });
+
+  it("returns null + warn captureError on network failure after retries (never throws)", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockRejectedValue(new Error("network down"));
+
+    const p = getDriveStorageQuota("tok-1");
+    await vi.advanceTimersByTimeAsync(64_000);
+    const quota = await p;
+
+    expect(quota).toBeNull();
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", source: "driveApi" })
+    );
+  });
+
+  it("returns null when storageQuota is missing or a mandatory usage field is absent", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, { kind: "drive#about" }));
+    expect(await getDriveStorageQuota("tok-1")).toBeNull();
+
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(200, { storageQuota: { usage: "10", usageInDrive: "5" } })
+    );
+    expect(await getDriveStorageQuota("tok-1")).toBeNull();
+  });
+
+  it("treats a non-numeric limit as absent (null) while keeping numeric usage", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(200, {
+        storageQuota: {
+          limit: "not-a-number",
+          usage: "100",
+          usageInDrive: "50",
+          usageInDriveTrash: "1",
+        },
+      })
+    );
+
+    const quota = await getDriveStorageQuota("tok-1");
+
+    expect(quota).toEqual({ limit: null, usage: 100, usageInDrive: 50, usageInDriveTrash: 1 });
   });
 });

@@ -28,7 +28,8 @@
     "not_authenticated": "Chưa đăng nhập",
     "log_out": "Đăng xuất",
     "playlists": "Danh sách phát",
-    "new_playlist_placeholder": "Danh sách phát của tôi #1"
+    "new_playlist_placeholder": "Danh sách phát của tôi #1",
+    "storage_unlimited": "Đã dùng"
   },
   "folder_selection": {
     "select_root": "Chọn thư mục gốc",
