@@ -5,7 +5,6 @@ import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
 import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
 import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
 import { TrashScreen } from "./ui/Settings/TrashScreen";
-import { GlobalContextMenu } from "./ui/components/GlobalContextMenu";
 import { RateLimitModal } from "./ui/components/RateLimitModal";
 import { captureError } from "./utils/errorLog";
 import { useShallow } from 'zustand/react/shallow';
@@ -294,8 +293,6 @@ function App() {
         />
       </div>
       
-      <GlobalContextMenu />
-
       <RateLimitModal 
         isOpen={showRateLimitModal}
         onClose={() => setShowRateLimitModal(false)}
