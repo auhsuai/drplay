@@ -251,6 +251,35 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
     expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
   });
 
+  it('BUG regression: drag commit (pointerup) clears the buffer bar synchronously after seek', () => {
+    render(<Harness track={makeTrack()} isOpen={true} />);
+    const buffer = screen.getByTestId('buffer');
+    act(() => {
+      fakeController._emit('durationchange', { duration: 240 });
+    });
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('progress');
+    });
+    expect(buffer.childElementCount).toBe(1);
+
+    const bar = screen.getByTestId('bar');
+    const rect = { left: 0, right: 200, top: 0, bottom: 10, width: 200, height: 10, x: 0, y: 0, toJSON: () => {} } as DOMRect;
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue(rect);
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+    expect(buffer.childElementCount).toBe(0);
+  });
+
   it('BUG regression: removes window drag listeners when unmounting mid-drag (no leak, no stray seek)', () => {
     const removeSpy = vi.spyOn(window, 'removeEventListener');
     const { unmount } = render(<Harness track={makeTrack()} isOpen={true} />);

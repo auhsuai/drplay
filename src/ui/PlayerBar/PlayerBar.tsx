@@ -98,10 +98,16 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         case 'ArrowLeft':
           e.preventDefault();
           audio.seek(Math.max(0, audio.getCurrentTime() - 5));
+          // Big-player pattern (YouTube/Spotify/JW Player): audio.buffered keeps
+          // pre-seek ranges in memory (browser does not rescale it synchronously),
+          // so clear the buffer bar NOW and let progress/timeupdate redraw it from
+          // the new position instead of showing a stale segment for a few ticks.
+          clearBufferBar(bufferFillRef.current);
           break;
         case 'ArrowRight':
           e.preventDefault();
           audio.seek(Math.min(audio.getDuration(), audio.getCurrentTime() + 5));
+          clearBufferBar(bufferFillRef.current);
           break;
         case 'ArrowUp':
           e.preventDefault();
@@ -250,6 +256,10 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     const onMove = (moveEvent: PointerEvent) => updateTime(moveEvent.clientX);
     const commit = (upEvent: PointerEvent) => {
       audio.seek(updateTime(upEvent.clientX));
+      // Big-player pattern: clear the buffer bar synchronously at seek time; the
+      // native `progress`/`timeupdate` events redraw it once data loads at the
+      // new position (audio.buffered is not updated synchronously on seek).
+      clearBufferBar(bufferFillRef.current);
       // Give the audio engine a small window to flush old timeupdate events
       setTimeout(() => {
         isDraggingRef.current = false;

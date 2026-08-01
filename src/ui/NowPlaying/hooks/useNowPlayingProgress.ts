@@ -177,6 +177,11 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
       isDraggingRef.current = false;
       const finalTime = updateTimeUI(clientX);
       AudioController.getInstance().seek(finalTime);
+      // Big-player pattern (YouTube/Spotify/JW Player): audio.buffered keeps
+      // pre-seek ranges in memory and is not rescaled synchronously on seek, so
+      // clear the buffer bar NOW — the native `progress`/`timeupdate` events
+      // redraw it once data loads at the new position.
+      clearBufferBar(bufferFillRef.current);
       window.removeEventListener('pointermove', pointerMoveRef.current);
       window.removeEventListener('pointerup', pointerUpRef.current);
       window.removeEventListener('pointercancel', pointerCancelRef.current);

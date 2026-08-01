@@ -297,6 +297,76 @@ describe('PlayerBar seek-drag (parity with useNowPlayingProgress)', () => {
   });
 });
 
+describe('PlayerBar seek clears buffer bar immediately (big-player pattern)', () => {
+  beforeEach(() => {
+    fakeController.seek.mockClear();
+  });
+
+  it('BUG regression: ArrowLeft seek clears the buffer bar synchronously (no stale pre-seek segments)', () => {
+    renderPlayer();
+    const buffer = screen.getByTestId('buffer-fill');
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('progress');
+    });
+    expect(buffer.childElementCount).toBe(1);
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(buffer.childElementCount).toBe(0);
+  });
+
+  it('BUG regression: ArrowRight seek clears the buffer bar synchronously (no stale pre-seek segments)', () => {
+    renderPlayer();
+    const buffer = screen.getByTestId('buffer-fill');
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('progress');
+    });
+    expect(buffer.childElementCount).toBe(1);
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowRight' });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(buffer.childElementCount).toBe(0);
+  });
+
+  it('BUG regression: drag commit (pointerup) clears the buffer bar synchronously after seek', () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit('timeupdate', { currentTime: 0, duration: 240 });
+    });
+    const buffer = screen.getByTestId('buffer-fill');
+
+    setBuffered([[0, 300]]);
+    act(() => {
+      fakeController._emit('progress');
+    });
+    expect(buffer.childElementCount).toBe(1);
+
+    const bar = buffer.parentElement as HTMLElement;
+    const rect = { left: 0, right: 200, top: 0, bottom: 10, width: 200, height: 10, x: 0, y: 0, toJSON: () => {} } as DOMRect;
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue(rect);
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+    expect(buffer.childElementCount).toBe(0);
+  });
+});
+
 describe('PlayerBar favorite (heart) button', () => {
   it('checks favorite status for the current track and renders the heart button (not liked)', async () => {
     renderPlayer();
