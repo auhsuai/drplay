@@ -177,18 +177,42 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     }
   }, [currentTrack]);
 
+  // Shared favorite-status check: re-reads the stored status for a track id
+  // and applies it, unless the requesting scope went stale (track changed /
+  // component unmounted) while the check was in flight.
+  const checkFavorite = useCallback(async (trackId: string, isStale: () => boolean) => {
+    try {
+      const liked = await isFavorite(trackId);
+      if (!isStale()) setIsLiked(liked);
+    } catch (e: unknown) {
+      captureError({ level: 'warn', source: PLAYER_BAR_MODULE, message: `check-favorite-failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }, []);
+
   // Check favorite status whenever the current track changes
   useEffect(() => {
     let cancelled = false;
     if (!currentTrack) { setIsLiked(false); return; }
-    isFavorite(currentTrack.id)
-      .then((liked) => { if (!cancelled) setIsLiked(liked); })
-      .catch((e: unknown) => { captureError({ level: 'warn', source: PLAYER_BAR_MODULE, message: `check-favorite-failed: ${e instanceof Error ? e.message : String(e)}` }); });
+    checkFavorite(currentTrack.id, () => cancelled);
     return () => { cancelled = true; };
-  }, [currentTrack?.id]);
+  }, [currentTrack?.id, checkFavorite]);
 
+  // Re-check the current track when favorites change elsewhere (favorites.ts
+  // dispatches `favorites-updated` on add/remove), so the heart never shows a
+  // stale state while the same track keeps playing.
+  useEffect(() => {
+    const handleFavoritesUpdated = () => {
+      if (!currentTrack) return;
+      checkFavorite(currentTrack.id, () => false);
+    };
+    window.addEventListener('favorites-updated', handleFavoritesUpdated);
+    return () => window.removeEventListener('favorites-updated', handleFavoritesUpdated);
+  }, [currentTrack?.id, checkFavorite]);
+
+  const isFavoriteTogglingRef = useRef(false);
   const handleToggleFavorite = async () => {
-    if (!currentTrack) return;
+    if (!currentTrack || isFavoriteTogglingRef.current) return;
+    isFavoriteTogglingRef.current = true;
     try {
       if (isLiked) {
         await removeFavorite(currentTrack.id);
@@ -198,6 +222,8 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       setIsLiked(!isLiked);
     } catch (e: unknown) {
       captureError({ level: 'error', source: PLAYER_BAR_MODULE, message: `toggle-favorite-failed: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      isFavoriteTogglingRef.current = false;
     }
   };
 

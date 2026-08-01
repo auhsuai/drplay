@@ -353,4 +353,74 @@ describe('PlayerBar favorite (heart) button', () => {
     await screen.findByRole('button', { name: 'Add to favorites' });
     expect(isFavorite).toHaveBeenCalledWith('track-2');
   });
+
+  it('re-checks the current track when favorites-updated fires elsewhere (no stale heart)', async () => {
+    renderPlayer();
+    await screen.findByRole('button', { name: 'Add to favorites' });
+    isFavorite.mockClear();
+    isFavorite.mockResolvedValue(true);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('favorites-updated'));
+    });
+
+    expect(isFavorite).toHaveBeenCalledWith('track-1');
+    await screen.findByRole('button', { name: 'Remove from favorites' });
+  });
+
+  it('does not crash when favorites-updated fires with no current track', async () => {
+    const { rerender } = renderPlayer();
+    await screen.findByRole('button', { name: 'Add to favorites' });
+    isFavorite.mockClear();
+
+    rerender(
+      <PlayerBar
+        currentTrack={null}
+        isPlaying={false}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onExpandNowPlaying={vi.fn()}
+      />
+    );
+
+    expect(() => {
+      act(() => {
+        window.dispatchEvent(new CustomEvent('favorites-updated'));
+      });
+    }).not.toThrow();
+    expect(isFavorite).not.toHaveBeenCalled();
+  });
+
+  it('ignores a second click while the first toggle is still in flight (no duplicate add)', async () => {
+    let resolveAdd: (() => void) | undefined;
+    addFavorite.mockImplementationOnce(
+      () => new Promise<void>((res) => { resolveAdd = res; })
+    );
+    renderPlayer();
+    const btn = await screen.findByRole('button', { name: 'Add to favorites' });
+
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+
+    expect(addFavorite).toHaveBeenCalledTimes(1);
+    act(() => { resolveAdd?.(); });
+    await screen.findByRole('button', { name: 'Remove from favorites' });
+  });
+
+  it('resets the toggle guard after completion so the next click can remove', async () => {
+    renderPlayer();
+    const btn = await screen.findByRole('button', { name: 'Add to favorites' });
+    fireEvent.click(btn);
+    await screen.findByRole('button', { name: 'Remove from favorites' });
+    expect(addFavorite).toHaveBeenCalledTimes(1);
+
+    const removeBtn = screen.getByRole('button', { name: 'Remove from favorites' });
+    fireEvent.click(removeBtn);
+    await screen.findByRole('button', { name: 'Add to favorites' });
+    expect(removeFavorite).toHaveBeenCalledTimes(1);
+    expect(removeFavorite).toHaveBeenCalledWith('track-1');
+  });
 });
