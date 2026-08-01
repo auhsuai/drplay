@@ -10,6 +10,13 @@ const SONG_CARD_MODULE = 'SongCard';
 
 export const coverImageCache = new Map<string, string>();
 const COVER_CACHE_MAX = 500; // ~50KB max (100 bytes/cover URL string)
+// Fixed chrome bands the card must stay within to count as "fully visible"
+// (below the main header, above the player bar).
+const HEADER_HEIGHT = 160;
+const PLAYER_BAR_HEIGHT = 85;
+// One on→off cycle for the navigate/locate highlight cue. The old
+// implementation toggled isFlashOn 7× every 300ms (≈4 blinks) which looked broken.
+const FLASH_DURATION_MS = 700;
 
 function formatDuration(seconds: number): string {
   if (!seconds) return "00:00:00";
@@ -90,27 +97,18 @@ export const SongCard = React.memo(function SongCard({
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {
       const rect = cardRef.current.getBoundingClientRect();
-      const headerHeight = 160;
-      const playerBarHeight = 85;
-      const isVisible = rect.top >= headerHeight && rect.bottom <= (window.innerHeight - playerBarHeight);
-      
+      const isVisible = rect.top >= HEADER_HEIGHT && rect.bottom <= (window.innerHeight - PLAYER_BAR_HEIGHT);
+
       if (!isVisible) {
         cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-      
-      let count = 0;
+
+      // Single flash: one on→off cycle is the intended "located" cue. The old
+      // implementation toggled isFlashOn 7× @ 300ms (≈4 blinks) which looked broken.
       setIsFlashOn(true);
-      const interval = setInterval(() => {
-        setIsFlashOn(prev => !prev);
-        count++;
-        if (count >= 7) {
-          clearInterval(interval);
-          setIsFlashOn(false);
-        }
-      }, 300);
-      
+      const timer = setTimeout(() => setIsFlashOn(false), FLASH_DURATION_MS);
       return () => {
-        clearInterval(interval);
+        clearTimeout(timer);
         setIsFlashOn(false);
       };
     }

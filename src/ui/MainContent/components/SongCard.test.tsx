@@ -465,3 +465,134 @@ describe('SongCard MoreMenu WAI-ARIA APG menu button pattern', () => {
     expect(triggerButton()?.getAttribute('aria-expanded')).toBe('false');
   });
 });
+
+describe('SongCard navigate/locate highlight flash (single on→off cycle)', () => {
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+
+  beforeEach(() => {
+    coverImageCache.clear();
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: null,
+      duration: 0,
+      size: 0,
+      coverUrl: null,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    vi.useFakeTimers();
+    // jsdom does not implement scrollIntoView (logs "Not implemented") — stub it.
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: originalScrollIntoView,
+    });
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      writable: true,
+      value: originalGetBoundingClientRect,
+    });
+    cleanup();
+  });
+
+  const flashCard = (container: HTMLElement): HTMLDivElement | null =>
+    container.querySelector<HTMLDivElement>('.p-3');
+
+  const FLASH_ON_CLASS = 'bg-white dark:bg-[#383a40]';
+  const FLASH_OFF_CLASS = 'bg-[#F8F9FA] dark:bg-[#202124]';
+
+  it('flashes ON once on highlight, then OFF after one cycle, never re-toggling', async () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+    );
+
+    const card = flashCard(container);
+    expect(card).not.toBeNull();
+    // (a) highlight color applied immediately after render
+    expect(card?.className).toContain(FLASH_ON_CLASS);
+
+    // (b) back to normal once the single flash duration elapses
+    await act(async () => { vi.advanceTimersByTime(700); });
+    expect(card?.className).not.toContain(FLASH_ON_CLASS);
+    expect(card?.className).toContain(FLASH_OFF_CLASS);
+
+    // (c) stays off — no further toggle (the old 7×@300ms loop blinked again here)
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(card?.className).not.toContain(FLASH_ON_CLASS);
+    expect(card?.className).toContain(FLASH_OFF_CLASS);
+  });
+
+  it('bumping highlightTrigger re-runs a single flash', async () => {
+    const { container, rerender } = render(
+      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+    );
+    const card = flashCard(container) as HTMLDivElement;
+    expect(card.className).toContain(FLASH_ON_CLASS);
+    await act(async () => { vi.advanceTimersByTime(700); });
+    expect(card.className).not.toContain(FLASH_ON_CLASS);
+
+    rerender(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={2} />);
+    expect(card.className).toContain(FLASH_ON_CLASS);
+    await act(async () => { vi.advanceTimersByTime(700); });
+    expect(card.className).not.toContain(FLASH_ON_CLASS);
+  });
+
+  it('re-render with unchanged highlight props does not re-trigger the flash', async () => {
+    const { container, rerender } = render(
+      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+    );
+    const card = flashCard(container) as HTMLDivElement;
+    await act(async () => { vi.advanceTimersByTime(700); });
+    expect(card.className).not.toContain(FLASH_ON_CLASS);
+
+    rerender(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />);
+    expect(card.className).not.toContain(FLASH_ON_CLASS);
+  });
+
+  it('scrolls into view only when the card is off-screen', async () => {
+    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+
+    // off-screen (jsdom default rect is 0,0 — above the header band) → scroll
+    render(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />);
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    await act(async () => { vi.advanceTimersByTime(700); });
+    cleanup();
+
+    // fully visible (inside header/player window band) → no scroll, still flashes
+    scrollIntoView.mockClear();
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      writable: true,
+      value: () => ({ x: 0, y: 200, top: 200, bottom: 320, left: 0, right: 800, width: 800, height: 120, toJSON: () => ({}) }),
+    });
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+    );
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    const card = flashCard(container) as HTMLDivElement;
+    expect(card.className).toContain(FLASH_ON_CLASS);
+    await act(async () => { vi.advanceTimersByTime(700); });
+    expect(card.className).not.toContain(FLASH_ON_CLASS);
+  });
+
+  it('unmounting mid-flash cancels the pending timer without errors', async () => {
+    const { unmount } = render(
+      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+    );
+    unmount();
+    cleanup();
+    await act(async () => { vi.advanceTimersByTime(2000); });
+    expect(true).toBe(true);
+  });
+});
