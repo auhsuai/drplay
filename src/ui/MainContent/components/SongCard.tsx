@@ -1,19 +1,15 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import { Folder, Music, Square, CheckSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { DriveItem, Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
+import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
+
+const SONG_CARD_MODULE = 'SongCard';
 
 export const coverImageCache = new Map<string, string>();
 const COVER_CACHE_MAX = 500; // ~50KB max (100 bytes/cover URL string)
-
-function classifyCardError(err: unknown): { name: string; message: string } {
-  if (err instanceof Error) {
-    return { name: err.name, message: err.message };
-  }
-  return { name: "UnknownError", message: String(err) };
-}
 
 function formatDuration(seconds: number): string {
   if (!seconds) return "00:00:00";
@@ -76,8 +72,7 @@ export const SongCard = React.memo(function SongCard({
   const [coverUrl, setCoverUrl] = useState<string | null>(() => {
     return coverImageCache.get(item.id) ?? null;
   });
-  const metadataRef = useRef({ title: item.title, artist: null as string | null, duration: 0, size: 0 });
-  const [, forceRender] = useState(0);
+  const [meta, setMeta] = useState<{ title: string; artist: string | null; duration: number; size: number }>({ title: item.title, artist: null, duration: 0, size: 0 });
   const cardRef = React.useRef<HTMLDivElement>(null);
   const imgRef = React.useRef<HTMLImageElement>(null);
   const blobUrlRef = React.useRef<string | null>(null);
@@ -91,7 +86,6 @@ export const SongCard = React.memo(function SongCard({
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
-  const [shouldFetch] = useState(true);
 
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {
@@ -138,11 +132,12 @@ export const SongCard = React.memo(function SongCard({
           duration: metadata.duration || 0,
           size: metadata.size || 0,
         };
-        const old = metadataRef.current;
-        if (newMeta.title !== old.title || newMeta.artist !== old.artist || newMeta.duration !== old.duration || newMeta.size !== old.size) {
-          metadataRef.current = newMeta;
-          forceRender(n => n + 1);
-        }
+        setMeta(prev => {
+          if (newMeta.title === prev.title && newMeta.artist === prev.artist && newMeta.duration === prev.duration && newMeta.size === prev.size) {
+            return prev;
+          }
+          return newMeta;
+        });
 
         if (metadata.coverUrl) {
           coverImageCache.set(item.id, metadata.coverUrl);
@@ -160,8 +155,8 @@ export const SongCard = React.memo(function SongCard({
           setCoverUrl(blobUrlRef.current);
         }
       } catch (e) {
-        const { name, message } = classifyCardError(e);
-        console.warn('[SongCard] Failed to load track metadata', { id: item.id, name, message });
+        if (controller.signal.aborted) return;   // deliberate cleanup abort — not an error (MDN AbortController)
+        captureError({ level: 'warn', source: SONG_CARD_MODULE, message: `metadata-load-failed (fileId=${item.id}): ${e instanceof Error ? e.message : String(e)}` });
       }
     };
 
@@ -188,23 +183,41 @@ export const SongCard = React.memo(function SongCard({
       }
       window.removeEventListener('metadata-updated', handleMetadataUpdated);
     };
-  }, [item.id, token, shouldFetch]);
+  }, [item.id, token]);
+
+  const handleCardActivate = () => {
+    if (isSelectionMode) {
+      onToggleSelection?.(item.id);
+      return;
+    }
+    if (item.isFolder) {
+      onOpenFolder(item.id, meta.title);
+      return;
+    }
+    const track = item.trackInfo;
+    if (!track) return;
+    onPlay({
+      ...track,
+      title: meta.title || track.title,
+      artist: meta.artist || track.artist
+    });
+  };
+
+  const handleCardKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    handleCardActivate();
+  };
 
   return (
     <div className="relative w-full">
       <div
         ref={cardRef}
-        onClick={() => {
-          if (isSelectionMode) {
-            onToggleSelection?.(item.id);
-          } else {
-            item.isFolder ? onOpenFolder(item.id, metadataRef.current.title) : onPlay({
-              ...item.trackInfo!,
-              title: metadataRef.current.title || item.trackInfo!.title,
-              artist: metadataRef.current.artist || item.trackInfo!.artist
-            });
-          }
-        }}
+        role="button"
+        tabIndex={0}
+        onClick={handleCardActivate}
+        onKeyDown={handleCardKeyDown}
         onContextMenu={(e) => {
           if (hideMenu) return;
           e.preventDefault();
@@ -233,7 +246,7 @@ export const SongCard = React.memo(function SongCard({
       )}
       <div className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-500' : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!bg-[#4285F4]/10 !text-[#4285F4]' : 'text-gray-400'}`}`}>
         {coverUrl && !item.isFolder ? (
-          <img ref={imgRef} src={coverUrl} alt="cover" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
+          <img ref={imgRef} src={coverUrl} alt={meta.title} decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
         ) : item.isFolder ? (
           <Folder className="w-6 h-6" fill="currentColor" />
         ) : (
@@ -242,23 +255,23 @@ export const SongCard = React.memo(function SongCard({
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">
         <h3 className={`font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!text-[#4285F4]' : 'text-gray-800 dark:text-gray-200'}`}>
-          {metadataRef.current.title}
+          {meta.title}
         </h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           {item.isFolder ? (
             <span className="truncate">{t('drive.folders')}</span>
           ) : (
             <div className="flex items-center truncate">
-              {(metadataRef.current.duration > 0 || metadataRef.current.size > 0) && (
+              {(meta.duration > 0 || meta.size > 0) && (
                 <>
                   <span className="text-[11px] font-medium tracking-wide">
-                    {formatDuration(metadataRef.current.duration)}
+                    {formatDuration(meta.duration)}
                   </span>
-                  {metadataRef.current.size > 0 && (
+                  {meta.size > 0 && (
                     <>
                       <span className="mx-2 text-gray-300 dark:text-gray-600">•</span>
                       <span className="text-[11px] font-medium tracking-wide">
-                        {formatSize(metadataRef.current.size)}
+                        {formatSize(meta.size)}
                       </span>
                     </>
                   )}
@@ -301,6 +314,11 @@ export const SongCard = React.memo(function SongCard({
   );
 }, (prev, next) => {
   return prev.item.id === next.item.id &&
+         prev.item.title === next.item.title &&
+         prev.item.isFolder === next.item.isFolder &&
+         prev.item.trackInfo?.id === next.item.trackInfo?.id &&
+         prev.item.trackInfo?.queueItemId === next.item.trackInfo?.queueItemId &&
+         prev.item.size === next.item.size &&
          prev.isPlaying === next.isPlaying &&
          prev.isSelected === next.isSelected &&
          prev.isSelectionMode === next.isSelectionMode &&

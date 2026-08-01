@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import { SongCard, coverImageCache } from './SongCard';
 import { getTrackMetadata } from '../../../utils/metadata';
 import type { DriveItem } from '../../../App';
@@ -62,7 +62,7 @@ describe('SongCard coverUrl prop', () => {
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
     expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
     await screen.findByText('Fetched Title');
-    await screen.findByAltText('cover');
+    await screen.findByAltText('Fetched Title');
     expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
   });
 
@@ -70,14 +70,14 @@ describe('SongCard coverUrl prop', () => {
 
   it('caches and reuses coverUrl from cache on remount', async () => {
     const { unmount, container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByAltText('cover');
+    await screen.findByAltText('Fetched Title');
     expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
 
     unmount();
     cleanup();
 
     const { container: container2 } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByAltText('cover');
+    await screen.findByAltText('Fetched Title');
     expect(container2.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
   });
 
@@ -87,6 +87,17 @@ describe('SongCard coverUrl prop', () => {
     );
     expect(mockedFetch).not.toHaveBeenCalled();
     expect(container.querySelector('.lucide-folder')).not.toBeNull();
+  });
+
+  it('non-folder without trackInfo: click is a no-op instead of crashing', () => {
+    const onPlay = vi.fn();
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ trackInfo: undefined })} onPlay={onPlay} />,
+    );
+    const card = container.querySelector('.cursor-pointer');
+    expect(card).not.toBeNull();
+    expect(() => fireEvent.click(card as Element)).not.toThrow();
+    expect(onPlay).not.toHaveBeenCalled();
   });
 
   it('metadata update callback still works when injectedCoverUrl changes', async () => {
@@ -114,6 +125,29 @@ describe('SongCard coverUrl prop', () => {
     await screen.findByText('Re-fetched Title');
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/3');
+  });
+
+  it('re-renders on same-id item change (trackInfo.queueItemId) so click uses fresh track (stale-prop fix)', () => {
+    const onPlay = vi.fn();
+    const { rerender, container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({ trackInfo: { ...makeItem().trackInfo!, queueItemId: 'q-1' } })}
+        onPlay={onPlay}
+      />,
+    );
+    rerender(
+      <SongCard
+        {...baseProps}
+        item={makeItem({ trackInfo: { ...makeItem().trackInfo!, queueItemId: 'q-2' } })}
+        onPlay={onPlay}
+      />,
+    );
+    const card = container.querySelector('.cursor-pointer');
+    expect(card).not.toBeNull();
+    fireEvent.click(card as Element);
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    expect(onPlay.mock.calls[0][0].queueItemId).toBe('q-2');
   });
 });
 
@@ -311,5 +345,78 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(2);
     expect(createObjectURLSpy.mock.calls.length).toBe(revokeObjectURLSpy.mock.calls.length);
+  });
+});
+
+describe('SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG button pattern)', () => {
+  beforeEach(() => {
+    coverImageCache.clear();
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: 'Fetched Artist',
+      coverUrl: null,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('card is an accessible button: role="button" + tabIndex=0', () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const card = container.querySelector('.cursor-pointer');
+    expect(card).not.toBeNull();
+    expect(card?.getAttribute('role')).toBe('button');
+    expect(card?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('Enter on the card activates like a click (track → onPlay)', () => {
+    const onPlay = vi.fn();
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />);
+    const card = container.querySelector('.cursor-pointer') as Element;
+    fireEvent.keyDown(card, { key: 'Enter' });
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    expect(onPlay.mock.calls[0][0].id).toBe('track-1');
+  });
+
+  it('Enter on a folder card opens the folder (onOpenFolder)', () => {
+    const onOpenFolder = vi.fn();
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ isFolder: true, trackInfo: undefined })} onOpenFolder={onOpenFolder} />,
+    );
+    const card = container.querySelector('.cursor-pointer') as Element;
+    fireEvent.keyDown(card, { key: 'Enter' });
+    expect(onOpenFolder).toHaveBeenCalledTimes(1);
+    expect(onOpenFolder).toHaveBeenCalledWith('track-1', 'My Song');
+  });
+
+  it('Space activates the card and preventDefaults (no page scroll)', () => {
+    const onPlay = vi.fn();
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />);
+    const card = container.querySelector('.cursor-pointer') as Element;
+    expect(fireEvent.keyDown(card, { key: ' ' })).toBe(false);
+    expect(onPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it('in selection mode Enter toggles selection (onToggleSelection)', () => {
+    const onToggleSelection = vi.fn();
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} isSelectionMode onToggleSelection={onToggleSelection} />,
+    );
+    const card = container.querySelector('.cursor-pointer') as Element;
+    fireEvent.keyDown(card, { key: 'Enter' });
+    expect(onToggleSelection).toHaveBeenCalledTimes(1);
+    expect(onToggleSelection).toHaveBeenCalledWith('track-1');
+  });
+
+  it('does not activate when keydown bubbles from a focused child (e.g. menu button)', () => {
+    const onPlay = vi.fn();
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />);
+    const titleEl = container.querySelector('h3') as Element;
+    fireEvent.keyDown(titleEl, { key: 'Enter' });
+    expect(onPlay).not.toHaveBeenCalled();
   });
 });
