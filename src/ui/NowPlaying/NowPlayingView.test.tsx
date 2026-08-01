@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ComponentProps } from 'react';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Track } from '../../App';
 import { NowPlayingView } from './NowPlayingView';
@@ -171,5 +171,40 @@ describe('NowPlayingView buffer bar', () => {
     unmount();
 
     expect(fakeController._handlers['progress'] ?? []).toHaveLength(0);
+  });
+});
+
+describe('NowPlayingView a11y progressbar', () => {
+  it('exposes the progress bar with role="progressbar" and a bounded ARIA value range', () => {
+    renderView();
+    const bar = screen.getByRole('progressbar');
+    expect(bar.getAttribute('aria-valuemin')).toBe('0');
+    expect(bar.getAttribute('aria-valuemax')).toBe('100');
+    expect(bar.getAttribute('aria-valuenow')).toBe('0');
+  });
+
+  it('gives the progressbar an accessible name', () => {
+    renderView();
+    expect(screen.getByRole('progressbar').getAttribute('aria-label')).toBe('Playback progress');
+  });
+
+  it('syncs aria-valuenow to the seek position when a drag is committed', () => {
+    renderView();
+    act(() => {
+      fakeController._emit('durationchange', { duration: 240 });
+    });
+
+    const bar = screen.getByRole('progressbar');
+    const rect = { left: 0, right: 200, top: 0, bottom: 10, width: 200, height: 10, x: 0, y: 0, toJSON: () => {} } as DOMRect;
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue(rect);
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 50, pointerId: 1 });
+    });
+
+    expect(bar.getAttribute('aria-valuenow')).toBe('25');
   });
 });

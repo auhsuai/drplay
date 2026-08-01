@@ -45,6 +45,10 @@ export const NowPlayingView = memo(function NowPlayingView({
     handlePointerDown
   } = useNowPlayingProgress(currentTrack, isOpen);
 
+  const progressPercent = progressFillRef.current
+    ? Math.round(parseFloat(progressFillRef.current.style.width) || 0)
+    : 0;
+
   if (!currentTrack) {
     return (
       <main className="flex-1 bg-gray-100 dark:bg-[#121212] overflow-hidden flex flex-col items-center justify-center transition-colors duration-300 relative">
@@ -131,6 +135,11 @@ export const NowPlayingView = memo(function NowPlayingView({
                 <span ref={currentTimeTextRef} className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums">0:00</span>
                 <div 
                   ref={progressBarRef}
+                  role="progressbar"
+                  aria-label={t('now_playing.progress', 'Playback progress')}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={progressPercent}
                   className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
                   onPointerDown={handlePointerDown}
                 >
