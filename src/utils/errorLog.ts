@@ -29,19 +29,10 @@ export async function captureError(input: {
     const count = await db.errorLogs.count();
     if (count > ERROR_LOG_MAX) {
       const excess = count - ERROR_LOG_MAX;
-      const oldest = await db.errorLogs.orderBy('ts').limit(excess).toArray();
-      const idsToRemove = oldest.map((e) => e.id);
-      if (idsToRemove.length > 0) {
-        await db.errorLogs.bulkDelete(idsToRemove);
-      }
+      await db.errorLogs.orderBy('ts').limit(excess).delete();
     }
   } catch (err) {
-    // NEVER throw: a failed log capture must not crash the app.
-    console.warn(
-      `[captureError] failed to persist error log at ${new Date().toISOString()}: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+    logCaptureFailure('captureError', err);
   }
 }
 
@@ -49,11 +40,7 @@ export async function getErrorLogs(): Promise<ErrorLogEntry[]> {
   try {
     return await db.errorLogs.orderBy('ts').reverse().toArray();
   } catch (err) {
-    console.warn(
-      `[getErrorLogs] failed to read error logs at ${new Date().toISOString()}: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+    logCaptureFailure('getErrorLogs', err);
     return [];
   }
 }
@@ -62,11 +49,7 @@ export async function clearErrorLogs(): Promise<void> {
   try {
     await db.errorLogs.clear();
   } catch (err) {
-    console.warn(
-      `[clearErrorLogs] failed to clear error logs at ${new Date().toISOString()}: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+    logCaptureFailure('clearErrorLogs', err);
   }
 }
 
@@ -90,11 +73,7 @@ export async function exportErrorLogsSanitized(): Promise<string> {
     if (logs.length === 0) return '';
     return formatLogsToReport(logs);
   } catch (err) {
-    console.warn(
-      `[exportErrorLogsSanitized] failed to export at ${new Date().toISOString()}: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+    logCaptureFailure('exportErrorLogsSanitized', err);
     return '';
   }
 }
@@ -155,11 +134,16 @@ export async function exportErrorLogsSanitizedForDate(
 
     return formatLogsToReport(group.entries);
   } catch (err) {
-    console.warn(
-      `[exportErrorLogsSanitizedForDate] failed to export for date ${dateKey} at ${new Date().toISOString()}: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+    logCaptureFailure(`exportErrorLogsSanitizedForDate:${dateKey}`, err);
     return '';
   }
+}
+
+// NEVER throw: a failed log capture must not crash the app.
+function logCaptureFailure(scope: string, err: unknown): void {
+  console.warn(
+    `[${scope}] failed at ${new Date().toISOString()}: ${
+      err instanceof Error ? err.message : String(err)
+    }`
+  );
 }

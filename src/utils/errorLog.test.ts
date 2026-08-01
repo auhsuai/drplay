@@ -83,6 +83,22 @@ describe('captureError', () => {
   });
 });
 
+describe('getErrorLogs', () => {
+  it('returns [] instead of throwing when Dexie read fails (never throw)', async () => {
+    const spy = vi
+      .spyOn(db.errorLogs, 'orderBy')
+      .mockReturnValue({
+        reverse: () => ({
+          toArray: () => Promise.reject(new Error('read boom'))
+        })
+      } as never);
+
+    await expect(getErrorLogs()).resolves.toEqual([]);
+
+    spy.mockRestore();
+  });
+});
+
 describe('groupLogsByDate', () => {
   it('groups entries by local date and orders newest-first', () => {
     // Two distinct local dates. Use date strings so tz is deterministic per host.
