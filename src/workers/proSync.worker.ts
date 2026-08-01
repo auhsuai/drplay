@@ -1,4 +1,5 @@
 import { db } from '../db/db';
+import type { DriveFile as DriveFileRow } from '../db/db';
 import { getAudioQuery, isAudioFile } from '../utils/audioQuery';
 import { classifyWorkerError, logWorkerError, WorkerAbortError } from './workerError';
 
@@ -13,15 +14,32 @@ interface DriveChange { file?: DriveFile; fileId?: string; removed?: boolean; ch
 let isBusy = false;
 let currentToken: string | null = null;
 let tokenRefreshResolver: ((value: boolean) => void) | null = null;
-let syncRetryCount = 0;
 const MAX_SYNC_RETRIES = 3;
+const syncRetry = { count: 0, max: MAX_SYNC_RETRIES };
 const SYNC_FETCH_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_TIMEOUT_MS = 15000;
+const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 function toSize(raw: string | undefined | null): number | undefined {
   if (raw === undefined || raw === null || raw === '') return undefined;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+// Shared mapping of a Google Drive file resource to the DB row shape used by
+// both full-sync and delta-sync. isFolder is a parameter so callers that
+// already computed it (delta-sync) don't recompute it.
+export function toDriveFileRow(f: DriveFile, isFolder: boolean): DriveFileRow {
+  return {
+    id: f.id!,
+    name: f.name!,
+    mimeType: f.mimeType!,
+    parentId: f.parents && f.parents.length > 0 ? f.parents[0] : 'root',
+    size: toSize(f.size),
+    modifiedTime: f.modifiedTime,
+    trashed: false,
+    isFolder,
+  };
 }
 
 async function waitForTokenRefresh(timeoutMs = TOKEN_REFRESH_TIMEOUT_MS): Promise<boolean> {
@@ -38,6 +56,60 @@ async function waitForTokenRefresh(timeoutMs = TOKEN_REFRESH_TIMEOUT_MS): Promis
   });
 }
 
+export interface SyncRetryState {
+  count: number;
+  max: number;
+}
+
+// Injected deps so unit tests can stub postMessage / waitForTokenRefresh
+// without a real worker scope or network.
+export interface RefreshTokenRetryDeps {
+  postMessage: (msg: { type: string }) => void;
+  waitForTokenRefresh: () => Promise<boolean>;
+}
+
+// Shared 401 handler used by all three Drive fetch loops (full-sync
+// startPageToken, full-sync files, delta-sync changes). Returns true when the
+// caller should retry the request after a successful token refresh; returns
+// false when it must give up (retries exhausted) or the refresh failed, and
+// the caller decides whether to return/break. Extracted so the retry-count
+// logic lives in one place instead of being copy-pasted three times.
+export async function refreshTokenAndRetry(
+  state: SyncRetryState,
+  deps: RefreshTokenRetryDeps,
+  ctx: string,
+): Promise<boolean> {
+  if (state.count >= state.max) {
+    logWorkerError(
+      'proSync/' + ctx,
+      { kind: 'auth', status: 401, reason: 'max-retries' },
+      new Error('token refresh retries exhausted'),
+      'error'
+    );
+    deps.postMessage({ type: 'SYNC_ERROR' });
+    return false;
+  }
+  state.count += 1;
+  deps.postMessage({ type: 'TOKEN_EXPIRED' });
+  const refreshed = await deps.waitForTokenRefresh();
+  if (refreshed) {
+    state.count = 0;
+    return true;
+  }
+  return false;
+}
+
+// Production bindings: post to the worker's parent scope and wait on the
+// module-level refresh resolver. Tests inject their own deps instead.
+const syncRetryDeps: RefreshTokenRetryDeps = {
+  postMessage: (msg) => self.postMessage(msg),
+  waitForTokenRefresh: () => waitForTokenRefresh(),
+};
+
+// Guard so the module can be imported in node-based unit tests (vitest), where
+// `self` does not exist. In a real worker `self` is always defined, so the
+// listener registration is unchanged.
+if (typeof self !== 'undefined') {
 self.addEventListener('message', async (e: MessageEvent) => {
   const { type, token } = e.data;
 
@@ -62,6 +134,7 @@ self.addEventListener('message', async (e: MessageEvent) => {
     isBusy = false;
   }
 });
+}
 
 // fetch() wrapper that applies the shared timeout and classifies transport
 // failures (network / timeout / abort). HTTP status is still the caller's job.
@@ -130,16 +203,9 @@ async function performFullSync() {
       const tokenRes = await fetchDrive('startPageToken', currentToken, tokenUrl);
 
       if (tokenRes.status === 401) {
-        if (syncRetryCount >= MAX_SYNC_RETRIES) return;
-        syncRetryCount++;
-        self.postMessage({ type: 'TOKEN_EXPIRED' });
-        const refreshed = await waitForTokenRefresh();
-        if (refreshed) {
-          syncRetryCount = 0;
-          retryFullSync = true;
-          continue;
-        }
-        return;
+        if (!(await refreshTokenAndRetry(syncRetry, syncRetryDeps, 'full-sync/startPageToken'))) return;
+        retryFullSync = true;
+        continue;
       }
       if (tokenRes.ok) {
         const tokenData = await parseDriveJson<{ startPageToken: string }>('startPageToken', tokenRes);
@@ -164,30 +230,16 @@ async function performFullSync() {
 
         if (!res.ok) {
           if (res.status === 401) {
-            if (syncRetryCount >= MAX_SYNC_RETRIES) break;
-            syncRetryCount++;
-            self.postMessage({ type: 'TOKEN_EXPIRED' });
-            const refreshed = await waitForTokenRefresh();
-            if (refreshed) {
-              syncRetryCount = 0;
-              continue;
-            }
+            if (await refreshTokenAndRetry(syncRetry, syncRetryDeps, 'full-sync/files')) continue;
           }
           break;
         }
 
         const data = await parseDriveJson<{ files?: DriveFile[]; nextPageToken?: string }>('files', res);
 
-        const filesToInsert = (data.files || []).map((f: DriveFile) => ({
-          id: f.id!,
-          name: f.name!,
-          mimeType: f.mimeType!,
-          parentId: f.parents && f.parents.length > 0 ? f.parents[0] : 'root',
-          size: toSize(f.size),
-          modifiedTime: f.modifiedTime,
-          trashed: false,
-          isFolder: f.mimeType === 'application/vnd.google-apps.folder',
-        }));
+        const filesToInsert = (data.files || []).map((f: DriveFile) =>
+          toDriveFileRow(f, f.mimeType === FOLDER_MIME_TYPE)
+        );
 
         if (filesToInsert.length > 0) {
           try {
@@ -233,7 +285,7 @@ async function performDeltaSync(startPageToken: string) {
 
       if (!res.ok) {
         if (res.status === 410) {
-          syncRetryCount = 0;
+          syncRetry.count = 0;
           try {
             await db.syncState.delete('startPageToken');
           } catch (err) {
@@ -243,14 +295,7 @@ async function performDeltaSync(startPageToken: string) {
           return;
         }
         if (res.status === 401) {
-          if (syncRetryCount >= MAX_SYNC_RETRIES) break;
-          syncRetryCount++;
-          self.postMessage({ type: 'TOKEN_EXPIRED' });
-          const refreshed = await waitForTokenRefresh();
-          if (refreshed) {
-            syncRetryCount = 0;
-            continue;
-          }
+          if (await refreshTokenAndRetry(syncRetry, syncRetryDeps, 'delta-sync/changes')) continue;
         }
         break;
       }
@@ -267,19 +312,10 @@ async function performDeltaSync(startPageToken: string) {
             hasValidChanges = true;
           } else if (change.file) {
             const file = change.file;
-            const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
+            const isFolder = file.mimeType === FOLDER_MIME_TYPE;
 
             if (isFolder || isAudioFile(file.mimeType!, file.name!)) {
-              await db.files.put({
-                id: file.id!,
-                name: file.name!,
-                mimeType: file.mimeType!,
-                parentId: file.parents && file.parents.length > 0 ? file.parents[0] : 'root',
-                size: toSize(file.size),
-                modifiedTime: file.modifiedTime,
-                trashed: false,
-                isFolder,
-              });
+              await db.files.put(toDriveFileRow(file, isFolder));
               hasValidChanges = true;
             }
           }
