@@ -1,8 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import Cropper, { Area } from 'react-easy-crop';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import { showErrorToast } from '../../utils/simpleToast';
+import { captureError } from '../../utils/errorLog';
+
+const CROPPER_MODULE = 'ImageCropperModal';
 
 interface ImageCropperModalProps {
   imageSrc: string;
@@ -16,10 +19,32 @@ export function ImageCropperModal({ imageSrc, onClose, onSave }: ImageCropperMod
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isProcessing) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, isProcessing]);
 
   const onCropComplete = useCallback((_croppedArea: Area, croppedAreaPixels: Area) => {
     setCroppedAreaPixels(croppedAreaPixels);
   }, []);
+
+  const handleOverlayClick = () => {
+    if (isProcessing) return;
+    onClose();
+  };
 
   const handleSave = async () => {
     if (!croppedAreaPixels || !imageSrc) return;
@@ -29,7 +54,7 @@ export function ImageCropperModal({ imageSrc, onClose, onSave }: ImageCropperMod
       const croppedImage = await getCroppedImg(imageSrc, croppedAreaPixels);
       onSave(croppedImage);
     } catch (e) {
-      console.error("[ImageCropper] save-cover: Failed to crop/save image", e);
+      captureError({ level: 'error', source: CROPPER_MODULE, message: `save-cover-failed: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('playlist.cover_save_error') || "Failed to save cover image");
     } finally {
       setIsProcessing(false);
@@ -37,17 +62,24 @@ export function ImageCropperModal({ imageSrc, onClose, onSave }: ImageCropperMod
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={onClose}>
-      <div 
-        className="bg-white dark:bg-[#202124] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col animate-in zoom-in-95 duration-200"
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={handleOverlayClick}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cropper-title"
+        tabIndex={-1}
+        className="bg-white dark:bg-[#202124] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col animate-in duration-200"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          <h3 id="cropper-title" className="text-lg font-bold text-gray-900 dark:text-white">
             {t('playlist.adjust_cover', 'Điều chỉnh ảnh bìa')}
           </h3>
-          <button 
+          <button
             onClick={onClose}
+            disabled={isProcessing}
+            aria-label={t('playlist.close')}
             className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -78,7 +110,7 @@ export function ImageCropperModal({ imageSrc, onClose, onSave }: ImageCropperMod
               min={1}
               max={3}
               step={0.1}
-              aria-labelledby="Zoom"
+              aria-label={t('playlist.zoom')}
               onChange={(e) => setZoom(Number(e.target.value))}
               className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-[#4285F4]"
             />
@@ -119,7 +151,7 @@ function getCroppedImg(imageSrc: string, pixelCrop: Area): Promise<string> {
       const ctx = canvas.getContext('2d');
       
       if (!ctx) {
-        reject(new Error('No 2d context'));
+        reject(new Error('canvas-2d-context-unavailable'));
         return;
       }
 
