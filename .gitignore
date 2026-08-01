@@ -77,3 +77,6 @@ cloudflare R2/
 src-tauri/r2_config.json
 r2_config.json
 *.r2.json
+
+# codebase-memory tool artifacts (keep local, never commit)
+.codebase-memory/
