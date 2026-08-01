@@ -2,11 +2,9 @@ import { useState, useEffect } from "react";
 import { Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { getPalette } from '../../../utils/color';
+import { captureError } from "../../../utils/errorLog";
 
-function classifyNowPlayingError(err: unknown): { name: string; message: string } {
-  if (err instanceof Error) return { name: err.name, message: err.message };
-  return { name: "UnknownError", message: String(err) };
-}
+const NOW_PLAYING_MODULE = 'useNowPlayingMetadata';
 
 export function useNowPlayingMetadata(currentTrack: Track | null, token: string | null) {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
@@ -32,8 +30,16 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
         }
       };
 
-      getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName, controller.signal)
-        .then(metadata => {
+      const resetPalette = () => {
+        if (!isCancelled) {
+          setBgColor('');
+          setBgPalette([]);
+        }
+      };
+
+      void (async () => {
+        try {
+          const metadata = await getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName, controller.signal);
           if (isCancelled) return;
           if (metadata.title) setRealTitle(metadata.title);
           if (metadata.artist) setRealArtist(metadata.artist);
@@ -41,53 +47,45 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
           const targetCover = metadata.fullCoverUrl || metadata.coverUrl;
           if (targetCover) {
             setCoverUrl(targetCover);
-            getPalette(targetCover)
-              .then(colors => {
-                if (isCancelled) return;
-                setBgColor(colors[0]);
-                setBgPalette(colors);
-              })
-              .catch((err) => {
-                if (!isCancelled) {
-                  setBgColor('');
-                  setBgPalette([]);
-                }
-                console.warn('[NowPlaying] palette-failed', { trackId: currentTrack?.id, err: classifyNowPlayingError(err) });
-              });
-          } else if ((metadata.pictureDataFull || metadata.pictureData) && metadata.pictureFormat) {
-            const data = metadata.pictureDataFull || metadata.pictureData;
-            const blob = new Blob([new Uint8Array(data!)], { type: metadata.pictureFormat });
-            const coverObjectUrl = URL.createObjectURL(blob);
-            objectUrl = coverObjectUrl;
-            setCoverUrl(coverObjectUrl);
-
-            Promise.resolve()
-              .then(() => getPalette(coverObjectUrl))
-              .then(colors => {
-                if (isCancelled) return;
-                setBgColor(colors[0]);
-                setBgPalette(colors);
-              })
-              .catch((err) => {
-                if (!isCancelled) {
-                  setBgColor('');
-                  setBgPalette([]);
-                }
-                console.warn('[NowPlaying] palette-failed', { trackId: currentTrack?.id, err: classifyNowPlayingError(err) });
-              })
-              .finally(() => revokeCoverUrl());
+            try {
+              const colors = await getPalette(targetCover);
+              if (isCancelled) return;
+              setBgColor(colors[0]);
+              setBgPalette(colors);
+            } catch (err) {
+              resetPalette();
+              captureError({ level: 'warn', source: NOW_PLAYING_MODULE, message: `palette-failed: ${err instanceof Error ? err.message : String(err)}` });
+            }
           } else {
-            setBgColor('');
-            setBgPalette([]);
+            const picture = metadata.pictureDataFull ?? metadata.pictureData;
+            if (picture && metadata.pictureFormat) {
+              const blob = new Blob([new Uint8Array(picture)], { type: metadata.pictureFormat });
+              const coverObjectUrl = URL.createObjectURL(blob);
+              objectUrl = coverObjectUrl;
+              setCoverUrl(coverObjectUrl);
+
+              try {
+                const colors = await getPalette(coverObjectUrl);
+                if (isCancelled) return;
+                setBgColor(colors[0]);
+                setBgPalette(colors);
+              } catch (err) {
+                resetPalette();
+                captureError({ level: 'warn', source: NOW_PLAYING_MODULE, message: `palette-failed: ${err instanceof Error ? err.message : String(err)}` });
+              } finally {
+                revokeCoverUrl();
+              }
+            } else {
+              setBgColor('');
+              setBgPalette([]);
+            }
           }
-        })
-        .catch((e) => {
-          console.error('[NowPlaying] track-metadata-failed', { trackId: currentTrack?.id, ...classifyNowPlayingError(e) });
-          if (!isCancelled) {
-            setBgColor('');
-            setBgPalette([]);
-          }
-        });
+        } catch (e) {
+          if (e instanceof DOMException && e.name === 'AbortError') return;
+          captureError({ level: 'error', source: NOW_PLAYING_MODULE, message: `track-metadata-failed: ${e instanceof Error ? e.message : String(e)}` });
+          resetPalette();
+        }
+      })();
         
       return () => {
         isCancelled = true;

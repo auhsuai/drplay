@@ -5,6 +5,7 @@ import type { Track } from '../../../App';
 import type { CachedMetadata } from '../../../utils/metadata';
 import { getTrackMetadata } from '../../../utils/metadata';
 import { getPalette } from '../../../utils/color';
+import { captureError } from '../../../utils/errorLog';
 import { useNowPlayingMetadata } from './useNowPlayingMetadata';
 
 vi.mock('../../../utils/metadata', () => ({
@@ -15,8 +16,13 @@ vi.mock('../../../utils/color', () => ({
   getPalette: vi.fn(),
 }));
 
+vi.mock('../../../utils/errorLog', () => ({
+  captureError: vi.fn(),
+}));
+
 const mockedGetTrackMetadata = vi.mocked(getTrackMetadata);
 const mockedGetPalette = vi.mocked(getPalette);
+const mockedCaptureError = vi.mocked(captureError);
 
 const BLOB_URL = 'blob:mock-nowplaying-cover';
 
@@ -185,5 +191,31 @@ describe('useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
     expect(revokeObjectURLSpy).toHaveBeenCalledWith(BLOB_URL);
     expect(createObjectURLSpy.mock.calls.length).toBe(revokeObjectURLSpy.mock.calls.length);
     expect(result.current.coverUrl).toBe(BLOB_URL);
+  });
+
+  it('logs a warn via captureError with the module source when palette decoding fails', async () => {
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+    mockedGetPalette.mockRejectedValue(new Error('decode failed'));
+
+    renderHook(() => useNowPlayingMetadata(makeTrack(), 'token'));
+    await flushMicrotasks();
+
+    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'useNowPlayingMetadata',
+        message: expect.stringContaining('palette-failed'),
+      })
+    );
+  });
+
+  it('does not log via captureError when metadata rejects with AbortError (cleanup abort is not an error)', async () => {
+    mockedGetTrackMetadata.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+
+    renderHook(() => useNowPlayingMetadata(makeTrack(), 'token'));
+    await flushMicrotasks();
+
+    expect(mockedCaptureError).not.toHaveBeenCalled();
   });
 });

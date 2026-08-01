@@ -31,7 +31,9 @@
     "select_root": "Select Root Folder",
     "choose_folder": "Choose this folder",
     "cancel": "Cancel",
-    "select_music_folder": "Select your main music folder"
+    "select_music_folder": "Select your main music folder",
+    "from_subfolders": "From subfolders",
+    "searching_deeper": "Searching deeper..."
   },
   "home": {
     "good_morning": "Good morning",

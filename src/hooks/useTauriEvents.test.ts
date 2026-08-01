@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getValidToken } from '../utils/apiClient';
 import { getTrackMetadata } from '../utils/metadata';
 import type { CachedMetadata } from '../utils/metadata';
-import { useTauriEvents } from './useTauriEvents';
+import { uploadCover, useTauriEvents } from './useTauriEvents';
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(),
@@ -148,5 +148,21 @@ describe('useTauriEvents repair-missing-thumbnail cover upload', () => {
 
     const failedLogs = warnSpy.mock.calls.filter(call => String(call[0]).includes('cover-upload-failed'));
     expect(failedLogs).toHaveLength(0);
+  });
+
+  it('uploadCover POSTs data to the URL with the given signal and throws on a non-OK response', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 503 } as Response);
+    const signal = new AbortController().signal;
+
+    await expect(
+      uploadCover('http://drplay.localhost/cover/db-1?thumb=true', new Uint8Array([1, 2]), signal)
+    ).rejects.toThrow('HTTP 503');
+
+    const [url, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit?];
+    expect(String(url)).toBe('http://drplay.localhost/cover/db-1?thumb=true');
+    expect(init?.method).toBe('POST');
+    expect(init?.signal).toBe(signal);
+    expect(init?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(init?.body as Uint8Array)).toEqual([1, 2]);
   });
 });

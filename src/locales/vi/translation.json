@@ -31,7 +31,9 @@
     "select_root": "Chọn thư mục gốc",
     "choose_folder": "Chọn thư mục này",
     "cancel": "Hủy",
-    "select_music_folder": "Chọn thư mục chứa nhạc chính của bạn"
+    "select_music_folder": "Chọn thư mục chứa nhạc chính của bạn",
+    "from_subfolders": "Từ thư mục con",
+    "searching_deeper": "Đang tìm sâu hơn..."
   },
   "home": {
     "good_morning": "Chào buổi sáng",

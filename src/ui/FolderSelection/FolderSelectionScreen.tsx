@@ -5,8 +5,13 @@ import { db } from '../../db/db';
 import { getValidToken } from '../../utils/apiClient';
 import { searchFolders, listFolderChildren, getFileParents, getFileName } from '../../utils/driveApi';
 import { showErrorToast } from '../../utils/simpleToast';
+import { captureError } from '../../utils/errorLog';
 
 const FOLDER_MODULE = "FolderSelection";
+const SEARCH_DEBOUNCE_MS = 300;
+const DRIVE_ROOT_ID = 'root';
+const LS_ROOT_FOLDER = 'drplay_root_folder';
+const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 // Classify a Drive fetch error for observability. Returns name + message only.
 function classifyFolderError(err: unknown): string {
@@ -15,9 +20,40 @@ function classifyFolderError(err: unknown): string {
   return `${name}: ${message}`;
 }
 
+// fetch aborts (AbortController/AbortSignal) reject with a DOMException named
+// 'AbortError' — the caller requested the cancellation, so it must not be
+// surfaced as a user-facing error. Check both shapes: browsers' DOMException
+// extends Error, but jsdom's implementation does not.
+function isAbortError(err: unknown): boolean {
+  if (err instanceof Error && err.name === 'AbortError') return true;
+  return typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError';
+}
+
 interface FolderItem {
   id: string;
   name: string;
+}
+
+function FolderCard({ folder, onClick }: { folder: FolderItem; onClick: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      onClick={onClick}
+      className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
+    >
+      <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
+        <Folder className="w-6 h-6" fill="currentColor" />
+      </div>
+      <div className="overflow-hidden flex-1">
+        <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4] transition-colors truncate">
+          {folder.name}
+        </h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+          {t('drive.folders')}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 interface FolderSelectionScreenProps {
@@ -33,13 +69,13 @@ interface FolderSelectionScreenProps {
   allowEscapeRoot?: boolean;
 }
 
-export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = 'root', initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder, allowEscapeRoot = false }: FolderSelectionScreenProps) {
+export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = DRIVE_ROOT_ID, initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder, allowEscapeRoot = false }: FolderSelectionScreenProps) {
   const { t } = useTranslation();
   
   // Resolve appRootFolder from props or localStorage
-  const resolvedAppRoot = appRootFolder || localStorage.getItem("drplay_root_folder");
+  const resolvedAppRoot = appRootFolder || localStorage.getItem(LS_ROOT_FOLDER);
   
-  const [currentFolderId, setCurrentFolderId] = useState(initialFolderId === 'root' && resolvedAppRoot ? resolvedAppRoot : initialFolderId);
+  const [currentFolderId, setCurrentFolderId] = useState(initialFolderId === DRIVE_ROOT_ID && resolvedAppRoot ? resolvedAppRoot : initialFolderId);
   const [currentFolderName, setCurrentFolderName] = useState(initialFolderName || t('drive.my_drive'));
   const [folderHistory, setFolderHistory] = useState<{id: string, name: string}[]>(initialFolderHistory);
   const [folders, setFolders] = useState<FolderItem[]>([]);
@@ -50,6 +86,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const [isSearchingApi, setIsSearchingApi] = useState(false);
   const isLoadingRef = useRef(false);
   const apiSearchAbortRef = useRef<AbortController | null>(null);
+  const foldersAbortRef = useRef<AbortController | null>(null);
 
   const filteredFolders = useMemo(() => {
     if (!searchQuery.trim()) return folders;
@@ -65,13 +102,13 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     setIsSearchingApi(true);
     try {
       const safeQuery = query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      const q = `name contains '${safeQuery}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      const q = `name contains '${safeQuery}' and mimeType='${DRIVE_FOLDER_MIME_TYPE}' and trashed=false`;
       const files = await searchFolders(token, q, controller.signal);
       setApiSearchResults(files.filter((f: FolderItem) => f.id !== currentFolderId));
     } catch (e: unknown) {
-      if (typeof e === 'object' && e !== null && 'name' in e && (e as { name: unknown }).name !== 'AbortError') {
+      if (!isAbortError(e)) {
         setApiSearchResults([]);
-        console.warn(`[${FOLDER_MODULE}] api-search-failed`, classifyFolderError(e));
+        captureError({ level: 'warn', source: FOLDER_MODULE, message: `api-search-failed: ${classifyFolderError(e)}` });
         showErrorToast(t('folder_selection.search_error') || 'Failed to search folders');
       }
     } finally {
@@ -86,7 +123,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
       return;
     }
     setIsSearchingApi(true);
-    const timer = setTimeout(() => searchSubfolders(searchQuery.trim()), 300);
+    const timer = setTimeout(() => searchSubfolders(searchQuery.trim()), SEARCH_DEBOUNCE_MS);
     return () => { clearTimeout(timer); apiSearchAbortRef.current?.abort(); };
   }, [searchQuery, filteredFolders.length, searchSubfolders]);
 
@@ -94,6 +131,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     fetchFolders(currentFolderId);
     setSearchQuery('');
     setApiSearchResults([]);
+    return () => cancelFolderFetch();
   }, [currentFolderId, token]);
 
   useEffect(() => {
@@ -116,26 +154,41 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const cancelFolderFetch = useCallback(() => {
+    foldersAbortRef.current?.abort();
+    foldersAbortRef.current = null;
+  }, []);
+
   const fetchFolders = async (folderId: string) => {
+    cancelFolderFetch();
+    const controller = new AbortController();
+    foldersAbortRef.current = controller;
+
     isLoadingRef.current = true;
     setIsLoading(true);
     setFolders([]);
     try {
       const dbFolders = await db.files.where('parentId').equals(folderId).filter(f => f.isFolder).toArray();
+      if (controller.signal.aborted) return;
       if (dbFolders.length > 0) {
         setFolders(dbFolders.map(c => ({ id: c.id, name: c.name })));
       } else {
         const freshToken = (await getValidToken()) || token;
-        const files = await listFolderChildren(freshToken, folderId);
+        if (controller.signal.aborted) return;
+        const files = await listFolderChildren(freshToken, folderId, controller.signal);
+        if (controller.signal.aborted) return;
         setFolders(files.map(f => ({ id: f.id, name: f.name })));
       }
     } catch (e) {
-      console.error("[FolderSelection] Failed to fetch folders", classifyFolderError(e));
+      if (isAbortError(e)) return;
+      captureError({ level: 'error', source: FOLDER_MODULE, message: `failed-to-fetch-folders: ${classifyFolderError(e)}` });
       showErrorToast(t('folder_selection.folders_error') || 'Failed to load folders');
       setFolders([]);
     } finally {
-      isLoadingRef.current = false;
-      setIsLoading(false);
+      if (foldersAbortRef.current === controller) {
+        isLoadingRef.current = false;
+        setIsLoading(false);
+      }
     }
   };
 
@@ -150,52 +203,54 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
 
   const handleBack = async () => {
     if (folderHistory.length > 0) {
+      cancelFolderFetch();
       const newHistory = [...folderHistory];
-      const prevFolder = newHistory.pop()!;
+      const prevFolder = newHistory.pop();
       setFolderHistory(newHistory);
-      setCurrentFolderId(prevFolder.id);
-      setCurrentFolderName(prevFolder.name);
+      setCurrentFolderId(prevFolder?.id || resolvedAppRoot || DRIVE_ROOT_ID);
+      setCurrentFolderName(prevFolder?.name || t('drive.my_drive'));
       return;
     }
 
-    if (currentFolderId === 'root' || (!allowEscapeRoot && resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
+    if (currentFolderId === DRIVE_ROOT_ID || (!allowEscapeRoot && resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
 
+    cancelFolderFetch();
     isLoadingRef.current = true;
     setIsLoading(true);
     try {
       const parents = await getFileParents(token, currentFolderId);
       if (parents === null) {
         // Drive request failed hard — fall back to root.
-        setCurrentFolderId('root');
-        setCurrentFolderName('My Drive');
+        setCurrentFolderId(DRIVE_ROOT_ID);
+        setCurrentFolderName(t('drive.my_drive'));
       } else if (parents.length > 0) {
         const fetchedParentId = parents[0];
         setCurrentFolderId(fetchedParentId);
-        if (fetchedParentId === 'root') {
-          setCurrentFolderName('My Drive');
+        if (fetchedParentId === DRIVE_ROOT_ID) {
+          setCurrentFolderName(t('drive.my_drive'));
         } else {
           try {
             const name = await getFileName(token, fetchedParentId);
             if (name) setCurrentFolderName(name);
           } catch (e) {
-            console.warn(`[${FOLDER_MODULE}] fetch-parent-name-failed`, classifyFolderError(e));
+            captureError({ level: 'warn', source: FOLDER_MODULE, message: `fetch-parent-name-failed: ${classifyFolderError(e)}` });
           }
         }
       } else {
-        setCurrentFolderId('root');
+        setCurrentFolderId(DRIVE_ROOT_ID);
       }
     } catch (e) {
-      console.error(`[${FOLDER_MODULE}] fetch-parent-failed`, classifyFolderError(e));
+      captureError({ level: 'error', source: FOLDER_MODULE, message: `fetch-parent-failed: ${classifyFolderError(e)}` });
       showErrorToast(t('folder_selection.back_error') || 'Failed to navigate back');
-      setCurrentFolderId('root');
-      setCurrentFolderName('My Drive');
+      setCurrentFolderId(DRIVE_ROOT_ID);
+      setCurrentFolderName(t('drive.my_drive'));
     }
   };
 
   const handleBreadcrumbClick = (index: number) => {
     if (index === -1) {
       setFolderHistory([]);
-      setCurrentFolderId(resolvedAppRoot || 'root');
+      setCurrentFolderId(resolvedAppRoot || DRIVE_ROOT_ID);
       setCurrentFolderName(initialFolderName || t('drive.my_drive'));
       return;
     }
@@ -240,7 +295,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
           <button 
             onClick={handleBack}
-            disabled={folderHistory.length === 0 && (currentFolderId === 'root' || (!allowEscapeRoot && currentFolderId === resolvedAppRoot))}
+            disabled={folderHistory.length === 0 && (currentFolderId === DRIVE_ROOT_ID || (!allowEscapeRoot && currentFolderId === resolvedAppRoot))}
             className="p-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4 text-gray-700 dark:text-gray-300" />
@@ -290,52 +345,28 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
           ) : searchQuery.trim() && (apiSearchResults.length > 0 || isSearchingApi) ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {filteredFolders.map(folder => (
-                <div 
+                <FolderCard
                   key={folder.id}
+                  folder={folder}
                   onClick={() => handleOpenFolder(folder.id, folder.name)}
-                  className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
-                >
-                  <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
-                    <Folder className="w-6 h-6" fill="currentColor" />
-                  </div>
-                  <div className="overflow-hidden flex-1">
-                    <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4] transition-colors truncate">
-                      {folder.name}
-                    </h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      {t('drive.folders')}
-                    </p>
-                  </div>
-                </div>
+                />
               ))}
               {filteredFolders.length > 0 && (
                 <div className="col-span-full text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-2 pb-1">
-                  From subfolders
+                  {t('folder_selection.from_subfolders')}
                 </div>
               )}
               {apiSearchResults.map(folder => (
-                <div 
+                <FolderCard
                   key={folder.id}
+                  folder={folder}
                   onClick={() => handleOpenFolder(folder.id, folder.name)}
-                  className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
-                >
-                  <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
-                    <Folder className="w-6 h-6" fill="currentColor" />
-                  </div>
-                  <div className="overflow-hidden flex-1">
-                    <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4] transition-colors truncate">
-                      {folder.name}
-                    </h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      {t('drive.folders')}
-                    </p>
-                  </div>
-                </div>
+                />
               ))}
               {isSearchingApi && (
                 <div className="col-span-full flex items-center justify-center gap-2 py-4 text-sm text-gray-400">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Searching deeper...
+                  {t('folder_selection.searching_deeper')}
                 </div>
               )}
             </div>
@@ -347,23 +378,11 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {filteredFolders.map(folder => (
-                <div 
+                <FolderCard
                   key={folder.id}
+                  folder={folder}
                   onClick={() => handleOpenFolder(folder.id, folder.name)}
-                  className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
-                >
-                  <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
-                    <Folder className="w-6 h-6" fill="currentColor" />
-                  </div>
-                  <div className="overflow-hidden flex-1">
-                    <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4] transition-colors truncate">
-                      {folder.name}
-                    </h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      {t('drive.folders')}
-                    </p>
-                  </div>
-                </div>
+                />
               ))}
             </div>
           )}

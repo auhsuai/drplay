@@ -1,25 +1,68 @@
 import { useCallback } from "react";
-import { Track } from "../../App";
+import type { Track, PlayMode } from "../../types";
 import { set as idbSet } from "../../db/kv";
+import { captureError } from "../../utils/errorLog";
 import { classifyPlayerError } from "./utils";
+
+const QUEUE_STORAGE_KEY = 'drplay_queue';
+const DRIVE_TAB_NAME = 'My Drive';
+
+const NEXT_MODE: Record<PlayMode, PlayMode> = {
+  normal: 'shuffle',
+  shuffle: 'repeat-all',
+  'repeat-all': 'repeat-one',
+  'repeat-one': 'normal',
+};
+
+export function ensureQueueItemId(track: Track): Track {
+  return track.queueItemId ? track : { ...track, queueItemId: crypto.randomUUID() };
+}
+
+export function sameTrack(a: Track, b: Track): boolean {
+  if (a.queueItemId && b.queueItemId) return a.queueItemId === b.queueItemId;
+  return a.id === b.id;
+}
+
+export function shuffleQueueWithCurrent(
+  queue: Track[],
+  current: Track,
+  fallbackHead: Track
+): Track[] {
+  if (queue.length === 0) return [];
+  const shuffled = [...queue];
+  const trackIndex = shuffled.findIndex((t) => sameTrack(t, current));
+  let currentTrackInQueue = shuffled[0];
+  if (trackIndex !== -1) {
+    currentTrackInQueue = shuffled[trackIndex];
+    shuffled.splice(trackIndex, 1);
+  } else {
+    currentTrackInQueue = fallbackHead;
+  }
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  shuffled.unshift(currentTrackInQueue);
+  return shuffled;
+}
 
 export function usePlayerQueue(
   currentTrack: Track | null,
   playbackQueue: Track[],
   originalQueue: Track[],
-  playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one',
+  playMode: PlayMode,
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
   setOriginalQueue: (queue: Track[]) => void,
-  setPlayMode: (mode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one' | ((prev: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one') => 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one')) => void,
+  setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void,
   handlePlayTrack: (track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: any[], activeTab?: string) => void
 ) {
 
   const handleNextTrack = useCallback(() => {
     if (!currentTrack || playbackQueue.length === 0) return;
 
-    const currentIndex = playbackQueue.findIndex(item => item.queueItemId ? (item.queueItemId === currentTrack.queueItemId) : (item.id === currentTrack.id));
+    const currentIndex = playbackQueue.findIndex(item => sameTrack(item, currentTrack));
     if (currentIndex === -1) {
-      console.warn(`[usePlayerQueue] handleNextTrack: current track not found in playbackQueue`, { currentTrackId: currentTrack?.id });
+      captureError({ level: 'warn', source: 'usePlayerQueue', message: 'handleNextTrack: current track not found in playbackQueue' });
       return;
     }
 
@@ -35,9 +78,9 @@ export function usePlayerQueue(
   const handlePrevTrack = useCallback(() => {
     if (!currentTrack || playbackQueue.length === 0) return;
 
-    const currentIndex = playbackQueue.findIndex(item => item.queueItemId ? (item.queueItemId === currentTrack.queueItemId) : (item.id === currentTrack.id));
+    const currentIndex = playbackQueue.findIndex(item => sameTrack(item, currentTrack));
     if (currentIndex === -1) {
-      console.warn(`[usePlayerQueue] handlePrevTrack: current track not found in playbackQueue`, { currentTrackId: currentTrack?.id });
+      captureError({ level: 'warn', source: 'usePlayerQueue', message: 'handlePrevTrack: current track not found in playbackQueue' });
       return;
     }
 
@@ -53,83 +96,52 @@ export function usePlayerQueue(
   const handleTogglePlayMode = useCallback(() => {
     const queue = originalQueue;
     const track = currentTrack;
-    setPlayMode(prev => {
-      const nextMode = prev === 'normal' ? 'shuffle' : (prev === 'shuffle' ? 'repeat-all' : (prev === 'repeat-all' ? 'repeat-one' : 'normal'));
+    const nextMode = NEXT_MODE[playMode];
 
-      if (nextMode === 'shuffle') {
-        if (queue.length > 0 && track) {
-          const shuffled = [...queue];
-          const trackIndex = shuffled.findIndex(t => t.queueItemId ? (t.queueItemId === track.queueItemId) : (t.id === track.id));
-          let currentTrackInQueue = track;
-          if (trackIndex !== -1) {
-            currentTrackInQueue = shuffled[trackIndex];
-            shuffled.splice(trackIndex, 1);
-          }
-
-          for (let i = shuffled.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-          }
-          shuffled.unshift(currentTrackInQueue);
-          setPlaybackQueue(shuffled);
-        }
-      } else if (prev === 'shuffle') {
-        setPlaybackQueue([...queue]);
+    if (nextMode === 'shuffle') {
+      if (queue.length > 0 && track) {
+        setPlaybackQueue(shuffleQueueWithCurrent(queue, track, track));
       }
+    } else if (playMode === 'shuffle') {
+      setPlaybackQueue([...queue]);
+    }
 
-      return nextMode;
-    });
-  }, [originalQueue, currentTrack, setPlayMode, setPlaybackQueue]);
+    setPlayMode(nextMode);
+  }, [playMode, originalQueue, currentTrack, setPlayMode, setPlaybackQueue]);
 
   const updateQueueContext = useCallback((track: Track, contextQueue?: Track[], driveItems?: any[], activeTab?: string): Track => {
     let targetTrack = { ...track };
     let newOriginalQueue: Track[] = [];
 
     if (contextQueue && contextQueue.length > 0) {
-      newOriginalQueue = contextQueue.map(t => ({...t, queueItemId: t.queueItemId || crypto.randomUUID()}));
-    } else if (activeTab === "My Drive" && driveItems) {
-      newOriginalQueue = driveItems.filter(item => !item.isFolder && item.trackInfo).map(item => ({...item.trackInfo!, queueItemId: item.trackInfo!.queueItemId || crypto.randomUUID()}));
+      newOriginalQueue = contextQueue.map(t => ensureQueueItemId(t));
+    } else if (activeTab === DRIVE_TAB_NAME && driveItems) {
+      newOriginalQueue = driveItems.filter(item => !item.isFolder && item.trackInfo).map(item => ensureQueueItemId(item.trackInfo!));
     }
 
     if (newOriginalQueue.length > 0) {
       setOriginalQueue(newOriginalQueue);
-      idbSet('drplay_queue', newOriginalQueue).catch(e =>
-        console.warn(`[usePlayerQueue] queue-save-fail`, classifyPlayerError(e))
+      idbSet(QUEUE_STORAGE_KEY, newOriginalQueue).catch(e =>
+        captureError({ level: 'warn', source: 'usePlayerQueue', message: `queue-save-fail: ${classifyPlayerError(e).message}` })
       );
       if (playMode === 'shuffle') {
-        const shuffled = [...newOriginalQueue];
-        const trackIndex = shuffled.findIndex(t => t.id === track.id);
-        let currentTrackInQueue = shuffled[0];
-        if (trackIndex !== -1) {
-          currentTrackInQueue = shuffled[trackIndex];
-          shuffled.splice(trackIndex, 1);
-        } else {
-           currentTrackInQueue = {...track, queueItemId: crypto.randomUUID()};
-        }
-
-        for (let i = shuffled.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-        }
-        shuffled.unshift(currentTrackInQueue);
+        const shuffled = shuffleQueueWithCurrent(newOriginalQueue, track, ensureQueueItemId(track));
         setPlaybackQueue(shuffled);
-        targetTrack = currentTrackInQueue;
+        targetTrack = shuffled[0];
       } else {
         setPlaybackQueue(newOriginalQueue);
-        const trackIndex = newOriginalQueue.findIndex(t => t.id === track.id);
+        const trackIndex = newOriginalQueue.findIndex(t => sameTrack(t, track));
         if (trackIndex !== -1) {
           targetTrack = newOriginalQueue[trackIndex];
         } else {
-          targetTrack = {...track, queueItemId: crypto.randomUUID()};
+          targetTrack = ensureQueueItemId(track);
         }
       }
     } else {
-      if (!targetTrack.queueItemId) {
-        targetTrack = {...targetTrack, queueItemId: crypto.randomUUID()};
-      }
+      targetTrack = ensureQueueItemId(targetTrack);
       setPlaybackQueue([targetTrack]);
-      idbSet('drplay_queue', []).catch(e =>
-        console.warn(`[usePlayerQueue] queue-clear-fail`, classifyPlayerError(e))
+      idbSet(QUEUE_STORAGE_KEY, []).catch(e =>
+        captureError({ level: 'warn', source: 'usePlayerQueue', message: `queue-clear-fail: ${classifyPlayerError(e).message}` })
       );
     }
     return targetTrack;

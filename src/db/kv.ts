@@ -1,41 +1,29 @@
 import { db } from './db';
 
-export async function get<T = unknown>(key: string): Promise<T | undefined> {
+async function runOp<T>(op: string, key: string, fn: () => Promise<T>): Promise<T> {
   try {
-    const row = await db.kv.get(key);
-    return row?.value as T | undefined;
+    return await fn();
   } catch (e: unknown) {
-    if (e instanceof DOMException) {
-      console.warn('[kv] get DOMException', { key, name: e.name, message: e.message });
-    } else {
-      console.warn('[kv] get error', { key, error: e });
-    }
+    console.warn(`[kv] ${op} error`, { key, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) });
     throw e;
   }
+}
+
+export async function get<T = unknown>(key: string): Promise<T | undefined> {
+  return runOp('get', key, async () => {
+    const row = await db.kv.get(key);
+    return row?.value as T | undefined;
+  });
 }
 
 export async function set(key: string, value: unknown): Promise<void> {
-  try {
+  return runOp('set', key, async () => {
     await db.kv.put({ key, value });
-  } catch (e: unknown) {
-    if (e instanceof DOMException) {
-      console.warn('[kv] set DOMException', { key, name: e.name, message: e.message });
-    } else {
-      console.warn('[kv] set error', { key, error: e });
-    }
-    throw e;
-  }
+  });
 }
 
 export async function del(key: string): Promise<void> {
-  try {
+  return runOp('del', key, async () => {
     await db.kv.delete(key);
-  } catch (e: unknown) {
-    if (e instanceof DOMException) {
-      console.warn('[kv] del DOMException', { key, name: e.name, message: e.message });
-    } else {
-      console.warn('[kv] del error', { key, error: e });
-    }
-    throw e;
-  }
+  });
 }

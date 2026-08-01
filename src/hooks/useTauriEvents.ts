@@ -4,6 +4,10 @@ import { getValidToken } from '../utils/apiClient';
 import { getTrackMetadata } from '../utils/metadata';
 import { captureError } from '../utils/errorLog';
 
+const TAURI_EVENT_QUOTA = 'drive-quota-exceeded';
+const TAURI_EVENT_REPAIR_THUMBNAIL = 'repair-missing-thumbnail';
+const WINDOW_EVENT_METADATA_UPDATED = 'metadata-updated';
+
 function classifyAppError(err: unknown): string {
   const msg =
     err instanceof Error
@@ -36,6 +40,17 @@ function errName(err: unknown): string {
     : '';
 }
 
+// Uploads cover art to the local proxy server; shared by the thumb + full-size
+// cover blocks so the fetch/signal/status-check logic lives in one place.
+export async function uploadCover(
+  url: string,
+  data: Uint8Array,
+  signal: AbortSignal
+): Promise<void> {
+  const res = await fetch(url, { method: 'POST', body: data, signal });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+}
+
 export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
   useEffect(() => {
     let quotaFn: (() => void) | null = null;
@@ -45,14 +60,14 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
     // upload would keep its resources after the component is gone.
     const controller = new AbortController();
 
-    listen('drive-quota-exceeded', () => {
+    listen(TAURI_EVENT_QUOTA, () => {
       setShowRateLimitModal(true);
     }).then(fn => {
       if (cancelled) { fn(); return; }
       quotaFn = fn;
     });
     
-    listen<{ driveFileId: string, dbId: string }>('repair-missing-thumbnail', async (event) => {
+    listen<{ driveFileId: string, dbId: string }>(TAURI_EVENT_REPAIR_THUMBNAIL, async (event) => {
       try {
         const token = await getValidToken();
         if (!token) return;
@@ -66,33 +81,29 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
           : controller.signal;
 
         if (meta.pictureData) {
-          await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=true`, {
-            method: 'POST',
-            body: meta.pictureData as any,
-            signal,
-          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => {
+          try {
+            await uploadCover(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=true`, new Uint8Array(meta.pictureData), signal);
+          } catch (err) {
             if (errName(err) === 'AbortError') {
               captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload aborted for ${event.payload.dbId} (thumb)` });
-              return;
+            } else {
+              captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload failed for ${event.payload.dbId}: ${err instanceof Error ? err.message : String(err)}` });
             }
-            captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload failed for ${event.payload.dbId}: ${err instanceof Error ? err.message : String(err)}` });
-          });
+          }
         }
         if (meta.pictureDataFull) {
-          await fetch(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=false`, {
-            method: 'POST',
-            body: meta.pictureDataFull as any,
-            signal,
-          }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }).catch(err => {
+          try {
+            await uploadCover(`http://drplay.localhost/cover/${event.payload.dbId}?thumb=false`, new Uint8Array(meta.pictureDataFull), signal);
+          } catch (err) {
             if (errName(err) === 'AbortError') {
               captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload aborted for ${event.payload.dbId} (full)` });
-              return;
+            } else {
+              captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload failed for ${event.payload.dbId} (full): ${err instanceof Error ? err.message : String(err)}` });
             }
-            captureError({ level: 'warn', source: 'useTauriEvents', message: `Cover upload failed for ${event.payload.dbId} (full): ${err instanceof Error ? err.message : String(err)}` });
-          });
+          }
         }
 
-        window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: event.payload.driveFileId } }));
+        window.dispatchEvent(new CustomEvent(WINDOW_EVENT_METADATA_UPDATED, { detail: { fileId: event.payload.driveFileId } }));
       } catch (e: unknown) {
         captureError({ level: 'warn', source: 'useTauriEvents', message: `Repair thumbnail failed for ${event.payload.driveFileId}: ${classifyAppError(e)}` });
       }
