@@ -151,6 +151,32 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
     expect(fakeController.seek).toHaveBeenCalledWith(120);
   });
 
+  it('BUG regression: drag uses fresh duration when durationchange arrives mid-drag (no seek-to-0 race)', () => {
+    render(<Harness track={makeTrack()} isOpen={true} />);
+
+    const bar = screen.getByTestId('bar');
+    const rect = { left: 0, right: 200, top: 0, bottom: 10, width: 200, height: 10, x: 0, y: 0, toJSON: () => {} } as DOMRect;
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue(rect);
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+
+    act(() => {
+      fakeController._emit('durationchange', { duration: 240 });
+    });
+
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+  });
+
   it('BUG regression: buffer bar renders audio.buffered segments when AudioController emits progress', () => {
     render(<Harness track={makeTrack()} isOpen={true} />);
     const buffer = screen.getByTestId('buffer');
@@ -222,5 +248,32 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
     render(<Harness track={makeTrack()} isOpen={false} />);
     expect(fakeController._handlers['timeupdate'] ?? []).toHaveLength(0);
     expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
+  });
+
+  it('BUG regression: removes window drag listeners when unmounting mid-drag (no leak, no stray seek)', () => {
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    const { unmount } = render(<Harness track={makeTrack()} isOpen={true} />);
+    const bar = screen.getByTestId('bar');
+    const rect = { left: 0, right: 200, top: 0, bottom: 10, width: 200, height: 10, x: 0, y: 0, toJSON: () => {} } as DOMRect;
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue(rect);
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+
+    removeSpy.mockClear();
+    unmount();
+
+    expect(removeSpy).toHaveBeenCalledWith('pointermove', expect.any(Function));
+    expect(removeSpy).toHaveBeenCalledWith('pointerup', expect.any(Function));
+    expect(removeSpy).toHaveBeenCalledWith('pointercancel', expect.any(Function));
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+
+    removeSpy.mockRestore();
   });
 });

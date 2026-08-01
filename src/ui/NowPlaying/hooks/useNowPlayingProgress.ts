@@ -2,7 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { Track } from "../../../App";
 import { formatTime } from "../../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from '../../../utils/bufferedRange';
+import { captureError } from "../../../utils/errorLog";
 import { AudioController } from "../../../lib/AudioController";
+
+const NOW_PLAYING_PROGRESS_MODULE = 'useNowPlayingProgress';
+const PROGRESS_DELTA_THRESHOLD_PCT = 0.05;
+const RESTORE_GUARD_SECONDS = 1;
 
 export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolean) {
   const [duration, setDuration] = useState(0);
@@ -15,6 +20,14 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
   // Mirror of `duration` used by the event-driven progress handler so it never
   // needs to be re-created when the duration state changes.
   const durationRef = useRef(0);
+  // Handlers registered on `window` by handlePointerDown are mirrored into
+  // refs so the unmount cleanup below can remove them even when the component
+  // unmounts mid-drag — otherwise the listeners would leak and keep firing
+  // setState on the unmounted component. No-op initials make removal of a
+  // never-registered handler safe (removeEventListener is a no-op then).
+  const pointerMoveRef = useRef<(e: PointerEvent) => void>(() => {});
+  const pointerUpRef = useRef<(e: PointerEvent) => void>(() => {});
+  const pointerCancelRef = useRef<(e: PointerEvent) => void>(() => {});
 
   // Initialize UI on track change
   useEffect(() => {
@@ -57,7 +70,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     return () => {
       unsubDuration();
     };
-  }, [currentTrack]);
+  }, [currentTrack?.id]);
 
   // Buffer sync with the native media buffering state. The Service Worker
   // passthrough stream populates HTMLMediaElement.buffered normally, and the
@@ -89,7 +102,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
       const time = currentTime;
 
       // Prevent UI jump to 0:00 when waiting for track to restore (sync with PlayerBar)
-      if (currentTrack && currentTrack.restoreTime !== undefined && time === 0 && currentTrack.restoreTime > 1) {
+      if (currentTrack && currentTrack.restoreTime !== undefined && time === 0 && currentTrack.restoreTime > RESTORE_GUARD_SECONDS) {
         return;
       }
 
@@ -98,7 +111,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
         const progressPercent = (time / dur) * 100;
         const newWidth = `${progressPercent}%`;
         
-        if (Math.abs(parseFloat(lastProgressWidth) - progressPercent) > 0.05 || lastProgressWidth === "") {
+        if (Math.abs(parseFloat(lastProgressWidth) - progressPercent) > PROGRESS_DELTA_THRESHOLD_PCT || lastProgressWidth === "") {
           progressFillRef.current.style.width = newWidth;
           lastProgressWidth = newWidth;
         }
@@ -125,16 +138,29 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     };
   }, [isOpen, currentTrack]);
 
+  // Unmount safety net: if the component unmounts mid-drag (view closed /
+  // track switched while dragging), the window listeners added by
+  // handlePointerDown would otherwise never be removed.
+  useEffect(() => () => {
+    window.removeEventListener('pointermove', pointerMoveRef.current);
+    window.removeEventListener('pointerup', pointerUpRef.current);
+    window.removeEventListener('pointercancel', pointerCancelRef.current);
+  }, []);
+
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!progressBarRef.current) return;
     setIsDragging(true);
     isDraggingRef.current = true;
-    try { progressBarRef.current.setPointerCapture(e.pointerId); } catch (err) { console.warn('[NowPlaying] setPointerCapture failed', err); }
+    try {
+      progressBarRef.current.setPointerCapture(e.pointerId);
+    } catch (err) {
+      captureError({ level: 'warn', source: NOW_PLAYING_PROGRESS_MODULE, message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}` });
+    }
     const bounds = progressBarRef.current.getBoundingClientRect();
     
     const updateTimeUI = (clientX: number) => {
       const percent = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
-      const newTime = percent * duration;
+      const newTime = percent * (durationRef.current || duration);
       if (progressFillRef.current) progressFillRef.current.style.width = `${percent * 100}%`;
       if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(newTime);
       return newTime;
@@ -151,9 +177,9 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
       isDraggingRef.current = false;
       const finalTime = updateTimeUI(clientX);
       AudioController.getInstance().seek(finalTime);
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
-      window.removeEventListener('pointercancel', onPointerCancel);
+      window.removeEventListener('pointermove', pointerMoveRef.current);
+      window.removeEventListener('pointerup', pointerUpRef.current);
+      window.removeEventListener('pointercancel', pointerCancelRef.current);
     };
 
     const onPointerUp = (upEvent: PointerEvent) => {
@@ -163,7 +189,10 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     const onPointerCancel = (cancelEvent: PointerEvent) => {
       commit(cancelEvent.clientX);
     };
-    
+
+    pointerMoveRef.current = onPointerMove;
+    pointerUpRef.current = onPointerUp;
+    pointerCancelRef.current = onPointerCancel;
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', onPointerCancel);
