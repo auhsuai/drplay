@@ -1,34 +1,50 @@
 import { useEffect } from "react";
 import { get } from "../../db/kv";
-import { Track } from "../../App";
+import type { Track, PlayMode } from "../../types";
 import { getValidToken } from "../../utils/apiClient";
 import { getPrefetchedStreamUrl } from "../../utils/streamPrefetcher";
+import { captureError } from "../../utils/errorLog";
 import { classifyPlayerError } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
 import { AudioController } from "../../lib/AudioController";
+import { shuffleQueueWithCurrent } from "./usePlayerQueue";
+
+// Duck-typed name extraction: DOMException is NOT instanceof Error in some
+// environments (jsdom), yet carries a reliable .name ('AbortError' for
+// deliberate cancels). Same rationale as useTauriEvents.ts / useMenuDownload.ts.
+function errName(err: unknown): string {
+  return err && typeof err === 'object' && typeof (err as { name?: unknown }).name === 'string'
+    ? (err as { name: string }).name
+    : '';
+}
+
+const PLAYER_SESSION_MODULE = 'usePlayerSession';
+const SESSION_STORAGE_KEY = 'drplay_last_session';
+const QUEUE_STORAGE_KEY = 'drplay_queue';
+const PLAYMODE_STORAGE_KEY = 'drplay_playmode';
 
 export function usePlayerSession(
   setCurrentTrack: (track: Track | null | ((prev: Track | null) => Track | null)) => void,
   setOriginalQueue: (queue: Track[]) => void,
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
-  setPlayMode: (mode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one' | ((prev: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one') => 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one')) => void,
+  setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void,
   triggerReload: () => void
 ) {
   useEffect(() => {
     const controller = new AbortController();
     const loadSession = async (signal: AbortSignal) => {
       try {
-        const lastSessionStr = localStorage.getItem("drplay_last_session");
+        const lastSessionStr = localStorage.getItem(SESSION_STORAGE_KEY);
         let lastSession;
         if (lastSessionStr) {
           try {
             lastSession = JSON.parse(lastSessionStr);
-          } catch (e) {
-            console.warn(`[usePlayer] session-corrupt`, classifyPlayerError(e));
-            lastSession = await get("drplay_last_session");
+          } catch (e: unknown) {
+            captureError({ level: 'warn', source: PLAYER_SESSION_MODULE, message: `session-corrupt: ${classifyPlayerError(e).message}` });
+            lastSession = await get(SESSION_STORAGE_KEY);
           }
         } else {
-          lastSession = await get("drplay_last_session");
+          lastSession = await get(SESSION_STORAGE_KEY);
         }
 
         if (lastSession && lastSession.track) {
@@ -45,14 +61,14 @@ export function usePlayerSession(
               if (!streamUrl) {
                 streamUrl = `/drive-stream/${lastSession.track.id}`;
               }
-            } catch (e) {
-              console.warn(`[usePlayer] session-restore-stream-fail`, classifyPlayerError(e));
+            } catch (e: unknown) {
+              captureError({ level: 'warn', source: PLAYER_SESSION_MODULE, message: `session-restore-stream-fail: ${classifyPlayerError(e).message}` });
             }
           }
           if (signal.aborted) return;
 
-          const savedQueue = await get('drplay_queue');
-          const savedPlayMode = await get('drplay_playmode');
+          const savedQueue = await get(QUEUE_STORAGE_KEY);
+          const savedPlayMode = await get(PLAYMODE_STORAGE_KEY);
           if (signal.aborted) return;
 
           const restoredTrack: Track = {
@@ -66,27 +82,19 @@ export function usePlayerSession(
           if (savedQueue && Array.isArray(savedQueue) && savedQueue.length > 0) {
             setOriginalQueue(savedQueue);
             if (savedPlayMode === 'shuffle') {
-              const q = [...savedQueue];
-              const idx = q.findIndex(t => t.id === restoredTrack.id);
-              let head = idx !== -1 ? q.splice(idx, 1)[0] : { ...restoredTrack, queueItemId: crypto.randomUUID() };
-              for (let i = q.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [q[i], q[j]] = [q[j], q[i]];
-              }
-              q.unshift(head);
-              setPlaybackQueue(q);
+              setPlaybackQueue(shuffleQueueWithCurrent(savedQueue, restoredTrack, { ...restoredTrack, queueItemId: crypto.randomUUID() }));
             } else {
               setPlaybackQueue([...savedQueue]);
             }
           } else {
             setPlaybackQueue([restoredTrack]);
           }
-          if (savedPlayMode) setPlayMode(savedPlayMode as 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one');
+          if (savedPlayMode) setPlayMode(savedPlayMode as PlayMode);
           triggerReload();
         }
-      } catch (e: any) {
-        if (e.name === 'AbortError') return;
-        console.error(`[usePlayer] session-load-failed`, classifyPlayerError(e));
+      } catch (e: unknown) {
+        if (errName(e) === 'AbortError') return;
+        captureError({ level: 'error', source: PLAYER_SESSION_MODULE, message: `session-load-failed: ${classifyPlayerError(e).message}` });
       }
     };
     loadSession(controller.signal);
@@ -117,7 +125,7 @@ export function usePlayerSession(
         time,
         duration
       };
-      localStorage.setItem("drplay_last_session", JSON.stringify(sessionData));
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionData));
       lastSaveTime = now;
     };
 

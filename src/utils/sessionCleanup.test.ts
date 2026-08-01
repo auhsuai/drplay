@@ -33,6 +33,33 @@ describe('clearSessionState', () => {
     ).toBeNull();
   });
 
+  it('removes drplay_sort_option from localStorage', () => {
+    localStorage.setItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage, 'name-asc');
+
+    clearSessionState();
+
+    expect(
+      localStorage.getItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage)
+    ).toBeNull();
+  });
+
+  it('clears sort option (raw string value) alongside last_session', () => {
+    localStorage.setItem(
+      SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
+      JSON.stringify({ track: { id: 'old-track' } })
+    );
+    localStorage.setItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage, 'modified-desc');
+
+    clearSessionState();
+
+    expect(
+      localStorage.getItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage)
+    ).toBeNull();
+    expect(
+      localStorage.getItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage)
+    ).toBeNull();
+  });
+
   it('calls kvDel for last_session, playmode and queue', () => {
     clearSessionState();
 

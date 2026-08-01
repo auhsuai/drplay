@@ -346,17 +346,33 @@ export async function getFileName(token: string, fileId: string, signal?: AbortS
 }
 
 // Fetch trashed items matching a fully-built Drive query string.
+// Drive caps each request at PAGINATION_PAGE_SIZE results, so a trash list
+// larger than one page was silently truncated without a nextPageToken loop
+// (same pagination pattern as fetchAllFolderPages). nextPageToken MUST stay in
+// the fields mask — Drive's partial response drops it otherwise. Keep
+// orderBy=folder,name so folders sort before files in the trash screen.
 export async function getTrashedFiles(token: string, query: string, signal?: AbortSignal): Promise<DriveFileItem[]> {
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType)&orderBy=folder,name`;
-  const response = await driveFetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` },
-    signal
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch trashed files (${response.status})`);
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType)&orderBy=folder,name&pageSize=${PAGINATION_PAGE_SIZE}`;
+  const all: DriveFileItem[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
+    if (signal?.aborted) break;
+    const url = pageToken
+      ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}`
+      : baseUrl;
+    const response = await driveFetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      signal
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch trashed files (${response.status})`);
+    }
+    const data = (await response.json()) as DriveFilesListResponse;
+    if (data.files) all.push(...data.files);
+    pageToken = data.nextPageToken;
+    if (!pageToken) break;
   }
-  const data = await response.json();
-  return data.files || [];
+  return all;
 }
 
 // App Configuration in appDataFolder

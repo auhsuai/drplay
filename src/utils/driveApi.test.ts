@@ -4,7 +4,9 @@ import {
   driveFetch,
   searchFolders,
   listFolderChildren,
+  getTrashedFiles,
   type DriveFolderItem,
+  type DriveFileItem,
 } from "./driveApi";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
@@ -332,6 +334,105 @@ describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
     });
 
     const result = await searchFolders("tok", "name contains 'foo'", controller.signal);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(result).toHaveLength(30);
+  });
+});
+
+// Regression: getTrashedFiles must paginate too. It used a single request with
+// no pageSize and no nextPageToken loop, so trash with more than one page of
+// results (Drive caps each request) was silently truncated in TrashScreen.
+describe("getTrashedFiles pagination (trash truncation)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const trashed = (id: string, name: string): DriveFileItem => ({
+    id,
+    name,
+    mimeType: "audio/mpeg",
+  });
+  const makeTrashed = (count: number, prefix: string): DriveFileItem[] =>
+    Array.from({ length: count }, (_, i) => trashed(`${prefix}${i}`, `${prefix}${i}`));
+
+  const captureTrashedUrls = (pages: Array<{ files: DriveFileItem[]; nextPageToken?: string }>): string[] => {
+    const urls: string[] = [];
+    mockedFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      const page = pages[urls.length - 1];
+      return makeJsonResponse(200, page);
+    });
+    return urls;
+  };
+
+  it("aggregates 2 pages (30 + 5) via nextPageToken", async () => {
+    const urls = captureTrashedUrls([
+      { files: makeTrashed(30, "t"), nextPageToken: "tok2" },
+      { files: makeTrashed(5, "u") },
+    ]);
+
+    const result = await getTrashedFiles("tok", "trashed=true");
+
+    expect(result).toHaveLength(35);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(urls[1]).toContain("pageToken=tok2");
+  });
+
+  it("aggregates 3 pages (30 + 30 + 5) via nextPageToken", async () => {
+    const urls = captureTrashedUrls([
+      { files: makeTrashed(30, "a"), nextPageToken: "tok2" },
+      { files: makeTrashed(30, "b"), nextPageToken: "tok3" },
+      { files: makeTrashed(5, "c") },
+    ]);
+
+    const result = await getTrashedFiles("tok", "trashed=true");
+
+    expect(result).toHaveLength(65);
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+    expect(urls[1]).toContain("pageToken=tok2");
+    expect(urls[2]).toContain("pageToken=tok3");
+  });
+
+  it("returns a single page when no nextPageToken is present", async () => {
+    const urls = captureTrashedUrls([{ files: makeTrashed(3, "z") }]);
+
+    const result = await getTrashedFiles("tok", "trashed=true");
+
+    expect(result).toHaveLength(3);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(urls[0]).not.toContain("pageToken=");
+  });
+
+  // Variation: a server that keeps issuing nextPageToken forever must stop at
+  // MAX_PAGINATION_PAGES instead of looping (same guard as the folder helpers).
+  it("stops at the pagination page cap instead of looping forever", async () => {
+    const pages = Array.from({ length: 12 }, () => ({
+      files: makeTrashed(30, "cap"),
+      nextPageToken: "next",
+    }));
+    captureTrashedUrls(pages);
+
+    const result = await getTrashedFiles("tok", "trashed=true");
+
+    // 10 pages = MAX_PAGINATION_PAGES cap in driveApi.ts; the 11th+ must not fire.
+    expect(mockedFetch).toHaveBeenCalledTimes(10);
+    expect(result).toHaveLength(300);
+  });
+
+  // Variation: caller abort between pages must break cleanly — no extra fetch,
+  // no thrown rejection, accumulated pages returned.
+  it("breaks cleanly when the caller aborts between pages", async () => {
+    const controller = new AbortController();
+    mockedFetch.mockImplementation(async () => {
+      if (!controller.signal.aborted) controller.abort();
+      return makeJsonResponse(200, { files: makeTrashed(30, "brk"), nextPageToken: "tok2" });
+    });
+
+    const result = await getTrashedFiles("tok", "trashed=true", controller.signal);
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(30);
