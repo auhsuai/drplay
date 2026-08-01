@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  captureError,
   getErrorLogs,
   clearErrorLogs,
   exportErrorLogsSanitized,
@@ -11,6 +12,8 @@ import {
 import { copyToClipboard } from "../../../utils/copyToClipboard";
 import { showErrorToast } from "../../../utils/simpleToast";
 import { ScrollText } from "lucide-react";
+
+const ERROR_LOG_SECTION_MODULE = "ErrorLogSection";
 
 const LEVEL_BADGE: Record<ErrorLogEntry["level"], string> = {
   error: "bg-red-500/15 text-red-500 dark:text-red-400",
@@ -82,10 +85,10 @@ export function ErrorLogSection() {
         const data = await getErrorLogs();
         if (!cancelled) setLogs(data);
       } catch (err) {
-        console.error("[ErrorLogSection] failed to load logs", {
-          module: "ErrorLogSection",
-          timestamp: new Date().toISOString(),
-          reason: err instanceof Error ? err.message : "unknown",
+        captureError({
+          level: "error",
+          source: ERROR_LOG_SECTION_MODULE,
+          message: `failed-to-load-logs: ${err instanceof Error ? err.message : String(err)}`,
         });
         if (!cancelled) setLogs([]);
       } finally {
@@ -131,10 +134,10 @@ export function ErrorLogSection() {
         showErrorToast(t("settings.error_log_copy_error") || "Could not copy to clipboard.");
       }
     } catch (err) {
-      console.error("[ErrorLogSection] failed to export/copy logs", {
-        module: "ErrorLogSection",
-        timestamp: new Date().toISOString(),
-        reason: err instanceof Error ? err.message : "unknown",
+      captureError({
+        level: "error",
+        source: ERROR_LOG_SECTION_MODULE,
+        message: `failed-to-export-copy-logs: ${err instanceof Error ? err.message : String(err)}`,
       });
       showErrorToast(t("settings.error_log_copy_error") || "Could not copy to clipboard.");
     } finally {
@@ -149,10 +152,10 @@ export function ErrorLogSection() {
       await clearErrorLogs();
       setLogs([]);
     } catch (err) {
-      console.error("[ErrorLogSection] failed to clear logs", {
-        module: "ErrorLogSection",
-        timestamp: new Date().toISOString(),
-        reason: err instanceof Error ? err.message : "unknown",
+      captureError({
+        level: "error",
+        source: ERROR_LOG_SECTION_MODULE,
+        message: `failed-to-clear-logs: ${err instanceof Error ? err.message : String(err)}`,
       });
       showErrorToast(t("settings.error_log_clear_error") || "Failed to clear logs.");
     } finally {

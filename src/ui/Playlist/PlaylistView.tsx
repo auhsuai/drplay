@@ -7,7 +7,9 @@ import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
+import { captureError } from "../../utils/errorLog";
 
+const PLAYLIST_VIEW_MODULE = 'PlaylistView';
 
 interface PlaylistViewProps {
   playlistId: string;
@@ -29,13 +31,13 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
       const data = await getPlaylistById(playlistId);
       setPlaylist(data);
     } catch (e) {
-      console.error("[PlaylistView] Failed to load playlist", e);
+      captureError({ level: 'error', source: PLAYLIST_VIEW_MODULE, message: `failed-to-load-playlist: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast(t('playlist.load_error') || "Failed to load playlist");
     }
   };
 
   useEffect(() => {
-    loadPlaylist().catch(err => console.error("[PlaylistView] Failed to load playlist", err));
+    loadPlaylist().catch(err => captureError({ level: 'error', source: PLAYLIST_VIEW_MODULE, message: `failed-to-load-playlist: ${err instanceof Error ? err.message : String(err)}` }));
     window.addEventListener('playlists-updated', loadPlaylist);
     window.addEventListener('user-changed', loadPlaylist);
     return () => {
@@ -66,7 +68,7 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
     try {
       await removeTrackFromPlaylist(playlistId, trackId);
     } catch (err) {
-      console.error("[PlaylistView] remove: Failed to remove track from playlist", err);
+      captureError({ level: 'error', source: PLAYLIST_VIEW_MODULE, message: `remove-track-failed: ${err instanceof Error ? err.message : String(err)}` });
       showErrorToast(t('playlist.remove_error') || "Failed to remove track");
     }
   };
@@ -77,7 +79,7 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
         await deletePlaylist(playlistId);
         onDelete(); // Triggers tab change in App
       } catch (err) {
-        console.error("[PlaylistView] delete: Failed to delete playlist", err);
+        captureError({ level: 'error', source: PLAYLIST_VIEW_MODULE, message: `delete-playlist-failed: ${err instanceof Error ? err.message : String(err)}` });
         showErrorToast(t('playlist.delete_error') || "Failed to delete playlist");
       }
     }
@@ -107,7 +109,7 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
       setIsCropperOpen(true);
     };
     reader.onerror = () => {
-      console.error("[PlaylistView] FileReader failed to read cover image", { name: file.name, size: file.size });
+      captureError({ level: 'error', source: PLAYLIST_VIEW_MODULE, message: `read-cover-failed: name=${file.name}, size=${file.size}` });
       showErrorToast(t('playlist.cover_read_error') || "Failed to read the selected image");
     };
     reader.readAsDataURL(file);
@@ -122,7 +124,7 @@ export function PlaylistView({ playlistId, onPlay, onDelete, currentTrack }: Pla
         setPlaylist(updated);
       }
     } catch (err) {
-      console.error("[PlaylistView] save-cover: Failed to update playlist cover", err);
+      captureError({ level: 'error', source: PLAYLIST_VIEW_MODULE, message: `update-cover-failed: ${err instanceof Error ? err.message : String(err)}` });
       showErrorToast(t('playlist.cover_save_error') || "Failed to save cover image");
     }
   };

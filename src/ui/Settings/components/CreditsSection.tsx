@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { copyToClipboard } from "../../../utils/copyToClipboard";
 import { showErrorToast } from "../../../utils/simpleToast";
+import { captureError } from "../../../utils/errorLog";
+
+const CREDITS_MODULE = 'CreditsSection';
 
 export const TELEGRAM_URL = "https://t.me/nguyen_tan_an";
 export const GITHUB_URL = "https://github.com/auhsuai/drplay";
@@ -50,12 +53,7 @@ export function CreditsSection() {
       await openUrl(url);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[CreditsSection] Failed to open external URL", {
-        module: "CreditsSection",
-        url,
-        timestamp: new Date().toISOString(),
-        error: message,
-      });
+      captureError({ level: 'error', source: CREDITS_MODULE, message: `open-external-url-failed: ${message}` });
       showErrorToast(t("settings.open_link_error") || "Failed to open link");
     }
   };
@@ -68,11 +66,7 @@ export function CreditsSection() {
         setTimeout(() => setCopiedIndex(null), 2000);
       }
     } catch (err) {
-      console.error("[CreditsSection] copy failed", {
-        module: "CreditsSection",
-        timestamp: new Date().toISOString(),
-        reason: err instanceof Error ? err.message : "unknown",
-      });
+      captureError({ level: 'error', source: CREDITS_MODULE, message: `copy-failed: ${err instanceof Error ? err.message : String(err)}` });
     }
   };
 

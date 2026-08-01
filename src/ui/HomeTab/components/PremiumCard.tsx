@@ -3,7 +3,9 @@ import { Track } from '../../../App';
 import { getTrackMetadata } from '../../../utils/metadata';
 import { Play, Music, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { captureError } from '../../../utils/errorLog';
 
+const PREMIUM_CARD_MODULE = 'PremiumCard';
 const GOOGLE_COLORS = ['#4285F4', '#EA4335', '#FBBC05', '#34A853'];
 export const getFillColor = (str: string) => {
   let hash = 0;
@@ -42,7 +44,7 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
         blobUrlRef.current = URL.createObjectURL(blob);
         setCoverUrl(blobUrlRef.current);
       }
-    }).catch(err => console.warn('[HomeTab] Failed to load cover metadata for track', track.id, err));
+    }).catch(err => captureError({ level: 'warn', source: PREMIUM_CARD_MODULE, message: 'failed-to-load-cover-metadata: ' + (err instanceof Error ? err.message : String(err)) }));
     return () => { 
       isMounted = false; 
       controller.abort();
@@ -61,7 +63,7 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
         className="w-full aspect-square rounded-2xl mb-4 relative overflow-hidden flex items-center justify-center shadow-sm"
       >
         {coverUrl ? (
-          <img ref={imgRef} src={coverUrl} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+          <img ref={imgRef} src={coverUrl} alt={title} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
         ) : (
           <Music className="w-12 h-12 text-white opacity-80 group-hover:scale-110 transition-transform duration-700" />
         )}

@@ -9,6 +9,9 @@ import { useTranslation } from "react-i18next";
 import { PremiumCard } from "./components/PremiumCard";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
+import { captureError } from "../../utils/errorLog";
+
+const HOME_TAB_MODULE = 'HomeTab';
 
 export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: { 
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
@@ -84,12 +87,12 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
             size: f.size ? parseInt(f.size, 10) : undefined
           }));
           setRecentlyAdded(tracks);
-        }).catch(err => console.warn('[HomeTab] Failed to load recently-added files from Drive', err));
+        }).catch(err => captureError({ level: 'warn', source: HOME_TAB_MODULE, message: `failed-to-load-recently-added: ${err instanceof Error ? err.message : String(err)}` }));
       }
     };
-    loadData().catch(err => console.error('[HomeTab] Failed to load home tab data', err));
+    loadData().catch(err => captureError({ level: 'error', source: HOME_TAB_MODULE, message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}` }));
 
-    const handleUpdate = () => { loadData().catch(err => console.error('[HomeTab] Failed to load home tab data', err)); };
+    const handleUpdate = () => { loadData().catch(err => captureError({ level: 'error', source: HOME_TAB_MODULE, message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}` })); };
     window.addEventListener('recent-updated', handleUpdate);
     return () => window.removeEventListener('recent-updated', handleUpdate);
   }, []);

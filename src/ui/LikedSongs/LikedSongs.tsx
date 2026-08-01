@@ -7,8 +7,9 @@ import { getFavorites, removeFavorite } from '../../utils/favorites';
 import { showErrorToast } from '../../utils/simpleToast';
 import { MoreMenu } from '../components/MoreMenu';
 import { prefetchVisibleTracks } from '../../utils/streamPrefetcher';
+import { captureError } from '../../utils/errorLog';
 
-
+const LIKED_SONGS_MODULE = 'LikedSongs';
 
 interface LikedSongsProps {
   onPlay: (track: Track, context: Track[], startIndex?: number) => void;
@@ -22,9 +23,9 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    loadFavorites().catch(err => console.error('[LikedSongs] Failed to load favorites', err));
+    loadFavorites().catch(err => captureError({ level: 'error', source: LIKED_SONGS_MODULE, message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}` }));
     
-    const handleUpdate = () => { loadFavorites().catch(err => console.error('[LikedSongs] Failed to load favorites', err)); };
+    const handleUpdate = () => { loadFavorites().catch(err => captureError({ level: 'error', source: LIKED_SONGS_MODULE, message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}` })); };
     window.addEventListener('favorites-updated', handleUpdate);
     window.addEventListener('user-changed', handleUpdate);
     return () => {
@@ -38,7 +39,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       const favs = await getFavorites();
       setFavorites(favs);
     } catch (e) {
-      console.error("[LikedSongs] Failed to load favorites", e);
+      captureError({ level: 'error', source: LIKED_SONGS_MODULE, message: `failed-to-load-favorites: ${e instanceof Error ? e.message : String(e)}` });
     }
   };
 
@@ -60,7 +61,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       await removeFavorite(trackId);
     } catch (e) {
       showErrorToast(t('liked_songs.remove_failed') || 'Không thể xóa khỏi yêu thích, vui lòng thử lại.');
-      console.error('[LikedSongs] Failed to remove favorite', trackId, e);
+      captureError({ level: 'error', source: LIKED_SONGS_MODULE, message: `remove-favorite-failed: ${e instanceof Error ? e.message : String(e)}` });
     }
   };
 

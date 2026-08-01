@@ -79,6 +79,7 @@
   "songs": "songs",
   "title": "Title",
   "unknown_artist": "Unknown Artist",
+  "view_all": "View All",
   "playlist": {
     "delete": "Delete Playlist",
     "delete_error": "Failed to delete playlist",

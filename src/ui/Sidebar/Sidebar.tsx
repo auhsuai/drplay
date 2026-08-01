@@ -3,6 +3,9 @@ import { Home, HardDrive, Settings, Heart, Plus, ListMusic, LogOut } from "lucid
 import { useTranslation } from "react-i18next";
 import { getPlaylists, createPlaylist, Playlist } from "../../utils/playlists";
 import { showErrorToast } from "../../utils/simpleToast";
+import { captureError } from "../../utils/errorLog";
+
+const SIDEBAR_MODULE = 'Sidebar';
 
 interface SidebarProps {
   activeTab: string;
@@ -21,8 +24,8 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
 
   useEffect(() => {
     let cancelled = false;
-    getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(err => console.error('[Sidebar] Failed to load playlists', err));
-    const handleUpdate = () => getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(err => console.error('[Sidebar] Failed to load playlists', err));
+    getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(err => captureError({ level: 'error', source: SIDEBAR_MODULE, message: `failed-to-load-playlists: ${err instanceof Error ? err.message : String(err)}` }));
+    const handleUpdate = () => getPlaylists().then(data => { if (!cancelled) setPlaylists(data); }).catch(err => captureError({ level: 'error', source: SIDEBAR_MODULE, message: `failed-to-load-playlists: ${err instanceof Error ? err.message : String(err)}` }));
     window.addEventListener('playlists-updated', handleUpdate);
     window.addEventListener('user-changed', handleUpdate);
     return () => {
@@ -44,7 +47,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
         onTabChange(`playlist_${newPlaylist.id}`);
       }
     } catch (err) {
-      console.error("[Sidebar] create-playlist: Failed to create playlist", err);
+      captureError({ level: 'error', source: SIDEBAR_MODULE, message: `create-playlist-failed: ${err instanceof Error ? err.message : String(err)}` });
       showErrorToast(t('sidebar.create_playlist_error') || "Failed to create playlist");
     } finally {
       setNewPlaylistName("");
