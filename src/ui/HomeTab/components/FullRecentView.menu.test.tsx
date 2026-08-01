@@ -127,3 +127,45 @@ describe('FullRecentView menu delete flow', () => {
     expect(screen.getByText('Beta')).toBeTruthy();
   });
 });
+
+describe('FullRecentView now-playing highlight (currentTrack prop)', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const cardByTitle = (title: string): HTMLDivElement | null => {
+    const cards = document.querySelectorAll<HTMLDivElement>('.p-3');
+    return Array.from(cards).find((c) => c.textContent?.includes(title)) ?? null;
+  };
+
+  it('marks only the track matching currentTrack.id as playing (hover-like gray, blue title)', () => {
+    const tracks = [makeTrack('t1', 'Alpha'), makeTrack('t2', 'Beta')];
+    render(
+      <FullRecentView
+        recent={tracks}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="tok"
+        currentTrack={tracks[0]}
+      />,
+    );
+    const alpha = cardByTitle('Alpha');
+    const beta = cardByTitle('Beta');
+    expect(alpha).not.toBeNull();
+    expect(alpha?.className).toContain('bg-gray-100 dark:bg-[#2a2b2f]');
+    expect(alpha?.className).not.toContain('bg-[#4285F4]/10');
+    expect(alpha?.querySelector('h3')?.className).toContain('!text-[#4285F4]');
+    expect(beta?.className).not.toContain('bg-gray-100 dark:bg-[#2a2b2f]');
+    expect(beta?.querySelector('h3')?.className).not.toContain('!text-[#4285F4]');
+  });
+
+  it('leaves every card idle when currentTrack is null/undefined', () => {
+    const tracks = [makeTrack('t1', 'Alpha')];
+    render(
+      <FullRecentView recent={tracks} onBack={vi.fn()} onPlay={vi.fn()} token="tok" />,
+    );
+    const alpha = cardByTitle('Alpha');
+    expect(alpha?.className).not.toContain('bg-gray-100 dark:bg-[#2a2b2f]');
+    expect(alpha?.querySelector('h3')?.className).not.toContain('!text-[#4285F4]');
+  });
+});

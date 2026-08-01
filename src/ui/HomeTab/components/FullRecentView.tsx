@@ -64,7 +64,7 @@ export function sortRecentTracks(items: Track[], sortOption: string): Track[] {
   return result;
 }
 
-export function FullRecentView({ recent, onBack, onPlay, token }: { recent: Track[], onBack: () => void, onPlay: (track: Track, ctx: Track[]) => void, token: string | null }) {
+export function FullRecentView({ recent, onBack, onPlay, token, currentTrack }: { recent: Track[], onBack: () => void, onPlay: (track: Track, ctx: Track[]) => void, token: string | null, currentTrack?: Track | null }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -199,6 +199,7 @@ export function FullRecentView({ recent, onBack, onPlay, token }: { recent: Trac
                   onRefresh={() => {}}
                   onRemoveItem={handleRemoveTrack}
                   menuVariant="recent"
+                  isPlaying={!!currentTrack && track.id === currentTrack.id}
                 />
               </div>
             );

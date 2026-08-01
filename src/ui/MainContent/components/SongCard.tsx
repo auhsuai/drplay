@@ -18,6 +18,12 @@ const PLAYER_BAR_HEIGHT = 85;
 // One on→off cycle for the navigate/locate highlight cue. The old
 // implementation toggled isFlashOn 7× every 300ms (≈4 blinks) which looked broken.
 const FLASH_DURATION_MS = 400;
+// Accent tint for "selected (bulk mode)" cards. Playing cards deliberately do
+// NOT use it: the user design wants the now-playing card to look exactly like
+// the hovered idle card (gray bg + blue title/icon + soft shadow) but WITHOUT
+// the hover lift, so it shares the idle hover palette instead of the accent.
+const ACCENT_CARD_TINT = 'bg-[#4285F4]/10 dark:bg-[#4285F4]/20';
+const ACCENT_CARD_TINT_HOVER = 'hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30';
 
 function formatDuration(seconds: number): string {
   if (!seconds) return "00:00:00";
@@ -231,9 +237,9 @@ export const SongCard = React.memo(function SongCard({
           isFlashOn
             ? 'bg-white dark:bg-[#383a40] shadow-lg shadow-black/5'
             : isSelected
-              ? 'bg-[#4285F4]/10 dark:bg-[#4285F4]/20 hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30'
+              ? `${ACCENT_CARD_TINT} ${ACCENT_CARD_TINT_HOVER}`
               : isPlaying
-                ? 'bg-[#F8F9FA] dark:bg-[#2a2b2f] shadow-sm hover:bg-white dark:hover:bg-[#383a40]'
+                ? 'bg-gray-100 dark:bg-[#2a2b2f] shadow-sm'
                 : 'bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'
         }`}>
       {isSelectionMode && (

@@ -596,3 +596,67 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
     expect(true).toBe(true);
   });
 });
+
+describe('SongCard now-playing visual distinction (hover-like gray, no lift)', () => {
+  beforeEach(() => {
+    coverImageCache.clear();
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: null,
+      duration: 0,
+      size: 0,
+      coverUrl: null,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const cardDiv = (container: HTMLElement): HTMLDivElement | null =>
+    container.querySelector<HTMLDivElement>('.p-3');
+
+  it('playing card uses the hover-like gray bg (same as idle hover), not the accent tint (light/dark)', () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} isPlaying />);
+    const card = cardDiv(container);
+    expect(card).not.toBeNull();
+    expect(card?.className).toContain('bg-gray-100 dark:bg-[#2a2b2f]');
+    expect(card?.className).not.toContain('bg-[#4285F4]/10');
+    expect(card?.className).not.toContain('bg-[#F8F9FA]');
+    expect(card?.className).toContain('shadow-sm');
+  });
+
+  it('playing card is NOT lifted in its static state (no standalone -translate-y-1; only the shared group-hover lift survives)', () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} isPlaying />);
+    const card = cardDiv(container);
+    expect(card?.className).not.toMatch(/(^|\s)-translate-y-1(\s|$)/);
+  });
+
+  it('playing card keeps the blue title and blue icon accents (hover-like)', () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} isPlaying />);
+    expect(container.querySelector('h3')?.className).toContain('!text-[#4285F4]');
+    const iconBox = container.querySelector('.lucide-music')?.parentElement;
+    expect(iconBox?.className).toContain('!bg-[#4285F4]/10');
+    expect(iconBox?.className).toContain('!text-[#4285F4]');
+  });
+
+  it('idle card keeps the original bg/hover unchanged', () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const card = cardDiv(container);
+    expect(card?.className).toContain('bg-[#F8F9FA] dark:bg-[#202124]');
+    expect(card?.className).toContain('hover:bg-gray-100 dark:hover:bg-[#2a2b2f]');
+    expect(card?.className).not.toContain('bg-[#4285F4]/10');
+  });
+
+  it('selected branch keeps priority and its own classes when selection mode is on', () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} isSelected isSelectionMode />,
+    );
+    const card = cardDiv(container);
+    expect(card?.className).toContain('bg-[#4285F4]/10 dark:bg-[#4285F4]/20 hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30');
+    expect(card?.className).not.toContain('hover:bg-white');
+  });
+});

@@ -209,6 +209,7 @@ function App() {
                 }}
                 token={accessToken} 
                 userProfile={userProfile} 
+                currentTrack={currentTrack}
               />
             ) : activeTab === "My Drive" ? (
               <MainContent
@@ -223,6 +224,7 @@ function App() {
                 currentFolderId={currentFolderId}
                 onBreadcrumbClick={handleBreadcrumbClick}
                 token={accessToken}
+                currentTrack={currentTrack}
                 highlightedFileId={highlightedFileId}
                 onRefresh={() => { /* No-op, sync runs in background */ }}
                 onRemoveItem={() => { /* useLiveQuery handles UI updates automatically now */ }}

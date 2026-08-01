@@ -13,11 +13,12 @@ import { captureError } from "../../utils/errorLog";
 
 const HOME_TAB_MODULE = 'HomeTab';
 
-export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: { 
+export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack }: { 
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
   onOpenFolder: (id: string, name: string) => void,
   token: string | null, 
-  userProfile?: any 
+  userProfile?: any,
+  currentTrack?: Track | null 
 }) {
   const { t, i18n } = useTranslation();
   const [recent, setRecent] = useState<Track[]>([]);
@@ -106,7 +107,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile }: {
   const visibleCount = useResponsiveItems();
 
   if (showFullRecent) {
-    return <FullRecentView recent={recent} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} />;
+    return <FullRecentView recent={recent} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
   }
 
   const quickAccess = recent.slice(0, visibleCount);
