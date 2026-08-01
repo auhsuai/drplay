@@ -1,5 +1,6 @@
-import { useState, type MouseEvent, type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
+import { ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { copyToClipboard } from "../../../utils/copyToClipboard";
 import { showErrorToast } from "../../../utils/simpleToast";
@@ -45,10 +46,7 @@ export function CreditsSection() {
   const { t } = useTranslation();
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  const handleOpen = (url: string) => async (e: MouseEvent<HTMLAnchorElement>) => {
-    // Prevent the webview from navigating away; the URL must open in the
-    // system's default external browser via the Tauri opener plugin.
-    e.preventDefault();
+  const handleOpen = (url: string) => async () => {
     try {
       await openUrl(url);
     } catch (err) {
@@ -81,21 +79,28 @@ export function CreditsSection() {
             <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
               <Icon className="w-6 h-6 text-[#4285F4]" />
             </div>
-            <a
-              href={url}
-              onClick={handleOpen(url)}
-              className="text-base font-semibold text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer"
-            >
+            <span className="text-base font-semibold text-gray-900 dark:text-white">
               {label}
-            </a>
+            </span>
           </div>
-          <button
-            onClick={handleCopy(index, display)}
-            className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
-            title={t("settings.copy") || "Copy"}
-          >
-            {copiedIndex === index ? (t("settings.copied") || "Copied!") : display}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleCopy(index, display)}
+              className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
+              title={t("settings.copy") || "Copy"}
+            >
+              {copiedIndex === index ? (t("settings.copied") || "Copied!") : display}
+            </button>
+            <button
+              type="button"
+              onClick={handleOpen(url)}
+              aria-label={t("settings.open_link") || "Open link"}
+              title={t("settings.open_link") || "Open link"}
+              className="p-2 rounded-full text-gray-400 hover:text-[#4285F4] hover:bg-gray-100 dark:hover:bg-[#33343a] transition-colors"
+            >
+              <ExternalLink className="w-4 h-4" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       ))}
     </div>
