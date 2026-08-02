@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useSyncExternalStore } from 'react';
 import { DriveItem } from '../App';
 import { useDebouncedLiveQuery } from './useDebouncedLiveQuery';
 import { db, DriveFile } from '../db/db';
 import { normalizeText } from '../utils/normalizeText';
 import { deleteFile, moveFile, createFolder } from '../utils/driveApi';
-import { isUploading } from '../utils/uploadManager';
+import { isUploading, getUploadState, subscribe as subscribeUploads } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { t } from 'i18next';
 import { captureError } from '../utils/errorLog';
@@ -30,6 +30,14 @@ const DRIVE_PAGE_SIZE = 1000;
 const DEBOUNCE_DELAY_MS = 150;
 const SEARCH_RESULT_LABEL = 'Search Result';
 const UPLOADING_BLOCKED_FALLBACK = 'This item is being uploaded, please wait';
+
+// Monotonic upload-status version: bumped on every uploadManager notify so the
+// explorer re-runs the pin partition below with fresh getUploadState()
+// verdicts (a started upload pins immediately, a finished one unpins).
+// Module-level (same pattern as MainContent's VirtualizedSongList) so a
+// remounted view still starts from the latest version — useSyncExternalStore
+// re-reads the snapshot right after subscribing.
+let uploadStatusVersion = 0;
 
 // Bulk ops must never touch items that are still uploading (a pending row can
 // not be deleted/moved — it has no Drive id yet). Excluded ids get a toast and
@@ -66,6 +74,16 @@ export function useDriveExplorer(
   useEffect(() => {
     setSearchQuery("");
   }, [currentFolderId]);
+
+  // Re-render on every upload status change so the pin partition below re-runs
+  // with fresh getUploadState() verdicts while an upload is in flight.
+  useSyncExternalStore(
+    (onStoreChange) => subscribeUploads(() => {
+      uploadStatusVersion += 1;
+      onStoreChange();
+    }),
+    () => uploadStatusVersion,
+  );
 
   // Global search data loading
   const globalSearchItemsRaw = useDebouncedLiveQuery(async () => {
@@ -242,8 +260,23 @@ export function useDriveExplorer(
       };
     });
 
+    // Pin items that are THEMSELVES uploading to the top of the list while the
+    // upload runs — a just-started upload must be visible in My Drive even
+    // when its name would sort to page 2+. Only 'uploading' pins: a folder
+    // whose child is uploading ('parent-uploading') already exists on Drive
+    // and must keep its normal sorted position (spinner only, no dim).
+    const uploadingItems: DriveItem[] = [];
+    const restItems: DriveItem[] = [];
+    for (const item of _items) {
+      if (getUploadState(item.id) === 'uploading') {
+        uploadingItems.push(item);
+      } else {
+        restItems.push(item);
+      }
+    }
+
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-    return _items.sort((a, b) => {
+    restItems.sort((a, b) => {
       if (a.isFolder && !b.isFolder) return -1;
       if (!a.isFolder && b.isFolder) return 1;
       
@@ -287,7 +320,12 @@ export function useDriveExplorer(
         }
       }
     });
-  }, [dbFiles, sortOption, currentFolderName]);
+
+    // Uploading items keep their _items (dbFiles) order — pending rows are
+    // inserted in upload enqueue order and the queue is strictly sequential,
+    // so this mirrors the order uploads started, not the active sort option.
+    return uploadingItems.length === 0 ? restItems : [...uploadingItems, ...restItems];
+  }, [dbFiles, sortOption, currentFolderName, uploadStatusVersion]);
 
   const filteredItems = searchQuery ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);

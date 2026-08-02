@@ -6,7 +6,7 @@ import { db } from '../db/db';
 import { useDriveExplorer } from './useDriveExplorer';
 import { useDriveStore } from '../store/driveStore';
 import { deleteFile, moveFile } from '../utils/driveApi';
-import { isUploading } from '../utils/uploadManager';
+import { isUploading, getUploadState } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 
 // Network layer mocked (mirrors useDriveExplorer.fetchOnDemand.test.tsx);
@@ -18,6 +18,8 @@ vi.mock('../utils/apiClient', () => ({
 vi.mock('../utils/uploadManager', () => ({
   isUploading: vi.fn(),
   getUploadingIds: vi.fn(),
+  getUploadState: vi.fn(),
+  subscribe: vi.fn(() => () => {}),
 }));
 vi.mock('../utils/driveApi', () => ({
   deleteFile: vi.fn(),
@@ -32,6 +34,7 @@ const mockedIsUploading = vi.mocked(isUploading);
 const mockedDeleteFile = vi.mocked(deleteFile);
 const mockedMoveFile = vi.mocked(moveFile);
 const mockedShowErrorToast = vi.mocked(showErrorToast);
+const mockedGetUploadState = vi.mocked(getUploadState);
 
 const FOLDER_ID = 'bulk-folder';
 const TOKEN = 'bulk-token';
@@ -41,6 +44,8 @@ beforeEach(async () => {
   useDriveStore.setState({ isLoadingTracks: false });
   mockedIsUploading.mockReset();
   mockedIsUploading.mockReturnValue(false);
+  mockedGetUploadState.mockReset();
+  mockedGetUploadState.mockReturnValue('none');
   mockedDeleteFile.mockReset();
   mockedDeleteFile.mockResolvedValue({ id: 'x', name: 'x', mimeType: 'audio/mpeg', parents: [FOLDER_ID] });
   mockedMoveFile.mockReset();
