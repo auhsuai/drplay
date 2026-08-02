@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { deleteFile } from '../utils/driveApi';
 import { db } from '../db/db';
+import { isUploading } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { captureError } from '../utils/errorLog';
 import { DriveItem } from '../App';
@@ -19,6 +20,14 @@ export function useMenuDelete(t: TFunction) {
     onRefresh?: () => void
   ) => {
     if (!deleteDriveItem || !token) return;
+    // Race guard (2nd layer behind the disabled menu item): the confirm dialog
+    // may already be open when an upload of this item starts — never delete a
+    // file that still has a pending upload.
+    if (isUploading(deleteDriveItem.id)) {
+      showErrorToast(t('upload.uploading_blocked', 'This item is being uploaded, please wait'));
+      setShowDeleteConfirm(false);
+      return;
+    }
     setIsDeleting(true);
     try {
       await deleteFile(token, deleteDriveItem.id);
@@ -37,6 +46,12 @@ export function useMenuDelete(t: TFunction) {
   };
 
   const openDeleteConfirm = (item: DriveItem) => {
+    // Race guard (1st layer, alongside the disabled menu item): never offer to
+    // delete an item that is still uploading.
+    if (isUploading(item.id)) {
+      showErrorToast(t('upload.uploading_blocked', 'This item is being uploaded, please wait'));
+      return;
+    }
     setDeleteDriveItem(item);
     setShowDeleteConfirm(true);
   };

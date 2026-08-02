@@ -91,7 +91,8 @@
     "audio_files": "Audio files",
     "upload_error": "Failed to open file dialog",
     "drop_overlay": "Drop to upload",
-    "drop_failed": "Nothing to upload"
+    "drop_failed": "Nothing to upload",
+    "uploading_blocked": "This item is being uploaded, please wait"
   },
   "unknown_artist": "Unknown Artist",
   "view_all": "View All",

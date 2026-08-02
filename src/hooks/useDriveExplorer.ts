@@ -4,6 +4,7 @@ import { useDebouncedLiveQuery } from './useDebouncedLiveQuery';
 import { db, DriveFile } from '../db/db';
 import { normalizeText } from '../utils/normalizeText';
 import { deleteFile, moveFile, createFolder } from '../utils/driveApi';
+import { isUploading } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { t } from 'i18next';
 import { captureError } from '../utils/errorLog';
@@ -28,6 +29,14 @@ const GLOBAL_SEARCH_LIMIT = 100;
 const DRIVE_PAGE_SIZE = 1000;
 const DEBOUNCE_DELAY_MS = 150;
 const SEARCH_RESULT_LABEL = 'Search Result';
+const UPLOADING_BLOCKED_FALLBACK = 'This item is being uploaded, please wait';
+
+// Bulk ops must never touch items that are still uploading (a pending row can
+// not be deleted/moved — it has no Drive id yet). Excluded ids get a toast and
+// the rest of the batch proceeds unchanged.
+function filterUploading(ids: string[]): string[] {
+  return ids.filter((id) => !isUploading(id));
+}
 
 export function useDriveExplorer(
   currentFolderId: string,
@@ -316,8 +325,13 @@ export function useDriveExplorer(
 
   const handleBulkDelete = async (onComplete: () => void) => {
     if (!token || selectedIds.size === 0) return;
-    
-    const itemsToDelete = [...selectedIds];
+
+    const itemsToDelete = filterUploading([...selectedIds]);
+    if (itemsToDelete.length < selectedIds.size) {
+      showErrorToast(t('upload.uploading_blocked') || UPLOADING_BLOCKED_FALLBACK);
+    }
+    if (itemsToDelete.length === 0) return;
+
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);
@@ -352,8 +366,13 @@ export function useDriveExplorer(
 
   const handleBulkMove = async (destinationFolderId: string, onComplete: () => void) => {
     if (!token || selectedIds.size === 0) return;
-    
-    const itemsToMove = [...selectedIds];
+
+    const itemsToMove = filterUploading([...selectedIds]);
+    if (itemsToMove.length < selectedIds.size) {
+      showErrorToast(t('upload.uploading_blocked') || UPLOADING_BLOCKED_FALLBACK);
+    }
+    if (itemsToMove.length === 0) return;
+
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);

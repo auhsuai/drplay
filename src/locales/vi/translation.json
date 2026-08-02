@@ -91,7 +91,8 @@
     "audio_files": "Tệp âm thanh",
     "upload_error": "Không thể mở hộp thoại chọn tệp",
     "drop_overlay": "Thả để upload",
-    "drop_failed": "Không có gì để tải lên"
+    "drop_failed": "Không có gì để tải lên",
+    "uploading_blocked": "Mục này đang được tải lên, vui lòng chờ"
   },
   "unknown_artist": "Không rõ ca sĩ",
   "view_all": "Xem tất cả",

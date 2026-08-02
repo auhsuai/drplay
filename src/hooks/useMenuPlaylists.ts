@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getPlaylists, addTrackToPlaylist, Playlist } from '../utils/playlists';
+import { isUploading } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { captureError } from '../utils/errorLog';
 import { Track } from '../App';
@@ -39,6 +40,13 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
     onClose?: () => void
   ) => {
     e.stopPropagation();
+    // Race guard (2nd layer behind the disabled menu item): a track that is
+    // still uploading has no Drive id yet, so adding it to a playlist would
+    // persist a stale pending-* reference.
+    if (track && isUploading(track.id)) {
+      showErrorToast(t('upload.uploading_blocked', 'This item is being uploaded, please wait'));
+      return;
+    }
     if (track) {
       try {
         await addTrackToPlaylist(playlistId, track);

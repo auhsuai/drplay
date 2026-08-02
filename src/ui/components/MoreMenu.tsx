@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { MoreHorizontal, Download, FolderOutput, Trash2, Loader2, CheckCircle2, Music, ChevronRight, CheckSquare, MapPin } from "lucide-react";
 import { Track, DriveItem } from "../../App";
 import { moveFile } from "../../utils/driveApi";
+import { isUploading, subscribe as subscribeUploads } from "../../utils/uploadManager";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
 import { db } from "../../db/db";
@@ -20,8 +21,18 @@ import { PlaylistsSubmenu } from "./MoreMenu/PlaylistsSubmenu";
 const MORE_MENU_MODULE = 'MoreMenu';
 const EVENT_LOCATE_FILE = 'locate-file';
 
+// Monotonic upload-status version: bumped on every uploadManager notify so the
+// menu re-renders and re-derives isUploading() for the currently targeted item.
+// Module-level (same pattern as MainContent's VirtualizedSongList) so a menu
+// remounted mid-upload still starts from the latest version —
+// useSyncExternalStore re-reads the snapshot right after subscribing.
+let uploadStatusVersion = 0;
+
 const MENU_ITEM_BASE_CLASS = "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group mb-1";
 const MENU_ITEM_DELETE_CLASS = "w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-all flex items-center gap-2 group mb-1";
+// Applied when the targeted item is still uploading: actions must stay
+// visible (the user sees why they are blocked) but must not be clickable.
+const MENU_ITEM_UPLOADING_BLOCKED_CLASS = ' disabled:opacity-40 disabled:cursor-not-allowed';
 const MENU_ESTIMATED_HEIGHT_PX = 250;   // estimated dropdown height used to decide open-up vs open-down
 
 export type MoreMenuVariant = 'default' | 'playerbar' | 'recent';
@@ -60,6 +71,23 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
   // Download Song + Add to Playlist + Navigate). isPlayerBarMode stays as the
   // legacy switch so PlayerBar does not need to change its call site.
   const mode: MoreMenuVariant = variant ?? (isPlayerBarMode ? 'playerbar' : 'default');
+
+  // Re-render whenever an upload starts/finishes so the destructive actions
+  // pick up the freshest isUploading() verdict while the menu is open (a menu
+  // opened before the upload would otherwise keep stale enabled buttons).
+  React.useSyncExternalStore(
+    (onStoreChange) => subscribeUploads(() => {
+      uploadStatusVersion += 1;
+      onStoreChange();
+    }),
+    () => uploadStatusVersion,
+  );
+
+  const guardedId = driveItem?.id ?? track?.id;
+  const isTargetUploading = guardedId !== undefined && isUploading(guardedId);
+  const uploadBlockedTitle = isTargetUploading ? t('upload.uploading_blocked') : undefined;
+  const uploadingBlocked = (extraClass: string): string =>
+    isTargetUploading ? `${extraClass}${MENU_ITEM_UPLOADING_BLOCKED_CLASS}` : extraClass;
 
   // -- Hooks --
   const { 
@@ -190,7 +218,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
             <>
               <button
                 onClick={(e) => handleDownloadClick(e, track, setIsOpen)}
-                className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+                className={uploadingBlocked(`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`)}
+                disabled={isTargetUploading}
+                title={uploadBlockedTitle}
               >
                 <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('menu.download_song', 'Download Song')}</span>
@@ -214,7 +244,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 e.stopPropagation();
                 openDeleteConfirm(driveItem); setIsOpen(false); onClose?.();
               }}
-              className={MENU_ITEM_DELETE_CLASS}
+              className={uploadingBlocked(MENU_ITEM_DELETE_CLASS)}
+              disabled={isTargetUploading}
+              title={uploadBlockedTitle}
             >
               <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
               <span className="truncate">{t('drive.delete') || 'Delete'}</span>
@@ -225,7 +257,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
             <>
               <button
                 onClick={(e) => handleDownloadClick(e, track, setIsOpen)}
-                className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+                className={uploadingBlocked(`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`)}
+                disabled={isTargetUploading}
+                title={uploadBlockedTitle}
               >
                 <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('menu.download_song', 'Download Song')}</span>
@@ -249,7 +283,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 onClick={(e) => { 
                   e.stopPropagation(); setIsOpen(false); onClose?.(); onSelectMultiple?.();
                 }}
-                className={MENU_ITEM_BASE_CLASS}
+                className={uploadingBlocked(MENU_ITEM_BASE_CLASS)}
+                disabled={isTargetUploading}
+                title={uploadBlockedTitle}
               >
                 <CheckSquare className="w-4 h-4 text-gray-400 group-hover:text-[#4285F4]" />
                 {t('menu.select_multiple', 'Đa chọn')}
@@ -263,7 +299,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                     setShowMoveScreen(true); setIsOpen(false); onClose?.(); 
                   }
                 }}
-                className={MENU_ITEM_BASE_CLASS}
+                className={uploadingBlocked(MENU_ITEM_BASE_CLASS)}
+                disabled={isTargetUploading}
+                title={uploadBlockedTitle}
               >
                 <FolderOutput className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('drive.move_to') || 'Move to...'}</span>
@@ -277,7 +315,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                     openDeleteConfirm(driveItem); setIsOpen(false); onClose?.(); 
                   }
                 }}
-                className={MENU_ITEM_DELETE_CLASS}
+                className={uploadingBlocked(MENU_ITEM_DELETE_CLASS)}
+                disabled={isTargetUploading}
+                title={uploadBlockedTitle}
               >
                 <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                 <span className="truncate">{t('drive.delete') || 'Delete'}</span>
@@ -288,7 +328,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
           {track && (
             <button
               onClick={(e) => handleDownloadClick(e, track, setIsOpen)}
-              className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={uploadingBlocked(`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`)}
+              disabled={isTargetUploading}
+              title={uploadBlockedTitle}
             >
               <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
               <span className="truncate">{t('menu.download')}</span>
@@ -301,7 +343,9 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
         <div className="relative">
           <button
             onClick={handleToggleSubmenu}
-            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center justify-between group mb-1"
+            className={uploadingBlocked("w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center justify-between group mb-1")}
+            disabled={isTargetUploading}
+            title={uploadBlockedTitle}
           >
             <div className="flex items-center gap-2">
               <Music className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />

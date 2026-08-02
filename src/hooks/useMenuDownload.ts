@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getValidToken } from '../utils/apiClient';
 import { getEffectiveDownloadPath, getCustomDownloadPath } from '../utils/downloadPath';
+import { isUploading } from '../utils/uploadManager';
+import { showErrorToast } from '../utils/simpleToast';
 import { captureError } from '../utils/errorLog';
 import { Track } from '../App';
 import { TFunction } from 'i18next';
@@ -54,6 +56,13 @@ export function useMenuDownload(t: TFunction) {
   const handleDownloadClick = (e: React.MouseEvent, track: Track | undefined, setIsOpen: (o: boolean) => void) => {
     e.stopPropagation();
     if (!track) return;
+    // Race guard (2nd layer behind the disabled menu item): an item that is
+    // still uploading has no playable media yet — downloading it would fetch a
+    // non-existent file.
+    if (isUploading(track.id)) {
+      showErrorToast(t('upload.uploading_blocked', 'This item is being uploaded, please wait'));
+      return;
+    }
     setDownloadTrack(track);
     setDownloadFileName(`${track.title} - ${track.artist || 'Unknown'}`);
     setShowDownloadDialog(true);

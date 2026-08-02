@@ -13,7 +13,7 @@ import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 
 import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
-import { getUploadState, subscribe as subscribeUploads } from "../../utils/uploadManager";
+import { getUploadState, isUploading, subscribe as subscribeUploads } from "../../utils/uploadManager";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
@@ -210,7 +210,12 @@ export const MainContent = React.memo(function MainContent({
           onToggleSelectAll={() => {
             explorer.setSelectedIds(prev => {
               if (prev.size === explorer.filteredItems.length) return new Set();
-              return new Set(explorer.filteredItems.map(i => i.id));
+              // Uploading items must never join the selection (their pending
+              // rows cannot be bulk-deleted/moved); Select All picks only the
+              // items that are safe to operate on.
+              return new Set(
+                explorer.filteredItems.filter(i => !isUploading(i.id)).map(i => i.id)
+              );
             });
           }}
           onBulkMoveClick={handleBulkMoveClick}
@@ -351,6 +356,10 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   const handleToggleSelection = React.useCallback((id: string) => {
+    // Upload race guard (UI layer): an uploading item must never be toggled
+    // into the selection — bulk ops on it are impossible and the pending row
+    // disappears when the upload finishes.
+    if (isUploading(id)) return;
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -360,6 +369,7 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
   }, [setSelectedIds]);
 
   const handleEnableSelectionMode = React.useCallback((id: string) => {
+    if (isUploading(id)) return;
     setIsSelectionMode(true);
     setSelectedIds(new Set([id]));
   }, [setIsSelectionMode, setSelectedIds]);
