@@ -76,7 +76,10 @@ describe('useDriveExplorer fetchOnDemand (incremental DB writes)', () => {
   it('still writes earlier pages when a later page request fails', async () => {
     mockedFetch
       .mockResolvedValueOnce(makePage([0, 1].map(i => makeDriveFile(1, i)), 'token-2'))
-      .mockResolvedValueOnce({ ok: false, status: 500 } as unknown as Response);
+      // 404 is non-retryable for driveFetch — the fetch breaks immediately.
+      // (500 would now be retried up to 4x with real-time exponential backoff,
+      // which would stall the test.)
+      .mockResolvedValueOnce({ ok: false, status: 404 } as unknown as Response);
 
     renderHook(() => useDriveExplorer(FOLDER_ID, 'Folder', 'fake-token', () => {}));
 
@@ -84,6 +87,30 @@ describe('useDriveExplorer fetchOnDemand (incremental DB writes)', () => {
       const count = await db.files.where('parentId').equals(FOLDER_ID).count();
       expect(count).toBe(2);
     });
+  });
+
+  it('retries a 429 rate-limit response (Retry-After) and continues pagination', async () => {
+    // driveFetch (driveApi) owns the retry policy now: 429 is retryable.
+    // Retry-After: 0 keeps the test off real-time backoff sleeps while still
+    // proving the retry path (Google handle-errors guidance).
+    mockedFetch
+      .mockResolvedValueOnce(makePage([0, 1].map(i => makeDriveFile(1, i)), 'token-2'))
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: { get: (name: string) => (name === 'Retry-After' ? '0' : null) },
+      } as unknown as Response)
+      .mockResolvedValueOnce(makePage([0, 1].map(i => makeDriveFile(2, i))));
+
+    renderHook(() => useDriveExplorer(FOLDER_ID, 'Folder', 'fake-token', () => {}));
+
+    await waitFor(async () => {
+      const count = await db.files.where('parentId').equals(FOLDER_ID).count();
+      expect(count).toBe(4);
+    });
+
+    // page 1 + 429 attempt + retried page 2
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
   });
 
   it('does not write anything when the component unmounts before first page resolves', async () => {

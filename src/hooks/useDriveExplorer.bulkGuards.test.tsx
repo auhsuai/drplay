@@ -5,7 +5,7 @@ import { act, renderHook } from '@testing-library/react';
 import { db } from '../db/db';
 import { useDriveExplorer } from './useDriveExplorer';
 import { useDriveStore } from '../store/driveStore';
-import { deleteFile, moveFile } from '../utils/driveApi';
+import { deleteFile, moveFile, driveFetch } from '../utils/driveApi';
 import { isUploading, getUploadState } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 
@@ -25,6 +25,7 @@ vi.mock('../utils/driveApi', () => ({
   deleteFile: vi.fn(),
   moveFile: vi.fn(),
   createFolder: vi.fn(),
+  driveFetch: vi.fn(),
 }));
 vi.mock('../utils/simpleToast', () => ({
   showErrorToast: vi.fn(),
@@ -35,6 +36,7 @@ const mockedDeleteFile = vi.mocked(deleteFile);
 const mockedMoveFile = vi.mocked(moveFile);
 const mockedShowErrorToast = vi.mocked(showErrorToast);
 const mockedGetUploadState = vi.mocked(getUploadState);
+const mockedDriveFetch = vi.mocked(driveFetch);
 
 const FOLDER_ID = 'bulk-folder';
 const TOKEN = 'bulk-token';
@@ -51,6 +53,10 @@ beforeEach(async () => {
   mockedMoveFile.mockReset();
   mockedMoveFile.mockResolvedValue({ id: 'x', name: 'x', mimeType: 'audio/mpeg', parents: [FOLDER_ID] });
   mockedShowErrorToast.mockReset();
+  // fetchOnDemand runs on mount with the real token; a non-retryable 404 keeps
+  // it out of the way (no retries, no real-time backoff).
+  mockedDriveFetch.mockReset();
+  mockedDriveFetch.mockResolvedValue({ ok: false, status: 404 } as unknown as Response);
 });
 
 afterEach(async () => {

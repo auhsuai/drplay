@@ -1,9 +1,10 @@
-import { useState, useMemo, useEffect, useSyncExternalStore } from 'react';
-import { DriveItem } from '../App';
+import { useState, useMemo, useEffect, useSyncExternalStore, useCallback } from 'react';
+import type { DriveItem } from '../App';
 import { useDebouncedLiveQuery } from './useDebouncedLiveQuery';
 import { db, DriveFile } from '../db/db';
 import { normalizeText } from '../utils/normalizeText';
-import { deleteFile, moveFile, createFolder } from '../utils/driveApi';
+import { deleteFile, moveFile, createFolder, driveFetch } from '../utils/driveApi';
+import type { DriveFileItem } from '../utils/driveApi';
 import { isUploading, getUploadState, subscribe as subscribeUploads } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { t } from 'i18next';
@@ -12,16 +13,7 @@ import { captureError } from '../utils/errorLog';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { metadataCache } from '../utils/metadata';
 import { getFolderAudioQuery } from '../utils/audioQuery';
-import { fetchWithAuth } from '../utils/apiClient';
 import { useDriveStore } from '../store/driveStore';
-
-interface DriveApiFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  size?: string;
-  modifiedTime?: string;
-}
 
 const GOOGLE_FOLDER_MIME = 'application/vnd.google-apps.folder';
 export const ITEMS_PER_PAGE = 50;
@@ -77,13 +69,18 @@ export function useDriveExplorer(
 
   // Re-render on every upload status change so the pin partition below re-runs
   // with fresh getUploadState() verdicts while an upload is in flight.
-  useSyncExternalStore(
-    (onStoreChange) => subscribeUploads(() => {
+  // Stable subscribe identity: useSyncExternalStore re-subscribes every time a
+  // different subscribe function is passed on a re-render (react.dev caveat),
+  // so the uploadManager wrapper is memoized to keep the subscription stable.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => subscribeUploads(() => {
       uploadStatusVersion += 1;
       onStoreChange();
     }),
-    () => uploadStatusVersion,
+    [],
   );
+
+  useSyncExternalStore(subscribe, () => uploadStatusVersion);
 
   // Global search data loading
   const globalSearchItemsRaw = useDebouncedLiveQuery(async () => {
@@ -157,66 +154,48 @@ export function useDriveExplorer(
 
         while (hasMore && isMounted && !abortController.signal.aborted) {
           const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)&pageSize=${DRIVE_PAGE_SIZE}${pageToken ? `&pageToken=${pageToken}` : ''}`;
-          
-          let pageOk = false;
-          let retries = 0;
-          
-          while (retries < 3 && !pageOk && !abortController.signal.aborted) {
+
+          // driveFetch owns the retry policy (driveApi resilience layer):
+          // 429/5xx and 403 rate-limit are retried with exponential backoff,
+          // honoring Retry-After when present; a caller abort propagates as an
+          // immediate rejection (Google handle-errors guidance). A response
+          // returned here is final — retried or non-retryable.
+          const res = await driveFetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: abortController.signal,
+          });
+          if (abortController.signal.aborted) break;
+
+          if (!res.ok) {
+            captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
+            break;
+          }
+          const data = await res.json();
+          if (abortController.signal.aborted) break;
+
+          // Write each page to Dexie immediately instead of accumulating all
+          // pages in memory (mirrors proSync.worker.ts full-sync pattern).
+          if (isMounted && Array.isArray(data.files) && data.files.length > 0) {
+            const filesToInsert = data.files.map((f: DriveFileItem) => ({
+              id: f.id,
+              name: f.name,
+              mimeType: f.mimeType,
+              parentId: currentFolderId,
+              size: f.size ? parseInt(f.size, 10) : undefined,
+              modifiedTime: f.modifiedTime,
+              trashed: false,
+              isFolder: f.mimeType === GOOGLE_FOLDER_MIME,
+            }));
             try {
-              const res = await fetchWithAuth(url, { headers: { Authorization: `Bearer ${token}` }, signal: abortController.signal });
-              if (abortController.signal.aborted) break;
-
-              if (!res.ok) {
-                captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
-                break;
-              }
-              const data = await res.json();
-              if (abortController.signal.aborted) break;
-
-              // Write each page to Dexie immediately instead of accumulating all
-              // pages in memory (mirrors proSync.worker.ts full-sync pattern).
-              if (isMounted && Array.isArray(data.files) && data.files.length > 0) {
-                const filesToInsert = data.files.map((f: DriveApiFile) => ({
-                  id: f.id,
-                  name: f.name,
-                  mimeType: f.mimeType,
-                  parentId: currentFolderId,
-                  size: f.size ? parseInt(f.size, 10) : undefined,
-                  modifiedTime: f.modifiedTime,
-                  trashed: false,
-                  isFolder: f.mimeType === GOOGLE_FOLDER_MIME,
-                }));
-                try {
-                  await db.files.bulkPut(filesToInsert);
-                } catch (dbErr) {
-                  captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
-                  break;
-                }
-              }
-
-              pageToken = data.nextPageToken;
-              if (!pageToken) hasMore = false;
-              pageOk = true;
-              retries = 0;
-            } catch (err) {
-              if (abortController.signal.aborted) break;
-              
-              if (retries < 2 && (err instanceof TypeError || (err instanceof DOMException && err.name === 'TimeoutError'))) {
-                retries++;
-                await new Promise(r => setTimeout(r, 1000 * retries));
-                continue;
-              }
-              
-              if (err instanceof TypeError) {
-                captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}` });
-              } else {
-                captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}` });
-              }
+              await db.files.bulkPut(filesToInsert);
+            } catch (dbErr) {
+              captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
               break;
             }
           }
-          
-          if (!pageOk) break;
+
+          pageToken = data.nextPageToken;
+          if (!pageToken) hasMore = false;
         }
       } catch (err) {
         if (abortController.signal.aborted) return;
@@ -427,9 +406,9 @@ export function useDriveExplorer(
           captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
         }
       }
-      for (const id of movedIds) {
-        await db.files.update(id, { parentId: destinationFolderId });
-      }
+      // Single transaction for the whole batch (vs. one update() per item);
+      // missing keys are skipped without throwing, same as update().
+      await db.files.bulkUpdate(movedIds.map(id => ({ key: id, changes: { parentId: destinationFolderId } })));
       if (onRemoveItem && movedIds.length > 0) movedIds.forEach(id => onRemoveItem(id));
       if (failedIds.length > 0) {
         showErrorToast(t('drive.move_error') || "Failed to move one or more items.");

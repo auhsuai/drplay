@@ -44,7 +44,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 28 | `src/utils/sidebarState.ts` | ✅ done | guard localStorage P0 (chống crash App init) |
 | 31 | `src/utils/simpleToast.tsx` | ✅ done | gộp DRY showToast + clamp duration + captureError |
 | 32 | `src/hooks/useDrive.ts` | ✅ done | mergeWithTimeoutSignal chung + CLEAR_LOCAL_CACHE_CMD |
-| 33 | `src/hooks/useDriveExplorer.ts` | ⬜ pending | |
+| 33 | `src/hooks/useDriveExplorer.ts` | ✅ done | driveFetch thay inline-retry (dedup bản backoff thứ 5), import type, useCallback subscribe, bulkUpdate |
 | 34 | `src/hooks/usePlayer.ts` | ⬜ pending | |
 | 35 | `src/hooks/player/usePlayerQueue.ts` | ⬜ pending | |
 | 36 | `src/hooks/player/usePlayerSession.ts` | ⬜ pending | |

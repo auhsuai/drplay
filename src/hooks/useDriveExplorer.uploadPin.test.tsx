@@ -6,6 +6,7 @@ import { db } from '../db/db';
 import { useDriveExplorer } from './useDriveExplorer';
 import { useDriveStore } from '../store/driveStore';
 import { getUploadState, subscribe } from '../utils/uploadManager';
+import { driveFetch } from '../utils/driveApi';
 
 // Network layer mocked (mirrors useDriveExplorer.bulkGuards.test.tsx);
 // uploadManager mocked so the pin partition can be driven by explicit
@@ -24,6 +25,7 @@ vi.mock('../utils/driveApi', () => ({
   deleteFile: vi.fn(),
   moveFile: vi.fn(),
   createFolder: vi.fn(),
+  driveFetch: vi.fn(),
 }));
 vi.mock('../utils/simpleToast', () => ({
   showErrorToast: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('../utils/simpleToast', () => ({
 
 const mockedGetUploadState = vi.mocked(getUploadState);
 const mockedSubscribe = vi.mocked(subscribe);
+const mockedDriveFetch = vi.mocked(driveFetch);
 
 const FOLDER_ID = 'pin-folder';
 const TOKEN = 'pin-token';
@@ -72,6 +75,10 @@ beforeEach(async () => {
       if (notifyUploadStoreChange === cb) notifyUploadStoreChange = null;
     };
   });
+  // fetchOnDemand runs on mount with the real token; a non-retryable 404 keeps
+  // it out of the way (no retries, no real-time backoff).
+  mockedDriveFetch.mockReset();
+  mockedDriveFetch.mockResolvedValue({ ok: false, status: 404 } as unknown as Response);
 });
 
 afterEach(async () => {
