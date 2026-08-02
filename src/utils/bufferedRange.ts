@@ -40,7 +40,7 @@ export function updateBufferBar(
 
   const dur = source.duration;
   const buffered = source.buffered;
-  if (!isFinite(dur) || dur <= 0 || !buffered || buffered.length === 0) {
+  if (!Number.isFinite(dur) || dur <= 0 || !buffered || buffered.length === 0) {
     if (container.childElementCount > 0) container.innerHTML = '';
     return;
   }
