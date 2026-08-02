@@ -6,6 +6,7 @@ import { getValidToken } from '../../utils/apiClient';
 import { getPrefetchedStreamUrl } from '../../utils/streamPrefetcher';
 import { captureError } from '../../utils/errorLog';
 import { usePlayerSession } from './usePlayerSession';
+import { usePlayerStore } from '../../store/playerStore';
 import type { Track } from '../../types';
 
 vi.mock('../../db/kv', () => ({
@@ -28,7 +29,7 @@ vi.mock('../../utils/errorLog', () => ({
 const audioMock = vi.hoisted(() => ({
   getCurrentTime: vi.fn(() => 0),
   getDuration: vi.fn(() => 0),
-  on: vi.fn(() => () => {}),
+  on: vi.fn((_event: string, _handler: () => void) => () => {}),
 }));
 
 vi.mock('../../lib/AudioController', () => ({
@@ -177,5 +178,95 @@ describe('usePlayerSession restore (lock-behavior)', () => {
     expect(setOriginalQueue).not.toHaveBeenCalled();
     expect(setPlayMode).not.toHaveBeenCalled();
     expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('usePlayerSession upgrades (new lock/guard tests)', () => {
+  it('E: kv playmode rác → setPlayMode không gọi với giá trị rác + captureError session-playmode-corrupt (UPGRADE 3)', async () => {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ track: makeTrack('t1', 'q1'), time: 5, duration: 100 }));
+    mockedGet.mockImplementation((key: string) => {
+      if (key === PLAYMODE_STORAGE_KEY) return Promise.resolve('rubbish');
+      return Promise.resolve(undefined);
+    });
+
+    const { setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'usePlayerSession',
+        message: expect.stringContaining('session-playmode-corrupt'),
+      })
+    );
+    expect(setCurrentTrack).toHaveBeenCalledTimes(1);
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).toHaveBeenCalledTimes(1);
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+
+  it('F: pagehide listener được đăng ký cùng beforeunload + remove đối xứng khi unmount (UPGRADE 4)', () => {
+    const addSpy = vi.spyOn(window, 'addEventListener');
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+
+    const { unmount } = renderHook(() =>
+      usePlayerSession(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn())
+    );
+
+    expect(addSpy.mock.calls.some(c => c[0] === 'beforeunload')).toBe(true);
+    expect(addSpy.mock.calls.some(c => c[0] === 'pagehide')).toBe(true);
+
+    unmount();
+    expect(removeSpy.mock.calls.some(c => c[0] === 'beforeunload')).toBe(true);
+    expect(removeSpy.mock.calls.some(c => c[0] === 'pagehide')).toBe(true);
+  });
+
+  it('G: localStorage.setItem throw → captureError session-save-fail, không crash (UPGRADE 2)', () => {
+    vi.mocked(usePlayerStore.getState).mockReturnValue({ currentTrack: makeTrack('t1', 'q1') } as unknown as ReturnType<typeof usePlayerStore.getState>);
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(10);
+    vi.mocked(audioMock.getDuration).mockReturnValue(240);
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+
+    makeHook();
+    const pauseHandler = audioMock.on.mock.calls.find(c => c[0] === 'pause')?.[1];
+    expect(pauseHandler).toBeTypeOf('function');
+    act(() => {
+      pauseHandler?.();
+    });
+
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'usePlayerSession',
+        message: expect.stringContaining('session-save-fail'),
+      })
+    );
+  });
+
+  it('H: kv get queue throw → không set state nào + captureError session-load-failed (lock UPGRADE 6)', async () => {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ track: makeTrack('t1', 'q1'), time: 5, duration: 100 }));
+    mockedGet.mockImplementation((key: string) => {
+      if (key === QUEUE_STORAGE_KEY) return Promise.reject(new Error('idb fail'));
+      return Promise.resolve(undefined);
+    });
+
+    const { setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).not.toHaveBeenCalled();
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(triggerReload).not.toHaveBeenCalled();
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'usePlayerSession',
+        message: expect.stringContaining('session-load-failed'),
+      })
+    );
   });
 });

@@ -4,15 +4,14 @@ import type { Track, PlayMode } from "../../types";
 import { getValidToken } from "../../utils/apiClient";
 import { getPrefetchedStreamUrl, DRIVE_STREAM_PREFIX } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
+import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { classifyPlayerError, isAbortError } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
 import { AudioController } from "../../lib/AudioController";
 import { shuffleQueueWithCurrent } from "./usePlayerQueue";
 
 const PLAYER_SESSION_MODULE = 'usePlayerSession';
-const SESSION_STORAGE_KEY = 'drplay_last_session';
-const QUEUE_STORAGE_KEY = 'drplay_queue';
-const PLAYMODE_STORAGE_KEY = 'drplay_playmode';
+const SAVE_THROTTLE_MS = 5000;
 
 export function usePlayerSession(
   setCurrentTrack: (track: Track | null | ((prev: Track | null) => Track | null)) => void,
@@ -25,17 +24,17 @@ export function usePlayerSession(
     const controller = new AbortController();
     const loadSession = async (signal: AbortSignal) => {
       try {
-        const lastSessionStr = localStorage.getItem(SESSION_STORAGE_KEY);
+        const lastSessionStr = localStorage.getItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage);
         let lastSession;
         if (lastSessionStr) {
           try {
             lastSession = JSON.parse(lastSessionStr);
           } catch (e: unknown) {
             captureError({ level: 'warn', source: PLAYER_SESSION_MODULE, message: `session-corrupt: ${classifyPlayerError(e).message}` });
-            lastSession = await get(SESSION_STORAGE_KEY);
+            lastSession = await get(SESSION_CLEANUP_KEYS.lastSessionKv);
           }
         } else {
-          lastSession = await get(SESSION_STORAGE_KEY);
+          lastSession = await get(SESSION_CLEANUP_KEYS.lastSessionKv);
         }
 
         if (lastSession && lastSession.track) {
@@ -58,8 +57,8 @@ export function usePlayerSession(
           }
           if (signal.aborted) return;
 
-          const savedQueue = await get(QUEUE_STORAGE_KEY);
-          const savedPlayMode = await get(PLAYMODE_STORAGE_KEY);
+          const savedQueue = await get(SESSION_CLEANUP_KEYS.queueKv);
+          const savedPlayMode = await get(SESSION_CLEANUP_KEYS.playModeKv);
           if (signal.aborted) return;
 
           const restoredTrack: Track = {
@@ -68,7 +67,6 @@ export function usePlayerSession(
             restoreTime: lastSession.time,
             restoreDuration: lastSession.duration,
           };
-          setCurrentTrack(restoredTrack);
 
           if (savedQueue && Array.isArray(savedQueue) && savedQueue.length > 0) {
             setOriginalQueue(savedQueue);
@@ -80,7 +78,12 @@ export function usePlayerSession(
           } else {
             setPlaybackQueue([restoredTrack]);
           }
-          if (savedPlayMode) setPlayMode(savedPlayMode as PlayMode);
+          if (savedPlayMode === 'normal' || savedPlayMode === 'shuffle' || savedPlayMode === 'repeat-all' || savedPlayMode === 'repeat-one') {
+            setPlayMode(savedPlayMode);
+          } else if (savedPlayMode) {
+            captureError({ level: 'warn', source: PLAYER_SESSION_MODULE, message: 'session-playmode-corrupt' });
+          }
+          setCurrentTrack(restoredTrack);
           triggerReload();
         }
       } catch (e: unknown) {
@@ -99,7 +102,7 @@ export function usePlayerSession(
     const saveSession = (force: boolean = false) => {
       const now = performance.now();
       // Throttle to 5 seconds unless forced (e.g. pause/unload)
-      if (!force && now - lastSaveTime < 5000) return;
+      if (!force && now - lastSaveTime < SAVE_THROTTLE_MS) return;
 
       const { currentTrack } = usePlayerStore.getState();
       if (!currentTrack) return;
@@ -116,12 +119,17 @@ export function usePlayerSession(
         time,
         duration
       };
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionData));
-      lastSaveTime = now;
+      try {
+        localStorage.setItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage, JSON.stringify(sessionData));
+        lastSaveTime = now;
+      } catch (e: unknown) {
+        captureError({ level: 'warn', source: PLAYER_SESSION_MODULE, message: `session-save-fail: ${classifyPlayerError(e).message}` });
+      }
     };
 
     const handleBeforeUnload = () => saveSession(true);
     window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
     
     const audio = AudioController.getInstance();
     const unsubTime = audio.on('timeupdate', () => saveSession(false));
@@ -130,6 +138,7 @@ export function usePlayerSession(
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
       unsubTime();
       unsubPause();
       unsubEnded();

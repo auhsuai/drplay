@@ -45,9 +45,9 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 31 | `src/utils/simpleToast.tsx` | ✅ done | gộp DRY showToast + clamp duration + captureError |
 | 32 | `src/hooks/useDrive.ts` | ✅ done | mergeWithTimeoutSignal chung + CLEAR_LOCAL_CACHE_CMD |
 | 33 | `src/hooks/useDriveExplorer.ts` | ✅ done | driveFetch thay inline-retry (dedup bản backoff thứ 5), import type, useCallback subscribe, bulkUpdate |
-| 34 | `src/hooks/usePlayer.ts` | ⬜ pending | |
-| 35 | `src/hooks/player/usePlayerQueue.ts` | ⬜ pending | |
-| 36 | `src/hooks/player/usePlayerSession.ts` | ⬜ pending | |
+| 34 | `src/hooks/usePlayer.ts` | ✅ done | DRIVE_STREAM_PREFIX 1 nguồn, isAbortError duck-typed, playmode key, PLAYER_STOP_EVENT |
+| 35 | `src/hooks/player/usePlayerQueue.ts` | ✅ done | SESSION_CLEANUP_KEYS.queueKv, driveItems type-safe, fallbackHead ensureQueueItemId |
+| 36 | `src/hooks/player/usePlayerSession.ts` | ✅ done | import prefix chung + isAbortError (đã xử lý cùng usePlayer) |
 | 37 | `src/hooks/player/utils.ts` | ⬜ pending | |
 | 38 | `src/hooks/useAuth.ts` | ✅ done | CLEAR_*_CMD, setAccessToken single-source, localStorage guards, race guard, handler reset |
 | 39 | `src/hooks/useDebouncedLiveQuery.ts` | ⬜ pending | |

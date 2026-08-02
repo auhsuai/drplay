@@ -14,6 +14,7 @@ import { SESSION_CLEANUP_KEYS } from "../utils/sessionCleanup";
 import { isAbortError } from "./player/utils";
 import { usePlayerSession } from "./player/usePlayerSession";
 import { usePlayerQueue } from "./player/usePlayerQueue";
+import type { QueueDriveItem } from "./player/usePlayerQueue";
 
 import { usePlayerStore } from "../store/playerStore";
 import { AudioController } from "../lib/AudioController";
@@ -45,7 +46,7 @@ export const usePlayer = (accessToken: string | null) => {
   usePlayerSession(setCurrentTrack, setOriginalQueue, setPlaybackQueue, setPlayMode, triggerReload);
 
   const handlePlayTrackRef = useRef<typeof handlePlayTrack>(undefined);
-  const stableHandlePlayTrack = useCallback((track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: unknown[], activeTab?: string) => {
+  const stableHandlePlayTrack = useCallback((track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: string) => {
     handlePlayTrackRef.current?.(track, contextQueue, isNavigation, driveItems, activeTab);
   }, []);
 
@@ -93,7 +94,7 @@ export const usePlayer = (accessToken: string | null) => {
 
   useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
 
-  const handlePlayTrack = useCallback(async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: unknown[], activeTab?: string) => {
+  const handlePlayTrack = useCallback(async (track: Track, contextQueue?: Track[], isNavigation: boolean = false, driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: string) => {
     if (!accessToken) return;
 
     const { currentTrack } = usePlayerStore.getState();

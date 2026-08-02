@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { ensureQueueItemId, sameTrack, shuffleQueueWithCurrent, usePlayerQueue } from './usePlayerQueue';
 import type { PlayMode, Track } from '../../types';
+import { set as idbSet } from '../../db/kv';
+import { SESSION_CLEANUP_KEYS } from '../../utils/sessionCleanup';
+
+vi.mock('../../db/kv', () => ({
+  set: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock('../../utils/errorLog', () => ({
+  captureError: vi.fn(),
+}));
 
 const baseTrack: Track = {
   id: 't1',
@@ -124,6 +134,19 @@ describe('handleTogglePlayMode', () => {
     expect(restored.map(t => t.id)).toEqual(['t1', 't2', 't3']);
     expect(lastCall(setPlayMode)).toBe('repeat-all');
   });
+
+  it('UPGRADE 8: current không có trong queue khi vào shuffle → fallbackHead được ensureQueueItemId (queueItemId luôn có)', () => {
+    const queue = [makeTrack('t1'), makeTrack('t2')];
+    const current = makeTrack('t9');
+    const { toggle, setPlaybackQueue, lastCall } = setup('normal', queue, current);
+
+    expect(toggle()).toBe('shuffle');
+
+    const shuffled = lastCall(setPlaybackQueue) as Track[];
+    expect(shuffled[0].id).toBe('t9');
+    expect(shuffled[0].queueItemId).toBeTypeOf('string');
+    expect(new Set(shuffled)).toHaveLength(3);
+  });
 });
 
 describe('shuffleQueueWithCurrent', () => {
@@ -171,5 +194,54 @@ describe('shuffleQueueWithCurrent', () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+describe('updateQueueContext', () => {
+  const setup = (playMode: PlayMode) => {
+    const setPlaybackQueue = vi.fn();
+    const setOriginalQueue = vi.fn();
+    const setPlayMode = vi.fn();
+    const handlePlayTrack = vi.fn();
+    const { result } = renderHook(() =>
+      usePlayerQueue(null, [], [], playMode, setPlaybackQueue, setOriginalQueue, setPlayMode, handlePlayTrack)
+    );
+    return { result, setPlaybackQueue, setOriginalQueue };
+  };
+
+  it('driveItems (My Drive): lọc folder + item thiếu trackInfo, map qua ensureQueueItemId, lưu kv bằng SESSION_CLEANUP_KEYS.queueKv (lock UPGRADE 1 + 7)', () => {
+    const { result, setOriginalQueue, setPlaybackQueue } = setup('normal');
+    const t1 = makeTrack('t1');
+    const t2 = makeTrack('t2');
+    const driveItems = [
+      { isFolder: true, trackInfo: makeTrack('folder') },
+      { trackInfo: t1 },
+      { trackInfo: t2 },
+      { isFolder: false },
+    ];
+
+    let target: Track | undefined;
+    act(() => {
+      target = result.current.updateQueueContext(t1, undefined, driveItems, 'My Drive');
+    });
+
+    const saved = setOriginalQueue.mock.calls[0]?.[0] as Track[];
+    expect(saved).toHaveLength(2);
+    expect(saved.map(t => t.id)).toEqual(['t1', 't2']);
+    saved.forEach(t => expect(t.queueItemId).toBeTypeOf('string'));
+    expect(vi.mocked(idbSet)).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.queueKv, saved);
+    expect(setPlaybackQueue).toHaveBeenCalledWith(saved);
+    expect(target?.id).toBe('t1');
+  });
+
+  it('không có contextQueue/driveItems → queue clear: idbSet(SESSION_CLEANUP_KEYS.queueKv, []) (lock UPGRADE 1)', () => {
+    const { result, setPlaybackQueue } = setup('normal');
+
+    act(() => {
+      result.current.updateQueueContext(makeTrack('t5'), undefined, undefined, 'Other Tab');
+    });
+
+    expect(vi.mocked(idbSet)).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.queueKv, []);
+    expect(setPlaybackQueue.mock.calls[0]?.[0] as Track[]).toHaveLength(1);
   });
 });

@@ -2,9 +2,14 @@ import { useCallback } from "react";
 import type { Track, PlayMode } from "../../types";
 import { set as idbSet } from "../../db/kv";
 import { captureError } from "../../utils/errorLog";
+import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { classifyPlayerError } from "./utils";
 
-const QUEUE_STORAGE_KEY = 'drplay_queue';
+export interface QueueDriveItem {
+  isFolder?: boolean;
+  trackInfo?: Track;
+}
+
 const DRIVE_TAB_NAME = 'My Drive';
 
 const NEXT_MODE: Record<PlayMode, PlayMode> = {
@@ -54,7 +59,7 @@ export function usePlayerQueue(
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
   setOriginalQueue: (queue: Track[]) => void,
   setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void,
-  handlePlayTrack: (track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: any[], activeTab?: string) => void
+  handlePlayTrack: (track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: string) => void
 ) {
 
   const handleNextTrack = useCallback(() => {
@@ -100,7 +105,7 @@ export function usePlayerQueue(
 
     if (nextMode === 'shuffle') {
       if (queue.length > 0 && track) {
-        setPlaybackQueue(shuffleQueueWithCurrent(queue, track, track));
+        setPlaybackQueue(shuffleQueueWithCurrent(queue, track, ensureQueueItemId(track)));
       }
     } else if (playMode === 'shuffle') {
       setPlaybackQueue([...queue]);
@@ -109,19 +114,19 @@ export function usePlayerQueue(
     setPlayMode(nextMode);
   }, [playMode, originalQueue, currentTrack, setPlayMode, setPlaybackQueue]);
 
-  const updateQueueContext = useCallback((track: Track, contextQueue?: Track[], driveItems?: any[], activeTab?: string): Track => {
+  const updateQueueContext = useCallback((track: Track, contextQueue?: Track[], driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: string): Track => {
     let targetTrack = { ...track };
     let newOriginalQueue: Track[] = [];
 
     if (contextQueue && contextQueue.length > 0) {
       newOriginalQueue = contextQueue.map(t => ensureQueueItemId(t));
     } else if (activeTab === DRIVE_TAB_NAME && driveItems) {
-      newOriginalQueue = driveItems.filter(item => !item.isFolder && item.trackInfo).map(item => ensureQueueItemId(item.trackInfo!));
+      newOriginalQueue = driveItems.flatMap(item => item.isFolder || !item.trackInfo ? [] : [ensureQueueItemId(item.trackInfo)]);
     }
 
     if (newOriginalQueue.length > 0) {
       setOriginalQueue(newOriginalQueue);
-      idbSet(QUEUE_STORAGE_KEY, newOriginalQueue).catch(e =>
+      idbSet(SESSION_CLEANUP_KEYS.queueKv, newOriginalQueue).catch(e =>
         captureError({ level: 'warn', source: 'usePlayerQueue', message: `queue-save-fail: ${classifyPlayerError(e).message}` })
       );
       if (playMode === 'shuffle') {
@@ -140,7 +145,7 @@ export function usePlayerQueue(
     } else {
       targetTrack = ensureQueueItemId(targetTrack);
       setPlaybackQueue([targetTrack]);
-      idbSet(QUEUE_STORAGE_KEY, []).catch(e =>
+      idbSet(SESSION_CLEANUP_KEYS.queueKv, []).catch(e =>
         captureError({ level: 'warn', source: 'usePlayerQueue', message: `queue-clear-fail: ${classifyPlayerError(e).message}` })
       );
     }
