@@ -22,7 +22,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 8 | `src/utils/metadata.ts` | ✅ done | Array.isArray guard, generation guard chống re-populate, CACHE_VERSION validate, comment, timer cleanup |
 | 9 | `src/utils/audioQuery.ts` | ✅ done | DRY helpers + as const + test contract chốt chuỗi output |
 | 10 | `src/utils/bufferedRange.ts` | ✅ done | Number.isFinite consistency |
-| 11 | `src/utils/safeAudio.ts` | ✅ done | dead code production (chỉ test import) — chờ quyết định chung với AudioController |
+| 11 | `src/utils/safeAudio.ts` | ✅ done | đã XOÁ (dead code — AudioController B1 thay thế, đợt 2) |
 | 12 | `src/utils/streamPrefetcher.ts` | ✅ done | bỏ machinery async chết, xoá export chết, comment đúng + test LRU |
 | 13 | `src/utils/nextTrackPrefetcher.ts` | ✅ done | AbortSignal.any thay dual-map, hằng số range, classify theo DOMException.name |
 | 14 | `src/utils/sessionCleanup.ts` | ✅ done | guard localStorage SecurityError + xoá .bak rác |
@@ -41,7 +41,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 27 | `src/utils/copyToClipboard.ts` | ✅ done | đạt chuẩn (execCommand giữ làm fallback cuối có lý do) |
 | 28 | `src/utils/errorLog.ts` | ✅ done | prune atomic 1 transaction (chống race xoá dư) |
 | 29 | `src/utils/logger.ts` | ✅ done | redaction refresh_token/token/upload_id/api_key/Authorization/Bearer-ci + circular safe |
-| 28 | `src/utils/sidebarState.ts` | ✅ done | guard localStorage P0 (chống crash App init) |
+| 30 | `src/utils/sidebarState.ts` | ✅ done | guard localStorage P0 (chống crash App init) |
 | 31 | `src/utils/simpleToast.tsx` | ✅ done | gộp DRY showToast + clamp duration + captureError |
 | 32 | `src/hooks/useDrive.ts` | ✅ done | mergeWithTimeoutSignal chung + CLEAR_LOCAL_CACHE_CMD |
 | 33 | `src/hooks/useDriveExplorer.ts` | ✅ done | driveFetch thay inline-retry (dedup bản backoff thứ 5), import type, useCallback subscribe, bulkUpdate |
@@ -60,12 +60,12 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 46 | `src/hooks/useTauriEvents.ts` | ✅ done | dedup signal merge + classify |
 | 47 | `src/hooks/useTheme.ts` | ✅ done | lazy-init no FOUC + type guard |
 | 48 | `src/hooks/useAppGlobalEvents.ts` | ✅ done | xoá isFocused dead + storage guard |
-| 49 | `src/store/appStore.ts` | ✅ done | đạt chuẩn zustand v5 |
+| 49 | `src/store/appStore.ts` | ✅ done | đã XOÁ (dead code — 0 caller, đợt 3) |
 | 50 | `src/store/authStore.ts` | ✅ done | đạt chuẩn (không persist — chủ đích) |
 | 51 | `src/store/driveStore.ts` | ✅ done | ROOT_FOLDER_ID const |
 | 52 | `src/store/playerStore.ts` | ✅ done | đạt chuẩn zustand v5 |
 | 53 | `src/lib/AudioController.ts` | ✅ done | dedup seek helper, classify safePlay, xoá safeAudio/preloadTrack dead |
-| 54 | `src/db/db.ts` | ✅ done | đạt chuẩn (2 backlog: PK cross-user, index isFolder no-op) |
+| 54 | `src/db/db.ts` | ✅ done | PK compound [userEmail+id] v7+v8 (đã fix cross-user overwrite), index isFolder no-op ghi nhận |
 | 55 | `src/db/kv.ts` | ✅ done | captureError thay console.warn (giữ rethrow) |
 | 56 | `src/workers/proSync.worker.ts` | ✅ done | FOLDER_MIME chung (backoff/pagination giữ — khác biệt thiết kế) |
 | 57 | `src/workers/scanner.worker.ts` | ✅ done | đã XOÁ (file mồ côi 0 caller) |
@@ -73,6 +73,45 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 
 ## Lịch sử hoàn thành
 
-| Ngày | File | Upgrade chính | Commit | Tests |
-|------|------|---------------|--------|-------|
-| | | | | |
+### Đợt 1 — Modernize 58 file src (closed-loop-code-modernize)
+23 commits: `114be5c` → `a507f46` (02/08/2026). Test 710 → 802. Chi tiết từng file ở bảng trên.
+
+### Đợt 2 — Backlog quan trọng (5 commits: `121a1f3` → `0053933`)
+| Task | Loại | Kết quả |
+|------|------|---------|
+| PK collision cross-user | bugfix | Schema v7: PK 4 bảng → compound `[userEmail+id]` (migration copy + v8 drop). 5 regression + 2 biến thể PASS |
+| SongCard formatSize | bugfix | Dùng `formatBytes` chuẩn thay hàm tự viết sai ("0 MB"/"0.5 MB") |
+| storageKeys.ts | refactor | USER_EMAIL_KEY + getCurrentUserEmail() (guard) — thay 4 module |
+| driveConstants.ts | refactor | ROOT_FOLDER_ID + MY_DRIVE_TAB — thay 12 module |
+| i18n + App.tsx | modernize | Guard crash-init (module-scope + lazy init), logout cleanup, LANGUAGE_KEY + supportedLngs, i18next → dependencies |
+
+### Đợt 3 — Backlog còn lại (6 commits: `2561dda` → `d4fb20a`)
+| Task | Loại | Kết quả |
+|------|------|---------|
+| useDrive 8 điểm localStorage | bugfix | Guard (6 read + 2 write) + nav keys vào storageKeys.ts |
+| DriveItem/BreadcrumbItem → types.ts | refactor | 10 file import chuyển khỏi App.tsx |
+| FolderSelectionScreen + MoreMenu | bugfix | Guard storage + ROOT_FOLDER_ID chung |
+| logger redaction | bugfix | Redact `dbId=`/`driveFileId=`/`fileId=`/`folder=` (pattern cũ bỏ lọt "Id=") |
+| activeTab → TabKey union | refactor | 11 file — giá trị lạ bị TS bắt |
+| sessionGuard test + xoá appStore | test | 3 test + 1 race test apiClient + xoá dead code |
+
+**Test suite hiện tại: 69 files / 829 tests PASS. Build xanh.**
+
+## BACKLOG PHIÊN SAU (còn lại — sắp theo ưu tiên)
+
+### Việc nhỏ còn sót (đều không phải bug, làm khi rảnh)
+1. **Track re-export ở App.tsx** (28 site import `Track` từ '../App') — chuyển dần sang `import type { Track } from '../types'` khi đụng từng file. Không phải bug, chỉ vệ sinh type.
+2. **README.md stale** — còn nhắc `scanner.worker` + `safeAudio` (2 file đã xoá). Cập nhật doc.
+3. **useDrive hydration test** — hook phức tạp không có test trực tiếp (giá trị thấp so công sức — làm nếu có thời gian).
+4. **index `isFolder` no-op** (db.ts) — Dexie bỏ qua index boolean; không xoá vì phí rebuild store.
+
+### Nếu muốn làm sâu hơn (đợt sau)
+5. **Login/Logout flow E2E** — dùng playwright test thật: đăng nhập → play nhạc → logout → login user khác → verify lịch sử/yêu thích tách biệt (xác nhận fix PK collision end-to-end).
+6. **WebView2/Tauri runtime check** — build desktop thật, kiểm tra: migration v7 chạy mượt trên DB cũ, localStorage guards hoạt động, theme init không FOUC.
+7. **Drive quota decimal vs binary** (formatBytes) — hiện 1024-based ("13.97 GB") nhưng Google UI hiển thị decimal ("15 GB") — quyết định sản phẩm xem có đổi không.
+
+### LƯU Ý QUY TRÌNH cho phiên sau
+- Mỗi task: chọn đúng skill (bugfix / refactor / modernize) → dispatch subagent → review → verify thật → **push GitHub** → ghi `codebase-memory` → cập nhật file md này.
+- ⚠️ **TUYỆT ĐỐI không dùng PowerShell Set-Content/Get-Content với file md tiếng Việt** — đã làm hỏng encoding 1 lần (mojibake). Chỉ dùng edit/write tool.
+- Test: `npx vitest run` (full) + `npm run build` — phải xanh trước khi push.
+- `codebase-memory` project name: `drplay`.
