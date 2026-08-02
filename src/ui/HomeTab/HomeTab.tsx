@@ -12,6 +12,9 @@ import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 import { captureError } from "../../utils/errorLog";
 
 const HOME_TAB_MODULE = 'HomeTab';
+// Fired by uploadManager after each completed upload (slice 1) — the delta
+// sync trigger that keeps "Recently Added to Drive" fresh without a reload.
+const DRIVE_FILES_CHANGED_EVENT = 'drive-files-changed';
 
 export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack }: { 
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
@@ -27,6 +30,13 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   const [mostVisitedFolders, setMostVisitedFolders] = useState<FolderVisitEntry[]>([]);
   const [recentlyAdded, setRecentlyAdded] = useState<Track[]>([]);
   const [showFullRecent, setShowFullRecent] = useState(false);
+  // Guards the Recently Added refetch against overlapping responses:
+  // uploadManager fires drive-files-changed once per completed file, so a
+  // multi-file batch triggers overlapping fetches. Every call bumps the
+  // generation and only the NEWEST call may write state — a slow stale
+  // response must never clobber the fresh result. The same bump in the effect
+  // cleanup also invalidates in-flight fetches after unmount.
+  const recentlyAddedLoadGenRef = useRef(0);
 
   // Read visit count + pick the random greeting object exactly ONCE per mount.
   // Reading sessionStorage and calling Math.random() inside useMemo caused the
@@ -71,31 +81,48 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
     const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
     sessionStorage.setItem('drplay_home_visit', (visitCount + 1).toString());
 
-    const loadData = async () => {
-      setRecent(await getRecentlyPlayed());
-      setHeavy(await getHeavyRotation());
-      setDiscover(await getRandomDiscoveries());
-      setMostVisitedFolders(await getMostVisitedFolders());
-
-      if (token) {
-        getRecentlyAddedAudioFiles(token).then(files => {
-          const tracks = files.map(f => ({
+    const loadRecentlyAdded = (activeToken: string | null): void => {
+      if (!activeToken) return;
+      const generation = ++recentlyAddedLoadGenRef.current;
+      getRecentlyAddedAudioFiles(activeToken)
+        .then(files => {
+          if (generation !== recentlyAddedLoadGenRef.current) return;
+          setRecentlyAdded(files.map(f => ({
             id: f.id,
             title: f.name,
             artist: "",
             streamUrl: "",
             originalName: f.name,
             size: f.size ? parseInt(f.size, 10) : undefined
-          }));
-          setRecentlyAdded(tracks);
-        }).catch(err => captureError({ level: 'warn', source: HOME_TAB_MODULE, message: `failed-to-load-recently-added: ${err instanceof Error ? err.message : String(err)}` }));
-      }
+          })));
+        })
+        .catch((err: unknown) => {
+          if (generation !== recentlyAddedLoadGenRef.current) return;
+          captureError({ level: 'warn', source: HOME_TAB_MODULE, message: `failed-to-load-recently-added: ${err instanceof Error ? err.message : String(err)}` });
+        });
+    };
+
+    const loadData = async () => {
+      setRecent(await getRecentlyPlayed());
+      setHeavy(await getHeavyRotation());
+      setDiscover(await getRandomDiscoveries());
+      setMostVisitedFolders(await getMostVisitedFolders());
+
+      loadRecentlyAdded(token);
     };
     loadData().catch(err => captureError({ level: 'error', source: HOME_TAB_MODULE, message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}` }));
 
     const handleUpdate = () => { loadData().catch(err => captureError({ level: 'error', source: HOME_TAB_MODULE, message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}` })); };
+    // Delta sync: upload done → refresh ONLY the Recently Added section
+    // (light, no re-running the heavy local loads).
+    const handleDriveFilesChanged = () => { loadRecentlyAdded(token); };
     window.addEventListener('recent-updated', handleUpdate);
-    return () => window.removeEventListener('recent-updated', handleUpdate);
+    window.addEventListener(DRIVE_FILES_CHANGED_EVENT, handleDriveFilesChanged);
+    return () => {
+      window.removeEventListener('recent-updated', handleUpdate);
+      window.removeEventListener(DRIVE_FILES_CHANGED_EVENT, handleDriveFilesChanged);
+      recentlyAddedLoadGenRef.current++;
+    };
   }, []);
 
   useEffect(() => {
