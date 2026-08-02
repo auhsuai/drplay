@@ -189,7 +189,14 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
   return token;
 };
 
-export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {}): Promise<Response> => {
+export interface FetchWithAuthOptions extends RequestInit {
+  // Caller-overridable request timeout (ms) for long-running operations such
+  // as large upload PUT bodies that legitimately outlast the 15s default.
+  timeoutMs?: number;
+}
+
+export const fetchWithAuth = async (url: RequestInfo, options: FetchWithAuthOptions = {}): Promise<Response> => {
+  const { timeoutMs, ...fetchOptions } = options;
   let token = localStorage.getItem("drplay_access_token");
 
   // Ensure headers exist and attach token
@@ -198,16 +205,25 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
     headers.set("Authorization", `Bearer ${token}`);
   }
 
+  // An explicit override wins only when it is a finite positive number; 0,
+  // negative, NaN or absent values fall back to the default. Capped at
+  // MAX_SAFE_TIMEOUT so an absurd value cannot overflow setTimeout and fire
+  // immediately (see the MAX_SAFE_TIMEOUT note above).
+  const effectiveTimeoutMs =
+    typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.min(timeoutMs, MAX_SAFE_TIMEOUT)
+      : FETCH_TIMEOUT_MS;
+
   // Every outbound fetch must be bounded by a timeout so a stalled server
   // cannot hang the caller forever. Merge with any caller-supplied signal
   // (e.g. a component-unmount cancel) via AbortSignal.any so neither wins,
   // falling back to the timeout alone on runtimes lacking AbortSignal.any.
-  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(effectiveTimeoutMs);
   const signal = options.signal && typeof AbortSignal.any === 'function'
     ? AbortSignal.any([options.signal, timeoutSignal])
     : timeoutSignal;
 
-  const requestOptions: RequestInit = { ...options, headers, signal };
+  const requestOptions: RequestInit = { ...fetchOptions, headers, signal };
 
   // Main request (timeout-bounded). Network/timeout here reject naturally so
   // callers can decide retry vs. surface; we never swallow a hang.
@@ -221,7 +237,7 @@ export const fetchWithAuth = async (url: RequestInfo, options: RequestInit = {})
       retryHeaders.set("Authorization", `Bearer ${newToken}`);
       try {
         // Retry also uses the same bounded signal so it cannot hang either.
-        return await fetch(url, { ...options, headers: retryHeaders, signal });
+        return await fetch(url, { ...fetchOptions, headers: retryHeaders, signal });
       } catch (err: unknown) {
         // Retry failed: classify and throw a clear, typed error. We do NOT
         // swallow it (caller must know) and we do NOT hang.

@@ -101,6 +101,68 @@ describe('fetchWithAuth', () => {
     expect(opts.signal).toBeDefined();
   });
 
+  it('uses the caller-supplied timeoutMs override for AbortSignal.timeout', async () => {
+    storage.setItem('drplay_access_token', 'tok');
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await fetchWithAuth('/api/songs', { timeoutMs: 30_000 });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+  });
+
+  it.each([
+    ['0', 0],
+    ['negative', -5],
+    ['NaN', NaN],
+  ])('falls back to the default 15s timeout when timeoutMs is %s', async (_label: string, bad: number) => {
+    storage.setItem('drplay_access_token', 'tok');
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await fetchWithAuth('/api/songs', { timeoutMs: bad });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(15_000);
+  });
+
+  it('keeps the timeout override on the 401 retry (same merged signal)', async () => {
+    storage.setItem('drplay_access_token', 'old');
+    storage.setItem('drplay_refresh_token', 'rt');
+    invokeMock.mockResolvedValue({ access_token: 'new', expires_in: 3600 });
+
+    const queue = [new Response('', { status: 401 }), new Response('data', { status: 200 })];
+    const fetchSpy = vi.fn().mockImplementation(async () => queue.shift()!);
+    vi.stubGlobal('fetch', fetchSpy);
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+
+    const res = await fetchWithAuth('/api/songs', { timeoutMs: 60_000 });
+
+    expect(res.status).toBe(200);
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const firstSignal = (fetchSpy.mock.calls[0][1] as RequestInit).signal;
+    const retrySignal = (fetchSpy.mock.calls[1][1] as RequestInit).signal;
+    expect(retrySignal).toBe(firstSignal);
+  });
+
+  it('merges the caller signal with the timeout override via AbortSignal.any', async () => {
+    storage.setItem('drplay_access_token', 'tok');
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const anySpy = vi.spyOn(AbortSignal, 'any');
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await fetchWithAuth('/api/songs', { timeoutMs: 45_000, signal: controller.signal });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(45_000);
+    expect(anySpy).toHaveBeenCalledWith([controller.signal, timeoutSpy.mock.results[0].value]);
+    const opts = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(opts.signal).toBe(anySpy.mock.results[0].value);
+  });
+
   it('throws a typed TokenRefreshError (not a raw error) when the 401 retry fails', async () => {
     storage.setItem('drplay_access_token', 'old');
     storage.setItem('drplay_refresh_token', 'rt');

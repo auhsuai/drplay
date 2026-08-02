@@ -23,6 +23,18 @@ const PAGINATION_PAGE_SIZE = 1000;
 // Worst-case safety cap: 10 pages = up to 10,000 results per call. Guards
 // against a misbehaving server that keeps issuing nextPageToken forever.
 const MAX_PAGINATION_PAGES = 10;
+// Resumable upload (developers.google.com/drive/api/guides/manage-uploads):
+// initiate via POST ?uploadType=resumable, then PUT the whole body once.
+const RESUMABLE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable';
+const UPLOAD_MIME_TYPE = 'application/octet-stream';
+const UPLOAD_METADATA_CONTENT_TYPE = 'application/json; charset=UTF-8';
+// Large audio files need a much longer bound than the 20s default used for
+// metadata requests; 120s covers a 50MB file on a slow connection.
+const UPLOAD_TIMEOUT_MS = 120_000;
+// Google's resumable protocol forbids re-sending a completed PUT (it would
+// create a NEW upload). A transient PUT failure therefore re-initiates the
+// whole session at most once — never after the server answered 200/201.
+const MAX_UPLOAD_ATTEMPTS = 2;
 
 export interface DriveFileItem {
   id: string; name: string; mimeType: string; size?: string;
@@ -55,6 +67,17 @@ export interface DriveStorageQuota {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// Merge a caller-supplied abort signal with a fresh timeout signal so a
+// stalled network still fails after timeoutMs. A caller signal must NOT
+// disable the timeout (same pattern as apiClient.fetchWithAuth); on runtimes
+// lacking AbortSignal.any the timeout alone is used.
+function mergeWithTimeoutSignal(callerSignal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return callerSignal && typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([callerSignal, timeoutSignal])
+    : timeoutSignal;
+}
 
 // Derive a short, safe classification tag from an error's message ONLY.
 // We never log the error object or its stack — those can leak file ids, user
@@ -101,15 +124,9 @@ export async function driveFetch(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       // Fresh timeout signal per attempt (an aborted signal cannot be reused).
-      // A caller-supplied signal must NOT disable the timeout — merge both via
-      // AbortSignal.any (same pattern as apiClient.fetchWithAuth) so a stalled
-      // network still fails after timeoutMs; fall back to the timeout alone on
-      // runtimes lacking AbortSignal.any.
-      const timeoutSignal = AbortSignal.timeout(timeoutMs);
-      const signal =
-        options.signal && typeof AbortSignal.any === 'function'
-          ? AbortSignal.any([options.signal, timeoutSignal])
-          : timeoutSignal;
+      // A caller-supplied signal must NOT disable the timeout — merge both so
+      // a stalled network still fails after timeoutMs.
+      const signal = mergeWithTimeoutSignal(options.signal, timeoutMs);
       const res = await fetchWithAuth(url, { ...options, signal });
 
       if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_RETRIES) {
@@ -547,4 +564,166 @@ export async function getDriveStorageQuota(token: string): Promise<DriveStorageQ
     captureError({ level: 'warn', source: DRIVE_MODULE, message: `get-storage-quota-failed: ${classifyDriveError(err)}` });
     return null;
   }
+}
+
+// Typed upload failure. kind lets callers (uploadManager) branch on the real
+// cause without string-matching error messages: quota (storage full), network
+// (transient, exhausted), auth (401), invalid (4xx / malformed response),
+// aborted (caller cancelled).
+export class UploadError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: 'quota' | 'network' | 'auth' | 'invalid' | 'aborted'
+  ) {
+    super(message);
+    this.name = 'UploadError';
+  }
+}
+
+// Google Drive error responses carry { error: { message, reason } }; only the
+// public message/reason are read (never the raw body — it can embed file ids).
+interface DriveErrorBody {
+  error?: { message?: unknown; reason?: unknown };
+}
+
+async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | null> {
+  try {
+    const data = await response.json();
+    if (typeof data !== 'object' || data === null) return null;
+    return data as DriveErrorBody;
+  } catch {
+    return null;
+  }
+}
+
+// 403 storage-quota detection: official reason storageQuotaExceeded with
+// message "The user's Drive storage quota has been exceeded." (docs + real
+// API traces). Everything else on 403 (e.g. rate-limit) stays 'invalid'.
+function isQuotaExceeded(errBody: DriveErrorBody | null): boolean {
+  const reason =
+    typeof errBody?.error?.reason === 'string' ? errBody.error.reason.toLowerCase() : '';
+  const message =
+    typeof errBody?.error?.message === 'string' ? errBody.error.message.toLowerCase() : '';
+  return reason.includes('quota') || message.includes('storage quota');
+}
+
+// Single mapper for both upload steps — non-retryable by design: a PUT retried
+// after the server answered would create a duplicate upload.
+function mapUploadHttpError(status: number, errBody: DriveErrorBody | null): UploadError {
+  if (status === 401) return new UploadError('upload unauthorized (401)', 'auth');
+  if (status === 403 && isQuotaExceeded(errBody)) return new UploadError('drive storage quota exceeded', 'quota');
+  return new UploadError(`upload failed (status=${status})`, 'invalid');
+}
+
+// Step 1: initiate a resumable session. POST is idempotent (metadata only), so
+// it safely reuses driveFetch's retry/backoff — unlike the PUT step below.
+async function initiateResumableUpload(
+  token: string,
+  name: string,
+  parentId: string,
+  byteLength: number,
+  signal: AbortSignal
+): Promise<string> {
+  const response = await driveFetch(RESUMABLE_UPLOAD_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': UPLOAD_METADATA_CONTENT_TYPE,
+      'X-Upload-Content-Type': UPLOAD_MIME_TYPE,
+      'X-Upload-Content-Length': String(byteLength)
+    },
+    body: JSON.stringify({ name, parents: [parentId] }),
+    signal
+  });
+
+  if (!response.ok) {
+    throw mapUploadHttpError(response.status, await readDriveErrorBody(response));
+  }
+  const location = response.headers.get('Location');
+  if (!location) {
+    throw new UploadError('resumable session returned no Location header', 'invalid');
+  }
+  return location;
+}
+
+// Step 2: PUT the whole body once. fetchWithAuth (NOT driveFetch) — it must
+// never auto-retry, and it gives us the 401 token-refresh for free.
+async function putResumableBytes(
+  uploadUri: string,
+  token: string,
+  data: Uint8Array,
+  signal: AbortSignal
+): Promise<DriveFileItem> {
+  const byteLength = data.byteLength;
+  const response = await fetchWithAuth(uploadUri, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': UPLOAD_MIME_TYPE,
+      'Content-Range': `bytes 0-${byteLength - 1}/${byteLength}`
+    },
+    body: data,
+    signal,
+    // fetchWithAuth's 15s internal default would kill a slow upload PUT well
+    // before the resumable session's 120s bound (already merged into the
+    // signal via mergeWithTimeoutSignal) — override so both stay in sync.
+    timeoutMs: UPLOAD_TIMEOUT_MS
+  });
+
+  if (!response.ok) {
+    throw mapUploadHttpError(response.status, await readDriveErrorBody(response));
+  }
+  try {
+    return (await response.json()) as DriveFileItem;
+  } catch (err) {
+    captureError({ level: 'error', source: DRIVE_MODULE, message: `upload-parse-response-failed (status=${response.status}): ${classifyDriveError(err)}` });
+    throw new UploadError('upload response was not valid JSON', 'invalid');
+  }
+}
+
+// Upload file bytes to Drive via the resumable protocol (2 steps: POST
+// initiate → PUT bytes). Non-retryable HTTP errors map to UploadError kinds;
+// only transient network/timeout failures re-initiate the session, at most
+// once. A caller abort (signal.aborted) always wins and never retries — a
+// timeout fired on our merged signal is still treated as transient.
+export async function uploadFileResumable(
+  token: string,
+  bytes: Blob | Uint8Array,
+  name: string,
+  parentId: string,
+  signal?: AbortSignal
+): Promise<DriveFileItem> {
+  if (signal?.aborted) {
+    throw new UploadError('upload aborted by caller', 'aborted');
+  }
+
+  const data = bytes instanceof Blob ? new Uint8Array(await bytes.arrayBuffer()) : bytes;
+  const byteLength = data.byteLength;
+  if (byteLength === 0) {
+    // Google's resumable docs define no Content-Range format for empty files
+    // (verified 2026-08-02); reject rather than risk a malformed upload.
+    throw new UploadError('cannot upload an empty file', 'invalid');
+  }
+
+  const mergedSignal = mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS);
+  for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt++) {
+    if (signal?.aborted) {
+      throw new UploadError('upload aborted by caller', 'aborted');
+    }
+    try {
+      const uploadUri = await initiateResumableUpload(token, name, parentId, byteLength, mergedSignal);
+      return await putResumableBytes(uploadUri, token, data, mergedSignal);
+    } catch (err) {
+      if (signal?.aborted) {
+        throw new UploadError('upload aborted by caller', 'aborted');
+      }
+      if (err instanceof UploadError) {
+        throw err;
+      }
+      // Transient network/timeout — re-initiate a fresh session (Google: a
+      // 4xx/expired session must be restarted from scratch).
+      captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-transient-failure (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
+    }
+  }
+  throw new UploadError(`upload failed after ${MAX_UPLOAD_ATTEMPTS} attempts`, 'network');
 }

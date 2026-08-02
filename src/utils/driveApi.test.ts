@@ -6,6 +6,7 @@ import {
   listFolderChildren,
   getTrashedFiles,
   getDriveStorageQuota,
+  uploadFileResumable,
   type DriveFolderItem,
   type DriveFileItem,
 } from "./driveApi";
@@ -550,5 +551,229 @@ describe("getDriveStorageQuota", () => {
     const quota = await getDriveStorageQuota("tok-1");
 
     expect(quota).toEqual({ limit: null, usage: 100, usageInDrive: 50, usageInDriveTrash: 1 });
+  });
+});
+
+// Resumable upload: POST initiate (via driveFetch) → Location → PUT bytes (via
+// fetchWithAuth, no auto-retry). Transient PUT failures re-initiate a NEW
+// session at most once; caller aborts and HTTP errors never retry.
+describe("uploadFileResumable", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  // Mirrors UPLOAD_TIMEOUT_MS in driveApi.ts (not exported): the PUT step must
+  // override fetchWithAuth's 15s default with this 120s upload bound, or a
+  // slow upload dies to the internal timeout before the resumable limit.
+  const PUT_TIMEOUT_MS = 120_000;
+
+  const INITIATE_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
+  const LOCATION =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=test-123";
+  const uploadedFile: DriveFileItem = {
+    id: "file-1",
+    name: "song.mp3",
+    mimeType: "audio/mpeg",
+  };
+
+  function makeLocationResponse(status: number, location: string): Response {
+    const ok = status >= 200 && status < 300;
+    return {
+      status,
+      ok,
+      headers: {
+        get: (name: string) => (String(name).toLowerCase() === "location" ? location : null),
+      },
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  function makeErrorBodyResponse(status: number, message: string, reason?: string): Response {
+    return makeJsonResponse(status, {
+      error: { code: status, message, reason: reason ?? "badRequest" },
+    });
+  }
+
+  it("happy path: POST initiate 200 + Location, PUT 201 + body → returns DriveFileItem", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const blob = new Blob([new Uint8Array(10)]);
+    const result = await uploadFileResumable("tok", blob, "song.mp3", "parent-1");
+
+    expect(result).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+
+    const [postUrl, postOpts] = mockedFetch.mock.calls[0];
+    expect(postUrl).toBe(INITIATE_URL);
+    expect(postOpts?.method).toBe("POST");
+    const postHeaders = postOpts?.headers as Record<string, string>;
+    expect(postHeaders["Authorization"]).toBe("Bearer tok");
+    expect(postHeaders["Content-Type"]).toBe("application/json; charset=UTF-8");
+    expect(postHeaders["X-Upload-Content-Type"]).toBe("application/octet-stream");
+    expect(postHeaders["X-Upload-Content-Length"]).toBe("10");
+    expect(JSON.parse(String(postOpts?.body))).toEqual({ name: "song.mp3", parents: ["parent-1"] });
+
+    const [putUrl, putOpts] = mockedFetch.mock.calls[1];
+    expect(putUrl).toBe(LOCATION);
+    expect(putOpts?.method).toBe("PUT");
+    const putHeaders = putOpts?.headers as Record<string, string>;
+    expect(putHeaders["Content-Range"]).toBe("bytes 0-9/10");
+    expect(putHeaders["Content-Type"]).toBe("application/octet-stream");
+    expect(putOpts?.timeoutMs).toBe(PUT_TIMEOUT_MS);
+  });
+
+  it("POST initiate 404 → UploadError kind invalid, no retry", async () => {
+    mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(404, "File not found"));
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+    ).rejects.toMatchObject({ name: "UploadError", kind: "invalid" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("POST initiate 403 with quota message → UploadError kind quota", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeErrorBodyResponse(
+        403,
+        "The user's Drive storage quota has been exceeded.",
+        "storageQuotaExceeded"
+      )
+    );
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+    ).rejects.toMatchObject({ kind: "quota" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("PUT 401 → UploadError kind auth, no retry", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeErrorBodyResponse(401, "Unauthorized"));
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+    ).rejects.toMatchObject({ kind: "auth" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("PUT network error on first attempt → re-initiates a new session and succeeds", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const result = await uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
+
+    expect(result).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(4);
+    expect(mockedFetch.mock.calls[0][0]).toBe(INITIATE_URL);
+    expect(mockedFetch.mock.calls[1][0]).toBe(LOCATION);
+    expect(mockedFetch.mock.calls[2][0]).toBe(INITIATE_URL);
+    expect(mockedFetch.mock.calls[3][0]).toBe(LOCATION);
+    // Both PUT attempts (call 1 and call 3) must carry the upload timeout.
+    expect(mockedFetch.mock.calls[1][1]?.timeoutMs).toBe(PUT_TIMEOUT_MS);
+    expect(mockedFetch.mock.calls[3][1]?.timeoutMs).toBe(PUT_TIMEOUT_MS);
+  });
+
+  it("PUT network error on both attempts → UploadError kind network", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockRejectedValueOnce(new Error("network down"));
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+    ).rejects.toMatchObject({ kind: "network" });
+    expect(mockedFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("caller abort before upload → UploadError kind aborted, zero network calls", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p", controller.signal)
+    ).rejects.toMatchObject({ kind: "aborted" });
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("caller abort mid-upload → UploadError kind aborted, no retry", async () => {
+    const controller = new AbortController();
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        throw new DOMException("aborted", "AbortError");
+      });
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p", controller.signal)
+    ).rejects.toMatchObject({ kind: "aborted" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("POST initiate 200 without Location header → UploadError kind invalid", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, {}));
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("Uint8Array input: exact byte length in X-Upload-Content-Length and Content-Range", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    await uploadFileResumable("tok", new Uint8Array([1, 2, 3, 4, 5]), "a.mp3", "p");
+
+    const postHeaders = mockedFetch.mock.calls[0][1]?.headers as Record<string, string>;
+    const putHeaders = mockedFetch.mock.calls[1][1]?.headers as Record<string, string>;
+    expect(postHeaders["X-Upload-Content-Length"]).toBe("5");
+    expect(putHeaders["Content-Range"]).toBe("bytes 0-4/5");
+  });
+
+  it("0-byte file → UploadError kind invalid (Google docs do not define Content-Range for empty files)", async () => {
+    await expect(uploadFileResumable("tok", new Blob([]), "empty.mp3", "p")).rejects.toMatchObject({
+      kind: "invalid",
+    });
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(0), "empty.mp3", "p")
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("PUT 200 (not only 201) is treated as success", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(200, uploadedFile));
+
+    const result = await uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
+
+    expect(result).toEqual(uploadedFile);
+  });
+
+  it("PUT 403 with quota message → UploadError kind quota", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(
+          403,
+          "The user's Drive storage quota has been exceeded.",
+          "storageQuotaExceeded"
+        )
+      );
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+    ).rejects.toMatchObject({ kind: "quota" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 });
