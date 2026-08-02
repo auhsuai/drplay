@@ -3,14 +3,13 @@ import type { Track, PlayMode } from "../../types";
 import { set as idbSet } from "../../db/kv";
 import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
+import { MY_DRIVE_TAB } from "../../utils/driveConstants";
 import { classifyPlayerError } from "./utils";
 
 export interface QueueDriveItem {
   isFolder?: boolean;
   trackInfo?: Track;
 }
-
-const DRIVE_TAB_NAME = 'My Drive';
 
 const NEXT_MODE: Record<PlayMode, PlayMode> = {
   normal: 'shuffle',
@@ -120,7 +119,7 @@ export function usePlayerQueue(
 
     if (contextQueue && contextQueue.length > 0) {
       newOriginalQueue = contextQueue.map(t => ensureQueueItemId(t));
-    } else if (activeTab === DRIVE_TAB_NAME && driveItems) {
+    } else if (activeTab === MY_DRIVE_TAB && driveItems) {
       newOriginalQueue = driveItems.flatMap(item => item.isFolder || !item.trackInfo ? [] : [ensureQueueItemId(item.trackInfo)]);
     }
 

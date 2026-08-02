@@ -7,6 +7,7 @@ import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScree
 import { TrashScreen } from "./ui/Settings/TrashScreen";
 import { RateLimitModal } from "./ui/components/RateLimitModal";
 import { captureError } from "./utils/errorLog";
+import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "./utils/driveConstants";
 import { useShallow } from 'zustand/react/shallow';
 
 const MainContent = React.lazy(() => import('./ui/MainContent/MainContent').then(module => ({ default: module.MainContent })));
@@ -60,6 +61,21 @@ const LS_SORT_OPTION = 'drplay_sort_option';
 const LS_MINIMIZE_TO_TRAY = 'drplay_minimize_to_tray';
 const DB_NAV_STATE_KEY = 'drplay_nav_state';
 
+// Lazy-useState-compatible reader for the tray-minimize preference: missing
+// key (first launch) defaults to minimized; only the literal 'true' means
+// minimized, any other stored value ('false'/corrupt) means not-minimized.
+// localStorage access can throw SecurityError (storage blocked by policy —
+// see MDN Window.localStorage), so the read is guarded and falls back to the
+// default like a missing key.
+export function loadMinimizeToTrayState(): boolean {
+  try {
+    const saved = localStorage.getItem(LS_MINIMIZE_TO_TRAY);
+    return saved !== null ? saved === "true" : true;
+  } catch {
+    return true; // storage blocked — default behavior (same as missing key)
+  }
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState("Home");
   const { theme, setTheme } = useTheme();
@@ -73,10 +89,19 @@ function App() {
   useTauriEvents(setShowRateLimitModal);
 
   const { isLoggedIn, accessToken, userProfile, handleLoginSuccess, handleLogout } = useAuth(() => {
-    localStorage.removeItem(LS_ROOT_FOLDER);
-    localStorage.removeItem(LS_CURRENT_FOLDER_ID);
-    localStorage.removeItem(LS_CURRENT_FOLDER_NAME);
-    localStorage.removeItem(LS_FOLDER_HISTORY);
+    try {
+      localStorage.removeItem(LS_ROOT_FOLDER);
+      localStorage.removeItem(LS_CURRENT_FOLDER_ID);
+      localStorage.removeItem(LS_CURRENT_FOLDER_NAME);
+      localStorage.removeItem(LS_FOLDER_HISTORY);
+    } catch (err) {
+      captureError({
+        level: 'warn',
+        source: 'App',
+        message: `logout-cleanup-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}`,
+        kind: 'localstorage-cleanup-failed'
+      });
+    }
     db.syncState.delete(DB_NAV_STATE_KEY).catch((e) => captureError({ source: 'App', message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'logout-cleanup-failed' }));
     clearSessionState();
     setAppRootFolder(null);
@@ -150,20 +175,25 @@ function App() {
   // value; anything else (missing/corrupt) opens — see sidebarState.
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
-  const [minimizeToTray, setMinimizeToTray] = useState(() => {
-    const saved = localStorage.getItem(LS_MINIMIZE_TO_TRAY);
-    return saved !== null ? saved === "true" : true;
-  });
+  const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
 
   useEffect(() => {
-    localStorage.setItem(LS_MINIMIZE_TO_TRAY, String(minimizeToTray));
+    try {
+      localStorage.setItem(LS_MINIMIZE_TO_TRAY, String(minimizeToTray));
+    } catch (err) {
+      captureError({
+        level: 'warn',
+        source: 'App',
+        message: `tray-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}`
+      });
+    }
     invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch((e) => captureError({ source: 'App', message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'minimize-to-tray-failed' }));
   }, [minimizeToTray]);
 
   const handleTabChange = useCallback((tab: string) => {
-    if (activeTab === tab && tab === "My Drive") {
-      setCurrentFolderId(appRootFolder || "root");
-      setCurrentFolderName("My Drive");
+    if (activeTab === tab && tab === MY_DRIVE_TAB) {
+      setCurrentFolderId(appRootFolder || ROOT_FOLDER_ID);
+      setCurrentFolderName(MY_DRIVE_TAB);
       setFolderHistory([]);
     }
     setActiveTab(tab);
@@ -183,7 +213,7 @@ function App() {
             setShowFolderSelection(false);
           }}
           onCancel={appRootFolder ? () => setShowFolderSelection(false) : undefined}
-          initialFolderId={'root'}
+          initialFolderId={ROOT_FOLDER_ID}
           initialFolderHistory={[]}
           allowEscapeRoot={true}
         />
@@ -215,13 +245,13 @@ function App() {
                 onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} 
                 onOpenFolder={(id, name) => {
                   handleOpenFolder(id, name);
-                  handleTabChange("My Drive");
+                  handleTabChange(MY_DRIVE_TAB);
                 }}
                 token={accessToken} 
                 userProfile={userProfile} 
                 currentTrack={currentTrack}
               />
-            ) : activeTab === "My Drive" ? (
+            ) : activeTab === MY_DRIVE_TAB ? (
               <MainContent
                 activeTab={activeTab}
                 onPlay={handlePlayTrack}
@@ -241,7 +271,15 @@ function App() {
                 sortOption={sortOption}
                 onSortChange={(val) => {
                   setSortOption(val);
-                  localStorage.setItem(LS_SORT_OPTION, val);
+                  try {
+                    localStorage.setItem(LS_SORT_OPTION, val);
+                  } catch (err) {
+                    captureError({
+                      level: 'warn',
+                      source: 'App',
+                      message: `sort-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}`
+                    });
+                  }
                 }}
               />
             ) : activeTab === "Liked Songs" ? (

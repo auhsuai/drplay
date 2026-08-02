@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { db } from '../db/db';
 import { fetchWithAuth } from '../utils/apiClient';
 import { classifyDriveError } from '../utils/driveApi';
-import { ROOT_FOLDER_ID } from '../utils/driveConstants';
+import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from '../utils/driveConstants';
 import { captureError } from '../utils/errorLog';
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
-const MY_DRIVE_LABEL = 'My Drive';
 const DRIVE_ID_PREFIX = 'drive_';
 const EVENT_LOCATE_FILE = 'locate-file';
 const STORAGE_KEY_ROOT = 'drplay_root_folder';
@@ -80,7 +79,7 @@ export function useLocateFile(
           }
 
           if (pId === rootId || pId === ROOT_FOLDER_ID) {
-            newHistory.unshift({ id: pId, name: MY_DRIVE_LABEL });
+            newHistory.unshift({ id: pId, name: MY_DRIVE_TAB });
             break;
           }
 
@@ -109,7 +108,7 @@ export function useLocateFile(
       };
 
       setIsLoadingTracks(true);
-      setActiveTab("My Drive");
+      setActiveTab(MY_DRIVE_TAB);
 
       try {
         let parentId: string | null = null;
@@ -144,7 +143,7 @@ export function useLocateFile(
         const rootId = rootRaw || ROOT_FOLDER_ID;
         
         if (parentId === rootId || parentId === ROOT_FOLDER_ID) {
-          folderName = MY_DRIVE_LABEL;
+          folderName = MY_DRIVE_TAB;
         } else {
           const parentInfo = await db.files.get(parentId);
           if (!mounted) return;

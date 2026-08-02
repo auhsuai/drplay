@@ -6,7 +6,7 @@ import { recordFolderVisit } from "../utils/history";
 import { getAppConfig, saveAppConfig, mergeWithTimeoutSignal } from "../utils/driveApi";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
-import { ROOT_FOLDER_ID } from "../utils/driveConstants";
+import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "../utils/driveConstants";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 
@@ -17,7 +17,6 @@ const LS_CURRENT_FOLDER_NAME = 'drplay_current_folder_name';
 const LS_FOLDER_HISTORY = 'drplay_folder_history';
 const DB_NAV_STATE_KEY = 'drplay_nav_state';
 const ROOT_VERIFY_TIMEOUT_MS = 15_000;
-const GD_MY_DRIVE_LABEL = 'My Drive';
 
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
@@ -125,7 +124,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
           const fallbackToRoot = () => {
             setCurrentFolderId(localRoot);
-            setCurrentFolderName(GD_MY_DRIVE_LABEL);
+            setCurrentFolderName(MY_DRIVE_TAB);
           };
 
           try {
@@ -138,7 +137,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                 if (typeof obj.id === 'string') {
                   const sv = {
                     id: obj.id,
-                    name: typeof obj.name === 'string' ? obj.name : GD_MY_DRIVE_LABEL,
+                    name: typeof obj.name === 'string' ? obj.name : MY_DRIVE_TAB,
                     history: Array.isArray(obj.history)
                       ? obj.history.filter((x: unknown): x is { id: string; name: string } =>
                           typeof x === 'object' && x !== null && typeof (x as Record<string, unknown>).id === 'string')
@@ -148,7 +147,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   const suspectRoot = savedId === ROOT_FOLDER_ID && localRoot !== ROOT_FOLDER_ID;
                   const restoredId = suspectRoot && localRoot ? localRoot : savedId;
                   setCurrentFolderId(restoredId);
-                  setCurrentFolderName(restoredId === localRoot || restoredId === ROOT_FOLDER_ID ? GD_MY_DRIVE_LABEL : sv.name);
+                  setCurrentFolderName(restoredId === localRoot || restoredId === ROOT_FOLDER_ID ? MY_DRIVE_TAB : sv.name);
                   setFolderHistory(suspectRoot ? [] : sv.history);
                 } else {
                   fallbackToRoot();
@@ -163,7 +162,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
               if (savedCurrentId && savedCurrentName && savedHistoryStr) {
                 setCurrentFolderId(savedCurrentId);
-                setCurrentFolderName(savedCurrentId === ROOT_FOLDER_ID ? GD_MY_DRIVE_LABEL : savedCurrentName);
+                setCurrentFolderName(savedCurrentId === ROOT_FOLDER_ID ? MY_DRIVE_TAB : savedCurrentName);
                 try {
                   setFolderHistory(JSON.parse(savedHistoryStr));
                 } catch (e: unknown) {
@@ -238,7 +237,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       const previousFolder = newHistory.pop();
       setFolderHistory(newHistory);
       setCurrentFolderId(previousFolder?.id || appRootFolder || ROOT_FOLDER_ID);
-      setCurrentFolderName(previousFolder?.name || GD_MY_DRIVE_LABEL);
+      setCurrentFolderName(previousFolder?.name || MY_DRIVE_TAB);
     }
   }, [folderHistory, appRootFolder, setFolderHistory, setCurrentFolderId, setCurrentFolderName]);
 
@@ -253,7 +252,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     localStorage.setItem(LS_ROOT_FOLDER, folderId);
     setAppRootFolder(folderId);
     setCurrentFolderId(folderId);
-    setCurrentFolderName(GD_MY_DRIVE_LABEL);
+    setCurrentFolderName(MY_DRIVE_TAB);
     setFolderHistory([]);
     try {
       await db.files.clear();
@@ -261,7 +260,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       const freshToken = await getValidToken();
       if (freshToken) {
         try {
-          const saved = await saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: GD_MY_DRIVE_LABEL, updatedAt: Date.now() });
+          const saved = await saveAppConfig(freshToken, { rootFolderId: folderId, rootFolderName: MY_DRIVE_TAB, updatedAt: Date.now() });
           if (!saved) {
             captureError({ level: 'warn', source: 'useDrive', message: 'save-config-unsaved: app config was not persisted to Drive' });
           }

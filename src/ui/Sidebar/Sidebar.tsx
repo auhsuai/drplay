@@ -6,6 +6,7 @@ import { getDriveStorageQuota, type DriveStorageQuota } from "../../utils/driveA
 import { formatBytes } from "../../utils/formatBytes";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { MY_DRIVE_TAB } from "../../utils/driveConstants";
 import { UploadButton } from "../components/UploadButton";
 import { DropZone } from "../components/DropZone";
 
@@ -137,7 +138,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
       </div>
       <nav className="px-4 space-y-1 mb-2">
         <NavItem icon={<Home />} label={t('sidebar.home')} active={activeTab === "Home"} onClick={() => onTabChange("Home")} isSidebarOpen={isSidebarOpen} />
-        <NavItem icon={<HardDrive />} label={t('sidebar.my_drive')} active={activeTab === "My Drive"} onClick={() => onTabChange("My Drive")} isSidebarOpen={isSidebarOpen} />
+        <NavItem icon={<HardDrive />} label={t('sidebar.my_drive')} active={activeTab === MY_DRIVE_TAB} onClick={() => onTabChange(MY_DRIVE_TAB)} isSidebarOpen={isSidebarOpen} />
         <NavItem icon={<Heart />} label={t('sidebar.liked_songs')} active={activeTab === "Liked Songs"} onClick={() => onTabChange("Liked Songs")} isSidebarOpen={isSidebarOpen} />
       </nav>
       

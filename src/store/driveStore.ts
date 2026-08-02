@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ROOT_FOLDER_ID } from '../utils/driveConstants';
+import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from '../utils/driveConstants';
 
 interface FolderHistoryItem {
   id: string;
@@ -28,7 +28,7 @@ interface DriveState {
 export const useDriveStore = create<DriveState>((set) => ({
   appRootFolder: null,
   currentFolderId: ROOT_FOLDER_ID,
-  currentFolderName: 'My Drive',
+  currentFolderName: MY_DRIVE_TAB,
   folderHistory: [],
   sortOption: 'name',
   isLoadingTracks: false,

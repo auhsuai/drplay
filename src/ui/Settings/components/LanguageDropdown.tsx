@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { LANGUAGE_KEY } from "../../../utils/storageKeys";
+import { captureError } from "../../../utils/errorLog";
 
 export function LanguageDropdown() {
   const { t, i18n } = useTranslation();
@@ -28,7 +30,15 @@ export function LanguageDropdown() {
 
   const handleSelect = (code: string) => {
     i18n.changeLanguage(code);
-    localStorage.setItem('drplay_language', code);
+    try {
+      localStorage.setItem(LANGUAGE_KEY, code);
+    } catch (err) {
+      captureError({
+        level: 'warn',
+        source: 'LanguageDropdown',
+        message: `language-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}`
+      });
+    }
     setIsOpen(false);
   };
 
