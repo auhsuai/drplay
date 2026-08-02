@@ -6,6 +6,7 @@ import type { DriveFileItem, DriveStorageQuota } from './driveApi';
 import { readDiskFile, registerUploadPath, walkDiskFolder } from './diskFs';
 import type { DiskEntry } from './diskFs';
 import { captureError } from './errorLog';
+import { basename } from './pathUtils';
 import { showErrorToast } from './simpleToast';
 
 // Sequential queue (1 upload at a time) + pending db.files rows that render as
@@ -75,13 +76,6 @@ const subscribers = new Set<() => void>();
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-// Mirrors diskFs's internal basename (exporting it is out of slice scope).
-function basename(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, '');
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] ?? path;
 }
 function dirOf(relPath: string): string {
   const idx = relPath.lastIndexOf('/');

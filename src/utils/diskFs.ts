@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { captureError } from './errorLog';
+import { basename } from './pathUtils';
 
 // tauri-plugin-fs v2 command names, verified against the plugins-workspace v2
 // guest-js (raw.githubusercontent.com/tauri-apps/plugins-workspace/v2/plugins/fs/guest-js/index.ts,
@@ -164,12 +165,4 @@ function joinPath(dirPath: string, name: string): string {
 function toForwardSlashRelative(rootPath: string, absolutePath: string): string {
   const rel = absolutePath.startsWith(rootPath) ? absolutePath.slice(rootPath.length) : absolutePath;
   return rel.replace(/^[\\/]+/, '').replace(/\\/g, '/');
-}
-
-// "C:\Music\a.mp3" -> "a.mp3"; "C:\Music\" -> "Music" (trailing sep stripped
-// first so a root path yields its folder name, not "").
-function basename(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, '');
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] ?? path;
 }

@@ -8,6 +8,7 @@ import { startUploads, type UploadSeed } from '../../utils/uploadManager';
 import { useDriveStore } from '../../store/driveStore';
 import { showErrorToast } from '../../utils/simpleToast';
 import { captureError } from '../../utils/errorLog';
+import { basename } from '../../utils/pathUtils';
 
 const DROPZONE_MODULE = 'DropZone';
 // Overlay must sit above every other layer (modals use z-50); Tauri's native
@@ -17,15 +18,6 @@ const OVERLAY_Z_CLASS = 'z-[10000]';
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-// Mirrors the basename logic in diskFs/uploadManager/UploadButton (all
-// private — extracting a shared util is out of this slice's scope): strips
-// trailing separators first so "C:\Music\" yields "Music" instead of "".
-function basename(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, '');
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] ?? path;
 }
 
 // Classify one dropped path into an UploadSeed, or null when the path is not

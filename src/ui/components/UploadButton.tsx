@@ -6,6 +6,7 @@ import { startUploads, type UploadSeed } from "../../utils/uploadManager";
 import { useDriveStore } from "../../store/driveStore";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { basename } from "../../utils/pathUtils";
 
 const UPLOAD_BUTTON_MODULE = 'UploadButton';
 // Extensions the file picker filters to (no leading dot, per DialogFilter docs).
@@ -17,15 +18,6 @@ const MENU_ITEM_CLASS = "w-full text-left px-3 py-2 text-sm text-gray-700 dark:t
 
 export interface UploadButtonProps {
   token?: string | null;
-}
-
-// Same path->name logic as uploadManager's internal basename (not exported
-// there — export is out of that module's slice scope): strips trailing
-// separators first so "C:\Music\" yields "Music" instead of "".
-function basename(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, '');
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] ?? path;
 }
 
 // The dialog returns string[] with multiple:true and string with
