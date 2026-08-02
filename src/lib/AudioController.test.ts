@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { Track } from '../App';
+import type { Track } from '../types';
 
 vi.mock('../store/playerStore', () => ({
   usePlayerStore: {

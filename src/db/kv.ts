@@ -1,10 +1,11 @@
 import { db } from './db';
+import { captureError } from '../utils/errorLog';
 
 async function runOp<T>(op: string, key: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e: unknown) {
-    console.warn(`[kv] ${op} error`, { key, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) });
+    captureError({ level: 'warn', source: 'kv', message: `kv-${op}-failed (key=${String(key)}): ${e instanceof Error ? e.name + ': ' + e.message : String(e)}` });
     throw e;
   }
 }

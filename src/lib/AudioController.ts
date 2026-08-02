@@ -1,4 +1,4 @@
-import { Track } from '../App';
+import type { Track } from '../types';
 import { usePlayerStore } from '../store/playerStore';
 import { captureError } from '../utils/errorLog';
 import { DRIVE_STREAM_PREFIX } from '../utils/streamPrefetcher';
@@ -84,7 +84,24 @@ export class AudioController {
   }
 
   private async safePlay(audio: HTMLAudioElement): Promise<void> {
-    try { await audio.play(); } catch { /* autoplay policy — silent */ }
+    try {
+      await audio.play();
+    } catch (e: unknown) {
+      if (!isAbortError(e) && !(e instanceof DOMException && e.name === 'NotAllowedError')) {
+        captureError({ level: 'warn', source: 'AudioController', message: `safe-play-failed: ${e instanceof Error ? e.name : String(e)}` });
+      }
+    }
+  }
+
+  // One-shot loadedmetadata listener: set currentTime once metadata arrives,
+  // then detach itself (MDN pattern). Prevents the listener from leaking and
+  // from re-applying the position on later metadata events.
+  private seekOnLoadedMetadata(audio: HTMLAudioElement, position: number): void {
+    const onMetadata = () => {
+      audio.currentTime = position;
+      audio.removeEventListener('loadedmetadata', onMetadata);
+    };
+    audio.addEventListener('loadedmetadata', onMetadata);
   }
 
   private setupAudio(audio: HTMLAudioElement) {
@@ -260,17 +277,14 @@ export class AudioController {
     newAudio.load();
 
     if (startTime !== undefined) {
-      const handleMetadata = () => {
-        newAudio.currentTime = startTime;
-        newAudio.removeEventListener('loadedmetadata', handleMetadata);
-      };
-      newAudio.addEventListener('loadedmetadata', handleMetadata);
+      this.seekOnLoadedMetadata(newAudio, startTime);
     }
 
     try {
       await newAudio.play();
     } catch (e: unknown) {
       if (!isAbortError(e) && this.currentTrackId === track.id) {
+        captureError({ level: 'warn', source: 'AudioController', message: `play-failed: ${e instanceof Error ? e.name : String(e)}` });
         usePlayerStore.getState().setIsPlaying(false);
       }
     }
@@ -293,16 +307,12 @@ export class AudioController {
     audio.src = baseUrl + '?retry=' + Date.now();
     audio.load();
     
-    const handleMetadata = () => {
-      audio.currentTime = position;
-      audio.removeEventListener('loadedmetadata', handleMetadata);
-    };
-    audio.addEventListener('loadedmetadata', handleMetadata);
+    this.seekOnLoadedMetadata(audio, position);
 
     try {
       await audio.play();
     } catch (e: unknown) {
-      if (e instanceof DOMException && e.name !== 'AbortError') captureError({ level: 'warn', source: 'AudioController', message: `Retry autoplay failed (${e.name})` });
+      if (!isAbortError(e)) captureError({ level: 'warn', source: 'AudioController', message: `Retry autoplay failed (${e instanceof Error ? e.name : String(e)})` });
     }
   }
 
@@ -351,13 +361,6 @@ export class AudioController {
   public getBuffered(): BufferedSource {
     const audio = this.activeAudio;
     return { duration: audio.duration, currentTime: audio.currentTime, buffered: audio.buffered };
-  }
-  
-  // Expose prefetch for gapless if needed
-  public preloadTrack(url: string) {
-    const inactiveAudio = this.activeIndex === 0 ? this.audio2 : this.audio1;
-    inactiveAudio.src = url;
-    inactiveAudio.load();
   }
 
   // B3: fully release audio resources (logout / player-stop). Each element is
