@@ -83,6 +83,26 @@ describe('captureError', () => {
   });
 });
 
+describe('captureError — atomic prune (upgrade)', () => {
+  it('prunes 101 entries via a single Dexie transaction', async () => {
+    const txSpy = vi.spyOn(db, 'transaction');
+    let txCalls = 0;
+    try {
+      for (let i = 0; i < ERROR_LOG_MAX + 1; i++) {
+        await captureError({ source: 'atomic-cap', message: `atomic-${i}`, kind: 'seq' });
+      }
+      // Read the call count BEFORE mockRestore: it clears mock.calls.
+      txCalls = txSpy.mock.calls.length;
+    } finally {
+      txSpy.mockRestore();
+    }
+
+    const logs = await getErrorLogs();
+    expect(logs).toHaveLength(ERROR_LOG_MAX);
+    expect(txCalls).toBeGreaterThan(0);
+  });
+});
+
 describe('getErrorLogs', () => {
   it('returns [] instead of throwing when Dexie read fails (never throw)', async () => {
     const spy = vi

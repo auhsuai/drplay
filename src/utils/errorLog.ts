@@ -24,13 +24,18 @@ export async function captureError(input: {
       kind: input.kind
     };
 
-    await db.errorLogs.add(entry);
+    // Add + count + prune trong 1 transaction để tránh race khi capture song song
+    // (add rời + delete rời có thể xoá dư 1-2 entry vì count đọc giữa chừng).
+    await db.transaction('rw', db.errorLogs, async () => {
+      await db.errorLogs.add(entry);
 
-    const count = await db.errorLogs.count();
-    if (count > ERROR_LOG_MAX) {
-      const excess = count - ERROR_LOG_MAX;
-      await db.errorLogs.orderBy('ts').limit(excess).delete();
-    }
+      const count = await db.errorLogs.count();
+      if (count > ERROR_LOG_MAX) {
+        const excess = count - ERROR_LOG_MAX;
+        const keys = await db.errorLogs.orderBy('ts').limit(excess).primaryKeys();
+        await db.errorLogs.bulkDelete(keys);
+      }
+    });
   } catch (err) {
     logCaptureFailure('captureError', err);
   }

@@ -47,3 +47,49 @@ describe('logger sanitizeArg', () => {
     expect(sanitizeArg('hello world')).toBe('hello world');
   });
 });
+
+describe('logger sanitizeString — upgrade redaction patterns', () => {
+  it('redacts refresh_token=xxx → [REDACTED_TOKEN]', () => {
+    expect(sanitizeString('refresh_token=abc.def-123')).toBe('[REDACTED_TOKEN]');
+    expect(sanitizeString('?refresh_token=abc.def')).toBe('[REDACTED_TOKEN]');
+  });
+
+  it('redacts token=xxx → [REDACTED_TOKEN]', () => {
+    expect(sanitizeString('token=secret123')).toBe('[REDACTED_TOKEN]');
+    expect(sanitizeString('?token=secret123')).toBe('[REDACTED_TOKEN]');
+  });
+
+  it('redacts upload_id=xxx value', () => {
+    expect(sanitizeString('upload_id=abc123')).toBe('upload_id=[REDACTED_ID]');
+    expect(sanitizeString('upload_id=abc123')).not.toContain('abc123');
+  });
+
+  it('redacts api_key / api-key / apikey → [REDACTED_TOKEN]', () => {
+    expect(sanitizeString('api_key=abc123')).toBe('[REDACTED_TOKEN]');
+    expect(sanitizeString('api-key=abc123')).toBe('[REDACTED_TOKEN]');
+    expect(sanitizeString('?apikey=abc123')).toBe('[REDACTED_TOKEN]');
+  });
+
+  it('redacts lowercase bearer → Bearer [REDACTED_TOKEN]', () => {
+    expect(sanitizeString('bearer xyz.abc')).toBe('Bearer [REDACTED_TOKEN]');
+  });
+
+  it('redacts Authorization header → Authorization: [REDACTED_TOKEN]', () => {
+    expect(sanitizeString('Authorization: Bearer abc123')).toBe(
+      'Authorization: [REDACTED_TOKEN]'
+    );
+    expect(sanitizeString('authorization: abc123')).toBe(
+      'Authorization: [REDACTED_TOKEN]'
+    );
+  });
+});
+
+describe('logger sanitizeArg — upgrade circular handling', () => {
+  it('does not leak raw circular object containing a secret', () => {
+    const circular: Record<string, unknown> = { payload: 'Bearer supersecret' };
+    circular.self = circular;
+    const san = sanitizeArg(circular);
+    expect(san).toBe('[REDACTED_UNSERIALIZABLE]');
+    expect(String(san)).not.toContain('supersecret');
+  });
+});

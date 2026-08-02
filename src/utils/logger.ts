@@ -11,8 +11,18 @@ const SENSITIVE_PATTERNS: { re: RegExp; redact: (match: string, prefix: string) 
   { re: /([?&]?)id=[a-zA-Z0-9_-]+/g, redact: (_m, p) => `${p}id=[REDACTED_ID]` },
   // Ẩn Access Token nếu lỡ bị log ra (giữ nguyên pattern tiền tố tuỳ chọn)
   { re: /([?&]?)access_token=[a-zA-Z0-9._-]+/g, redact: () => '[REDACTED_TOKEN]' },
-  // Ẩn Bearer token (defense-in-depth, đồng bộ với workerError.ts)
-  { re: /Bearer\s+[a-zA-Z0-9._-]+/g, redact: () => 'Bearer [REDACTED_TOKEN]' }
+  // Ẩn Refresh Token (sống lâu hơn access token nên không được log — OWASP Logging Cheat Sheet)
+  { re: /([?&]?)refresh_token=[a-zA-Z0-9._-]+/g, redact: () => '[REDACTED_TOKEN]' },
+  // Ẩn token= chung (đặt sau access_token/refresh_token để key dài hơn được khớp trước)
+  { re: /([?&]?)token=[a-zA-Z0-9._-]+/g, redact: () => '[REDACTED_TOKEN]' },
+  // Ẩn upload_id= (key lẫn value)
+  { re: /([?&]?)upload_id=[a-zA-Z0-9._-]+/g, redact: () => '[REDACTED_ID]' },
+  // Ẩn api_key / api-key / apikey
+  { re: /([?&]?)api[_-]?key=[a-zA-Z0-9._-]+/g, redact: () => '[REDACTED_TOKEN]' },
+  // Ẩn header Authorization (đứng trước Bearer để "Authorization: Bearer xyz" không bị redact 2 lần)
+  { re: /Authorization:\s*(?:Bearer\s+)?[a-zA-Z0-9._-]+/gi, redact: () => 'Authorization: [REDACTED_TOKEN]' },
+  // Ẩn Bearer token (case-insensitive, defense-in-depth, đồng bộ với workerError.ts)
+  { re: /Bearer\s+[a-zA-Z0-9._-]+/gi, redact: () => 'Bearer [REDACTED_TOKEN]' }
 ];
 
 export const sanitizeString = (str: string): string => {
@@ -26,7 +36,7 @@ export const sanitizeString = (str: string): string => {
   return sanitized;
 };
 
-export const sanitizeArg = (arg: any): any => {
+export const sanitizeArg = (arg: unknown): any => {
   if (typeof arg === 'string') {
     return sanitizeString(arg);
   }
@@ -45,8 +55,10 @@ export const sanitizeArg = (arg: any): any => {
       if (SENSITIVE_PATTERNS.some(({ re }) => { re.lastIndex = 0; return re.test(str); })) {
          return JSON.parse(sanitizeString(str));
       }
-    } catch(e: unknown) {
-      // Ignore circular structures
+    } catch (e: unknown) {
+      // Circular structure không serialize được: trả placeholder thay vì trả raw
+      // object (raw có thể chứa secret). An toàn hơn là im lặng bỏ qua.
+      return '[REDACTED_UNSERIALIZABLE]';
     }
   }
   return arg;
