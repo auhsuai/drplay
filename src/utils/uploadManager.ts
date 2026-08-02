@@ -26,6 +26,12 @@ const ERROR_INVALID_SEED = 'invalid-seed';
 const ERROR_QUOTA = 'quota';
 const ERROR_PARENT_FOLDER_MISSING = 'parent-folder-missing';
 const ERROR_FAILED = 'failed';
+const ERROR_ABORTED = 'aborted';
+// Subscribers get at most one progress notify per this window; onProgress can
+// fire once per chunk (128× on a 1 GB file) and per-chunk notifies would spam
+// renders, so progress bursts are coalesced into a single trailing-edge notify.
+const PROGRESS_NOTIFY_INTERVAL_MS = 500;
+const ABORTED_UPLOAD_MESSAGE = 'upload aborted by caller';
 
 export interface UploadEntry {
   id: string; // 'pending-<uuid>' until a real Drive id exists (also db.files row id)
@@ -75,6 +81,60 @@ let entries: InternalEntry[] = [];
 let busy = false;
 const subscribers = new Set<() => void>();
 
+// One AbortController per in-flight upload: created when the entry turns
+// 'uploading' (before handleByKind) and removed at terminal. cancelUpload
+// aborts it; driveApi converts the abort into UploadError('aborted') which
+// markError surfaces as a silent user-initiated cancel.
+const entryControllers = new Map<string, AbortController>();
+
+// Progress notify is coalesced through a single trailing-edge timer: pending
+// onProgress bursts leave the timer running (at most one notify per
+// PROGRESS_NOTIFY_INTERVAL_MS), and a notify only fires when the value
+// actually changed since the last one. The queue is strictly sequential, so
+// one shared timer + last-notified value covers every entry.
+let pendingProgressTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingProgressEntry: InternalEntry | null = null;
+let lastNotifiedProgress = 0;
+
+function controllerFor(entry: InternalEntry): AbortController | undefined {
+  return entryControllers.get(entry.id);
+}
+function createControllerFor(entry: InternalEntry): void {
+  entryControllers.set(entry.id, new AbortController());
+}
+function clearControllerFor(entry: InternalEntry): void {
+  entryControllers.delete(entry.id);
+}
+
+// Coalesce: a pending timer is left running (new bursts merge into it). The
+// callback re-checks the entry (still queued/uploading? progress changed?)
+// because the entry may have gone terminal while the timer was pending.
+function scheduleProgressNotify(entry: InternalEntry): void {
+  if (pendingProgressTimer !== null) return;
+  pendingProgressEntry = entry;
+  pendingProgressTimer = setTimeout(() => {
+    pendingProgressTimer = null;
+    const target = pendingProgressEntry;
+    pendingProgressEntry = null;
+    if (!target) return;
+    const active = target.status === 'queued' || target.status === 'uploading';
+    if (!active || target.progress === undefined) return;
+    if (target.progress === lastNotifiedProgress) return;
+    lastNotifiedProgress = target.progress;
+    notify();
+  }, PROGRESS_NOTIFY_INTERVAL_MS);
+}
+
+// Terminal transitions notify immediately themselves, so a pending progress
+// timer must not fire a stale notify afterwards (and must not leak).
+function clearProgressNotifyTimer(): void {
+  if (pendingProgressTimer !== null) {
+    clearTimeout(pendingProgressTimer);
+    pendingProgressTimer = null;
+    pendingProgressEntry = null;
+  }
+}
+
 // Terminal (done/error) entries are useless to the UI — getUploadingIds /
 // getUploadState only read queued/uploading — but each holds a full diskPath
 // string and (for byte seeds) the raw payload, so keeping them is an
@@ -115,6 +175,43 @@ export function getUploadingIds(): ReadonlySet<string> {
 
 export function isUploading(id: string): boolean {
   return getUploadingIds().has(id);
+}
+
+// User-initiated cancel. 'uploading' → abort the wired controller (driveApi
+// rejects with UploadError('aborted') → markError cleans up silently);
+// 'queued' → flip straight to terminal inline (pump only picks 'queued').
+// Unknown or already-terminal ids are a no-op — cancel can be re-clicked.
+export function cancelUpload(id: string): void {
+  const entry = entries.find((e) => e.id === id || e.driveId === id);
+  if (!entry || entry.status === 'done' || entry.status === 'error') return;
+  if (entry.status === 'queued') {
+    cancelQueuedEntry(entry);
+    return;
+  }
+  const controller = controllerFor(entry);
+  if (controller) controller.abort();
+}
+
+// A queued entry never touched the network: flip it to terminal so pump skips
+// it, drop the (absent) pending row safely, then notify + prune like any
+// other terminal transition (subscribers must observe the terminal state).
+function cancelQueuedEntry(entry: InternalEntry): void {
+  entry.status = 'error';
+  entry.error = ERROR_ABORTED;
+  void dbRowOp(() => db.files.delete(entry.id), 'pending-row-delete');
+  clearProgressNotifyTimer();
+  notify();
+  pruneEntry(entry);
+}
+
+// Live progress fraction (0..1) of a queued/uploading entry — the id may be
+// the pending entry id or the Drive id. undefined when the id is unknown,
+// terminal, or no progress has been reported yet.
+export function getUploadProgress(id: string): number | undefined {
+  const entry = entries.find(
+    (e) => (e.id === id || e.driveId === id) && (e.status === 'queued' || e.status === 'uploading')
+  );
+  return entry?.progress;
 }
 
 // Card-level upload presentation state (slice 6):
@@ -204,6 +301,8 @@ async function pump(): Promise<void> {
 async function processEntry(entry: InternalEntry): Promise<void> {
   entry.status = 'uploading';
   notify();
+  createControllerFor(entry);
+  lastNotifiedProgress = 0;
   await dbRowOp(
     () => db.files.put({
       id: entry.id, name: entry.name,
@@ -324,11 +423,17 @@ async function uploadDiskPathChunked(entry: InternalEntry, path: string, totalSi
       parentId: entry.parentId,
       totalSize,
       readChunk,
-      // Progress is written silently on the entry — no notify() per chunk
-      // (subscribers re-render on status changes only; per-chunk notifies
-      // would spam the UI on a 1 GB file = 128 chunks).
+      // The entry's cancel controller is wired into the real uploader so a
+      // cancelUpload aborts the in-flight Drive request (driveApi rejects
+      // with UploadError('aborted')).
+      signal: controllerFor(entry)?.signal,
+      // Progress is written silently on the entry and surfaced via a throttled
+      // notify (at most one per PROGRESS_NOTIFY_INTERVAL_MS): onProgress can
+      // fire once per chunk (128× on a 1 GB file = 128 chunks) and per-chunk
+      // notifies would spam subscribers.
       onProgress: (fraction) => {
         entry.progress = fraction;
+        scheduleProgressNotify(entry);
       },
     });
   } finally {
@@ -432,22 +537,31 @@ async function quotaAllows(entry: InternalEntry, byteLength: number): Promise<bo
 
 // Only transient network failures are retried (bounded backoff); pending row stays.
 async function uploadWithRetry(entry: InternalEntry, data: Blob | Uint8Array): Promise<DriveFileItem> {
+  const signal = controllerFor(entry)?.signal;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw abortedUploadError();
     entry.attempt = attempt;
     try {
-      return await uploadFileResumable(entry.token, data, entry.name, entry.parentId);
+      return await uploadFileResumable(entry.token, data, entry.name, entry.parentId, signal);
     } catch (err) {
       lastErr = err;
       const retryable = err instanceof UploadError && err.kind === 'network' && attempt < MAX_UPLOAD_ATTEMPTS;
       if (!retryable) throw err;
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt - 1]));
+      // An abort during the backoff must not schedule another attempt — the
+      // user asked to cancel; re-firing would waste a fresh upload session.
+      if (signal?.aborted) throw abortedUploadError();
     }
   }
   throw lastErr instanceof Error ? lastErr : new UploadError('upload failed', 'network');
 }
+function abortedUploadError(): UploadError {
+  return new UploadError(ABORTED_UPLOAD_MESSAGE, ERROR_ABORTED);
+}
 
 async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise<void> {
+  clearProgressNotifyTimer();
   entry.driveId = driveItem.id;
   // Publish the created subfolder to the batch memo so its child files can
   // resolve their parent id when their own turn comes.
@@ -460,37 +574,48 @@ async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise
   notify();
   window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED_EVENT, { detail: { count: 1 } }));
   pruneEntry(entry);
+  clearControllerFor(entry);
 }
 
 async function markError(entry: InternalEntry, err: unknown): Promise<void> {
-  entry.error =
-    err instanceof ParentFolderMissingError
+  clearProgressNotifyTimer();
+  const isAborted = err instanceof UploadError && err.kind === ERROR_ABORTED;
+  entry.error = isAborted
+    ? ERROR_ABORTED
+    : err instanceof ParentFolderMissingError
       ? ERROR_PARENT_FOLDER_MISSING
       : err instanceof UploadError
         ? err.kind
         : ERROR_FAILED;
   entry.status = 'error';
   await dbRowOp(() => db.files.delete(entry.id), 'pending-row-delete');
-  const isQuota = entry.error === ERROR_QUOTA;
-  // UploadError messages are self-created constants (status/quota text — never
-  // PII), so they are safe to log and carry the concrete 4xx that the kind
-  // alone hides. A plain Error from diskFs can embed the full disk path, so
-  // its message stays out of the log — only name + kind are recorded.
-  const uploadDetail = err instanceof UploadError ? ` message=${err.message}` : '';
-  // Never log the disk path or token - only the shortened file name.
-  captureError({
-    level: isQuota ? 'warn' : 'error',
-    source: MODULE,
-    message: `upload-entry-failed name=${entry.name} kind=${entry.error}${uploadDetail}`,
-    kind: entry.error,
-  });
-  if (isQuota) {
-    showErrorToast(t('upload.quota_exceeded'));
-  } else if (entry.error !== ERROR_INVALID_SEED && entry.error !== ERROR_PARENT_FOLDER_MISSING) {
-    showErrorToast(t('upload.error'));
+  if (isAborted) {
+    // A user-initiated cancel is not a failure: no error toast, warn-level log
+    // only. entry.name is always a basename (never a disk path or token).
+    captureError({ level: 'warn', source: MODULE, message: `upload-cancelled name=${entry.name}`, kind: ERROR_ABORTED });
+  } else {
+    const isQuota = entry.error === ERROR_QUOTA;
+    // UploadError messages are self-created constants (status/quota text — never
+    // PII), so they are safe to log and carry the concrete 4xx that the kind
+    // alone hides. A plain Error from diskFs can embed the full disk path, so
+    // its message stays out of the log — only name + kind are recorded.
+    const uploadDetail = err instanceof UploadError ? ` message=${err.message}` : '';
+    // Never log the disk path or token - only the shortened file name.
+    captureError({
+      level: isQuota ? 'warn' : 'error',
+      source: MODULE,
+      message: `upload-entry-failed name=${entry.name} kind=${entry.error}${uploadDetail}`,
+      kind: entry.error,
+    });
+    if (isQuota) {
+      showErrorToast(t('upload.quota_exceeded'));
+    } else if (entry.error !== ERROR_INVALID_SEED && entry.error !== ERROR_PARENT_FOLDER_MISSING) {
+      showErrorToast(t('upload.error'));
+    }
   }
   notify();
   pruneEntry(entry);
+  clearControllerFor(entry);
 }
 
 function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {

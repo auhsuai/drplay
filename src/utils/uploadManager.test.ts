@@ -264,7 +264,8 @@ describe('uploadManager', () => {
     expect(rows[0].isFolder).toBe(false);
     expect(typeof rows[0].modifiedTime).toBe('string');
 
-    expect(uploadFileResumable).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), 'song.mp3', 'root');
+    // The entry AbortController's signal must be wired into the upload call.
+    expect(uploadFileResumable).toHaveBeenCalledWith(TOKEN, expect.any(Uint8Array), 'song.mp3', 'root', expect.any(AbortSignal));
 
     d.resolve(makeDriveFile('file-1', 'song.mp3'));
     await waitIdle();
@@ -642,7 +643,8 @@ describe('uploadManager', () => {
     expect(showErrorToast).toHaveBeenCalledWith('upload.quota_exceeded');
   });
 
-  it('chunked upload progress cập nhật vào entry qua onProgress (không fire thêm notify)', async () => {
+  it('chunked upload progress: onProgress ghi entry.progress + throttle 1 notify sau 500ms; done xóa timer', async () => {
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     const d = deferred<DriveFileItem>();
     uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
       opts.onProgress?.(0.42);
@@ -652,16 +654,20 @@ describe('uploadManager', () => {
     um.subscribe(cb);
 
     um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
-    await flush();
+    await realTick();
 
     expect(um.getEntries()[0].progress).toBe(0.42);
-    // notify fires for queued-push + uploading only — per-chunk progress must
-    // NOT spam subscribers (still exactly 2 before completion).
+    // queued-push + uploading only — the progress update sits in the throttled
+    // timer, subscribers are NOT spammed per chunk.
     expect(cb).toHaveBeenCalledTimes(2);
 
+    await advanceBackoff(500);
+    expect(cb).toHaveBeenCalledTimes(3); // one throttled progress notify
+
     d.resolve(makeDriveFile('f1', 'x.mp3'));
-    await waitIdle();
-    expect(cb).toHaveBeenCalledTimes(3);
+    await realTick(6);
+    expect(cb).toHaveBeenCalledTimes(4); // done notify fires immediately
+    expect(vi.getTimerCount()).toBe(0); // progress timer cleared at terminal
   });
 
   it('chunked upload throw → stream.close vẫn được gọi (finally)', async () => {
@@ -949,5 +955,255 @@ describe('uploadManager', () => {
     expect(um.getUploadingIds().size).toBe(0);
     expect(um.isUploading(entryId)).toBe(false);
     expect(um.getUploadState(entryId)).toBe('none');
+  });
+
+  describe('cancelUpload', () => {
+    it('1. cancel entry đang upload (chunked) → error aborted + không toast + xóa pending row + prune', async () => {
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        // Real driveApi listens on the wired signal and rejects with
+        // UploadError('aborted') — mirror that so the manager's markError
+        // branch is exercised end-to-end.
+        return new Promise<DriveFileItem>((_resolve, reject) => {
+          opts.signal?.addEventListener('abort', () => {
+            reject(new UploadErrorClass('upload aborted by caller', 'aborted'));
+          }, { once: true });
+        });
+      });
+
+      um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+      await flush();
+
+      const entryId = um.getEntries()[0].id;
+      expect(um.getUploadState(entryId)).toBe('uploading');
+      // The entry controller's signal must actually be wired into the uploader.
+      expect(uploadFileResumableChunked.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+      expect(await db.files.toArray()).toHaveLength(1); // pending row exists
+
+      um.cancelUpload(entryId);
+      await waitIdle();
+
+      expect(um.getEntries()).toEqual([]); // pruned
+      expect(showErrorToast).not.toHaveBeenCalled(); // user cancel is not an error
+      expect(await db.files.toArray()).toHaveLength(0); // pending row deleted
+      const messages = captureError.mock.calls.map((c) => c[0].message as string);
+      expect(messages).toContain('upload-cancelled name=x.mp3');
+      const warnLog = captureError.mock.calls.find((c) => c[0].message.includes('upload-cancelled'));
+      expect(warnLog?.[0].level).toBe('warn');
+      expect(firedEvents('drive-files-changed')).toHaveLength(0);
+    });
+
+    it('2. cancel entry queued → không gọi upload API cho nó, error aborted + prune ngay, queue không đụng', async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads([fileSeed('a.mp3'), fileSeed('b.mp3')], TOKEN);
+      await flush();
+
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+      const [a, b] = um.getEntries();
+      expect(b.status).toBe('queued');
+
+      um.cancelUpload(b.id);
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // b chưa bao giờ start
+      expect(um.getEntries().map((e) => e.id)).toEqual([a.id]); // b bị prune ngay
+      expect(showErrorToast).not.toHaveBeenCalled();
+
+      d.resolve(makeDriveFile('f1', 'a.mp3'));
+      await waitIdle();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // pump bỏ qua b (đã error)
+      expect(um.getEntries()).toEqual([]);
+      expect(showErrorToast).not.toHaveBeenCalled();
+    });
+
+    it('3. cancel id không tồn tại → no-op không throw, entries không đổi', async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads([fileSeed('a.mp3')], TOKEN);
+      await flush();
+      const before = um.getEntries();
+
+      expect(() => um.cancelUpload('unknown-id')).not.toThrow();
+      expect(um.getEntries()).toEqual(before);
+
+      d.resolve(makeDriveFile('f1', 'a.mp3'));
+      await waitIdle();
+    });
+
+    it('4. cancel 2 lần liên tiếp → lần 2 no-op (abort idempotent), chỉ 1 lần xử lý aborted', async () => {
+      let abortEvents = 0;
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        return new Promise<DriveFileItem>((_resolve, reject) => {
+          opts.signal?.addEventListener('abort', () => {
+            abortEvents++;
+            reject(new UploadErrorClass('upload aborted by caller', 'aborted'));
+          }, { once: true });
+        });
+      });
+
+      um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+      await flush();
+      const id = um.getEntries()[0].id;
+
+      um.cancelUpload(id);
+      um.cancelUpload(id); // signal đã aborted → abort() là no-op
+      await waitIdle();
+
+      expect(abortEvents).toBe(1);
+      expect(um.getEntries()).toEqual([]);
+      const cancelled = captureError.mock.calls.filter((c) => (c[0].message as string).includes('upload-cancelled'));
+      expect(cancelled).toHaveLength(1);
+      expect(showErrorToast).not.toHaveBeenCalled();
+    });
+
+    it('5. cancel sau khi entry terminal (done) → no-op không throw', async () => {
+      um.startUploads([fileSeed('a.mp3')], TOKEN);
+      await waitIdle();
+      expect(um.getEntries()).toEqual([]);
+
+      expect(() => um.cancelUpload('pending-whatever')).not.toThrow();
+    });
+
+    it('11. cancel bytes-upload đang retry giữa backoff → không retry tiếp, error aborted', async () => {
+      vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+      uploadFileResumable
+        .mockRejectedValueOnce(new UploadErrorClass('network hiccup', 'network'))
+        .mockRejectedValueOnce(new UploadErrorClass('should never be called', 'network'));
+
+      um.startUploads([fileSeed('r.mp3')], TOKEN);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+      expect(uploadFileResumable.mock.calls[0][4]).toBeInstanceOf(AbortSignal); // signal wired
+
+      const id = um.getEntries()[0].id;
+      um.cancelUpload(id); // abort trong lúc backoff 1s
+      await advanceBackoff(1000);
+      await realTick();
+
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // không retry sau abort
+      expect(um.getEntries()).toEqual([]);
+      expect(captureError.mock.calls.some((c) => (c[0].message as string).includes('upload-cancelled'))).toBe(true);
+      expect(showErrorToast).not.toHaveBeenCalled();
+
+      await advanceBackoff(5000);
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getUploadProgress', () => {
+    it('10. trả progress fraction của entry uploading; undefined khi chưa có / id lạ / sau done', async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        opts.onProgress?.(0.42);
+        return d.promise;
+      });
+
+      um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+      await flush();
+
+      const entryId = um.getEntries()[0].id;
+      expect(um.getUploadProgress(entryId)).toBe(0.42);
+      expect(um.getUploadProgress('unknown-id')).toBeUndefined();
+
+      d.resolve(makeDriveFile('f1', 'x.mp3'));
+      await waitIdle();
+      expect(um.getUploadProgress(entryId)).toBeUndefined(); // sau done (pruned)
+    });
+
+    it('10b. bytes upload / entry queued (chưa có progress) → undefined', async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads([fileSeed('a.mp3'), fileSeed('b.mp3')], TOKEN);
+      await flush();
+
+      const [a, b] = um.getEntries();
+      expect(um.getUploadProgress(a.id)).toBeUndefined(); // uploading nhưng chưa có progress
+      expect(um.getUploadProgress(b.id)).toBeUndefined(); // queued
+
+      d.resolve(makeDriveFile('f1', 'a.mp3'));
+      await waitIdle();
+    });
+  });
+
+  describe('progress throttle', () => {
+    it('6. onProgress 3 lần nhanh → coalesce 1 notify sau 500ms; đợt 2 cách >500ms → notify thứ 2', async () => {
+      vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+      const d = deferred<DriveFileItem>();
+      let onProgress: ((f: number) => void) | undefined;
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        onProgress = opts.onProgress;
+        opts.onProgress?.(0.3);
+        opts.onProgress?.(0.6);
+        opts.onProgress?.(0.9);
+        return d.promise;
+      });
+      const cb = vi.fn();
+      um.subscribe(cb);
+
+      um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+      await realTick();
+
+      expect(um.getEntries()[0].progress).toBe(0.9);
+      expect(cb).toHaveBeenCalledTimes(2); // queued + uploading — burst đang chờ timer
+      await advanceBackoff(500);
+      expect(cb).toHaveBeenCalledTimes(3); // 3 onProgress nhanh → đúng 1 notify
+
+      onProgress?.(0.95); // đợt 2, cách > 500ms
+      expect(cb).toHaveBeenCalledTimes(3);
+      await advanceBackoff(500);
+      expect(cb).toHaveBeenCalledTimes(4); // notify thứ 2
+
+      d.resolve(makeDriveFile('f1', 'x.mp3'));
+      await realTick(6);
+      expect(cb).toHaveBeenCalledTimes(5); // done notify NGAY, không bị delay bởi throttle
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('7. progress không đổi → không notify thừa (1 notify duy nhất cho cùng giá trị)', async () => {
+      vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+      const d = deferred<DriveFileItem>();
+      let onProgress: ((f: number) => void) | undefined;
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        onProgress = opts.onProgress;
+        opts.onProgress?.(0.5);
+        opts.onProgress?.(0.5);
+        return d.promise;
+      });
+      const cb = vi.fn();
+      um.subscribe(cb);
+
+      um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+      await realTick();
+      await advanceBackoff(500);
+      expect(cb).toHaveBeenCalledTimes(3); // 2 baseline + đúng 1 notify (coalesce cùng giá trị)
+
+      onProgress?.(0.5); // cùng giá trị lặp lại
+      await advanceBackoff(500);
+      expect(cb).toHaveBeenCalledTimes(3); // không notify thêm
+
+      d.resolve(makeDriveFile('f1', 'x.mp3'));
+      await realTick(6);
+      expect(cb).toHaveBeenCalledTimes(4); // done notify
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('9. timer dọn khi entry done — không còn pending timer (tránh leak)', async () => {
+      vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        opts.onProgress?.(0.5);
+        return d.promise;
+      });
+
+      um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+      await realTick();
+      expect(vi.getTimerCount()).toBe(1); // progress timer đang chờ
+
+      d.resolve(makeDriveFile('f1', 'x.mp3'));
+      await realTick(6);
+      expect(vi.getTimerCount()).toBe(0); // cleared ở markDone
+      expect(um.getEntries()).toEqual([]);
+    });
   });
 });
