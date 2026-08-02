@@ -1,5 +1,5 @@
 import { db } from '../db/db';
-import { Track } from '../App';
+import type { Track } from '../types';
 import { showErrorToast } from './simpleToast';
 import { captureError } from './errorLog';
 
@@ -18,7 +18,9 @@ const TOKEN_KEY_EMAIL = 'drplay_current_user_email';
 
 // Derive a short, safe classification from an error's name/message ONLY.
 // We never log the error object or its stack — those can leak file ids, user
-// data, or (in theory) auth material into logs. Mirrors classifyDriveError.
+// data, or (in theory) auth material into logs. Local persistence (IndexedDB)
+// errors — semantic twin of classifyFavoriteError (favorites.ts), NOT Drive's
+// classifyDriveError (HTTP).
 function classifyPlaylistError(err: unknown): { name: string; message: string } {
   const name = err instanceof Error ? err.name : "unknown";
   const message =
@@ -51,10 +53,11 @@ export async function getPlaylists(): Promise<Playlist[]> {
   try {
     return await loadPlaylists();
   } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
     captureError({
       level: 'error',
       source: PLAYLIST_MODULE,
-      message: `get-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+      message: `get-failed: ${name}: ${message}`,
     });
     return [];
   }
@@ -74,10 +77,11 @@ export async function createPlaylist(name: string): Promise<Playlist | null> {
     window.dispatchEvent(new CustomEvent('playlists-updated'));
     return newPlaylist;
   } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
     captureError({
       level: 'error',
       source: PLAYLIST_MODULE,
-      message: `create-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+      message: `create-failed: ${name}: ${message}`,
     });
     showErrorToast("Failed to create playlist");
     return null;
@@ -89,10 +93,11 @@ export async function deletePlaylist(id: string): Promise<void> {
     await db.playlists.delete(id);
     window.dispatchEvent(new CustomEvent('playlists-updated'));
   } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
     captureError({
       level: 'error',
       source: PLAYLIST_MODULE,
-      message: `delete-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+      message: `delete-failed: ${name}: ${message}`,
     });
     showErrorToast("Failed to delete playlist");
   }
@@ -100,17 +105,22 @@ export async function deletePlaylist(id: string): Promise<void> {
 
 export async function updatePlaylist(id: string, updates: Partial<Playlist>): Promise<Playlist | null> {
   try {
-    const existing = await db.playlists.get(id);
-    if (!existing) return null;
-    const updated: Playlist = { ...existing, ...updates, id, userEmail: existing.userEmail };
-    await db.playlists.put(updated);
-    window.dispatchEvent(new CustomEvent('playlists-updated'));
-    return updated;
+    return await db.transaction('rw', db.playlists, async () => {
+      const existing = await db.playlists.get(id);
+      if (!existing) return null;
+      const updated: Playlist = { ...existing, ...updates, id, userEmail: existing.userEmail };
+      await db.playlists.put(updated);
+      window.dispatchEvent(new CustomEvent('playlists-updated'));
+      // Return a clone — objects touched inside a transaction zone must not
+      // be used after commit (IndexedDB structured-clone restriction).
+      return { ...updated, tracks: [...updated.tracks] };
+    });
   } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
     captureError({
       level: 'error',
       source: PLAYLIST_MODULE,
-      message: `update-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+      message: `update-failed: ${name}: ${message}`,
     });
     showErrorToast("Failed to update playlist");
     return null;
@@ -119,19 +129,22 @@ export async function updatePlaylist(id: string, updates: Partial<Playlist>): Pr
 
 export async function addTrackToPlaylist(playlistId: string, track: Track): Promise<void> {
   try {
-    const playlist = await db.playlists.get(playlistId);
-    if (playlist) {
-      if (!playlist.tracks.some(t => t.id === track.id)) {
-        playlist.tracks.push(track);
-        await db.playlists.put(playlist);
-        window.dispatchEvent(new CustomEvent('playlists-updated'));
+    return await db.transaction('rw', db.playlists, async () => {
+      const playlist = await db.playlists.get(playlistId);
+      if (playlist) {
+        if (!playlist.tracks.some(t => t.id === track.id)) {
+          playlist.tracks.push(track);
+          await db.playlists.put(playlist);
+          window.dispatchEvent(new CustomEvent('playlists-updated'));
+        }
       }
-    }
+    });
   } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
     captureError({
       level: 'error',
       source: PLAYLIST_MODULE,
-      message: `add-track-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+      message: `add-track-failed: ${name}: ${message}`,
     });
     showErrorToast("Failed to add track to playlist");
   }
@@ -139,17 +152,20 @@ export async function addTrackToPlaylist(playlistId: string, track: Track): Prom
 
 export async function removeTrackFromPlaylist(playlistId: string, trackId: string): Promise<void> {
   try {
-    const playlist = await db.playlists.get(playlistId);
-    if (playlist) {
-      playlist.tracks = playlist.tracks.filter(t => t.id !== trackId);
-      await db.playlists.put(playlist);
-      window.dispatchEvent(new CustomEvent('playlists-updated'));
-    }
+    return await db.transaction('rw', db.playlists, async () => {
+      const playlist = await db.playlists.get(playlistId);
+      if (playlist) {
+        playlist.tracks = playlist.tracks.filter(t => t.id !== trackId);
+        await db.playlists.put(playlist);
+        window.dispatchEvent(new CustomEvent('playlists-updated'));
+      }
+    });
   } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
     captureError({
       level: 'error',
       source: PLAYLIST_MODULE,
-      message: `remove-track-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+      message: `remove-track-failed: ${name}: ${message}`,
     });
     showErrorToast("Failed to remove track from playlist");
   }
@@ -168,10 +184,11 @@ export async function getPlaylistById(id: string): Promise<Playlist | null> {
       coverImage: row.coverImage
     };
   } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
     captureError({
       level: 'error',
       source: PLAYLIST_MODULE,
-      message: `get-by-id-failed: ${classifyPlaylistError(e).name}: ${classifyPlaylistError(e).message}`,
+      message: `get-by-id-failed: ${name}: ${message}`,
     });
     return null;
   }

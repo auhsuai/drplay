@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // In-memory stub for the Dexie `db` module, isolated per test.
 // Mirrors the subset of the real `db.playlists` API used by playlists.ts:
-//   get(id), put(row), bulkPut(rows), where('userEmail').equals(email).toArray(), delete(id)
+//   get(id), put(row), bulkPut(rows), where('userEmail').equals(email).toArray(), delete(id), transaction()
 type PlaylistRow = {
   id: string;
   name: string;
@@ -33,6 +33,13 @@ class InMemoryPlaylists {
     this.rows.delete(id);
   }
 
+  // Minimal Dexie transaction shim: executes the scope function directly.
+  // IndexedDB-level serialization is not emulated — the real `db.transaction`
+  // call is asserted separately via the spy test below.
+  async transaction<T>(_mode: string, _tables: unknown, fn: () => Promise<T>): Promise<T> {
+    return fn();
+  }
+
   where(field: 'userEmail') {
     const rows = this.rows;
     return {
@@ -51,19 +58,25 @@ class InMemoryPlaylists {
 
 const store = new InMemoryPlaylists();
 
-vi.mock('../db/db', () => ({
-  db: {
-    playlists: {
-      get: (id: string) => store.get(id),
-      put: (row: PlaylistRow) => store.put(row),
-      bulkPut: (rows: PlaylistRow[]) => store.bulkPut(rows),
-      delete: (id: string) => store.delete(id),
-      where: (field: 'userEmail') => store.where(field),
+vi.mock('../db/db', () => {
+  const playlistsTable = {
+    get: (id: string) => store.get(id),
+    put: (row: PlaylistRow) => store.put(row),
+    bulkPut: (rows: PlaylistRow[]) => store.bulkPut(rows),
+    delete: (id: string) => store.delete(id),
+    where: (field: 'userEmail') => store.where(field),
+  };
+  return {
+    db: {
+      // Dexie's transaction() is a method on the db instance, not the table.
+      transaction: (mode: string, tables: unknown, fn: () => Promise<unknown>) => store.transaction(mode, tables, fn),
+      playlists: playlistsTable,
     },
-  },
-}));
+  };
+});
 
 import { getPlaylists, createPlaylist, deletePlaylist, updatePlaylist, addTrackToPlaylist, removeTrackFromPlaylist, getPlaylistById } from './playlists';
+import { db } from '../db/db';
 
 const EMAIL_A = 'a@example.com';
 const EMAIL_B = 'b@example.com';
@@ -171,5 +184,27 @@ describe('playlists (Dexie-backed)', () => {
     await deletePlaylist((await getPlaylists())[0].id);
     expect(handler).toHaveBeenCalledTimes(2);
     window.removeEventListener('playlists-updated', handler);
+  });
+
+  it('addTrackToPlaylist concurrently preserves both tracks (lost-update guard)', async () => {
+    setUser(EMAIL_A);
+    const p = await createPlaylist('Race') as any;
+    await Promise.all([
+      addTrackToPlaylist(p.id, track('1') as any),
+      addTrackToPlaylist(p.id, track('2') as any),
+    ]);
+    const fetched = await getPlaylistById(p.id);
+    expect(fetched!.tracks.map((t: any) => t.id).sort()).toEqual(['1', '2']);
+  });
+
+  it('addTrackToPlaylist wraps the read-modify-write in a readwrite transaction', async () => {
+    setUser(EMAIL_A);
+    const p = await createPlaylist('Txn') as any;
+    const spy = vi.spyOn(store, 'transaction');
+    await addTrackToPlaylist(p.id, track('1') as any);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe('rw');
+    expect(spy.mock.calls[0][1]).toBe((db as any).playlists);
+    spy.mockRestore();
   });
 });
