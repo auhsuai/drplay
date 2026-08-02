@@ -32,16 +32,16 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 18 | `src/utils/favorites.ts` | ✅ done | transaction addFavorite, log isFavorite, import type chuẩn |
 | 19 | `src/utils/history.ts` | ✅ done | transaction recordPlay/recordFolderVisit, import type, METADATA_KEY_PREFIX/V_PLACEHOLDER, classify error |
 | 20 | `src/utils/downloadPath.ts` | ✅ done | localStorage guard + bỏ return await |
-| 21 | `src/utils/pathUtils.ts` | ⬜ pending | |
-| 22 | `src/utils/truncatePath.ts` | ⬜ pending | |
-| 23 | `src/utils/formatBytes.ts` | ⬜ pending | |
-| 24 | `src/utils/formatTime.ts` | ⬜ pending | |
-| 25 | `src/utils/normalizeText.ts` | ⬜ pending | |
-| 26 | `src/utils/color.ts` | ⬜ pending | |
-| 27 | `src/utils/copyToClipboard.ts` | ⬜ pending | |
+| 21 | `src/utils/pathUtils.ts` | ✅ done | đạt chuẩn, không cần nâng cấp |
+| 22 | `src/utils/truncatePath.ts` | ✅ done | đạt chuẩn, không cần nâng cấp |
+| 23 | `src/utils/formatBytes.ts` | ✅ done | đạt chuẩn (1024-based cố ý; escalate: Drive hiển thị decimal) |
+| 24 | `src/utils/formatTime.ts` | ✅ done | thêm test file (logic đạt chuẩn) |
+| 25 | `src/utils/normalizeText.ts` | ✅ done | đạt chuẩn (NFD + đ→d đúng) |
+| 26 | `src/utils/color.ts` | ✅ done | BG_ALPHA const + captureError onerror |
+| 27 | `src/utils/copyToClipboard.ts` | ✅ done | đạt chuẩn (execCommand giữ làm fallback cuối có lý do) |
 | 28 | `src/utils/errorLog.ts` | ⬜ pending | |
 | 29 | `src/utils/logger.ts` | ⬜ pending | |
-| 30 | `src/utils/sidebarState.ts` | ⬜ pending | |
+| 28 | `src/utils/sidebarState.ts` | ✅ done | guard localStorage P0 (chống crash App init) |
 | 31 | `src/utils/simpleToast.tsx` | ⬜ pending | |
 | 32 | `src/hooks/useDrive.ts` | ⬜ pending | |
 | 33 | `src/hooks/useDriveExplorer.ts` | ⬜ pending | |

@@ -10,7 +10,14 @@
 // fails; after the memo fix it passes.
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { captureError } from "./errorLog";
 import { getPalette } from "./color";
+
+vi.mock("./errorLog", () => ({
+  captureError: vi.fn().mockResolvedValue(undefined)
+}));
+
+const mockedCaptureError = vi.mocked(captureError);
 
 // Minimal canvas/Image stubs so the decode path executes without a real DOM.
 // NOTE: under Vitest 4 a `vi.fn().mockImplementation(() => ({}))` is no longer
@@ -82,5 +89,33 @@ describe("getPalette — memoization (P0-2 regression)", () => {
 
     expect(a).not.toBe(b);
     expect(ImageCtor.instances.length).toBe(2);
+  });
+
+  it("rejects with 'Image load error' and logs via captureError when the image fails to load", async () => {
+    const ctor = class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      crossOrigin: string | null = null;
+      constructor() {
+        // Resolve asynchronously like a real network image failure.
+        queueMicrotask(() => {
+          if (typeof this.onerror === "function") this.onerror();
+        });
+      }
+      set src(_v: string) {
+        /* error fired via microtask above */
+      }
+      get src() {
+        return "";
+      }
+    };
+    (globalThis as any).Image = ctor;
+
+    await expect(getPalette("http://x/broken-cover")).rejects.toThrow("Image load error");
+    expect(mockedCaptureError).toHaveBeenCalledWith({
+      level: "warn",
+      source: "color",
+      message: "getPalette image load failed"
+    });
   });
 });

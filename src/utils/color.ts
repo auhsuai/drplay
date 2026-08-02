@@ -89,7 +89,7 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
 
         const darken = DARKEN_FACTOR;
         const palette = sum.map((s) => {
-          if (s.n === 0) return 'rgba(0,0,0,0.8)';
+          if (s.n === 0) return `rgba(0,0,0,${BG_ALPHA})`;
           const r = Math.floor((s.r / s.n) * darken);
           const g = Math.floor((s.g / s.n) * darken);
           const b = Math.floor((s.b / s.n) * darken);
@@ -102,7 +102,10 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
         reject(e);
       }
     });
-    img.onerror = () => finish(() => reject(new Error("Image load error")));
+    img.onerror = () => finish(() => {
+      captureError({ level: 'warn', source: 'color', message: 'getPalette image load failed' });
+      reject(new Error("Image load error"));
+    });
     img.src = imgUrl;
   });
 };
