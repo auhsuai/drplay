@@ -26,6 +26,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../utils/driveApi', () => mocks.driveApi);
+vi.mock('../../utils/drivePagination', () => ({
+  listFolderChildren: mocks.driveApi.listFolderChildren,
+  searchFolders: mocks.driveApi.searchFolders,
+}));
 vi.mock('../../utils/apiClient', () => ({ getValidToken: mocks.getValidToken }));
 vi.mock('../../utils/simpleToast', () => ({ showErrorToast: mocks.showErrorToast }));
 vi.mock('../../utils/errorLog', () => ({ captureError: mocks.captureError }));

@@ -3,7 +3,8 @@ import { Folder, ArrowLeft, HardDrive, Check, Search, Loader2 } from 'lucide-rea
 import { useTranslation } from 'react-i18next';
 import { db } from '../../db/db';
 import { getValidToken } from '../../utils/apiClient';
-import { searchFolders, listFolderChildren, getFileParents, getFileName } from '../../utils/driveApi';
+import { getFileParents, getFileName } from '../../utils/driveApi';
+import { searchFolders, listFolderChildren } from '../../utils/drivePagination';
 import { showErrorToast } from '../../utils/simpleToast';
 import { captureError } from '../../utils/errorLog';
 

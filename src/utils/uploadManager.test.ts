@@ -10,11 +10,18 @@ import type { DriveFileItem } from '../utils/driveApi';
 vi.mock('../utils/driveApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/driveApi')>();
   return {
+    ...actual,
+    getDriveStorageQuota: vi.fn(),
+    createFolder: vi.fn(),
+  };
+});
+
+vi.mock('../utils/driveUpload', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/driveUpload')>();
+  return {
     ...actual, // keep the REAL UploadError class — `instanceof` must work
     uploadFileResumable: vi.fn(),
     uploadFileResumableChunked: vi.fn(),
-    getDriveStorageQuota: vi.fn(),
-    createFolder: vi.fn(),
   };
 });
 
@@ -62,7 +69,7 @@ let walkDiskFolder: ReturnType<typeof vi.fn>;
 let registerUploadPath: ReturnType<typeof vi.fn>;
 let showErrorToast: ReturnType<typeof vi.fn>;
 let captureError: ReturnType<typeof vi.fn>;
-let UploadErrorClass: typeof import('../utils/driveApi').UploadError;
+let UploadErrorClass: typeof import('../utils/driveUpload').UploadError;
 
 beforeEach(async () => {
   vi.useRealTimers();
@@ -73,11 +80,12 @@ beforeEach(async () => {
   vi.resetModules();
   um = await import('./uploadManager');
   const da = await import('../utils/driveApi');
+  const du = await import('../utils/driveUpload');
   const df = await import('../utils/diskFs');
   const st = await import('../utils/simpleToast');
   const el = await import('../utils/errorLog');
-  uploadFileResumable = vi.mocked(da.uploadFileResumable);
-  uploadFileResumableChunked = vi.mocked(da.uploadFileResumableChunked);
+  uploadFileResumable = vi.mocked(du.uploadFileResumable);
+  uploadFileResumableChunked = vi.mocked(du.uploadFileResumableChunked);
   getDriveStorageQuota = vi.mocked(da.getDriveStorageQuota);
   createFolderMock = vi.mocked(da.createFolder);
   readDiskFile = vi.mocked(df.readDiskFile);
@@ -87,7 +95,7 @@ beforeEach(async () => {
   registerUploadPath = vi.mocked(df.registerUploadPath);
   showErrorToast = vi.mocked(st.showErrorToast);
   captureError = vi.mocked(el.captureError);
-  UploadErrorClass = da.UploadError;
+  UploadErrorClass = du.UploadError;
 
   // Default mocks: unlimited quota, tiny readable file, empty folder walk,
   // single folder creation, trivial upload success.

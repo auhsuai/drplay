@@ -2,17 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   backoffDelay,
   driveFetch,
-  searchFolders,
-  listFolderChildren,
-  getTrashedFiles,
   getDriveStorageQuota,
   saveAppConfig,
   withSaveConfigLock,
-  uploadFileResumable,
-  uploadFileResumableChunked,
   type DriveFolderItem,
   type DriveFileItem,
 } from "./driveApi";
+import { searchFolders, listFolderChildren, getTrashedFiles } from "./drivePagination";
+import { uploadFileResumable, uploadFileResumableChunked } from "./driveUpload";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
 // exercise driveFetch's retry/backoff path without real network calls.

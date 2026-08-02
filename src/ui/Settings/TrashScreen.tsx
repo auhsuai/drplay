@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { restoreFile, permanentlyDeleteFile, getTrashedFiles } from '../../utils/driveApi';
+import { restoreFile, permanentlyDeleteFile } from '../../utils/driveApi';
+import { getTrashedFiles } from '../../utils/drivePagination';
 import { showErrorToast, showSuccessToast } from '../../utils/simpleToast';
 import { captureError } from '../../utils/errorLog';
 

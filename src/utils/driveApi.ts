@@ -1,15 +1,14 @@
 import { fetchWithAuth } from './apiClient';
 import { getAudioFilesQuery } from './audioQuery';
 import { captureError } from './errorLog';
-import { sanitizeString } from './logger';
 
 // Google Drive API resilience layer.
 // Official guidance (developers.google.com/workspace/drive/api/guides/limits):
 // 403/429 rate-limit and 5xx transient errors must be retried with exponential
 // backoff + jitter; honor the Retry-After header when present. 4xx (400/401/404)
 // are NOT retried here — 401 refresh is handled inside fetchWithAuth.
-const DRIVE_MODULE = "driveApi";
-const FOLDER_MIME = 'application/vnd.google-apps.folder';
+export const DRIVE_MODULE = "driveApi";
+export const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const CONFIG_FILENAME = 'drplay_config.json';
 const APP_DATA_FOLDER = 'appDataFolder';
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
@@ -22,42 +21,6 @@ const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 32000;
 const DEFAULT_TIMEOUT_MS = 20000;
-// Drive files.list caps each request at 1000 results (docs: values above 1000
-// are coerced to 1000). We aggregate pages so large folders/searches are never
-// silently truncated in the UI.
-const PAGINATION_PAGE_SIZE = 1000;
-// Worst-case safety cap: 10 pages = up to 10,000 results per call. Guards
-// against a misbehaving server that keeps issuing nextPageToken forever.
-const MAX_PAGINATION_PAGES = 10;
-// Resumable upload (developers.google.com/drive/api/guides/manage-uploads):
-// initiate via POST ?uploadType=resumable, then PUT the whole body once.
-const RESUMABLE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable';
-const UPLOAD_MIME_TYPE = 'application/octet-stream';
-const UPLOAD_METADATA_CONTENT_TYPE = 'application/json; charset=UTF-8';
-// Large audio files need a much longer bound than the 20s default used for
-// metadata requests; 120s covers a 50MB file on a slow connection.
-const UPLOAD_TIMEOUT_MS = 120_000;
-// Google's resumable protocol forbids re-sending a completed PUT (it would
-// create a NEW upload). A transient PUT failure therefore re-initiates the
-// whole session at most once — never after the server answered 200/201.
-// Shared by the whole-body (uploadFileResumable) and chunked
-// (uploadFileResumableChunked) uploaders.
-const MAX_UPLOAD_ATTEMPTS = 2;
-// Length cap for the errBody.message/reason strings copied into the error
-// log: a 400 can echo back the (large) request payload, and the log must stay
-// bounded while still carrying the diagnostic strings.
-const UPLOAD_ERROR_DETAIL_MAX_LENGTH = 200;
-
-// Chunked resumable upload (developers.google.com/drive/api/guides/manage-uploads):
-// chunk sizes MUST be multiples of 256 KiB except the final chunk; the server
-// answers each chunk with 308 Resume Incomplete plus a Range header
-// ("bytes=0-<lastByte>") telling where to resume, 200/201 means the upload
-// completed, 404 means the session expired (restart from a fresh session URI),
-// and 5xx/429 plus 403 rate-limits are retryable per chunk.
-const UPLOAD_CHUNK_MAX_RETRIES = 2;
-const UPLOAD_CHUNK_RETRY_DELAYS_MS: ReadonlyArray<number> = [1000, 3000];
-// A missing Range header on 308 means no bytes were received — resend from 0.
-const RANGE_HEADER_PATTERN = /^bytes=(\d+)-(\d+)$/;
 
 export interface DriveFileItem {
   id: string; name: string; mimeType: string; size?: string;
@@ -89,13 +52,13 @@ export interface DriveStorageQuota {
   usageInDriveTrash: number;
 }
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // Merge a caller-supplied abort signal with a fresh timeout signal so a
 // stalled network still fails after timeoutMs. A caller signal must NOT
 // disable the timeout (same pattern as apiClient.fetchWithAuth); on runtimes
 // lacking AbortSignal.any the timeout alone is used.
-function mergeWithTimeoutSignal(callerSignal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
+export function mergeWithTimeoutSignal(callerSignal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   return callerSignal && typeof AbortSignal.any === 'function'
     ? AbortSignal.any([callerSignal, timeoutSignal])
@@ -105,7 +68,7 @@ function mergeWithTimeoutSignal(callerSignal: AbortSignal | null | undefined, ti
 // Derive a short, safe classification tag from an error's message ONLY.
 // We never log the error object or its stack — those can leak file ids, user
 // data, or (in theory) auth material into logs. Callers use this for observability.
-function classifyDriveError(err: unknown): string {
+export function classifyDriveError(err: unknown): string {
   const msg =
     err instanceof Error
       ? err.message
@@ -182,6 +145,46 @@ export async function driveFetch(
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('Drive request failed after retries');
+}
+
+// Google Drive error responses carry { error: { message, reason } }; only the
+// public message/reason are read (never the raw body — it can embed file ids).
+interface DriveErrorBody {
+  error?: { message?: unknown; reason?: unknown };
+}
+
+async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | null> {
+  try {
+    const data = await response.json();
+    if (typeof data !== 'object' || data === null) return null;
+    return data as DriveErrorBody;
+  } catch {
+    return null;
+  }
+}
+
+// 403 rate-limit detection: Drive reports usage limits with the official
+// reasons rateLimitExceeded / userRateLimitExceeded (handle-errors docs + the
+// proSync worker precedent). Everything else on 403 (permissions…) is NOT a
+// rate limit and must not be retried.
+function isRateLimitError(status: number, errBody: DriveErrorBody | null): boolean {
+  if (status !== 403) return false;
+  const reason = typeof errBody?.error?.reason === 'string' ? errBody.error.reason : '';
+  return DRIVE_RATE_LIMIT_REASONS.has(reason);
+}
+
+// Read a 403 body via a clone so the response handed back to the caller keeps
+// its body intact (same clone pattern as the worker's isDriveRateLimitResponse).
+// A clone/parse failure means we cannot confirm a rate limit → treat the 403
+// as non-retryable (fail as before) instead of guessing.
+export async function isRateLimit403Response(response: Response): Promise<boolean> {
+  let cloned: Response;
+  try {
+    cloned = response.clone();
+  } catch {
+    return false;
+  }
+  return isRateLimitError(response.status, await readDriveErrorBody(cloned));
 }
 
 export async function createFolder(token: string, name: string, parentId: string): Promise<DriveFileItem> {
@@ -329,71 +332,6 @@ export async function getRecentlyAddedAudioFiles(token: string): Promise<DriveFi
   return data.files || [];
 }
 
-// Aggregate ALL pages of a Drive files.list query. Drive caps each request at
-// PAGINATION_PAGE_SIZE and signals more results via nextPageToken
-// (developers.google.com/workspace/drive/api/reference/rest/v3/files/list).
-// The official samples always include nextPageToken in the `fields` mask — a
-// partial-response mask without it silently drops the token, so the caller
-// MUST pass a fields string that contains it. Break (not throw) if the caller
-// aborts between pages; per-request aborts still reject via driveFetch.
-// Generic over the item type so the folder listers and the trash lister share
-// one loop instead of two copy-pasted copies. orderBy defaults to name; the
-// trash lister overrides it with folder,name (its screen sorts folders first).
-async function fetchAllPages<T>(
-  token: string,
-  query: string,
-  fields: string,
-  failureLabel: string,
-  signal?: AbortSignal,
-  orderBy: string = 'name'
-): Promise<T[]> {
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=${orderBy}&pageSize=${PAGINATION_PAGE_SIZE}`;
-  const all: T[] = [];
-  let pageToken: string | undefined;
-  for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
-    if (signal?.aborted) break;
-    const url = pageToken
-      ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}`
-      : baseUrl;
-    const response = await driveFetch(url, {
-      headers: { 'Authorization': `Bearer ${token}` },
-      signal
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to ${failureLabel} (${response.status})`);
-    }
-    const data = (await response.json()) as { files?: T[]; nextPageToken?: string };
-    if (data.files) all.push(...data.files);
-    pageToken = data.nextPageToken;
-    if (!pageToken) break;
-  }
-  return all;
-}
-
-// Folder-typed wrapper around the generic paginator; keeps the folder listers
-// reading at the DriveFolderItem level (behavior and signature unchanged).
-async function fetchAllFolderPages(
-  token: string,
-  query: string,
-  fields: string,
-  failureLabel: string,
-  signal?: AbortSignal
-): Promise<DriveFolderItem[]> {
-  return fetchAllPages<DriveFolderItem>(token, query, fields, failureLabel, signal);
-}
-
-// Search for folders matching a fully-built Drive query string.
-// `query` must already be a valid Drive q-expression (e.g. escaped/quoted).
-export async function searchFolders(token: string, query: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
-  return fetchAllFolderPages(token, query, 'nextPageToken,files(id,name)', 'search folders', signal);
-}
-
-// List immediate folder children (subfolders only, not trashed).
-export async function listFolderChildren(token: string, folderId: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
-  const q = `'${folderId}' in parents and trashed=false and mimeType='${FOLDER_MIME}'`;
-  return fetchAllFolderPages(token, q, 'nextPageToken,files(id,name)', 'list folder children', signal);
-}
-
 // Return the parent ids of a file/folder. Returns null when the Drive request
 // fails (or the file has no parents) so callers can fall back to root.
 export async function getFileParents(token: string, fileId: string, signal?: AbortSignal): Promise<string[] | null> {
@@ -421,23 +359,6 @@ export async function getFileName(token: string, fileId: string, signal?: AbortS
   }
   const data = await response.json();
   return typeof data.name === "string" ? data.name : null;
-}
-
-// Fetch trashed items matching a fully-built Drive query string.
-// Drive caps each request at PAGINATION_PAGE_SIZE results, so a trash list
-// larger than one page was silently truncated without a nextPageToken loop
-// (same pagination pattern as fetchAllFolderPages). nextPageToken MUST stay in
-// the fields mask — Drive's partial response drops it otherwise. Keep
-// orderBy=folder,name so folders sort before files in the trash screen.
-export async function getTrashedFiles(token: string, query: string, signal?: AbortSignal): Promise<DriveFileItem[]> {
-  return fetchAllPages<DriveFileItem>(
-    token,
-    query,
-    'nextPageToken,files(id,name,mimeType)',
-    'fetch trashed files',
-    signal,
-    'folder,name'
-  );
 }
 
 // App Configuration in appDataFolder
@@ -605,425 +526,4 @@ export async function getDriveStorageQuota(token: string): Promise<DriveStorageQ
     captureError({ level: 'warn', source: DRIVE_MODULE, message: `get-storage-quota-failed: ${classifyDriveError(err)}` });
     return null;
   }
-}
-
-// Typed upload failure. kind lets callers (uploadManager) branch on the real
-// cause without string-matching error messages: quota (storage full), network
-// (transient, exhausted), auth (401), invalid (4xx / malformed response),
-// aborted (caller cancelled).
-export class UploadError extends Error {
-  constructor(
-    message: string,
-    public readonly kind: 'quota' | 'network' | 'auth' | 'invalid' | 'aborted'
-  ) {
-    super(message);
-    this.name = 'UploadError';
-  }
-}
-
-// Google Drive error responses carry { error: { message, reason } }; only the
-// public message/reason are read (never the raw body — it can embed file ids).
-interface DriveErrorBody {
-  error?: { message?: unknown; reason?: unknown };
-}
-
-async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | null> {
-  try {
-    const data = await response.json();
-    if (typeof data !== 'object' || data === null) return null;
-    return data as DriveErrorBody;
-  } catch {
-    return null;
-  }
-}
-
-// 403 rate-limit detection: Drive reports usage limits with the official
-// reasons rateLimitExceeded / userRateLimitExceeded (handle-errors docs + the
-// proSync worker precedent). Everything else on 403 (permissions…) is NOT a
-// rate limit and must not be retried.
-function isRateLimitError(status: number, errBody: DriveErrorBody | null): boolean {
-  if (status !== 403) return false;
-  const reason = typeof errBody?.error?.reason === 'string' ? errBody.error.reason : '';
-  return DRIVE_RATE_LIMIT_REASONS.has(reason);
-}
-
-// Read a 403 body via a clone so the response handed back to the caller keeps
-// its body intact (same clone pattern as the worker's isDriveRateLimitResponse).
-// A clone/parse failure means we cannot confirm a rate limit → treat the 403
-// as non-retryable (fail as before) instead of guessing.
-async function isRateLimit403Response(response: Response): Promise<boolean> {
-  let cloned: Response;
-  try {
-    cloned = response.clone();
-  } catch {
-    return false;
-  }
-  return isRateLimitError(response.status, await readDriveErrorBody(cloned));
-}
-
-// 403 storage-quota detection: official reason storageQuotaExceeded with
-// message "The user's Drive storage quota has been exceeded." (docs + real
-// API traces). rate-limit 403s never reach this mapper — driveFetch and
-// putChunkWithRetry retry them beforehand; everything else on 403
-// (permissions…) maps to 'invalid'.
-function isQuotaExceeded(errBody: DriveErrorBody | null): boolean {
-  const reason =
-    typeof errBody?.error?.reason === 'string' ? errBody.error.reason.toLowerCase() : '';
-  const message =
-    typeof errBody?.error?.message === 'string' ? errBody.error.message.toLowerCase() : '';
-  return reason.includes('quota') || message.includes('storage quota');
-}
-
-// Only the two official string fields of a Drive error body reach the log; the
-// raw body is never logged (it can embed file ids / request echoes). Each
-// field is sanitized (id=, tokens, links redacted) and the joined detail is
-// length-capped so a hostile or oversized body cannot bloat the log.
-function uploadErrorDetail(errBody: DriveErrorBody | null): string {
-  const parts: string[] = [];
-  const message = errBody?.error?.message;
-  if (typeof message === 'string' && message !== '') parts.push(sanitizeString(message));
-  const reason = errBody?.error?.reason;
-  if (typeof reason === 'string' && reason !== '') parts.push(sanitizeString(reason));
-  if (parts.length === 0) return '';
-  const joined = parts.join(' | ');
-  return joined.length > UPLOAD_ERROR_DETAIL_MAX_LENGTH
-    ? `${joined.slice(0, UPLOAD_ERROR_DETAIL_MAX_LENGTH)}...`
-    : joined;
-}
-
-// Single mapper for both upload steps — non-retryable by design: a PUT retried
-// after the server answered would create a duplicate upload.
-function mapUploadHttpError(status: number, errBody: DriveErrorBody | null): UploadError {
-  // Log the concrete status + sanitized reason BEFORE throwing: the caller
-  // (uploadManager) only records the UploadError kind, so without this the
-  // exact 4xx from Drive is invisible in the log and the root cause cannot be
-  // diagnosed.
-  const detail = uploadErrorDetail(errBody);
-  captureError({
-    level: 'warn',
-    source: DRIVE_MODULE,
-    message: `upload-http-error (status=${status})${detail ? `: ${detail}` : ''}`,
-  });
-  if (status === 401) return new UploadError('upload unauthorized (401)', 'auth');
-  if (status === 403 && isQuotaExceeded(errBody)) return new UploadError('drive storage quota exceeded', 'quota');
-  return new UploadError(`upload failed (status=${status})`, 'invalid');
-}
-
-// Step 1: initiate a resumable session. POST is idempotent (metadata only), so
-// it safely reuses driveFetch's retry/backoff — unlike the PUT step below.
-async function initiateResumableUpload(
-  token: string,
-  name: string,
-  parentId: string,
-  byteLength: number,
-  signal: AbortSignal
-): Promise<string> {
-  const response = await driveFetch(RESUMABLE_UPLOAD_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': UPLOAD_METADATA_CONTENT_TYPE,
-      'X-Upload-Content-Type': UPLOAD_MIME_TYPE,
-      'X-Upload-Content-Length': String(byteLength)
-    },
-    body: JSON.stringify({ name, parents: [parentId] }),
-    signal
-  });
-
-  if (!response.ok) {
-    throw mapUploadHttpError(response.status, await readDriveErrorBody(response));
-  }
-  const location = response.headers.get('Location');
-  if (!location) {
-    throw new UploadError('resumable session returned no Location header', 'invalid');
-  }
-  return location;
-}
-
-// Step 2: PUT the whole body once. fetchWithAuth (NOT driveFetch) — it must
-// never auto-retry, and it gives us the 401 token-refresh for free.
-async function putResumableBytes(
-  uploadUri: string,
-  token: string,
-  data: Uint8Array,
-  signal: AbortSignal
-): Promise<DriveFileItem> {
-  const byteLength = data.byteLength;
-  const response = await fetchWithAuth(uploadUri, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': UPLOAD_MIME_TYPE,
-      'Content-Range': `bytes 0-${byteLength - 1}/${byteLength}`
-    },
-    body: data,
-    signal,
-    // fetchWithAuth's 15s internal default would kill a slow upload PUT well
-    // before the resumable session's 120s bound (already merged into the
-    // signal via mergeWithTimeoutSignal) — override so both stay in sync.
-    timeoutMs: UPLOAD_TIMEOUT_MS
-  });
-
-  if (!response.ok) {
-    throw mapUploadHttpError(response.status, await readDriveErrorBody(response));
-  }
-  try {
-    return (await response.json()) as DriveFileItem;
-  } catch (err) {
-    captureError({ level: 'error', source: DRIVE_MODULE, message: `upload-parse-response-failed (status=${response.status}): ${classifyDriveError(err)}` });
-    throw new UploadError('upload response was not valid JSON', 'invalid');
-  }
-}
-
-// Upload file bytes to Drive via the resumable protocol (2 steps: POST
-// initiate → PUT bytes). Non-retryable HTTP errors map to UploadError kinds;
-// only transient network/timeout failures re-initiate the session, at most
-// once. A caller abort (signal.aborted) always wins and never retries — a
-// timeout fired on our merged signal is still treated as transient.
-export async function uploadFileResumable(
-  token: string,
-  bytes: Blob | Uint8Array,
-  name: string,
-  parentId: string,
-  signal?: AbortSignal
-): Promise<DriveFileItem> {
-  if (signal?.aborted) {
-    throw new UploadError('upload aborted by caller', 'aborted');
-  }
-
-  const data = bytes instanceof Blob ? new Uint8Array(await bytes.arrayBuffer()) : bytes;
-  const byteLength = data.byteLength;
-  if (byteLength === 0) {
-    // Google's resumable docs define no Content-Range format for empty files
-    // (verified 2026-08-02); reject rather than risk a malformed upload.
-    throw new UploadError('cannot upload an empty file', 'invalid');
-  }
-
-  const mergedSignal = mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS);
-  for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt++) {
-    if (signal?.aborted) {
-      throw new UploadError('upload aborted by caller', 'aborted');
-    }
-    try {
-      const uploadUri = await initiateResumableUpload(token, name, parentId, byteLength, mergedSignal);
-      return await putResumableBytes(uploadUri, token, data, mergedSignal);
-    } catch (err) {
-      if (signal?.aborted) {
-        throw new UploadError('upload aborted by caller', 'aborted');
-      }
-      if (err instanceof UploadError) {
-        throw err;
-      }
-      // Transient network/timeout — re-initiate a fresh session (Google: a
-      // 4xx/expired session must be restarted from scratch).
-      captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-transient-failure (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
-    }
-  }
-  throw new UploadError(`upload failed after ${MAX_UPLOAD_ATTEMPTS} attempts`, 'network');
-}
-
-// Internal marker: a 404 on a chunk PUT means the resumable session expired
-// server-side, so the whole upload must restart from a fresh session URI
-// (Drive docs: "the upload must be restarted from the beginning").
-class SessionExpiredError extends Error {
-  constructor() {
-    super('resumable upload session expired');
-    this.name = 'SessionExpiredError';
-  }
-}
-
-export interface ChunkedUploadOptions {
-  name: string;
-  parentId: string;
-  totalSize: number;
-  // Returns the bytes at `offset` (may be shorter than the chunk size for the
-  // final chunk), null at end of file. Called again after a 308 resume at the
-  // server-reported offset — must support arbitrary offsets, not just
-  // sequential reads.
-  readChunk: (offset: number) => Promise<Uint8Array | null>;
-  onProgress?: (fraction: number) => void;
-  signal?: AbortSignal;
-}
-
-function abortedUploadError(): UploadError {
-  return new UploadError('upload aborted by caller', 'aborted');
-}
-
-// PUT one chunk with bounded retries for 5xx/429 and 403 rate-limits (backoff
-// [1s, 3s]). Exhausted retries throw UploadError('network') — the caller
-// decides whether to restart the session. A network rejection (fetch threw)
-// propagates raw as transient.
-async function putChunkWithRetry(
-  uploadUri: string,
-  token: string,
-  chunk: Uint8Array,
-  start: number,
-  end: number,
-  totalSize: number,
-  mergedSignal: AbortSignal,
-  callerSignal: AbortSignal | null | undefined
-): Promise<Response> {
-  for (let attempt = 0; ; attempt++) {
-    let response: Response;
-    try {
-      response = await fetchWithAuth(uploadUri, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': UPLOAD_MIME_TYPE,
-          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-        },
-        body: chunk,
-        signal: mergedSignal,
-        // fetchWithAuth's 15s internal default would kill a slow chunk PUT
-        // well before the resumable session's 120s bound — keep both in sync.
-        timeoutMs: UPLOAD_TIMEOUT_MS
-      });
-    } catch (err) {
-      if (callerSignal?.aborted) throw abortedUploadError();
-      throw err;
-    }
-    // 429/5xx are retryable by status alone; a 403 only when its body reports
-    // a Drive rate limit. The body is read via a clone so the response keeps
-    // its body for mapUploadHttpError below; a clone/parse failure means "not
-    // a rate limit" → the 403 returns as-is (fail as before). The body is
-    // only read on 403 attempts that could still retry.
-    let rateLimit403 = false;
-    if (response.status === 403 && attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-      rateLimit403 = await isRateLimit403Response(response);
-    }
-    const retryable =
-      response.status === 429 ||
-      (response.status >= 500 && response.status < 600) ||
-      rateLimit403;
-    if (!retryable) return response;
-    if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-      await sleep(UPLOAD_CHUNK_RETRY_DELAYS_MS[attempt]);
-      continue;
-    }
-    throw new UploadError(`upload failed (status=${response.status})`, 'network');
-  }
-}
-
-// Upload one session's worth of chunks. Throws UploadError for fatal errors
-// (auth/quota/invalid/aborted), SessionExpiredError for a 404 (session died),
-// and raw transient errors (network/timeout) — both non-UploadError cases let
-// the outer loop start a fresh session.
-async function uploadChunksInSession(
-  uploadUri: string,
-  token: string,
-  opts: ChunkedUploadOptions,
-  mergedSignal: AbortSignal
-): Promise<DriveFileItem> {
-  const { totalSize, readChunk, onProgress, signal } = opts;
-  let offset = 0;
-  for (;;) {
-    if (signal?.aborted) throw abortedUploadError();
-    let chunk: Uint8Array | null;
-    try {
-      chunk = await readChunk(offset);
-    } catch (err) {
-      if (signal?.aborted) throw abortedUploadError();
-      captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-chunk-read-failed (offset=${offset}): ${classifyDriveError(err)}` });
-      throw new UploadError('failed to read upload data', 'invalid');
-    }
-    // null/empty before the announced totalSize is a caller bug (EOF early);
-    // overshooting the totalSize would make Google reject the session.
-    if (chunk === null || chunk.byteLength === 0) {
-      throw new UploadError('upload data ended before total size', 'invalid');
-    }
-    if (offset + chunk.byteLength > totalSize) {
-      if (offset >= totalSize) {
-        // Only reachable through a server anomaly (a 308 full-range is
-        // rejected above) — sending anything here exceeds the announced
-        // size and would get the session rejected by Google.
-        throw new UploadError('upload chunk exceeds total size', 'invalid');
-      }
-      // The file grew after the initial stat (e.g. it was still being written
-      // when the upload started) so readChunk streams past totalSize. Truncate
-      // the chunk to the remaining bytes — the final chunk may be any size
-      // (the 256 KiB multiple rule only applies to non-final chunks). No log
-      // here: this is the SUCCESS path (fires on every growing-file upload).
-      chunk = chunk.slice(0, totalSize - offset);
-    }
-
-    const end = offset + chunk.byteLength - 1;
-    const response = await putChunkWithRetry(
-      uploadUri, token, chunk, offset, end, totalSize, mergedSignal, signal
-    );
-    onProgress?.(Math.min(1, (offset + chunk.byteLength) / totalSize));
-
-    if (response.status >= 200 && response.status < 300) {
-      try {
-        return (await response.json()) as DriveFileItem;
-      } catch (err) {
-        captureError({ level: 'error', source: DRIVE_MODULE, message: `upload-parse-response-failed (status=${response.status}): ${classifyDriveError(err)}` });
-        throw new UploadError('upload response was not valid JSON', 'invalid');
-      }
-    }
-    if (response.status === 308) {
-      const range = response.headers.get('Range');
-      const match = range ? RANGE_HEADER_PATTERN.exec(range) : null;
-      // "bytes=0-<lastByte>" → next offset = lastByte + 1; no/malformed Range
-      // → nothing received, resend from the start (Drive docs).
-      offset = match ? Number(match[2]) + 1 : 0;
-      if (offset >= totalSize) {
-        // 308 claiming the whole file is received without a 200/201 is a
-        // server anomaly — continuing would send an out-of-range chunk.
-        throw new UploadError('resumable server reported a complete range without completing the upload', 'invalid');
-      }
-      continue;
-    }
-    if (response.status === 404) throw new SessionExpiredError();
-    throw mapUploadHttpError(response.status, await readDriveErrorBody(response));
-  }
-}
-
-// Upload file bytes to Drive via the chunked resumable protocol: memory stays
-// bounded at chunk size regardless of totalSize (fixes the multi-GB RAM spike
-// of whole-file uploads). Bytes come from the injected readChunk, so this
-// module never touches the filesystem or the uploader's chunk size.
-export async function uploadFileResumableChunked(
-  token: string,
-  opts: ChunkedUploadOptions
-): Promise<DriveFileItem> {
-  if (opts.signal?.aborted) throw abortedUploadError();
-  if (!(opts.totalSize > 0)) {
-    // Google's resumable docs define no Content-Range format for empty files
-    // (same rule as uploadFileResumable).
-    throw new UploadError('cannot upload an empty file', 'invalid');
-  }
-  const mergedSignal = mergeWithTimeoutSignal(opts.signal, UPLOAD_TIMEOUT_MS);
-  for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt++) {
-    if (opts.signal?.aborted) throw abortedUploadError();
-    let uploadUri: string;
-    try {
-      uploadUri = await initiateResumableUpload(token, opts.name, opts.parentId, opts.totalSize, mergedSignal);
-    } catch (err) {
-      if (opts.signal?.aborted) throw abortedUploadError();
-      if (err instanceof UploadError) throw err;
-      // Initiate exhausted its own retries with a transient failure — try a
-      // fresh session (bounded by MAX_UPLOAD_ATTEMPTS).
-      if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
-        captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-session-restarted (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
-        continue;
-      }
-      break;
-    }
-    try {
-      return await uploadChunksInSession(uploadUri, token, opts, mergedSignal);
-    } catch (err) {
-      if (opts.signal?.aborted) throw abortedUploadError();
-      if (err instanceof UploadError) throw err;
-      // Session expired (404) or transient network/timeout — restart the whole
-      // upload from a fresh session URI, bounded by MAX_UPLOAD_ATTEMPTS.
-      if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
-        const expired = err instanceof SessionExpiredError;
-        captureError({ level: 'warn', source: DRIVE_MODULE, message: `${expired ? 'upload-session-expired' : 'upload-session-restarted'} (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
-        continue;
-      }
-      break;
-    }
-  }
-  throw new UploadError(`upload failed after ${MAX_UPLOAD_ATTEMPTS} attempts`, 'network');
 }

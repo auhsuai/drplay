@@ -1,7 +1,8 @@
 import { t } from 'i18next';
 import { db } from '../db/db';
 import type { DriveFile } from '../db/db';
-import { createFolder, getDriveStorageQuota, uploadFileResumable, uploadFileResumableChunked, UploadError } from './driveApi';
+import { createFolder, getDriveStorageQuota } from './driveApi';
+import { uploadFileResumable, uploadFileResumableChunked, UploadError } from './driveUpload';
 import type { DriveFileItem, DriveStorageQuota } from './driveApi';
 import { openDiskReadStream, registerUploadPath, statDiskPath, walkDiskFolder } from './diskFs';
 import type { DiskEntry } from './diskFs';
