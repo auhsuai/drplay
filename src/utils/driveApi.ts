@@ -880,10 +880,9 @@ async function uploadChunksInSession(
       // The file grew after the initial stat (e.g. it was still being written
       // when the upload started) so readChunk streams past totalSize. Truncate
       // the chunk to the remaining bytes — the final chunk may be any size
-      // (the 256 KiB multiple rule only applies to non-final chunks).
-      const overrun = offset + chunk.byteLength - totalSize;
+      // (the 256 KiB multiple rule only applies to non-final chunks). No log
+      // here: this is the SUCCESS path (fires on every growing-file upload).
       chunk = chunk.slice(0, totalSize - offset);
-      captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-chunk-truncated (offset=${offset}, overrun=${overrun})` });
     }
 
     const end = offset + chunk.byteLength - 1;

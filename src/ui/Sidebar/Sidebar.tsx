@@ -125,7 +125,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
           <div className={`overflow-hidden transition-all duration-300 whitespace-nowrap flex items-center ${isSidebarOpen ? 'max-w-[100px] opacity-100 ml-2' : 'max-w-0 opacity-0 ml-0'}`}>
             <span className="truncate">DrPlay</span>
           </div>
-          <UploadButton token={token} />
+          {isSidebarOpen && <UploadButton token={token} />}
         </h1>
       </div>
       <nav className="px-4 space-y-1 mb-2">

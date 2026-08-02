@@ -19,6 +19,7 @@ import "./App.css";
 import { db } from './db/db';
 import { LoginScreen } from "./ui/Login/LoginScreen";
 import { clearSessionState } from "./utils/sessionCleanup";
+import { loadSidebarOpenState, saveSidebarOpenState } from "./utils/sidebarState";
 
 import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
@@ -143,7 +144,11 @@ function App() {
   };
 
   const [showFolderSelection, setShowFolderSelection] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // Lazy initializer (read once on mount, no default-flash): stored state is
+  // kept across launches; first launch (no key) defaults to OPEN, the opposite
+  // of the old hardcoded collapsed default. 'false' is the only collapsing
+  // value; anything else (missing/corrupt) opens — see sidebarState.
+  const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(() => {
     const saved = localStorage.getItem(LS_MINIMIZE_TO_TRAY);
@@ -195,7 +200,11 @@ function App() {
           userProfile={userProfile}
           onLogout={handleLogout}
           isSidebarOpen={isSidebarOpen}
-          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          onToggleSidebar={() => {
+            const nextOpen = !isSidebarOpen;
+            setIsSidebarOpen(nextOpen);
+            saveSidebarOpenState(nextOpen);
+          }}
           token={accessToken}
         />
 

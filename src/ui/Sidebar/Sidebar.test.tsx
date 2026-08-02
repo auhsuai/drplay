@@ -431,3 +431,25 @@ describe('Sidebar storage quota', () => {
   });
 });
 
+describe('Sidebar UploadButton (header "+")', () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('renders the UploadButton when the sidebar is expanded', () => {
+    render(<Sidebar {...baseProps({ token: 'tok-1' })} />);
+    expect(screen.getByTitle('upload.button_title')).toBeTruthy();
+  });
+
+  it('hides the UploadButton when the sidebar is collapsed', () => {
+    render(<Sidebar {...baseProps({ isSidebarOpen: false, token: 'tok-1' })} />);
+    expect(screen.queryByTitle('upload.button_title')).toBeNull();
+  });
+
+  it('renders no UploadButton when not logged in (no token), even expanded', () => {
+    render(<Sidebar {...baseProps({ token: null })} />);
+    expect(screen.queryByTitle('upload.button_title')).toBeNull();
+  });
+});
+

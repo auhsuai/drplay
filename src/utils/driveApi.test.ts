@@ -1303,7 +1303,11 @@ describe("uploadFileResumableChunked", () => {
     expect(ranges).toEqual(["bytes 0-49/50", "bytes 20-49/50", "bytes 40-49/50"]);
   });
 
-  it("truncate → warn captureError with upload-chunk-truncated (offset + overrun)", async () => {
+  it("file growth truncation is silent: chunk still truncated to totalSize, no upload-chunk-truncated log", async () => {
+    // The file was still being written when the upload started, so the final
+    // chunk overshoots totalSize and must be trimmed — this is the SUCCESS
+    // path. The upload-chunk-truncated warn was removed because it fired on
+    // every growing-file upload (i.e. normal completion), so it must NOT log.
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
@@ -1315,13 +1319,17 @@ describe("uploadFileResumableChunked", () => {
       readChunk: async (offset) => (offset >= 50 ? null : makePayload(64)),
     });
 
-    expect(captureError).toHaveBeenCalledWith(
+    expect(captureError).not.toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        source: "driveApi",
-        message: expect.stringContaining("upload-chunk-truncated (offset=0, overrun=14)"),
+        message: expect.stringContaining("upload-chunk-truncated"),
       })
     );
+    // Truncation behavior itself is unchanged: the 64-byte chunk is cut to the
+    // remaining 50 bytes and sent with the exact Content-Range.
+    const [, putOpts] = mockedFetch.mock.calls[1];
+    expect((putOpts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-49/50");
+    expect((putOpts?.body as Uint8Array).byteLength).toBe(50);
   });
 
   it("offset >= totalSize (308 full-range after the final truncated chunk) → invalid, no further PUT", async () => {
