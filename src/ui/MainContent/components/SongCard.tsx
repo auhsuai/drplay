@@ -3,6 +3,7 @@ import { Folder, Music, Square, CheckSquare, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { DriveItem, Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
+import { formatBytes } from "../../../utils/formatBytes";
 import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
 import type { MoreMenuVariant } from "../../components/MoreMenu";
@@ -91,12 +92,6 @@ function formatDuration(seconds: number): string {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
-function formatSize(bytes: number): string {
-  if (!bytes) return "0 MB";
-  const mb = bytes / (1024 * 1024);
-  return `${mb.toFixed(1)} MB`;
-}
-
 interface SongCardProps {
   item: DriveItem;
   onPlay: (track: Track) => void;
@@ -150,7 +145,10 @@ export const SongCard = React.memo(function SongCard({
   const [coverUrl, setCoverUrl] = useState<string | null>(() => {
     return coverImageCache.get(item.id) ?? null;
   });
-  const [meta, setMeta] = useState<{ title: string; artist: string | null; duration: number; size: number }>({ title: item.title, artist: null, duration: 0, size: 0 });
+  // loaded=true only after getTrackMetadata resolves, so the meta row (duration
+  // • size) appears only for real metadata — the old size>0 guard also hid
+  // legitimate 0-byte files, which must show "0 B" (formatBytes semantics).
+  const [meta, setMeta] = useState<{ title: string; artist: string | null; duration: number; size: number; loaded: boolean }>({ title: item.title, artist: null, duration: 0, size: 0, loaded: false });
   const cardRef = React.useRef<HTMLDivElement>(null);
   const imgRef = React.useRef<HTMLImageElement>(null);
   const blobUrlRef = React.useRef<string | null>(null);
@@ -203,9 +201,10 @@ export const SongCard = React.memo(function SongCard({
           artist: metadata.artist || null,
           duration: metadata.duration || 0,
           size: metadata.size || 0,
+          loaded: true,
         };
         setMeta(prev => {
-          if (newMeta.title === prev.title && newMeta.artist === prev.artist && newMeta.duration === prev.duration && newMeta.size === prev.size) {
+          if (newMeta.title === prev.title && newMeta.artist === prev.artist && newMeta.duration === prev.duration && newMeta.size === prev.size && newMeta.loaded === prev.loaded) {
             return prev;
           }
           return newMeta;
@@ -350,19 +349,15 @@ export const SongCard = React.memo(function SongCard({
             <span className="truncate">{t('drive.folders')}</span>
           ) : (
             <div className="flex items-center truncate">
-              {(meta.duration > 0 || meta.size > 0) && (
+              {meta.loaded && (
                 <>
                   <span className="text-[11px] font-medium tracking-wide">
                     {formatDuration(meta.duration)}
                   </span>
-                  {meta.size > 0 && (
-                    <>
-                      <span className="mx-2 text-gray-300 dark:text-gray-600">•</span>
-                      <span className="text-[11px] font-medium tracking-wide">
-                        {formatSize(meta.size)}
-                      </span>
-                    </>
-                  )}
+                  <span className="mx-2 text-gray-300 dark:text-gray-600">•</span>
+                  <span className="text-[11px] font-medium tracking-wide">
+                    {formatBytes(meta.size)}
+                  </span>
                 </>
               )}
             </div>

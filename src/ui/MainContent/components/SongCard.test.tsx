@@ -953,3 +953,52 @@ describe('SongCard now-playing visual distinction (hover-like gray, no lift)', (
     expect(card?.className).not.toContain('hover:bg-white');
   });
 });
+
+describe('SongCard size text uses shared formatBytes semantics (not the old MB-only formatSize)', () => {
+  beforeEach(() => {
+    coverImageCache.clear();
+    mockedFetch.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Metadata drives meta.size via getTrackMetadata; the card must render the
+  // size span with the shared util's semantics ("500 KB", "5 MB", "0 B").
+  const renderWithMetaSize = (size: number, duration = 123) => {
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: null,
+      duration,
+      size,
+      coverUrl: null,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    return render(<SongCard {...baseProps} item={makeItem()} />);
+  };
+
+  it('size 0 → shows "0 B" (old formatSize returned "0 MB"; guard hid the span entirely)', async () => {
+    renderWithMetaSize(0, 0);
+    expect(await screen.findByText('0 B')).not.toBeNull();
+    expect(screen.getByText('00:00:00')).not.toBeNull();
+  });
+
+  it('500 KB (512000 B) → shows "500 KB", not "0.5 MB"', async () => {
+    renderWithMetaSize(500 * 1024);
+    expect(await screen.findByText('500 KB')).not.toBeNull();
+    expect(screen.queryByText('0.5 MB')).toBeNull();
+  });
+
+  it('5 MB → shows "5 MB", not "5.0 MB" (shared util trims trailing .0)', async () => {
+    renderWithMetaSize(5 * 1024 * 1024);
+    expect(await screen.findByText('5 MB')).not.toBeNull();
+    expect(screen.queryByText('5.0 MB')).toBeNull();
+  });
+
+  it('1.5 MB (1536 KB) → shows "1.5 MB" (fraction digits preserved for non-whole units)', async () => {
+    renderWithMetaSize(1536 * 1024);
+    expect(await screen.findByText('1.5 MB')).not.toBeNull();
+  });
+});
