@@ -18,7 +18,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 4 | `src/utils/driveUpload.ts` | ⬜ pending | |
 | 5 | `src/utils/uploadManager.ts` | ✅ done | backoffDelay/sleep chung, xoá dead attempt, type CustomEvent |
 | 6 | `src/utils/drivePagination.ts` | ✅ done | json() malformed guard, classify lỗi thay SyntaxError thô |
-| 7 | `src/utils/cache.ts` | ⬜ pending | |
+| 7 | `src/utils/cache.ts` | ✅ done | guard removeItem SecurityError, log đúng ngữ cảnh, hằng số chung metadata.ts |
 | 8 | `src/utils/metadata.ts` | ⬜ pending | |
 | 9 | `src/utils/audioQuery.ts` | ⬜ pending | |
 | 10 | `src/utils/bufferedRange.ts` | ⬜ pending | |

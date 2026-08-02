@@ -3,8 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { captureError } from './errorLog';
 
 const META_MODULE = "metadata";
-const METADATA_LRU_KEY = '__drplay_metadata_lru';
-const METADATA_KEY_PREFIX = 'metadata_';
+export const METADATA_LRU_KEY = '__drplay_metadata_lru';
+export const METADATA_KEY_PREFIX = 'metadata_';
 const UNKNOWN_ARTIST = 'Unknown Artist';
 const FALLBACK_AUDIO_FILENAME = 'audio.mp3';
 const METADATA_UPDATED_EVENT = 'metadata-updated';

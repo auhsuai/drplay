@@ -1,17 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
-import { clearAllMetadataCache } from "./metadata";
+import { clearAllMetadataCache, METADATA_KEY_PREFIX, METADATA_LRU_KEY } from "./metadata";
 import { captureError } from "./errorLog";
-
-const METADATA_CACHE_PREFIX = "metadata_";
-const METADATA_LRU_KEY = "__drplay_metadata_lru";
 
 export async function clearAppCache(): Promise<void> {
   let error: unknown = null;
   try {
     await db.metadataCache
       .where("key")
-      .startsWith(METADATA_CACHE_PREFIX)
+      .startsWith(METADATA_KEY_PREFIX)
       .delete();
   } catch (e: unknown) {
     captureError({
@@ -22,11 +19,28 @@ export async function clearAppCache(): Promise<void> {
     error = e;
   } finally {
     if (typeof localStorage !== "undefined") {
-      localStorage.removeItem(METADATA_LRU_KEY);
+      try {
+        localStorage.removeItem(METADATA_LRU_KEY);
+      } catch (removeErr: unknown) {
+        captureError({
+          level: 'warn',
+          source: 'cache',
+          message: `clear-lru-key-failed: ${removeErr instanceof Error ? removeErr.message : String(removeErr)}`,
+        });
+      }
     }
     try {
       await invoke("clear_local_cache");
-      clearAllMetadataCache();
+      try {
+        clearAllMetadataCache();
+      } catch (metaErr: unknown) {
+        captureError({
+          level: 'error',
+          source: 'cache',
+          message: `clear-memory-metadata-cache failed: ${metaErr instanceof Error ? metaErr.message : String(metaErr)}`,
+        });
+        if (!error) error = metaErr;
+      }
     } catch (invokeErr: unknown) {
       if (!error) {
         captureError({
