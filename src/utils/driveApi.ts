@@ -455,20 +455,28 @@ export async function getAppConfig(token: string): Promise<Record<string, unknow
   return null;
 }
 
-// Serialize config writes with a simple async lock. Two concurrent saves
+// Serialize config writes with a promise-chain mutex. Two concurrent saves
 // would otherwise both search (find nothing), both POST, and create duplicate
 // drplay_config.json files in appDataFolder (Drive has no conditional upsert).
-let saveConfigLock = false;
+// A chain of gate promises gives FIFO fairness (each task waits on the previous
+// task's gate) without polling: no busy-wait, no wasted event-loop spins, no
+// magic poll interval. release() always runs in finally, and prev.catch()
+// swallows a rejected predecessor's gate so a failed save can never leave the
+// lock stuck. Nested calls deadlock (a task awaiting its own gate) — same as
+// the previous boolean-flag lock, so that behavior is unchanged.
+// Exported (like backoffDelay) so tests can assert the lock semantics directly.
+let lockTail: Promise<unknown> = Promise.resolve();
 
-async function withSaveConfigLock<T>(fn: () => Promise<T>): Promise<T> {
-  while (saveConfigLock) {
-    await new Promise(r => setTimeout(r, 50));
-  }
-  saveConfigLock = true;
+export async function withSaveConfigLock<T>(fn: () => Promise<T>): Promise<T> {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const prev = lockTail;
+  lockTail = gate;
+  await prev.catch(() => {});
   try {
     return await fn();
   } finally {
-    saveConfigLock = false;
+    release();
   }
 }
 

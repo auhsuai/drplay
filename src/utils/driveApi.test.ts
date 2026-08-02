@@ -6,6 +6,8 @@ import {
   listFolderChildren,
   getTrashedFiles,
   getDriveStorageQuota,
+  saveAppConfig,
+  withSaveConfigLock,
   uploadFileResumable,
   uploadFileResumableChunked,
   type DriveFolderItem,
@@ -1384,5 +1386,55 @@ describe("uploadFileResumableChunked", () => {
     const message = vi.mocked(captureError).mock.calls.map((c) => c[0].message).join("\n");
     expect(message).toContain("status=400");
     expect(message).toContain("Invalid upload request");
+  });
+});
+
+describe("saveAppConfig serialization lock (promise-chain mutex)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("serializes concurrent saves: task 2's fetch only starts after task 1 fully finishes", async () => {
+    let releaseFirstSearch!: () => void;
+    const firstSearchGate = new Promise<Response>((resolve) => {
+      releaseFirstSearch = () => resolve(makeJsonResponse(200, { files: [{ id: "file-1" }] }));
+    });
+
+    mockedFetch
+      .mockReturnValueOnce(firstSearchGate)                          // task 1: search (held open)
+      .mockResolvedValueOnce(makeResponse(200))                      // task 1: PATCH upload
+      .mockResolvedValueOnce(makeJsonResponse(200, { files: [] }))   // task 2: search (no file → POST)
+      .mockResolvedValueOnce(makeResponse(200));                     // task 2: POST upload
+
+    const task1 = saveAppConfig("tok-1", { a: 1 });
+    const task2 = saveAppConfig("tok-2", { a: 2 });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    releaseFirstSearch();
+    const results = await Promise.all([task1, task2]);
+    expect(results).toEqual([true, true]);
+    expect(mockedFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("a rejected task does not block the next task (lock is always released)", async () => {
+    const order: string[] = [];
+    const task1 = withSaveConfigLock(async () => {
+      order.push("t1");
+      throw new Error("save failed");
+    });
+    await expect(task1).rejects.toThrow("save failed");
+
+    const result = await withSaveConfigLock(async () => {
+      order.push("t2");
+      return 42;
+    });
+    expect(result).toBe(42);
+    expect(order).toEqual(["t1", "t2"]);
   });
 });
