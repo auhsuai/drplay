@@ -4,7 +4,6 @@ import {
   openDiskReadStream,
   registerUploadPath,
   statDiskPath,
-  readDiskFile,
   walkDiskFolder,
 } from './diskFs';
 import { captureError } from './errorLog';
@@ -153,38 +152,27 @@ describe('statDiskPath', () => {
       expect.objectContaining({ source: 'diskFs' })
     );
   });
-});
 
-describe('readDiskFile', () => {
-  it('converts the raw ArrayBuffer invoke response to Uint8Array', async () => {
-    const bytes = new Uint8Array([0xff, 0x00, 0x01, 0x7f, 0x80]).buffer;
-    invokeMock.mockResolvedValue(bytes);
+  it('throws a wrapped error for ENOTDIR (os error 20) — not a not-found, must not return null', async () => {
+    invokeMock.mockRejectedValue(
+      'failed to get metadata of path: C:\\Music\\song.mp3\\extra with error: Not a directory (os error 20)'
+    );
 
-    const data = await readDiskFile('C:\\Music\\song.mp3');
-
-    expect(data).toBeInstanceOf(Uint8Array);
-    expect(Array.from(data)).toEqual([0xff, 0x00, 0x01, 0x7f, 0x80]);
-    expect(invokeMock).toHaveBeenCalledWith('plugin:fs|read_file', {
-      path: 'C:\\Music\\song.mp3',
-    });
-  });
-
-  it('falls back to number[] responses (JSON IPC path) like plugin guest-js', async () => {
-    invokeMock.mockResolvedValue([1, 2, 3, 254]);
-
-    const data = await readDiskFile('C:\\Music\\song.mp3');
-
-    expect(Array.from(data)).toEqual([1, 2, 3, 254]);
-  });
-
-  it('wraps IPC/scope rejections in a clear Error (no silent swallow)', async () => {
-    invokeMock.mockRejectedValue('path forbidden on scope');
-
-    await expect(readDiskFile('C:\\Music\\song.mp3')).rejects.toThrow(
-      /Failed to read file "C:\\Music\\song\.mp3"/
+    await expect(statDiskPath('C:\\Music\\song.mp3\\extra')).rejects.toThrow(
+      /Failed to stat "C:\\Music\\song\.mp3\\extra"/
     );
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'diskFs' })
+    );
+  });
+
+  it('throws a wrapped error for ERROR_DIRECTORY (os error 267, Windows) — not a not-found', async () => {
+    invokeMock.mockRejectedValue(
+      'failed to get metadata of path: C:\\Music\\song.mp3 with error: The directory name is invalid. (os error 267)'
+    );
+
+    await expect(statDiskPath('C:\\Music\\song.mp3')).rejects.toThrow(
+      /Failed to stat "C:\\Music\\song\.mp3"/
     );
   });
 });

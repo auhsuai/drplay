@@ -30,7 +30,6 @@ vi.mock('../utils/diskFs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/diskFs')>();
   return {
     ...actual,
-    readDiskFile: vi.fn(),
     openDiskReadStream: vi.fn(),
     statDiskPath: vi.fn(),
     walkDiskFolder: vi.fn(),
@@ -63,7 +62,6 @@ let uploadFileResumable: ReturnType<typeof vi.fn>;
 let uploadFileResumableChunked: ReturnType<typeof vi.fn>;
 let getDriveStorageQuota: ReturnType<typeof vi.fn>;
 let createFolderMock: ReturnType<typeof vi.fn>;
-let readDiskFile: ReturnType<typeof vi.fn>;
 let openDiskReadStream: ReturnType<typeof vi.fn>;
 let statDiskPath: ReturnType<typeof vi.fn>;
 let walkDiskFolder: ReturnType<typeof vi.fn>;
@@ -89,7 +87,6 @@ beforeEach(async () => {
   uploadFileResumableChunked = vi.mocked(du.uploadFileResumableChunked);
   getDriveStorageQuota = vi.mocked(da.getDriveStorageQuota);
   createFolderMock = vi.mocked(da.createFolder);
-  readDiskFile = vi.mocked(df.readDiskFile);
   openDiskReadStream = vi.mocked(df.openDiskReadStream);
   statDiskPath = vi.mocked(df.statDiskPath);
   walkDiskFolder = vi.mocked(df.walkDiskFolder);
@@ -101,7 +98,6 @@ beforeEach(async () => {
   // Default mocks: unlimited quota, tiny readable file, empty folder walk,
   // single folder creation, trivial upload success.
   getDriveStorageQuota.mockResolvedValue({ limit: null, usage: 0, usageInDrive: 0, usageInDriveTrash: 0 });
-  readDiskFile.mockResolvedValue(new Uint8Array([9, 9]));
   statDiskPath.mockResolvedValue({ path: 'x', name: 'x', relativePath: 'x', isDirectory: false, size: 2 });
   openDiskReadStream.mockResolvedValue({
     read: vi.fn().mockResolvedValueOnce(new Uint8Array([9, 9])).mockResolvedValueOnce(null),
@@ -603,9 +599,8 @@ describe('uploadManager', () => {
     expect(typeof opts.readChunk).toBe('function');
     expect(typeof opts.onProgress).toBe('function');
     // Disk files stream via the chunked uploader — the whole-file bytes path
-    // and readDiskFile must NOT be used.
+    // must NOT be used.
     expect(uploadFileResumable).not.toHaveBeenCalled();
-    expect(readDiskFile).not.toHaveBeenCalled();
 
     // The stream opened for the upload is closed on completion (finally).
     // (mock.results holds the raw Promise — await it to get the stream.)

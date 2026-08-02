@@ -7,7 +7,6 @@ import { basename } from './pathUtils';
 // fetched 2026-08-02). The repo does NOT use @tauri-apps/plugin-fs npm
 // bindings — it invokes the plugin commands directly (same pattern as
 // useMenuDownload.ts:121).
-const FS_READ_FILE_CMD = 'plugin:fs|read_file';
 const FS_READ_DIR_CMD = 'plugin:fs|read_dir';
 const FS_STAT_CMD = 'plugin:fs|stat';
 // Streaming read commands (guest-js FileHandle pattern): open returns a
@@ -41,8 +40,10 @@ const REGISTER_UPLOAD_PATH_CMD = 'register_upload_path';
 // ENOENT from std::fs — the plugin formats io errors as
 // "with error: <msg> (os error N)". os error 2 is the same value on Windows
 // ("The system cannot find the file specified.") and Unix ("No such file or
-// directory"). Matching on the numeric code keeps this cross-platform.
-const NOT_FOUND_PATTERN = /os error 2/i;
+// directory"). Matching the parenthesized Display form (NOT a bare "os error
+// 2" substring, which would also match 20/21/24/267 and swallow real
+// failures as not-found) keeps this cross-platform.
+const NOT_FOUND_PATTERN = /\(os error 2\)/;
 
 // Minimal shapes of the plugin's serialized responses (camelCase via serde
 // rename_all). Full FileInfo has many more fields — only what we consume.
@@ -121,27 +122,10 @@ export async function statDiskPath(path: string): Promise<DiskEntry | null> {
 }
 
 /**
- * Read a file's bytes. The plugin returns a raw octet-stream response
- * (ArrayBuffer) on the fast IPC path and a JSON number[] on the fallback —
- * mirror the official guest-js readFile() normalization exactly.
- */
-export async function readDiskFile(path: string): Promise<Uint8Array> {
-  let payload: ArrayBuffer | number[];
-  try {
-    payload = await invoke<ArrayBuffer | number[]>(FS_READ_FILE_CMD, { path });
-  } catch (err: unknown) {
-    const wrapped = wrapError(`Failed to read file "${path}"`, err);
-    captureError({ level: 'error', source: 'diskFs', message: wrapped.message, kind: 'read' });
-    throw wrapped;
-  }
-  return payload instanceof ArrayBuffer ? new Uint8Array(payload) : Uint8Array.from(payload);
-}
-
-/**
  * A sequential read handle over a disk file. Each read() returns at most
  * `chunkSize` bytes and null at end of file; close() releases the underlying
  * resource. Memory stays bounded at chunkSize no matter how large the file is
- * (unlike readDiskFile, which materializes the whole file in the JS heap).
+ * (unlike a whole-file read, which would materialize the file in the JS heap).
  */
 export interface DiskReadStream {
   read(): Promise<Uint8Array | null>; // null = end of file
