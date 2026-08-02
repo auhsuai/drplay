@@ -4,7 +4,7 @@ import { captureError } from './errorLog';
 // main->UI protocol (CustomEvent names). Worker messages were previously
 // matched by raw string literals; the worker file still posts the same
 // strings, so the runtime protocol is unchanged.
-const SYNC_EVENT_NAMES = {
+export const SYNC_EVENT_NAMES = {
   progress: 'pro-sync-progress',
   complete: 'pro-sync-complete',
   busy: 'pro-sync-busy',
@@ -20,6 +20,12 @@ const WORKER_MSG_TYPES = {
   noToken: 'SYNC_NO_TOKEN',
   error: 'SYNC_ERROR',
 } as const;
+
+// Value union of the wire-level strings the worker can post (the switch
+// matches against these values, so the union is derived from the values).
+export type WorkerMsgType = (typeof WORKER_MSG_TYPES)[keyof typeof WORKER_MSG_TYPES];
+// Union of the CustomEvent names dispatched to the UI layer.
+type SyncEventName = (typeof SYNC_EVENT_NAMES)[keyof typeof SYNC_EVENT_NAMES];
 
 let globalWorker: Worker | null = null;
 let onTokenRefreshRequest: (() => Promise<string | null>) | null = null;
@@ -39,7 +45,7 @@ export function updateWorkerToken(token: string) {
 export interface ProSyncHandlerDeps {
   onTokenRefreshRequest: (() => Promise<string | null>) | null;
   updateToken: (token: string) => void;
-  dispatch: (name: string) => void;
+  dispatch: (name: SyncEventName) => void;
   logError: (msg: string) => void;
 }
 
@@ -47,7 +53,7 @@ export interface ProSyncHandlerDeps {
 // SYNC_ERROR fell through silently (no log, no UI event); they now surface
 // via logError + a CustomEvent so failures are never swallowed.
 export async function handleWorkerMessage(
-  msg: { type?: string },
+  msg: { type?: WorkerMsgType },
   deps: ProSyncHandlerDeps
 ): Promise<void> {
   switch (msg.type) {
@@ -107,6 +113,21 @@ export function startProSyncWorker(token: string) {
 
     globalWorker.onmessage = (e) => {
       void handleWorkerMessage(e.data, deps);
+    };
+    globalWorker.onerror = (e) => {
+      void captureError({
+        level: 'error',
+        source: 'proSyncManager',
+        message: `worker-error: ${e.message ?? 'unknown worker error'}`,
+      });
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
+    };
+    globalWorker.onmessageerror = () => {
+      void captureError({
+        level: 'error',
+        source: 'proSyncManager',
+        message: 'worker-messageerror: malformed message from worker',
+      });
     };
   }
 

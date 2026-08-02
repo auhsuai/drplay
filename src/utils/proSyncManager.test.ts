@@ -1,14 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
-import { handleWorkerMessage } from './proSyncManager';
-import type { ProSyncHandlerDeps } from './proSyncManager';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  handleWorkerMessage,
+  startProSyncWorker,
+  stopProSyncWorker,
+  SYNC_EVENT_NAMES as EVENT,
+} from './proSyncManager';
+import type { ProSyncHandlerDeps, WorkerMsgType } from './proSyncManager';
+import { captureError } from './errorLog';
 
-const EVENT = {
-  progress: 'pro-sync-progress',
-  complete: 'pro-sync-complete',
-  busy: 'pro-sync-busy',
-  noToken: 'pro-sync-no-token',
-  error: 'pro-sync-error',
-} as const;
+vi.mock('./errorLog', () => ({ captureError: vi.fn() }));
 
 function makeDeps(overrides: Partial<ProSyncHandlerDeps> = {}): {
   deps: ProSyncHandlerDeps;
@@ -131,11 +131,95 @@ describe('handleWorkerMessage', () => {
   it('unknown message type is ignored safely', async () => {
     const { deps, updateToken, dispatch, logError } = makeDeps();
 
-    await handleWorkerMessage({ type: 'SOME_FUTURE_TYPE' }, deps);
+    await handleWorkerMessage({ type: 'SOME_FUTURE_TYPE' as string as WorkerMsgType }, deps);
     await handleWorkerMessage({}, deps);
 
     expect(updateToken).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
     expect(logError).not.toHaveBeenCalled();
+  });
+});
+
+class FakeWorker {
+  static instances: FakeWorker[] = [];
+
+  onmessage: ((e: { data: unknown }) => void) | null = null;
+  onerror: ((e: ErrorEvent) => void) | null = null;
+  onmessageerror: ((e: MessageEvent) => void) | null = null;
+  postMessage = vi.fn();
+  terminate = vi.fn();
+
+  constructor(_url: string | URL, _options?: WorkerOptions) {
+    FakeWorker.instances.push(this);
+  }
+}
+
+describe('startProSyncWorker', () => {
+  let dispatchEvent: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    dispatchEvent = vi.fn();
+    vi.stubGlobal('Worker', FakeWorker);
+    vi.stubGlobal('window', { dispatchEvent });
+    vi.stubGlobal('CustomEvent', class {
+      type: string;
+      constructor(type: string) {
+        this.type = type;
+      }
+    });
+    vi.mocked(captureError).mockReset();
+  });
+
+  afterEach(() => {
+    stopProSyncWorker();
+    vi.unstubAllGlobals();
+  });
+
+  it('attaches onmessage, onerror and onmessageerror handlers', () => {
+    startProSyncWorker('token');
+
+    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    expect(worker).toBeDefined();
+    expect(typeof worker.onmessage).toBe('function');
+    expect(typeof worker.onerror).toBe('function');
+    expect(typeof worker.onmessageerror).toBe('function');
+  });
+
+  it('logs worker runtime errors via captureError and dispatches the error event', () => {
+    startProSyncWorker('token');
+    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+
+    worker.onerror?.({ message: 'Script load failed' } as ErrorEvent);
+
+    expect(captureError).toHaveBeenCalledTimes(1);
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'proSyncManager',
+        message: 'worker-error: Script load failed',
+      })
+    );
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'pro-sync-error' })
+    );
+  });
+
+  it('logs messageerror without dispatching a UI event', () => {
+    startProSyncWorker('token');
+    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+
+    worker.onmessageerror?.({} as MessageEvent);
+
+    expect(captureError).toHaveBeenCalledTimes(1);
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'proSyncManager',
+        message: 'worker-messageerror: malformed message from worker',
+      })
+    );
+    expect(dispatchEvent).not.toHaveBeenCalled();
   });
 });
