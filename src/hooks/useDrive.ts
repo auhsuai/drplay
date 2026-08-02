@@ -9,12 +9,8 @@ import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "../utils/driveConstants";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
+import { ROOT_FOLDER_KEY, CURRENT_FOLDER_ID_KEY, CURRENT_FOLDER_NAME_KEY, FOLDER_HISTORY_KEY, SORT_OPTION_KEY } from "../utils/storageKeys";
 
-const LS_SORT_OPTION = 'drplay_sort_option';
-const LS_ROOT_FOLDER = 'drplay_root_folder';
-const LS_CURRENT_FOLDER_ID = 'drplay_current_folder_id';
-const LS_CURRENT_FOLDER_NAME = 'drplay_current_folder_name';
-const LS_FOLDER_HISTORY = 'drplay_folder_history';
 const DB_NAV_STATE_KEY = 'drplay_nav_state';
 const ROOT_VERIFY_TIMEOUT_MS = 15_000;
 
@@ -55,12 +51,22 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       // hydratedRef.current=false forever and the app would silently stop
       // persisting navigation state.
       try {
-        const savedSort = localStorage.getItem(LS_SORT_OPTION);
+        let savedSort: string | null = null;
+        try {
+          savedSort = localStorage.getItem(SORT_OPTION_KEY);
+        } catch (err) {
+          captureError({ level: 'warn', source: 'useDrive', message: `sort-option-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+        }
         if (savedSort) {
           setSortOption(savedSort);
         }
 
-        let localRoot = localStorage.getItem(LS_ROOT_FOLDER);
+        let localRoot: string | null = null;
+        try {
+          localRoot = localStorage.getItem(ROOT_FOLDER_KEY);
+        } catch (err) {
+          captureError({ level: 'warn', source: 'useDrive', message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+        }
 
         if (isLoggedIn && accessToken) {
           try {
@@ -94,8 +100,18 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   }
                 }
                 if (localRoot) {
-                  if (remoteConfig.rootFolderId !== localStorage.getItem(LS_ROOT_FOLDER)) {
-                    localStorage.setItem(LS_ROOT_FOLDER, localRoot);
+                  let savedRoot: string | null = null;
+                  try {
+                    savedRoot = localStorage.getItem(ROOT_FOLDER_KEY);
+                  } catch (err) {
+                    captureError({ level: 'warn', source: 'useDrive', message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+                  }
+                  if (remoteConfig.rootFolderId !== savedRoot) {
+                    try {
+                      localStorage.setItem(ROOT_FOLDER_KEY, localRoot);
+                    } catch (err) {
+                      captureError({ level: 'warn', source: 'useDrive', message: `root-folder-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+                    }
                   }
                   try {
                     await db.files.clear();
@@ -156,9 +172,24 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                 fallbackToRoot();
               }
             } else {
-              const savedCurrentId = localStorage.getItem(LS_CURRENT_FOLDER_ID);
-              const savedCurrentName = localStorage.getItem(LS_CURRENT_FOLDER_NAME);
-              const savedHistoryStr = localStorage.getItem(LS_FOLDER_HISTORY);
+              let savedCurrentId: string | null = null;
+              try {
+                savedCurrentId = localStorage.getItem(CURRENT_FOLDER_ID_KEY);
+              } catch (err) {
+                captureError({ level: 'warn', source: 'useDrive', message: `current-folder-id-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+              }
+              let savedCurrentName: string | null = null;
+              try {
+                savedCurrentName = localStorage.getItem(CURRENT_FOLDER_NAME_KEY);
+              } catch (err) {
+                captureError({ level: 'warn', source: 'useDrive', message: `current-folder-name-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+              }
+              let savedHistoryStr: string | null = null;
+              try {
+                savedHistoryStr = localStorage.getItem(FOLDER_HISTORY_KEY);
+              } catch (err) {
+                captureError({ level: 'warn', source: 'useDrive', message: `folder-history-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+              }
 
               if (savedCurrentId && savedCurrentName && savedHistoryStr) {
                 setCurrentFolderId(savedCurrentId);
@@ -249,7 +280,11 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   }, [folderHistory, setFolderHistory, setCurrentFolderId, setCurrentFolderName]);
 
   const handleSelectRootFolder = useCallback(async (folderId: string) => {
-    localStorage.setItem(LS_ROOT_FOLDER, folderId);
+    try {
+      localStorage.setItem(ROOT_FOLDER_KEY, folderId);
+    } catch (err) {
+      captureError({ level: 'warn', source: 'useDrive', message: `root-folder-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}` });
+    }
     setAppRootFolder(folderId);
     setCurrentFolderId(folderId);
     setCurrentFolderName(MY_DRIVE_TAB);

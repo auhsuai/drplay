@@ -2,6 +2,11 @@
 export const USER_EMAIL_KEY = 'drplay_current_user_email';
 export const DEFAULT_USER_EMAIL = 'default';
 export const LANGUAGE_KEY = 'drplay_language';
+export const ROOT_FOLDER_KEY = 'drplay_root_folder';
+export const CURRENT_FOLDER_ID_KEY = 'drplay_current_folder_id';
+export const CURRENT_FOLDER_NAME_KEY = 'drplay_current_folder_name';
+export const FOLDER_HISTORY_KEY = 'drplay_folder_history';
+export const SORT_OPTION_KEY = 'drplay_sort_option';
 
 export function getCurrentUserEmail(): string {
   try {
