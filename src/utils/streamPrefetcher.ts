@@ -1,5 +1,5 @@
 const prefetchedStreams = new Map<string, string>();
-const DRIVE_STREAM_PREFIX = '/drive-stream/';
+export const DRIVE_STREAM_PREFIX = '/drive-stream/';
 const MAX_CACHE = 200; // cache URL string ngắn (~20 byte/URL), KHÔNG prefetch data — việc prefetch thật do nextTrackPrefetcher đảm nhiệm
 
 export function getPrefetchedStreamUrl(fileId: string): string | undefined {

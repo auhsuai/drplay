@@ -49,7 +49,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 35 | `src/hooks/player/usePlayerQueue.ts` | ⬜ pending | |
 | 36 | `src/hooks/player/usePlayerSession.ts` | ⬜ pending | |
 | 37 | `src/hooks/player/utils.ts` | ⬜ pending | |
-| 38 | `src/hooks/useAuth.ts` | ⬜ pending | |
+| 38 | `src/hooks/useAuth.ts` | ✅ done | CLEAR_*_CMD, setAccessToken single-source, localStorage guards, race guard, handler reset |
 | 39 | `src/hooks/useDebouncedLiveQuery.ts` | ⬜ pending | |
 | 40 | `src/hooks/useLocateFile.ts` | ⬜ pending | |
 | 41 | `src/hooks/useMenuDelete.ts` | ⬜ pending | |

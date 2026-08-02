@@ -1,6 +1,8 @@
 import { Track } from '../App';
 import { usePlayerStore } from '../store/playerStore';
 import { captureError } from '../utils/errorLog';
+import { DRIVE_STREAM_PREFIX } from '../utils/streamPrefetcher';
+import { isAbortError } from '../hooks/player/utils';
 import type { BufferedSource } from '../utils/bufferedRange';
 
 type AudioEventMap = {
@@ -252,7 +254,7 @@ export class AudioController {
     this.activeIndex = this.activeIndex === 0 ? 1 : 0;
     const newAudio = this.activeAudio;
     
-    const url = track.streamUrl || `/drive-stream/${track.id}`;
+    const url = track.streamUrl || `${DRIVE_STREAM_PREFIX}${track.id}`;
     newAudio.src = url;
     newAudio.volume = this.muted ? 0 : this.volume;
     newAudio.load();
@@ -268,7 +270,7 @@ export class AudioController {
     try {
       await newAudio.play();
     } catch (e: unknown) {
-      if (e instanceof DOMException && e.name !== 'AbortError' && this.currentTrackId === track.id) {
+      if (!isAbortError(e) && this.currentTrackId === track.id) {
         usePlayerStore.getState().setIsPlaying(false);
       }
     }

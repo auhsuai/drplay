@@ -1,5 +1,6 @@
 // DrPlay Service Worker
 // Intercepts /drive-stream/{fileId} and proxies to Google Drive API with Authorization header
+// NOTE: '/drive-stream/' prefix must match src/utils/streamPrefetcher.ts DRIVE_STREAM_PREFIX
 
 let accessToken = '';
 

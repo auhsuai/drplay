@@ -10,6 +10,7 @@ import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
 import { showErrorToast } from "../utils/simpleToast";
+import { PLAYER_STOP_EVENT } from './usePlayer';
 
 interface TokenData {
   access_token: string;
@@ -122,7 +123,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       setAccessToken(null);
       setUserProfile(null);
       stopProactiveRefresh();
-      window.dispatchEvent(new CustomEvent('player-stop'));
+      window.dispatchEvent(new CustomEvent(PLAYER_STOP_EVENT));
 
       try {
         await invoke(CLEAR_STREAM_TOKEN_CMD);

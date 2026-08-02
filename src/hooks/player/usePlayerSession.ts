@@ -2,21 +2,12 @@ import { useEffect } from "react";
 import { get } from "../../db/kv";
 import type { Track, PlayMode } from "../../types";
 import { getValidToken } from "../../utils/apiClient";
-import { getPrefetchedStreamUrl } from "../../utils/streamPrefetcher";
+import { getPrefetchedStreamUrl, DRIVE_STREAM_PREFIX } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
-import { classifyPlayerError } from "./utils";
+import { classifyPlayerError, isAbortError } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
 import { AudioController } from "../../lib/AudioController";
 import { shuffleQueueWithCurrent } from "./usePlayerQueue";
-
-// Duck-typed name extraction: DOMException is NOT instanceof Error in some
-// environments (jsdom), yet carries a reliable .name ('AbortError' for
-// deliberate cancels). Same rationale as useTauriEvents.ts / useMenuDownload.ts.
-function errName(err: unknown): string {
-  return err && typeof err === 'object' && typeof (err as { name?: unknown }).name === 'string'
-    ? (err as { name: string }).name
-    : '';
-}
 
 const PLAYER_SESSION_MODULE = 'usePlayerSession';
 const SESSION_STORAGE_KEY = 'drplay_last_session';
@@ -59,7 +50,7 @@ export function usePlayerSession(
             try {
               streamUrl = getPrefetchedStreamUrl(lastSession.track.id) || '';
               if (!streamUrl) {
-                streamUrl = `/drive-stream/${lastSession.track.id}`;
+                streamUrl = `${DRIVE_STREAM_PREFIX}${lastSession.track.id}`;
               }
             } catch (e: unknown) {
               captureError({ level: 'warn', source: PLAYER_SESSION_MODULE, message: `session-restore-stream-fail: ${classifyPlayerError(e).message}` });
@@ -93,7 +84,7 @@ export function usePlayerSession(
           triggerReload();
         }
       } catch (e: unknown) {
-        if (errName(e) === 'AbortError') return;
+        if (isAbortError(e)) return;
         captureError({ level: 'error', source: PLAYER_SESSION_MODULE, message: `session-load-failed: ${classifyPlayerError(e).message}` });
       }
     };

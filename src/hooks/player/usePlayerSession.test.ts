@@ -18,6 +18,7 @@ vi.mock('../../utils/apiClient', () => ({
 
 vi.mock('../../utils/streamPrefetcher', () => ({
   getPrefetchedStreamUrl: vi.fn(),
+  DRIVE_STREAM_PREFIX: '/drive-stream/',
 }));
 
 vi.mock('../../utils/errorLog', () => ({

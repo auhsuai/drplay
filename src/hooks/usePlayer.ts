@@ -6,18 +6,19 @@ import { Track } from "../App";
 import { recordPlay } from "../utils/history";
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
-import { getPrefetchedStreamUrl } from "../utils/streamPrefetcher";
+import { getPrefetchedStreamUrl, DRIVE_STREAM_PREFIX } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from '../utils/nextTrackPrefetcher';
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
+import { SESSION_CLEANUP_KEYS } from "../utils/sessionCleanup";
+import { isAbortError } from "./player/utils";
 import { usePlayerSession } from "./player/usePlayerSession";
 import { usePlayerQueue } from "./player/usePlayerQueue";
 
 import { usePlayerStore } from "../store/playerStore";
 import { AudioController } from "../lib/AudioController";
 
-const PLAYER_STOP_EVENT = 'player-stop';
-const DRIVE_STREAM_PREFIX = '/drive-stream/';
+export const PLAYER_STOP_EVENT = 'player-stop';
 
 export const usePlayer = (accessToken: string | null) => {
   const {
@@ -65,7 +66,7 @@ export const usePlayer = (accessToken: string | null) => {
 
   // Persist playMode
   useEffect(() => {
-    idbSet('drplay_playmode', playMode).catch((e: unknown) => { captureError({ level: 'warn', source: 'usePlayer', message: `playmode-save-fail: ${e instanceof Error ? e.message : String(e)}` }); });
+    idbSet(SESSION_CLEANUP_KEYS.playModeKv, playMode).catch((e: unknown) => { captureError({ level: 'warn', source: 'usePlayer', message: `playmode-save-fail: ${e instanceof Error ? e.message : String(e)}` }); });
   }, [playMode]);
 
   // Cleanup on logout
@@ -127,7 +128,7 @@ export const usePlayer = (accessToken: string | null) => {
 
     try {
       const freshToken = await getValidToken(false, signal).catch((e: unknown) => {
-        if (e instanceof DOMException && e.name === 'AbortError') throw e;
+        if (isAbortError(e)) throw e;
         captureError({ level: 'warn', source: 'usePlayer', message: `token-refresh-fail: ${e instanceof Error ? e.message : String(e)}` });
         return null;
       });
@@ -154,14 +155,14 @@ export const usePlayer = (accessToken: string | null) => {
             setCurrentTrack(prev => prev ? { ...prev, restoreDuration: metadata.duration } : prev);
           }
         } catch (e: unknown) {
-          if (!(e instanceof DOMException && e.name === 'AbortError')) {
+          if (!isAbortError(e)) {
             captureError({ level: 'warn', source: 'usePlayer', message: `metadata-prefetch-fail: ${e instanceof Error ? e.message : String(e)}` });
           }
         }
       })();
       
     } catch (e: unknown) {
-      if (e instanceof DOMException && e.name === 'AbortError') return;
+      if (isAbortError(e)) return;
       captureError({ level: 'error', source: 'usePlayer', message: `network-playback-error: ${e instanceof Error ? e.message : String(e)}` });
       showErrorToast("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
     } finally {
@@ -196,7 +197,7 @@ export const usePlayer = (accessToken: string | null) => {
           try {
             await getTrackMetadata(currentTrack.id, freshToken, currentTrack.size, currentTrack.originalName, signal);
           } catch (e: unknown) {
-            if (!(e instanceof DOMException && e.name === 'AbortError')) {
+            if (!isAbortError(e)) {
               captureError({ level: 'warn', source: 'usePlayer', message: `bitrate-resume-fail: ${e instanceof Error ? e.message : String(e)}` });
             }
           }
@@ -207,7 +208,7 @@ export const usePlayer = (accessToken: string | null) => {
           triggerReload();
           setIsPlaying(true);
         } catch (e: unknown) {
-          if (e instanceof DOMException && e.name === 'AbortError') return;
+          if (isAbortError(e)) return;
           captureError({ level: 'error', source: 'usePlayer', message: `stream-url-resume-fail: ${e instanceof Error ? e.message : String(e)}` });
           showErrorToast("Could not start playback. Please try another track.");
         } finally {
