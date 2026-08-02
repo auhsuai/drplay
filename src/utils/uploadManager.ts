@@ -74,6 +74,16 @@ let entries: InternalEntry[] = [];
 let busy = false;
 const subscribers = new Set<() => void>();
 
+// Terminal (done/error) entries are useless to the UI — getUploadingIds /
+// getUploadState only read queued/uploading — but each holds a full diskPath
+// string and (for byte seeds) the raw payload, so keeping them is an
+// unbounded retention that grows with every batch. Callers must have fired
+// their final notify() first so subscribers still observe the terminal state.
+function pruneEntry(entry: InternalEntry): void {
+  entry.bytes = undefined;
+  entries = entries.filter((e) => e !== entry);
+}
+
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -366,6 +376,7 @@ async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise
   entry.status = 'done';
   notify();
   window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED_EVENT, { detail: { count: 1 } }));
+  pruneEntry(entry);
 }
 
 async function markError(entry: InternalEntry, err: unknown): Promise<void> {
@@ -391,6 +402,7 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
     showErrorToast(t('upload.error'));
   }
   notify();
+  pruneEntry(entry);
 }
 
 function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
