@@ -147,4 +147,31 @@ describe('FolderSelectionScreen', () => {
     );
     expect(screen.queryByText('Folder 1')).not.toBeNull();
   });
+
+  it('guards the localStorage root-folder read: SecurityError → warn + fallback null (no crash)', async () => {
+    const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('storage blocked', 'SecurityError');
+    });
+    try {
+      render(
+        <FolderSelectionScreen
+          token="test-token"
+          onSelectFolder={vi.fn()}
+          initialFolderId="folderB"
+          initialFolderHistory={[{ id: 'root', name: 'My Drive' }]}
+        />
+      );
+      // Component still mounts and starts the normal folder fetch.
+      await waitFor(() => expect(deferredCalls).toHaveLength(1));
+      expect(mocks.captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          source: 'FolderSelectionScreen',
+          message: expect.stringContaining('root-folder-read-failed'),
+        })
+      );
+    } finally {
+      getItemSpy.mockRestore();
+    }
+  });
 });

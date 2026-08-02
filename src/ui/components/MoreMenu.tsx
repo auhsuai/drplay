@@ -4,6 +4,7 @@ import { MoreHorizontal, Download, FolderOutput, Trash2, Loader2, CheckCircle2, 
 import { Track } from "../../App";
 import type { DriveItem } from "../../types";
 import { moveFile } from "../../utils/driveApi";
+import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import { isUploading, subscribe as subscribeUploads } from "../../utils/uploadManager";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
@@ -455,7 +456,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
           token={token}
           onSelectFolder={handleMove}
           onCancel={() => setShowMoveScreen(false)}
-          initialFolderId={currentFolderId || 'root'}
+          initialFolderId={currentFolderId || ROOT_FOLDER_ID}
           initialFolderName={currentFolderName}
           initialFolderHistory={folderHistory}
           title={t('drive.move_to', 'Move to...')}

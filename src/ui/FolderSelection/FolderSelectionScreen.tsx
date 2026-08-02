@@ -4,14 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { db } from '../../db/db';
 import { getValidToken } from '../../utils/apiClient';
 import { getFileParents, getFileName } from '../../utils/driveApi';
+import { ROOT_FOLDER_ID } from '../../utils/driveConstants';
 import { searchFolders, listFolderChildren } from '../../utils/drivePagination';
 import { showErrorToast } from '../../utils/simpleToast';
+import { ROOT_FOLDER_KEY } from '../../utils/storageKeys';
 import { captureError } from '../../utils/errorLog';
 
 const FOLDER_MODULE = "FolderSelection";
 const SEARCH_DEBOUNCE_MS = 300;
-const DRIVE_ROOT_ID = 'root';
-const LS_ROOT_FOLDER = 'drplay_root_folder';
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 // Classify a Drive fetch error for observability. Returns name + message only.
@@ -70,13 +70,26 @@ interface FolderSelectionScreenProps {
   allowEscapeRoot?: boolean;
 }
 
-export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = DRIVE_ROOT_ID, initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder, allowEscapeRoot = false }: FolderSelectionScreenProps) {
+export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initialFolderId = ROOT_FOLDER_ID, initialFolderName, initialFolderHistory = [], title, subtitle, appRootFolder, allowEscapeRoot = false }: FolderSelectionScreenProps) {
   const { t } = useTranslation();
   
-  // Resolve appRootFolder from props or localStorage
-  const resolvedAppRoot = appRootFolder || localStorage.getItem(LS_ROOT_FOLDER);
+  // Resolve appRootFolder from props or localStorage.
+  // localStorage access can throw SecurityError (storage blocked by policy —
+  // see MDN Window.localStorage), so the read is guarded and falls back to
+  // null (same as a missing key).
+  let storedAppRoot: string | null = null;
+  try {
+    storedAppRoot = localStorage.getItem(ROOT_FOLDER_KEY);
+  } catch (err) {
+    captureError({
+      level: 'warn',
+      source: 'FolderSelectionScreen',
+      message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : 'unknown'}`
+    });
+  }
+  const resolvedAppRoot = appRootFolder || storedAppRoot;
   
-  const [currentFolderId, setCurrentFolderId] = useState(initialFolderId === DRIVE_ROOT_ID && resolvedAppRoot ? resolvedAppRoot : initialFolderId);
+  const [currentFolderId, setCurrentFolderId] = useState(initialFolderId === ROOT_FOLDER_ID && resolvedAppRoot ? resolvedAppRoot : initialFolderId);
   const [currentFolderName, setCurrentFolderName] = useState(initialFolderName || t('drive.my_drive'));
   const [folderHistory, setFolderHistory] = useState<{id: string, name: string}[]>(initialFolderHistory);
   const [folders, setFolders] = useState<FolderItem[]>([]);
@@ -208,12 +221,12 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
       const newHistory = [...folderHistory];
       const prevFolder = newHistory.pop();
       setFolderHistory(newHistory);
-      setCurrentFolderId(prevFolder?.id || resolvedAppRoot || DRIVE_ROOT_ID);
+      setCurrentFolderId(prevFolder?.id || resolvedAppRoot || ROOT_FOLDER_ID);
       setCurrentFolderName(prevFolder?.name || t('drive.my_drive'));
       return;
     }
 
-    if (currentFolderId === DRIVE_ROOT_ID || (!allowEscapeRoot && resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
+    if (currentFolderId === ROOT_FOLDER_ID || (!allowEscapeRoot && resolvedAppRoot && currentFolderId === resolvedAppRoot)) return;
 
     cancelFolderFetch();
     isLoadingRef.current = true;
@@ -222,12 +235,12 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
       const parents = await getFileParents(token, currentFolderId);
       if (parents === null) {
         // Drive request failed hard — fall back to root.
-        setCurrentFolderId(DRIVE_ROOT_ID);
+        setCurrentFolderId(ROOT_FOLDER_ID);
         setCurrentFolderName(t('drive.my_drive'));
       } else if (parents.length > 0) {
         const fetchedParentId = parents[0];
         setCurrentFolderId(fetchedParentId);
-        if (fetchedParentId === DRIVE_ROOT_ID) {
+        if (fetchedParentId === ROOT_FOLDER_ID) {
           setCurrentFolderName(t('drive.my_drive'));
         } else {
           try {
@@ -238,12 +251,12 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
           }
         }
       } else {
-        setCurrentFolderId(DRIVE_ROOT_ID);
+        setCurrentFolderId(ROOT_FOLDER_ID);
       }
     } catch (e) {
       captureError({ level: 'error', source: FOLDER_MODULE, message: `fetch-parent-failed: ${classifyFolderError(e)}` });
       showErrorToast(t('folder_selection.back_error') || 'Failed to navigate back');
-      setCurrentFolderId(DRIVE_ROOT_ID);
+      setCurrentFolderId(ROOT_FOLDER_ID);
       setCurrentFolderName(t('drive.my_drive'));
     }
   };
@@ -251,7 +264,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const handleBreadcrumbClick = (index: number) => {
     if (index === -1) {
       setFolderHistory([]);
-      setCurrentFolderId(resolvedAppRoot || DRIVE_ROOT_ID);
+      setCurrentFolderId(resolvedAppRoot || ROOT_FOLDER_ID);
       setCurrentFolderName(initialFolderName || t('drive.my_drive'));
       return;
     }
@@ -296,7 +309,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
           <button 
             onClick={handleBack}
-            disabled={folderHistory.length === 0 && (currentFolderId === DRIVE_ROOT_ID || (!allowEscapeRoot && currentFolderId === resolvedAppRoot))}
+            disabled={folderHistory.length === 0 && (currentFolderId === ROOT_FOLDER_ID || (!allowEscapeRoot && currentFolderId === resolvedAppRoot))}
             className="p-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4 text-gray-700 dark:text-gray-300" />
