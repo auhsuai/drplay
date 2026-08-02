@@ -111,6 +111,28 @@ export function getUploadingIds(): ReadonlySet<string> {
 export function isUploading(id: string): boolean {
   return getUploadingIds().has(id);
 }
+
+// Card-level upload presentation state (slice 6):
+// - 'uploading'        → the item itself is being uploaded (dim + spinner)
+// - 'parent-uploading' → a child of this folder is uploading (spinner only,
+//                        the folder already exists on Drive — no dim)
+// - 'none'             → idle
+export type UploadState = 'none' | 'uploading' | 'parent-uploading';
+
+export function getUploadState(id: string): UploadState {
+  // Mirrors getUploadingIds' coverage (entry id + driveId + parentId) but
+  // resolves a SINGLE id to a presentation state instead of a flat set.
+  // 'uploading' wins when the id matches both (e.g. a folder whose own
+  // driveId matches while a child uploads under it).
+  let isParent = false;
+  for (const entry of entries) {
+    if (entry.status !== 'queued' && entry.status !== 'uploading') continue;
+    if (entry.id === id || entry.driveId === id) return 'uploading';
+    if (entry.parentId === id && id !== ROOT_PARENT_ID) isParent = true;
+  }
+  return isParent ? 'parent-uploading' : 'none';
+}
+
 export function subscribe(cb: () => void): () => void {
   subscribers.add(cb);
   return () => {

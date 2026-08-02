@@ -563,6 +563,72 @@ describe('uploadManager', () => {
     expect(await db.files.toArray()).toHaveLength(0);
   });
 
+  it('getUploadState: entry.id đang upload/queued → uploading', async () => {
+    const d = deferred<DriveFileItem>();
+    // NOTE: no second once-implementation — the queue is sequential, so b.mp3
+    // never starts while a.mp3 is deferred; a leftover once-impl would leak
+    // into the next test (vitest clearAllMocks does NOT clear once-queue).
+    uploadFileResumable.mockReturnValueOnce(d.promise);
+
+    um.startUploads([fileSeed('a.mp3'), fileSeed('b.mp3')], TOKEN);
+    await flush();
+
+    const [a, b] = um.getEntries();
+    expect(um.getUploadState(a.id)).toBe('uploading');
+    expect(um.getUploadState(b.id)).toBe('uploading');
+    expect(um.getUploadState('unknown-id')).toBe('none');
+
+    d.resolve(makeDriveFile('f1', 'a.mp3'));
+    await waitIdle();
+  });
+
+  it('getUploadState: folder batch — con đang upload (parentId=folder driveId) → folder chỉ parent-uploading (hết mờ)', async () => {
+    walkDiskFolder.mockResolvedValue([
+      { path: 'C:/Music/a.mp3', name: 'a.mp3', relativePath: 'a.mp3', isDirectory: false, size: 5 },
+    ]);
+    createFolderMock.mockResolvedValue({ id: 'folder-1', name: 'Album', mimeType: FOLDER_MIME });
+    const d = deferred<DriveFileItem>();
+    uploadFileResumable.mockReturnValueOnce(d.promise);
+
+    um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
+    await flush();
+
+    // folder root đã done (driveId='folder-1'); con đang upload với parentId='folder-1'
+    // → folder chỉ 'parent-uploading' (hết mờ, giữ spinner) — ADR deviation đã chốt.
+    expect(um.getUploadState('folder-1')).toBe('parent-uploading');
+
+    d.resolve(makeDriveFile('f-a', 'a.mp3'));
+    await waitIdle();
+  });
+
+  it('getUploadState: parentId → parent-uploading; root không bao giờ parent-uploading', async () => {
+    const d = deferred<DriveFileItem>();
+    uploadFileResumable.mockReturnValueOnce(d.promise);
+
+    um.startUploads([fileSeed('s.mp3', 'folder-9')], TOKEN);
+    await flush();
+
+    expect(um.getUploadState('folder-9')).toBe('parent-uploading');
+    expect(um.getUploadState('root')).toBe('none');
+
+    d.resolve(makeDriveFile('f9', 's.mp3'));
+    await waitIdle();
+  });
+
+  it('getUploadState: sau done → none', async () => {
+    const d = deferred<DriveFileItem>();
+    uploadFileResumable.mockReturnValueOnce(d.promise);
+
+    um.startUploads([fileSeed('s.mp3')], TOKEN);
+    await flush();
+    const id = um.getEntries()[0].id;
+    expect(um.getUploadState(id)).toBe('uploading');
+
+    d.resolve(makeDriveFile('f9', 's.mp3'));
+    await waitIdle();
+    expect(um.getUploadState(id)).toBe('none');
+  });
+
   it('createFolder subfolder fail → subfolder error; file con trong đó → parent-folder-missing', async () => {
     walkDiskFolder.mockResolvedValue([
       { path: 'C:/Music/sub', name: 'sub', relativePath: 'sub', isDirectory: true, size: 0 },

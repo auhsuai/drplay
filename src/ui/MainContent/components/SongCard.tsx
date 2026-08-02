@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-import { Folder, Music, Square, CheckSquare } from "lucide-react";
+import { Folder, Music, Square, CheckSquare, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { DriveItem, Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
 import type { MoreMenuVariant } from "../../components/MoreMenu";
+import type { UploadState } from "../../../utils/uploadManager";
 
 const SONG_CARD_MODULE = 'SongCard';
 
@@ -60,6 +61,7 @@ interface SongCardProps {
   menuVariant?: MoreMenuVariant;
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
+  uploadState?: UploadState;
 }
 
 export const SongCard = React.memo(function SongCard({ 
@@ -82,7 +84,8 @@ export const SongCard = React.memo(function SongCard({
   hideMenu,
   menuVariant,
   onBulkMoveClick,
-  onBulkDeleteClick
+  onBulkDeleteClick,
+  uploadState = 'none',
 }: SongCardProps) {
   const { t } = useTranslation();
   const [coverUrl, setCoverUrl] = useState<string | null>(() => {
@@ -193,6 +196,10 @@ export const SongCard = React.memo(function SongCard({
   }, [item.id, token]);
 
   const handleCardActivate = () => {
+    // Upload race guard (UI layer): an item that is still uploading must not
+    // play / open / select. pointer-events-none handles the mouse; keyboard
+    // (Enter/Space) reaches this handler directly, so the guard lives here.
+    if (uploadState === 'uploading') return;
     if (isSelectionMode) {
       onToggleSelection?.(item.id);
       return;
@@ -231,7 +238,7 @@ export const SongCard = React.memo(function SongCard({
           setContextMenuPos({ x: e.clientX, y: e.clientY });
           setIsContextMenuOpen(true);
         }}
-        className="group w-full rounded-xl cursor-pointer"
+        className={`group w-full rounded-xl cursor-pointer ${uploadState === 'uploading' ? 'opacity-50 pointer-events-none' : ''}`}
       >
       <div className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${
           isFlashOn
@@ -316,6 +323,16 @@ export const SongCard = React.memo(function SongCard({
           />
         </div>
       )}
+      {uploadState === 'uploading' && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="w-5 h-5 animate-spin text-[#4285F4]" />
+        </div>
+      )}
+      {uploadState === 'parent-uploading' && (
+        <div className="absolute top-2 right-2 pointer-events-none">
+          <Loader2 className="w-4 h-4 animate-spin text-[#4285F4]" />
+        </div>
+      )}
       </div>
     </div>
     </div>
@@ -331,5 +348,6 @@ export const SongCard = React.memo(function SongCard({
          prev.isSelected === next.isSelected &&
          prev.isSelectionMode === next.isSelectionMode &&
          prev.isHighlighted === next.isHighlighted &&
-         prev.highlightTrigger === next.highlightTrigger;
+         prev.highlightTrigger === next.highlightTrigger &&
+         prev.uploadState === next.uploadState;
 });

@@ -13,10 +13,17 @@ import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 
 import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
+import { getUploadState, subscribe as subscribeUploads } from "../../utils/uploadManager";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { PaginationControls } from "./components/PaginationControls";
+
+// Monotonic upload-status version: bumped on every uploadManager notify so the
+// virtualized list can re-derive each card's uploadState. Module-level (not
+// component state) so a list remounted mid-upload still starts from the latest
+// version — useSyncExternalStore re-reads the snapshot right after subscribing.
+let uploadVersion = 0;
 
 interface MainContentProps {
   activeTab: string;
@@ -323,6 +330,18 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
     useFlushSync: false,
   });
 
+  // External-store subscription to uploadManager: every status change bumps
+  // uploadVersion and re-renders this list; each visible card then re-derives
+  // its own uploadState via getUploadState(item.id) and the SongCard memo
+  // comparator skips cards whose state did not change.
+  React.useSyncExternalStore(
+    (onStoreChange) => subscribeUploads(() => {
+      uploadVersion += 1;
+      onStoreChange();
+    }),
+    () => uploadVersion,
+  );
+
   React.useImperativeHandle(ref, () => ({
     scrollToIndex: (index, options) => {
       rowVirtualizer.scrollToIndex(index, options);
@@ -390,6 +409,7 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
               onEnableSelectionMode={handleEnableSelectionMode}
               onBulkMoveClick={onBulkMoveClick}
               onBulkDeleteClick={onBulkDeleteClick}
+              uploadState={getUploadState(item.id)}
             />
           </div>
         );

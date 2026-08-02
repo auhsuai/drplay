@@ -597,6 +597,104 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
   });
 });
 
+describe('SongCard uploadState (dim + spinner)', () => {
+  beforeEach(() => {
+    coverImageCache.clear();
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: null,
+      duration: 0,
+      size: 0,
+      coverUrl: null,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const cardEl = (container: HTMLElement): Element =>
+    container.querySelector('.cursor-pointer') as Element;
+  // lucide-react v1.x renders <Loader2> with class 'lucide-loader-circle'
+  // (Loader2 is the deprecated alias — PlayerBar still imports it).
+  const spinnerEl = (container: HTMLElement): Element | null =>
+    container.querySelector('.lucide-loader-circle');
+
+  it("'uploading' → card dimmed (opacity-50 + pointer-events-none) with centered spinner", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" />,
+    );
+    expect(cardEl(container).className).toContain('opacity-50');
+    expect(cardEl(container).className).toContain('pointer-events-none');
+    expect(spinnerEl(container)).not.toBeNull();
+  });
+
+  it("'parent-uploading' → small spinner, NO dim", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="parent-uploading" />,
+    );
+    expect(cardEl(container).className).not.toContain('opacity-50');
+    expect(spinnerEl(container)).not.toBeNull();
+  });
+
+  it("'none' (default) → no spinner, no dim", () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(spinnerEl(container)).toBeNull();
+    expect(cardEl(container).className).not.toContain('opacity-50');
+  });
+
+  it("'uploading' → click does NOT fire onPlay (race guard)", () => {
+    const onPlay = vi.fn();
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" onPlay={onPlay} />,
+    );
+    fireEvent.click(cardEl(container));
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("'uploading' → Enter does NOT fire onPlay (keyboard guard)", () => {
+    const onPlay = vi.fn();
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" onPlay={onPlay} />,
+    );
+    fireEvent.keyDown(cardEl(container), { key: 'Enter' });
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("'parent-uploading' → click still opens the folder (NOT blocked)", () => {
+    const onOpenFolder = vi.fn();
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({ isFolder: true, trackInfo: undefined })}
+        uploadState="parent-uploading"
+        onOpenFolder={onOpenFolder}
+      />,
+    );
+    fireEvent.click(cardEl(container));
+    expect(onOpenFolder).toHaveBeenCalledTimes(1);
+    expect(onOpenFolder).toHaveBeenCalledWith('track-1', 'My Song');
+  });
+
+  it("'uploading' + selection mode → selection NOT toggled", () => {
+    const onToggleSelection = vi.fn();
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        isSelectionMode
+        onToggleSelection={onToggleSelection}
+      />,
+    );
+    fireEvent.click(cardEl(container));
+    expect(onToggleSelection).not.toHaveBeenCalled();
+  });
+});
+
 describe('SongCard now-playing visual distinction (hover-like gray, no lift)', () => {
   beforeEach(() => {
     coverImageCache.clear();
