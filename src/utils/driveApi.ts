@@ -324,15 +324,19 @@ export async function getRecentlyAddedAudioFiles(token: string): Promise<DriveFi
 // partial-response mask without it silently drops the token, so the caller
 // MUST pass a fields string that contains it. Break (not throw) if the caller
 // aborts between pages; per-request aborts still reject via driveFetch.
-async function fetchAllFolderPages(
+// Generic over the item type so the folder listers and the trash lister share
+// one loop instead of two copy-pasted copies. orderBy defaults to name; the
+// trash lister overrides it with folder,name (its screen sorts folders first).
+async function fetchAllPages<T>(
   token: string,
   query: string,
   fields: string,
   failureLabel: string,
-  signal?: AbortSignal
-): Promise<DriveFolderItem[]> {
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=name&pageSize=${PAGINATION_PAGE_SIZE}`;
-  const all: DriveFolderItem[] = [];
+  signal?: AbortSignal,
+  orderBy: string = 'name'
+): Promise<T[]> {
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=${orderBy}&pageSize=${PAGINATION_PAGE_SIZE}`;
+  const all: T[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
     if (signal?.aborted) break;
@@ -346,12 +350,24 @@ async function fetchAllFolderPages(
     if (!response.ok) {
       throw new Error(`Failed to ${failureLabel} (${response.status})`);
     }
-    const data = (await response.json()) as DriveFoldersListResponse;
+    const data = (await response.json()) as { files?: T[]; nextPageToken?: string };
     if (data.files) all.push(...data.files);
     pageToken = data.nextPageToken;
     if (!pageToken) break;
   }
   return all;
+}
+
+// Folder-typed wrapper around the generic paginator; keeps the folder listers
+// reading at the DriveFolderItem level (behavior and signature unchanged).
+async function fetchAllFolderPages(
+  token: string,
+  query: string,
+  fields: string,
+  failureLabel: string,
+  signal?: AbortSignal
+): Promise<DriveFolderItem[]> {
+  return fetchAllPages<DriveFolderItem>(token, query, fields, failureLabel, signal);
 }
 
 // Search for folders matching a fully-built Drive query string.
@@ -402,27 +418,14 @@ export async function getFileName(token: string, fileId: string, signal?: AbortS
 // the fields mask — Drive's partial response drops it otherwise. Keep
 // orderBy=folder,name so folders sort before files in the trash screen.
 export async function getTrashedFiles(token: string, query: string, signal?: AbortSignal): Promise<DriveFileItem[]> {
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType)&orderBy=folder,name&pageSize=${PAGINATION_PAGE_SIZE}`;
-  const all: DriveFileItem[] = [];
-  let pageToken: string | undefined;
-  for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
-    if (signal?.aborted) break;
-    const url = pageToken
-      ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}`
-      : baseUrl;
-    const response = await driveFetch(url, {
-      headers: { 'Authorization': `Bearer ${token}` },
-      signal
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch trashed files (${response.status})`);
-    }
-    const data = (await response.json()) as DriveFilesListResponse;
-    if (data.files) all.push(...data.files);
-    pageToken = data.nextPageToken;
-    if (!pageToken) break;
-  }
-  return all;
+  return fetchAllPages<DriveFileItem>(
+    token,
+    query,
+    'nextPageToken,files(id,name,mimeType)',
+    'fetch trashed files',
+    signal,
+    'folder,name'
+  );
 }
 
 // App Configuration in appDataFolder

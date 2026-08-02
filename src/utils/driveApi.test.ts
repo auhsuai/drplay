@@ -318,6 +318,28 @@ describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
     expect(urls[0]).not.toContain("pageToken=");
   });
 
+  // Behavior contract for the generic paginator: the folder path must keep
+  // orderBy=name and pageSize bound exactly as before the deduplication.
+  it("searchFolders keeps orderBy=name and pageSize in the request URL", async () => {
+    const urls = captureUrls([{ files: makeFiles(2, "z") }]);
+
+    await searchFolders("tok", "name contains 'foo'");
+
+    expect(urls[0]).toContain("orderBy=name");
+    expect(urls[0]).toContain("pageSize=1000");
+  });
+
+  // Error format is part of the public contract (callers surface it in the UI);
+  // a 404 (non-retryable) must reject with the exact label + status.
+  it("searchFolders throws `Failed to search folders (status)` on a non-ok response", async () => {
+    mockedFetch.mockResolvedValueOnce(makeResponse(404));
+
+    await expect(searchFolders("tok", "name contains 'foo'")).rejects.toThrow(
+      "Failed to search folders (404)"
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
   // Variation: a server that keeps handing out nextPageToken forever must not
   // turn the loop into an infinite fetch — it stops at MAX_PAGINATION_PAGES.
   it("searchFolders stops at the pagination page cap instead of looping forever", async () => {
@@ -415,6 +437,28 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
     expect(result).toHaveLength(3);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(urls[0]).not.toContain("pageToken=");
+  });
+
+  // Behavior contract: the trash screen sorts folders before files via
+  // orderBy=folder,name. A generic paginator defaulting to orderBy=name would
+  // silently change the displayed order — the trash path must keep it.
+  it("keeps orderBy=folder,name so folders sort before files in the trash screen", async () => {
+    const urls = captureTrashedUrls([{ files: makeTrashed(2, "z") }]);
+
+    await getTrashedFiles("tok", "trashed=true");
+
+    expect(urls[0]).toContain("orderBy=folder,name");
+  });
+
+  // Error format is part of the public contract; a 404 must reject with the
+  // exact same message the single-loop implementation produced.
+  it("throws `Failed to fetch trashed files (status)` on a non-ok response", async () => {
+    mockedFetch.mockResolvedValueOnce(makeResponse(404));
+
+    await expect(getTrashedFiles("tok", "trashed=true")).rejects.toThrow(
+      "Failed to fetch trashed files (404)"
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 
   // Variation: a server that keeps issuing nextPageToken forever must stop at
