@@ -1,28 +1,13 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getValidToken } from '../utils/apiClient';
+import { classifyDriveError, mergeWithTimeoutSignal } from '../utils/driveApi';
 import { getTrackMetadata } from '../utils/metadata';
 import { captureError } from '../utils/errorLog';
 
 const TAURI_EVENT_QUOTA = 'drive-quota-exceeded';
 const TAURI_EVENT_REPAIR_THUMBNAIL = 'repair-missing-thumbnail';
 const WINDOW_EVENT_METADATA_UPDATED = 'metadata-updated';
-
-function classifyAppError(err: unknown): string {
-  const msg =
-    err instanceof Error
-      ? err.message
-      : typeof err === "string"
-        ? err
-        : "unknown-error";
-  const m = msg.toLowerCase();
-  if (m.includes("timeout") || m.includes("aborterror")) return "timeout";
-  if (m.includes("network") || m.includes("failed to fetch") || m.includes("unreachable"))
-    return "network";
-  const statusMatch = m.match(/\((\d{3})\)/);
-  if (statusMatch) return `http-${statusMatch[1]}`;
-  return "unknown";
-}
 
 // Cover thumbnails are uploaded to the local proxy server; 30s is generous for
 // a multi-MB full-size cover yet still bounds a stalled upload. AbortSignal.timeout
@@ -75,10 +60,9 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
         const meta = await getTrackMetadata(event.payload.driveFileId, token, undefined, undefined, undefined, true);
 
         // Merge the unmount-cancel signal with a bounded timeout so a stalled
-        // upload cannot hang the handler (MDN AbortSignal.any / timeout).
-        const signal = typeof AbortSignal.any === 'function'
-          ? AbortSignal.any([controller.signal, AbortSignal.timeout(COVER_UPLOAD_TIMEOUT_MS)])
-          : controller.signal;
+        // upload cannot hang the handler (MDN AbortSignal.any / timeout). Same
+        // helper as useMenuDownload.ts / useDrive.ts.
+        const signal = mergeWithTimeoutSignal(controller.signal, COVER_UPLOAD_TIMEOUT_MS);
 
         if (meta.pictureData) {
           try {
@@ -105,7 +89,7 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
 
         window.dispatchEvent(new CustomEvent(WINDOW_EVENT_METADATA_UPDATED, { detail: { fileId: event.payload.driveFileId } }));
       } catch (e: unknown) {
-        captureError({ level: 'warn', source: 'useTauriEvents', message: `Repair thumbnail failed for ${event.payload.driveFileId}: ${classifyAppError(e)}` });
+        captureError({ level: 'warn', source: 'useTauriEvents', message: `Repair thumbnail failed for ${event.payload.driveFileId}: ${classifyDriveError(e)}` });
       }
     }).then(fn => {
       if (cancelled) { fn(); return; }

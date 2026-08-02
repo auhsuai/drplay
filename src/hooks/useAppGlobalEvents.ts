@@ -1,35 +1,34 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { getValidToken } from '../utils/apiClient';
 import { captureError } from '../utils/errorLog';
 
 export function useAppGlobalEvents(handleLogout: () => void) {
-  const [isFocused, setIsFocused] = useState(true);
-
   useEffect(() => {
     const handleFocus = () => {
-      setIsFocused(true);
       // The proactive-refresh setTimeout is frozen while the OS sleeps / the app
       // is suspended. On regaining focus, refresh if the token is stale so the
       // next play doesn't hit the proxy with an expired token. Guard on
       // refresh_token presence to avoid triggering the logout path when signed out.
-      if (localStorage.getItem("drplay_access_token") && localStorage.getItem("drplay_refresh_token")) {
+      let hasTokens = false;
+      try {
+        hasTokens = !!(localStorage.getItem("drplay_access_token") && localStorage.getItem("drplay_refresh_token"));
+      } catch {
+        // Storage can throw (privacy mode / quota); a read failure must not
+        // crash focus handling — skip the refresh and let the next play fail.
+        captureError({ level: 'warn', source: 'useAppGlobalEvents', message: 'auth-storage-read-failed' });
+      }
+      if (hasTokens) {
         getValidToken().catch(e => captureError({ level: 'warn', source: 'useAppGlobalEvents', message: `Focus refresh failed: ${e instanceof Error ? e.message : String(e)}` }));
       }
     };
     
-    const handleBlur = () => setIsFocused(false);
-    
     const preventContextMenu = (e: MouseEvent) => e.preventDefault();
     
     window.addEventListener("focus", handleFocus);
-    window.addEventListener("blur", handleBlur);
     document.addEventListener('contextmenu', preventContextMenu);
-    
-    setIsFocused(document.hasFocus());
     
     return () => {
       window.removeEventListener("focus", handleFocus);
-      window.removeEventListener("blur", handleBlur);
       document.removeEventListener('contextmenu', preventContextMenu);
     };
   }, []);
@@ -42,6 +41,4 @@ export function useAppGlobalEvents(handleLogout: () => void) {
     window.addEventListener('auth-logout', handleAuthLogout);
     return () => window.removeEventListener('auth-logout', handleAuthLogout);
   }, [handleLogout]);
-
-  return { isFocused };
 }

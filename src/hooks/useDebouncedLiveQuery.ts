@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, DependencyList } from 'react';
+import { captureError } from '../utils/errorLog';
 
 export function useDebouncedLiveQuery<T>(
   querier: () => Promise<T>,
@@ -12,15 +13,21 @@ export function useDebouncedLiveQuery<T>(
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(async () => {
-      const data = await querierRef.current();
-      if (!cancelled) setResult(data);
+      try {
+        const data = await querierRef.current();
+        if (!cancelled) setResult(data);
+      } catch {
+        // A failed query must not clear the last good data — keep showing it
+        // and surface the failure through observability only.
+        captureError({ level: 'warn', source: 'useDebouncedLiveQuery', message: 'debounced-query-failed' });
+      }
     }, delayMs);
     
     return () => { 
       cancelled = true; 
       clearTimeout(timer); 
     };
-  }, deps);
+  }, [...deps, delayMs]);
 
   return result;
 }
