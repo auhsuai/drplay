@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   prefetchNextTrackAudio,
   clearNextTrackPrefetches,
@@ -9,6 +9,16 @@ vi.mock('./errorLog', () => ({
 }));
 
 import { captureError } from './errorLog';
+
+async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('waitUntil timed out');
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 describe('nextTrackPrefetcher LRU', () => {
   beforeEach(() => {
@@ -130,6 +140,79 @@ describe('nextTrackPrefetcher body release (#7)', () => {
     expect(callArg.source).toBe('nextTrackPrefetcher');
     expect(callArg.message).toContain('Prefetch body cancel failed');
     expect(callArg.message).not.toContain('cancel-fail');
+
+    fetchSpy.mockRestore();
+  });
+});
+
+describe('nextTrackPrefetcher AbortSignal composition', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearNextTrackPrefetches();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('classifies a real timeout (TimeoutError DOMException) as (timeout)', async () => {
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => originalTimeout(20));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+        })
+    );
+
+    prefetchNextTrackAudio('https://x/timing-out');
+    await waitUntil(() => vi.mocked(captureError).mock.calls.length > 0);
+
+    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    expect(callArg.message).toContain('(timeout)');
+    expect(callArg.message).not.toContain('(aborted)');
+  });
+
+  it('evicts only the oldest in-flight controller and leaves no manual timers behind', () => {
+    vi.useFakeTimers();
+    const aborted: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((url, init) => {
+      init?.signal?.addEventListener('abort', () => aborted.push(String(url)));
+      return Promise.resolve(new Response('', { status: 200 }));
+    });
+
+    const urls = ['a', 'b', 'c', 'd'].map((u) => `https://x/${u}`);
+    urls.forEach((u) => prefetchNextTrackAudio(u));
+
+    expect(aborted).toEqual([urls[0]]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    prefetchNextTrackAudio(urls[0]);
+    expect(aborted).toEqual([urls[0], urls[1]]);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+
+    fetchSpy.mockRestore();
+  });
+
+  it('clearNextTrackPrefetches aborts every controller and empties the maps', () => {
+    vi.useFakeTimers();
+    const aborted: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((url, init) => {
+      init?.signal?.addEventListener('abort', () => aborted.push(String(url)));
+      return Promise.resolve(new Response('', { status: 200 }));
+    });
+
+    const urls = ['a', 'b'].map((u) => `https://x/${u}`);
+    urls.forEach((u) => prefetchNextTrackAudio(u));
+    expect(aborted).toEqual([]);
+
+    clearNextTrackPrefetches();
+    expect(aborted.sort()).toEqual([...urls].sort());
+    expect(vi.getTimerCount()).toBe(0);
+
+    prefetchNextTrackAudio(urls[0]);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
 
     fetchSpy.mockRestore();
   });

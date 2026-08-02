@@ -2,9 +2,11 @@ import { captureError } from './errorLog';
 
 const MAX_CONCURRENT = 3;
 const PREFETCH_TIMEOUT_MS = 15000;
+// 512 KiB window; Range byte offsets are zero-indexed and end-inclusive
+// (MDN Range header), so end = PREFETCH_RANGE_BYTES - 1.
+const PREFETCH_RANGE_BYTES = 512 * 1024;
 
 const abortControllers = new Map<string, AbortController>();
-const timeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
 function touch(url: string, controller: AbortController): void {
   abortControllers.delete(url);
@@ -16,17 +18,14 @@ function evictOldest(): void {
   if (oldest === undefined) return;
   abortControllers.get(oldest)?.abort();
   abortControllers.delete(oldest);
-  const t = timeouts.get(oldest);
-  if (t !== undefined) {
-    clearTimeout(t);
-    timeouts.delete(oldest);
-  }
 }
 
-function classifyError(err: unknown): 'timeout' | 'network' | 'unknown' {
-  const message = err instanceof Error ? err.message : String(err);
-  if (/timeout|abort|aborted/i.test(message)) return 'timeout';
-  if (/network|fetch|failed|econn|enotfound|ECONNRESET/i.test(message)) return 'network';
+function classifyError(err: unknown): 'timeout' | 'aborted' | 'network' | 'unknown' {
+  if (err instanceof DOMException) {
+    if (err.name === 'TimeoutError') return 'timeout';
+    if (err.name === 'AbortError') return 'aborted';
+  }
+  if (err instanceof TypeError) return 'network';
   return 'unknown';
 }
 
@@ -38,12 +37,10 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
 
   const controller = new AbortController();
   touch(streamUrl, controller);
-  const timeout = setTimeout(() => controller.abort(), PREFETCH_TIMEOUT_MS);
-  timeouts.set(streamUrl, timeout);
 
   fetch(streamUrl, {
-    headers: { Range: 'bytes=0-524287' },
-    signal: controller.signal,
+    headers: { Range: `bytes=0-${PREFETCH_RANGE_BYTES - 1}` },
+    signal: AbortSignal.any([controller.signal, AbortSignal.timeout(PREFETCH_TIMEOUT_MS)]),
   })
     .then((response) => {
       if (!response.ok) return;
@@ -69,8 +66,6 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
       });
     })
     .finally(() => {
-      clearTimeout(timeouts.get(streamUrl));
-      timeouts.delete(streamUrl);
       abortControllers.delete(streamUrl);
     });
 }
@@ -80,8 +75,4 @@ export function clearNextTrackPrefetches(): void {
     controller.abort();
   }
   abortControllers.clear();
-  for (const t of timeouts.values()) {
-    clearTimeout(t);
-  }
-  timeouts.clear();
 }
