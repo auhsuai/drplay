@@ -25,6 +25,8 @@
     "fs:allow-read-file",
     "fs:allow-read-dir",
     "fs:allow-stat",
+    "fs:allow-open",
+    "fs:allow-read",
     "http:default",
     {
       "identifier": "http:default",

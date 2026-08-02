@@ -14,7 +14,14 @@ const FS_STAT_CMD = 'plugin:fs|stat';
 // resource id (rid) that sequential read() calls consume, and close releases.
 const FS_OPEN_CMD = 'plugin:fs|open';
 const FS_READ_CMD = 'plugin:fs|read';
-const FS_CLOSE_CMD = 'plugin:fs|close';
+// tauri-plugin-fs v2 has NO `plugin:fs|close` command (verified in
+// tauri-plugin-fs 2.5.1 lib.rs invoke_handler: only create/open/read/seek/
+// fstat/... are registered). File handles are core Resources: the official
+// guest-js `FileHandle.close()` falls back to core Resource.close(), which
+// invokes `plugin:resources|close` (core.js:272). That core command is
+// enabled by default (`core:resources` allow-close in tauri build.rs
+// core:default), so no capability change is required.
+const FS_CLOSE_CMD = 'plugin:resources|close';
 
 // Default streaming read granularity. The Drive resumable protocol requires
 // upload chunks to be multiples of 256 KiB (except the final chunk), and 8 MiB

@@ -353,13 +353,13 @@ describe('openDiskReadStream', () => {
     expect(Array.from(chunk!)).toEqual([9, 8, 7]);
   });
 
-  it('close() invokes plugin:fs|close with the rid', async () => {
+  it('close() invokes the core resources close command with the rid', async () => {
     invokeMock.mockResolvedValue(RID);
 
     const stream = await openDiskReadStream(PATH);
     await stream.close();
 
-    expect(invokeMock).toHaveBeenCalledWith('plugin:fs|close', { rid: RID });
+    expect(invokeMock).toHaveBeenCalledWith('plugin:resources|close', { rid: RID });
   });
 
   it('close() failure is logged, not thrown (finally must not mask primary errors)', async () => {
