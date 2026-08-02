@@ -39,7 +39,9 @@ export async function addFavorite(track: Track): Promise<void> {
   try {
     const email = getCurrentUserEmail();
     await db.transaction('rw', db.favorites, async () => {
-      const existing = await db.favorites.get(track.id);
+      // Compound PK [userEmail+id] (schema v7): guard must not see another
+      // user's favorite of the same track as "already exists".
+      const existing = await db.favorites.get([email, track.id]);
       if (!existing) {
         await db.favorites.put({
           ...track,
@@ -61,7 +63,10 @@ export async function addFavorite(track: Track): Promise<void> {
 
 export async function removeFavorite(trackId: string): Promise<void> {
   try {
-    await db.favorites.delete(trackId);
+    // Compound PK [userEmail+id] (schema v7): delete only this user's row,
+    // never another user's favorite of the same track.
+    const email = getCurrentUserEmail();
+    await db.favorites.delete([email, trackId]);
     window.dispatchEvent(new CustomEvent('favorites-updated'));
   } catch (e: unknown) {
     captureError({
@@ -75,7 +80,10 @@ export async function removeFavorite(trackId: string): Promise<void> {
 
 export async function isFavorite(trackId: string): Promise<boolean> {
   try {
-    const fav = await db.favorites.get(trackId);
+    // Compound PK [userEmail+id] (schema v7): must not report another user's
+    // favorite of the same track as liked by the current user.
+    const email = getCurrentUserEmail();
+    const fav = await db.favorites.get([email, trackId]);
     return !!fav;
   } catch (e: unknown) {
     captureError({

@@ -38,14 +38,19 @@ export interface MetadataCacheRow { key: string; entry: unknown; }
 export class DriveDatabase extends Dexie {
   files!: Table<DriveFile, string>; // Primary key is 'id'
   syncState!: Table<SyncState, string>; // Primary key is 'key'
-  favorites!: Table<Track & { userEmail: string; createdAt?: number }, string>; // Primary key is 'id', we store Track objects with an added userEmail index
+  favorites!: Table<Track & { userEmail: string; createdAt?: number }, [string, string]>; // Compound PK [userEmail+id] (schema v7)
   errorLogs!: Table<ErrorLogEntry, string>; // Primary key is 'id', index on 'ts'
   kv!: Table<KvRow, string>;
   playlists!: Table<PlaylistRow, string>;
-  recentTracks!: Table<RecentTrackRow, string>;
-  playCounts!: Table<PlayCountRow, string>;
-  folderVisits!: Table<FolderVisitRow, string>;
+  recentTracks!: Table<RecentTrackRow, [string, string]>;
+  playCounts!: Table<PlayCountRow, [string, string]>;
+  folderVisits!: Table<FolderVisitRow, [string, string]>;
   metadataCache!: Table<MetadataCacheRow, string>;
+  // Compound-key tables that replaced the raw-id versions (schema v7).
+  recentTracksV2!: Table<RecentTrackRow, [string, string]>;
+  playCountsV2!: Table<PlayCountRow, [string, string]>;
+  folderVisitsV2!: Table<FolderVisitRow, [string, string]>;
+  favoritesV2!: Table<Track & { userEmail: string; createdAt?: number }, [string, string]>;
 
   constructor() {
     super('DrPlayDriveDB');
@@ -115,6 +120,58 @@ export class DriveDatabase extends Dexie {
       folderVisits: 'id, userEmail, [userEmail+count]',
       metadataCache: 'key'
     });
+
+    // Version 7 fixes the cross-user primary-key collision: the 4 per-user
+    // tables were keyed by RAW id (track.id / folderId) with userEmail only
+    // an index, so two users playing/favoriting/visiting the SAME id
+    // overwrote each other's rows (IndexedDB put() is keyed by primary key).
+    // Changing the PK of an existing table in-place throws UpgradeError, so
+    // this version adds NEW tables with compound [userEmail+id] primary keys
+    // and copies the old rows into them. Queries keep working because the
+    // first part of a compound key is an implicit index (where('userEmail')
+    // stays valid) and put({id, userEmail, ...}) auto-builds the compound
+    // key from the keyPath.
+    this.version(7).stores({
+      files: 'id, parentId, name, isFolder',
+      syncState: 'key',
+      favorites: 'id, userEmail',
+      errorLogs: 'id, ts',
+      kv: 'key',
+      playlists: 'id, userEmail',
+      recentTracks: 'id, userEmail, createdAt, [userEmail+createdAt]',
+      playCounts: 'id, userEmail, [userEmail+count]',
+      folderVisits: 'id, userEmail, [userEmail+count]',
+      metadataCache: 'key',
+      recentTracksV2: '[userEmail+id], createdAt, [userEmail+createdAt]',
+      playCountsV2: '[userEmail+id], [userEmail+count]',
+      folderVisitsV2: '[userEmail+id], [userEmail+count]',
+      favoritesV2: '[userEmail+id], createdAt'
+    }).upgrade(async (tx) => {
+      await tx.table('recentTracksV2').bulkPut(await tx.table('recentTracks').toArray());
+      await tx.table('playCountsV2').bulkPut(await tx.table('playCounts').toArray());
+      await tx.table('folderVisitsV2').bulkPut(await tx.table('folderVisits').toArray());
+      await tx.table('favoritesV2').bulkPut(await tx.table('favorites').toArray());
+    });
+
+    // Version 8 drops the obsolete raw-id tables now that every row lives in
+    // the compound-key V2 tables.
+    this.version(8).stores({
+      favorites: null,
+      recentTracks: null,
+      playCounts: null,
+      folderVisits: null,
+      recentTracksV2: '[userEmail+id], createdAt, [userEmail+createdAt]',
+      playCountsV2: '[userEmail+id], [userEmail+count]',
+      folderVisitsV2: '[userEmail+id], [userEmail+count]',
+      favoritesV2: '[userEmail+id], createdAt'
+    });
+
+    // Bind the public table names to the new compound-key tables so app code
+    // (history.ts / favorites.ts) keeps talking to db.recentTracks etc.
+    this.recentTracks = this.recentTracksV2;
+    this.playCounts = this.playCountsV2;
+    this.folderVisits = this.folderVisitsV2;
+    this.favorites = this.favoritesV2;
   }
 }
 

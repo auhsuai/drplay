@@ -40,15 +40,16 @@ export async function recordPlay(track: Track) {
   const email = currentUserEmail();
   try {
     await db.transaction('rw', [db.recentTracks, db.playCounts], async () => {
-      const existing = await db.recentTracks.where('userEmail').equals(email).and((r) => r.id === track.id).toArray();
-      if (existing.length) {
-        await db.recentTracks.delete(existing[0].id);
+      // Compound PK [userEmail+id] (schema v7): the row is addressable by its
+      // exact key — no need to scan + filter by id like the old raw-id schema.
+      const existing = await db.recentTracks.get([email, track.id]);
+      if (existing) {
+        await db.recentTracks.delete([email, track.id]);
       }
       await db.recentTracks.put({ id: track.id, track, userEmail: email, createdAt: Date.now() });
       await pruneRecentTracks(email);
 
-      const countRows = await db.playCounts.where('userEmail').equals(email).and((r) => r.id === track.id).toArray();
-      const countRow = countRows[0];
+      const countRow = await db.playCounts.get([email, track.id]);
       const nextCount = (countRow?.count || 0) + 1;
       await db.playCounts.put({ id: track.id, track, count: nextCount, userEmail: email });
       await prunePlayCounts(email);
@@ -77,7 +78,8 @@ async function prunePlayCounts(email: string): Promise<void> {
     if (excess <= 0) return;
     const evict = await range.limit(excess).toArray();
     if (evict.length === 0) return;
-    await db.playCounts.bulkDelete(evict.map((r) => r.id));
+    // Compound PK [userEmail+id] (schema v7) — bulkDelete needs full keys.
+    await db.playCounts.bulkDelete(evict.map((r): [string, string] => [r.userEmail, r.id]));
   } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
     captureError({ level: 'error', source: HISTORY_MODULE, message: `playCounts-prune-failed: ${classifyHistoryError(e)}` });
@@ -195,8 +197,9 @@ export async function recordFolderVisit(folderId: string, folderName: string) {
   const email = currentUserEmail();
   try {
     await db.transaction('rw', [db.folderVisits], async () => {
-      const existingRows = await db.folderVisits.where('userEmail').equals(email).and((r) => r.id === folderId).toArray();
-      const existing = existingRows[0];
+      // Compound PK [userEmail+id] (schema v7): the row is addressable by its
+      // exact key — no need to scan + filter by id like the old raw-id schema.
+      const existing = await db.folderVisits.get([email, folderId]);
       const now = Date.now();
       const count = (existing?.count || 0) + 1;
       await db.folderVisits.put({ id: folderId, name: folderName, count, lastVisited: now, userEmail: email });
@@ -223,7 +226,8 @@ async function pruneFolderVisits(email: string): Promise<void> {
     if (excess <= 0) return;
     const evict = await range.limit(excess).toArray();
     if (evict.length === 0) return;
-    await db.folderVisits.bulkDelete(evict.map((r) => r.id));
+    // Compound PK [userEmail+id] (schema v7) — bulkDelete needs full keys.
+    await db.folderVisits.bulkDelete(evict.map((r): [string, string] => [r.userEmail, r.id]));
   } catch (e: unknown) {
     // Prune failure must not lose the visit record — log with context only.
     captureError({ level: 'error', source: HISTORY_MODULE, message: `folderVisits-prune-failed: ${classifyHistoryError(e)}` });

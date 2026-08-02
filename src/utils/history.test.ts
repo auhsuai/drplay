@@ -13,6 +13,7 @@ import {
   FolderVisitEntry,
 } from './history';
 import * as errorLog from './errorLog';
+import { addFavorite, getFavorites, isFavorite, removeFavorite } from './favorites';
 
 const TRACK: any = { id: 't1', title: 'Song One', artist: 'Artist A', streamUrl: 'x' };
 const TRACK2: any = { id: 't2', title: 'Song Two', artist: 'Artist B', streamUrl: 'y' };
@@ -153,9 +154,9 @@ describe('history (Dexie-backed)', () => {
     expect(count).toBeLessThanOrEqual(1000);
     expect(count).toBe(1000);
 
-    const newest = await db.recentTracks.get(TRACK.id);
+    const newest = await db.recentTracks.get(['default', TRACK.id]);
     expect(newest).toBeDefined();
-    const oldest = await db.recentTracks.get('seed_0');
+    const oldest = await db.recentTracks.get(['default', 'seed_0']);
     expect(oldest).toBeUndefined();
   });
 
@@ -221,9 +222,9 @@ describe('history (Dexie-backed)', () => {
     const bCount = await db.recentTracks.where('userEmail').equals('b@x.com').count();
     expect(aCount).toBe(1000);
     expect(bCount).toBe(3);
-    expect(await db.recentTracks.get('a_new')).toBeDefined();
-    expect(await db.recentTracks.get('b_2')).toBeDefined();
-    expect(await db.recentTracks.get('a_seed_0')).toBeUndefined();
+    expect(await db.recentTracks.get(['a@x.com', 'a_new'])).toBeDefined();
+    expect(await db.recentTracks.get(['b@x.com', 'b_2'])).toBeDefined();
+    expect(await db.recentTracks.get(['a@x.com', 'a_seed_0'])).toBeUndefined();
   });
 
   it('#playCounts cap: recordPlay prunes playCounts to PLAY_COUNT_CAP (1000) on write', async () => {
@@ -242,11 +243,11 @@ describe('history (Dexie-backed)', () => {
     await recordPlay(TRACK);
 
     expect(await db.playCounts.count()).toBe(1000);
-    const updated = await db.playCounts.get('t1');
+    const updated = await db.playCounts.get(['default', 't1']);
     expect(updated).toBeDefined();
     expect(updated?.count).toBe(51);
-    for (let i = 0; i < 5; i++) expect(await db.playCounts.get(`pseed_${i}`)).toBeUndefined();
-    for (let i = 5; i < 1004; i++) expect(await db.playCounts.get(`pseed_${i}`)).toBeDefined();
+    for (let i = 0; i < 5; i++) expect(await db.playCounts.get(['default', `pseed_${i}`])).toBeUndefined();
+    for (let i = 5; i < 1004; i++) expect(await db.playCounts.get(['default', `pseed_${i}`])).toBeDefined();
   });
 
   it('#playCounts cap variant: getHeavyRotation returns top 10 by count from the index', async () => {
@@ -295,10 +296,10 @@ describe('history (Dexie-backed)', () => {
     const bCount = await db.playCounts.where('userEmail').equals('b@x.com').count();
     expect(aCount).toBe(1000);
     expect(bCount).toBe(1);
-    expect(await db.playCounts.get('a_t')).toBeDefined();
-    expect(await db.playCounts.get('a_p_5')).toBeDefined();
-    expect(await db.playCounts.get('a_p_0')).toBeUndefined();
-    expect(await db.playCounts.get('b_1')).toBeDefined();
+    expect(await db.playCounts.get(['a@x.com', 'a_t'])).toBeDefined();
+    expect(await db.playCounts.get(['a@x.com', 'a_p_5'])).toBeDefined();
+    expect(await db.playCounts.get(['a@x.com', 'a_p_0'])).toBeUndefined();
+    expect(await db.playCounts.get(['b@x.com', 'b_1'])).toBeDefined();
   });
 
   it('#playCounts cap variant: small number of plays never loses data', async () => {
@@ -327,11 +328,11 @@ describe('history (Dexie-backed)', () => {
     await recordFolderVisit('f_new', 'New');
 
     expect(await db.folderVisits.count()).toBe(1000);
-    const updated = await db.folderVisits.get('f_new');
+    const updated = await db.folderVisits.get(['default', 'f_new']);
     expect(updated).toBeDefined();
     expect(updated?.count).toBe(2001);
-    for (let i = 0; i < 5; i++) expect(await db.folderVisits.get(`fseed_${i}`)).toBeUndefined();
-    for (let i = 5; i < 1004; i++) expect(await db.folderVisits.get(`fseed_${i}`)).toBeDefined();
+    for (let i = 0; i < 5; i++) expect(await db.folderVisits.get(['default', `fseed_${i}`])).toBeUndefined();
+    for (let i = 5; i < 1004; i++) expect(await db.folderVisits.get(['default', `fseed_${i}`])).toBeDefined();
     const top = await getMostVisitedFolders();
     expect(top[0].id).toBe('f_new');
   });
@@ -345,7 +346,7 @@ describe('history (Dexie-backed)', () => {
   it('recordPlay transaction guard: consecutive plays of same track increment count to 2 (no lost update)', async () => {
     await recordPlay(TRACK);
     await recordPlay(TRACK);
-    const row = await db.playCounts.get(TRACK.id);
+    const row = await db.playCounts.get(['default', TRACK.id]);
     expect(row?.count).toBe(2);
   });
 
@@ -353,7 +354,7 @@ describe('history (Dexie-backed)', () => {
     await recordFolderVisit('f9', 'Folder Nine');
     await recordFolderVisit('f9', 'Folder Nine');
     await recordFolderVisit('f9', 'Folder Nine');
-    const row = await db.folderVisits.get('f9');
+    const row = await db.folderVisits.get(['default', 'f9']);
     expect(row?.count).toBe(3);
   });
 
@@ -366,5 +367,137 @@ describe('history (Dexie-backed)', () => {
     const call = captureSpy.mock.calls[0][0] as { message: string };
     expect(call.message).toContain('recordPlay-failed');
     expect(call.message).toContain('Error: boom');
+  });
+});
+
+// #PK-collision regression: tables are keyed by RAW id (track.id / folderId)
+// while data is per-user. Two users playing/favoriting/visiting the SAME id
+// must keep independent rows. On the current schema (PK = id, userEmail is
+// only an index) the second user's put() overwrites the first user's row
+// because IndexedDB put() is keyed by primary key.
+describe('PK collision cross-user (regression)', () => {
+  beforeEach(async () => {
+    await db.recentTracks.clear();
+    await db.playCounts.clear();
+    await db.folderVisits.clear();
+    await db.favorites.clear();
+  });
+
+  it('recentTracks: user B playing the same track does not erase user A history', async () => {
+    setUser('a@x.com');
+    await recordPlay(TRACK); // A plays t1
+    setUser('b@x.com');
+    await recordPlay(TRACK); // B plays the SAME track t1
+
+    setUser('a@x.com');
+    const aRecents = await getRecentlyPlayed();
+    expect(aRecents.map((t: any) => t.id)).toEqual(['t1']);
+
+    const aRows = await db.recentTracks.where('userEmail').equals('a@x.com').toArray();
+    const bRows = await db.recentTracks.where('userEmail').equals('b@x.com').toArray();
+    expect(aRows).toHaveLength(1);
+    expect(bRows).toHaveLength(1);
+    expect(await db.recentTracks.count()).toBe(2);
+  });
+
+  it('playCounts: play counts of the same track stay independent per user (no merging)', async () => {
+    setUser('a@x.com');
+    for (let i = 0; i < 3; i++) await recordPlay(TRACK); // A plays t1 3 times
+    setUser('b@x.com');
+    for (let i = 0; i < 2; i++) await recordPlay(TRACK); // B plays t1 2 times
+
+    const aRow = await db.playCounts.where('userEmail').equals('a@x.com').and((r) => r.id === 't1').first();
+    const bRow = await db.playCounts.where('userEmail').equals('b@x.com').and((r) => r.id === 't1').first();
+    expect(aRow?.count).toBe(3);
+    expect(bRow?.count).toBe(2);
+    expect(await db.playCounts.count()).toBe(2);
+
+    setUser('a@x.com');
+    const aHeavy = await getHeavyRotation();
+    expect(aHeavy.map((t: any) => t.id)).toEqual(['t1']);
+    setUser('b@x.com');
+    const bHeavy = await getHeavyRotation();
+    expect(bHeavy.map((t: any) => t.id)).toEqual(['t1']);
+  });
+
+  it('favorites: two users can favorite the same track independently (2 rows)', async () => {
+    setUser('a@x.com');
+    await addFavorite(TRACK);
+    setUser('b@x.com');
+    await addFavorite(TRACK);
+
+    expect(await db.favorites.count()).toBe(2);
+    const aRows = await db.favorites.where('userEmail').equals('a@x.com').toArray();
+    const bRows = await db.favorites.where('userEmail').equals('b@x.com').toArray();
+    expect(aRows).toHaveLength(1);
+    expect(bRows).toHaveLength(1);
+
+    setUser('a@x.com');
+    expect(await isFavorite('t1')).toBe(true);
+    expect((await getFavorites()).map((t: any) => t.id)).toEqual(['t1']);
+    setUser('b@x.com');
+    expect(await isFavorite('t1')).toBe(true);
+    expect((await getFavorites()).map((t: any) => t.id)).toEqual(['t1']);
+  });
+
+  it('favorites: user B removing their favorite must not delete user A favorite', async () => {
+    setUser('a@x.com');
+    await addFavorite(TRACK);
+    setUser('b@x.com');
+    await addFavorite(TRACK);
+
+    setUser('b@x.com');
+    await removeFavorite('t1');
+
+    expect(await db.favorites.count()).toBe(1);
+    setUser('a@x.com');
+    expect(await isFavorite('t1')).toBe(true);
+    expect((await getFavorites()).map((t: any) => t.id)).toEqual(['t1']);
+    setUser('b@x.com');
+    expect(await isFavorite('t1')).toBe(false);
+  });
+
+  it('folderVisits: visit counts of the same folder stay independent per user', async () => {
+    setUser('a@x.com');
+    for (let i = 0; i < 3; i++) await recordFolderVisit('f1', 'Folder One');
+    setUser('b@x.com');
+    for (let i = 0; i < 2; i++) await recordFolderVisit('f1', 'Folder One');
+
+    const aRow = await db.folderVisits.where('userEmail').equals('a@x.com').and((r) => r.id === 'f1').first();
+    const bRow = await db.folderVisits.where('userEmail').equals('b@x.com').and((r) => r.id === 'f1').first();
+    expect(aRow?.count).toBe(3);
+    expect(bRow?.count).toBe(2);
+    expect(await db.folderVisits.count()).toBe(2);
+
+    setUser('a@x.com');
+    expect((await getMostVisitedFolders()).find((v: FolderVisitEntry) => v.id === 'f1')?.count).toBe(3);
+    setUser('b@x.com');
+    expect((await getMostVisitedFolders()).find((v: FolderVisitEntry) => v.id === 'f1')?.count).toBe(2);
+  });
+
+  it('variant: 3 users playing the same track keep 3 independent play-count rows', async () => {
+    for (const user of ['a@x.com', 'b@x.com', 'c@x.com']) {
+      setUser(user);
+      await recordPlay(TRACK);
+    }
+    setUser('a@x.com');
+    await recordPlay(TRACK); // bump A's count to 2
+
+    expect(await db.playCounts.count()).toBe(3);
+    expect((await db.playCounts.where('userEmail').equals('a@x.com').first())?.count).toBe(2);
+    expect((await db.playCounts.where('userEmail').equals('b@x.com').first())?.count).toBe(1);
+    expect((await db.playCounts.where('userEmail').equals('c@x.com').first())?.count).toBe(1);
+    expect((await db.recentTracks.where('userEmail').equals('a@x.com').toArray()).length).toBe(1);
+  });
+
+  it('variant: the same user playing 2 different tracks keeps both rows', async () => {
+    setUser('a@x.com');
+    await recordPlay(TRACK);
+    await recordPlay(TRACK2);
+
+    const rows = await db.recentTracks.where('userEmail').equals('a@x.com').toArray();
+    expect(rows.map((r) => r.id).sort()).toEqual(['t1', 't2']);
+    expect(await db.recentTracks.count()).toBe(2);
+    expect((await getRecentlyPlayed()).map((t: any) => t.id)).toEqual(['t2', 't1']);
   });
 });

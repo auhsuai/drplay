@@ -4,7 +4,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // In-memory stub for the Dexie `db` module, isolated per test.
 // Mirrors the subset of the real `db.favorites` API used by favorites.ts:
-//   get(id), put(row), delete(id), where('userEmail').equals(email).toArray(), transaction()
+//   get([email,id]), put(row), delete([email,id]),
+//   where('userEmail').equals(email).toArray(), transaction()
 type FavoriteRow = {
   id: string;
   userEmail: string;
@@ -12,19 +13,25 @@ type FavoriteRow = {
   [key: string]: unknown;
 };
 
+// The real table uses the compound PK [userEmail+id] (schema v7), so the stub
+// keys rows by the same pair. NUL joins the parts collision-free (neither
+// emails nor track ids contain NUL).
+type FavoriteKey = [string, string];
+const keyOf = (userEmail: string, id: string) => `${userEmail}\u0000${id}`;
+
 class InMemoryFavorites {
   private rows = new Map<string, FavoriteRow>();
 
-  async get(id: string): Promise<FavoriteRow | undefined> {
-    return this.rows.get(id);
+  async get(id: FavoriteKey): Promise<FavoriteRow | undefined> {
+    return this.rows.get(keyOf(id[0], id[1]));
   }
 
   async put(row: FavoriteRow): Promise<void> {
-    this.rows.set(row.id, row);
+    this.rows.set(keyOf(row.userEmail, row.id), row);
   }
 
-  async delete(id: string): Promise<void> {
-    this.rows.delete(id);
+  async delete(id: FavoriteKey): Promise<void> {
+    this.rows.delete(keyOf(id[0], id[1]));
   }
 
   // Minimal Dexie transaction shim: executes the scope function directly.
@@ -54,9 +61,9 @@ const store = new InMemoryFavorites();
 
 vi.mock('../db/db', () => {
   const favoritesTable = {
-    get: (id: string) => store.get(id),
+    get: (id: FavoriteKey) => store.get(id),
     put: (row: FavoriteRow) => store.put(row),
-    delete: (id: string) => store.delete(id),
+    delete: (id: FavoriteKey) => store.delete(id),
     where: (field: 'userEmail') => store.where(field),
   };
   return {
