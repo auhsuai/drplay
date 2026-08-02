@@ -13,7 +13,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | # | File | Status | Ghi chú |
 |---|------|--------|---------|
 | 1 | `src/utils/driveApi.ts` | ✅ done | timeoutMs forwarded, dead code xoá, DRY assertDriveOk + buildConfigSearchUrl |
-| 2 | `src/utils/apiClient.ts` | ⬜ pending | |
+| 2 | `src/utils/apiClient.ts` | ✅ done | invoke refresh_google_token bọc timeout 15s (Tauri #8351) |
 | 3 | `src/utils/diskFs.ts` | ⬜ pending | |
 | 4 | `src/utils/driveUpload.ts` | ⬜ pending | |
 | 5 | `src/utils/uploadManager.ts` | ⬜ pending | |

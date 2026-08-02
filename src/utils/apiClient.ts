@@ -21,6 +21,11 @@ const MAX_SAFE_TIMEOUT = 2_147_483_647; // 32-bit signed int limit (~24.8 days);
 // the caller indefinitely (checklist: "no timeout on network calls").
 const FETCH_TIMEOUT_MS = 15_000;
 
+// Tauri v2 invoke does not accept an AbortSignal (tauri issue #8351 is still
+// open), so the refresh_google_token call must be bounded by a timeout
+// wrapper — a stalled Rust backend could otherwise hang getValidToken forever.
+const REFRESH_TIMEOUT_MS = 15_000;
+
 const PROACTIVE_REFRESH_MARGIN_SEC = 300;
 const PROACTIVE_REFRESH_MIN_MS = 5000;
 const TOKEN_EXPIRY_MS = 50 * 60 * 1000;
@@ -38,6 +43,23 @@ function classifyRequestError(err: unknown): 'network' | 'timeout' {
     if (err.name === 'TimeoutError' || err.name === 'AbortError') return 'timeout';
   }
   return 'network';
+}
+
+// Bound a promise that cannot be cancelled (Tauri invoke has no AbortSignal,
+// see issue tauri-apps/tauri#8351). The timeout error message must contain
+// "timeout" so callers classifying errors by string keep working. The
+// original promise still gets .then/.catch attached immediately, so a late
+// rejection after the timeout fired is never an unhandled rejection.
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Token refresh timeout (no response within ${ms}ms)`));
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
 }
 
 let isRefreshing = false;
@@ -133,7 +155,7 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
     try {
       let tokenData: TokenData;
       try {
-        tokenData = await invoke<TokenData>("refresh_google_token", { refreshToken });
+        tokenData = await withTimeout(invoke<TokenData>("refresh_google_token", { refreshToken }), REFRESH_TIMEOUT_MS);
       } catch (err: unknown) {
         const errStr = String(err);
         if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {

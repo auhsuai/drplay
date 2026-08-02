@@ -191,3 +191,19 @@ describe('fetchWithAuth', () => {
     expect(fail).toBeNull();
   });
 });
+
+describe('getValidToken invoke timeout', () => {
+  it('does not hang forever when refresh_google_token never settles (bounded by REFRESH_TIMEOUT_MS)', async () => {
+    storage.setItem('drplay_refresh_token', 'rt');
+    vi.useFakeTimers();
+    try {
+      invokeMock.mockReturnValue(new Promise(() => {}));
+      const resultPromise = getValidToken(true);
+      await vi.advanceTimersByTimeAsync(16_000);
+      const result = await resultPromise;
+      expect(result).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
