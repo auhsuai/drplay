@@ -147,10 +147,12 @@ export async function driveFetch(
   }
 }
 
-// Google Drive error responses carry { error: { message, reason } }; only the
-// public message/reason are read (never the raw body — it can embed file ids).
+// Google Drive error responses carry { error: { message, reason } } with the
+// failure reason ALSO inside error.errors[].reason (handle-errors docs — real
+// API shape). Only the public message/reason are read (never the raw body —
+// it can embed file ids).
 export interface DriveErrorBody {
-  error?: { message?: unknown; reason?: unknown };
+  error?: { message?: unknown; reason?: unknown; errors?: Array<{ reason?: unknown }> };
 }
 
 export async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | null> {
@@ -165,12 +167,20 @@ export async function readDriveErrorBody(response: Response): Promise<DriveError
 
 // 403 rate-limit detection: Drive reports usage limits with the official
 // reasons rateLimitExceeded / userRateLimitExceeded (handle-errors docs + the
-// proSync worker precedent). Everything else on 403 (permissions…) is NOT a
-// rate limit and must not be retried.
+// proSync worker precedent). The real API sends the reason inside
+// error.errors[].reason, not error.reason — checking the array first, then
+// falling back to the legacy top-level reason. Everything else on 403
+// (permissions…) is NOT a rate limit and must not be retried.
 function isRateLimitError(status: number, errBody: DriveErrorBody | null): boolean {
   if (status !== 403) return false;
-  const reason = typeof errBody?.error?.reason === 'string' ? errBody.error.reason : '';
-  return DRIVE_RATE_LIMIT_REASONS.has(reason);
+  const reasons = errBody?.error?.errors;
+  if (Array.isArray(reasons)) {
+    for (const r of reasons) {
+      if (typeof r?.reason === 'string' && DRIVE_RATE_LIMIT_REASONS.has(r.reason)) return true;
+    }
+  }
+  const legacy = errBody?.error?.reason;
+  return typeof legacy === 'string' && DRIVE_RATE_LIMIT_REASONS.has(legacy);
 }
 
 // Read a 403 body via a clone so the response handed back to the caller keeps

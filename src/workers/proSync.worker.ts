@@ -1,6 +1,7 @@
 import { db } from '../db/db';
 import type { DriveFile as DriveFileRow } from '../db/db';
 import { getAudioQuery, isAudioFile } from '../utils/audioQuery';
+import { FOLDER_MIME } from '../utils/driveApi';
 import { classifyWorkerError, logWorkerError, WorkerAbortError } from './workerError';
 
 interface DriveFile {
@@ -34,7 +35,6 @@ const RETRY_JITTER_MAX_MS = 500;
 // Google Drive reports rate limiting as 403 with these `error.errors[].reason`
 // values (usage limits): https://developers.google.com/drive/api/guides/handle-errors
 const DRIVE_RATE_LIMIT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded']);
-const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 function toSize(raw: string | undefined | null): number | undefined {
   if (raw === undefined || raw === null || raw === '') return undefined;
@@ -405,7 +405,7 @@ async function performFullSync() {
         }
 
         const filesToInsert = validFiles.map((f: DriveFile) =>
-          toDriveFileRow(f, f.mimeType === FOLDER_MIME_TYPE)
+          toDriveFileRow(f, f.mimeType === FOLDER_MIME)
         );
 
         if (filesToInsert.length > 0) {
@@ -487,7 +487,7 @@ async function performDeltaSync(startPageToken: string) {
             // is accumulated across pages and reported in one summary line
             // after the pagination loop.
             if (!isValidDriveFile(file)) { skippedDeltaFiles += 1; continue; }
-            const isFolder = file.mimeType === FOLDER_MIME_TYPE;
+            const isFolder = file.mimeType === FOLDER_MIME;
 
             if (isFolder || isAudioFile(file.mimeType!, file.name!)) {
               await db.files.put(toDriveFileRow(file, isFolder));

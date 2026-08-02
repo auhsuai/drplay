@@ -1,6 +1,6 @@
 // Shared error classification + safe logging for web workers.
 //
-// Centralises how the scanner/proSync workers turn unknown throwables into a
+// Centralises how the proSync worker turns unknown throwables into a
 // small, typed set of failure kinds (network | timeout | abort | parse |
 // unknown) and how they log without leaking secrets (auth tokens, file ids,
 // local proxy links).

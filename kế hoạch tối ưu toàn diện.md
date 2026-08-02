@@ -15,7 +15,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 1 | `src/utils/driveApi.ts` | ✅ done | timeoutMs forwarded, dead code xoá, DRY assertDriveOk + buildConfigSearchUrl |
 | 2 | `src/utils/apiClient.ts` | ✅ done | invoke refresh_google_token bọc timeout 15s (Tauri #8351) |
 | 3 | `src/utils/diskFs.ts` | ✅ done | đạt chuẩn 2026, không cần nâng cấp (raw invoke = guest-js 2.5.1, verified) |
-| 4 | `src/utils/driveUpload.ts` | ⬜ pending | |
+| 4 | `src/utils/driveUpload.ts` | ✅ done | backoffDelay Retry-After + DRY readDriveErrorBody |
 | 5 | `src/utils/uploadManager.ts` | ✅ done | backoffDelay/sleep chung, xoá dead attempt, type CustomEvent |
 | 6 | `src/utils/drivePagination.ts` | ✅ done | json() malformed guard, classify lỗi thay SyntaxError thô |
 | 7 | `src/utils/cache.ts` | ✅ done | guard removeItem SecurityError, log đúng ngữ cảnh, hằng số chung metadata.ts |
@@ -48,28 +48,28 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 34 | `src/hooks/usePlayer.ts` | ✅ done | DRIVE_STREAM_PREFIX 1 nguồn, isAbortError duck-typed, playmode key, PLAYER_STOP_EVENT |
 | 35 | `src/hooks/player/usePlayerQueue.ts` | ✅ done | SESSION_CLEANUP_KEYS.queueKv, driveItems type-safe, fallbackHead ensureQueueItemId |
 | 36 | `src/hooks/player/usePlayerSession.ts` | ✅ done | import prefix chung + isAbortError (đã xử lý cùng usePlayer) |
-| 37 | `src/hooks/player/utils.ts` | ⬜ pending | |
+| 37 | `src/hooks/player/utils.ts` | ✅ done | isAbortError duck-typed helper chung |
 | 38 | `src/hooks/useAuth.ts` | ✅ done | CLEAR_*_CMD, setAccessToken single-source, localStorage guards, race guard, handler reset |
-| 39 | `src/hooks/useDebouncedLiveQuery.ts` | ⬜ pending | |
-| 40 | `src/hooks/useLocateFile.ts` | ⬜ pending | |
-| 41 | `src/hooks/useMenuDelete.ts` | ⬜ pending | |
-| 42 | `src/hooks/useMenuDownload.ts` | ⬜ pending | |
-| 43 | `src/hooks/useMenuPlaylists.ts` | ⬜ pending | |
-| 44 | `src/hooks/useResponsiveItems.ts` | ⬜ pending | |
-| 45 | `src/hooks/useServiceWorker.ts` | ⬜ pending | |
-| 46 | `src/hooks/useTauriEvents.ts` | ⬜ pending | |
-| 47 | `src/hooks/useTheme.ts` | ⬜ pending | |
-| 48 | `src/hooks/useAppGlobalEvents.ts` | ⬜ pending | |
-| 49 | `src/store/appStore.ts` | ⬜ pending | |
-| 50 | `src/store/authStore.ts` | ⬜ pending | |
-| 51 | `src/store/driveStore.ts` | ⬜ pending | |
-| 52 | `src/store/playerStore.ts` | ⬜ pending | |
-| 53 | `src/lib/AudioController.ts` | ⬜ pending | |
-| 54 | `src/db/db.ts` | ⬜ pending | |
-| 55 | `src/db/kv.ts` | ⬜ pending | |
-| 56 | `src/workers/proSync.worker.ts` | ⬜ pending | |
-| 57 | `src/workers/scanner.worker.ts` | ⬜ pending | |
-| 58 | `src/workers/workerError.ts` | ⬜ pending | |
+| 39 | `src/hooks/useDebouncedLiveQuery.ts` | ✅ done | try/catch querier + deps fix |
+| 40 | `src/hooks/useLocateFile.ts` | ✅ done | dedup classifyDriveError + storage guard |
+| 41 | `src/hooks/useMenuDelete.ts` | ✅ done | import type DriveItem |
+| 42 | `src/hooks/useMenuDownload.ts` | ✅ done | join() cross-platform fix, mergeWithTimeoutSignal, import type |
+| 43 | `src/hooks/useMenuPlaylists.ts` | ✅ done | import type Track |
+| 44 | `src/hooks/useResponsiveItems.ts` | ✅ done | matchMedia + useSyncExternalStore |
+| 45 | `src/hooks/useServiceWorker.ts` | ✅ done | ready-gated post + safePost |
+| 46 | `src/hooks/useTauriEvents.ts` | ✅ done | dedup signal merge + classify |
+| 47 | `src/hooks/useTheme.ts` | ✅ done | lazy-init no FOUC + type guard |
+| 48 | `src/hooks/useAppGlobalEvents.ts` | ✅ done | xoá isFocused dead + storage guard |
+| 49 | `src/store/appStore.ts` | ✅ done | đạt chuẩn zustand v5 |
+| 50 | `src/store/authStore.ts` | ✅ done | đạt chuẩn (không persist — chủ đích) |
+| 51 | `src/store/driveStore.ts` | ✅ done | ROOT_FOLDER_ID const |
+| 52 | `src/store/playerStore.ts` | ✅ done | đạt chuẩn zustand v5 |
+| 53 | `src/lib/AudioController.ts` | ✅ done | dedup seek helper, classify safePlay, xoá safeAudio/preloadTrack dead |
+| 54 | `src/db/db.ts` | ✅ done | đạt chuẩn (2 backlog: PK cross-user, index isFolder no-op) |
+| 55 | `src/db/kv.ts` | ✅ done | captureError thay console.warn (giữ rethrow) |
+| 56 | `src/workers/proSync.worker.ts` | ✅ done | FOLDER_MIME chung (backoff/pagination giữ — khác biệt thiết kế) |
+| 57 | `src/workers/scanner.worker.ts` | ✅ done | đã XOÁ (file mồ côi 0 caller) |
+| 58 | `src/workers/workerError.ts` | ✅ done | đạt chuẩn (SENSITIVE_KEYS bổ sung logger — giữ) |
 
 ## Lịch sử hoàn thành
 

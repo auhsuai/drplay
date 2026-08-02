@@ -48,7 +48,27 @@ function makeJsonResponse(status: number, body: unknown): Response {
 // Drive error response with a cloneable body, mirroring the real API: 403
 // rate-limit detection reads the body via response.clone() so the original
 // response stays usable.
+// Shape is the REAL Google Drive error format — the reason lives inside
+// error.errors[] (developers.google.com/workspace/drive/api/guides/handle-errors),
+// not at error.reason. The chunked-upload tests share this helper, so the
+// shape change exercises driveApi.isRateLimitError through the shared
+// isRateLimit403Response for both the retry and the upload paths.
 function makeRateLimitResponse(status: number, reason: string): Response {
+  const ok = status >= 200 && status < 300;
+  const body = { error: { code: status, message: "Rate Limit Exceeded", errors: [{ reason }] } };
+  const response = {
+    status,
+    ok,
+    headers: { get: () => null },
+    json: async () => body,
+    clone: () => response,
+  } as unknown as Response;
+  return response;
+}
+
+// Legacy shape used by some older clients: top-level error.reason. Still
+// supported for backward compatibility (no regression on the old contract).
+function makeLegacyRateLimitResponse(status: number, reason: string): Response {
   const ok = status >= 200 && status < 300;
   const body = { error: { code: status, message: "Rate Limit Exceeded", reason } };
   const response = {
@@ -155,6 +175,19 @@ describe("driveFetch retry", () => {
   it("retries a 403 rate-limit (userRateLimitExceeded) and returns the eventual 200", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeRateLimitResponse(403, "userRateLimitExceeded"))
+      .mockResolvedValueOnce(makeResponse(200));
+
+    const p = driveFetch("https://www.googleapis.com/drive/v3/files");
+    await vi.advanceTimersByTimeAsync(64_000);
+    const res = await p;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(200);
+  });
+
+  it("still retries a 403 whose body uses the legacy top-level error.reason (no regression)", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLegacyRateLimitResponse(403, "rateLimitExceeded"))
       .mockResolvedValueOnce(makeResponse(200));
 
     const p = driveFetch("https://www.googleapis.com/drive/v3/files");
