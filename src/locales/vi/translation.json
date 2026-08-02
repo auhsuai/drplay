@@ -82,6 +82,10 @@
   "song": "bài hát",
   "songs": "bài hát",
   "title": "Tiêu đề",
+  "upload": {
+    "error": "Tải lên thất bại",
+    "quota_exceeded": "Dung lượng Google Drive của bạn đã đầy"
+  },
   "unknown_artist": "Không rõ ca sĩ",
   "view_all": "Xem tất cả",
   "playlist": {
