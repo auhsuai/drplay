@@ -28,6 +28,10 @@ const ERROR_QUOTA = 'quota';
 const ERROR_PARENT_FOLDER_MISSING = 'parent-folder-missing';
 const ERROR_FAILED = 'failed';
 const ERROR_ABORTED = 'aborted';
+// Disk-path error messages shared by every disk entry kind (file, child file,
+// folder root); named constants keep one spelling across all call sites.
+const ERROR_MISSING_DISK_PATH = 'missing disk path';
+const ERROR_QUOTA_EXCEEDED = 'drive storage quota exceeded';
 // Subscribers get at most one progress notify per this window; onProgress can
 // fire once per chunk (128× on a 1 GB file) and per-chunk notifies would spam
 // renders, so progress bursts are coalesced into a single trailing-edge notify.
@@ -152,6 +156,14 @@ function describeError(err: unknown): string {
 function dirOf(relPath: string): string {
   const idx = relPath.lastIndexOf('/');
   return idx === -1 ? '' : relPath.slice(0, idx);
+}
+
+// Disk-path seeds must carry a diskPath; a missing one is a seed-level defect
+// that must fail loudly as 'invalid' instead of a TypeError downstream.
+function requireDiskPath(entry: InternalEntry): string {
+  const path = entry.diskPath;
+  if (!path) throw new UploadError(ERROR_MISSING_DISK_PATH, 'invalid');
+  return path;
 }
 
 export function startUploads(seeds: UploadSeed[], token: string): void {
@@ -339,8 +351,7 @@ function handleByKind(entry: InternalEntry): Promise<DriveFileItem> {
 }
 
 async function handleDiskFile(entry: InternalEntry): Promise<DriveFileItem> {
-  const path = entry.diskPath;
-  if (!path) throw new UploadError('missing disk path', 'invalid');
+  const path = requireDiskPath(entry);
   entry.name = basename(path);
   await registerUploadPath(path);
   return uploadDiskFileStreaming(entry, path);
@@ -353,8 +364,7 @@ async function handleChildFile(entry: InternalEntry): Promise<DriveFileItem> {
   const parentId = entry.batchMemo?.get(dir);
   if (!parentId) throw new ParentFolderMissingError(dir);
   entry.parentId = parentId;
-  const path = entry.diskPath;
-  if (!path) throw new UploadError('missing disk path', 'invalid');
+  const path = requireDiskPath(entry);
   return uploadDiskFileStreaming(entry, path);
 }
 
@@ -370,7 +380,7 @@ async function uploadDiskFileStreaming(entry: InternalEntry, path: string): Prom
     throw new Error(`file not found on disk: ${basename(path)}`);
   }
   if (!(await quotaAllows(entry, stat.size))) {
-    throw new UploadError('drive storage quota exceeded', 'quota');
+    throw new UploadError(ERROR_QUOTA_EXCEEDED, 'quota');
   }
   return uploadDiskPathChunked(entry, path, stat.size);
 }
@@ -457,8 +467,7 @@ async function handleFolderChild(entry: InternalEntry): Promise<DriveFileItem> {
 }
 
 async function handleFolderRoot(entry: InternalEntry): Promise<DriveFileItem> {
-  const dirPath = entry.diskPath;
-  if (!dirPath) throw new UploadError('missing disk path', 'invalid');
+  const dirPath = requireDiskPath(entry);
   await registerUploadPath(dirPath);
   // The batch's cancel controller must reach BOTH the walk and the folder
   // creation: without it a cancel of the root folder would still walk + create
@@ -533,7 +542,7 @@ function enqueueChildFile(batch: FolderBatch, item: DiskEntry): void {
 async function uploadWithQuotaAndRetry(entry: InternalEntry, data: Blob | Uint8Array): Promise<DriveFileItem> {
   const byteLength = data instanceof Blob ? data.size : data.byteLength;
   if (!(await quotaAllows(entry, byteLength))) {
-    throw new UploadError('drive storage quota exceeded', 'quota');
+    throw new UploadError(ERROR_QUOTA_EXCEEDED, 'quota');
   }
   return uploadWithRetry(entry, data);
 }
@@ -592,6 +601,18 @@ async function abortIfCancelled<T>(promise: Promise<T>, signal: AbortSignal | un
   }
 }
 
+// Shared terminal cleanup for the two async terminal paths: drop the pending
+// row, then notify subscribers BEFORE the prune so they still observe the
+// terminal state, then release the entry's cancel controller. cancelQueuedEntry
+// does not share this — a queued entry never touched the network and must turn
+// terminal synchronously within cancelUpload (the pump only picks 'queued').
+async function finishEntry(entry: InternalEntry): Promise<void> {
+  await dbRowOp(() => db.files.delete(entry.id), 'pending-row-delete');
+  notify();
+  pruneEntry(entry);
+  clearControllerFor(entry);
+}
+
 async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise<void> {
   clearProgressNotifyTimer();
   entry.driveId = driveItem.id;
@@ -600,13 +621,10 @@ async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise
   if (entry.kind === 'folderChild' && entry.relativeDir !== undefined && entry.batchMemo) {
     entry.batchMemo.set(entry.relativeDir, driveItem.id);
   }
-  await dbRowOp(() => db.files.delete(entry.id), 'pending-row-delete');
   await dbRowOp(() => db.files.put(realRow(entry, driveItem)), 'real-row');
   entry.status = 'done';
-  notify();
+  await finishEntry(entry);
   window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED_EVENT, { detail: { count: 1 } }));
-  pruneEntry(entry);
-  clearControllerFor(entry);
 }
 
 async function markError(entry: InternalEntry, err: unknown): Promise<void> {
@@ -620,7 +638,6 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
         ? err.kind
         : ERROR_FAILED;
   entry.status = 'error';
-  await dbRowOp(() => db.files.delete(entry.id), 'pending-row-delete');
   if (isAborted) {
     // A user-initiated cancel is not a failure: no error toast, warn-level log
     // only. entry.name is always a basename (never a disk path or token).
@@ -645,9 +662,7 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
       showErrorToast(t('upload.error'));
     }
   }
-  notify();
-  pruneEntry(entry);
-  clearControllerFor(entry);
+  await finishEntry(entry);
 }
 
 function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
