@@ -1,7 +1,7 @@
 import { t } from 'i18next';
 import { db } from '../db/db';
 import type { DriveFile } from '../db/db';
-import { createFolder, getDriveStorageQuota } from './driveApi';
+import { backoffDelay, createFolder, getDriveStorageQuota, sleep } from './driveApi';
 import { uploadFileResumable, uploadFileResumableChunked, UploadError } from './driveUpload';
 import type { DriveFileItem, DriveStorageQuota } from './driveApi';
 import { openDiskReadStream, registerUploadPath, statDiskPath, walkDiskFolder } from './diskFs';
@@ -17,9 +17,7 @@ const PENDING_ID_PREFIX = 'pending-';
 // Drive folders report this mimeType; octet-stream uploads keep it (getFolderAudioQuery matches on it).
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const AUDIO_FILE_MIME = 'application/octet-stream';
-// 1 attempt + 2 retries; backoff (attempt-1) = 1s, 3s.
 const MAX_UPLOAD_ATTEMPTS = 3;
-const RETRY_DELAYS_MS: ReadonlyArray<number> = [1000, 3000];
 const ROOT_PARENT_ID = 'root';
 const UPLOAD_STATUS_EVENT = 'upload-status-changed';
 const DRIVE_FILES_CHANGED_EVENT = 'drive-files-changed';
@@ -60,12 +58,11 @@ export interface UploadSeed {
 
 type UploadKind = 'bytes' | 'diskFile' | 'folderRoot' | 'folderChild' | 'folderChildFile';
 
-// Internal fields (token, attempt, memo, drive id) must never leak through the public contract.
+// Internal fields (token, memo, drive id) must never leak through the public contract.
 interface InternalEntry extends UploadEntry {
   token: string;
   kind: UploadKind;
   driveId?: string;
-  attempt: number;
   relativeDir?: string; // dir path within a folder batch ('sub/sub2'; '' = batch root)
   batchMemo?: Map<string, string>; // shared per batch: relativeDir -> driveId ('' marker = enqueued)
 }
@@ -280,7 +277,6 @@ function createEntry(seed: UploadSeed, token: string): InternalEntry {
     diskPath: seed.diskPath, bytes: seed.bytes,
     status: 'queued', token,
     kind: seed.isFolder ? 'folderRoot' : seed.diskPath ? 'diskFile' : 'bytes',
-    attempt: 0,
   };
   if (seed.isFolder && !seed.diskPath) {
     failSeed(entry, 'folder seed lacks a disk path');
@@ -520,7 +516,7 @@ function enqueueFolderChild(batch: FolderBatch, relativeDir: string): void {
     id: `${PENDING_ID_PREFIX}${crypto.randomUUID()}`,
     name: basename(relativeDir), isFolder: true,
     parentId: batch.entry.parentId, // placeholder - resolved during processing
-    status: 'queued', token: batch.entry.token, kind: 'folderChild', attempt: 0,
+    status: 'queued', token: batch.entry.token, kind: 'folderChild',
     relativeDir, batchMemo: batch.memo,
   };
   batch.memo.set(relativeDir, ''); // '' marker = enqueued, drive id pending
@@ -532,7 +528,7 @@ function enqueueChildFile(batch: FolderBatch, item: DiskEntry): void {
     name: basename(item.relativePath), isFolder: false,
     parentId: batch.entry.parentId, // placeholder - resolved during processing
     diskPath: item.path,
-    status: 'queued', token: batch.entry.token, kind: 'folderChildFile', attempt: 0,
+    status: 'queued', token: batch.entry.token, kind: 'folderChildFile',
     relativeDir: dirOf(item.relativePath), batchMemo: batch.memo,
   });
 }
@@ -573,14 +569,13 @@ async function uploadWithRetry(entry: InternalEntry, data: Blob | Uint8Array): P
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
     if (signal?.aborted) throw abortedUploadError();
-    entry.attempt = attempt;
     try {
       return await uploadFileResumable(entry.token, data, entry.name, entry.parentId, signal);
     } catch (err) {
       lastErr = err;
       const retryable = err instanceof UploadError && err.kind === 'network' && attempt < MAX_UPLOAD_ATTEMPTS;
       if (!retryable) throw err;
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt - 1]));
+      await sleep(backoffDelay(attempt - 1));
       // An abort during the backoff must not schedule another attempt — the
       // user asked to cancel; re-firing would waste a fresh upload session.
       if (signal?.aborted) throw abortedUploadError();
@@ -631,7 +626,7 @@ async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise
   await dbRowOp(() => db.files.put(realRow(entry, driveItem)), 'real-row');
   entry.status = 'done';
   await finishEntry(entry);
-  window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED_EVENT, { detail: { count: 1 } }));
+  window.dispatchEvent(new CustomEvent<{ count: number }>(DRIVE_FILES_CHANGED_EVENT, { detail: { count: 1 } }));
 }
 
 async function markError(entry: InternalEntry, err: unknown): Promise<void> {

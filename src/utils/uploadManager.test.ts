@@ -340,7 +340,7 @@ describe('uploadManager', () => {
     expect(captureError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }));
   });
 
-  it('7. retry: network fail lần 1 → backoff 1s → lần 2 pass → done', async () => {
+  it('7. retry: network fail lần 1 → backoff 1–1.5s (exp+jitter) → lần 2 pass → done', async () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     uploadFileResumable
       .mockRejectedValueOnce(new UploadErrorClass('network hiccup', 'network'))
@@ -351,7 +351,7 @@ describe('uploadManager', () => {
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
-    await advanceBackoff(1000);
+    await advanceBackoff(1500); // backoffDelay(attempt-1=0) ∈ [1000, 1500)
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(2);
 
@@ -369,11 +369,11 @@ describe('uploadManager', () => {
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
-    await advanceBackoff(1000);
+    await advanceBackoff(1500); // backoffDelay(attempt-1=0) ∈ [1000, 1500)
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(2);
 
-    await advanceBackoff(3000);
+    await advanceBackoff(3000); // backoffDelay(attempt-1=1) ∈ [2000, 3000)
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(3);
     await realTick();
@@ -1184,8 +1184,8 @@ describe('uploadManager', () => {
       expect(uploadFileResumable.mock.calls[0][4]).toBeInstanceOf(AbortSignal); // signal wired
 
       const id = um.getEntries()[0].id;
-      um.cancelUpload(id); // abort trong lúc backoff 1s
-      await advanceBackoff(1000);
+      um.cancelUpload(id); // abort trong lúc backoff
+      await advanceBackoff(1500); // backoffDelay(attempt-1=0) ∈ [1000, 1500)
       await realTick();
 
       expect(uploadFileResumable).toHaveBeenCalledTimes(1); // không retry sau abort
