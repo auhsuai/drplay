@@ -2,12 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { fetchWithAuth, getValidToken, TokenRefreshError } from './apiClient';
 import { stopProactiveRefresh } from './apiClient';
+import { getCurrentSessionId } from './sessionGuard';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
+vi.mock('./sessionGuard', () => ({
+  getCurrentSessionId: vi.fn(),
+  invalidateCurrentSession: vi.fn(),
+}));
+
 const invokeMock = vi.mocked(invoke);
+const getCurrentSessionIdMock = vi.mocked(getCurrentSessionId);
 
 function makeStorage(): Storage {
   let s: Record<string, string> = {};
@@ -29,6 +36,8 @@ beforeEach(() => {
   (globalThis as unknown as { window: { dispatchEvent: (e: Event) => void } }).window = {
     dispatchEvent: vi.fn(),
   };
+  getCurrentSessionIdMock.mockReset();
+  getCurrentSessionIdMock.mockReturnValue(0);
 });
 
 afterEach(() => {
@@ -205,5 +214,22 @@ describe('getValidToken invoke timeout', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('getValidToken session race guard', () => {
+  it('does not persist the refreshed token when the session was invalidated mid-refresh', async () => {
+    storage.setItem('drplay_refresh_token', 'rt');
+    invokeMock.mockResolvedValue({ access_token: 'new', expires_in: 3600 });
+    getCurrentSessionIdMock
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1);
+
+    const result = await getValidToken(true);
+
+    expect(getCurrentSessionIdMock).toHaveBeenCalledTimes(2);
+    expect(result).toBe('');
+    expect(storage.getItem('drplay_access_token')).toBeNull();
+    expect(storage.getItem('drplay_token_time')).toBeNull();
   });
 });
