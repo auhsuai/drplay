@@ -8,6 +8,7 @@ import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen"
 
 import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
+import { TABS, type TabKey } from "../../utils/driveConstants";
 
 import { SongCard } from './components/SongCard';
 import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
@@ -27,7 +28,7 @@ import { PaginationControls } from "./components/PaginationControls";
 let uploadVersion = 0;
 
 interface MainContentProps {
-  activeTab: string;
+  activeTab: TabKey;
   onPlay: (track: Track, contextQueue?: Track[]) => void;
   isLoading: boolean;
   onOpenFolder: (id: string, name: string) => void;
@@ -225,7 +226,7 @@ export const MainContent = React.memo(function MainContent({
       </div>
         
       <div className="px-8 pb-6 pt-4 min-h-[calc(100%-140px)]">
-        {activeTab === "Settings" ? (
+        {activeTab === TABS.settings ? (
           <div className="text-gray-500">Settings page coming soon...</div>
         ) : isLoading ? (
           <div className="flex flex-col items-center justify-center h-[50vh] text-[#4285F4]">

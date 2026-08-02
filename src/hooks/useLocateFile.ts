@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { db } from '../db/db';
 import { fetchWithAuth } from '../utils/apiClient';
 import { classifyDriveError } from '../utils/driveApi';
-import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from '../utils/driveConstants';
+import { ROOT_FOLDER_ID, MY_DRIVE_TAB, type TabKey } from '../utils/driveConstants';
 import { captureError } from '../utils/errorLog';
 
 const HISTORY_LIMIT = 20;
@@ -29,7 +29,7 @@ export function useLocateFile(
   setCurrentFolderId: (id: string) => void,
   setCurrentFolderName: (name: string) => void,
   setFolderHistory: (history: { id: string, name: string }[]) => void,
-  setActiveTab: (tab: string) => void,
+  setActiveTab: (tab: TabKey) => void,
   setIsLoadingTracks: (loading: boolean) => void
 ) {
   const [highlightedFileId, setHighlightedFileId] = useState<{ id: string, ts: number } | null>(null);

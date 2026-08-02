@@ -37,3 +37,8 @@ export type BreadcrumbItem = {
   id: string;
   name: string;
 };
+
+// Canonical definition lives in utils/driveConstants.ts (TABS const + TabKey
+// derive from the same literal values). Re-exported here so type-only
+// consumers can keep importing from './types'.
+export type { TabKey } from './utils/driveConstants';

@@ -238,7 +238,7 @@ describe('updateQueueContext', () => {
     const { result, setPlaybackQueue } = setup('normal');
 
     act(() => {
-      result.current.updateQueueContext(makeTrack('t5'), undefined, undefined, 'Other Tab');
+      result.current.updateQueueContext(makeTrack('t5'), undefined, undefined, 'Settings');
     });
 
     expect(vi.mocked(idbSet)).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.queueKv, []);

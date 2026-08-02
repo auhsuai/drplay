@@ -6,7 +6,7 @@ import { getDriveStorageQuota, type DriveStorageQuota } from "../../utils/driveA
 import { formatBytes } from "../../utils/formatBytes";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
-import { MY_DRIVE_TAB } from "../../utils/driveConstants";
+import { TABS, type TabKey } from "../../utils/driveConstants";
 import { UploadButton } from "../components/UploadButton";
 import { DropZone } from "../components/DropZone";
 
@@ -30,8 +30,8 @@ const STORAGE_BAR_WIDTH_CLASS = 'w-[212px]';
 const STORAGE_WARNING_THRESHOLD = 0.8;
 
 interface SidebarProps {
-  activeTab: string;
-  onTabChange: (tab: string) => void;
+  activeTab: TabKey;
+  onTabChange: (tab: TabKey) => void;
   userProfile?: { name: string; email: string; picture: string } | null;
   onLogout?: () => void;
   isSidebarOpen: boolean;
@@ -137,9 +137,9 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
         </h1>
       </div>
       <nav className="px-4 space-y-1 mb-2">
-        <NavItem icon={<Home />} label={t('sidebar.home')} active={activeTab === "Home"} onClick={() => onTabChange("Home")} isSidebarOpen={isSidebarOpen} />
-        <NavItem icon={<HardDrive />} label={t('sidebar.my_drive')} active={activeTab === MY_DRIVE_TAB} onClick={() => onTabChange(MY_DRIVE_TAB)} isSidebarOpen={isSidebarOpen} />
-        <NavItem icon={<Heart />} label={t('sidebar.liked_songs')} active={activeTab === "Liked Songs"} onClick={() => onTabChange("Liked Songs")} isSidebarOpen={isSidebarOpen} />
+        <NavItem icon={<Home />} label={t('sidebar.home')} active={activeTab === TABS.home} onClick={() => onTabChange(TABS.home)} isSidebarOpen={isSidebarOpen} />
+        <NavItem icon={<HardDrive />} label={t('sidebar.my_drive')} active={activeTab === TABS.myDrive} onClick={() => onTabChange(TABS.myDrive)} isSidebarOpen={isSidebarOpen} />
+        <NavItem icon={<Heart />} label={t('sidebar.liked_songs')} active={activeTab === TABS.likedSongs} onClick={() => onTabChange(TABS.likedSongs)} isSidebarOpen={isSidebarOpen} />
       </nav>
       
       <div className={`px-4 mt-6 mb-2 flex items-center group transition-all duration-300 ${isSidebarOpen ? 'justify-between' : ''}`}>
@@ -240,7 +240,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
       )}
 
       <div className="p-4">
-        <NavItem icon={<Settings />} label={t('sidebar.settings')} active={activeTab === "Settings"} onClick={() => onTabChange("Settings")} isSidebarOpen={isSidebarOpen} />
+        <NavItem icon={<Settings />} label={t('sidebar.settings')} active={activeTab === TABS.settings} onClick={() => onTabChange(TABS.settings)} isSidebarOpen={isSidebarOpen} />
         
         <div className="mt-4 pt-4 flex items-center transition-all duration-300">
           <div className="ml-1 shrink-0 flex items-center justify-center">

@@ -7,7 +7,7 @@ import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScree
 import { TrashScreen } from "./ui/Settings/TrashScreen";
 import { RateLimitModal } from "./ui/components/RateLimitModal";
 import { captureError } from "./utils/errorLog";
-import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "./utils/driveConstants";
+import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
 import { useShallow } from 'zustand/react/shallow';
 
 const MainContent = React.lazy(() => import('./ui/MainContent/MainContent').then(module => ({ default: module.MainContent })));
@@ -33,7 +33,7 @@ import { useDriveStore } from './store/driveStore';
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
 
-import type { Track, UserProfile } from './types';
+import type { Track, UserProfile, TabKey } from './types';
 export type { Track, UserProfile };
 
 
@@ -61,7 +61,7 @@ export function loadMinimizeToTrayState(): boolean {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState("Home");
+  const [activeTab, setActiveTab] = useState<TabKey>(TABS.home);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
   const [showRateLimitModal, setShowRateLimitModal] = useState(false);
@@ -174,8 +174,8 @@ function App() {
     invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch((e) => captureError({ source: 'App', message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`, kind: 'minimize-to-tray-failed' }));
   }, [minimizeToTray]);
 
-  const handleTabChange = useCallback((tab: string) => {
-    if (activeTab === tab && tab === MY_DRIVE_TAB) {
+  const handleTabChange = useCallback((tab: TabKey) => {
+    if (activeTab === tab && tab === TABS.myDrive) {
       setCurrentFolderId(appRootFolder || ROOT_FOLDER_ID);
       setCurrentFolderName(MY_DRIVE_TAB);
       setFolderHistory([]);
@@ -224,18 +224,18 @@ function App() {
 
         <div id="content-area" className="flex-1 relative overflow-hidden flex flex-col">
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500">Loading...</div>}>
-            {activeTab === "Home" ? (
+            {activeTab === TABS.home ? (
               <HomeTab 
                 onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} 
                 onOpenFolder={(id, name) => {
                   handleOpenFolder(id, name);
-                  handleTabChange(MY_DRIVE_TAB);
+                  handleTabChange(TABS.myDrive);
                 }}
                 token={accessToken} 
                 userProfile={userProfile} 
                 currentTrack={currentTrack}
               />
-            ) : activeTab === MY_DRIVE_TAB ? (
+            ) : activeTab === TABS.myDrive ? (
               <MainContent
                 activeTab={activeTab}
                 onPlay={handlePlayTrack}
@@ -266,16 +266,16 @@ function App() {
                   }
                 }}
               />
-            ) : activeTab === "Liked Songs" ? (
+            ) : activeTab === TABS.likedSongs ? (
               <LikedSongs onPlay={(t: Track, c: Track[]) => { handlePlayTrack(t, c); }} token={accessToken} currentTrack={currentTrack} />
             ) : activeTab.startsWith("playlist_") ? (
               <PlaylistView
                 playlistId={activeTab.replace("playlist_", "")}
                 onPlay={(t: Track, c?: Track[]) => { handlePlayTrack(t, c); }}
-                onDelete={() => handleTabChange("Home")}
+                onDelete={() => handleTabChange(TABS.home)}
                 currentTrack={currentTrack}
               />
-            ) : activeTab === "Settings" ? (
+            ) : activeTab === TABS.settings ? (
               <SettingsTab
                 theme={theme}
                 setTheme={setTheme}

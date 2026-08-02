@@ -7,3 +7,15 @@ export const ROOT_FOLDER_ID = 'root';
 // that historically kept their own copy (App.tsx, useDrive, useLocateFile,
 // usePlayerQueue, driveStore).
 export const MY_DRIVE_TAB = 'My Drive';
+
+// Single source of truth for every static tab id. Playlist tabs
+// (`playlist_${id}`) are dynamic — one per user playlist — and are covered by
+// the `playlist_${string}` member of TabKey below, not by this object.
+export const TABS = {
+  home: 'Home',
+  myDrive: MY_DRIVE_TAB,
+  likedSongs: 'Liked Songs',
+  settings: 'Settings',
+} as const;
+
+export type TabKey = (typeof TABS)[keyof typeof TABS] | `playlist_${string}`;

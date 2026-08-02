@@ -3,7 +3,7 @@ import type { Track, PlayMode } from "../../types";
 import { set as idbSet } from "../../db/kv";
 import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
-import { MY_DRIVE_TAB } from "../../utils/driveConstants";
+import { MY_DRIVE_TAB, type TabKey } from "../../utils/driveConstants";
 import { classifyPlayerError } from "./utils";
 
 export interface QueueDriveItem {
@@ -58,7 +58,7 @@ export function usePlayerQueue(
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
   setOriginalQueue: (queue: Track[]) => void,
   setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void,
-  handlePlayTrack: (track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: string) => void
+  handlePlayTrack: (track: Track, contextQueue?: Track[], isNavigation?: boolean, driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: TabKey) => void
 ) {
 
   const handleNextTrack = useCallback(() => {
@@ -113,7 +113,7 @@ export function usePlayerQueue(
     setPlayMode(nextMode);
   }, [playMode, originalQueue, currentTrack, setPlayMode, setPlaybackQueue]);
 
-  const updateQueueContext = useCallback((track: Track, contextQueue?: Track[], driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: string): Track => {
+  const updateQueueContext = useCallback((track: Track, contextQueue?: Track[], driveItems?: ReadonlyArray<QueueDriveItem>, activeTab?: TabKey): Track => {
     let targetTrack = { ...track };
     let newOriginalQueue: Track[] = [];
 

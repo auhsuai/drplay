@@ -93,7 +93,7 @@ vi.mock('./components/SongCard', () => ({
 }));
 
 const baseProps = {
-  activeTab: 'Drive',
+  activeTab: 'My Drive' as const,
   onPlay: vi.fn(),
   
   isLoading: false,

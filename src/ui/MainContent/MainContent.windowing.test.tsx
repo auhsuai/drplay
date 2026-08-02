@@ -95,7 +95,7 @@ function makeExplorerState(items: DriveItem[]) {
 }
 
 const baseProps = {
-  activeTab: 'Drive',
+  activeTab: 'My Drive' as const,
   onPlay: vi.fn(),
   isLoading: false,
   onOpenFolder: vi.fn(),
