@@ -39,10 +39,10 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 25 | `src/utils/normalizeText.ts` | ✅ done | đạt chuẩn (NFD + đ→d đúng) |
 | 26 | `src/utils/color.ts` | ✅ done | BG_ALPHA const + captureError onerror |
 | 27 | `src/utils/copyToClipboard.ts` | ✅ done | đạt chuẩn (execCommand giữ làm fallback cuối có lý do) |
-| 28 | `src/utils/errorLog.ts` | ⬜ pending | |
-| 29 | `src/utils/logger.ts` | ⬜ pending | |
+| 28 | `src/utils/errorLog.ts` | ✅ done | prune atomic 1 transaction (chống race xoá dư) |
+| 29 | `src/utils/logger.ts` | ✅ done | redaction refresh_token/token/upload_id/api_key/Authorization/Bearer-ci + circular safe |
 | 28 | `src/utils/sidebarState.ts` | ✅ done | guard localStorage P0 (chống crash App init) |
-| 31 | `src/utils/simpleToast.tsx` | ⬜ pending | |
+| 31 | `src/utils/simpleToast.tsx` | ✅ done | gộp DRY showToast + clamp duration + captureError |
 | 32 | `src/hooks/useDrive.ts` | ⬜ pending | |
 | 33 | `src/hooks/useDriveExplorer.ts` | ⬜ pending | |
 | 34 | `src/hooks/usePlayer.ts` | ⬜ pending | |
