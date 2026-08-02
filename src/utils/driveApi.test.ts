@@ -777,6 +777,98 @@ describe("uploadFileResumable", () => {
     ).rejects.toMatchObject({ kind: "quota" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
+
+  // Upload diagnostics: the concrete 4xx status + sanitized reason must reach
+  // the error log — uploadManager only records the kind, so without this a
+  // real 400/404/403 disappears from the log and the root cause is invisible.
+  describe("upload 4xx diagnostics (captureError in mapUploadHttpError)", () => {
+    function lastLogMessages(): string {
+      return vi.mocked(captureError).mock.calls.map((c) => c[0].message).join("\n");
+    }
+
+    it("logs warn captureError with status=404 + errBody message before throwing", async () => {
+      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(404, "File not found"));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      ).rejects.toMatchObject({ name: "UploadError", kind: "invalid" });
+
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          source: "driveApi",
+          message: expect.stringContaining("status=404"),
+        })
+      );
+      expect(lastLogMessages()).toContain("File not found");
+    });
+
+    it("logs status=403 for a quota 403 (kind mapping unchanged)", async () => {
+      mockedFetch.mockResolvedValueOnce(
+        makeErrorBodyResponse(403, "The user's Drive storage quota has been exceeded.", "storageQuotaExceeded")
+      );
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      ).rejects.toMatchObject({ kind: "quota" });
+
+      expect(lastLogMessages()).toContain("status=403");
+      expect(lastLogMessages()).toContain("storageQuotaExceeded");
+    });
+
+    it("logs status=400 for a generic 4xx", async () => {
+      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, "Bad Request"));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      ).rejects.toMatchObject({ kind: "invalid" });
+
+      expect(lastLogMessages()).toContain("status=400");
+    });
+
+    it("logs only the status when the error body carries no message/reason", async () => {
+      mockedFetch.mockResolvedValueOnce(makeResponse(404));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      ).rejects.toMatchObject({ kind: "invalid" });
+
+      expect(lastLogMessages()).toBe("upload-http-error (status=404)");
+    });
+
+    it("never logs the auth token", async () => {
+      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, "Bad Request"));
+
+      await expect(
+        uploadFileResumable("super-secret-token-42", new Uint8Array(3), "a.mp3", "p")
+      ).rejects.toMatchObject({ kind: "invalid" });
+
+      expect(lastLogMessages()).not.toContain("super-secret-token-42");
+    });
+
+    it("redacts embedded id= values from the errBody message (sanitized)", async () => {
+      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, "file id=abc123 locked"));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      ).rejects.toMatchObject({ kind: "invalid" });
+
+      expect(lastLogMessages()).not.toContain("abc123");
+      expect(lastLogMessages()).toContain("[REDACTED_ID]");
+    });
+
+    it("caps a very long errBody message instead of bloating the log", async () => {
+      const longMessage = "x".repeat(500);
+      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, longMessage));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      ).rejects.toMatchObject({ kind: "invalid" });
+
+      expect(lastLogMessages()).not.toContain(longMessage);
+      expect(lastLogMessages().length).toBeLessThanOrEqual(300);
+    });
+  });
 });
 
 // Chunked streaming resumable upload: POST initiate → loop { PUT chunk →
@@ -1183,5 +1275,25 @@ describe("uploadFileResumableChunked", () => {
       })
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs warn captureError with status=400 when a chunk PUT hits a non-retryable 4xx", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeErrorBodyResponse(400, "Invalid upload request"));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      })
+    ).rejects.toMatchObject({ kind: "invalid" });
+
+    const message = vi.mocked(captureError).mock.calls.map((c) => c[0].message).join("\n");
+    expect(message).toContain("status=400");
+    expect(message).toContain("Invalid upload request");
   });
 });

@@ -816,6 +816,31 @@ describe('uploadManager', () => {
     expect(captureError).toHaveBeenCalledWith(expect.objectContaining({ source: 'uploadManager' }));
   });
 
+  it('B2. UploadError invalid → log gồm name + kind + message UploadError (status 4xx)', async () => {
+    uploadFileResumable.mockRejectedValueOnce(new UploadErrorClass('upload failed (status=400)', 'invalid'));
+
+    um.startUploads([fileSeed('x.mp3')], TOKEN);
+    await waitIdle();
+
+    const message = captureError.mock.calls.map((c) => c[0].message as string).join('\n');
+    expect(message).toContain('name=x.mp3');
+    expect(message).toContain('kind=invalid');
+    expect(message).toContain('status=400');
+  });
+
+  it('B3. Plain Error từ diskFs (message chứa full disk path) → log chỉ name+kind, không lộ path', async () => {
+    const fullPath = 'C:\\Music\\Secret Album\\track.flac';
+    openDiskReadStream.mockRejectedValue(new Error(`EACCES: permission denied, open '${fullPath}'`));
+
+    um.startUploads([diskFileSeed('x', fullPath)], TOKEN);
+    await waitIdle();
+
+    const message = captureError.mock.calls.map((c) => c[0].message as string).join('\n');
+    expect(message).toContain('name=track.flac');
+    expect(message).toContain('kind=failed');
+    expect(message).not.toContain('Secret Album');
+  });
+
   it('C. prune: folder batch (folder + subfolder + 2 files con) xong → getEntries trả []', async () => {
     walkDiskFolder.mockResolvedValue([
       { path: 'C:/Music/a.mp3', name: 'a.mp3', relativePath: 'a.mp3', isDirectory: false, size: 5 },

@@ -1,6 +1,7 @@
 import { fetchWithAuth } from './apiClient';
 import { getAudioFilesQuery } from './audioQuery';
 import { captureError } from './errorLog';
+import { sanitizeString } from './logger';
 
 // Google Drive API resilience layer.
 // Official guidance (developers.google.com/workspace/drive/api/guides/limits):
@@ -37,6 +38,10 @@ const UPLOAD_TIMEOUT_MS = 120_000;
 // Shared by the whole-body (uploadFileResumable) and chunked
 // (uploadFileResumableChunked) uploaders.
 const MAX_UPLOAD_ATTEMPTS = 2;
+// Length cap for the errBody.message/reason strings copied into the error
+// log: a 400 can echo back the (large) request payload, and the log must stay
+// bounded while still carrying the diagnostic strings.
+const UPLOAD_ERROR_DETAIL_MAX_LENGTH = 200;
 
 // Chunked resumable upload (developers.google.com/drive/api/guides/manage-uploads):
 // chunk sizes MUST be multiples of 256 KiB except the final chunk; the server
@@ -620,9 +625,36 @@ function isQuotaExceeded(errBody: DriveErrorBody | null): boolean {
   return reason.includes('quota') || message.includes('storage quota');
 }
 
+// Only the two official string fields of a Drive error body reach the log; the
+// raw body is never logged (it can embed file ids / request echoes). Each
+// field is sanitized (id=, tokens, links redacted) and the joined detail is
+// length-capped so a hostile or oversized body cannot bloat the log.
+function uploadErrorDetail(errBody: DriveErrorBody | null): string {
+  const parts: string[] = [];
+  const message = errBody?.error?.message;
+  if (typeof message === 'string' && message !== '') parts.push(sanitizeString(message));
+  const reason = errBody?.error?.reason;
+  if (typeof reason === 'string' && reason !== '') parts.push(sanitizeString(reason));
+  if (parts.length === 0) return '';
+  const joined = parts.join(' | ');
+  return joined.length > UPLOAD_ERROR_DETAIL_MAX_LENGTH
+    ? `${joined.slice(0, UPLOAD_ERROR_DETAIL_MAX_LENGTH)}...`
+    : joined;
+}
+
 // Single mapper for both upload steps — non-retryable by design: a PUT retried
 // after the server answered would create a duplicate upload.
 function mapUploadHttpError(status: number, errBody: DriveErrorBody | null): UploadError {
+  // Log the concrete status + sanitized reason BEFORE throwing: the caller
+  // (uploadManager) only records the UploadError kind, so without this the
+  // exact 4xx from Drive is invisible in the log and the root cause cannot be
+  // diagnosed.
+  const detail = uploadErrorDetail(errBody);
+  captureError({
+    level: 'warn',
+    source: DRIVE_MODULE,
+    message: `upload-http-error (status=${status})${detail ? `: ${detail}` : ''}`,
+  });
   if (status === 401) return new UploadError('upload unauthorized (401)', 'auth');
   if (status === 403 && isQuotaExceeded(errBody)) return new UploadError('drive storage quota exceeded', 'quota');
   return new UploadError(`upload failed (status=${status})`, 'invalid');

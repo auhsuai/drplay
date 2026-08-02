@@ -451,11 +451,16 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
   entry.status = 'error';
   await dbRowOp(() => db.files.delete(entry.id), 'pending-row-delete');
   const isQuota = entry.error === ERROR_QUOTA;
+  // UploadError messages are self-created constants (status/quota text — never
+  // PII), so they are safe to log and carry the concrete 4xx that the kind
+  // alone hides. A plain Error from diskFs can embed the full disk path, so
+  // its message stays out of the log — only name + kind are recorded.
+  const uploadDetail = err instanceof UploadError ? ` message=${err.message}` : '';
   // Never log the disk path or token - only the shortened file name.
   captureError({
     level: isQuota ? 'warn' : 'error',
     source: MODULE,
-    message: `upload-entry-failed name=${entry.name} kind=${entry.error}`,
+    message: `upload-entry-failed name=${entry.name} kind=${entry.error}${uploadDetail}`,
     kind: entry.error,
   });
   if (isQuota) {
