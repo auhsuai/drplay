@@ -23,7 +23,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 9 | `src/utils/audioQuery.ts` | ✅ done | DRY helpers + as const + test contract chốt chuỗi output |
 | 10 | `src/utils/bufferedRange.ts` | ✅ done | Number.isFinite consistency |
 | 11 | `src/utils/safeAudio.ts` | ✅ done | dead code production (chỉ test import) — chờ quyết định chung với AudioController |
-| 12 | `src/utils/streamPrefetcher.ts` | ⬜ pending | |
+| 12 | `src/utils/streamPrefetcher.ts` | ✅ done | bỏ machinery async chết, xoá export chết, comment đúng + test LRU |
 | 13 | `src/utils/nextTrackPrefetcher.ts` | ⬜ pending | |
 | 14 | `src/utils/sessionCleanup.ts` | ⬜ pending | |
 | 15 | `src/utils/sessionGuard.ts` | ⬜ pending | |
