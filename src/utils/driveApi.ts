@@ -13,6 +13,11 @@ const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const CONFIG_FILENAME = 'drplay_config.json';
 const APP_DATA_FOLDER = 'appDataFolder';
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+// 403 is retryable ONLY when its body reports a Drive usage-limit reason
+// (official docs: "403 error: rateLimitExceeded" / "userRateLimitExceeded" —
+// developers.google.com/workspace/drive/api/guides/handle-errors; same set as
+// the proSync worker precedent). Other 403s (permissions…) are never retried.
+const DRIVE_RATE_LIMIT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded']);
 const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 32000;
@@ -48,7 +53,7 @@ const UPLOAD_ERROR_DETAIL_MAX_LENGTH = 200;
 // answers each chunk with 308 Resume Incomplete plus a Range header
 // ("bytes=0-<lastByte>") telling where to resume, 200/201 means the upload
 // completed, 404 means the session expired (restart from a fresh session URI),
-// and 5xx/429 are retryable per chunk.
+// and 5xx/429 plus 403 rate-limits are retryable per chunk.
 const UPLOAD_CHUNK_MAX_RETRIES = 2;
 const UPLOAD_CHUNK_RETRY_DELAYS_MS: ReadonlyArray<number> = [1000, 3000];
 // A missing Range header on 308 means no bytes were received — resend from 0.
@@ -147,9 +152,16 @@ export async function driveFetch(
       const signal = mergeWithTimeoutSignal(options.signal, timeoutMs);
       const res = await fetchWithAuth(url, { ...options, signal });
 
-      if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_RETRIES) {
-        await sleep(backoffDelay(attempt, res.headers.get('Retry-After')));
-        continue;
+      if (attempt < MAX_RETRIES) {
+        // 429/5xx are retryable by status alone; a 403 only when its body
+        // reports a Drive rate limit. The body is read via a clone so the
+        // response returned to the caller keeps its body; the clone is only
+        // taken on attempts that could still retry (never for 2xx/5xx).
+        const rateLimit403 = res.status === 403 && (await isRateLimit403Response(res));
+        if (RETRYABLE_STATUS.has(res.status) || rateLimit403) {
+          await sleep(backoffDelay(attempt, res.headers.get('Retry-After')));
+          continue;
+        }
       }
       return res;
     } catch (err) {
@@ -625,9 +637,35 @@ async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | 
   }
 }
 
+// 403 rate-limit detection: Drive reports usage limits with the official
+// reasons rateLimitExceeded / userRateLimitExceeded (handle-errors docs + the
+// proSync worker precedent). Everything else on 403 (permissions…) is NOT a
+// rate limit and must not be retried.
+function isRateLimitError(status: number, errBody: DriveErrorBody | null): boolean {
+  if (status !== 403) return false;
+  const reason = typeof errBody?.error?.reason === 'string' ? errBody.error.reason : '';
+  return DRIVE_RATE_LIMIT_REASONS.has(reason);
+}
+
+// Read a 403 body via a clone so the response handed back to the caller keeps
+// its body intact (same clone pattern as the worker's isDriveRateLimitResponse).
+// A clone/parse failure means we cannot confirm a rate limit → treat the 403
+// as non-retryable (fail as before) instead of guessing.
+async function isRateLimit403Response(response: Response): Promise<boolean> {
+  let cloned: Response;
+  try {
+    cloned = response.clone();
+  } catch {
+    return false;
+  }
+  return isRateLimitError(response.status, await readDriveErrorBody(cloned));
+}
+
 // 403 storage-quota detection: official reason storageQuotaExceeded with
 // message "The user's Drive storage quota has been exceeded." (docs + real
-// API traces). Everything else on 403 (e.g. rate-limit) stays 'invalid'.
+// API traces). rate-limit 403s never reach this mapper — driveFetch and
+// putChunkWithRetry retry them beforehand; everything else on 403
+// (permissions…) maps to 'invalid'.
 function isQuotaExceeded(errBody: DriveErrorBody | null): boolean {
   const reason =
     typeof errBody?.error?.reason === 'string' ? errBody.error.reason.toLowerCase() : '';
@@ -811,9 +849,10 @@ function abortedUploadError(): UploadError {
   return new UploadError('upload aborted by caller', 'aborted');
 }
 
-// PUT one chunk with bounded retries for 5xx/429 (backoff [1s, 3s]). Exhausted
-// retries throw UploadError('network') — the caller decides whether to restart
-// the session. A network rejection (fetch threw) propagates raw as transient.
+// PUT one chunk with bounded retries for 5xx/429 and 403 rate-limits (backoff
+// [1s, 3s]). Exhausted retries throw UploadError('network') — the caller
+// decides whether to restart the session. A network rejection (fetch threw)
+// propagates raw as transient.
 async function putChunkWithRetry(
   uploadUri: string,
   token: string,
@@ -844,7 +883,19 @@ async function putChunkWithRetry(
       if (callerSignal?.aborted) throw abortedUploadError();
       throw err;
     }
-    const retryable = response.status === 429 || (response.status >= 500 && response.status < 600);
+    // 429/5xx are retryable by status alone; a 403 only when its body reports
+    // a Drive rate limit. The body is read via a clone so the response keeps
+    // its body for mapUploadHttpError below; a clone/parse failure means "not
+    // a rate limit" → the 403 returns as-is (fail as before). The body is
+    // only read on 403 attempts that could still retry.
+    let rateLimit403 = false;
+    if (response.status === 403 && attempt < UPLOAD_CHUNK_MAX_RETRIES) {
+      rateLimit403 = await isRateLimit403Response(response);
+    }
+    const retryable =
+      response.status === 429 ||
+      (response.status >= 500 && response.status < 600) ||
+      rateLimit403;
     if (!retryable) return response;
     if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
       await sleep(UPLOAD_CHUNK_RETRY_DELAYS_MS[attempt]);

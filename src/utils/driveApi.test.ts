@@ -47,6 +47,22 @@ function makeJsonResponse(status: number, body: unknown): Response {
   } as unknown as Response;
 }
 
+// Drive error response with a cloneable body, mirroring the real API: 403
+// rate-limit detection reads the body via response.clone() so the original
+// response stays usable.
+function makeRateLimitResponse(status: number, reason: string): Response {
+  const ok = status >= 200 && status < 300;
+  const body = { error: { code: status, message: "Rate Limit Exceeded", reason } };
+  const response = {
+    status,
+    ok,
+    headers: { get: () => null },
+    json: async () => body,
+    clone: () => response,
+  } as unknown as Response;
+  return response;
+}
+
 describe("backoffDelay", () => {
   it("honors numeric Retry-After in seconds (capped at MAX_DELAY_MS)", () => {
     expect(backoffDelay(0, "5")).toBe(5000);
@@ -123,6 +139,64 @@ describe("driveFetch retry", () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(404);
+  });
+
+  it("retries a 403 rate-limit (rateLimitExceeded) and returns the eventual 200", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "rateLimitExceeded"))
+      .mockResolvedValueOnce(makeResponse(200));
+
+    const p = driveFetch("https://www.googleapis.com/drive/v3/files");
+    await vi.advanceTimersByTimeAsync(64_000);
+    const res = await p;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(200);
+  });
+
+  it("retries a 403 rate-limit (userRateLimitExceeded) and returns the eventual 200", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "userRateLimitExceeded"))
+      .mockResolvedValueOnce(makeResponse(200));
+
+    const p = driveFetch("https://www.googleapis.com/drive/v3/files");
+    await vi.advanceTimersByTimeAsync(64_000);
+    const res = await p;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(200);
+  });
+
+  it("does NOT retry a 403 with a non-rate-limit reason (permission error)", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeRateLimitResponse(403, "insufficientFilePermissions")
+    );
+
+    const p = driveFetch("https://www.googleapis.com/drive/v3/files");
+    await vi.advanceTimersByTimeAsync(64_000);
+    const res = await p;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(403);
+  });
+
+  it("does NOT retry a 403 when the body clone throws (body already consumed)", async () => {
+    const consumed: Response = {
+      status: 403,
+      ok: false,
+      headers: { get: () => null },
+      clone: () => {
+        throw new TypeError("Failed to execute 'clone' on 'Response': body is already used");
+      },
+    } as unknown as Response;
+    mockedFetch.mockResolvedValueOnce(consumed);
+
+    const p = driveFetch("https://www.googleapis.com/drive/v3/files");
+    await vi.advanceTimersByTimeAsync(64_000);
+    const res = await p;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(403);
   });
 });
 
@@ -1122,6 +1196,68 @@ describe("uploadFileResumableChunked", () => {
 
     expect(await p).toEqual(uploadedFile);
     expect(mockedFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("chunk PUT 403 rate-limit (rateLimitExceeded) → retried with backoff [1s, 3s], succeeds", async () => {
+    vi.useFakeTimers();
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "rateLimitExceeded"))
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "userRateLimitExceeded"))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    const p = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+    });
+    // Past the 1st backoff (1s) but before the 2nd (3s): the 2nd PUT ran, the
+    // 3rd did not — proves the [1s, 3s] delay is honored for 403 retries.
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(await p).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(4);
+    expect(reader.offsets).toEqual([0]);
+  });
+
+  it("chunk PUT 403 rate-limit (userRateLimitExceeded) → retried, succeeds on the second attempt", async () => {
+    vi.useFakeTimers();
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "userRateLimitExceeded"))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    const p = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await p).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("chunk PUT 403 non-rate-limit reason (forbidden) → NOT retried → invalid", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "forbidden"));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      })
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
   it("404 on a chunk PUT → restarts a whole new session (POST + PUT again), succeeds", async () => {
