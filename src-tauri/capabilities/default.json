@@ -22,6 +22,9 @@
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "$DOWNLOAD/**" }]
     },
+    "fs:allow-read-file",
+    "fs:allow-read-dir",
+    "fs:allow-stat",
     "http:default",
     {
       "identifier": "http:default",

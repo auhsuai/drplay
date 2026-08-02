@@ -31,6 +31,28 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
+// Extend the fs READ scope for the user-picked upload source (drag-drop or
+// folder picker). Directories are allowed recursively so walkDiskFolder can
+// descend; single files get a file pattern. The plugin's resolve_path checks
+// `fs_scope.scope.is_allowed()` (runtime-extended scope) as an OR against the
+// capability paths, so bare fs:allow-read-* capabilities + this extension are
+// sufficient (verified against plugins-workspace v2 fs commands.rs 2026-08-02).
+#[tauri::command]
+fn register_upload_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_fs::FsExt;
+    let scope = app.fs_scope();
+    if std::path::Path::new(&path).is_dir() {
+        scope
+            .allow_directory(path, true)
+            .map_err(|e| format!("failed to extend fs scope for upload dir: {}", e))?;
+    } else {
+        scope
+            .allow_file(path)
+            .map_err(|e| format!("failed to extend fs scope for upload file: {}", e))?;
+    }
+    Ok(())
+}
+
 pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
     if let Ok(mut exe_path) = std::env::current_exe() {
         exe_path.pop();
@@ -118,6 +140,7 @@ pub fn run() {
             login_google_native,
             refresh_google_token,
             register_download_path,
+            register_upload_path,
             get_track_data,
             get_local_metadata,
             update_minimize_to_tray,
