@@ -14,7 +14,10 @@ const UPLOAD_METADATA_CONTENT_TYPE = 'application/json; charset=UTF-8';
 const UPLOAD_TIMEOUT_MS = 120_000;
 // Google forbids re-sending a completed PUT (it creates a NEW upload); a
 // transient PUT failure re-initiates the session at most once — never after
-// the server answered 200/201. Shared by both uploaders.
+// the server answered 200/201. Used by the chunked uploader only: the bytes
+// path (uploadFileResumable) is a single attempt and delegates retry to
+// uploadManager — one retry layer per mechanism, never two stacked on the
+// same call.
 const MAX_UPLOAD_ATTEMPTS = 2;
 // Cap errBody.message/reason strings in error logs: a 400 can echo the
 // request payload; the log must stay bounded yet carry diagnostics.
@@ -162,9 +165,12 @@ async function putResumableBytes(
   }
 }
 
-// Upload file bytes via the resumable protocol (POST initiate → PUT bytes).
-// Non-retryable HTTP errors map to UploadError kinds; only transient
-// network/timeout failures re-initiate the session, at most once. Aborts win.
+// Upload file bytes via the resumable protocol (POST initiate → PUT bytes) —
+// exactly ONE attempt. Transient network/timeout failures wrap into
+// UploadError('network') so uploadManager.uploadWithRetry — the single retry
+// layer for the bytes path (3 attempts + backoff) — can classify and retry.
+// Retrying here too would stack two retry layers on the same call and multiply
+// upload sessions. Non-retryable HTTP errors map to UploadError kinds; aborts win.
 export async function uploadFileResumable(
   token: string,
   bytes: Blob | Uint8Array,
@@ -184,25 +190,22 @@ export async function uploadFileResumable(
   }
 
   const mergedSignal = mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS);
-  for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt++) {
+  try {
+    const uploadUri = await initiateResumableUpload(token, name, parentId, byteLength, mergedSignal);
+    return await putResumableBytes(uploadUri, token, data, mergedSignal);
+  } catch (err) {
     if (signal?.aborted) {
       throw new UploadError('upload aborted by caller', 'aborted');
     }
-    try {
-      const uploadUri = await initiateResumableUpload(token, name, parentId, byteLength, mergedSignal);
-      return await putResumableBytes(uploadUri, token, data, mergedSignal);
-    } catch (err) {
-      if (signal?.aborted) {
-        throw new UploadError('upload aborted by caller', 'aborted');
-      }
-      if (err instanceof UploadError) {
-        throw err;
-      }
-      // Transient network/timeout — re-initiate a fresh session (Google: a 4xx/expired session must be restarted from scratch).
-      captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-transient-failure (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
+    if (err instanceof UploadError) {
+      throw err;
     }
+    // Transient network/timeout — wrap so the manager's single retry layer can
+    // classify it; a raw TypeError would NOT match `kind === 'network'` and
+    // would bypass the retry entirely.
+    captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-transient-failure: ${classifyDriveError(err)}` });
+    throw new UploadError('upload failed', 'network');
   }
-  throw new UploadError(`upload failed after ${MAX_UPLOAD_ATTEMPTS} attempts`, 'network');
 }
 
 // Internal marker: a 404 on a chunk PUT means the resumable session expired server-side; the whole upload must restart from a fresh session URI.

@@ -522,10 +522,14 @@ function enqueueChildFile(batch: FolderBatch, item: DiskEntry): void {
 }
 
 // Bytes-path uploads (picker/tests keep the whole body in memory): quota check
-// then uploadFileResumable with manager-level retries. Disk paths bypass this
-// and go through uploadDiskFileStreaming — the chunked uploader retries
-// transient failures internally (2 sessions × 2 chunk retries), so layering
-// the manager retries on top would multiply upload attempts.
+// then uploadFileResumable with manager-level retries — the SINGLE retry layer
+// for the bytes path (uploadFileResumable is one attempt; retry lives here, so
+// a transient failure is retried at most 3 times, never 3×2). Disk paths
+// bypass this and go through uploadDiskFileStreaming — the chunked uploader
+// retries transient failures internally (2 session restarts via its own
+// MAX_UPLOAD_ATTEMPTS + per-chunk backoff through the 308-resume protocol), a
+// DIFFERENT mechanism, so layering the manager retries on top would multiply
+// upload attempts.
 async function uploadWithQuotaAndRetry(entry: InternalEntry, data: Blob | Uint8Array): Promise<DriveFileItem> {
   const byteLength = data instanceof Blob ? data.size : data.byteLength;
   if (!(await quotaAllows(entry, byteLength))) {

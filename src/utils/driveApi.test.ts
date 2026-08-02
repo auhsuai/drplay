@@ -736,8 +736,9 @@ describe("getDriveStorageQuota", () => {
 });
 
 // Resumable upload: POST initiate (via driveFetch) → Location → PUT bytes (via
-// fetchWithAuth, no auto-retry). Transient PUT failures re-initiate a NEW
-// session at most once; caller aborts and HTTP errors never retry.
+// fetchWithAuth, no auto-retry). Exactly ONE attempt: transient network/timeout
+// failures wrap into UploadError('network') for the manager's single retry
+// layer (uploadWithRetry); caller aborts and HTTP errors never retry.
 describe("uploadFileResumable", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
@@ -841,37 +842,62 @@ describe("uploadFileResumable", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("PUT network error on first attempt → re-initiates a new session and succeeds", async () => {
+  it("PUT network error → UploadError kind network thrown immediately (single PUT, no re-initiate)", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockRejectedValueOnce(new Error("network down"))
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
 
-    const result = await uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
-
-    expect(result).toEqual(uploadedFile);
-    expect(mockedFetch).toHaveBeenCalledTimes(4);
-    expect(mockedFetch.mock.calls[0][0]).toBe(INITIATE_URL);
-    expect(mockedFetch.mock.calls[1][0]).toBe(LOCATION);
-    expect(mockedFetch.mock.calls[2][0]).toBe(INITIATE_URL);
-    expect(mockedFetch.mock.calls[3][0]).toBe(LOCATION);
-    // Both PUT attempts (call 1 and call 3) must carry the upload timeout.
-    expect(mockedFetch.mock.calls[1][1]?.timeoutMs).toBe(PUT_TIMEOUT_MS);
-    expect(mockedFetch.mock.calls[3][1]?.timeoutMs).toBe(PUT_TIMEOUT_MS);
-  });
-
-  it("PUT network error on both attempts → UploadError kind network", async () => {
-    mockedFetch
-      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockRejectedValueOnce(new Error("network down"))
-      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockRejectedValueOnce(new Error("network down"));
-
     await expect(
       uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
     ).rejects.toMatchObject({ kind: "network" });
-    expect(mockedFetch).toHaveBeenCalledTimes(4);
+    // Exactly one session: the leftover success mocks would have been consumed
+    // by an internal retry — their non-use proves the retry loop is gone.
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(mockedFetch.mock.calls[0][0]).toBe(INITIATE_URL);
+    expect(mockedFetch.mock.calls[1][0]).toBe(LOCATION);
+    expect(mockedFetch.mock.calls[1][1]?.timeoutMs).toBe(PUT_TIMEOUT_MS);
+  });
+
+  it("PUT timeout (merged 120s bound) → UploadError kind network, single attempt", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      setTimeout(
+        () =>
+          controller.abort(
+            new DOMException("The operation was aborted due to timeout", "TimeoutError")
+          ),
+        ms
+      );
+      return controller.signal;
+    });
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockImplementationOnce(
+        (_url: RequestInfo | URL, opts?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = opts?.signal;
+            if (!signal) {
+              reject(new Error("no signal passed to PUT"));
+              return;
+            }
+            signal.addEventListener("abort", () =>
+              reject(signal.reason ?? new DOMException("aborted", "AbortError"))
+            );
+          })
+      );
+
+    const p = uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
+    const assertion = expect(p).rejects.toMatchObject({ kind: "network" });
+    await vi.advanceTimersByTimeAsync(130_000);
+
+    await assertion;
+    // A stalled PUT dies to the 120s bound exactly once — never a fresh session.
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("caller abort before upload → UploadError kind aborted, zero network calls", async () => {
