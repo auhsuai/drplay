@@ -1,6 +1,7 @@
 ﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  openDiskReadStream,
   registerUploadPath,
   statDiskPath,
   readDiskFile,
@@ -284,5 +285,121 @@ describe('walkDiskFolder', () => {
     await expect(walkDiskFolder('C:\\Music')).rejects.toThrow(
       /Failed to read directory "C:\\Music\\broken"/
     );
+  });
+});
+
+describe('openDiskReadStream', () => {
+  const PATH = 'C:\\Music\\big.flac';
+  const RID = 42;
+
+  // Mirror the plugin's raw response: chunk bytes followed by the nread count
+  // as 8 big-endian bytes (guest-js FileHandle.read convention).
+  function arrayBufferPayload(bytes: number[], nread: number): ArrayBuffer {
+    const buf = new ArrayBuffer(bytes.length + 8);
+    const view = new DataView(buf);
+    new Uint8Array(buf, 0, bytes.length).set(bytes);
+    view.setBigUint64(bytes.length, BigInt(nread), false);
+    return buf;
+  }
+
+  function numberPayload(bytes: number[], nread: number): number[] {
+    const be: number[] = [];
+    for (let i = 7; i >= 0; i--) be.push(Math.floor(nread / 256 ** i) % 256);
+    return [...bytes, ...be];
+  }
+
+  it('opens with the exact invoke shape (path + options.read) and returns a stream', async () => {
+    invokeMock.mockResolvedValue(RID);
+
+    const stream = await openDiskReadStream(PATH);
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith('plugin:fs|open', {
+      path: PATH,
+      options: { read: true },
+    });
+    expect(typeof stream.read).toBe('function');
+    expect(typeof stream.close).toBe('function');
+  });
+
+  it('read() requests len = chunkSize and strips the trailing 8-byte nread', async () => {
+    invokeMock.mockResolvedValueOnce(RID);
+    invokeMock.mockResolvedValueOnce(arrayBufferPayload([1, 2, 3, 4], 4));
+
+    const stream = await openDiskReadStream(PATH, 1024);
+    const chunk = await stream.read();
+
+    expect(invokeMock).toHaveBeenCalledWith('plugin:fs|read', { rid: RID, len: 1024 });
+    expect(chunk).not.toBeNull();
+    expect(Array.from(chunk!)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('read() resolves null at EOF (nread = 0)', async () => {
+    invokeMock.mockResolvedValueOnce(RID);
+    invokeMock.mockResolvedValueOnce(arrayBufferPayload([], 0));
+
+    const stream = await openDiskReadStream(PATH);
+    await expect(stream.read()).resolves.toBeNull();
+  });
+
+  it('handles the JSON number[] fallback path with the same nread convention', async () => {
+    invokeMock.mockResolvedValueOnce(RID);
+    invokeMock.mockResolvedValueOnce(numberPayload([9, 8, 7], 3));
+
+    const stream = await openDiskReadStream(PATH);
+    const chunk = await stream.read();
+
+    expect(chunk).not.toBeNull();
+    expect(Array.from(chunk!)).toEqual([9, 8, 7]);
+  });
+
+  it('close() invokes plugin:fs|close with the rid', async () => {
+    invokeMock.mockResolvedValue(RID);
+
+    const stream = await openDiskReadStream(PATH);
+    await stream.close();
+
+    expect(invokeMock).toHaveBeenCalledWith('plugin:fs|close', { rid: RID });
+  });
+
+  it('close() failure is logged, not thrown (finally must not mask primary errors)', async () => {
+    invokeMock.mockResolvedValueOnce(RID);
+    invokeMock.mockRejectedValueOnce('close failed');
+
+    const stream = await openDiskReadStream(PATH);
+    await expect(stream.close()).resolves.toBeUndefined();
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'diskFs', level: 'warn' })
+    );
+  });
+
+  it('open rejection → wrapped error + captureError (no silent swallow)', async () => {
+    invokeMock.mockRejectedValue('path forbidden on scope');
+
+    await expect(openDiskReadStream(PATH)).rejects.toThrow(
+      /Failed to open file "C:\\Music\\big\.flac"/
+    );
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'diskFs' })
+    );
+  });
+
+  it('read rejection → wrapped error + captureError', async () => {
+    invokeMock.mockResolvedValueOnce(RID);
+    invokeMock.mockRejectedValueOnce('io error');
+
+    const stream = await openDiskReadStream(PATH);
+    await expect(stream.read()).rejects.toThrow(/Failed to read file/);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'diskFs' })
+    );
+  });
+
+  it('malformed response (< 8 bytes, no nread trailer) → wrapped error', async () => {
+    invokeMock.mockResolvedValueOnce(RID);
+    invokeMock.mockResolvedValueOnce(new Uint8Array([1, 2, 3]).buffer);
+
+    const stream = await openDiskReadStream(PATH);
+    await expect(stream.read()).rejects.toThrow(/malformed stream response/);
   });
 });

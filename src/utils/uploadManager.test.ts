@@ -12,6 +12,7 @@ vi.mock('../utils/driveApi', async (importOriginal) => {
   return {
     ...actual, // keep the REAL UploadError class — `instanceof` must work
     uploadFileResumable: vi.fn(),
+    uploadFileResumableChunked: vi.fn(),
     getDriveStorageQuota: vi.fn(),
     createFolder: vi.fn(),
   };
@@ -22,6 +23,8 @@ vi.mock('../utils/diskFs', async (importOriginal) => {
   return {
     ...actual,
     readDiskFile: vi.fn(),
+    openDiskReadStream: vi.fn(),
+    statDiskPath: vi.fn(),
     walkDiskFolder: vi.fn(),
     registerUploadPath: vi.fn(),
   };
@@ -49,9 +52,12 @@ const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
 // queue/subscriber state starts clean (fresh vi.fn instances included).
 let um: typeof import('./uploadManager');
 let uploadFileResumable: ReturnType<typeof vi.fn>;
+let uploadFileResumableChunked: ReturnType<typeof vi.fn>;
 let getDriveStorageQuota: ReturnType<typeof vi.fn>;
 let createFolderMock: ReturnType<typeof vi.fn>;
 let readDiskFile: ReturnType<typeof vi.fn>;
+let openDiskReadStream: ReturnType<typeof vi.fn>;
+let statDiskPath: ReturnType<typeof vi.fn>;
 let walkDiskFolder: ReturnType<typeof vi.fn>;
 let registerUploadPath: ReturnType<typeof vi.fn>;
 let showErrorToast: ReturnType<typeof vi.fn>;
@@ -71,9 +77,12 @@ beforeEach(async () => {
   const st = await import('../utils/simpleToast');
   const el = await import('../utils/errorLog');
   uploadFileResumable = vi.mocked(da.uploadFileResumable);
+  uploadFileResumableChunked = vi.mocked(da.uploadFileResumableChunked);
   getDriveStorageQuota = vi.mocked(da.getDriveStorageQuota);
   createFolderMock = vi.mocked(da.createFolder);
   readDiskFile = vi.mocked(df.readDiskFile);
+  openDiskReadStream = vi.mocked(df.openDiskReadStream);
+  statDiskPath = vi.mocked(df.statDiskPath);
   walkDiskFolder = vi.mocked(df.walkDiskFolder);
   registerUploadPath = vi.mocked(df.registerUploadPath);
   showErrorToast = vi.mocked(st.showErrorToast);
@@ -84,10 +93,16 @@ beforeEach(async () => {
   // single folder creation, trivial upload success.
   getDriveStorageQuota.mockResolvedValue({ limit: null, usage: 0, usageInDrive: 0, usageInDriveTrash: 0 });
   readDiskFile.mockResolvedValue(new Uint8Array([9, 9]));
+  statDiskPath.mockResolvedValue({ path: 'x', name: 'x', relativePath: 'x', isDirectory: false, size: 2 });
+  openDiskReadStream.mockResolvedValue({
+    read: vi.fn().mockResolvedValueOnce(new Uint8Array([9, 9])).mockResolvedValueOnce(null),
+    close: vi.fn().mockResolvedValue(undefined),
+  });
   walkDiskFolder.mockResolvedValue([]);
   registerUploadPath.mockResolvedValue(undefined);
   createFolderMock.mockResolvedValue({ id: 'folder-x', name: 'x', mimeType: FOLDER_MIME });
   uploadFileResumable.mockResolvedValue(makeDriveFile('file-x', 'x.mp3'));
+  uploadFileResumableChunked.mockResolvedValue(makeDriveFile('file-x', 'x.mp3'));
 
   await db.files.clear();
   dispatchSpy.mockClear();
@@ -389,7 +404,7 @@ describe('uploadManager', () => {
       name,
       mimeType: FOLDER_MIME,
     }));
-    uploadFileResumable.mockImplementation(async (_t, _b, name) => makeDriveFile(`file-${++fileCounter}`, name));
+    uploadFileResumableChunked.mockImplementation(async (_t, opts) => makeDriveFile(`file-${++fileCounter}`, opts.name));
 
     um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
     await waitIdle();
@@ -403,13 +418,15 @@ describe('uploadManager', () => {
     expect(folderCalls[0]).toEqual([TOKEN, 'Album', 'root']);
     expect(folderCalls[1]).toEqual([TOKEN, 'sub', 'folder-1']);
 
-    const uploadNames = uploadFileResumable.mock.calls.map((c) => c[2]);
-    const uploadParents = uploadFileResumable.mock.calls.map((c) => c[3]);
+    const uploadNames = uploadFileResumableChunked.mock.calls.map((c) => c[1].name);
+    const uploadParents = uploadFileResumableChunked.mock.calls.map((c) => c[1].parentId);
     expect(uploadNames).toEqual(['a.mp3', 'x.mp3', 'y.mp3']);
     expect(uploadParents).toEqual(['folder-1', 'sub-1', 'sub-1']);
 
-    const readPaths = readDiskFile.mock.calls.map((c) => c[0]);
+    const readPaths = openDiskReadStream.mock.calls.map((c) => c[0]);
     expect(readPaths).toEqual(['C:/Music/a.mp3', 'C:/Music/sub/x.mp3', 'C:/Music/sub/y.mp3']);
+    // Bytes path must NOT be used for disk files (streaming replaces it).
+    expect(uploadFileResumable).not.toHaveBeenCalled();
 
     const rows = await db.files.toArray();
     expect(rows.map((r) => r.id).sort()).toEqual(['file-1', 'file-2', 'file-3', 'folder-1', 'sub-1']);
@@ -470,7 +487,7 @@ describe('uploadManager', () => {
     ]);
     createFolderMock.mockResolvedValue({ id: 'folder-1', name: 'Album', mimeType: FOLDER_MIME });
     const d = deferred<DriveFileItem>();
-    uploadFileResumable.mockReturnValueOnce(d.promise);
+    uploadFileResumableChunked.mockReturnValueOnce(d.promise);
 
     um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
     await flush();
@@ -560,22 +577,34 @@ describe('uploadManager', () => {
     expect(um.isUploading(id)).toBe(false);
   });
 
-  it('file seed từ diskPath: register + readDiskFile + upload với basename', async () => {
+  it('file seed từ diskPath: register + stat + openDiskReadStream + chunked upload với basename', async () => {
     const path = 'C:\\Music\\Live Album\\Track One.mp3';
     um.startUploads([diskFileSeed('irrelevant', path)], TOKEN);
     await waitIdle();
 
     expect(registerUploadPath).toHaveBeenCalledWith(path);
-    expect(readDiskFile).toHaveBeenCalledWith(path);
-    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
-    const call = uploadFileResumable.mock.calls[0];
-    expect(call[2]).toBe('Track One.mp3');
-    expect(call[3]).toBe('root');
-    expect(call[1]).toBeInstanceOf(Uint8Array);
+    expect(statDiskPath).toHaveBeenCalledWith(path);
+    expect(openDiskReadStream).toHaveBeenCalledWith(path);
+    expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+    const opts = uploadFileResumableChunked.mock.calls[0][1];
+    expect(opts.name).toBe('Track One.mp3');
+    expect(opts.parentId).toBe('root');
+    expect(opts.totalSize).toBe(2);
+    expect(typeof opts.readChunk).toBe('function');
+    expect(typeof opts.onProgress).toBe('function');
+    // Disk files stream via the chunked uploader — the whole-file bytes path
+    // and readDiskFile must NOT be used.
+    expect(uploadFileResumable).not.toHaveBeenCalled();
+    expect(readDiskFile).not.toHaveBeenCalled();
+
+    // The stream opened for the upload is closed on completion (finally).
+    // (mock.results holds the raw Promise — await it to get the stream.)
+    const stream = await openDiskReadStream.mock.results[0].value;
+    expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
-  it('readDiskFile fail → entry error failed, không upload', async () => {
-    readDiskFile.mockRejectedValue(new Error('os error 2'));
+  it('openDiskReadStream fail → entry error failed, không upload', async () => {
+    openDiskReadStream.mockRejectedValue(new Error('os error 2'));
     const snapshots = captureSnapshots();
 
     um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
@@ -583,8 +612,97 @@ describe('uploadManager', () => {
 
     expect(snapshots[snapshots.length - 1]).toEqual([{ status: 'error', error: 'failed' }]);
     expect(um.getEntries()).toEqual([]);
-    expect(uploadFileResumable).not.toHaveBeenCalled();
+    expect(uploadFileResumableChunked).not.toHaveBeenCalled();
     expect(await db.files.toArray()).toHaveLength(0);
+  });
+
+  it('statDiskPath null (file biến mất giữa chừng) → entry error failed, không upload', async () => {
+    statDiskPath.mockResolvedValue(null);
+    const snapshots = captureSnapshots();
+
+    um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+    await waitIdle();
+
+    expect(snapshots[snapshots.length - 1]).toEqual([{ status: 'error', error: 'failed' }]);
+    expect(openDiskReadStream).not.toHaveBeenCalled();
+    expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+  });
+
+  it('disk file: totalSize từ stat được dùng cho quota check trước khi mở stream', async () => {
+    getDriveStorageQuota.mockResolvedValue({ limit: 100, usage: 99, usageInDrive: 99, usageInDriveTrash: 0 });
+    statDiskPath.mockResolvedValue({ path: 'C:/big.flac', name: 'big.flac', relativePath: 'big.flac', isDirectory: false, size: 2 });
+    const snapshots = captureSnapshots();
+
+    um.startUploads([diskFileSeed('x', 'C:/big.flac')], TOKEN);
+    await waitIdle();
+
+    expect(snapshots[snapshots.length - 1]).toEqual([{ status: 'error', error: 'quota' }]);
+    expect(openDiskReadStream).not.toHaveBeenCalled();
+    expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+    expect(showErrorToast).toHaveBeenCalledWith('upload.quota_exceeded');
+  });
+
+  it('chunked upload progress cập nhật vào entry qua onProgress (không fire thêm notify)', async () => {
+    const d = deferred<DriveFileItem>();
+    uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+      opts.onProgress?.(0.42);
+      return d.promise;
+    });
+    const cb = vi.fn();
+    um.subscribe(cb);
+
+    um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+    await flush();
+
+    expect(um.getEntries()[0].progress).toBe(0.42);
+    // notify fires for queued-push + uploading only — per-chunk progress must
+    // NOT spam subscribers (still exactly 2 before completion).
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    d.resolve(makeDriveFile('f1', 'x.mp3'));
+    await waitIdle();
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it('chunked upload throw → stream.close vẫn được gọi (finally)', async () => {
+    uploadFileResumableChunked.mockRejectedValueOnce(new UploadErrorClass('network down', 'network'));
+    const snapshots = captureSnapshots();
+
+    um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+    await waitIdle();
+
+    expect(snapshots[snapshots.length - 1]).toEqual([{ status: 'error', error: 'network' }]);
+    const stream = await openDiskReadStream.mock.results[0].value;
+    expect(stream.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('chunked 308-rewind: readChunk offset < vị trí stream → reopen stream mới từ đầu', async () => {
+    const s1 = {
+      read: vi.fn().mockResolvedValueOnce(new Uint8Array([1, 2])).mockResolvedValueOnce(null),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const s2 = {
+      read: vi.fn().mockResolvedValueOnce(new Uint8Array([3, 4])).mockResolvedValueOnce(null),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    openDiskReadStream.mockResolvedValueOnce(s1).mockResolvedValueOnce(s2);
+    const chunks: Uint8Array[] = [];
+    uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+      // Simulates a 308-without-Range resume: the session asks for offset 0
+      // again after the stream already consumed 2 bytes.
+      chunks.push((await opts.readChunk(0))!);
+      chunks.push((await opts.readChunk(0))!);
+      return makeDriveFile('f1', 'x.mp3');
+    });
+
+    um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+    await waitIdle();
+
+    expect(openDiskReadStream).toHaveBeenCalledTimes(2);
+    expect(s1.close).toHaveBeenCalledTimes(1);
+    expect(s2.close).toHaveBeenCalledTimes(1); // via the outer finally
+    expect(Array.from(chunks[0])).toEqual([1, 2]);
+    expect(Array.from(chunks[1])).toEqual([3, 4]);
   });
 
   it('getUploadState: entry.id đang upload/queued → uploading', async () => {
@@ -612,7 +730,7 @@ describe('uploadManager', () => {
     ]);
     createFolderMock.mockResolvedValue({ id: 'folder-1', name: 'Album', mimeType: FOLDER_MIME });
     const d = deferred<DriveFileItem>();
-    uploadFileResumable.mockReturnValueOnce(d.promise);
+    uploadFileResumableChunked.mockReturnValueOnce(d.promise);
 
     um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
     await flush();
@@ -711,12 +829,12 @@ describe('uploadManager', () => {
       name,
       mimeType: FOLDER_MIME,
     }));
-    uploadFileResumable.mockImplementation(async (_t, _b, name) => makeDriveFile(`file-${++fileCounter}`, name));
+    uploadFileResumableChunked.mockImplementation(async (_t, opts) => makeDriveFile(`file-${++fileCounter}`, opts.name));
 
     um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
     await waitIdle();
 
-    expect(uploadFileResumable).toHaveBeenCalledTimes(3);
+    expect(uploadFileResumableChunked).toHaveBeenCalledTimes(3);
     expect(um.getEntries()).toEqual([]);
   });
 

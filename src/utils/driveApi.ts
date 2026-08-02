@@ -34,7 +34,20 @@ const UPLOAD_TIMEOUT_MS = 120_000;
 // Google's resumable protocol forbids re-sending a completed PUT (it would
 // create a NEW upload). A transient PUT failure therefore re-initiates the
 // whole session at most once — never after the server answered 200/201.
+// Shared by the whole-body (uploadFileResumable) and chunked
+// (uploadFileResumableChunked) uploaders.
 const MAX_UPLOAD_ATTEMPTS = 2;
+
+// Chunked resumable upload (developers.google.com/drive/api/guides/manage-uploads):
+// chunk sizes MUST be multiples of 256 KiB except the final chunk; the server
+// answers each chunk with 308 Resume Incomplete plus a Range header
+// ("bytes=0-<lastByte>") telling where to resume, 200/201 means the upload
+// completed, 404 means the session expired (restart from a fresh session URI),
+// and 5xx/429 are retryable per chunk.
+const UPLOAD_CHUNK_MAX_RETRIES = 2;
+const UPLOAD_CHUNK_RETRY_DELAYS_MS: ReadonlyArray<number> = [1000, 3000];
+// A missing Range header on 308 means no bytes were received — resend from 0.
+const RANGE_HEADER_PATTERN = /^bytes=(\d+)-(\d+)$/;
 
 export interface DriveFileItem {
   id: string; name: string; mimeType: string; size?: string;
@@ -723,6 +736,188 @@ export async function uploadFileResumable(
       // Transient network/timeout — re-initiate a fresh session (Google: a
       // 4xx/expired session must be restarted from scratch).
       captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-transient-failure (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
+    }
+  }
+  throw new UploadError(`upload failed after ${MAX_UPLOAD_ATTEMPTS} attempts`, 'network');
+}
+
+// Internal marker: a 404 on a chunk PUT means the resumable session expired
+// server-side, so the whole upload must restart from a fresh session URI
+// (Drive docs: "the upload must be restarted from the beginning").
+class SessionExpiredError extends Error {
+  constructor() {
+    super('resumable upload session expired');
+    this.name = 'SessionExpiredError';
+  }
+}
+
+export interface ChunkedUploadOptions {
+  name: string;
+  parentId: string;
+  totalSize: number;
+  // Returns the bytes at `offset` (may be shorter than the chunk size for the
+  // final chunk), null at end of file. Called again after a 308 resume at the
+  // server-reported offset — must support arbitrary offsets, not just
+  // sequential reads.
+  readChunk: (offset: number) => Promise<Uint8Array | null>;
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+function abortedUploadError(): UploadError {
+  return new UploadError('upload aborted by caller', 'aborted');
+}
+
+// PUT one chunk with bounded retries for 5xx/429 (backoff [1s, 3s]). Exhausted
+// retries throw UploadError('network') — the caller decides whether to restart
+// the session. A network rejection (fetch threw) propagates raw as transient.
+async function putChunkWithRetry(
+  uploadUri: string,
+  token: string,
+  chunk: Uint8Array,
+  start: number,
+  end: number,
+  totalSize: number,
+  mergedSignal: AbortSignal,
+  callerSignal: AbortSignal | null | undefined
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetchWithAuth(uploadUri, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': UPLOAD_MIME_TYPE,
+          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+        },
+        body: chunk,
+        signal: mergedSignal,
+        // fetchWithAuth's 15s internal default would kill a slow chunk PUT
+        // well before the resumable session's 120s bound — keep both in sync.
+        timeoutMs: UPLOAD_TIMEOUT_MS
+      });
+    } catch (err) {
+      if (callerSignal?.aborted) throw abortedUploadError();
+      throw err;
+    }
+    const retryable = response.status === 429 || (response.status >= 500 && response.status < 600);
+    if (!retryable) return response;
+    if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
+      await sleep(UPLOAD_CHUNK_RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+    throw new UploadError(`upload failed (status=${response.status})`, 'network');
+  }
+}
+
+// Upload one session's worth of chunks. Throws UploadError for fatal errors
+// (auth/quota/invalid/aborted), SessionExpiredError for a 404 (session died),
+// and raw transient errors (network/timeout) — both non-UploadError cases let
+// the outer loop start a fresh session.
+async function uploadChunksInSession(
+  uploadUri: string,
+  token: string,
+  opts: ChunkedUploadOptions,
+  mergedSignal: AbortSignal
+): Promise<DriveFileItem> {
+  const { totalSize, readChunk, onProgress, signal } = opts;
+  let offset = 0;
+  for (;;) {
+    if (signal?.aborted) throw abortedUploadError();
+    let chunk: Uint8Array | null;
+    try {
+      chunk = await readChunk(offset);
+    } catch (err) {
+      if (signal?.aborted) throw abortedUploadError();
+      captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-chunk-read-failed (offset=${offset}): ${classifyDriveError(err)}` });
+      throw new UploadError('failed to read upload data', 'invalid');
+    }
+    // null/empty before the announced totalSize is a caller bug (EOF early);
+    // overshooting the totalSize would make Google reject the session.
+    if (chunk === null || chunk.byteLength === 0) {
+      throw new UploadError('upload data ended before total size', 'invalid');
+    }
+    if (offset + chunk.byteLength > totalSize) {
+      throw new UploadError('upload chunk exceeds total size', 'invalid');
+    }
+
+    const end = offset + chunk.byteLength - 1;
+    const response = await putChunkWithRetry(
+      uploadUri, token, chunk, offset, end, totalSize, mergedSignal, signal
+    );
+    onProgress?.(Math.min(1, (offset + chunk.byteLength) / totalSize));
+
+    if (response.status >= 200 && response.status < 300) {
+      try {
+        return (await response.json()) as DriveFileItem;
+      } catch (err) {
+        captureError({ level: 'error', source: DRIVE_MODULE, message: `upload-parse-response-failed (status=${response.status}): ${classifyDriveError(err)}` });
+        throw new UploadError('upload response was not valid JSON', 'invalid');
+      }
+    }
+    if (response.status === 308) {
+      const range = response.headers.get('Range');
+      const match = range ? RANGE_HEADER_PATTERN.exec(range) : null;
+      // "bytes=0-<lastByte>" → next offset = lastByte + 1; no/malformed Range
+      // → nothing received, resend from the start (Drive docs).
+      offset = match ? Number(match[2]) + 1 : 0;
+      if (offset >= totalSize) {
+        // 308 claiming the whole file is received without a 200/201 is a
+        // server anomaly — continuing would send an out-of-range chunk.
+        throw new UploadError('resumable server reported a complete range without completing the upload', 'invalid');
+      }
+      continue;
+    }
+    if (response.status === 404) throw new SessionExpiredError();
+    throw mapUploadHttpError(response.status, await readDriveErrorBody(response));
+  }
+}
+
+// Upload file bytes to Drive via the chunked resumable protocol: memory stays
+// bounded at chunk size regardless of totalSize (fixes the multi-GB RAM spike
+// of whole-file uploads). Bytes come from the injected readChunk, so this
+// module never touches the filesystem or the uploader's chunk size.
+export async function uploadFileResumableChunked(
+  token: string,
+  opts: ChunkedUploadOptions
+): Promise<DriveFileItem> {
+  if (opts.signal?.aborted) throw abortedUploadError();
+  if (!(opts.totalSize > 0)) {
+    // Google's resumable docs define no Content-Range format for empty files
+    // (same rule as uploadFileResumable).
+    throw new UploadError('cannot upload an empty file', 'invalid');
+  }
+  const mergedSignal = mergeWithTimeoutSignal(opts.signal, UPLOAD_TIMEOUT_MS);
+  for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt++) {
+    if (opts.signal?.aborted) throw abortedUploadError();
+    let uploadUri: string;
+    try {
+      uploadUri = await initiateResumableUpload(token, opts.name, opts.parentId, opts.totalSize, mergedSignal);
+    } catch (err) {
+      if (opts.signal?.aborted) throw abortedUploadError();
+      if (err instanceof UploadError) throw err;
+      // Initiate exhausted its own retries with a transient failure — try a
+      // fresh session (bounded by MAX_UPLOAD_ATTEMPTS).
+      if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
+        captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-session-restarted (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
+        continue;
+      }
+      break;
+    }
+    try {
+      return await uploadChunksInSession(uploadUri, token, opts, mergedSignal);
+    } catch (err) {
+      if (opts.signal?.aborted) throw abortedUploadError();
+      if (err instanceof UploadError) throw err;
+      // Session expired (404) or transient network/timeout — restart the whole
+      // upload from a fresh session URI, bounded by MAX_UPLOAD_ATTEMPTS.
+      if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
+        const expired = err instanceof SessionExpiredError;
+        captureError({ level: 'warn', source: DRIVE_MODULE, message: `${expired ? 'upload-session-expired' : 'upload-session-restarted'} (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}` });
+        continue;
+      }
+      break;
     }
   }
   throw new UploadError(`upload failed after ${MAX_UPLOAD_ATTEMPTS} attempts`, 'network');

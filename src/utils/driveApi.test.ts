@@ -7,6 +7,7 @@ import {
   getTrashedFiles,
   getDriveStorageQuota,
   uploadFileResumable,
+  uploadFileResumableChunked,
   type DriveFolderItem,
   type DriveFileItem,
 } from "./driveApi";
@@ -774,6 +775,413 @@ describe("uploadFileResumable", () => {
     await expect(
       uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
     ).rejects.toMatchObject({ kind: "quota" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Chunked streaming resumable upload: POST initiate → loop { PUT chunk →
+// 308 Range resume | 200/201 done | 404 restart session }. Memory stays
+// bounded at chunk size regardless of file size (the upload spike fix).
+describe("uploadFileResumableChunked", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const INITIATE_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
+  const LOCATION =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=chunk-123";
+  const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
+  const TOTAL_SIZE = 10_000_000;
+  // Mirrors UPLOAD_TIMEOUT_MS in driveApi.ts: each chunk PUT overrides
+  // fetchWithAuth's 15s default with the 120s upload bound.
+  const PUT_TIMEOUT_MS = 120_000;
+  const uploadedFile: DriveFileItem = {
+    id: "file-9",
+    name: "big.flac",
+    mimeType: "audio/flac",
+  };
+
+  function makeLocationResponse(status: number, location: string): Response {
+    const ok = status >= 200 && status < 300;
+    return {
+      status,
+      ok,
+      headers: {
+        get: (name: string) => (String(name).toLowerCase() === "location" ? location : null),
+      },
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  function makeRangeResponse(status: number, range: string | null): Response {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      headers: { get: (name: string) => (String(name).toLowerCase() === "range" ? range : null) },
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  function makeErrorBodyResponse(status: number, message: string, reason?: string): Response {
+    return makeJsonResponse(status, {
+      error: { code: status, message, reason: reason ?? "badRequest" },
+    });
+  }
+
+  // Offset-capable reader mirroring uploadManager's readChunk contract:
+  // returns the slice at `offset`, null when past the end.
+  function makeReader(bytes: Uint8Array, chunkSize: number): {
+    readChunk: (offset: number) => Promise<Uint8Array | null>;
+    offsets: number[];
+  } {
+    const offsets: number[] = [];
+    return {
+      offsets,
+      readChunk: async (offset) => {
+        offsets.push(offset);
+        if (offset >= bytes.length) return null;
+        return bytes.slice(offset, offset + chunkSize);
+      },
+    };
+  }
+
+  function makePayload(size: number, fill = 7): Uint8Array {
+    const b = new Uint8Array(size);
+    b.fill(fill);
+    return b;
+  }
+
+  it("happy path: 2 chunks via 308 resume, Content-Range exact, progress fractions", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8388607"))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+    const fractions: number[] = [];
+    const result = await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: TOTAL_SIZE,
+      readChunk: reader.readChunk,
+      onProgress: (f) => fractions.push(f),
+    });
+
+    expect(result).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+    expect(reader.offsets).toEqual([0, CHUNK_SIZE]);
+
+    const [postUrl, postOpts] = mockedFetch.mock.calls[0];
+    expect(postUrl).toBe(INITIATE_URL);
+    expect(postOpts?.method).toBe("POST");
+    expect((postOpts?.headers as Record<string, string>)["X-Upload-Content-Length"]).toBe(String(TOTAL_SIZE));
+
+    const [put1Url, put1Opts] = mockedFetch.mock.calls[1];
+    expect(put1Url).toBe(LOCATION);
+    expect(put1Opts?.method).toBe("PUT");
+    const put1Headers = put1Opts?.headers as Record<string, string>;
+    expect(put1Headers["Content-Range"]).toBe("bytes 0-8388607/10000000");
+    expect(put1Opts?.timeoutMs).toBe(PUT_TIMEOUT_MS);
+
+    const [, put2Opts] = mockedFetch.mock.calls[2];
+    const put2Headers = put2Opts?.headers as Record<string, string>;
+    expect(put2Headers["Content-Range"]).toBe("bytes 8388608-9999999/10000000");
+
+    expect(fractions).toEqual([8388608 / 10000000, 1]);
+  });
+
+  it("308 Range mid-chunk → resumes at lastByte+1 (readChunk called with the new offset)", async () => {
+    const total = 20_000_000; // 3 full chunks + 1 tail, room for a mid-chunk resume
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-4194303"))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8388607"))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-16777215"))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(total), CHUNK_SIZE);
+    await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: total,
+      readChunk: reader.readChunk,
+    });
+
+    expect(reader.offsets).toEqual([0, 4194304, 8388608, 16777216]);
+    const [, put2Opts] = mockedFetch.mock.calls[2];
+    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 4194304-12582911/20000000");
+    const [, put3Opts] = mockedFetch.mock.calls[3];
+    expect((put3Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 8388608-16777215/20000000");
+    const [, put4Opts] = mockedFetch.mock.calls[4];
+    expect((put4Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 16777216-19999999/20000000");
+  });
+
+  it("308 without a Range header → offset resets to 0, chunk resent from the start", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, null))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const data = makePayload(CHUNK_SIZE);
+    const reader = makeReader(data, CHUNK_SIZE);
+    await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+    });
+
+    expect(reader.offsets).toEqual([0, 0]);
+    const [, put1Opts] = mockedFetch.mock.calls[1];
+    const [, put2Opts] = mockedFetch.mock.calls[2];
+    expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-8388607/8388608");
+    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-8388607/8388608");
+  });
+
+  it("chunk 500 → retried twice with backoff [1s, 3s], then network UploadError", async () => {
+    vi.useFakeTimers();
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(500, null))
+      .mockResolvedValueOnce(makeRangeResponse(500, null))
+      .mockResolvedValueOnce(makeRangeResponse(500, null));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    const p = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+    });
+    const assertion = expect(p).rejects.toMatchObject({ kind: "network" });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await assertion;
+    // 1 original PUT + 2 retries = 3 PUT calls, no session restart.
+    expect(mockedFetch).toHaveBeenCalledTimes(4);
+    expect(reader.offsets).toEqual([0]);
+  });
+
+  it("chunk 429 → retried, succeeds on the second attempt", async () => {
+    vi.useFakeTimers();
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(429, null))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    const p = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await p).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("404 on a chunk PUT → restarts a whole new session (POST + PUT again), succeeds", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(404, null))
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    const result = await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+    });
+
+    expect(result).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(4);
+    expect(mockedFetch.mock.calls[0][0]).toBe(INITIATE_URL);
+    expect(mockedFetch.mock.calls[1][0]).toBe(LOCATION);
+    expect(mockedFetch.mock.calls[2][0]).toBe(INITIATE_URL);
+    expect(mockedFetch.mock.calls[3][0]).toBe(LOCATION);
+    // A fresh session re-uploads from offset 0.
+    expect(reader.offsets).toEqual([0, 0]);
+  });
+
+  it("404 twice → network UploadError after 2 session attempts", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(404, null))
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(404, null));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      })
+    ).rejects.toMatchObject({ kind: "network" });
+    expect(mockedFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("caller abort mid-upload → aborted, no chunk retry, no session restart", async () => {
+    const controller = new AbortController();
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        throw new DOMException("aborted", "AbortError");
+      });
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+        signal: controller.signal,
+      })
+    ).rejects.toMatchObject({ kind: "aborted" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("caller abort before upload → aborted, zero network calls", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: async () => makePayload(10),
+        signal: controller.signal,
+      })
+    ).rejects.toMatchObject({ kind: "aborted" });
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("totalSize 0 → invalid, no network calls", async () => {
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "empty.flac",
+        parentId: "p",
+        totalSize: 0,
+        readChunk: async () => null,
+      })
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("PUT 403 quota → quota, no session restart", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(
+          403,
+          "The user's Drive storage quota has been exceeded.",
+          "storageQuotaExceeded"
+        )
+      );
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      })
+    ).rejects.toMatchObject({ kind: "quota" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("PUT 401 → auth, no session restart", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeErrorBodyResponse(401, "Unauthorized"));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      })
+    ).rejects.toMatchObject({ kind: "auth" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("readChunk returns null before totalSize (EOF early) → invalid", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-4"));
+
+    const data = makePayload(5);
+    const reader = makeReader(data, CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+      })
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(reader.offsets).toEqual([0, 5]);
+  });
+
+  it("readChunk rejects → invalid UploadError, no retry", async () => {
+    mockedFetch.mockResolvedValueOnce(makeLocationResponse(200, LOCATION));
+
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: async () => {
+          throw new Error("disk io error");
+        },
+      })
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("chunk overshoot (readChunk beyond totalSize) → invalid, no PUT", async () => {
+    mockedFetch.mockResolvedValueOnce(makeLocationResponse(200, LOCATION));
+
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: 10,
+        readChunk: async () => makePayload(CHUNK_SIZE),
+      })
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("308 Range covering the whole file → invalid (server anomaly, would re-send out of range)", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, `bytes=0-${TOTAL_SIZE - 1}`));
+
+    const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+      })
+    ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 });

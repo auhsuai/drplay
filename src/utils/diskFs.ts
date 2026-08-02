@@ -10,6 +10,21 @@ import { basename } from './pathUtils';
 const FS_READ_FILE_CMD = 'plugin:fs|read_file';
 const FS_READ_DIR_CMD = 'plugin:fs|read_dir';
 const FS_STAT_CMD = 'plugin:fs|stat';
+// Streaming read commands (guest-js FileHandle pattern): open returns a
+// resource id (rid) that sequential read() calls consume, and close releases.
+const FS_OPEN_CMD = 'plugin:fs|open';
+const FS_READ_CMD = 'plugin:fs|read';
+const FS_CLOSE_CMD = 'plugin:fs|close';
+
+// Default streaming read granularity. The Drive resumable protocol requires
+// upload chunks to be multiples of 256 KiB (except the final chunk), and 8 MiB
+// satisfies that — the uploader reads chunks of exactly this size.
+export const DEFAULT_READ_CHUNK_SIZE = 8 * 1024 * 1024;
+
+// plugin:fs|read appends the number of bytes actually read (nread) as 8
+// big-endian bytes at the END of the payload (guest-js FileHandle.read
+// convention, verified in plugins-workspace v2 guest-js source).
+const NREAD_BYTES = 8;
 
 // Custom Rust command registered in src-tauri/src/lib.rs (same shape as the
 // existing register_download_path; the runtime scope it extends is checked by
@@ -113,6 +128,77 @@ export async function readDiskFile(path: string): Promise<Uint8Array> {
     throw wrapped;
   }
   return payload instanceof ArrayBuffer ? new Uint8Array(payload) : Uint8Array.from(payload);
+}
+
+/**
+ * A sequential read handle over a disk file. Each read() returns at most
+ * `chunkSize` bytes and null at end of file; close() releases the underlying
+ * resource. Memory stays bounded at chunkSize no matter how large the file is
+ * (unlike readDiskFile, which materializes the whole file in the JS heap).
+ */
+export interface DiskReadStream {
+  read(): Promise<Uint8Array | null>; // null = end of file
+  close(): Promise<void>;
+}
+
+// Parse the plugin's big-endian 8-byte nread trailer (same algorithm as
+// guest-js fromBytes).
+function fromBigEndian(bytes: Uint8Array): number {
+  let x = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    x *= 0x100;
+    x += bytes[i];
+  }
+  return x;
+}
+
+export async function openDiskReadStream(
+  path: string,
+  chunkSize: number = DEFAULT_READ_CHUNK_SIZE
+): Promise<DiskReadStream> {
+  let rid: number;
+  try {
+    rid = await invoke<number>(FS_OPEN_CMD, { path, options: { read: true } });
+  } catch (err: unknown) {
+    const wrapped = wrapError(`Failed to open file "${path}"`, err);
+    captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-open' });
+    throw wrapped;
+  }
+
+  async function read(): Promise<Uint8Array | null> {
+    let payload: ArrayBuffer | number[];
+    try {
+      payload = await invoke<ArrayBuffer | number[]>(FS_READ_CMD, { rid, len: chunkSize });
+    } catch (err: unknown) {
+      const wrapped = wrapError(`Failed to read file "${path}"`, err);
+      captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-read' });
+      throw wrapped;
+    }
+    const arr = payload instanceof ArrayBuffer ? new Uint8Array(payload) : Uint8Array.from(payload);
+    // The plugin guarantees ≥8 elements; anything shorter is a protocol
+    // violation and would misparse nread into silently wrong chunk data.
+    if (arr.byteLength < NREAD_BYTES) {
+      const wrapped = new Error(`Failed to read file "${path}": malformed stream response`);
+      captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-read' });
+      throw wrapped;
+    }
+    const nread = fromBigEndian(arr.slice(arr.byteLength - NREAD_BYTES));
+    if (nread === 0) return null; // end of file
+    return arr.slice(0, arr.byteLength - NREAD_BYTES);
+  }
+
+  // Close errors are logged, not thrown: close runs from a caller finally and
+  // must never mask the primary outcome (upload result or an earlier error).
+  async function close(): Promise<void> {
+    try {
+      await invoke(FS_CLOSE_CMD, { rid });
+    } catch (err: unknown) {
+      const wrapped = wrapError(`Failed to close file "${path}"`, err);
+      captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-close' });
+    }
+  }
+
+  return { read, close };
 }
 
 /**

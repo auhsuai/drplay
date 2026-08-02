@@ -1,9 +1,9 @@
 import { t } from 'i18next';
 import { db } from '../db/db';
 import type { DriveFile } from '../db/db';
-import { createFolder, getDriveStorageQuota, uploadFileResumable, UploadError } from './driveApi';
+import { createFolder, getDriveStorageQuota, uploadFileResumable, uploadFileResumableChunked, UploadError } from './driveApi';
 import type { DriveFileItem, DriveStorageQuota } from './driveApi';
-import { readDiskFile, registerUploadPath, walkDiskFolder } from './diskFs';
+import { openDiskReadStream, registerUploadPath, statDiskPath, walkDiskFolder } from './diskFs';
 import type { DiskEntry } from './diskFs';
 import { captureError } from './errorLog';
 import { basename } from './pathUtils';
@@ -36,6 +36,7 @@ export interface UploadEntry {
   bytes?: Blob | Uint8Array;
   status: 'queued' | 'uploading' | 'done' | 'error';
   error?: string; // only when status === 'error'
+  progress?: number; // 0..1 fraction of bytes confirmed by Drive (chunked disk uploads)
 }
 
 export interface UploadSeed {
@@ -147,6 +148,7 @@ export function getEntries(): UploadEntry[] {
   return entries.map((e) => ({
     id: e.id, name: e.name, isFolder: e.isFolder, parentId: e.parentId,
     status: e.status, diskPath: e.diskPath, bytes: e.bytes, error: e.error,
+    progress: e.progress,
   }));
 }
 
@@ -241,8 +243,7 @@ async function handleDiskFile(entry: InternalEntry): Promise<DriveFileItem> {
   if (!path) throw new UploadError('missing disk path', 'invalid');
   entry.name = basename(path);
   await registerUploadPath(path);
-  const data = await readDiskFile(path);
-  return uploadWithQuotaAndRetry(entry, data);
+  return uploadDiskFileStreaming(entry, path);
 }
 
 async function handleChildFile(entry: InternalEntry): Promise<DriveFileItem> {
@@ -254,8 +255,64 @@ async function handleChildFile(entry: InternalEntry): Promise<DriveFileItem> {
   entry.parentId = parentId;
   const path = entry.diskPath;
   if (!path) throw new UploadError('missing disk path', 'invalid');
-  const data = await readDiskFile(path);
-  return uploadWithQuotaAndRetry(entry, data);
+  return uploadDiskFileStreaming(entry, path);
+}
+
+// Disk-path files stream in bounded chunks (~8 MiB in memory) instead of
+// materializing the whole file in the JS heap — the fix for the multi-GB RAM
+// spike when uploading large FLAC/WAV files. The file size comes from one stat
+// (walk entries carry size 0), which also feeds the quota check.
+async function uploadDiskFileStreaming(entry: InternalEntry, path: string): Promise<DriveFileItem> {
+  const stat = await statDiskPath(path);
+  if (stat === null || stat.isDirectory) {
+    // Plain Error (not UploadError) so the entry shows 'failed', same as the
+    // old whole-file read failure.
+    throw new Error(`file not found on disk: ${basename(path)}`);
+  }
+  if (!(await quotaAllows(entry, stat.size))) {
+    throw new UploadError('drive storage quota exceeded', 'quota');
+  }
+  return uploadDiskPathChunked(entry, path, stat.size);
+}
+
+async function uploadDiskPathChunked(entry: InternalEntry, path: string, totalSize: number): Promise<DriveFileItem> {
+  let stream = await openDiskReadStream(path);
+  let consumed = 0;
+  const readChunk = async (offset: number): Promise<Uint8Array | null> => {
+    if (offset < consumed) {
+      // A 308 resume can ask for bytes we already consumed (server received
+      // fewer than sent). The rid-backed handle only reads forward, so reopen
+      // the stream and skip to the requested offset.
+      await stream.close();
+      stream = await openDiskReadStream(path);
+      consumed = 0;
+    }
+    while (consumed < offset) {
+      const skipped = await stream.read();
+      if (skipped === null) break;
+      consumed += skipped.byteLength;
+    }
+    const chunk = await stream.read();
+    if (chunk === null) return null;
+    consumed += chunk.byteLength;
+    return chunk;
+  };
+  try {
+    return await uploadFileResumableChunked(entry.token, {
+      name: entry.name,
+      parentId: entry.parentId,
+      totalSize,
+      readChunk,
+      // Progress is written silently on the entry — no notify() per chunk
+      // (subscribers re-render on status changes only; per-chunk notifies
+      // would spam the UI on a 1 GB file = 128 chunks).
+      onProgress: (fraction) => {
+        entry.progress = fraction;
+      },
+    });
+  } finally {
+    await stream.close();
+  }
 }
 
 async function handleFolderChild(entry: InternalEntry): Promise<DriveFileItem> {
@@ -326,6 +383,11 @@ function enqueueChildFile(batch: FolderBatch, item: DiskEntry): void {
   });
 }
 
+// Bytes-path uploads (picker/tests keep the whole body in memory): quota check
+// then uploadFileResumable with manager-level retries. Disk paths bypass this
+// and go through uploadDiskFileStreaming — the chunked uploader retries
+// transient failures internally (2 sessions × 2 chunk retries), so layering
+// the manager retries on top would multiply upload attempts.
 async function uploadWithQuotaAndRetry(entry: InternalEntry, data: Blob | Uint8Array): Promise<DriveFileItem> {
   const byteLength = data instanceof Blob ? data.size : data.byteLength;
   if (!(await quotaAllows(entry, byteLength))) {
