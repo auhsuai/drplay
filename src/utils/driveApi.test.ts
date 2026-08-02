@@ -662,6 +662,36 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
   });
 });
 
+// Upgrade: a 200 response whose body is not valid JSON (proxy truncation,
+// wrong Content-Type, server bug) must reject with a classified error instead
+// of a raw SyntaxError leaking out of response.json() — callers surface the
+// message in the UI, so "malformed response" tells the user the server answer
+// was unreadable rather than dumping a parser error.
+describe("drivePagination malformed JSON body", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("searchFolders throws `Failed to search folders (malformed response)` when json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      headers: { get: () => null },
+      json: async () => {
+        throw new SyntaxError("Unexpected token '<', \"<html>...\" is not valid JSON");
+      },
+    } as unknown as Response);
+
+    await expect(searchFolders("tok", "name contains 'foo'")).rejects.toThrow(
+      "Failed to search folders (malformed response)"
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 // Regression: getDriveStorageQuota (sidebar storage quota display) must reuse
 // driveFetch, parse int64 byte strings, tolerate an absent limit (unlimited),
 // and NEVER throw — the sidebar hides itself on failure.

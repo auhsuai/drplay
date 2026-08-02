@@ -16,8 +16,8 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 2 | `src/utils/apiClient.ts` | ✅ done | invoke refresh_google_token bọc timeout 15s (Tauri #8351) |
 | 3 | `src/utils/diskFs.ts` | ✅ done | đạt chuẩn 2026, không cần nâng cấp (raw invoke = guest-js 2.5.1, verified) |
 | 4 | `src/utils/driveUpload.ts` | ⬜ pending | |
-| 5 | `src/utils/uploadManager.ts` | ⏳ in progress | |
-| 6 | `src/utils/drivePagination.ts` | ⬜ pending | |
+| 5 | `src/utils/uploadManager.ts` | ✅ done | backoffDelay/sleep chung, xoá dead attempt, type CustomEvent |
+| 6 | `src/utils/drivePagination.ts` | ✅ done | json() malformed guard, classify lỗi thay SyntaxError thô |
 | 7 | `src/utils/cache.ts` | ⬜ pending | |
 | 8 | `src/utils/metadata.ts` | ⬜ pending | |
 | 9 | `src/utils/audioQuery.ts` | ⬜ pending | |

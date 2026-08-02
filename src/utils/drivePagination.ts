@@ -42,7 +42,15 @@ async function fetchAllPages<T>(
     if (!response.ok) {
       throw new Error(`Failed to ${failureLabel} (${response.status})`);
     }
-    const data = (await response.json()) as { files?: T[]; nextPageToken?: string };
+    let data: { files?: T[]; nextPageToken?: string };
+    try {
+      data = (await response.json()) as { files?: T[]; nextPageToken?: string };
+    } catch {
+      // A 200 body that is not JSON (proxy/truncated response) would otherwise
+      // surface as a raw SyntaxError from json(); classify it so callers can
+      // show a meaningful message. Never log the raw body (may be huge/opaque).
+      throw new Error(`Failed to ${failureLabel} (malformed response)`);
+    }
     if (data.files) all.push(...data.files);
     pageToken = data.nextPageToken;
     if (!pageToken) break;
