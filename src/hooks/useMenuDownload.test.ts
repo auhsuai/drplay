@@ -5,12 +5,17 @@ import type { MouseEvent } from 'react';
 import type { TFunction } from 'i18next';
 import type { Track } from '../App';
 import { invoke } from '@tauri-apps/api/core';
+import { join } from '@tauri-apps/api/path';
 import { getValidToken } from '../utils/apiClient';
 import { getEffectiveDownloadPath, getCustomDownloadPath } from '../utils/downloadPath';
 import { useMenuDownload } from './useMenuDownload';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api/path', () => ({
+  join: vi.fn(),
 }));
 
 vi.mock('../utils/apiClient', () => ({
@@ -26,6 +31,7 @@ const mockedInvoke = vi.mocked(invoke);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedGetEffectiveDownloadPath = vi.mocked(getEffectiveDownloadPath);
 const mockedGetCustomDownloadPath = vi.mocked(getCustomDownloadPath);
+const mockedJoin = vi.mocked(join);
 
 // Minimal TFunction: return the Vietnamese fallback, matching how the hook
 // calls t(key, fallback).
@@ -89,6 +95,9 @@ beforeEach(() => {
   mockedGetValidToken.mockResolvedValue('test-token');
   mockedGetEffectiveDownloadPath.mockResolvedValue('C:\\Downloads');
   mockedGetCustomDownloadPath.mockReturnValue(null);
+  // Windows-style separator, matching the pre-upgrade behavior the existing
+  // assertions were written against.
+  mockedJoin.mockImplementation(async (dir: string, file: string) => `${dir}\\${file}`);
   mockedInvoke.mockImplementation(async () => undefined);
 });
 
@@ -280,5 +289,19 @@ describe('useMenuDownload abortable download', () => {
     await runDownload();
 
     expect(timeoutSpy).toHaveBeenCalledWith(300_000);
+  });
+});
+
+describe('useMenuDownload save path building (RC3)', () => {
+  it('builds the save path via join() with the platform separator (POSIX regression: no literal backslash)', async () => {
+    mockedJoin.mockImplementation(async (dir: string, file: string) => `${dir}/${file}`);
+    mockedGetEffectiveDownloadPath.mockResolvedValue('/home/user/Music');
+    fetchResolved();
+
+    await runDownload();
+
+    expect(mockedJoin).toHaveBeenCalledWith('/home/user/Music', 'Test Song - Test Artist.mp3');
+    const { pathHeader } = writeFileCall();
+    expect(pathHeader).toBe(encodeURIComponent('/home/user/Music/Test Song - Test Artist.mp3'));
   });
 });

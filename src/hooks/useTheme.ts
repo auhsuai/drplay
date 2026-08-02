@@ -1,16 +1,23 @@
 import { useState, useEffect } from "react";
+import { captureError } from "../utils/errorLog";
 
 export type ThemeType = 'light' | 'dark' | 'system';
 
-export const useTheme = () => {
-  const [theme, setTheme] = useState<ThemeType>('system');
+function isThemeType(value: unknown): value is ThemeType {
+  return value === 'light' || value === 'dark' || value === 'system';
+}
 
-  useEffect(() => {
-    const savedTheme = localStorage.getItem("drplay_theme") as ThemeType;
-    if (savedTheme) {
-      setTheme(savedTheme);
+export const useTheme = () => {
+  // Lazy initializer: read the stored theme on first render so the apply
+  // effect below already sees the right value (no FOUC after first paint).
+  const [theme, setTheme] = useState<ThemeType>(() => {
+    try {
+      const v = localStorage.getItem("drplay_theme");
+      return isThemeType(v) ? v : 'system';
+    } catch {
+      return 'system';
     }
-  }, []);
+  });
 
   // Apply Theme
   useEffect(() => {
@@ -38,7 +45,11 @@ export const useTheme = () => {
 
   const changeTheme = (newTheme: ThemeType) => {
     setTheme(newTheme);
-    localStorage.setItem('drplay_theme', newTheme);
+    try {
+      localStorage.setItem('drplay_theme', newTheme);
+    } catch {
+      captureError({ level: 'warn', source: 'useTheme', message: 'theme-write-failed' });
+    }
   };
 
   return { theme, setTheme: changeTheme };

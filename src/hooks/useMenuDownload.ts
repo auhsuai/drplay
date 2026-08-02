@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { join } from '@tauri-apps/api/path';
 import { getValidToken } from '../utils/apiClient';
 import { getEffectiveDownloadPath, getCustomDownloadPath } from '../utils/downloadPath';
+import { mergeWithTimeoutSignal } from '../utils/driveApi';
 import { isUploading } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { captureError } from '../utils/errorLog';
-import { Track } from '../App';
+import type { Track } from '../types';
 import { TFunction } from 'i18next';
 
 // The download buffers the ENTIRE file into RAM via arrayBuffer(), so an
@@ -82,9 +84,7 @@ export function useMenuDownload(t: TFunction) {
     // Merge the cancel signal with a bounded timeout so a stalled server
     // cannot hold the RAM-buffered bytes forever (MDN AbortSignal.any /
     // AbortSignal.timeout; same pattern as useDrive.ts:72).
-    const signal = typeof AbortSignal.any === 'function'
-      ? AbortSignal.any([controller.signal, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)])
-      : controller.signal;
+    const signal = mergeWithTimeoutSignal(controller.signal, DOWNLOAD_TIMEOUT_MS);
 
     try {
       const freshToken = await getValidToken(false, signal);
@@ -120,7 +120,9 @@ export function useMenuDownload(t: TFunction) {
       const base = downloadFileName.trim() || 'audio';
       const ext = downloadTrack.originalName?.includes('.') ? downloadTrack.originalName.slice(downloadTrack.originalName.lastIndexOf('.')) : '.mp3';
       const finalFileName = sanitizeFilename(`${base}${ext}`);
-      const savePath = `${dir}\\${finalFileName}`;
+      // join() uses the platform-specific separator (Tauri v2 path API) so a
+      // POSIX build no longer writes a literal backslash into the file name.
+      const savePath = await join(dir, finalFileName);
 
       // tauri-plugin-fs v2: write_file reads the target path from a request
       // header and takes the bytes as the raw invoke body. Passing the

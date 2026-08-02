@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { db } from '../db/db';
 import { fetchWithAuth } from '../utils/apiClient';
+import { classifyDriveError } from '../utils/driveApi';
 import { captureError } from '../utils/errorLog';
 
 const HISTORY_LIMIT = 20;
@@ -12,20 +13,15 @@ const EVENT_LOCATE_FILE = 'locate-file';
 const STORAGE_KEY_ROOT = 'drplay_root_folder';
 const UNKNOWN_FOLDER = 'Unknown Folder';
 
-function classifyAppError(err: unknown): string {
-  const msg =
-    err instanceof Error
-      ? err.message
-      : typeof err === "string"
-        ? err
-        : "unknown-error";
-  const m = msg.toLowerCase();
-  if (m.includes("timeout") || m.includes("aborterror")) return "timeout";
-  if (m.includes("network") || m.includes("failed to fetch") || m.includes("unreachable"))
-    return "network";
-  const statusMatch = m.match(/\((\d{3})\)/);
-  if (statusMatch) return `http-${statusMatch[1]}`;
-  return "unknown";
+// localStorage can throw (privacy mode / disabled storage) — a failed root
+// read must never crash the locate flow; fall back to the Drive root.
+function readStoredRootFolder(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEY_ROOT);
+  } catch {
+    captureError({ level: 'warn', source: 'useLocateFile', message: 'locate-root-read-failed' });
+    return null;
+  }
 }
 
 export function useLocateFile(
@@ -51,7 +47,7 @@ export function useLocateFile(
       }
 
       const rebuildHistory = async (targetFolderId: string): Promise<{ id: string, name: string }[]> => {
-        const rootRaw = localStorage.getItem(STORAGE_KEY_ROOT);
+        const rootRaw = readStoredRootFolder();
         const rootId = rootRaw || ROOT_FOLDER_ID;
         
         let current = targetFolderId;
@@ -76,7 +72,7 @@ export function useLocateFile(
                 }
               }
             } catch (e: unknown) {
-              captureError({ level: 'warn', source: 'useLocateFile', message: `Failed to get parents via API: ${classifyAppError(e)}` });
+              captureError({ level: 'warn', source: 'useLocateFile', message: `Failed to get parents via API: ${classifyDriveError(e)}` });
             }
             if (!pId) break;
           } else {
@@ -101,7 +97,7 @@ export function useLocateFile(
                 newHistory.unshift({ id: pId, name: UNKNOWN_FOLDER });
               }
             } catch (e: unknown) {
-              captureError({ level: 'warn', source: 'useLocateFile', message: `Parent name fetch failed: ${classifyAppError(e)}` });
+              captureError({ level: 'warn', source: 'useLocateFile', message: `Parent name fetch failed: ${classifyDriveError(e)}` });
               newHistory.unshift({ id: pId, name: UNKNOWN_FOLDER });
             }
           } else {
@@ -131,7 +127,7 @@ export function useLocateFile(
             }
           }
         } catch (e: unknown) {
-          captureError({ level: 'warn', source: 'useLocateFile', message: `Locate parent API failed: ${classifyAppError(e)}` });
+          captureError({ level: 'warn', source: 'useLocateFile', message: `Locate parent API failed: ${classifyDriveError(e)}` });
         }
 
         if (!parentId) {
@@ -144,7 +140,7 @@ export function useLocateFile(
         
         if (!parentId) throw new Error("Could not determine parent folder");
         
-        const rootRaw = localStorage.getItem(STORAGE_KEY_ROOT);
+        const rootRaw = readStoredRootFolder();
         const rootId = rootRaw || ROOT_FOLDER_ID;
         
         if (parentId === rootId || parentId === ROOT_FOLDER_ID) {
@@ -183,7 +179,7 @@ export function useLocateFile(
 
         setTimeout(() => setHighlightedFileId(null), HIGHLIGHT_DURATION_MS);
       } catch (err: unknown) {
-        captureError({ level: 'error', source: 'useLocateFile', message: `Locate file failed: ${classifyAppError(err)}` });
+        captureError({ level: 'error', source: 'useLocateFile', message: `Locate file failed: ${classifyDriveError(err)}` });
       } finally {
         if (mounted) setIsLoadingTracks(false);
       }

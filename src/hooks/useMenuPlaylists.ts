@@ -3,7 +3,7 @@ import { getPlaylists, addTrackToPlaylist, Playlist } from '../utils/playlists';
 import { isUploading } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { captureError } from '../utils/errorLog';
-import { Track } from '../App';
+import type { Track } from '../types';
 import { TFunction } from 'i18next';
 
 const SUBMENU_WIDTH = 270;
