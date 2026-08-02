@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { Folder, Music, Square, CheckSquare, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { DriveItem, Track } from "../../../App";
+import { Track } from "../../../App";
+import type { DriveItem } from "../../../types";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { formatBytes } from "../../../utils/formatBytes";
 import { captureError } from "../../../utils/errorLog";

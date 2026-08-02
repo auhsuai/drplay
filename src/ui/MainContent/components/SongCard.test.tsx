@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vite
 import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import { SongCard, coverImageCache } from './SongCard';
 import { getTrackMetadata } from '../../../utils/metadata';
-import type { DriveItem } from '../../../App';
+import type { DriveItem } from '../../../types';
 
 vi.mock('../../../utils/metadata', () => ({
   getTrackMetadata: vi.fn(),

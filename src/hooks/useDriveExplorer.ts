@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useSyncExternalStore, useCallback } from 'react';
-import type { DriveItem } from '../App';
+import type { DriveItem } from '../types';
 import { useDebouncedLiveQuery } from './useDebouncedLiveQuery';
 import { db, DriveFile } from '../db/db';
 import { normalizeText } from '../utils/normalizeText';

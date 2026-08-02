@@ -1,5 +1,5 @@
 import { Loader2, Trash2 } from 'lucide-react';
-import { DriveItem } from '../../../App';
+import type { DriveItem } from '../../../types';
 
 interface DeleteConfirmDialogProps {
   show: boolean;

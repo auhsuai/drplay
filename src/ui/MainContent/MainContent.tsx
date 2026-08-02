@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback } from "react";
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Track, DriveItem } from "../../App";
+import { Track } from "../../App";
+import type { DriveItem } from "../../types";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";

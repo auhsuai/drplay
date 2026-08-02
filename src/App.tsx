@@ -36,22 +36,6 @@ import { useLocateFile } from "./hooks/useLocateFile";
 import type { Track, UserProfile } from './types';
 export type { Track, UserProfile };
 
-export type DriveItem = {
-  id: string;
-  title: string;
-  isFolder: boolean;
-  trackInfo?: Track;
-  size?: number;
-  modifiedTime?: string;
-};
-
-export type BreadcrumbItem = {
-  id: string;
-  name: string;
-};
-
-
-
 
 const LS_ROOT_FOLDER = 'drplay_root_folder';
 const LS_CURRENT_FOLDER_ID = 'drplay_current_folder_id';

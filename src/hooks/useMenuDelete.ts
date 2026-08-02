@@ -4,7 +4,7 @@ import { db } from '../db/db';
 import { isUploading } from '../utils/uploadManager';
 import { showErrorToast } from '../utils/simpleToast';
 import { captureError } from '../utils/errorLog';
-import type { DriveItem } from '../App';
+import type { DriveItem } from '../types';
 import { TFunction } from 'i18next';
 
 export function useMenuDelete(t: TFunction) {

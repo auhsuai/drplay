@@ -21,3 +21,19 @@ export type UserProfile = {
 };
 
 export type PlayMode = 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
+
+// moved from App.tsx
+export type DriveItem = {
+  id: string;
+  title: string;
+  isFolder: boolean;
+  trackInfo?: Track;
+  size?: number;
+  modifiedTime?: string;
+};
+
+// moved from App.tsx
+export type BreadcrumbItem = {
+  id: string;
+  name: string;
+};

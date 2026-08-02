@@ -2,7 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testing-library/react';
 import { MoreMenu } from './MoreMenu';
-import type { Track, DriveItem } from '../../App';
+import type { Track } from '../../App';
+import type { DriveItem } from '../../types';
 
 const mocks = vi.hoisted(() => ({
   driveApi: {

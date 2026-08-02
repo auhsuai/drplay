@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal, Download, FolderOutput, Trash2, Loader2, CheckCircle2, Music, ChevronRight, CheckSquare, MapPin } from "lucide-react";
-import { Track, DriveItem } from "../../App";
+import { Track } from "../../App";
+import type { DriveItem } from "../../types";
 import { moveFile } from "../../utils/driveApi";
 import { isUploading, subscribe as subscribeUploads } from "../../utils/uploadManager";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
