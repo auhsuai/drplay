@@ -3,6 +3,7 @@ import { db } from '../db/db';
 import type { Track } from '../types';
 import { captureError } from './errorLog';
 import { METADATA_KEY_PREFIX, V_PLACEHOLDER } from './metadata';
+import { getCurrentUserEmail } from './storageKeys';
 
 const RECENT_CAP = 1000;
 const PLAY_COUNT_CAP = 1000;
@@ -10,18 +11,12 @@ const FOLDER_VISIT_CAP = 1000;
 const HEAVY_ROTATION_LIMIT = 10;
 const RANDOM_DISCOVERIES_LIMIT = 12;
 const MOST_VISITED_FOLDERS_LIMIT = 4;
-const DEFAULT_USER_EMAIL = 'default';
-const TOKEN_KEY_EMAIL = 'drplay_current_user_email';
 const HISTORY_MODULE = 'history';
 
 function classifyHistoryError(err: unknown): string {
   const name = err instanceof Error ? err.name : "unknown";
   const message = err instanceof Error ? err.message : String(err);
   return `${name}: ${message}`;
-}
-
-function currentUserEmail(): string {
-  return localStorage.getItem(TOKEN_KEY_EMAIL) || DEFAULT_USER_EMAIL;
 }
 
 export interface PlayCountEntry {
@@ -37,7 +32,7 @@ export interface FolderVisitEntry {
 }
 
 export async function recordPlay(track: Track) {
-  const email = currentUserEmail();
+  const email = getCurrentUserEmail();
   try {
     await db.transaction('rw', [db.recentTracks, db.playCounts], async () => {
       // Compound PK [userEmail+id] (schema v7): the row is addressable by its
@@ -119,7 +114,7 @@ async function pruneRecentTracks(email: string): Promise<void> {
 }
 
 export async function getRecentlyPlayed(): Promise<Track[]> {
-  const email = currentUserEmail();
+  const email = getCurrentUserEmail();
   try {
     const rows = await db.recentTracks.where('userEmail').equals(email).toArray();
     rows.sort((a, b) => b.createdAt - a.createdAt);
@@ -138,7 +133,7 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
 }
 
 export async function getHeavyRotation(): Promise<Track[]> {
-  const email = currentUserEmail();
+  const email = getCurrentUserEmail();
   try {
     // Top 10 by count straight from the [userEmail+count] index (schema v6):
     // a reversed compound range capped at 10 — never materializes the whole
@@ -194,7 +189,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
 
 export async function recordFolderVisit(folderId: string, folderName: string) {
   if (folderId === 'root') return;
-  const email = currentUserEmail();
+  const email = getCurrentUserEmail();
   try {
     await db.transaction('rw', [db.folderVisits], async () => {
       // Compound PK [userEmail+id] (schema v7): the row is addressable by its
@@ -235,7 +230,7 @@ async function pruneFolderVisits(email: string): Promise<void> {
 }
 
 export async function getMostVisitedFolders(): Promise<FolderVisitEntry[]> {
-  const email = currentUserEmail();
+  const email = getCurrentUserEmail();
   try {
     const rows = await db.folderVisits.where('userEmail').equals(email).toArray();
     return rows

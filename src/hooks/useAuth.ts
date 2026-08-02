@@ -11,6 +11,7 @@ import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
 import { showErrorToast } from "../utils/simpleToast";
 import { PLAYER_STOP_EVENT } from './usePlayer';
+import { USER_EMAIL_KEY } from '../utils/storageKeys';
 
 interface TokenData {
   access_token: string;
@@ -26,7 +27,6 @@ const SYNC_INTERVAL_MS = 2 * 60 * 1000;
 const LS_ACCESS_TOKEN = 'drplay_access_token';
 const LS_REFRESH_TOKEN = 'drplay_refresh_token';
 const LS_TOKEN_TIME = 'drplay_token_time';
-const LS_USER_EMAIL = 'drplay_current_user_email';
 
 const CLEAR_STREAM_TOKEN_CMD = 'clear_stream_token';
 
@@ -115,7 +115,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         localStorage.removeItem(LS_ACCESS_TOKEN);
         localStorage.removeItem(LS_REFRESH_TOKEN);
         localStorage.removeItem(LS_TOKEN_TIME);
-        localStorage.removeItem(LS_USER_EMAIL);
+        localStorage.removeItem(USER_EMAIL_KEY);
       } catch {
         captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-clear-failed' });
       }
@@ -238,7 +238,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
               picture: typeof data.picture === 'string' ? data.picture : ''
             });
             try {
-              localStorage.setItem(LS_USER_EMAIL, data.email);
+              localStorage.setItem(USER_EMAIL_KEY, data.email);
             } catch {
               captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-write-failed' });
             }

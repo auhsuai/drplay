@@ -2,10 +2,9 @@ import type { Track } from '../types';
 import { db } from '../db/db';
 import { showErrorToast } from './simpleToast';
 import { captureError } from './errorLog';
+import { getCurrentUserEmail } from './storageKeys';
 
 const FAV_MODULE = "favorites";
-const DEFAULT_USER_EMAIL = 'default';
-const TOKEN_KEY_EMAIL = 'drplay_current_user_email';
 
 // Classify a favorites persistence error for observability. Returns name +
 // message only — never the error object/stack, which can leak track data.
@@ -13,10 +12,6 @@ function classifyFavoriteError(err: unknown): string {
   const name = err instanceof Error ? err.name : typeof err;
   const message = err instanceof Error ? err.message : String(err);
   return `${name}: ${message}`;
-}
-
-function getCurrentUserEmail() {
-  return localStorage.getItem(TOKEN_KEY_EMAIL) || DEFAULT_USER_EMAIL;
 }
 
 export async function getFavorites(): Promise<Track[]> {

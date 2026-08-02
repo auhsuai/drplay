@@ -2,6 +2,7 @@ import { db } from '../db/db';
 import type { Track } from '../types';
 import { showErrorToast } from './simpleToast';
 import { captureError } from './errorLog';
+import { getCurrentUserEmail } from './storageKeys';
 
 export interface Playlist {
   id: string;
@@ -13,8 +14,6 @@ export interface Playlist {
 }
 
 const PLAYLIST_MODULE = "playlists";
-const DEFAULT_USER_EMAIL = 'default';
-const TOKEN_KEY_EMAIL = 'drplay_current_user_email';
 
 // Derive a short, safe classification from an error's name/message ONLY.
 // We never log the error object or its stack — those can leak file ids, user
@@ -32,12 +31,8 @@ function classifyPlaylistError(err: unknown): { name: string; message: string } 
   return { name, message };
 }
 
-function getUserEmail(): string {
-  return localStorage.getItem(TOKEN_KEY_EMAIL) || DEFAULT_USER_EMAIL;
-}
-
 async function loadPlaylists(): Promise<Playlist[]> {
-  const email = getUserEmail();
+  const email = getCurrentUserEmail();
   const rows = await db.playlists.where('userEmail').equals(email).toArray();
   return rows.map(({ id, userEmail, name, createdAt, tracks, coverImage }) => ({
     id,
@@ -65,7 +60,7 @@ export async function getPlaylists(): Promise<Playlist[]> {
 
 export async function createPlaylist(name: string): Promise<Playlist | null> {
   try {
-    const email = getUserEmail();
+    const email = getCurrentUserEmail();
     const newPlaylist: Playlist = {
       id: crypto.randomUUID(),
       userEmail: email,
