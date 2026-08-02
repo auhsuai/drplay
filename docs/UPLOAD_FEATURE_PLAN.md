@@ -219,3 +219,45 @@ export async function uploadFolder(
 - Google Drive resumable upload: developers.google.com/workspace/drive/api/guides/manage-uploads (đã fetch 2026-08-01).
 - Quota: developers.google.com/workspace/drive/api/guides/limits (cập nhật 2026-05-01).
 - storageQuota: developers.google.com/workspace/drive/api/reference/rest/v3/about.
+
+---
+
+## 6. QUYẾT ĐỊNH PHIÊN THỰC THI (2026-08-02 — đã verify + context7, ghi ADR codebase-memory)
+
+1. **Drag & drop = core API** `getCurrentWebview().onDragDropEvent()` từ `@tauri-apps/api/webview`
+   (context7 v2.tauri.app 2026-08-02) — KHÔNG cần plugin mới. `drop` → `paths: string[]`.
+2. **Đọc file = `tauri-plugin-fs`** (đã cài): `readFile(path) → Uint8Array`, `readDir(path, {recursive:true})`
+   để walk folder. Rust: command mới `register_upload_path` (pattern `register_download_path` lib.rs:25),
+   capabilities thêm `fs:allow-read-file` + `fs:allow-read-dir`.
+3. **Resumable 2 bước**: POST `?uploadType=resumable` (headers X-Upload-*, body metadata) → `Location`
+   → PUT full body + `Content-Range: bytes 0-(N-1)/N` → 200/201. KHÔNG chunk, KHÔNG progress (spinner đủ).
+   Bước PUT KHÔNG retry tự động (sau 200 mà gửi lại → upload mới); retry cả luồng do uploadManager làm,
+   max 2 lần lỗi tạm thời. Timeout PUT = 120s (không dùng 20s mặc định).
+4. **uploadManager = single source of truth** — mọi guard đọc `getUploadingIds()` từ module singleton,
+   CẤM state local. Fire `upload-status-changed` (detail entries) + `drive-files-changed` (detail {count}).
+5. **Pending row cơ chế hiển thị**: bắt đầu upload → `db.files.put({id:'pending-<uuid>', ...})` →
+   Dexie live query tự hiện card → SongCard `uploadState: 'uploading'` (mờ + spinner). Done → xoá pending,
+   put row thật. Error → xoá pending + toast. Folder mới: pending folder row → createFolder → row thật,
+   giữ 'uploading' tới khi hết children.
+6. **Folder upload**: KHÔNG hàm riêng — uploadManager compose: `walkDiskFolder` (diskFs.ts wrapper
+   plugin-fs, test inject fake) → `createFolder` (có sẵn) → mỗi file con = 1 UploadEntry vào queue
+   (tái dùng pending-row). driveApi chỉ thêm `uploadFileResumable` + `UploadError` (kind:
+   quota|network|auth|invalid|aborted).
+7. **Quota**: check `getDriveStorageQuota` trước mỗi file; `limit!==null && usage+size>limit` → error 'quota' + toast.
+8. **Nút +**: menu 2 chọn Upload file / Upload folder (plugin-dialog `open()`, `dialog:allow-open` đã có).
+   Đích = currentFolderId (driveStore). Token: `startUploads(seeds, token)`.
+9. **MoreMenu guard**: đọc `uploadManager.isUploading(driveItem?.id ?? track?.id)` NGAY TRONG component
+   (không cần prop mới — 3 call site PlayerBar/recent/default không đổi prop).
+10. **SongCard memo comparator** phải thêm `uploadState` (nếu không card không re-render hết mờ).
+11. **i18n**: section `upload.*` (button_title, upload_file, upload_folder, drop_overlay, uploading,
+    quota_exceeded, error, uploading_blocked) — cả vi + en.
+
+### Thứ tự dispatch (tuần tự, mỗi slice 1 subagent, commit riêng sau verify)
+1. Slice 1: `uploadManager.ts` (+test) — mock driveApi
+2. Slice 2: `driveApi.ts` uploadFileResumable + UploadError (+test mock fetch)
+3. Slice 3: Rust `register_upload_path` + capabilities + `src/utils/diskFs.ts`
+4. Slice 4: Sidebar UploadButton (menu file/folder + dialog)
+5. Slice 5: Drag & drop overlay + onDragDropEvent
+6. Slice 6: SongCard uploadState + spinner (MainContent/VirtualizedSongList truyền)
+7. Slice 7: Guards race (MoreMenu + useDriveExplorer bulk + selection + useMenuPlaylists)
+8. Slice 8: HomeTab delta sync (drive-files-changed listener)
