@@ -25,7 +25,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 11 | `src/utils/safeAudio.ts` | ✅ done | dead code production (chỉ test import) — chờ quyết định chung với AudioController |
 | 12 | `src/utils/streamPrefetcher.ts` | ✅ done | bỏ machinery async chết, xoá export chết, comment đúng + test LRU |
 | 13 | `src/utils/nextTrackPrefetcher.ts` | ✅ done | AbortSignal.any thay dual-map, hằng số range, classify theo DOMException.name |
-| 14 | `src/utils/sessionCleanup.ts` | ⬜ pending | |
+| 14 | `src/utils/sessionCleanup.ts` | ✅ done | guard localStorage SecurityError + xoá .bak rác |
 | 15 | `src/utils/sessionGuard.ts` | ⬜ pending | |
 | 16 | `src/utils/proSyncManager.ts` | ⬜ pending | |
 | 17 | `src/utils/playlists.ts` | ⬜ pending | |

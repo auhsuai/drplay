@@ -16,8 +16,17 @@ export const SESSION_CLEANUP_KEYS = {
 } as const;
 
 export function clearSessionState(): void {
-  localStorage.removeItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage);
-  localStorage.removeItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage);
+  try {
+    localStorage.removeItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage);
+    localStorage.removeItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage);
+  } catch (err) {
+    captureError({
+      level: 'warn',
+      source: 'sessionCleanup',
+      message: `localStorage cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+      kind: 'localstorage-cleanup-failed',
+    });
+  }
   Promise.allSettled([
     kvDel(SESSION_CLEANUP_KEYS.lastSessionKv),
     kvDel(SESSION_CLEANUP_KEYS.playModeKv),

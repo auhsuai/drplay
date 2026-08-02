@@ -96,4 +96,30 @@ describe('clearSessionState', () => {
 
     expect(kvDelMock).toHaveBeenCalledTimes(3);
   });
+
+  it('does not throw when localStorage.removeItem throws (SecurityError) and captures the failure', async () => {
+    const removeItemSpy = vi
+      .spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      });
+
+    try {
+      expect(() => clearSessionState()).not.toThrow();
+
+      await vi.waitFor(() => {
+        expect(captureErrorMock).toHaveBeenCalled();
+      });
+
+      expect(captureErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          source: 'sessionCleanup',
+          message: expect.stringContaining('localStorage cleanup failed'),
+        })
+      );
+    } finally {
+      removeItemSpy.mockRestore();
+    }
+  });
 });
