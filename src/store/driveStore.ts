@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { ROOT_FOLDER_ID } from '../utils/driveConstants';
 
 interface FolderHistoryItem {
   id: string;
@@ -21,9 +22,8 @@ interface DriveState {
   setIsLoadingTracks: (isLoading: boolean) => void;
 }
 
-// Drive root folder id — mirrored in useDrive.GD_ROOT_ID, useLocateFile.ROOT_FOLDER_ID etc.;
-// consolidation into a shared module is a separate task
-const ROOT_FOLDER_ID = 'root';
+// Drive root folder id lives in utils/driveConstants.ts (shared with the
+// hooks and utils that touch the Drive API).
 
 export const useDriveStore = create<DriveState>((set) => ({
   appRootFolder: null,

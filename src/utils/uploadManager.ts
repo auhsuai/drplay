@@ -2,6 +2,7 @@ import { t } from 'i18next';
 import { db } from '../db/db';
 import type { DriveFile } from '../db/db';
 import { backoffDelay, createFolder, getDriveStorageQuota, sleep } from './driveApi';
+import { ROOT_FOLDER_ID } from './driveConstants';
 import { uploadFileResumable, uploadFileResumableChunked, UploadError } from './driveUpload';
 import type { DriveFileItem, DriveStorageQuota } from './driveApi';
 import { openDiskReadStream, registerUploadPath, statDiskPath, walkDiskFolder } from './diskFs';
@@ -18,7 +19,6 @@ const PENDING_ID_PREFIX = 'pending-';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const AUDIO_FILE_MIME = 'application/octet-stream';
 const MAX_UPLOAD_ATTEMPTS = 3;
-const ROOT_PARENT_ID = 'root';
 const UPLOAD_STATUS_EVENT = 'upload-status-changed';
 const DRIVE_FILES_CHANGED_EVENT = 'drive-files-changed';
 const ERROR_INVALID_SEED = 'invalid-seed';
@@ -178,7 +178,7 @@ export function getUploadingIds(): ReadonlySet<string> {
     ids.add(entry.id);
     if (entry.driveId) ids.add(entry.driveId);
     // The parent folder must stay locked (spinner, no dim) while a child uploads.
-    if (entry.parentId !== ROOT_PARENT_ID) ids.add(entry.parentId);
+    if (entry.parentId !== ROOT_FOLDER_ID) ids.add(entry.parentId);
   }
   return ids; // fresh set per call - callers must not cache the reference
 }
@@ -240,7 +240,7 @@ export function getUploadState(id: string): UploadState {
   for (const entry of entries) {
     if (entry.status !== 'queued' && entry.status !== 'uploading') continue;
     if (entry.id === id || entry.driveId === id) return 'uploading';
-    if (entry.parentId === id && id !== ROOT_PARENT_ID) isParent = true;
+    if (entry.parentId === id && id !== ROOT_FOLDER_ID) isParent = true;
   }
   return isParent ? 'parent-uploading' : 'none';
 }

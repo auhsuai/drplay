@@ -2,6 +2,7 @@ import { db } from '../db/db';
 import type { DriveFile as DriveFileRow } from '../db/db';
 import { getAudioQuery, isAudioFile } from '../utils/audioQuery';
 import { FOLDER_MIME } from '../utils/driveApi';
+import { ROOT_FOLDER_ID } from '../utils/driveConstants';
 import { classifyWorkerError, logWorkerError, WorkerAbortError } from './workerError';
 
 interface DriveFile {
@@ -50,7 +51,7 @@ export function toDriveFileRow(f: DriveFile, isFolder: boolean): DriveFileRow {
     id: f.id!,
     name: f.name!,
     mimeType: f.mimeType!,
-    parentId: f.parents && f.parents.length > 0 ? f.parents[0] : 'root',
+    parentId: f.parents && f.parents.length > 0 ? f.parents[0] : ROOT_FOLDER_ID,
     size: toSize(f.size),
     modifiedTime: f.modifiedTime,
     trashed: false,

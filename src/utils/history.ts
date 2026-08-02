@@ -1,6 +1,7 @@
 import Dexie from 'dexie';
 import { db } from '../db/db';
 import type { Track } from '../types';
+import { ROOT_FOLDER_ID } from './driveConstants';
 import { captureError } from './errorLog';
 import { METADATA_KEY_PREFIX, V_PLACEHOLDER } from './metadata';
 import { getCurrentUserEmail } from './storageKeys';
@@ -188,7 +189,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
 }
 
 export async function recordFolderVisit(folderId: string, folderName: string) {
-  if (folderId === 'root') return;
+  if (folderId === ROOT_FOLDER_ID) return;
   const email = getCurrentUserEmail();
   try {
     await db.transaction('rw', [db.folderVisits], async () => {

@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { db } from '../db/db';
 import { fetchWithAuth } from '../utils/apiClient';
 import { classifyDriveError } from '../utils/driveApi';
+import { ROOT_FOLDER_ID } from '../utils/driveConstants';
 import { captureError } from '../utils/errorLog';
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
-const ROOT_FOLDER_ID = 'root';
 const MY_DRIVE_LABEL = 'My Drive';
 const DRIVE_ID_PREFIX = 'drive_';
 const EVENT_LOCATE_FILE = 'locate-file';
