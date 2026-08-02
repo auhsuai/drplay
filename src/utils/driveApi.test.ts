@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   backoffDelay,
+  createFolder,
   driveFetch,
   getDriveStorageQuota,
   saveAppConfig,
@@ -322,6 +323,68 @@ describe("driveFetch caller abort (Bug 1b)", () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(2);
     expect(res.status).toBe(200);
+  });
+});
+
+// Regression: createFolder must forward a caller signal into driveFetch so a
+// cancel of an in-flight folder upload aborts the Drive request (Bug 1d).
+describe("createFolder abort propagation (Bug 1d)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("forwards the caller signal into driveFetch", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(200, { id: "folder-1", name: "Album", mimeType: "application/vnd.google-apps.folder" })
+    );
+    const controller = new AbortController();
+
+    const result = await createFolder("tok", "Album", "root", controller.signal);
+
+    expect(result.id).toBe("folder-1");
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockedFetch.mock.calls[0];
+    expect(url).toBe("https://www.googleapis.com/drive/v3/files");
+    expect((opts as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("rejects without retrying when the caller aborts mid-flight", async () => {
+    const controller = new AbortController();
+    mockedFetch.mockImplementation(
+      (_url: RequestInfo | URL, opts?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = opts?.signal as AbortSignal | undefined;
+          if (!signal) {
+            // Pre-fix the caller signal was never forwarded — fail loudly so
+            // the regression test is RED before the implementation exists.
+            reject(new Error("caller signal was not forwarded"));
+            return;
+          }
+          if (signal.aborted) {
+            reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
+            { once: true }
+          );
+        })
+    );
+
+    const p = createFolder("tok", "Album", "root", controller.signal);
+    const assertion = expect(p).rejects.toThrow(/abort/i);
+    await vi.advanceTimersByTimeAsync(10);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(200_000);
+
+    await assertion;
+    // User abort must not schedule retries (same contract as driveFetch 1b).
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 });
 

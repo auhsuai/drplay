@@ -214,17 +214,33 @@ export async function openDiskReadStream(
  * tauri-plugin-fs v2 read_dir has NO recursive option (verified in its
  * guest-js ReadDirOptions), so descent is done here, one read_dir per folder.
  * Throws a wrapped error when the root or any nested folder cannot be read.
+ * A caller-supplied AbortSignal (user cancel) aborts the walk between IPC
+ * calls with an AbortError — the batch caller normalizes it to its own
+ * 'aborted' error kind.
  */
-export async function walkDiskFolder(dirPath: string): Promise<DiskEntry[]> {
+export async function walkDiskFolder(dirPath: string, signal?: AbortSignal): Promise<DiskEntry[]> {
+  // Fail fast on an already-aborted walk: a cancel must never descend into IPC.
+  throwIfWalkAborted(signal);
   const entries: DiskEntry[] = [];
-  await walkDirRecursive(dirPath, dirPath, entries);
+  await walkDirRecursive(dirPath, dirPath, entries, signal);
   // Plain code-unit comparison: stable across machines/locales (localeCompare
   // depends on the host locale, which would break snapshot expectations).
   entries.sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
   return entries;
 }
 
-async function walkDirRecursive(dirPath: string, rootPath: string, out: DiskEntry[]): Promise<void> {
+// MDN AbortSignal guidance ("Implementing an abortable API"): a Promise-based
+// API that takes a signal rejects with the abort reason instead of completing
+// (developer.mozilla.org/en-US/docs/Web/API/AbortSignal, fetched 2026-08-02).
+// A cancel is deliberately NOT wrapped in wrapError/captureError: it is not a
+// disk failure, and logging the walk path would leak it into the error log.
+function throwIfWalkAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+}
+
+async function walkDirRecursive(dirPath: string, rootPath: string, out: DiskEntry[], signal?: AbortSignal): Promise<void> {
+  // Fail before every read_dir IPC so an abort never schedules new work.
+  throwIfWalkAborted(signal);
   let rawEntries: DirEntryDto[];
   try {
     rawEntries = await invoke<DirEntryDto[]>(FS_READ_DIR_CMD, { path: dirPath });
@@ -234,6 +250,8 @@ async function walkDirRecursive(dirPath: string, rootPath: string, out: DiskEntr
     throw wrapped;
   }
   for (const entry of rawEntries) {
+    // An abort that landed while read_dir was pending stops mid-iteration.
+    throwIfWalkAborted(signal);
     const childPath = joinPath(dirPath, entry.name);
     out.push({
       path: childPath,
@@ -243,7 +261,7 @@ async function walkDirRecursive(dirPath: string, rootPath: string, out: DiskEntr
       size: 0,
     });
     if (entry.isDirectory) {
-      await walkDirRecursive(childPath, rootPath, out);
+      await walkDirRecursive(childPath, rootPath, out, signal);
     }
   }
 }

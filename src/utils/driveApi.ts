@@ -187,7 +187,10 @@ export async function isRateLimit403Response(response: Response): Promise<boolea
   return isRateLimitError(response.status, await readDriveErrorBody(cloned));
 }
 
-export async function createFolder(token: string, name: string, parentId: string): Promise<DriveFileItem> {
+// signal?: AbortSignal wires a caller cancel (uploadManager batch controller)
+// into the request; driveFetch already turns a caller abort into an immediate
+// non-retried rejection. Optional: callers like useDriveExplorer omit it.
+export async function createFolder(token: string, name: string, parentId: string, signal?: AbortSignal): Promise<DriveFileItem> {
   const metadata = {
     name: name,
     mimeType: FOLDER_MIME,
@@ -200,7 +203,8 @@ export async function createFolder(token: string, name: string, parentId: string
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(metadata)
+    body: JSON.stringify(metadata),
+    signal
   });
 
   if (!response.ok) {

@@ -286,6 +286,56 @@ describe('walkDiskFolder', () => {
       /Failed to read directory "C:\\Music\\broken"/
     );
   });
+
+  it('walks normally when a non-aborted signal is passed (optional param keeps old behavior)', async () => {
+    mockTree();
+    const controller = new AbortController();
+
+    const entries = await walkDiskFolder('C:\\Music', controller.signal);
+
+    expect(entries).toHaveLength(6);
+    expect(invokeMock.mock.calls.filter((c) => c[0] === 'plugin:fs|read_dir')).toHaveLength(3);
+  });
+
+  it('throws AbortError immediately for an already-aborted signal (zero read_dir calls)', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(walkDiskFolder('C:\\Music', controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(invokeMock).not.toHaveBeenCalled();
+    // A user cancel is not a disk failure: no error log, no wrap.
+    expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts mid-walk: signal aborted while a nested read_dir is pending → throws AbortError, no further read_dir', async () => {
+    let releaseSubDir!: (entries: ReturnType<typeof dirEntry>[]) => void;
+    const subDirGate = new Promise<ReturnType<typeof dirEntry>[]>((resolve) => {
+      releaseSubDir = resolve;
+    });
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'plugin:fs|read_dir') {
+        const path = pathOf(args);
+        if (path === 'C:\\Music') return Promise.resolve([dirEntry('sub', true)]);
+        if (path === 'C:\\Music\\sub') return subDirGate;
+        throw new Error(`unknown dir: ${path}`);
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const controller = new AbortController();
+
+    const p = walkDiskFolder('C:\\Music', controller.signal);
+    // Let the root read_dir land and the recursion enter the pending subdir read.
+    await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+    releaseSubDir([dirEntry('song2.flac', false)]);
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+
+    // Root + subdir only — the aborted walk never descends any further.
+    expect(invokeMock.mock.calls.filter((c) => c[0] === 'plugin:fs|read_dir')).toHaveLength(2);
+    expect(captureErrorMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('openDiskReadStream', () => {

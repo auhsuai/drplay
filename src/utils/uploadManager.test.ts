@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/db';
 import type { UploadSeed } from './uploadManager';
 import type { DriveFileItem } from '../utils/driveApi';
+import type { DiskEntry } from './diskFs';
 
 // Mocks keep the manager isolated: driveApi/diskFs stand-ins for the network
 // and Tauri IPC, errorLog/simpleToast/i18next for side effects we assert on.
@@ -420,12 +421,12 @@ describe('uploadManager', () => {
 
     expect(registerUploadPath).toHaveBeenCalledTimes(1);
     expect(registerUploadPath).toHaveBeenCalledWith('C:/Music');
-    expect(walkDiskFolder).toHaveBeenCalledWith('C:/Music');
+    expect(walkDiskFolder).toHaveBeenCalledWith('C:/Music', expect.any(AbortSignal));
 
     const folderCalls = createFolderMock.mock.calls;
     expect(folderCalls).toHaveLength(2);
-    expect(folderCalls[0]).toEqual([TOKEN, 'Album', 'root']);
-    expect(folderCalls[1]).toEqual([TOKEN, 'sub', 'folder-1']);
+    expect(folderCalls[0]).toEqual([TOKEN, 'Album', 'root', expect.any(AbortSignal)]);
+    expect(folderCalls[1]).toEqual([TOKEN, 'sub', 'folder-1', expect.any(AbortSignal)]);
 
     const uploadNames = uploadFileResumableChunked.mock.calls.map((c) => c[1].name);
     const uploadParents = uploadFileResumableChunked.mock.calls.map((c) => c[1].parentId);
@@ -1070,6 +1071,110 @@ describe('uploadManager', () => {
       expect(um.getEntries()).toEqual([]);
 
       expect(() => um.cancelUpload('pending-whatever')).not.toThrow();
+    });
+
+    it('6. cancel folder root khi đang walk → aborted + không toast + không createFolder + không enqueue children', async () => {
+      walkDiskFolder.mockImplementation(async (_path, signal) => {
+        return new Promise<DiskEntry[]>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new DOMException('aborted', 'AbortError'));
+            return;
+          }
+          signal?.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      });
+      const snapshots = captureSnapshots();
+
+      um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
+      await flush();
+
+      const entryId = um.getEntries()[0].id;
+      expect(walkDiskFolder.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+      expect(um.getUploadState(entryId)).toBe('uploading');
+
+      um.cancelUpload(entryId);
+      await waitIdle();
+
+      expect(snapshots[snapshots.length - 1]).toEqual([{ status: 'error', error: 'aborted' }]);
+      expect(um.getEntries()).toEqual([]);
+      expect(createFolderMock).not.toHaveBeenCalled();
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).not.toHaveBeenCalled();
+      const messages = captureError.mock.calls.map((c) => c[0].message as string);
+      expect(messages).toContain('upload-cancelled name=Album');
+      expect(await db.files.toArray()).toHaveLength(0);
+    });
+
+    it('7. cancel folder root sau walk, trong lúc createFolder → aborted + không enqueue children', async () => {
+      walkDiskFolder.mockResolvedValue([
+        { path: 'C:/Music/a.mp3', name: 'a.mp3', relativePath: 'a.mp3', isDirectory: false, size: 5 },
+        { path: 'C:/Music/sub', name: 'sub', relativePath: 'sub', isDirectory: true, size: 0 },
+      ]);
+      createFolderMock.mockImplementation(async (_t, _name, _parent, signal) => {
+        return new Promise<DriveFileItem>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new DOMException('aborted', 'AbortError'));
+            return;
+          }
+          signal?.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      });
+      const snapshots = captureSnapshots();
+
+      um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
+      await flush();
+
+      const entryId = um.getEntries()[0].id;
+      expect(createFolderMock.mock.calls[0][3]).toBeInstanceOf(AbortSignal);
+
+      um.cancelUpload(entryId);
+      await waitIdle();
+
+      expect(snapshots[snapshots.length - 1]).toEqual([{ status: 'error', error: 'aborted' }]);
+      expect(um.getEntries()).toEqual([]);
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).not.toHaveBeenCalled();
+      expect(await db.files.toArray()).toHaveLength(0);
+    });
+
+    it('8. cancel folder child (đang createFolder subfolder) → child aborted + không toast + file con không upload', async () => {
+      walkDiskFolder.mockResolvedValue([
+        { path: 'C:/Music/sub', name: 'sub', relativePath: 'sub', isDirectory: true, size: 0 },
+        { path: 'C:/Music/sub/x.mp3', name: 'x.mp3', relativePath: 'sub/x.mp3', isDirectory: false, size: 5 },
+      ]);
+      createFolderMock.mockImplementation(async (_t, name, _parent, signal) => {
+        if (name === 'Album') return { id: 'folder-1', name, mimeType: FOLDER_MIME };
+        return new Promise<DriveFileItem>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new DOMException('aborted', 'AbortError'));
+            return;
+          }
+          signal?.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      });
+
+      um.startUploads([folderSeed('Album', 'C:/Music')], TOKEN);
+      await flush();
+
+      const childId = um.getEntries().find((e) => e.name === 'sub')?.id;
+      expect(childId).toBeTruthy();
+      expect(createFolderMock.mock.calls[1][3]).toBeInstanceOf(AbortSignal);
+
+      um.cancelUpload(childId!);
+      await waitIdle();
+
+      const messages = captureError.mock.calls.map((c) => c[0].message as string);
+      expect(messages).toContain('upload-cancelled name=sub');
+      expect(showErrorToast).not.toHaveBeenCalled();
+      // x.mp3's parent subfolder never materialized → it must not upload.
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(um.getEntries()).toEqual([]);
     });
 
     it('11. cancel bytes-upload đang retry giữa backoff → không retry tiếp, error aborted', async () => {

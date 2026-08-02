@@ -449,18 +449,29 @@ async function handleFolderChild(entry: InternalEntry): Promise<DriveFileItem> {
   const parentId = entry.batchMemo?.get(parentDir);
   if (!parentId) throw new ParentFolderMissingError(parentDir);
   entry.parentId = parentId;
-  return createFolder(entry.token, entry.name, entry.parentId);
+  // Cancel must abort the in-flight createFolder (driveApi forwards the
+  // signal into driveFetch); the rejection is normalized so a cancel of a
+  // subfolder surfaces as 'aborted', not 'failed' + error toast.
+  const signal = controllerFor(entry)?.signal;
+  return abortIfCancelled(createFolder(entry.token, entry.name, entry.parentId, signal), signal);
 }
 
 async function handleFolderRoot(entry: InternalEntry): Promise<DriveFileItem> {
   const dirPath = entry.diskPath;
   if (!dirPath) throw new UploadError('missing disk path', 'invalid');
   await registerUploadPath(dirPath);
-  const walked = await walkDiskFolder(dirPath);
-  const rootFolder = await createFolder(entry.token, entry.name, entry.parentId);
+  // The batch's cancel controller must reach BOTH the walk and the folder
+  // creation: without it a cancel of the root folder would still walk + create
+  // + enqueue every child, and the children would upload despite the cancel.
+  const signal = controllerFor(entry)?.signal;
+  const walked = await abortIfCancelled(walkDiskFolder(dirPath, signal), signal);
+  const rootFolder = await abortIfCancelled(createFolder(entry.token, entry.name, entry.parentId, signal), signal);
   const memo = new Map<string, string>();
   memo.set('', rootFolder.id);
   const batch: FolderBatch = { entry, memo };
+  // A cancel that landed while createFolder was resolving must not enqueue the
+  // walked children — they would upload after the user already cancelled.
+  if (signal?.aborted) throw abortedUploadError();
   // walkDiskFolder sorts by relativePath, so a folder's entry (and thus its
   // creation) always precedes the files inside it - the sequential queue
   // preserves that order and the memo is filled before children resolve it.
@@ -559,6 +570,22 @@ async function uploadWithRetry(entry: InternalEntry, data: Blob | Uint8Array): P
 }
 function abortedUploadError(): UploadError {
   return new UploadError(ABORTED_UPLOAD_MESSAGE, ERROR_ABORTED);
+}
+
+// Normalize a rejection caused by a user-initiated cancel into the manager's
+// canonical UploadError('aborted'). A raw AbortError/DOMException would
+// otherwise classify as 'failed' and show an error toast — markError only
+// treats UploadError kind 'aborted' as a silent cancel. The signal is
+// re-checked in the catch (instead of inspecting err.name) because diskFs
+// throws its own AbortError-like error and driveFetch rethrows the merged
+// fetch rejection; both are aborts and both are normalized here.
+async function abortIfCancelled<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  try {
+    return await promise;
+  } catch (err) {
+    if (signal?.aborted) throw abortedUploadError();
+    throw err;
+  }
 }
 
 async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise<void> {
