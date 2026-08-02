@@ -3,6 +3,8 @@ import { db } from "../db/db";
 import { clearAllMetadataCache, METADATA_KEY_PREFIX, METADATA_LRU_KEY } from "./metadata";
 import { captureError } from "./errorLog";
 
+export const CLEAR_LOCAL_CACHE_CMD = 'clear_local_cache';
+
 export async function clearAppCache(): Promise<void> {
   let error: unknown = null;
   try {
@@ -30,7 +32,7 @@ export async function clearAppCache(): Promise<void> {
       }
     }
     try {
-      await invoke("clear_local_cache");
+      await invoke(CLEAR_LOCAL_CACHE_CMD);
       try {
         clearAllMetadataCache();
       } catch (metaErr: unknown) {

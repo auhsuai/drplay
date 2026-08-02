@@ -3,8 +3,9 @@ import { useShallow } from 'zustand/react/shallow';
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { recordFolderVisit } from "../utils/history";
-import { getAppConfig, saveAppConfig } from "../utils/driveApi";
+import { getAppConfig, saveAppConfig, mergeWithTimeoutSignal } from "../utils/driveApi";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
+import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 
@@ -77,7 +78,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                 const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
                 const verifyRes = await fetchWithAuth(verifyUrl, {
                   headers: { Authorization: `Bearer ${freshToken}` },
-                  signal: AbortSignal.any([controller.signal, AbortSignal.timeout(ROOT_VERIFY_TIMEOUT_MS)]),
+                  signal: mergeWithTimeoutSignal(controller.signal, ROOT_VERIFY_TIMEOUT_MS),
                 });
                 if (cancelled) return;
                 if (!verifyRes.ok) {
@@ -99,7 +100,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   }
                   try {
                     await db.files.clear();
-                    await invoke("clear_local_cache");
+                    await invoke(CLEAR_LOCAL_CACHE_CMD);
                   } catch (e: unknown) {
                     captureError({ level: 'warn', source: 'useDrive', message: `clear-cache-failed: ${classifyError(e)}` });
                   }
@@ -256,7 +257,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     setFolderHistory([]);
     try {
       await db.files.clear();
-      await invoke("clear_local_cache");
+      await invoke(CLEAR_LOCAL_CACHE_CMD);
       const freshToken = await getValidToken();
       if (freshToken) {
         try {

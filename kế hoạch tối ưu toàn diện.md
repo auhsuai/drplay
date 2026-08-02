@@ -43,7 +43,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 29 | `src/utils/logger.ts` | ✅ done | redaction refresh_token/token/upload_id/api_key/Authorization/Bearer-ci + circular safe |
 | 28 | `src/utils/sidebarState.ts` | ✅ done | guard localStorage P0 (chống crash App init) |
 | 31 | `src/utils/simpleToast.tsx` | ✅ done | gộp DRY showToast + clamp duration + captureError |
-| 32 | `src/hooks/useDrive.ts` | ⬜ pending | |
+| 32 | `src/hooks/useDrive.ts` | ✅ done | mergeWithTimeoutSignal chung + CLEAR_LOCAL_CACHE_CMD |
 | 33 | `src/hooks/useDriveExplorer.ts` | ⬜ pending | |
 | 34 | `src/hooks/usePlayer.ts` | ⬜ pending | |
 | 35 | `src/hooks/player/usePlayerQueue.ts` | ⬜ pending | |
