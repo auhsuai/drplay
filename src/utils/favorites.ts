@@ -1,4 +1,4 @@
-import { Track } from '../App';
+import type { Track } from '../types';
 import { db } from '../db/db';
 import { showErrorToast } from './simpleToast';
 import { captureError } from './errorLog';
@@ -38,15 +38,17 @@ export async function getFavorites(): Promise<Track[]> {
 export async function addFavorite(track: Track): Promise<void> {
   try {
     const email = getCurrentUserEmail();
-    const existing = await db.favorites.get(track.id);
-    if (!existing) {
-      await db.favorites.put({
-        ...track,
-        userEmail: email,
-        createdAt: Date.now()
-      });
-      window.dispatchEvent(new CustomEvent('favorites-updated'));
-    }
+    await db.transaction('rw', db.favorites, async () => {
+      const existing = await db.favorites.get(track.id);
+      if (!existing) {
+        await db.favorites.put({
+          ...track,
+          userEmail: email,
+          createdAt: Date.now()
+        });
+        window.dispatchEvent(new CustomEvent('favorites-updated'));
+      }
+    });
   } catch (e: unknown) {
     captureError({
       level: 'error',
@@ -76,6 +78,11 @@ export async function isFavorite(trackId: string): Promise<boolean> {
     const fav = await db.favorites.get(trackId);
     return !!fav;
   } catch (e: unknown) {
+    captureError({
+      level: 'warn',
+      source: FAV_MODULE,
+      message: `is-fav-failed: ${classifyFavoriteError(e)}`,
+    });
     return false;
   }
 }

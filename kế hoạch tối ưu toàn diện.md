@@ -29,7 +29,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 15 | `src/utils/sessionGuard.ts` | ✅ done | đạt chuẩn 2026, không cần nâng cấp (counter generation-token chuẩn) |
 | 16 | `src/utils/proSyncManager.ts` | ✅ done | onerror/onmessageerror worker, typed unions, test import constants |
 | 17 | `src/utils/playlists.ts` | ✅ done | transaction chống lost update, import type chuẩn, destructure classify |
-| 18 | `src/utils/favorites.ts` | ⬜ pending | |
+| 18 | `src/utils/favorites.ts` | ✅ done | transaction addFavorite, log isFavorite, import type chuẩn |
 | 19 | `src/utils/history.ts` | ⬜ pending | |
 | 20 | `src/utils/downloadPath.ts` | ⬜ pending | |
 | 21 | `src/utils/pathUtils.ts` | ⬜ pending | |
