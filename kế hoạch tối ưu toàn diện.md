@@ -26,7 +26,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 12 | `src/utils/streamPrefetcher.ts` | ✅ done | bỏ machinery async chết, xoá export chết, comment đúng + test LRU |
 | 13 | `src/utils/nextTrackPrefetcher.ts` | ✅ done | AbortSignal.any thay dual-map, hằng số range, classify theo DOMException.name |
 | 14 | `src/utils/sessionCleanup.ts` | ✅ done | guard localStorage SecurityError + xoá .bak rác |
-| 15 | `src/utils/sessionGuard.ts` | ⬜ pending | |
+| 15 | `src/utils/sessionGuard.ts` | ✅ done | đạt chuẩn 2026, không cần nâng cấp (counter generation-token chuẩn) |
 | 16 | `src/utils/proSyncManager.ts` | ⬜ pending | |
 | 17 | `src/utils/playlists.ts` | ⬜ pending | |
 | 18 | `src/utils/favorites.ts` | ⬜ pending | |
