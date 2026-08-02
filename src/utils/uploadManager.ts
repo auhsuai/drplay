@@ -347,6 +347,13 @@ function handleByKind(entry: InternalEntry): Promise<DriveFileItem> {
       return handleFolderRoot(entry);
     case 'folderChild':
       return handleFolderChild(entry);
+    default: {
+      // Exhaustiveness guard: TS narrows `entry.kind` to `never` here, so a new
+      // UploadKind added to the union without a matching branch fails to compile
+      // instead of returning undefined and crashing markDone downstream.
+      const exhaustive: never = entry.kind;
+      throw new Error(`unhandled upload kind: ${String(exhaustive)}`);
+    }
   }
 }
 
