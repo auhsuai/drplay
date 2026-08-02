@@ -1,8 +1,8 @@
 import { fetchWithAuth } from './apiClient';
 import { captureError } from './errorLog';
 import { sanitizeString } from './logger';
-import { classifyDriveError, DRIVE_MODULE, driveFetch, isRateLimit403Response, mergeWithTimeoutSignal, sleep } from './driveApi';
-import type { DriveFileItem } from './driveApi';
+import { backoffDelay, classifyDriveError, DRIVE_MODULE, driveFetch, isRateLimit403Response, mergeWithTimeoutSignal, readDriveErrorBody, sleep } from './driveApi';
+import type { DriveErrorBody, DriveFileItem } from './driveApi';
 
 // Resumable upload (developers.google.com/drive/api/guides/manage-uploads):
 // initiate via POST ?uploadType=resumable, then PUT the whole body once.
@@ -29,7 +29,6 @@ const UPLOAD_ERROR_DETAIL_MAX_LENGTH = 200;
 // where to resume, 200/201 means done, 404 means the session expired,
 // 5xx/429 and 403 rate-limits are retryable per chunk.
 const UPLOAD_CHUNK_MAX_RETRIES = 2;
-const UPLOAD_CHUNK_RETRY_DELAYS_MS: ReadonlyArray<number> = [1000, 3000];
 // A missing Range header on 308 means no bytes were received — resend from 0.
 const RANGE_HEADER_PATTERN = /^bytes=(\d+)-(\d+)$/;
 
@@ -45,22 +44,8 @@ export class UploadError extends Error {
   }
 }
 
-// Drive error bodies carry { error: { message, reason } }; read only the public
-// fields (never the raw body — it can embed file ids).
-interface DriveErrorBody {
-  error?: { message?: unknown; reason?: unknown };
-}
-
-async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | null> {
-  try {
-    const data = await response.json();
-    if (typeof data !== 'object' || data === null) return null;
-    return data as DriveErrorBody;
-  } catch {
-    return null;
-  }
-}
-
+// Drive error bodies carry { error: { message, reason } } — the shared
+// readDriveErrorBody lives in driveApi (exported, single source of truth).
 // 403 storage-quota detection: official reason storageQuotaExceeded (docs +
 // real API traces). rate-limit 403s never reach this mapper — retried before;
 // other 403s (permissions…) → 'invalid'.
@@ -232,9 +217,10 @@ function abortedUploadError(): UploadError {
   return new UploadError('upload aborted by caller', 'aborted');
 }
 
-// PUT one chunk with bounded retries for 5xx/429 and 403 rate-limits (backoff
-// [1s, 3s]). Exhausted retries throw UploadError('network'); a network
-// rejection (fetch threw) propagates raw as transient.
+// PUT one chunk with bounded retries for 5xx/429 and 403 rate-limits
+// (backoffDelay: exponential + jitter, honors Retry-After). Exhausted retries
+// throw UploadError('network'); a network rejection (fetch threw) propagates
+// raw as transient.
 async function putChunkWithRetry(
   uploadUri: string,
   token: string,
@@ -278,7 +264,7 @@ async function putChunkWithRetry(
       rateLimit403;
     if (!retryable) return response;
     if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-      await sleep(UPLOAD_CHUNK_RETRY_DELAYS_MS[attempt]);
+      await sleep(backoffDelay(attempt, response.headers.get('Retry-After')));
       continue;
     }
     throw new UploadError(`upload failed (status=${response.status})`, 'network');

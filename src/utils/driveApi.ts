@@ -149,11 +149,11 @@ export async function driveFetch(
 
 // Google Drive error responses carry { error: { message, reason } }; only the
 // public message/reason are read (never the raw body — it can embed file ids).
-interface DriveErrorBody {
+export interface DriveErrorBody {
   error?: { message?: unknown; reason?: unknown };
 }
 
-async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | null> {
+export async function readDriveErrorBody(response: Response): Promise<DriveErrorBody | null> {
   try {
     const data = await response.json();
     if (typeof data !== 'object' || data === null) return null;

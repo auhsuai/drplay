@@ -14,9 +14,9 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 |---|------|--------|---------|
 | 1 | `src/utils/driveApi.ts` | ✅ done | timeoutMs forwarded, dead code xoá, DRY assertDriveOk + buildConfigSearchUrl |
 | 2 | `src/utils/apiClient.ts` | ✅ done | invoke refresh_google_token bọc timeout 15s (Tauri #8351) |
-| 3 | `src/utils/diskFs.ts` | ⬜ pending | |
+| 3 | `src/utils/diskFs.ts` | ✅ done | đạt chuẩn 2026, không cần nâng cấp (raw invoke = guest-js 2.5.1, verified) |
 | 4 | `src/utils/driveUpload.ts` | ⬜ pending | |
-| 5 | `src/utils/uploadManager.ts` | ⬜ pending | |
+| 5 | `src/utils/uploadManager.ts` | ⏳ in progress | |
 | 6 | `src/utils/drivePagination.ts` | ⬜ pending | |
 | 7 | `src/utils/cache.ts` | ⬜ pending | |
 | 8 | `src/utils/metadata.ts` | ⬜ pending | |
