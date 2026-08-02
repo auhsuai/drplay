@@ -89,7 +89,9 @@
     "upload_file": "Upload file",
     "upload_folder": "Upload folder",
     "audio_files": "Audio files",
-    "upload_error": "Failed to open file dialog"
+    "upload_error": "Failed to open file dialog",
+    "drop_overlay": "Drop to upload",
+    "drop_failed": "Nothing to upload"
   },
   "unknown_artist": "Unknown Artist",
   "view_all": "View All",

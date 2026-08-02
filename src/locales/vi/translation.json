@@ -89,7 +89,9 @@
     "upload_file": "Tải lên tệp",
     "upload_folder": "Tải lên thư mục",
     "audio_files": "Tệp âm thanh",
-    "upload_error": "Không thể mở hộp thoại chọn tệp"
+    "upload_error": "Không thể mở hộp thoại chọn tệp",
+    "drop_overlay": "Thả để upload",
+    "drop_failed": "Không có gì để tải lên"
   },
   "unknown_artist": "Không rõ ca sĩ",
   "view_all": "Xem tất cả",

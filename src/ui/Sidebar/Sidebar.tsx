@@ -7,6 +7,7 @@ import { formatBytes } from "../../utils/formatBytes";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { UploadButton } from "../components/UploadButton";
+import { DropZone } from "../components/DropZone";
 
 const SIDEBAR_MODULE = 'Sidebar';
 // Storage bar width (expanded) — matches the full NavItem row content width
@@ -283,6 +284,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
           )}
         </div>
       </div>
+      <DropZone token={token} />
     </aside>
   );
 }
