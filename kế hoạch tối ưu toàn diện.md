@@ -20,7 +20,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 6 | `src/utils/drivePagination.ts` | ✅ done | json() malformed guard, classify lỗi thay SyntaxError thô |
 | 7 | `src/utils/cache.ts` | ✅ done | guard removeItem SecurityError, log đúng ngữ cảnh, hằng số chung metadata.ts |
 | 8 | `src/utils/metadata.ts` | ✅ done | Array.isArray guard, generation guard chống re-populate, CACHE_VERSION validate, comment, timer cleanup |
-| 9 | `src/utils/audioQuery.ts` | ⬜ pending | |
+| 9 | `src/utils/audioQuery.ts` | ✅ done | DRY helpers + as const + test contract chốt chuỗi output |
 | 10 | `src/utils/bufferedRange.ts` | ⬜ pending | |
 | 11 | `src/utils/safeAudio.ts` | ⬜ pending | |
 | 12 | `src/utils/streamPrefetcher.ts` | ⬜ pending | |
