@@ -13,7 +13,7 @@ import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 
 import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
-import { getUploadState, isUploading, subscribe as subscribeUploads } from "../../utils/uploadManager";
+import { getUploadProgress, getUploadState, isUploading, subscribe as subscribeUploads } from "../../utils/uploadManager";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
@@ -420,6 +420,7 @@ const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSong
               onBulkMoveClick={onBulkMoveClick}
               onBulkDeleteClick={onBulkDeleteClick}
               uploadState={getUploadState(item.id)}
+              uploadProgress={getUploadProgress(item.id)}
             />
           </div>
         );

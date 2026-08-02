@@ -1,14 +1,78 @@
 import React, { useState } from "react";
-import { Folder, Music, Square, CheckSquare, Loader2 } from "lucide-react";
+import { Folder, Music, Square, CheckSquare, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { DriveItem, Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
 import type { MoreMenuVariant } from "../../components/MoreMenu";
+import { cancelUpload } from "../../../utils/uploadManager";
 import type { UploadState } from "../../../utils/uploadManager";
 
 const SONG_CARD_MODULE = 'SongCard';
+
+// Determinate upload ring (replaces the old centered spinner): 24-unit
+// viewBox, stroke 2, radius 10 keeps the stroke fully inside the box
+// (radius = center - stroke per the CSS-Tricks progress-ring pattern).
+const RING_VIEWBOX = '0 0 24 24';
+const RING_CENTER = 12;
+const RING_RADIUS = 10;
+const RING_STROKE_WIDTH = 2;
+// dashoffset = C × (1 − fraction) draws the visible arc; the -90° rotation
+// makes it start at 12 o'clock instead of the default 3 o'clock.
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const RING_ROTATION = 'rotate(-90 12 12)';
+const PROGRESS_MIN = 0;
+const PROGRESS_MAX = 1;
+
+// Progress fractions can overshoot (Drive confirms bytes out of order) — clamp
+// to a valid arc; undefined/NaN (no progress reported yet) mean "just started".
+function clampFraction(fraction: number | undefined): number {
+  if (fraction === undefined || !Number.isFinite(fraction)) return PROGRESS_MIN;
+  return Math.min(PROGRESS_MAX, Math.max(PROGRESS_MIN, fraction));
+}
+
+function ProgressRing({ fraction }: { fraction: number }): React.JSX.Element {
+  const percent = Math.round(fraction * 100);
+  return (
+    <svg
+      className="w-5 h-5 shrink-0"
+      viewBox={RING_VIEWBOX}
+      role="img"
+      aria-label={`${percent}%`}
+    >
+      <circle
+        cx={RING_CENTER}
+        cy={RING_CENTER}
+        r={RING_RADIUS}
+        fill="none"
+        strokeWidth={RING_STROKE_WIDTH}
+        className="stroke-gray-200 dark:stroke-[#3c4043]"
+      />
+      <circle
+        cx={RING_CENTER}
+        cy={RING_CENTER}
+        r={RING_RADIUS}
+        fill="none"
+        strokeWidth={RING_STROKE_WIDTH}
+        strokeLinecap="round"
+        strokeDasharray={RING_CIRCUMFERENCE}
+        strokeDashoffset={RING_CIRCUMFERENCE * (1 - fraction)}
+        transform={RING_ROTATION}
+        className="stroke-[#4285F4]"
+      />
+      <text
+        x={RING_CENTER}
+        y={RING_CENTER}
+        textAnchor="middle"
+        dominantBaseline="central"
+        className="text-[9px] font-semibold text-[#4285F4] fill-current"
+      >
+        {percent}%
+      </text>
+    </svg>
+  );
+}
 
 export const coverImageCache = new Map<string, string>();
 const COVER_CACHE_MAX = 500; // ~50KB max (100 bytes/cover URL string)
@@ -62,6 +126,7 @@ interface SongCardProps {
   onBulkMoveClick?: () => void;
   onBulkDeleteClick?: () => void;
   uploadState?: UploadState;
+  uploadProgress?: number;
 }
 
 export const SongCard = React.memo(function SongCard({ 
@@ -86,6 +151,7 @@ export const SongCard = React.memo(function SongCard({
   onBulkMoveClick,
   onBulkDeleteClick,
   uploadState = 'none',
+  uploadProgress,
 }: SongCardProps) {
   const { t } = useTranslation();
   const [coverUrl, setCoverUrl] = useState<string | null>(() => {
@@ -105,6 +171,9 @@ export const SongCard = React.memo(function SongCard({
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
+  // Shared by the idle and uploading title rows; the uploading row adds
+  // flex-1 min-w-0 so the h3 truncates instead of pushing the ring out.
+  const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!text-[#4285F4]' : 'text-gray-800 dark:text-gray-200'}`;
 
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {
@@ -268,9 +337,21 @@ export const SongCard = React.memo(function SongCard({
         )}
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">
-        <h3 className={`font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!text-[#4285F4]' : 'text-gray-800 dark:text-gray-200'}`}>
-          {meta.title}
-        </h3>
+        {uploadState === 'uploading' ? (
+          <div className="flex items-center gap-2 min-w-0">
+            {/* flex-1 + min-w-0 keeps the long title truncating against the
+                fixed 8px gap (gap-2); the ring is shrink-0 so it never gets
+                squeezed off by an overflowing title. */}
+            <h3 className={`${titleClass} flex-1 min-w-0`}>
+              {meta.title}
+            </h3>
+            <ProgressRing fraction={clampFraction(uploadProgress)} />
+          </div>
+        ) : (
+          <h3 className={titleClass}>
+            {meta.title}
+          </h3>
+        )}
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           {item.isFolder ? (
             <span className="truncate">{t('drive.folders')}</span>
@@ -296,36 +377,49 @@ export const SongCard = React.memo(function SongCard({
         </div>
       </div>
       {!hideMenu && (
-        <div className={`transition-opacity ml-2 shrink-0 ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-          <MoreMenu 
-            track={item.trackInfo} 
-            driveItem={item} 
-            token={token}
-            currentFolderId={currentFolderId}
-            currentFolderName={currentFolderName}
-            folderHistory={folderHistory}
-            onRefresh={onRefresh}
-            onRemoveItem={onRemoveItem}
-            variant={menuVariant}
-            forceOpen={isContextMenuOpen}
-            onClose={() => {
-              setIsContextMenuOpen(false);
-              setContextMenuPos(null);
-            }}
-            anchorPoint={contextMenuPos}
-            onOpenChange={setIsThreeDotsMenuOpen}
-            onSelectMultiple={() => {
-              onEnableSelectionMode?.(item.id);
-            }}
-            isBulkSelected={isSelectionMode && isSelected}
-            onBulkMoveClick={onBulkMoveClick}
-            onBulkDeleteClick={onBulkDeleteClick}
-          />
-        </div>
-      )}
-      {uploadState === 'uploading' && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <Loader2 className="w-5 h-5 animate-spin text-[#4285F4]" />
+        <div className={`transition-opacity ml-2 shrink-0 ${uploadState === 'uploading' || isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+          {uploadState === 'uploading' ? (
+            // Cancel replaces the menu while the file is uploading (the menu
+            // cannot open then anyway). pointer-events-auto is required: the
+            // dimmed card is pointer-events-none. p-1.5 + 16px icon = 28px hit
+            // area (WCAG 2.5.8 minimum target size is 24×24).
+            <button
+              type="button"
+              aria-label={t('upload.cancel_upload')}
+              className="pointer-events-auto p-1.5 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                cancelUpload(item.id);
+              }}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          ) : (
+            <MoreMenu 
+              track={item.trackInfo} 
+              driveItem={item} 
+              token={token}
+              currentFolderId={currentFolderId}
+              currentFolderName={currentFolderName}
+              folderHistory={folderHistory}
+              onRefresh={onRefresh}
+              onRemoveItem={onRemoveItem}
+              variant={menuVariant}
+              forceOpen={isContextMenuOpen}
+              onClose={() => {
+                setIsContextMenuOpen(false);
+                setContextMenuPos(null);
+              }}
+              anchorPoint={contextMenuPos}
+              onOpenChange={setIsThreeDotsMenuOpen}
+              onSelectMultiple={() => {
+                onEnableSelectionMode?.(item.id);
+              }}
+              isBulkSelected={isSelectionMode && isSelected}
+              onBulkMoveClick={onBulkMoveClick}
+              onBulkDeleteClick={onBulkDeleteClick}
+            />
+          )}
         </div>
       )}
       {uploadState === 'parent-uploading' && (
@@ -349,5 +443,6 @@ export const SongCard = React.memo(function SongCard({
          prev.isSelectionMode === next.isSelectionMode &&
          prev.isHighlighted === next.isHighlighted &&
          prev.highlightTrigger === next.highlightTrigger &&
-         prev.uploadState === next.uploadState;
+         prev.uploadState === next.uploadState &&
+         prev.uploadProgress === next.uploadProgress;
 });

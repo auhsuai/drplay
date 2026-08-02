@@ -9,6 +9,16 @@ vi.mock('../../../utils/metadata', () => ({
   getTrackMetadata: vi.fn(),
 }));
 
+// Slice 2: cancelUpload is imported (runtime) by SongCard now. Spy on the real
+// module's export (importOriginal spread keeps isUploading/subscribe real for
+// MoreMenu) so the X-cancel click can be asserted without side effects.
+const { cancelUploadMock } = vi.hoisted(() => ({ cancelUploadMock: vi.fn() }));
+
+vi.mock('../../../utils/uploadManager', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../utils/uploadManager')>()),
+  cancelUpload: cancelUploadMock,
+}));
+
 const mockedFetch = vi.mocked(getTrackMetadata);
 
 function makeItem(over: Partial<DriveItem> = {}): DriveItem {
@@ -623,13 +633,13 @@ describe('SongCard uploadState (dim + spinner)', () => {
   const spinnerEl = (container: HTMLElement): Element | null =>
     container.querySelector('.lucide-loader-circle');
 
-  it("'uploading' → card dimmed (opacity-50 + pointer-events-none) with centered spinner", () => {
+  it("'uploading' → card dimmed (opacity-50 + pointer-events-none); centered spinner removed (determinate ring replaces it)", () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" />,
     );
     expect(cardEl(container).className).toContain('opacity-50');
     expect(cardEl(container).className).toContain('pointer-events-none');
-    expect(spinnerEl(container)).not.toBeNull();
+    expect(spinnerEl(container)).toBeNull();
   });
 
   it("'parent-uploading' → small spinner, NO dim", () => {
@@ -692,6 +702,171 @@ describe('SongCard uploadState (dim + spinner)', () => {
     );
     fireEvent.click(cardEl(container));
     expect(onToggleSelection).not.toHaveBeenCalled();
+  });
+});
+
+describe('SongCard upload progress ring + cancel X (slice 2)', () => {
+  // The ring lives in a 24-unit viewBox with radius 10 (mirrors RING_RADIUS
+  // in SongCard.tsx) — needed to assert the dash offset that renders the %.
+  const RING_RADIUS = 10;
+  const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+  beforeEach(() => {
+    coverImageCache.clear();
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: null,
+      duration: 0,
+      size: 0,
+      coverUrl: null,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    cancelUploadMock.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const ringSvg = (container: HTMLElement): Element | null =>
+    container.querySelector('svg[aria-label]');
+  const ringText = (container: HTMLElement): string =>
+    container.querySelector('svg[aria-label] text')?.textContent ?? '';
+  const progressCircle = (container: HTMLElement): Element | null =>
+    container.querySelector('circle[stroke-dashoffset]');
+  const cancelButton = (container: HTMLElement): Element | null =>
+    container.querySelector('button[aria-label="upload.cancel_upload"]');
+  const menuButton = (container: HTMLElement): Element | null =>
+    container.querySelector('button[aria-haspopup="menu"]');
+
+  it("'uploading' + uploadProgress=0.42 → ring shows '42%' with dashoffset for the remaining 58%", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.42} />,
+    );
+    const svg = ringSvg(container);
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute('aria-label')).toBe('42%');
+    expect(ringText(container)).toBe('42%');
+    const circle = progressCircle(container);
+    expect(circle).not.toBeNull();
+    expect(Number(circle?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE * 0.58, 4);
+    expect(circle?.getAttribute('stroke-dasharray')).toBe(String(RING_CIRCUMFERENCE));
+    // Ring starts at 12 o'clock (dash draws from the top, not 3 o'clock).
+    expect(circle?.getAttribute('transform')).toContain('rotate(-90');
+  });
+
+  it("'uploading' + uploadProgress undefined → ring at 0% (no indeterminate state)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" />,
+    );
+    expect(ringSvg(container)).not.toBeNull();
+    expect(ringText(container)).toBe('0%');
+    const circle = progressCircle(container);
+    expect(Number(circle?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE, 4);
+  });
+
+  it('rerender with a new uploadProgress updates the ring % (memo comparator includes uploadProgress)', () => {
+    const { container, rerender } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.2} />,
+    );
+    expect(ringText(container)).toBe('20%');
+    rerender(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.8} />,
+    );
+    expect(ringText(container)).toBe('80%');
+  });
+
+  it('clamps out-of-range progress into 0..1 (progress can overshoot from truncation)', () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={1.7} />,
+    );
+    expect(ringText(container)).toBe('100%');
+    expect(Number(progressCircle(container)?.getAttribute('stroke-dashoffset'))).toBeCloseTo(0, 4);
+  });
+
+  it("'uploading' → X replaces the MoreMenu trigger; click calls cancelUpload(item.id) and does NOT bubble to onPlay", () => {
+    const onPlay = vi.fn();
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} onPlay={onPlay} />,
+    );
+    expect(menuButton(container)).toBeNull();
+    const x = cancelButton(container);
+    expect(x).not.toBeNull();
+    fireEvent.click(x as Element);
+    expect(cancelUploadMock).toHaveBeenCalledTimes(1);
+    expect(cancelUploadMock).toHaveBeenCalledWith('track-1');
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it('X button keeps WCAG 2.5.8 minimum target size (p-1.5 + w-4 h-4 icon = 28px hit area)', () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.3} />,
+    );
+    const x = cancelButton(container) as Element;
+    expect(x.className).toContain('p-1.5');
+    // jsdom exposes svg.className as SVGAnimatedString — read the class
+    // attribute instead (same for the ring svg assertions below).
+    const icon = x.querySelector('.lucide-x');
+    expect(icon?.getAttribute('class')).toContain('w-4');
+    expect(icon?.getAttribute('class')).toContain('h-4');
+  });
+
+  it("'parent-uploading' → no X, MoreMenu still rendered, no ring", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="parent-uploading" uploadProgress={0.5} />,
+    );
+    expect(cancelButton(container)).toBeNull();
+    expect(menuButton(container)).not.toBeNull();
+    expect(ringSvg(container)).toBeNull();
+  });
+
+  it("'none' (default) → no ring, no X, MoreMenu renders as before", () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(ringSvg(container)).toBeNull();
+    expect(cancelButton(container)).toBeNull();
+    expect(menuButton(container)).not.toBeNull();
+  });
+
+  it("hideMenu + 'uploading' → no X (hideMenu wins)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.4} hideMenu />,
+    );
+    expect(cancelButton(container)).toBeNull();
+  });
+
+  it('long title stays truncated (ellipsis) and the ring never gets squeezed (h3 flex-1 + ring shrink-0)', () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({
+          title: 'A very long song title that will definitely overflow the available space and must be truncated with an ellipsis',
+        })}
+        uploadState="uploading"
+        uploadProgress={0.6}
+      />,
+    );
+    const h3 = container.querySelector('h3');
+    expect(h3?.className).toContain('truncate');
+    expect(h3?.className).toContain('flex-1');
+    const titleRow = h3?.parentElement;
+    expect(titleRow?.className).toContain('flex items-center gap-2 min-w-0');
+    expect(ringSvg(container)?.getAttribute('class')).toContain('shrink-0');
+  });
+
+  it('X cancel button carries the i18n key upload.cancel_upload as aria-label', () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.1} />,
+    );
+    expect(cancelButton(container)?.getAttribute('aria-label')).toBe('upload.cancel_upload');
+  });
+
+  it("'uploading' → the old centered Loader2 overlay is gone (ring replaces it)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} />,
+    );
+    expect(container.querySelector('.lucide-loader-circle')).toBeNull();
   });
 });
 

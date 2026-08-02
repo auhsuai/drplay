@@ -92,7 +92,8 @@
     "upload_error": "Không thể mở hộp thoại chọn tệp",
     "drop_overlay": "Thả để upload",
     "drop_failed": "Không có gì để tải lên",
-    "uploading_blocked": "Mục này đang được tải lên, vui lòng chờ"
+    "uploading_blocked": "Mục này đang được tải lên, vui lòng chờ",
+    "cancel_upload": "Hủy tải lên"
   },
   "unknown_artist": "Không rõ ca sĩ",
   "view_all": "Xem tất cả",
