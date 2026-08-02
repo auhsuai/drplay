@@ -32,7 +32,10 @@ const MAX_LRU_CACHE = 100;
 let lruKeys: string[] = [];
 try {
   const stored = localStorage.getItem(METADATA_LRU_KEY);
-  if (stored) lruKeys = JSON.parse(stored);
+  if (stored) {
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed)) lruKeys = parsed;
+  }
 } catch (e: unknown) {
   captureError({ level: 'warn', source: META_MODULE, message: `lru-load-failed: ${classifyMetaError(e).message}` });
 }
@@ -84,7 +87,11 @@ interface CacheEntry {
 
 async function getCacheEntry(key: string): Promise<CacheEntry | undefined> {
   const row = await db.metadataCache.get(key);
-  return row?.entry as CacheEntry | undefined;
+  const entry = row?.entry;
+  if (entry && typeof entry === 'object' && (entry as { version?: unknown }).version === CACHE_VERSION) {
+    return entry as CacheEntry;
+  }
+  return undefined;
 }
 
 async function putCacheEntry(key: string, entry: CacheEntry): Promise<void> {
@@ -92,7 +99,7 @@ async function putCacheEntry(key: string, entry: CacheEntry): Promise<void> {
 }
 
 export const metadataCache: Record<string, CachedMetadata> = {};
-const MAX_MEM_CACHE = 1000; // ~300KB max (300 bytes/entry for metadata title+artist+duration)
+const MAX_MEM_CACHE = 1000; // 1000 entries cap; entries may carry pictureData (thumb) so real usage can reach tens of MB - bounded by count, not bytes.
 const memCacheKeys: string[] = [];
 
 function setMetadataCache(fileId: string, entry: CachedMetadata) {
@@ -115,9 +122,13 @@ export function cacheTrackMetadata(fileId: string, entry: CachedMetadata): Cache
   return entry;
 }
 
+let cacheGeneration = 0;
+
 export function clearAllMetadataCache(): void {
+  cacheGeneration++;
   for (const k of Object.keys(metadataCache)) delete metadataCache[k];
   memCacheKeys.length = 0;
+  lruKeys = [];
 }
 
 async function setCache(
@@ -125,6 +136,7 @@ async function setCache(
   newEntry: CachedMetadata,
   skipVerify: boolean = false,
 ): Promise<void> {
+  const genAtStart = cacheGeneration;
   if (newEntry.dbId && !skipVerify) {
     try {
       const exists = await invoke<boolean>(IPC_VERIFY_TRACK_EXISTS, { dbId: newEntry.dbId });
@@ -138,8 +150,10 @@ async function setCache(
         captureError({ level: 'warn', source: META_MODULE, message: `verify-track-exists-failed (dbId=${String(newEntry.dbId)}): ${classifyMetaError(e).message}` });
       }
     }
+  if (genAtStart !== cacheGeneration) return;
 
   const existing = await getCacheEntry(key);
+  if (genAtStart !== cacheGeneration) return;
   const newHasDbId = !!newEntry.dbId;
   const oldHasDbId = !!existing?.data?.dbId;
 
@@ -254,12 +268,14 @@ export async function getTrackMetadata(
 
   inflightMetadata.set(fileId, promise);
 
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const cleanup = () => {
+    if (timer) clearTimeout(timer);
     if (inflightMetadata.get(fileId) === promise) {
       inflightMetadata.delete(fileId);
     }
   };
-  AbortSignal.timeout(INFLIGHT_TIMEOUT).addEventListener('abort', cleanup, { once: true });
+  timer = setTimeout(cleanup, INFLIGHT_TIMEOUT);
 
   promise.then(
     (result) => {
