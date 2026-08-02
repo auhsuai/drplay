@@ -732,8 +732,8 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
 
   const ringSvg = (container: HTMLElement): Element | null =>
     container.querySelector('svg[aria-label]');
-  const ringText = (container: HTMLElement): string =>
-    container.querySelector('svg[aria-label] text')?.textContent ?? '';
+  const ringTextEl = (container: HTMLElement): Element | null =>
+    container.querySelector('svg[aria-label] text');
   const progressCircle = (container: HTMLElement): Element | null =>
     container.querySelector('circle[stroke-dashoffset]');
   const cancelButton = (container: HTMLElement): Element | null =>
@@ -741,14 +741,16 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
   const menuButton = (container: HTMLElement): Element | null =>
     container.querySelector('button[aria-haspopup="menu"]');
 
-  it("'uploading' + uploadProgress=0.42 → ring shows '42%' with dashoffset for the remaining 58%", () => {
+  it("'uploading' + uploadProgress=0.42 → ring beside title, dashoffset for the remaining 58%, NO % text", () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.42} />,
     );
     const svg = ringSvg(container);
     expect(svg).not.toBeNull();
+    // The percentage is conveyed through aria-label only — never rendered as
+    // visible text inside the ring.
     expect(svg?.getAttribute('aria-label')).toBe('42%');
-    expect(ringText(container)).toBe('42%');
+    expect(ringTextEl(container)).toBeNull();
     const circle = progressCircle(container);
     expect(circle).not.toBeNull();
     expect(Number(circle?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE * 0.58, 4);
@@ -757,32 +759,50 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
     expect(circle?.getAttribute('transform')).toContain('rotate(-90');
   });
 
-  it("'uploading' + uploadProgress undefined → ring at 0% (no indeterminate state)", () => {
+  it("'uploading' → ring sits BESIDE the title h3 (same flex row, 8px gap); X stays in the MoreMenu slot", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} />,
+    );
+    const h3 = container.querySelector('h3');
+    const svg = ringSvg(container);
+    expect(h3).not.toBeNull();
+    // Ring and title share the same flex row (gap-2 = 8px between them).
+    expect(h3?.parentElement).toBe(svg?.parentElement);
+    expect(h3?.parentElement?.className).toContain('flex items-center gap-2 min-w-0');
+    expect(svg?.getAttribute('class')).toContain('shrink-0');
+    const x = cancelButton(container);
+    expect(x).not.toBeNull();
+    // The X is NOT part of the title row — it renders in the trailing menu slot.
+    expect(x?.parentElement).not.toBe(h3?.parentElement);
+  });
+
+  it("'uploading' + uploadProgress undefined → ring at 0% (no indeterminate state, no % text)", () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" />,
     );
     expect(ringSvg(container)).not.toBeNull();
-    expect(ringText(container)).toBe('0%');
+    expect(ringTextEl(container)).toBeNull();
     const circle = progressCircle(container);
     expect(Number(circle?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE, 4);
   });
 
-  it('rerender with a new uploadProgress updates the ring % (memo comparator includes uploadProgress)', () => {
+  it('rerender with a new uploadProgress updates the ring arc (memo comparator includes uploadProgress), no % text', () => {
     const { container, rerender } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.2} />,
     );
-    expect(ringText(container)).toBe('20%');
+    expect(Number(progressCircle(container)?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE * 0.8, 4);
     rerender(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.8} />,
     );
-    expect(ringText(container)).toBe('80%');
+    expect(Number(progressCircle(container)?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE * 0.2, 4);
+    expect(ringTextEl(container)).toBeNull();
   });
 
   it('clamps out-of-range progress into 0..1 (progress can overshoot from truncation)', () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={1.7} />,
     );
-    expect(ringText(container)).toBe('100%');
+    expect(ringTextEl(container)).toBeNull();
     expect(Number(progressCircle(container)?.getAttribute('stroke-dashoffset'))).toBeCloseTo(0, 4);
   });
 

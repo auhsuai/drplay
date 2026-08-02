@@ -39,6 +39,8 @@ function ProgressRing({ fraction }: { fraction: number }): React.JSX.Element {
       className="w-5 h-5 shrink-0"
       viewBox={RING_VIEWBOX}
       role="img"
+      // The % is announced to screen readers only — the ring itself stays a
+      // pure arc (user design: no number inside the ring next to the title).
       aria-label={`${percent}%`}
     >
       <circle
@@ -61,15 +63,6 @@ function ProgressRing({ fraction }: { fraction: number }): React.JSX.Element {
         transform={RING_ROTATION}
         className="stroke-[#4285F4]"
       />
-      <text
-        x={RING_CENTER}
-        y={RING_CENTER}
-        textAnchor="middle"
-        dominantBaseline="central"
-        className="text-[9px] font-semibold text-[#4285F4] fill-current"
-      >
-        {percent}%
-      </text>
     </svg>
   );
 }

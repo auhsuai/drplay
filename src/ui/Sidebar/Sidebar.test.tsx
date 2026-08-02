@@ -114,10 +114,11 @@ describe('Sidebar storage quota', () => {
     await findQuotaText('2 GB / 15 GB');
     expect(screen.getByTestId('storage-quota-bar')).toBeTruthy();
     expect(screen.getByTestId('storage-quota-bar').style.width).toBe('13%');
-    // Expanded bar width == full NavItem content width (icon 24 + ml-3 12 +
-    // text 150 = 186px), so the bar aligns with the Home/My Drive row's
-    // content and animates width smoothly.
-    expect(screen.getByTestId('storage-quota-track').className).toContain('w-[186px]');
+    // Expanded bar width == full NavItem hover-row width (sidebar 256px − nav
+    // px-4 right edge 16px − storage px-4 left 16px − track ml-3 12px =
+    // 212px), so the bar's right edge matches the Home/My Drive row's hover
+    // extent and animates width smoothly.
+    expect(screen.getByTestId('storage-quota-track').className).toContain('w-[212px]');
     expect(screen.getByTestId('storage-quota-track').className).toContain('transition-all');
     expect(screen.getByTestId('storage-quota-track').className).toContain('ease-in-out');
     // Track background matches the PlayerBar seekbar track color exactly
@@ -336,7 +337,7 @@ describe('Sidebar storage quota', () => {
     expect(textEl.className).toContain('overflow-hidden');
     expect(quotaTextContent()).toBe('2 GB / 15 GB');
     // Collapsed: same container padding and same track ml-3 as expanded, so
-    // the track's left edge does not jump (bar just shrinks w-[186px] → w-11).
+    // the track's left edge does not jump (bar just shrinks w-[212px] → w-11).
     expect(screen.getByTestId('storage-quota').className).toContain('px-4');
     expect(screen.getByTestId('storage-quota').className).not.toContain('px-2');
     expect(screen.getByTestId('storage-quota').className).not.toContain('justify-center');
@@ -445,6 +446,14 @@ describe('Sidebar UploadButton (header "+")', () => {
   it('hides the UploadButton when the sidebar is collapsed', () => {
     render(<Sidebar {...baseProps({ isSidebarOpen: false, token: 'tok-1' })} />);
     expect(screen.queryByTitle('upload.button_title')).toBeNull();
+  });
+
+  it('pushes the + to the right of the header via an ml-auto wrapper (aligned with the nav hover zone, not trailing the DrPlay text)', () => {
+    render(<Sidebar {...baseProps({ token: 'tok-1' })} />);
+    const btn = screen.getByTitle('upload.button_title');
+    // The button itself lives inside UploadButton's own div — the ml-auto
+    // wrapper sits between it and the header <h1>.
+    expect(btn.closest('.ml-auto')).not.toBeNull();
   });
 
   it('renders no UploadButton when not logged in (no token), even expanded', () => {

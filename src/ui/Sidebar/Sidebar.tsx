@@ -10,13 +10,15 @@ import { UploadButton } from "../components/UploadButton";
 import { DropZone } from "../components/DropZone";
 
 const SIDEBAR_MODULE = 'Sidebar';
-// Storage bar width (expanded) — matches the full NavItem row content width
-// (icon w-6 h-6 24px + ml-3 12px + text max-w-[150px] 150px = 186px, inside
-// px-3 24px row padding), so the bar aligns with the Home/My Drive row's
-// icon+text extent. A fixed width (instead of `flex-1`/max-w) is required so
-// the collapsed <-> expanded width transition can animate smoothly between
-// two concrete values.
-const STORAGE_BAR_WIDTH_CLASS = 'w-[186px]';
+// Storage bar width (expanded) — matches the FULL NavItem hover-row extent:
+// sidebar w-64 (256px) − nav px-4 right (16px, row hover right edge at 240px)
+// − storage px-4 left (16px) − track ml-3 (12px) = 212px. The row's hover
+// background spans its whole px-3 row box, so aligning to that (not the
+// icon+text content) makes the bar's right edge line up with the hover zone
+// of the Home/My Drive rows above. A fixed width (instead of `flex-1`/max-w)
+// is required so the collapsed <-> expanded width transition can animate
+// smoothly between two concrete values.
+const STORAGE_BAR_WIDTH_CLASS = 'w-[212px]';
 
 // Usage fraction at which the quota bar fill and the usage text switch from
 // blue to red. Mirrors Google's behavior of flagging accounts that cross 80%
@@ -120,12 +122,15 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
   return (
     <aside className={`${isSidebarOpen ? 'w-64' : 'w-20'} bg-[#F8F9FA] dark:bg-[#121212] h-full flex flex-col shrink-0 transition-all duration-300 overflow-hidden border-r border-gray-200/50 dark:border-gray-800/50`}>
       <div className="px-7 py-6 flex items-center cursor-pointer transition-all duration-300" onClick={onToggleSidebar}>
-        <h1 className="text-xl font-bold flex items-center text-[#4285F4]" title="DrPlay">
+        <h1 className="text-xl font-bold flex items-center text-[#4285F4] w-full" title="DrPlay">
           <HardDrive className="w-6 h-6 shrink-0" />
           <div className={`overflow-hidden transition-all duration-300 whitespace-nowrap flex items-center ${isSidebarOpen ? 'max-w-[100px] opacity-100 ml-2' : 'max-w-0 opacity-0 ml-0'}`}>
             <span className="truncate">DrPlay</span>
           </div>
-          {isSidebarOpen && <UploadButton token={token} />}
+          {/* ml-auto pushes the + to the header's right edge so it aligns with
+              the nav rows' hover zone below instead of trailing the DrPlay
+              text (same right margin math as STORAGE_BAR_WIDTH_CLASS). */}
+          {isSidebarOpen && <div className="ml-auto"><UploadButton token={token} /></div>}
         </h1>
       </div>
       <nav className="px-4 space-y-1 mb-2">
