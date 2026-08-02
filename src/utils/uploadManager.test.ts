@@ -705,6 +705,65 @@ describe('uploadManager', () => {
     expect(Array.from(chunks[1])).toEqual([3, 4]);
   });
 
+  it('chunked 308 partial-ack giữa chunk: skip overshoot → trả remainder bắt đầu ĐÚNG offset (không lệch vị trí)', async () => {
+    // Stream chunks encode their absolute file position in byte values so a
+    // misaligned read is immediately visible: chunk0 = [0..7], chunk1 = [8..15].
+    const chunk0 = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
+    const chunk1 = new Uint8Array([8, 9, 10, 11, 12, 13, 14, 15]);
+    const s1 = { read: vi.fn().mockResolvedValueOnce(chunk0).mockResolvedValueOnce(chunk1).mockResolvedValueOnce(null), close: vi.fn().mockResolvedValue(undefined) };
+    // After the reopen the same file content is replayed from the start.
+    const s2 = { read: vi.fn().mockResolvedValueOnce(chunk0).mockResolvedValueOnce(chunk1).mockResolvedValueOnce(null), close: vi.fn().mockResolvedValue(undefined) };
+    const s3 = { read: vi.fn().mockResolvedValueOnce(chunk0).mockResolvedValueOnce(chunk1).mockResolvedValueOnce(null), close: vi.fn().mockResolvedValue(undefined) };
+    // First two opens are explicit; any further reopen falls back to s3 (the
+    // old buggy code reopens on every readChunk rewind). mockResolvedValue
+    // (not Once) so no queued mock leaks into the next test.
+    openDiskReadStream.mockResolvedValueOnce(s1).mockResolvedValueOnce(s2).mockResolvedValue(s3);
+    const seen: Array<Uint8Array | null> = [];
+    uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+      // Simulates a 308 resume where the server acked only 3 of the 8 bytes
+      // it actually received: the next read must start at byte 3, not at the
+      // next stream boundary (byte 8).
+      seen.push(await opts.readChunk(0));
+      seen.push(await opts.readChunk(3));
+      seen.push(await opts.readChunk(8));
+      return makeDriveFile('f1', 'x.mp3');
+    });
+
+    um.startUploads([diskFileSeed('x', 'C:/x.mp3')], TOKEN);
+    await waitIdle();
+
+    expect(seen[0]).toEqual(chunk0);
+    expect(seen[1]).toEqual(new Uint8Array([3, 4, 5, 6, 7]));
+    expect(seen[2]).toEqual(chunk1);
+  });
+
+  it('file growth: totalSize từ stat.size, readChunk không truncate ở tầng manager', async () => {
+    statDiskPath.mockResolvedValue({ path: 'C:/grow.mp3', name: 'grow.mp3', relativePath: 'grow.mp3', isDirectory: false, size: 100 });
+    const seq = (start: number, len: number) => new Uint8Array(Array.from({ length: len }, (_, i) => start + i));
+    openDiskReadStream.mockResolvedValue({
+      read: vi.fn()
+        .mockResolvedValueOnce(seq(0, 64)) // bytes 0..63
+        .mockResolvedValueOnce(seq(64, 64)) // bytes 64..127 — stream outlives the announced size
+        .mockResolvedValueOnce(null),
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+    const reads: Array<Uint8Array | null> = [];
+    uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+      reads.push(await opts.readChunk(0));
+      reads.push(await opts.readChunk(64));
+      return makeDriveFile('f1', 'grow.mp3');
+    });
+
+    um.startUploads([diskFileSeed('x', 'C:/grow.mp3')], TOKEN);
+    await waitIdle();
+
+    expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+    expect(uploadFileResumableChunked.mock.calls[0][1].totalSize).toBe(100);
+    // readChunk stays a pure reader — overshoot handling lives in driveApi.
+    expect(reads[0]).toEqual(seq(0, 64));
+    expect(reads[1]).toEqual(seq(64, 64));
+  });
+
   it('getUploadState: entry.id đang upload/queued → uploading', async () => {
     const d = deferred<DriveFileItem>();
     // NOTE: no second once-implementation — the queue is sequential, so b.mp3

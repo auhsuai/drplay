@@ -1246,18 +1246,99 @@ describe("uploadFileResumableChunked", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("chunk overshoot (readChunk beyond totalSize) → invalid, no PUT", async () => {
-    mockedFetch.mockResolvedValueOnce(makeLocationResponse(200, LOCATION));
+  it("file growth: readChunk overshoots totalSize → chunk truncated to the remaining bytes, final chunk sent with exact Content-Range", async () => {
+    // The file was still being written when the upload started (user dropped
+    // a half-downloaded file): the streamed bytes exceed the stat-ed size.
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-63"))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const offsets: number[] = [];
+    const fractions: number[] = [];
+    const result = await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: 100,
+      readChunk: async (offset) => {
+        offsets.push(offset);
+        // Still growing: every read returns a full 64-byte chunk, including
+        // the one at offset 64 that overshoots totalSize=100.
+        return offset >= 100 ? null : makePayload(64);
+      },
+      onProgress: (f) => fractions.push(f),
+    });
+
+    expect(result).toEqual(uploadedFile);
+    expect(offsets).toEqual([0, 64]);
+    expect(fractions).toEqual([64 / 100, 1]);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+    const [, put1Opts] = mockedFetch.mock.calls[1];
+    expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-63/100");
+    const [, put2Opts] = mockedFetch.mock.calls[2];
+    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 64-99/100");
+    // The truncated final chunk is 36 bytes — not a 256 KB multiple, which is
+    // fine: the multiple rule only applies to non-final chunks.
+    expect((put2Opts?.body as Uint8Array).byteLength).toBe(36);
+  });
+
+  it("file growth persists: every chunk truncated to totalSize, upload never exceeds it", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-19"))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-39"))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: 50,
+      readChunk: async (offset) => (offset >= 100 ? null : makePayload(64)),
+    });
+
+    const bodies: number[] = mockedFetch.mock.calls.slice(1).map(([, o]) => (o?.body as Uint8Array).byteLength);
+    expect(bodies).toEqual([50, 30, 10]);
+    const ranges = mockedFetch.mock.calls.slice(1).map(([, o]) => (o?.headers as Record<string, string>)["Content-Range"]);
+    expect(ranges).toEqual(["bytes 0-49/50", "bytes 20-49/50", "bytes 40-49/50"]);
+  });
+
+  it("truncate → warn captureError with upload-chunk-truncated (offset + overrun)", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: 50,
+      readChunk: async (offset) => (offset >= 50 ? null : makePayload(64)),
+    });
+
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "driveApi",
+        message: expect.stringContaining("upload-chunk-truncated (offset=0, overrun=14)"),
+      })
+    );
+  });
+
+  it("offset >= totalSize (308 full-range after the final truncated chunk) → invalid, no further PUT", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-9"));
 
     await expect(
       uploadFileResumableChunked("tok", {
         name: "big.flac",
         parentId: "p",
         totalSize: 10,
-        readChunk: async () => makePayload(CHUNK_SIZE),
+        readChunk: async (offset) => (offset >= 10 ? null : makePayload(CHUNK_SIZE)),
       })
     ).rejects.toMatchObject({ kind: "invalid" });
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    // initiate + the single truncated PUT — never a resend past the announced size.
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
   it("308 Range covering the whole file → invalid (server anomaly, would re-send out of range)", async () => {

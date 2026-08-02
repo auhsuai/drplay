@@ -278,6 +278,10 @@ async function uploadDiskFileStreaming(entry: InternalEntry, path: string): Prom
 async function uploadDiskPathChunked(entry: InternalEntry, path: string, totalSize: number): Promise<DriveFileItem> {
   let stream = await openDiskReadStream(path);
   let consumed = 0;
+  // Tail of a chunk that straddled the requested skip offset, served before
+  // the stream is read again so every returned chunk starts exactly at the
+  // offset the resumable session asked for.
+  let remainder: Uint8Array | null = null;
   const readChunk = async (offset: number): Promise<Uint8Array | null> => {
     if (offset < consumed) {
       // A 308 resume can ask for bytes we already consumed (server received
@@ -286,11 +290,28 @@ async function uploadDiskPathChunked(entry: InternalEntry, path: string, totalSi
       await stream.close();
       stream = await openDiskReadStream(path);
       consumed = 0;
+      remainder = null;
     }
     while (consumed < offset) {
       const skipped = await stream.read();
       if (skipped === null) break;
-      consumed += skipped.byteLength;
+      const next = consumed + skipped.byteLength;
+      if (next > offset) {
+        // The chunk straddles the requested offset: keep its tail (starting
+        // exactly at `offset`) instead of discarding it — the old
+        // discard-then-read desynced the stream and uploaded data shifted by
+        // `next - offset` bytes, silently corrupting the file.
+        remainder = skipped.slice(offset - consumed);
+        consumed = offset;
+        break;
+      }
+      consumed = next;
+    }
+    if (remainder !== null) {
+      const r = remainder;
+      remainder = null;
+      consumed += r.byteLength;
+      return r;
     }
     const chunk = await stream.read();
     if (chunk === null) return null;

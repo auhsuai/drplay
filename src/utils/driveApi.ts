@@ -871,7 +871,19 @@ async function uploadChunksInSession(
       throw new UploadError('upload data ended before total size', 'invalid');
     }
     if (offset + chunk.byteLength > totalSize) {
-      throw new UploadError('upload chunk exceeds total size', 'invalid');
+      if (offset >= totalSize) {
+        // Only reachable through a server anomaly (a 308 full-range is
+        // rejected above) — sending anything here exceeds the announced
+        // size and would get the session rejected by Google.
+        throw new UploadError('upload chunk exceeds total size', 'invalid');
+      }
+      // The file grew after the initial stat (e.g. it was still being written
+      // when the upload started) so readChunk streams past totalSize. Truncate
+      // the chunk to the remaining bytes — the final chunk may be any size
+      // (the 256 KiB multiple rule only applies to non-final chunks).
+      const overrun = offset + chunk.byteLength - totalSize;
+      chunk = chunk.slice(0, totalSize - offset);
+      captureError({ level: 'warn', source: DRIVE_MODULE, message: `upload-chunk-truncated (offset=${offset}, overrun=${overrun})` });
     }
 
     const end = offset + chunk.byteLength - 1;
