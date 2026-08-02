@@ -8,17 +8,18 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
 }));
 
-vi.mock('lucide-react', () => {
-  const icons = ['Plus'];
-  const Stub = () => null;
-  return Object.fromEntries(icons.map((n) => [n, Stub]));
-});
+vi.mock('lucide-react', () => ({
+  // CloudUpload is the canonical lucide export for "cloud-upload";
+  // UploadCloud is the deprecated alias (removed in a future lucide major).
+  CloudUpload: mocks.lucideCloudUpload,
+}));
 
 const mocks = vi.hoisted(() => ({
   open: vi.fn(),
   startUploads: vi.fn(),
   showErrorToast: vi.fn(),
   captureError: vi.fn(),
+  lucideCloudUpload: vi.fn((_props: { className?: string }) => null),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open }));
@@ -54,6 +55,7 @@ describe('UploadButton', () => {
     mocks.startUploads.mockReset();
     mocks.showErrorToast.mockReset();
     mocks.captureError.mockReset();
+    mocks.lucideCloudUpload.mockReset();
     useDriveStore.setState({ currentFolderId: 'root' });
   });
 
@@ -65,6 +67,13 @@ describe('UploadButton', () => {
   it('renders a button with the i18n title when a token is present', () => {
     render(<UploadButton token="tok-1" />);
     expect(openButton()).toBeTruthy();
+  });
+
+  it('renders the CloudUpload icon (cloud-arrow-up) at w-5 h-5', () => {
+    render(<UploadButton token="tok-1" />);
+    expect(mocks.lucideCloudUpload).toHaveBeenCalledTimes(1);
+    const props = mocks.lucideCloudUpload.mock.calls[0][0] as { className?: string };
+    expect(props.className).toBe('w-5 h-5');
   });
 
   it('does not render when token is null', () => {

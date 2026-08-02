@@ -9,7 +9,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('lucide-react', () => {
-  const icons = ['Home', 'HardDrive', 'Settings', 'Heart', 'Plus', 'ListMusic', 'LogOut', 'Gauge', 'UploadCloud'];
+  const icons = ['Home', 'HardDrive', 'Settings', 'Heart', 'Plus', 'ListMusic', 'LogOut', 'Gauge', 'CloudUpload'];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });
@@ -456,9 +456,46 @@ describe('Sidebar UploadButton (header "+")', () => {
     expect(btn.closest('.ml-auto')).not.toBeNull();
   });
 
+  it('offsets the + wrapper right by -mr-3 so its right edge aligns flush with the nav hover zone (header px-7 28px − 12px = nav px-4 16px)', () => {
+    render(<Sidebar {...baseProps({ token: 'tok-1' })} />);
+    const btn = screen.getByTitle('upload.button_title');
+    const wrapper = btn.closest('.ml-auto');
+    expect(wrapper).not.toBeNull();
+    // Same convention as the storage bar test: assert the exact class that
+    // carries the 12px offset that closes the header/nav 12px gap.
+    expect(wrapper!.className).toContain('-mr-3');
+  });
+
   it('renders no UploadButton when not logged in (no token), even expanded', () => {
     render(<Sidebar {...baseProps({ token: null })} />);
     expect(screen.queryByTitle('upload.button_title')).toBeNull();
+  });
+});
+
+describe('Sidebar playlist row + button alignment', () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('pushes the playlist + button to the row right edge (justify-between) when expanded, aligning it with the header upload +', () => {
+    render(<Sidebar {...baseProps({ token: 'tok-1' })} />);
+    const btn = screen.getByTitle('sidebar.create_playlist');
+    // The button's parent is the playlist row container.
+    const row = btn.parentElement;
+    expect(row).not.toBeNull();
+    expect(row!.className).toContain('justify-between');
+    // Expanded: no ml-3 spacer (justify-between distributes the space instead).
+    expect(btn.className).not.toContain('ml-3');
+  });
+
+  it('keeps the legacy collapsed layout (no justify-between, button keeps ml-3)', () => {
+    render(<Sidebar {...baseProps({ isSidebarOpen: false, token: 'tok-1' })} />);
+    const btn = screen.getByTitle('sidebar.create_playlist');
+    const row = btn.parentElement;
+    expect(row).not.toBeNull();
+    expect(row!.className).not.toContain('justify-between');
+    expect(btn.className).toContain('ml-3');
   });
 });
 

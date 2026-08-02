@@ -127,10 +127,12 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
           <div className={`overflow-hidden transition-all duration-300 whitespace-nowrap flex items-center ${isSidebarOpen ? 'max-w-[100px] opacity-100 ml-2' : 'max-w-0 opacity-0 ml-0'}`}>
             <span className="truncate">DrPlay</span>
           </div>
-          {/* ml-auto pushes the + to the header's right edge so it aligns with
-              the nav rows' hover zone below instead of trailing the DrPlay
-              text (same right margin math as STORAGE_BAR_WIDTH_CLASS). */}
-          {isSidebarOpen && <div className="ml-auto"><UploadButton token={token} /></div>}
+          {/* ml-auto pushes the + to the header's right edge; -mr-3 (12px)
+              cancels the difference between the header's px-7 (28px) and the
+              nav rows' px-4 (16px) right padding, so the + lines up flush
+              with the nav rows' hover zone below (right edge 240px) instead
+              of stopping 12px short of it. */}
+          {isSidebarOpen && <div className="ml-auto -mr-3"><UploadButton token={token} /></div>}
         </h1>
       </div>
       <nav className="px-4 space-y-1 mb-2">
@@ -139,7 +141,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
         <NavItem icon={<Heart />} label={t('sidebar.liked_songs')} active={activeTab === "Liked Songs"} onClick={() => onTabChange("Liked Songs")} isSidebarOpen={isSidebarOpen} />
       </nav>
       
-      <div className="px-4 mt-6 mb-2 flex items-center group transition-all duration-300">
+      <div className={`px-4 mt-6 mb-2 flex items-center group transition-all duration-300 ${isSidebarOpen ? 'justify-between' : ''}`}>
         <div className={`overflow-hidden transition-all duration-300 whitespace-nowrap ${isSidebarOpen ? 'max-w-[160px] opacity-100 flex-1' : 'max-w-0 opacity-0 flex-none'}`}>
           <h2 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('sidebar.playlists')}</h2>
         </div>

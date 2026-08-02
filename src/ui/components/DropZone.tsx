@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { UploadCloud } from 'lucide-react';
+import { CloudUpload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -125,7 +125,7 @@ export function DropZone({ token }: DropZoneProps) {
   return (
     <div data-testid="drop-overlay" className={`fixed inset-0 ${OVERLAY_Z_CLASS} bg-black/50 pointer-events-none flex items-center justify-center`}>
       <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-white/80 bg-white/10 px-10 py-8">
-        <UploadCloud className="w-12 h-12 text-white" />
+        <CloudUpload className="w-12 h-12 text-white" />
         <p className="text-lg font-medium text-white">{t('upload.drop_overlay')}</p>
       </div>
     </div>

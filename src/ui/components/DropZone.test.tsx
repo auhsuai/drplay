@@ -8,10 +8,11 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
 }));
 
-vi.mock('lucide-react', () => {
-  const Stub = () => null;
-  return { UploadCloud: Stub };
-});
+vi.mock('lucide-react', () => ({
+  // CloudUpload is the canonical lucide export for "cloud-upload";
+  // UploadCloud is the deprecated alias (removed in a future lucide major).
+  CloudUpload: mocks.lucideCloudUpload,
+}));
 
 const mocks = vi.hoisted(() => ({
   getCurrentWebview: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   startUploads: vi.fn(),
   showErrorToast: vi.fn(),
   captureError: vi.fn(),
+  lucideCloudUpload: vi.fn((_props: { className?: string }) => null),
 }));
 
 vi.mock('@tauri-apps/api/webview', () => ({
@@ -64,6 +66,7 @@ describe('DropZone', () => {
       capturedHandler = handler as (event: { payload: DropPayload }) => void;
       return mocks.unlisten;
     });
+    mocks.lucideCloudUpload.mockReset();
     useDriveStore.setState({ currentFolderId: 'root' });
   });
 
@@ -144,6 +147,18 @@ describe('DropZone', () => {
     expect(overlay.className).toContain('pointer-events-none');
     expect(overlay.className).toContain('fixed');
     expect(overlay.className).toContain('z-[10000]');
+  });
+
+  it('renders the overlay icon with the canonical CloudUpload (not deprecated UploadCloud) and the agreed sizing classes', async () => {
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 1, y: 1 } } });
+    // The lucide-react mock records the icon component actually rendered.
+    expect(mocks.lucideCloudUpload).toHaveBeenCalledTimes(1);
+    const props = mocks.lucideCloudUpload.mock.calls[0][0] as { className?: string };
+    expect(props.className).toContain('w-12');
+    expect(props.className).toContain('h-12');
+    expect(props.className).toContain('text-white');
   });
 
   it('uploads a dropped file into the current folder', async () => {

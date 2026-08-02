@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { CloudUpload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { startUploads, type UploadSeed } from "../../utils/uploadManager";
@@ -121,7 +121,8 @@ export function UploadButton({ token }: UploadButtonProps) {
         aria-expanded={isMenuOpen}
         className={TOGGLE_BUTTON_CLASS}
       >
-        <Plus className="w-5 h-5" />
+        {/* CloudUpload = lucide "cloud-arrow-up"; UploadCloud is the deprecated alias. */}
+        <CloudUpload className="w-5 h-5" />
       </button>
       {isMenuOpen && (
         <div
