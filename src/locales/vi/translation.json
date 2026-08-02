@@ -84,7 +84,12 @@
   "title": "Tiêu đề",
   "upload": {
     "error": "Tải lên thất bại",
-    "quota_exceeded": "Dung lượng Google Drive của bạn đã đầy"
+    "quota_exceeded": "Dung lượng Google Drive của bạn đã đầy",
+    "button_title": "Tải lên",
+    "upload_file": "Tải lên tệp",
+    "upload_folder": "Tải lên thư mục",
+    "audio_files": "Tệp âm thanh",
+    "upload_error": "Không thể mở hộp thoại chọn tệp"
   },
   "unknown_artist": "Không rõ ca sĩ",
   "view_all": "Xem tất cả",

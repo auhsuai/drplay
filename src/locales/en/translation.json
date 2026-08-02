@@ -84,7 +84,12 @@
   "title": "Title",
   "upload": {
     "error": "Upload failed",
-    "quota_exceeded": "Your Google Drive storage is full"
+    "quota_exceeded": "Your Google Drive storage is full",
+    "button_title": "Upload",
+    "upload_file": "Upload file",
+    "upload_folder": "Upload folder",
+    "audio_files": "Audio files",
+    "upload_error": "Failed to open file dialog"
   },
   "unknown_artist": "Unknown Artist",
   "view_all": "View All",

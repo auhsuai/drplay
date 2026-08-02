@@ -1,0 +1,149 @@
+import React, { useEffect, useRef, useState } from "react";
+import { Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { open } from "@tauri-apps/plugin-dialog";
+import { startUploads, type UploadSeed } from "../../utils/uploadManager";
+import { useDriveStore } from "../../store/driveStore";
+import { showErrorToast } from "../../utils/simpleToast";
+import { captureError } from "../../utils/errorLog";
+
+const UPLOAD_BUTTON_MODULE = 'UploadButton';
+// Extensions the file picker filters to (no leading dot, per DialogFilter docs).
+const AUDIO_FILE_EXTENSIONS: ReadonlyArray<string> = ['mp3', 'flac', 'wav', 'm4a', 'ogg', 'aac', 'opus'];
+// Matches the "+" playlist button style (Sidebar.tsx) — gray, hover to dark,
+// fixed icon-sized hit area.
+const TOGGLE_BUTTON_CLASS = "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-all duration-300 w-6 h-6 flex items-center justify-center shrink-0";
+const MENU_ITEM_CLASS = "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all";
+
+export interface UploadButtonProps {
+  token?: string | null;
+}
+
+// Same path->name logic as uploadManager's internal basename (not exported
+// there — export is out of that module's slice scope): strips trailing
+// separators first so "C:\Music\" yields "Music" instead of "".
+function basename(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, '');
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] ?? path;
+}
+
+// The dialog returns string[] with multiple:true and string with
+// directory:true — normalize both shapes (plus a defensive single-string
+// file result) to a uniform string[] of non-empty paths.
+function normalizePaths(selected: unknown): string[] {
+  if (Array.isArray(selected)) {
+    return selected.filter((p): p is string => typeof p === 'string');
+  }
+  if (typeof selected === 'string') {
+    return [selected];
+  }
+  return [];
+}
+
+export function UploadButton({ token }: UploadButtonProps) {
+  const { t } = useTranslation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Menu lifecycle listeners (MoreMenu pattern): close on outside mousedown
+  // or Escape. Listeners exist only while the menu is open.
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handleMouseDownOutside = (event: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleMouseDownOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDownOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMenuOpen]);
+
+  if (!token) return null;
+
+  const handleToggleMenu = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    setIsMenuOpen((prev) => !prev);
+  };
+
+  const handleUploadFiles = async () => {
+    if (!token) return;
+    setIsMenuOpen(false);
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: true,
+        filters: [{ name: t('upload.audio_files'), extensions: [...AUDIO_FILE_EXTENSIONS] }],
+      });
+      const paths = normalizePaths(selected);
+      if (paths.length === 0) return;
+      const parentId = useDriveStore.getState().currentFolderId;
+      const seeds: UploadSeed[] = paths.map((path) => ({
+        name: basename(path),
+        isFolder: false,
+        parentId,
+        diskPath: path,
+      }));
+      startUploads(seeds, token);
+    } catch (err) {
+      captureError({
+        level: 'error',
+        source: UPLOAD_BUTTON_MODULE,
+        message: `open-file-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      showErrorToast(t('upload.upload_error'));
+    }
+  };
+
+  const handleUploadFolder = async () => {
+    if (!token) return;
+    setIsMenuOpen(false);
+    try {
+      const selected = await open({ directory: true });
+      if (typeof selected !== 'string') return;
+      const parentId = useDriveStore.getState().currentFolderId;
+      startUploads([{ name: basename(selected), isFolder: true, parentId, diskPath: selected }], token);
+    } catch (err) {
+      captureError({
+        level: 'error',
+        source: UPLOAD_BUTTON_MODULE,
+        message: `open-folder-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      showErrorToast(t('upload.upload_error'));
+    }
+  };
+
+  return (
+    <div className="relative shrink-0" ref={wrapperRef} onClick={(e) => e.stopPropagation()}>
+      <button
+        onClick={handleToggleMenu}
+        title={t('upload.button_title')}
+        aria-haspopup="menu"
+        aria-expanded={isMenuOpen}
+        className={TOGGLE_BUTTON_CLASS}
+      >
+        <Plus className="w-5 h-5" />
+      </button>
+      {isMenuOpen && (
+        <div
+          role="menu"
+          className="absolute right-0 top-8 z-50 w-40 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+        >
+          <button role="menuitem" onClick={handleUploadFiles} className={MENU_ITEM_CLASS}>
+            {t('upload.upload_file')}
+          </button>
+          <button role="menuitem" onClick={handleUploadFolder} className={MENU_ITEM_CLASS}>
+            {t('upload.upload_folder')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

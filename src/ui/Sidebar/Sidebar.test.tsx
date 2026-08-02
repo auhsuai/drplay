@@ -29,6 +29,11 @@ vi.mock('../../utils/playlists', () => ({
 vi.mock('../../utils/driveApi', () => ({ getDriveStorageQuota: mocks.getDriveStorageQuota }));
 vi.mock('../../utils/errorLog', () => ({ captureError: mocks.captureError }));
 vi.mock('../../utils/simpleToast', () => ({ showErrorToast: mocks.showErrorToast }));
+// UploadButton (rendered in the header when token is set) pulls in the real
+// uploadManager (dexie/db chain) and the Tauri dialog plugin — neither is
+// exercised by these tests, so stand-ins keep the jsdom environment isolated.
+vi.mock('../../utils/uploadManager', () => ({ startUploads: vi.fn() }));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }));
 
 const GB = 1024 * 1024 * 1024;
 
