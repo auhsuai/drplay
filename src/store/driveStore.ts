@@ -21,9 +21,13 @@ interface DriveState {
   setIsLoadingTracks: (isLoading: boolean) => void;
 }
 
+// Drive root folder id — mirrored in useDrive.GD_ROOT_ID, useLocateFile.ROOT_FOLDER_ID etc.;
+// consolidation into a shared module is a separate task
+const ROOT_FOLDER_ID = 'root';
+
 export const useDriveStore = create<DriveState>((set) => ({
   appRootFolder: null,
-  currentFolderId: 'root',
+  currentFolderId: ROOT_FOLDER_ID,
   currentFolderName: 'My Drive',
   folderHistory: [],
   sortOption: 'name',
