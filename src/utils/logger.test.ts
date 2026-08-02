@@ -84,6 +84,28 @@ describe('logger sanitizeString — upgrade redaction patterns', () => {
   });
 });
 
+describe('logger sanitizeString — Drive id-key redaction', () => {
+  it('redacts driveFileId= value', () => {
+    expect(sanitizeString('driveFileId=abc123')).toBe('[REDACTED_ID]');
+    expect(sanitizeString('driveFileId=abc123')).not.toContain('abc123');
+  });
+
+  it('redacts dbId= value', () => {
+    expect(sanitizeString('dbId=xyz_1')).toBe('[REDACTED_ID]');
+    expect(sanitizeString('dbId=xyz_1')).not.toContain('xyz_1');
+  });
+
+  it('redacts folder= value', () => {
+    expect(sanitizeString('folder=root')).toBe('[REDACTED_ID]');
+    expect(sanitizeString('folder=root')).not.toContain('root');
+  });
+
+  it('regression: id= still redacted as before', () => {
+    expect(sanitizeString('id=abc')).toBe('id=[REDACTED_ID]');
+    expect(sanitizeString('?id=abc')).toBe('?id=[REDACTED_ID]');
+  });
+});
+
 describe('logger sanitizeArg — upgrade circular handling', () => {
   it('does not leak raw circular object containing a secret', () => {
     const circular: Record<string, unknown> = { payload: 'Bearer supersecret' };

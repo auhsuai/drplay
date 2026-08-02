@@ -9,6 +9,9 @@ const SENSITIVE_PATTERNS: { re: RegExp; redact: (match: string, prefix: string) 
   { re: /https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[^\s"']*/g, redact: () => '[REDACTED_LINK]' },
   // Ẩn mọi string có chứa id= (id của bài hát trên drive); prefix ?/& tuỳ chọn
   { re: /([?&]?)id=[a-zA-Z0-9_-]+/g, redact: (_m, p) => `${p}id=[REDACTED_ID]` },
+  // Drive file/folder ids logged by hooks (keys ending in "Id" or "folder")
+  // — case-sensitive 'id=' above misses these; redact the value only.
+  { re: /([?&]?)(?:dbId|driveFileId|fileId|folder)=[a-zA-Z0-9_-]+/g, redact: (_m, p) => `${p}[REDACTED_ID]` },
   // Ẩn Access Token nếu lỡ bị log ra (giữ nguyên pattern tiền tố tuỳ chọn)
   { re: /([?&]?)access_token=[a-zA-Z0-9._-]+/g, redact: () => '[REDACTED_TOKEN]' },
   // Ẩn Refresh Token (sống lâu hơn access token nên không được log — OWASP Logging Cheat Sheet)
