@@ -198,6 +198,41 @@ describe("driveFetch retry", () => {
   });
 });
 
+// Regression: driveFetch must forward its timeoutMs into fetchWithAuth so the
+// declared 20s default (and any caller override) actually applies. The old
+// code merged only `signal`, so fetchWithAuth's internal 15s default always
+// won and the driveApi timeout was dead on arrival.
+describe("driveFetch forwards timeoutMs to fetchWithAuth", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards the default 20s timeoutMs when the caller passes none", async () => {
+    mockedFetch.mockResolvedValueOnce(makeResponse(200));
+
+    const res = await driveFetch("https://www.googleapis.com/drive/v3/files");
+
+    expect(res.status).toBe(200);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    const opts = mockedFetch.mock.calls[0][1] as RequestInit & { timeoutMs?: number };
+    expect(opts.timeoutMs).toBe(20000);
+  });
+
+  it("forwards an explicit caller timeoutMs override", async () => {
+    mockedFetch.mockResolvedValueOnce(makeResponse(200));
+
+    const res = await driveFetch("https://www.googleapis.com/drive/v3/files", {}, 5000);
+
+    expect(res.status).toBe(200);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    const opts = mockedFetch.mock.calls[0][1] as RequestInit & { timeoutMs?: number };
+    expect(opts.timeoutMs).toBe(5000);
+  });
+});
+
 // Regression: caller-supplied signal must NOT disable the timeout (Bug 1a).
 // The combined timeout is faked via AbortSignal.timeout spy so we can advance
 // the clock without waiting 20s per attempt in real time.

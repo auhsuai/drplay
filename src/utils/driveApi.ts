@@ -106,14 +106,16 @@ export async function driveFetch(
   options: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<Response> {
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  // Infinite loop: every iteration ends in `return res`, `throw err`, or a
+  // `continue` gated by attempt < MAX_RETRIES — the loop can never exit
+  // normally (TS needs the non-terminating form to accept the shape).
+  for (let attempt = 0; ; attempt++) {
     try {
       // Fresh timeout signal per attempt (an aborted signal cannot be reused).
       // A caller-supplied signal must NOT disable the timeout — merge both so
       // a stalled network still fails after timeoutMs.
       const signal = mergeWithTimeoutSignal(options.signal, timeoutMs);
-      const res = await fetchWithAuth(url, { ...options, signal });
+      const res = await fetchWithAuth(url, { ...options, signal, timeoutMs });
 
       if (attempt < MAX_RETRIES) {
         // 429/5xx are retryable by status alone; a 403 only when its body
@@ -136,7 +138,6 @@ export async function driveFetch(
         throw err;
       }
       // Network failure or timeout (AbortError) — transient, retry with backoff.
-      lastErr = err;
       if (attempt < MAX_RETRIES) {
         await sleep(backoffDelay(attempt));
         continue;
@@ -144,7 +145,6 @@ export async function driveFetch(
       throw err;
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error('Drive request failed after retries');
 }
 
 // Google Drive error responses carry { error: { message, reason } }; only the
@@ -187,6 +187,15 @@ export async function isRateLimit403Response(response: Response): Promise<boolea
   return isRateLimitError(response.status, await readDriveErrorBody(cloned));
 }
 
+// Shared guard for the simple `Failed to <action> (status)` throw pattern.
+// NOT used where a non-ok response has its own handling (null returns,
+// captureError + detail parsing in moveFile, quota, etc.).
+function assertDriveOk(response: Response, action: string): void {
+  if (!response.ok) {
+    throw new Error(`Failed to ${action} (${response.status})`);
+  }
+}
+
 // signal?: AbortSignal wires a caller cancel (uploadManager batch controller)
 // into the request; driveFetch already turns a caller abort into an immediate
 // non-retried rejection. Optional: callers like useDriveExplorer omit it.
@@ -207,9 +216,7 @@ export async function createFolder(token: string, name: string, parentId: string
     signal
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to create folder (${response.status})`);
-  }
+  assertDriveOk(response, 'create folder');
   return response.json();
 }
 
@@ -231,9 +238,7 @@ export async function deleteFile(token: string, fileId: string): Promise<DriveFi
     body: JSON.stringify(metadata)
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to delete file (${response.status})`);
-  }
+  assertDriveOk(response, 'delete file');
   return response.json();
 }
 
@@ -298,9 +303,7 @@ export async function restoreFile(token: string, fileId: string): Promise<DriveF
     body: JSON.stringify(metadata)
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to restore file (${response.status})`);
-  }
+  assertDriveOk(response, 'restore file');
   return response.json();
 }
 
@@ -312,9 +315,7 @@ export async function permanentlyDeleteFile(token: string, fileId: string): Prom
     }
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to permanently delete file (${response.status})`);
-  }
+  assertDriveOk(response, 'permanently delete file');
   return true;
 }
 
@@ -328,9 +329,7 @@ export async function getRecentlyAddedAudioFiles(token: string): Promise<DriveFi
     }
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch recently added audio files (${response.status})`);
-  }
+  assertDriveOk(response, 'fetch recently added audio files');
   
   const data = await response.json();
   return data.files || [];
@@ -366,9 +365,15 @@ export async function getFileName(token: string, fileId: string, signal?: AbortS
 }
 
 // App Configuration in appDataFolder
-export async function getAppConfig(token: string): Promise<Record<string, unknown> | null> {
+// Search URL for the config file in appDataFolder (shared by getAppConfig and
+// saveAppConfigInternal so both always query the exact same endpoint).
+function buildConfigSearchUrl(): string {
   const q = `name = '${CONFIG_FILENAME}' and '${APP_DATA_FOLDER}' in parents`;
-  const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
+  return `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
+}
+
+export async function getAppConfig(token: string): Promise<Record<string, unknown> | null> {
+  const url = buildConfigSearchUrl();
   
   try {
     const searchRes = await driveFetch(url, {
@@ -421,8 +426,7 @@ export async function withSaveConfigLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 async function saveAppConfigInternal(token: string, config: unknown): Promise<boolean> {
-  const q = `name = '${CONFIG_FILENAME}' and '${APP_DATA_FOLDER}' in parents`;
-  const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
+  const url = buildConfigSearchUrl();
 
   try {
     const searchRes = await driveFetch(url, {
