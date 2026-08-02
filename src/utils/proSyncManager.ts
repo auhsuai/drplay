@@ -30,7 +30,7 @@ type SyncEventName = (typeof SYNC_EVENT_NAMES)[keyof typeof SYNC_EVENT_NAMES];
 let globalWorker: Worker | null = null;
 let onTokenRefreshRequest: (() => Promise<string | null>) | null = null;
 
-export function setTokenRefreshHandler(handler: () => Promise<string | null>) {
+export function setTokenRefreshHandler(handler: (() => Promise<string | null>) | null) {
   onTokenRefreshRequest = handler;
 }
 

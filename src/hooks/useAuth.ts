@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker, stopProSyncWorker, setTokenRefreshHandler, updateWorkerToken } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
+import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
 import { showErrorToast } from "../utils/simpleToast";
@@ -25,6 +26,8 @@ const LS_ACCESS_TOKEN = 'drplay_access_token';
 const LS_REFRESH_TOKEN = 'drplay_refresh_token';
 const LS_TOKEN_TIME = 'drplay_token_time';
 const LS_USER_EMAIL = 'drplay_current_user_email';
+
+const CLEAR_STREAM_TOKEN_CMD = 'clear_stream_token';
 
 const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 
@@ -51,11 +54,22 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
   // Initialize token from localStorage
   useEffect(() => {
-    const savedToken = localStorage.getItem(LS_ACCESS_TOKEN);
+    let savedToken: string | null = null;
+    try {
+      savedToken = localStorage.getItem(LS_ACCESS_TOKEN);
+    } catch {
+      captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-read-failed' });
+    }
     if (savedToken) {
       setAccessToken(savedToken);
       setIsLoggedIn(true);
-      const issueTime = parseInt(localStorage.getItem(LS_TOKEN_TIME) || "", 10);
+      let issueTime: number;
+      try {
+        issueTime = parseInt(localStorage.getItem(LS_TOKEN_TIME) || "", 10);
+      } catch {
+        captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-read-failed' });
+        issueTime = NaN;
+      }
       // Corrupt/missing token_time -> treat as expired and refresh promptly
       // (scheduleProactiveRefresh clamps the minimum to 5s).
       const remainingSec = Number.isFinite(issueTime) && issueTime > 0
@@ -66,14 +80,19 @@ export const useAuth = (onLogoutExt?: () => void) => {
   }, []);
 
   const handleLoginSuccess = (tokenData: TokenData) => {
+    if (isLoggingOutRef.current) return;
     if (!tokenData || typeof tokenData.access_token !== 'string' || tokenData.access_token.length === 0) {
       captureError({ level: 'error', source: AUTH_MODULE, message: 'Login aborted: malformed token response (missing access_token) — no token leaked' });
       return;
     }
-    localStorage.setItem(LS_ACCESS_TOKEN, tokenData.access_token);
-    localStorage.setItem(LS_TOKEN_TIME, Date.now().toString());
-    if (tokenData.refresh_token) {
-      localStorage.setItem(LS_REFRESH_TOKEN, tokenData.refresh_token);
+    try {
+      localStorage.setItem(LS_ACCESS_TOKEN, tokenData.access_token);
+      localStorage.setItem(LS_TOKEN_TIME, Date.now().toString());
+      if (tokenData.refresh_token) {
+        localStorage.setItem(LS_REFRESH_TOKEN, tokenData.refresh_token);
+      }
+    } catch {
+      captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-write-failed' });
     }
     setAccessToken(tokenData.access_token);
     setIsLoggedIn(true);
@@ -88,12 +107,17 @@ export const useAuth = (onLogoutExt?: () => void) => {
       invalidateCurrentSession();
       stopProSyncWorker();
 
-      const tokenToRevoke = localStorage.getItem(LS_ACCESS_TOKEN);
+      let tokenToRevoke: string | null = null;
+      try {
+        tokenToRevoke = localStorage.getItem(LS_ACCESS_TOKEN);
 
-      localStorage.removeItem(LS_ACCESS_TOKEN);
-      localStorage.removeItem(LS_REFRESH_TOKEN);
-      localStorage.removeItem(LS_TOKEN_TIME);
-      localStorage.removeItem(LS_USER_EMAIL);
+        localStorage.removeItem(LS_ACCESS_TOKEN);
+        localStorage.removeItem(LS_REFRESH_TOKEN);
+        localStorage.removeItem(LS_TOKEN_TIME);
+        localStorage.removeItem(LS_USER_EMAIL);
+      } catch {
+        captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-clear-failed' });
+      }
       setIsLoggedIn(false);
       setAccessToken(null);
       setUserProfile(null);
@@ -101,8 +125,8 @@ export const useAuth = (onLogoutExt?: () => void) => {
       window.dispatchEvent(new CustomEvent('player-stop'));
 
       try {
-        await invoke("clear_stream_token");
-        await invoke("clear_local_cache");
+        await invoke(CLEAR_STREAM_TOKEN_CMD);
+        await invoke(CLEAR_LOCAL_CACHE_CMD);
         clearAllMetadataCache();
       } catch (e: unknown) {
         captureError({ level: 'warn', source: AUTH_MODULE, message: `Failed to clear backend token/cache (clear_stream_token/clear_local_cache) — continuing logout: ${classifyError(e)}` });
@@ -179,13 +203,18 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
       // Run periodic sync every 2 minutes
       const syncInterval = setInterval(() => {
-        const latestToken = localStorage.getItem(LS_ACCESS_TOKEN);
-        if (latestToken) startProSyncWorker(latestToken);
+        try {
+          const latestToken = localStorage.getItem(LS_ACCESS_TOKEN);
+          if (latestToken) startProSyncWorker(latestToken);
+        } catch {
+          captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-read-failed' });
+        }
       }, SYNC_INTERVAL_MS);
 
       const handleTokenUpdated = (e: Event) => {
         const detail = (e as CustomEvent).detail;
         if (typeof detail?.token === 'string') {
+          setAccessToken(detail.token);
           updateWorkerToken(detail.token);
         }
       };
@@ -207,7 +236,11 @@ export const useAuth = (onLogoutExt?: () => void) => {
               email: data.email,
               picture: typeof data.picture === 'string' ? data.picture : ''
             });
-            localStorage.setItem(LS_USER_EMAIL, data.email);
+            try {
+              localStorage.setItem(LS_USER_EMAIL, data.email);
+            } catch {
+              captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-write-failed' });
+            }
             window.dispatchEvent(new CustomEvent('user-changed'));
           }
         } catch (err: unknown) {
@@ -220,6 +253,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       return () => {
         clearInterval(syncInterval);
         stopProSyncWorker();
+        setTokenRefreshHandler(null);
         controller.abort();
         window.removeEventListener('token-updated', handleTokenUpdated);
       };

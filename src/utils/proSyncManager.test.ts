@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   handleWorkerMessage,
+  setTokenRefreshHandler,
   startProSyncWorker,
   stopProSyncWorker,
   SYNC_EVENT_NAMES as EVENT,
@@ -221,5 +222,34 @@ describe('startProSyncWorker', () => {
       })
     );
     expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('TOKEN_EXPIRED with registered handler posts the refreshed token to the worker', async () => {
+    setTokenRefreshHandler(async () => 'new-token');
+    startProSyncWorker('token');
+    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+
+    worker.onmessage?.({ data: { type: 'TOKEN_EXPIRED' } });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(worker.postMessage).toHaveBeenCalledTimes(2);
+    expect(worker.postMessage).toHaveBeenLastCalledWith({ type: 'token', token: 'new-token' });
+  });
+
+  it('setTokenRefreshHandler(null) prevents a restarted worker from reusing the stale handler', async () => {
+    setTokenRefreshHandler(async () => 'stale-token');
+    startProSyncWorker('token');
+    setTokenRefreshHandler(null);
+    stopProSyncWorker();
+    startProSyncWorker('token');
+    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+
+    worker.onmessage?.({ data: { type: 'TOKEN_EXPIRED' } });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'sync', token: 'token' });
   });
 });
