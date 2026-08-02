@@ -30,7 +30,7 @@ Mỗi file: Audit → Cross-verify → Upgrade (TDD) → Review → Verify → *
 | 16 | `src/utils/proSyncManager.ts` | ✅ done | onerror/onmessageerror worker, typed unions, test import constants |
 | 17 | `src/utils/playlists.ts` | ✅ done | transaction chống lost update, import type chuẩn, destructure classify |
 | 18 | `src/utils/favorites.ts` | ✅ done | transaction addFavorite, log isFavorite, import type chuẩn |
-| 19 | `src/utils/history.ts` | ⬜ pending | |
+| 19 | `src/utils/history.ts` | ✅ done | transaction recordPlay/recordFolderVisit, import type, METADATA_KEY_PREFIX/V_PLACEHOLDER, classify error |
 | 20 | `src/utils/downloadPath.ts` | ⬜ pending | |
 | 21 | `src/utils/pathUtils.ts` | ⬜ pending | |
 | 22 | `src/utils/truncatePath.ts` | ⬜ pending | |

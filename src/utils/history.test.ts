@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { db } from '../db/db';
 import {
   recordPlay,
@@ -12,6 +12,7 @@ import {
   PlayCountEntry,
   FolderVisitEntry,
 } from './history';
+import * as errorLog from './errorLog';
 
 const TRACK: any = { id: 't1', title: 'Song One', artist: 'Artist A', streamUrl: 'x' };
 const TRACK2: any = { id: 't2', title: 'Song Two', artist: 'Artist B', streamUrl: 'y' };
@@ -35,6 +36,9 @@ describe('history (Dexie-backed)', () => {
   });
   afterEach(async () => {
     await clearAll();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('recordPlay adds to recent and increments play count', async () => {
@@ -330,5 +334,37 @@ describe('history (Dexie-backed)', () => {
     for (let i = 5; i < 1004; i++) expect(await db.folderVisits.get(`fseed_${i}`)).toBeDefined();
     const top = await getMostVisitedFolders();
     expect(top[0].id).toBe('f_new');
+  });
+
+  it('recordPlay runs inside a single rw transaction over recentTracks+playCounts', async () => {
+    const txSpy = vi.spyOn(db, 'transaction');
+    await recordPlay(TRACK);
+    expect(txSpy).toHaveBeenCalledWith('rw', [db.recentTracks, db.playCounts], expect.any(Function));
+  });
+
+  it('recordPlay transaction guard: consecutive plays of same track increment count to 2 (no lost update)', async () => {
+    await recordPlay(TRACK);
+    await recordPlay(TRACK);
+    const row = await db.playCounts.get(TRACK.id);
+    expect(row?.count).toBe(2);
+  });
+
+  it('recordFolderVisit transaction: 3 visits to same folder => count = 3', async () => {
+    await recordFolderVisit('f9', 'Folder Nine');
+    await recordFolderVisit('f9', 'Folder Nine');
+    await recordFolderVisit('f9', 'Folder Nine');
+    const row = await db.folderVisits.get('f9');
+    expect(row?.count).toBe(3);
+  });
+
+  it('recordPlay failure calls captureError with classified error message', async () => {
+    const captureSpy = vi.spyOn(errorLog, 'captureError').mockResolvedValue(undefined);
+    const txSpy = vi.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('boom'));
+    await recordPlay(TRACK);
+    expect(txSpy).toHaveBeenCalled();
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+    const call = captureSpy.mock.calls[0][0] as { message: string };
+    expect(call.message).toContain('recordPlay-failed');
+    expect(call.message).toContain('Error: boom');
   });
 });
