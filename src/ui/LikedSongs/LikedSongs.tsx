@@ -68,9 +68,9 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   return (
     <main ref={scrollRef} className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex flex-col relative transition-colors duration-300">
       {/* Header Gradient */}
-      <div className="h-64 bg-gradient-to-b from-[#5c4cf4] to-white dark:to-[#121212] flex items-end p-8 flex-shrink-0">
+      <div className="h-64 bg-gradient-to-b from-[#4285F4] to-white dark:to-[#121212] flex items-end p-8 flex-shrink-0">
         <div className="flex items-end gap-6">
-          <div className="w-48 h-48 bg-gradient-to-br from-[#4b3cce] to-[#8f82f7] shadow-2xl flex items-center justify-center text-white rounded-md">
+          <div className="w-48 h-48 bg-gradient-to-br from-[#4285F4] to-[#66a3ff] shadow-2xl flex items-center justify-center text-white rounded-md">
             <Heart className="w-20 h-20" fill="currentColor" />
           </div>
           <div className="text-white dark:text-gray-100 mb-2">

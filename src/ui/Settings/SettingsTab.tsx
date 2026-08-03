@@ -1,4 +1,4 @@
-import { FolderOpen, Globe, Moon, MonitorDown, Download, HardDrive } from "lucide-react";
+import { FolderOpen, Globe, Moon, MonitorDown, Download, Eraser, Cloud } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
 import { ThemeDropdown } from "./components/ThemeDropdown";
@@ -67,7 +67,7 @@ export function SettingsTab({
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <FolderOpen className="w-6 h-6 text-[#4285F4]" />
+                  <Cloud className="w-6 h-6 text-[#4285F4]" />
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.google_drive_folder')}</p>
@@ -75,7 +75,7 @@ export function SettingsTab({
               </div>
               <button
                 onClick={() => setShowFolderSelection(true)}
-                className="px-5 py-2.5 rounded-xl bg-[#4285F4] hover:bg-[#3367d6] text-white text-sm font-semibold transition-all transform active:scale-[0.97] shadow-[0_4px_12px_rgba(66,133,244,0.3)] hover:shadow-[0_6px_16px_rgba(66,133,244,0.4)] flex items-center gap-2"
+                  className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
               >
                 <FolderOpen className="w-4 h-4" />
                 {t('settings.change_folder')}
@@ -149,7 +149,7 @@ export function SettingsTab({
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={handlePickDownloadPath}
-                  className="px-5 py-2.5 rounded-xl bg-[#4285F4] hover:bg-[#3367d6] text-white text-sm font-semibold transition-all transform active:scale-[0.97] shadow-[0_4px_12px_rgba(66,133,244,0.3)] hover:shadow-[0_6px_16px_rgba(66,133,244,0.4)] flex items-center gap-2"
+                className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
                 >
                   <FolderOpen className="w-4 h-4" />
                   {t('settings.change_path') || 'Change Path'}
@@ -182,7 +182,7 @@ export function SettingsTab({
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <HardDrive className="w-6 h-6 text-[#4285F4]" />
+                  <Eraser className="w-6 h-6 text-[#4285F4]" />
                 </div>
                 <div className="max-w-[320px]">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('settings.clear_cache', 'Clear App Cache')}</p>

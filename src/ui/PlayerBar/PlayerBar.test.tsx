@@ -297,12 +297,12 @@ describe('PlayerBar seek-drag (parity with useNowPlayingProgress)', () => {
   });
 });
 
-describe('PlayerBar seek clears buffer bar immediately (big-player pattern)', () => {
+describe('PlayerBar seek redraws buffer bar immediately (no empty blink)', () => {
   beforeEach(() => {
     fakeController.seek.mockClear();
   });
 
-  it('BUG regression: ArrowLeft seek clears the buffer bar synchronously (no stale pre-seek segments)', () => {
+  it('BUG regression: ArrowLeft seek redraws the buffer bar synchronously (no empty-blink, stale ranges filtered)', () => {
     renderPlayer();
     const buffer = screen.getByTestId('buffer-fill');
 
@@ -317,10 +317,11 @@ describe('PlayerBar seek clears buffer bar immediately (big-player pattern)', ()
     });
 
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    expect(buffer.childElementCount).toBe(0);
+    // Immediate redraw at seek time — the bar never flashes empty.
+    expect(buffer.childElementCount).toBe(1);
   });
 
-  it('BUG regression: ArrowRight seek clears the buffer bar synchronously (no stale pre-seek segments)', () => {
+  it('BUG regression: ArrowRight seek redraws the buffer bar synchronously (no empty-blink, stale ranges filtered)', () => {
     renderPlayer();
     const buffer = screen.getByTestId('buffer-fill');
 
@@ -335,10 +336,11 @@ describe('PlayerBar seek clears buffer bar immediately (big-player pattern)', ()
     });
 
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    expect(buffer.childElementCount).toBe(0);
+    // Immediate redraw at seek time — the bar never flashes empty.
+    expect(buffer.childElementCount).toBe(1);
   });
 
-  it('BUG regression: drag commit (pointerup) clears the buffer bar synchronously after seek', () => {
+  it('BUG regression: drag commit (pointerup) redraws the buffer bar synchronously after seek', () => {
     renderPlayer();
     act(() => {
       fakeController._emit('timeupdate', { currentTime: 0, duration: 240 });
@@ -363,7 +365,8 @@ describe('PlayerBar seek clears buffer bar immediately (big-player pattern)', ()
 
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
     expect(fakeController.seek).toHaveBeenCalledWith(120);
-    expect(buffer.childElementCount).toBe(0);
+    // Immediate redraw at seek time — the bar never flashes empty.
+    expect(buffer.childElementCount).toBe(1);
   });
 });
 

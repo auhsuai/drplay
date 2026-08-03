@@ -96,16 +96,16 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         case 'ArrowLeft':
           e.preventDefault();
           audio.seek(Math.max(0, audio.getCurrentTime() - 5));
-          // Big-player pattern (YouTube/Spotify/JW Player): audio.buffered keeps
-          // pre-seek ranges in memory (browser does not rescale it synchronously),
-          // so clear the buffer bar NOW and let progress/timeupdate redraw it from
-          // the new position instead of showing a stale segment for a few ticks.
-          clearBufferBar(bufferFillRef.current);
+          // Redraw immediately instead of clearing: updateBufferBar already
+          // drops stale pre-seek ranges, and clearing first would flash an
+          // empty bar for a frame before the next progress event (blink on
+          // every seek).
+          updateBufferBar(bufferFillRef.current, audio.getBuffered());
           break;
         case 'ArrowRight':
           e.preventDefault();
           audio.seek(Math.min(audio.getDuration(), audio.getCurrentTime() + 5));
-          clearBufferBar(bufferFillRef.current);
+          updateBufferBar(bufferFillRef.current, audio.getBuffered());
           break;
         case 'ArrowUp':
           e.preventDefault();
@@ -254,10 +254,10 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     const onMove = (moveEvent: PointerEvent) => updateTime(moveEvent.clientX);
     const commit = (upEvent: PointerEvent) => {
       audio.seek(updateTime(upEvent.clientX));
-      // Big-player pattern: clear the buffer bar synchronously at seek time; the
-      // native `progress`/`timeupdate` events redraw it once data loads at the
-      // new position (audio.buffered is not updated synchronously on seek).
-      clearBufferBar(bufferFillRef.current);
+      // Redraw immediately (not clear): updateBufferBar drops stale pre-seek
+      // ranges, so an immediate redraw shows the real buffer at the new
+      // position without the empty-bar blink a clear would cause.
+      updateBufferBar(bufferFillRef.current, audio.getBuffered());
       // Give the audio engine a small window to flush old timeupdate events
       setTimeout(() => {
         isDraggingRef.current = false;

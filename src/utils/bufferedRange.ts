@@ -12,7 +12,9 @@ export interface BufferedSource {
 // bar in PlayerBar/NowPlaying), so referencing them here keeps dynamic
 // segments styled without extra CSS. Positioning is done via inline styles to
 // stay robust regardless of Tailwind purging.
-const BUFFER_SEGMENT_BG = 'bg-gray-400 dark:bg-gray-500';
+// rounded-r-full: the segment's right end (its tail) must match the seek
+// bar's rounded progress fill when the buffer ends mid-track.
+const BUFFER_SEGMENT_BG = 'bg-gray-400 dark:bg-gray-500 rounded-r-full';
 
 /**
  * Render the buffered ranges around the playhead as individual

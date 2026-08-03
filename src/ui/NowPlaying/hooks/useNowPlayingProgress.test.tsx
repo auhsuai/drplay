@@ -251,7 +251,7 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
     expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
   });
 
-  it('BUG regression: drag commit (pointerup) clears the buffer bar synchronously after seek', () => {
+  it('BUG regression: drag commit (pointerup) redraws the buffer bar synchronously after seek (no empty-blink)', () => {
     render(<Harness track={makeTrack()} isOpen={true} />);
     const buffer = screen.getByTestId('buffer');
     act(() => {
@@ -277,7 +277,8 @@ describe('useNowPlayingProgress — progress sync driven by AudioController even
 
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
     expect(fakeController.seek).toHaveBeenCalledWith(120);
-    expect(buffer.childElementCount).toBe(0);
+    // Immediate redraw at seek time — the bar never flashes empty.
+    expect(buffer.childElementCount).toBe(1);
   });
 
   it('BUG regression: removes window drag listeners when unmounting mid-drag (no leak, no stray seek)', () => {
