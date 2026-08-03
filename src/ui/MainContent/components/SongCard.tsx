@@ -69,8 +69,6 @@ function ProgressRing({ fraction }: { fraction: number }): React.JSX.Element {
   );
 }
 
-export const coverImageCache = new Map<string, string>();
-const COVER_CACHE_MAX = 500; // ~50KB max (100 bytes/cover URL string)
 // Fixed chrome bands the card must stay within to count as "fully visible"
 // (below the main header, above the player bar).
 const HEADER_HEIGHT = 160;
@@ -143,9 +141,7 @@ export const SongCard = React.memo(function SongCard({
   uploadProgress,
 }: SongCardProps) {
   const { t } = useTranslation();
-  const [coverUrl, setCoverUrl] = useState<string | null>(() => {
-    return coverImageCache.get(item.id) ?? null;
-  });
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   // loaded=true only after getTrackMetadata resolves, so the meta row (duration
   // • size) appears only for real metadata — the old size>0 guard also hid
   // legitimate 0-byte files, which must show "0 B" (formatBytes semantics).
@@ -211,16 +207,7 @@ export const SongCard = React.memo(function SongCard({
           return newMeta;
         });
 
-        if (metadata.coverUrl) {
-          coverImageCache.set(item.id, metadata.coverUrl);
-          if (coverImageCache.size > COVER_CACHE_MAX) {
-            const oldest = coverImageCache.keys().next().value;
-            if (oldest !== undefined) coverImageCache.delete(oldest);
-          }
-        }
-        if (metadata.coverUrl) {
-          setCoverUrl(metadata.coverUrl);
-        } else if (metadata.pictureData && metadata.pictureFormat) {
+        if (metadata.pictureData && metadata.pictureFormat) {
           const blob = new Blob([new Uint8Array(metadata.pictureData)], { type: metadata.pictureFormat });
           releaseBlobUrl();
           blobUrlRef.current = URL.createObjectURL(blob);

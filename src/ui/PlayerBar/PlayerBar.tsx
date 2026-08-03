@@ -27,7 +27,6 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isVolumeActive, setIsVolumeActive] = useState(false);
-  const [coverError, setCoverError] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{ message: string, code: string } | null>(null);
   const [isLiked, setIsLiked] = useState(false);
 
@@ -45,11 +44,10 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   
   const audio = AudioController.getInstance();
 
-  // Reset cover error when track changes
+  // Reset transient track state when the track changes
   const prevTrackIdRef = useRef<string | undefined>(undefined);
   if (currentTrack?.id !== prevTrackIdRef.current) {
     prevTrackIdRef.current = currentTrack?.id;
-    if (coverError) setCoverError(false);
     if (errorInfo) setErrorInfo(null);
   }
 
@@ -311,8 +309,6 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     return <Volume2 className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer" onClick={toggleMute} />;
   };
 
-  const coverUrl = currentTrack?.coverUrl; 
-  // Fallback metadata extraction logic deleted as we should use Track object properties directly.
   const realTitle = currentTrack?.title || t('player.no_track');
   const realArtist = currentTrack?.artist || t('unknown_artist');
 
@@ -325,10 +321,8 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
           onClick={() => currentTrack && onExpandNowPlaying()}
           title={t('player.view_now_playing', 'Xem Đang Phát')}
         >
-          <div className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden ${currentTrack && (!coverUrl || coverError) ? 'bg-gray-200 dark:bg-[#121212] text-gray-400' : 'bg-gray-200 dark:bg-[#121212]'}`}>
-            {coverUrl && !coverError ? (
-              <img src={coverUrl} alt="Cover" onError={() => setCoverError(true)} className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110 group-hover:brightness-75" />
-            ) : currentTrack ? (
+          <div className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400`}>
+            {currentTrack ? (
               <Music className="w-6 h-6 opacity-80 transition-transform duration-300 group-hover:scale-110" />
             ) : null}
             {currentTrack && (

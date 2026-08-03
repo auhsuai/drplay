@@ -36,9 +36,7 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
       if (!isMounted) return;
       if (meta.title) setTitle(meta.title);
       if (meta.artist) setArtist(meta.artist);
-      if (meta.coverUrl) {
-        setCoverUrl(meta.coverUrl);
-      } else if (meta.pictureData && meta.pictureFormat) {
+      if (meta.pictureData && meta.pictureFormat) {
         const blob = new Blob([new Uint8Array(meta.pictureData)], { type: meta.pictureFormat });
         releaseBlobUrl();
         blobUrlRef.current = URL.createObjectURL(blob);

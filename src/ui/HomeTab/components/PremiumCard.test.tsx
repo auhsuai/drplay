@@ -39,13 +39,12 @@ function baseProps(over: Partial<Parameters<typeof PremiumCard>[0]> = {}) {
   };
 }
 
-describe('PremiumCard cover render', () => {
+describe('PremiumCard metadata render', () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: 'Fetched Artist',
-      coverUrl: 'http://cover/1',
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -55,18 +54,17 @@ describe('PremiumCard cover render', () => {
     cleanup();
   });
 
-  it('renders remote coverUrl from metadata', async () => {
+  it('renders fetched title and artist from metadata', async () => {
     const { container } = render(<PremiumCard {...baseProps()} />);
     expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
     await screen.findByText('Fetched Title');
-    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1'));
+    expect(container.querySelector('img')).toBeNull();
   });
 
   it('shows fallback placeholder when no cover data resolves', async () => {
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: 'Fetched Artist',
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -106,7 +104,6 @@ describe('PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
       artist: 'Blob Artist',
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
       pictureFormat: 'image/png',
     } as never;
@@ -125,7 +122,6 @@ describe('PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
       artist: null,
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);

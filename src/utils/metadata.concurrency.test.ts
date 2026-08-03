@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getTrackMetadata, clearAllMetadataCache, cacheTrackMetadata, METADATA_LRU_KEY } from './metadata';
+import { getTrackMetadata, clearAllMetadataCache, cacheTrackMetadata, METADATA_LRU_KEY, V_PLACEHOLDER } from './metadata';
 import { db } from '../db/db';
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -103,26 +103,23 @@ describe('getTrackMetadata caching', () => {
     vi.mocked(invoke).mockReset();
   });
 
-  it('returns cached metadata on second call without invoking IPC', async () => {
-    vi.mocked(invoke).mockResolvedValue({
-      id: '123',
-      title: 'Real Title',
-      artist: 'Real Artist',
-      album: '',
-      duration: 200,
-      has_cover: true,
-      file_type: 'audio/mpeg',
-    });
-
-    // First call: goes to IPC.
+  it('returns a placeholder entry on first call and never invokes IPC (DB commands removed)', async () => {
     const r1 = await getTrackMetadata('file-1', 'tok', 1000, 'song.mp3');
-    expect(r1.title).toBe('Real Title');
-    expect(vi.mocked(invoke)).toHaveBeenCalledTimes(1);
+    expect(r1.title).toBe('song');
+    expect(r1.artist).toBe('Unknown Artist');
+    expect(r1.duration).toBe(0);
+    expect(r1.durationEstimated).toBe(true);
+    expect(r1.v).toBe(V_PLACEHOLDER);
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
+  });
 
-    // Second call same fileId: should return from memory cache, NO IPC.
+  it('returns the same entry from memory cache on second call (no IPC)', async () => {
+    const r1 = await getTrackMetadata('file-1', 'tok', 1000, 'song.mp3');
+
     vi.mocked(invoke).mockClear();
     const r2 = await getTrackMetadata('file-1', 'tok', 1000, 'song.mp3');
-    expect(r2.title).toBe('Real Title');
+
+    expect(r2).toBe(r1);
     expect(vi.mocked(invoke)).not.toHaveBeenCalled();
   });
 });
@@ -204,19 +201,9 @@ describe('lruKeys + cache invalidation hardening', () => {
       entry: { version: 1, data: makeEntry(), ts: Date.now() },
     });
 
-    vi.mocked(invoke).mockResolvedValue({
-      id: '456',
-      title: 'Fresh Title',
-      artist: 'Fresh Artist',
-      album: '',
-      duration: 300,
-      has_cover: false,
-      file_type: 'audio/mpeg',
-    });
-
     const r = await getTrackMetadata('stale-ver', 'tok', 1000, 'stale.mp3');
-    expect(r.title).toBe('Fresh Title');
-    expect(vi.mocked(invoke)).toHaveBeenCalledTimes(1);
+    expect(r.title).toBe('stale');
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
   });
 
   it('loads corrupt lruKeys JSON (non-array) from localStorage without crashing', async () => {

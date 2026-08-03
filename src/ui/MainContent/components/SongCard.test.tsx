@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
 import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
-import { SongCard, coverImageCache } from './SongCard';
+import { SongCard } from './SongCard';
 import { getTrackMetadata } from '../../../utils/metadata';
 import type { DriveItem } from '../../../types';
 
@@ -48,14 +48,12 @@ const baseProps = {
   onRefresh: () => {},
 };
 
-describe('SongCard coverUrl prop', () => {
+describe('SongCard metadata fetch', () => {
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: 'Fetched Artist',
-      coverUrl: 'http://cover/1',
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -65,33 +63,32 @@ describe('SongCard coverUrl prop', () => {
     cleanup();
   });
 
-  it('self-fetches on mount', async () => {
+  it('self-fetches on mount and falls back to the music icon when metadata has no picture', async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     // SongCard debounces the metadata fetch by 150ms (visible-card guard in
     // SongCard.tsx), so the fetch assertion must wait for the timer.
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
     expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
     await screen.findByText('Fetched Title');
-    await screen.findByAltText('Fetched Title');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('.lucide-music')).not.toBeNull();
   });
 
-
-
-  it('caches and reuses coverUrl from cache on remount', async () => {
-    const { unmount, container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByAltText('Fetched Title');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
+  it('re-fetches metadata on remount (no cross-mount cover cache)', async () => {
+    const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
+    await screen.findByText('Fetched Title');
 
     unmount();
     cleanup();
+    mockedFetch.mockClear();
 
     const { container: container2 } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByAltText('Fetched Title');
-    expect(container2.querySelector('img')?.getAttribute('src')).toBe('http://cover/1');
+    await screen.findByText('Fetched Title');
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(container2.querySelector('img')).toBeNull();
   });
 
-  it('does not self-fetch for folder items even without coverUrl', () => {
+  it('does not self-fetch for folder items', () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem({ isFolder: true, trackInfo: undefined })} />,
     );
@@ -110,31 +107,25 @@ describe('SongCard coverUrl prop', () => {
     expect(onPlay).not.toHaveBeenCalled();
   });
 
-  it('metadata update callback still works when injectedCoverUrl changes', async () => {
+  it('metadata-updated event for this fileId triggers a re-fetch that updates the title', async () => {
     mockedFetch.mockResolvedValue({
       title: 'Updated Title',
       artist: 'Updated Artist',
-      coverUrl: 'http://cover/2',
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} />
-    );
+    render(<SongCard {...baseProps} item={makeItem()} />);
     await screen.findByText('Updated Title');
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/2');
     mockedFetch.mockClear();
     mockedFetch.mockResolvedValue({
       title: 'Re-fetched Title',
       artist: 'Re-fetched Artist',
-      coverUrl: 'http://cover/3',
       pictureData: null,
       pictureFormat: undefined,
     } as never);
     window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
     await screen.findByText('Re-fetched Title');
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('http://cover/3');
   });
 
   it('re-renders on same-id item change (trackInfo.queueItemId) so click uses fresh track (stale-prop fix)', () => {
@@ -191,7 +182,6 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
       artist: 'Blob Artist',
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
       pictureFormat: 'image/png',
     } as never;
@@ -205,13 +195,11 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
 
   beforeEach(() => {
     vi.clearAllMocks();
-    coverImageCache.clear();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: null,
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -360,12 +348,10 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
 
 describe('SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG button pattern)', () => {
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: 'Fetched Artist',
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -433,12 +419,10 @@ describe('SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG bu
 
 describe('SongCard MoreMenu WAI-ARIA APG menu button pattern', () => {
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: 'Fetched Artist',
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -481,14 +465,12 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
   const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: null,
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -609,14 +591,12 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
 
 describe('SongCard uploadState (dim + spinner)', () => {
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: null,
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -712,14 +692,12 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: null,
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -892,14 +870,12 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
 
 describe('SongCard now-playing visual distinction (hover-like gray, no lift)', () => {
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: 'Fetched Title',
       artist: null,
       duration: 0,
       size: 0,
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -956,7 +932,6 @@ describe('SongCard now-playing visual distinction (hover-like gray, no lift)', (
 
 describe('SongCard size text uses shared formatBytes semantics (not the old MB-only formatSize)', () => {
   beforeEach(() => {
-    coverImageCache.clear();
     mockedFetch.mockReset();
   });
 
@@ -972,7 +947,6 @@ describe('SongCard size text uses shared formatBytes semantics (not the old MB-o
       artist: null,
       duration,
       size,
-      coverUrl: null,
       pictureData: null,
       pictureFormat: undefined,
     } as never);

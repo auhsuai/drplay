@@ -7,8 +7,6 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-use r2d2_sqlite::SqliteConnectionManager;
-
 use crate::thumbnail::validate_file_id;
 
 // --- Named constants for the in-RAM cover cache (no magic numbers) ---
@@ -21,7 +19,7 @@ const COVER_CACHE_TTL_SECS: u64 = 3600; // 1 hour
 // Max size accepted for an incoming POSTed cover payload (legacy local-cover path).
 const MAX_COVER_SIZE: usize = 52_428_800;
 /// Sentinel etag stored in COVER_CACHE when a track has no cover (NoCover).
-/// Checking this in step 0 avoids re-fetching from R2 + SQLite on every mount.
+/// Checking this in step 0 avoids re-fetching from R2 on every mount.
 const COVER_NOCOVER_ETAG: &str = "\"nocover\"";
 // Upper bound on how many concurrent requests may queue as waiters for one
 // in-flight cover fetch (singleflight per `cache_key`). A burst beyond this
@@ -85,44 +83,10 @@ impl Drop for InFlightGuard {
     }
 }
 
-fn query_cover_blob(
-    pool: &r2d2::Pool<SqliteConnectionManager>,
-    file_id: &str,
-    thumb: bool,
-) -> Result<Option<Vec<u8>>, String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    let has_thumb = *crate::HAS_THUMB.get_or_init(|| {
-        conn.prepare("SELECT thumbnail FROM tracks LIMIT 1").is_ok()
-    });
-    let sql = if thumb && has_thumb {
-        "SELECT thumbnail, cover_art FROM tracks WHERE id = ? LIMIT 1"
-    } else {
-        "SELECT cover_art FROM tracks WHERE id = ? AND cover_art IS NOT NULL LIMIT 1"
-    };
-    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
-    let mut rows = stmt.query([&file_id]).map_err(|e| e.to_string())?;
-    if let Ok(Some(row)) = rows.next() {
-        let cover: Vec<u8> = if thumb && has_thumb {
-            let t: Vec<u8> = row.get(0).unwrap_or_default();
-            if !t.is_empty() { t } else { row.get(1).unwrap_or_default() }
-        } else {
-            row.get(0).unwrap_or_default()
-        };
-        if !cover.is_empty() {
-            return Ok(Some(cover));
-        }
-    }
-    Ok(None)
-}
-
-
-
-pub async fn handle_cover_get<R: tauri::Runtime>(
+pub async fn handle_cover_get(
     raw_id: &str,
     thumb: bool,
-    pool: Option<&r2d2::Pool<SqliteConnectionManager>>,
     recorder: &std::sync::Mutex<crate::thumbnail::AccessRecorder>,
-    app: Option<&tauri::AppHandle<R>>,
 ) -> Result<(String, Bytes, &'static str), CoverError> {
     let _start = std::time::Instant::now();
 
@@ -133,7 +97,7 @@ pub async fn handle_cover_get<R: tauri::Runtime>(
 
     let cache_key = cover_cache_key(raw_id, thumb);
 
-    // Step 0: in-RAM cache (bounded, TTL). Hits avoid any R2/DB round trip.
+    // Step 0: in-RAM cache (bounded, TTL). Hits avoid any R2 round trip.
     if let Some(hit) = COVER_CACHE.get(&cache_key).await {
         if hit.0 == COVER_NOCOVER_ETAG {
             eprintln!("[PERF] handle_cover_get {} source=NOCOVER_CACHE took {:?}", raw_id, _start.elapsed());
@@ -147,7 +111,7 @@ pub async fn handle_cover_get<R: tauri::Runtime>(
     }
 
     // Step 0.5: In-flight dedup — if another task is already fetching this
-    // cache_key, wait on its result instead of issuing a duplicate R2/SQLite call.
+    // cache_key, wait on its result instead of issuing a duplicate R2 call.
     // The MutexGuard is scoped to NOT span the .await point (it is !Send).
     let subscribe_rx = {
         let mut in_flight = IN_FLIGHT.lock().unwrap();
@@ -189,70 +153,24 @@ pub async fn handle_cover_get<R: tauri::Runtime>(
     // Drop guard ensures IN_FLIGHT cleanup even on panic/cancellation.
     let _guard = InFlightGuard { cache_key: cache_key.clone() };
 
-    // Steps 1-3 wrapped in a labeled block for single cleanup point.
-    let result = 'fetch: {
-        // Step 2: SQLite blob fallback — only for ids without drive_ prefix (legacy records)
-        if let Some(pool) = pool {
-            if !raw_id.starts_with(crate::thumbnail::PREFIX) {
-                if let Ok(Some(blob)) = query_cover_blob(pool, raw_id, thumb) {
-                    let etag = format!("\"{:x}\"", md5::compute(&blob));
-                    let bytes = Bytes::from(blob);
-                    COVER_CACHE.insert(cache_key.clone(), (etag.clone(), bytes.clone())).await;
-                    if let Ok(mut r) = recorder.lock() {
-                        r.record(raw_id);
-                    }
-                    eprintln!("[PERF] handle_cover_get {} source=SQLITE took {:?}", raw_id, _start.elapsed());
-                    break 'fetch Ok((etag, bytes, "image/jpeg"));
-                }
-            }
-        }
+    // Step 2: No real cover anywhere — covers live in R2; the SQLite blob
+    // backend was removed (2026-08-03), so there is no DB to fall back on.
+    // Cache a "no cover" marker so subsequent requests skip the R2 round trip,
+    // then return the music-note placeholder so the UI never shows a
+    // black/transparent image. `has_cover` on the JS side stays false, so the
+    // app knows there is no real cover.
+    COVER_CACHE.insert(cache_key.clone(), (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
+    eprintln!("[PERF] handle_cover_get {} source=NOCOVER took {:?}", raw_id, _start.elapsed());
+    let result: CoverResult = Err(CoverError::NoCover);
 
-        // Step 3: No real cover anywhere (no R2 key, no SQLite blob). Emit a repair
-        // signal if we can map to a Drive file, then return the music-note placeholder
-        // so the UI never shows a black/transparent image. `has_cover` on the JS side
-        // stays false, so the app knows there is no real cover.
-        if let Some(pool) = pool {
-            let drive_file_id_opt = if raw_id.starts_with(crate::thumbnail::PREFIX) {
-                Some(raw_id.trim_start_matches(crate::thumbnail::PREFIX).to_string())
-            } else {
-                get_drive_file_id_for_track(pool, raw_id).ok().flatten()
-            };
-
-            if let Some(drive_file_id) = drive_file_id_opt {
-                if let Some(app) = app {
-                    use tauri::Emitter;
-                    let payload = serde_json::json!({
-                        "driveFileId": drive_file_id,
-                        "dbId": raw_id,
-                    });
-                    let _ = app.emit("repair-missing-thumbnail", payload);
-                }
-            }
-        }
-
-        // Cache the "no cover" result so subsequent requests skip R2/SQLite.
-        COVER_CACHE.insert(cache_key.clone(), (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
-        eprintln!("[PERF] handle_cover_get {} source=NOCOVER took {:?}", raw_id, _start.elapsed());
-        break 'fetch Err(CoverError::NoCover)
-    };
-
-    // Step 4: Notify any concurrent waiters and remove from IN_FLIGHT.
-    // Must happen AFTER COVER_CACHE insert (already done per-step above) so that
-    // subsequent requests to this key hit the cache instead of joining IN_FLIGHT.
+    // Step 3: Notify any concurrent waiters and remove from IN_FLIGHT.
+    // Must happen AFTER the COVER_CACHE insert so that subsequent requests to
+    // this key hit the cache instead of joining IN_FLIGHT.
     {
         let mut in_flight = IN_FLIGHT.lock().unwrap();
         if let Some(waiters) = in_flight.remove(&cache_key) {
-            match &result {
-                Ok((etag, bytes, ct)) => {
-                    for tx in waiters {
-                        let _ = tx.send(Ok((etag.clone(), bytes.clone(), *ct)));
-                    }
-                }
-                Err(e) => {
-                    for tx in waiters {
-                        let _ = tx.send(Err(e.clone()));
-                    }
-                }
+            for tx in waiters {
+                let _ = tx.send(result.clone());
             }
         }
     }
@@ -266,19 +184,14 @@ pub enum CoverError {
     NoCover,
 }
 
-fn get_drive_file_id_for_track(
-    pool: &r2d2::Pool<SqliteConnectionManager>,
-    db_id: &str,
-) -> Result<Option<String>, String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    let path: Option<String> = conn
-        .query_row(
-            "SELECT file_path FROM tracks WHERE id = ?",
-            [db_id],
-            |row| row.get(0),
-        )
-        .ok();
-    Ok(path.and_then(|p| p.strip_prefix("drive://").map(String::from)))
+/// Invalidates every in-RAM cover/etag cache entry. Called by the frontend on
+/// logout / cache-clear (IPC contract: no args); covers re-fetch from R2 on
+/// the next request.
+#[tauri::command]
+pub async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
+    COVER_CACHE.invalidate_all();
+    ETAG_CACHE.invalidate_all();
+    Ok(())
 }
 
 pub fn handle_cover_post(
@@ -367,7 +280,7 @@ mod tests {
             std::path::PathBuf::new(),
         ));
         let task = tokio::spawn(async move {
-            handle_cover_get::<tauri::Wry>(KEY_ID, false, None, &recorder, None).await
+            handle_cover_get(KEY_ID, false, &recorder).await
         });
 
         // Poll: on the old unbounded code the request pushes a (cap+1)-th
@@ -419,7 +332,7 @@ mod tests {
             .map(|_| {
                 let recorder = std::sync::Arc::clone(&recorder);
                 tokio::spawn(async move {
-                    handle_cover_get::<tauri::Wry>(KEY_ID, false, None, recorder.as_ref(), None)
+                    handle_cover_get(KEY_ID, false, recorder.as_ref())
                         .await
                 })
             })

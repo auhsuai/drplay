@@ -9,12 +9,7 @@ export function useMediaSession(
 ) {
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
-      const artwork: MediaImage[] = [];
-      if ((currentTrack as any).coverUrl) {
-        artwork.push({ src: (currentTrack as any).coverUrl, sizes: '512x512', type: 'image/jpeg' });
-      } else {
-        artwork.push({ src: '/sample.png', sizes: '512x512', type: 'image/png' });
-      }
+      const artwork: MediaImage[] = [{ src: '/sample.png', sizes: '512x512', type: 'image/png' }];
 
       navigator.mediaSession.metadata = new MediaMetadata({
         title: currentTrack.title || currentTrack.originalName || 'Unknown Title',

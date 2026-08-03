@@ -10,7 +10,6 @@ pub fn init_access_recorder(log_path: std::path::PathBuf) {
 
 pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.register_asynchronous_uri_scheme_protocol("drplay", move |_app, request, responder| {
-        let app_handle = _app.app_handle().clone();
         tauri::async_runtime::spawn(async move {
             let uri = request.uri().to_string();
             let parsed_url = match url::Url::parse(&uri) {
@@ -85,10 +84,6 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let client_etag = request.headers().get("if-none-match")
                     .and_then(|h| h.to_str().ok().map(|s| s.to_string()));
 
-                use tauri::Manager;
-                let pool_state = app_handle.try_state::<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>();
-                let pool = pool_state.map(|p| p.inner().clone());
-
                 let recorder = match cover::ACCESS_RECORDER.get() {
                     Some(r) => r,
                     None => {
@@ -107,9 +102,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let fetch_result = handle_cover_get(
                     &file_id,
                     thumb,
-                    pool.as_ref(),
                     recorder,
-                    Some(&app_handle),
                 ).await;
 
                 match fetch_result {

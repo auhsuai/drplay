@@ -1,24 +1,18 @@
-use std::sync::atomic::{Ordering, AtomicU64};
+use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use tauri::Manager;
 
 pub mod protocol;
 mod thumbnail;
 mod auth;
-mod db;
 mod tray;
 mod memory;
 
 use auth::{login_google_native, refresh_google_token};
-use db::metadata::{get_local_metadata, get_track_data, verify_track_exists, update_track_duration_in_db, clear_local_cache};
 use memory::{apply_window_activity, WindowActivityEvent};
+use protocol::cover::clear_local_cache;
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 
-pub static HAS_FILE_TYPE: OnceLock<bool> = OnceLock::new();
-pub static HAS_THUMB: OnceLock<bool> = OnceLock::new();
-pub static HAS_COVER_URL: OnceLock<bool> = OnceLock::new();
-pub static HAS_EXTENDED_META: OnceLock<bool> = OnceLock::new();
-pub static HAS_DURATION_ESTIMATED: OnceLock<bool> = OnceLock::new();
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 #[tauri::command]
@@ -53,27 +47,6 @@ fn register_upload_path(app: tauri::AppHandle, path: String) -> Result<(), Strin
     Ok(())
 }
 
-pub(crate) fn get_db_path() -> Option<std::path::PathBuf> {
-    if let Ok(mut exe_path) = std::env::current_exe() {
-        exe_path.pop();
-        let path = exe_path.join("music_database.db");
-        if path.exists() { return Some(path); }
-    }
-    if std::path::Path::new("music_database.db").exists() {
-        Some(std::path::PathBuf::from("music_database.db"))
-    } else if std::path::Path::new("../music_database.db").exists() {
-        Some(std::path::PathBuf::from("../music_database.db"))
-    } else {
-        None
-    }
-}
-
-pub fn diag_log(module: &str, dur: std::time::Duration) {
-    static DIAG_COUNT: AtomicU64 = AtomicU64::new(0);
-    let c = DIAG_COUNT.fetch_add(1, Ordering::Relaxed);
-    eprintln!("[PERF] {} took {:?} (call #{})", module, dur, c);
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivityEvent) {
     if let Some(webview_window) = window.get_webview_window("main") {
@@ -95,19 +68,6 @@ pub fn run() {
             if let Ok(cache_dir) = app.path().app_cache_dir() {
                 let access_log = cache_dir.join(".thumbnails").join("access_log.json");
                 crate::protocol::init_access_recorder(access_log);
-            }
-
-            use r2d2_sqlite::SqliteConnectionManager;
-            use r2d2::Pool;
-            let db_path = get_db_path().unwrap_or_else(|| std::path::PathBuf::from("music_database.db"));
-            let manager = SqliteConnectionManager::file(&db_path);
-            if let Ok(pool) = Pool::new(manager) {
-                let migration_pool = pool.clone();
-                app.manage(pool);
-
-                if let Ok(conn) = migration_pool.get() {
-                    db::migration::run_migrations(&conn);
-                }
             }
 
             setup_tray(app)?;
@@ -141,11 +101,7 @@ pub fn run() {
             refresh_google_token,
             register_download_path,
             register_upload_path,
-            get_track_data,
-            get_local_metadata,
             update_minimize_to_tray,
-            verify_track_exists,
-            update_track_duration_in_db,
             clear_local_cache,
         ])
         .build(tauri::generate_context!());
@@ -164,4 +120,24 @@ pub fn run() {
             }
             _ => {}
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// Guards against re-adding the SQLite backend after its removal
+    /// (2026-08-03): the DB pool, migrations and 4 DB commands were deleted,
+    /// so this crate must never pull in rusqlite/r2d2 again. Compiled in at
+    /// build time via include_str! — a false positive is impossible.
+    #[test]
+    fn sqlite_backend_dependencies_are_absent() {
+        let manifest = include_str!("../Cargo.toml");
+        assert!(
+            !manifest.contains("rusqlite"),
+            "Cargo.toml must not depend on rusqlite — the SQLite backend was removed"
+        );
+        assert!(
+            !manifest.contains("r2d2"),
+            "Cargo.toml must not depend on r2d2 — the SQLite backend was removed"
+        );
+    }
 }

@@ -77,7 +77,6 @@ beforeEach(() => {
     artist: null,
     duration: 0,
     size: 0,
-    coverUrl: null,
     pictureData: null,
     pictureFormat: undefined,
   });

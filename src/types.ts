@@ -9,8 +9,6 @@ export type Track = {
   restoreDuration?: number;
   parentId?: string;
   parentName?: string;
-  coverUrl?: string;
-  dbId?: string;
   queueItemId?: string;
 };
 

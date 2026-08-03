@@ -43,42 +43,28 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
           if (isCancelled) return;
           if (metadata.title) setRealTitle(metadata.title);
           if (metadata.artist) setRealArtist(metadata.artist);
-          
-          const targetCover = metadata.fullCoverUrl || metadata.coverUrl;
-          if (targetCover) {
-            setCoverUrl(targetCover);
+
+          const picture = metadata.pictureDataFull ?? metadata.pictureData;
+          if (picture && metadata.pictureFormat) {
+            const blob = new Blob([new Uint8Array(picture)], { type: metadata.pictureFormat });
+            const coverObjectUrl = URL.createObjectURL(blob);
+            objectUrl = coverObjectUrl;
+            setCoverUrl(coverObjectUrl);
+
             try {
-              const colors = await getPalette(targetCover);
+              const colors = await getPalette(coverObjectUrl);
               if (isCancelled) return;
               setBgColor(colors[0]);
               setBgPalette(colors);
             } catch (err) {
               resetPalette();
               captureError({ level: 'warn', source: NOW_PLAYING_MODULE, message: `palette-failed: ${err instanceof Error ? err.message : String(err)}` });
+            } finally {
+              revokeCoverUrl();
             }
           } else {
-            const picture = metadata.pictureDataFull ?? metadata.pictureData;
-            if (picture && metadata.pictureFormat) {
-              const blob = new Blob([new Uint8Array(picture)], { type: metadata.pictureFormat });
-              const coverObjectUrl = URL.createObjectURL(blob);
-              objectUrl = coverObjectUrl;
-              setCoverUrl(coverObjectUrl);
-
-              try {
-                const colors = await getPalette(coverObjectUrl);
-                if (isCancelled) return;
-                setBgColor(colors[0]);
-                setBgPalette(colors);
-              } catch (err) {
-                resetPalette();
-                captureError({ level: 'warn', source: NOW_PLAYING_MODULE, message: `palette-failed: ${err instanceof Error ? err.message : String(err)}` });
-              } finally {
-                revokeCoverUrl();
-              }
-            } else {
-              setBgColor('');
-              setBgPalette([]);
-            }
+            setBgColor('');
+            setBgPalette([]);
           }
         } catch (e) {
           if (e instanceof DOMException && e.name === 'AbortError') return;
