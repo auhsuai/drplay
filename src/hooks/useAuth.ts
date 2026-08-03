@@ -28,8 +28,6 @@ const LS_ACCESS_TOKEN = 'drplay_access_token';
 const LS_REFRESH_TOKEN = 'drplay_refresh_token';
 const LS_TOKEN_TIME = 'drplay_token_time';
 
-const CLEAR_STREAM_TOKEN_CMD = 'clear_stream_token';
-
 const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 
 const classifyError = (e: unknown): string =>
@@ -126,11 +124,12 @@ export const useAuth = (onLogoutExt?: () => void) => {
       window.dispatchEvent(new CustomEvent(PLAYER_STOP_EVENT));
 
       try {
-        await invoke(CLEAR_STREAM_TOKEN_CMD);
+        // clear_stream_token was removed from the backend during the Service
+        // Worker migration (commit a134f77) — only clear_local_cache remains.
         await invoke(CLEAR_LOCAL_CACHE_CMD);
         clearAllMetadataCache();
       } catch (e: unknown) {
-        captureError({ level: 'warn', source: AUTH_MODULE, message: `Failed to clear backend token/cache (clear_stream_token/clear_local_cache) — continuing logout: ${classifyError(e)}` });
+        captureError({ level: 'warn', source: AUTH_MODULE, message: `Failed to clear backend cache (clear_local_cache) — continuing logout: ${classifyError(e)}` });
       }
 
       if (tokenToRevoke) {
