@@ -4,10 +4,10 @@
 // showSuccessToast → toast element appended to #toast-root. This catches
 // regressions where the success branch calls the wrong toast function.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
-import { clearAppCache } from "../../utils/cache";
+import { clearAppCache, getCacheSizes } from "../../utils/cache";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -17,7 +17,16 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
-vi.mock("../../utils/cache", () => ({ clearAppCache: vi.fn() }));
+vi.mock("../../utils/cache", () => ({
+  clearAppCache: vi.fn(),
+  getCacheSizes: vi.fn(),
+  CACHE_CATEGORY_LABELS: {
+    metadata: "Metadata cache",
+    files: "File listing cache",
+    covers: "Covers & thumbnails",
+    prefetch: "Prefetched data",
+  },
+}));
 
 vi.mock("../../utils/downloadPath", () => ({
   getEffectiveDownloadPath: vi.fn().mockResolvedValue(""),
@@ -38,11 +47,18 @@ const baseProps = {
   setShowTrashScreen: vi.fn(),
 };
 
-describe("Clear Now button renders a real success toast", () => {
+describe("Clear Now flow renders a real success toast", () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="toast-root"></div>';
     vi.mocked(clearAppCache).mockReset();
     vi.mocked(clearAppCache).mockResolvedValue(undefined);
+    vi.mocked(getCacheSizes).mockReset();
+    vi.mocked(getCacheSizes).mockResolvedValue([
+      { id: "metadata", label: "Metadata cache", bytes: 1024 },
+      { id: "files", label: "File listing cache", bytes: 2048 },
+      { id: "covers", label: "Covers & thumbnails", bytes: 0 },
+      { id: "prefetch", label: "Prefetched data", bytes: 1536 },
+    ]);
   });
 
   afterEach(() => {
@@ -50,9 +66,13 @@ describe("Clear Now button renders a real success toast", () => {
     document.body.innerHTML = "";
   });
 
-  it("appends an .app-toast--success element into #toast-root", async () => {
+  it("appends an .app-toast--success element into #toast-root after confirming in the modal", async () => {
     render(<SettingsTab {...baseProps} />);
+    // Settings trigger → modal opens (all categories default-checked).
     fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
+    const modal = await screen.findByTestId("cache-manager-modal");
+    await screen.findByText("Metadata cache");
+    fireEvent.click(within(modal).getByRole("button", { name: "Clear Now" }));
 
     await waitFor(() => {
       const successToast = document.querySelector(".app-toast--success");

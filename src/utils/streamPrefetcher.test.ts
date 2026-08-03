@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   getPrefetchedStreamUrl,
+  getPrefetchedStreamCount,
   prefetchVisibleTracks,
   clearPrefetchedStreams,
 } from './streamPrefetcher';
@@ -47,5 +48,13 @@ describe('streamPrefetcher', () => {
     expect(getPrefetchedStreamUrl('a')).toBeUndefined();
     expect(getPrefetchedStreamUrl('b')).toBeUndefined();
     expect(getPrefetchedStreamUrl('c')).toBeUndefined();
+  });
+
+  it('reports the current number of cached stream urls', () => {
+    expect(getPrefetchedStreamCount()).toBe(0);
+    prefetchVisibleTracks(['a', 'b']);
+    expect(getPrefetchedStreamCount()).toBe(2);
+    clearPrefetchedStreams();
+    expect(getPrefetchedStreamCount()).toBe(0);
   });
 });

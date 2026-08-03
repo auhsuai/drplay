@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   prefetchNextTrackAudio,
   clearNextTrackPrefetches,
+  getPendingPrefetchCount,
 } from './nextTrackPrefetcher';
 
 vi.mock('./errorLog', () => ({
@@ -48,6 +49,21 @@ describe('nextTrackPrefetcher LRU', () => {
     prefetchNextTrackAudio(url);
     prefetchNextTrackAudio(url);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fetchSpy.mockRestore();
+  });
+
+  it('reports the number of in-flight prefetches', () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 200 }));
+
+    expect(getPendingPrefetchCount()).toBe(0);
+    prefetchNextTrackAudio('https://x/one');
+    prefetchNextTrackAudio('https://x/two');
+    expect(getPendingPrefetchCount()).toBe(2);
+    clearNextTrackPrefetches();
+    expect(getPendingPrefetchCount()).toBe(0);
+
     fetchSpy.mockRestore();
   });
 

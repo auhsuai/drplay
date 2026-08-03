@@ -1,6 +1,7 @@
 
 use moka::future::Cache;
 use bytes::Bytes;
+use tauri::Manager;
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -198,6 +199,137 @@ pub async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Snapshot of what the cache manager dialog shows: current in-RAM weight of
+/// the two moka caches plus the on-disk size of the thumbnail dir.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CacheInfo {
+    pub cover_cache_bytes: u64,
+    pub etag_cache_bytes: u64,
+    pub thumbnail_dir_bytes: u64,
+}
+
+/// Returns current cache usage. `weighted_size()` is a moka estimate that can
+/// lag concurrent inserts/removals, so pending maintenance tasks are drained
+/// first (see moka docs for `entry_count`/`weighted_size`). On-disk thumbnail
+/// size is computed from `<app_cache_dir>/.thumbnails` (same path the access
+/// recorder log lives under — see `lib.rs` `setup`).
+#[tauri::command]
+pub async fn get_cache_info(app: tauri::AppHandle) -> CacheInfo {
+    COVER_CACHE.run_pending_tasks().await;
+    ETAG_CACHE.run_pending_tasks().await;
+    let thumbnail_dir_bytes = match app.path().app_cache_dir() {
+        Ok(cache_dir) => directory_size(&cache_dir.join(".thumbnails")),
+        Err(_) => 0,
+    };
+    CacheInfo {
+        cover_cache_bytes: COVER_CACHE.weighted_size(),
+        etag_cache_bytes: ETAG_CACHE.weighted_size(),
+        thumbnail_dir_bytes,
+    }
+}
+
+/// Empties `<app_cache_dir>/.thumbnails` (same path `get_cache_info` measures
+/// and the access-recorder log lives under), keeping the directory itself.
+/// `remove_dir_contents` never follows symlinks and treats a missing dir as a
+/// no-op, so this is safe to call even if the cache was never created.
+#[tauri::command]
+pub async fn clear_thumbnail_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("clear_thumbnail_dir: failed to resolve app cache dir: {e}"))?;
+    let thumbnails_dir = cache_dir.join(".thumbnails");
+    remove_dir_contents(&thumbnails_dir).map_err(|e| {
+        format!(
+            "clear_thumbnail_dir: failed to clear {}: {e}",
+            thumbnails_dir.display()
+        )
+    })
+}
+
+/// Total byte size of every regular file under `path` (recursive), or 0 when
+/// the path does not exist. Pure std — no tauri dependency, unit-testable.
+/// Recursion depth is bounded in practice: the thumbnail dir holds 1-2 levels.
+pub fn directory_size(path: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            total = total.saturating_add(directory_size(&entry_path));
+        } else if let Ok(meta) = entry.metadata() {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
+}
+
+/// Recursively removes every file and subdirectory under `path` while keeping
+/// `path` itself. Pure std — no tauri dependency, unit-testable.
+///
+/// - Path does not exist → `Ok(())` (the cache dir may never have been
+///   created).
+/// - Path is a regular FILE → the file is removed: the cache location is
+///   expected to be a directory, so a file squatting on it is stale state and
+///   the next `create_dir_all` recreates the directory.
+/// - Symlinks are NEVER followed: `symlink_metadata` (lstat semantics) detects
+///   them so an entry pointing outside `path` is only unlinked, never
+///   traversed. A symlink AT `path` itself is rejected outright (it could
+///   point anywhere; clearing "through" it could wipe an unrelated tree).
+/// - An entry that vanishes mid-scan (NotFound) is skipped — concurrent
+///   cleanup by another process is not an error worth aborting over.
+/// Recursion depth is bounded in practice: the thumbnail dir holds 1-2 levels.
+pub fn remove_dir_contents(path: &std::path::Path) -> std::io::Result<()> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing to clear through a symlink: {}", path.display()),
+        ));
+    }
+    if meta.is_file() {
+        return std::fs::remove_file(path);
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry_path = entry?.path();
+        let entry_meta = match std::fs::symlink_metadata(&entry_path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        if entry_meta.file_type().is_symlink() {
+            // Unlink the link itself — never traverse into its target. On
+            // Windows a symlink to a DIRECTORY carries the directory attribute,
+            // so DeleteFileW (remove_file) is rejected with Access Denied and
+            // RemoveDirectoryW (remove_dir) must be used instead; the target is
+            // never touched either way. On Unix unlink (remove_file) removes
+            // any symlink regardless of target kind.
+            #[cfg(not(windows))]
+            std::fs::remove_file(&entry_path)?;
+            #[cfg(windows)]
+            {
+                if std::fs::metadata(&entry_path).map_or(false, |m| m.is_dir()) {
+                    std::fs::remove_dir(&entry_path)?;
+                } else {
+                    std::fs::remove_file(&entry_path)?;
+                }
+            }
+        } else if entry_meta.is_dir() {
+            remove_dir_contents(&entry_path)?;
+            std::fs::remove_dir(&entry_path)?;
+        } else {
+            std::fs::remove_file(&entry_path)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn handle_cover_post(
     raw_id: &str,
     _thumb: bool,
@@ -374,5 +506,154 @@ mod tests {
         for h in handles {
             let _ = tokio::time::timeout(Duration::from_secs(5), h).await;
         }
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("drplay_cache_info_{}_{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test fixture dir must be creatable");
+        dir
+    }
+
+    #[test]
+    fn directory_size_missing_path_is_zero() {
+        let missing = std::env::temp_dir().join("drplay_cache_info_does_not_exist_anything");
+        let _ = std::fs::remove_dir_all(&missing);
+        assert_eq!(directory_size(&missing), 0, "nonexistent path must report 0");
+        assert_eq!(directory_size(std::path::Path::new("Z:\\definitely\\no\\such\\path")), 0);
+    }
+
+    #[test]
+    fn directory_size_empty_dir_is_zero() {
+        let dir = temp_dir("empty");
+        assert_eq!(directory_size(&dir), 0, "empty dir must report 0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn directory_size_sums_files_and_nested_dirs() {
+        let dir = temp_dir("nested");
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).expect("subdir must be creatable");
+        std::fs::write(dir.join("a.bin"), vec![0u8; 100]).expect("file a must be writable");
+        std::fs::write(dir.join("b.bin"), vec![0u8; 250]).expect("file b must be writable");
+        std::fs::write(sub.join("c.bin"), vec![0u8; 50]).expect("file c must be writable");
+        assert_eq!(directory_size(&dir), 400, "must sum all files recursively (100+250+50)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_dir_contents_clears_files_and_subdirs_keeps_dir() {
+        let dir = temp_dir("clear");
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).expect("subdir must be creatable");
+        std::fs::write(dir.join("a.bin"), vec![0u8; 10]).expect("file a must be writable");
+        std::fs::write(sub.join("b.bin"), vec![0u8; 20]).expect("file b must be writable");
+        remove_dir_contents(&dir).expect("clearing must succeed");
+        assert!(dir.is_dir(), "the directory itself must survive");
+        assert!(!sub.exists(), "nested subdir must be removed");
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("cleared dir must be readable").count(),
+            0,
+            "no entries may remain"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_dir_contents_missing_path_is_ok() {
+        let missing = std::env::temp_dir().join(format!(
+            "drplay_cache_info_missing_clear_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(remove_dir_contents(&missing).is_ok(), "nonexistent path must be Ok(())");
+    }
+
+    #[test]
+    fn remove_dir_contents_empty_dir_is_ok() {
+        let dir = temp_dir("clear_empty");
+        assert!(remove_dir_contents(&dir).is_ok(), "empty dir must be Ok(())");
+        assert!(dir.is_dir(), "empty dir must survive");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_dir_contents_file_path_removes_the_file() {
+        let dir = temp_dir("clear_file");
+        let file = dir.join("squatter.bin");
+        std::fs::write(&file, vec![0u8; 5]).expect("file must be writable");
+        remove_dir_contents(&file).expect("a regular file at the path must be removed");
+        assert!(!file.exists(), "file squatting on the cache dir path must be gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remove_dir_contents_does_not_follow_dir_symlinks() {
+        let target = temp_dir("clear_symlink_target");
+        let dir = temp_dir("clear_symlink");
+        let link = dir.join("to_target");
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Ok(()) => {
+                remove_dir_contents(&dir).expect("clearing must succeed");
+                assert!(!link.exists(), "the symlink itself must be removed");
+                assert!(
+                    std::fs::read_dir(&target).expect("target must be readable").count() == 0,
+                    "target dir must exist untouched"
+                );
+            }
+            Err(e) => eprintln!("skipping symlink test (no privilege): {e}"),
+        }
+        let _ = std::fs::remove_dir_all(&target);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn remove_dir_contents_does_not_follow_dir_symlinks() {
+        let target = temp_dir("clear_symlink_target");
+        std::fs::write(target.join("keep.bin"), vec![0u8; 7]).expect("target file must be writable");
+        let dir = temp_dir("clear_symlink");
+        let link = dir.join("to_target");
+        match std::os::unix::fs::symlink(&target, &link) {
+            Ok(()) => {
+                remove_dir_contents(&dir).expect("clearing must succeed");
+                assert!(!link.exists(), "the symlink itself must be removed");
+                assert!(
+                    target.join("keep.bin").exists(),
+                    "content behind the symlink must NOT be removed"
+                );
+            }
+            Err(e) => eprintln!("skipping symlink test (no privilege): {e}"),
+        }
+        let _ = std::fs::remove_dir_all(&target);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn weighted_size_reports_zero_when_cache_empty() {
+        let cache: Cache<String, (String, Bytes)> = Cache::builder()
+            .max_capacity(10_000)
+            .weigher(|_k: &String, v: &(String, Bytes)| v.1.len() as u32)
+            .build();
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.weighted_size(), 0, "empty cache must report 0 bytes");
+        assert_eq!(cache.entry_count(), 0, "empty cache must report 0 entries");
+    }
+
+    #[tokio::test]
+    async fn weighted_size_tracks_inserted_bytes() {
+        let cache: Cache<String, (String, Bytes)> = Cache::builder()
+            .max_capacity(10_000)
+            .weigher(|_k: &String, v: &(String, Bytes)| v.1.len() as u32)
+            .build();
+        cache.insert("a".to_string(), ("\"e\"".to_string(), Bytes::from(vec![0u8; 64]))).await;
+        cache.insert("b".to_string(), ("\"e\"".to_string(), Bytes::from(vec![0u8; 36]))).await;
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.weighted_size(), 100, "weighted_size must equal summed weigher weights (64+36)");
+        cache.invalidate_all();
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.weighted_size(), 0, "invalidate_all must drain weight to 0");
     }
 }

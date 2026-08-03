@@ -76,3 +76,7 @@ export function clearNextTrackPrefetches(): void {
   }
   abortControllers.clear();
 }
+
+export function getPendingPrefetchCount(): number {
+  return abortControllers.size;
+}

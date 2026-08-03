@@ -12,7 +12,7 @@ mod token_store;
 
 use auth::{login_google_native, refresh_google_token};
 use memory::{apply_window_activity, WindowActivityEvent};
-use protocol::cover::clear_local_cache;
+use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
@@ -207,6 +207,8 @@ pub fn run() {
             register_upload_path,
             update_minimize_to_tray,
             clear_local_cache,
+            get_cache_info,
+            clear_thumbnail_dir,
             token_store::set_refresh_token,
             token_store::get_refresh_token,
             token_store::delete_refresh_token,

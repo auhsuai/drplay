@@ -25,3 +25,7 @@ export function prefetchVisibleTracks(fileIds: string[]): void {
 export function clearPrefetchedStreams() {
   prefetchedStreams.clear();
 }
+
+export function getPrefetchedStreamCount(): number {
+  return prefetchedStreams.size;
+}

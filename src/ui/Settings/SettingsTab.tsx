@@ -4,11 +4,11 @@ import { LanguageDropdown } from "./components/LanguageDropdown";
 import { ThemeDropdown } from "./components/ThemeDropdown";
 import { CreditsSection } from "./components/CreditsSection";
 import { ErrorLogSection } from "./components/ErrorLogSection";
+import { CacheManagerModal } from "./components/CacheManagerModal";
 
 import { ThemeType } from "../../hooks/useTheme";
-import { clearAppCache } from "../../utils/cache";
 import { open } from "@tauri-apps/plugin-dialog";
-import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
+import { showErrorToast } from "../../utils/simpleToast";
 import { setCustomDownloadPath, getEffectiveDownloadPath } from "../../utils/downloadPath";
 import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useEffect, useState } from "react";
@@ -30,6 +30,7 @@ export function SettingsTab({
 }: SettingsTabProps) {
   const { t } = useTranslation();
   const [downloadPath, setDownloadPath] = useState<string>("");
+  const [showCacheManager, setShowCacheManager] = useState(false);
 
   useEffect(() => {
     getEffectiveDownloadPath().then(setDownloadPath);
@@ -190,14 +191,7 @@ export function SettingsTab({
               </div>
 
               <button
-                onClick={async () => {
-                  try {
-                    await clearAppCache();
-                    showSuccessToast(t('settings.clear_cache_success', 'Cache cleared successfully!'));
-                  } catch (e) {
-                    showErrorToast(t('settings.clear_cache_error', 'Failed to clear cache.'));
-                  }
-                }}
+                onClick={() => setShowCacheManager(true)}
                 className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t('settings.clear_cache_btn', 'Clear Now')}
@@ -209,6 +203,11 @@ export function SettingsTab({
 
           <ErrorLogSection />
         </div>
+
+        <CacheManagerModal
+          open={showCacheManager}
+          onClose={() => setShowCacheManager(false)}
+        />
       </div>
     </main>
   );

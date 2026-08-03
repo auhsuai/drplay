@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
-import { clearAppCache } from "../../utils/cache";
+import { clearAppCache, getCacheSizes } from "../../utils/cache";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so we stub useTranslation to return
@@ -23,7 +23,16 @@ vi.mock("../../utils/simpleToast", () => ({
   showSuccessToast: (msg: string) => showSuccessToast(msg),
 }));
 
-vi.mock("../../utils/cache", () => ({ clearAppCache: vi.fn() }));
+vi.mock("../../utils/cache", () => ({
+  clearAppCache: vi.fn(),
+  getCacheSizes: vi.fn(),
+  CACHE_CATEGORY_LABELS: {
+    metadata: "Metadata cache",
+    files: "File listing cache",
+    covers: "Covers & thumbnails",
+    prefetch: "Prefetched data",
+  },
+}));
 
 const getEffectiveDownloadPath = vi.fn();
 vi.mock("../../utils/downloadPath", () => ({
@@ -92,27 +101,23 @@ describe("SettingsTab clear cache button", () => {
     showErrorToast.mockReset();
     showSuccessToast.mockReset();
     vi.mocked(clearAppCache).mockReset();
+    vi.mocked(getCacheSizes).mockReset();
+    vi.mocked(getCacheSizes).mockResolvedValue([
+      { id: "metadata", label: "Metadata cache", bytes: 1024 },
+      { id: "files", label: "File listing cache", bytes: 2048 },
+      { id: "covers", label: "Covers & thumbnails", bytes: 0 },
+      { id: "prefetch", label: "Prefetched data", bytes: 1536 },
+    ]);
   });
 
-  it("shows a SUCCESS toast when cache clearing succeeds", async () => {
-    vi.mocked(clearAppCache).mockResolvedValue(undefined);
+  it("opens the cache manager modal instead of clearing directly", async () => {
     render(<SettingsTab {...baseProps} />);
     fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
-    await waitFor(() => {
-      expect(showSuccessToast).toHaveBeenCalledWith(
-        "Cache cleared successfully!"
-      );
-    });
-    expect(showErrorToast).not.toHaveBeenCalled();
-  });
-
-  it("shows an ERROR toast when cache clearing fails", async () => {
-    vi.mocked(clearAppCache).mockRejectedValue(new Error("boom"));
-    render(<SettingsTab {...baseProps} />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
-    await waitFor(() => {
-      expect(showErrorToast).toHaveBeenCalledWith("Failed to clear cache.");
-    });
+    const modal = await screen.findByTestId("cache-manager-modal");
+    expect(within(modal).getByText("Clear App Cache")).toBeTruthy();
+    // The old direct-clear path is gone: nothing is cleared until the modal's
+    // own Clear button is pressed.
+    expect(clearAppCache).not.toHaveBeenCalled();
     expect(showSuccessToast).not.toHaveBeenCalled();
   });
 });
