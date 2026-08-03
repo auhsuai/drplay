@@ -1,14 +1,15 @@
 import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useLiveQuery } from "dexie-react-hooks";
 import {
   captureError,
-  getErrorLogs,
   clearErrorLogs,
   exportErrorLogsSanitized,
   exportErrorLogsSanitizedForDate,
   groupLogsByDate,
   type ErrorLogEntry,
 } from "../../../utils/errorLog";
+import { db } from "../../../db/db";
 import { copyToClipboard } from "../../../utils/copyToClipboard";
 import { showErrorToast } from "../../../utils/simpleToast";
 import { ScrollText } from "lucide-react";
@@ -70,35 +71,36 @@ function LogEntryCard({ entry }: { entry: ErrorLogEntry }) {
 
 export function ErrorLogSection() {
   const { t } = useTranslation();
-  const [logs, setLogs] = useState<ErrorLogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  // useLiveQuery subscribes to db.errorLogs writes (captureError() adds rows
+  // while this section is mounted), so new/cleared logs appear WITHOUT a
+  // remount — the one-shot useEffect+getErrorLogs version went stale.
+  // Querier never rejects: on failure it reports via captureError and falls
+  // back to [] (useLiveQuery itself rethrows querier errors on render).
+  const logs = useLiveQuery(
+    () =>
+      db.errorLogs
+        .orderBy("ts")
+        .reverse()
+        .toArray()
+        .catch((err: unknown) => {
+          captureError({
+            level: "error",
+            source: ERROR_LOG_SECTION_MODULE,
+            message: `failed-to-load-logs: ${err instanceof Error ? err.message : String(err)}`,
+          });
+          return [];
+        }),
+    []
+  );
+  // undefined until the first query resolves → same "Loading..." gate as the
+  // old mount-only fetch (later live re-runs keep the last value, no flicker).
+  const loading = logs === undefined;
+  const logList = logs ?? [];
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hasSelection, setHasSelection] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await getErrorLogs();
-        if (!cancelled) setLogs(data);
-      } catch (err) {
-        captureError({
-          level: "error",
-          source: ERROR_LOG_SECTION_MODULE,
-          message: `failed-to-load-logs: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        if (!cancelled) setLogs([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -113,7 +115,7 @@ export function ErrorLogSection() {
   }, []);
 
   const handleCopy = async () => {
-    if (logs.length === 0 || busy) return;
+    if (logList.length === 0 || busy) return;
     setBusy(true);
     try {
       const sel = window.getSelection();
@@ -150,7 +152,6 @@ export function ErrorLogSection() {
     setBusy(true);
     try {
       await clearErrorLogs();
-      setLogs([]);
     } catch (err) {
       captureError({
         level: "error",
@@ -167,7 +168,7 @@ export function ErrorLogSection() {
     <div className="flex items-center gap-2 shrink-0 -mt-[2px]">
       <button
         onClick={handleCopy}
-        disabled={logs.length === 0 || busy}
+        disabled={logList.length === 0 || busy}
         className="px-5 py-2.5 rounded-xl bg-[#4285F4] hover:bg-[#3367d6] text-white text-sm font-semibold transition-all transform active:scale-[0.97] shadow-[0_4px_12px_rgba(66,133,244,0.3)] hover:shadow-[0_6px_16px_rgba(66,133,244,0.4)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center"
       >
         <ScrollText className="w-4 h-4" />
@@ -179,7 +180,7 @@ export function ErrorLogSection() {
       </button>
       <button
         onClick={handleClear}
-        disabled={logs.length === 0 || busy}
+        disabled={logList.length === 0 || busy}
         className="px-5 py-2.5 rounded-xl bg-gray-200 dark:bg-[#2A2A2A] hover:bg-gray-300 dark:hover:bg-[#3A3A3A] text-gray-900 dark:text-gray-100 text-sm font-semibold transition-all transform active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
         {t("settings.error_log_clear") || "Clear"}
@@ -210,13 +211,13 @@ export function ErrorLogSection() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {t("loading") || "Loading..."}
           </p>
-        ) : logs.length === 0 ? (
+        ) : logList.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {t("settings.error_log_empty") || "No errors have been recorded yet."}
           </p>
         ) : selectedDate === null ? (
           <div className="flex flex-col gap-2">
-            {groupLogsByDate(logs).map((group) => (
+            {groupLogsByDate(logList).map((group) => (
               <button
                 key={group.dateKey}
                 onClick={() => setSelectedDate(group.dateKey)}
@@ -234,7 +235,7 @@ export function ErrorLogSection() {
           </div>
         ) : (
           <div className="flex flex-col gap-3 select-text">
-            {groupLogsByDate(logs)
+            {groupLogsByDate(logList)
               .find((g) => g.dateKey === selectedDate)
               ?.entries.map((entry) => (
                 <LogEntryCard key={entry.id} entry={entry} />

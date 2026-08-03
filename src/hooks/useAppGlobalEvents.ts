@@ -1,17 +1,21 @@
 import { useEffect } from 'react';
 import { getValidToken } from '../utils/apiClient';
 import { captureError } from '../utils/errorLog';
+import { ACCESS_TOKEN_KEY } from '../utils/storageKeys';
 
 export function useAppGlobalEvents(handleLogout: () => void) {
   useEffect(() => {
     const handleFocus = () => {
       // The proactive-refresh setTimeout is frozen while the OS sleeps / the app
       // is suspended. On regaining focus, refresh if the token is stale so the
-      // next play doesn't hit the proxy with an expired token. Guard on
-      // refresh_token presence to avoid triggering the logout path when signed out.
+      // next play doesn't hit the proxy with an expired token. Guard on access
+      // token presence only: the refresh token lives in the OS keyring since
+      // the M1b/M1c migration, so it is no longer in localStorage (checking it
+      // would skip the refresh for every keyring user). Signed-out users have
+      // no access token, so the logout path stays unreachable.
       let hasTokens = false;
       try {
-        hasTokens = !!(localStorage.getItem("drplay_access_token") && localStorage.getItem("drplay_refresh_token"));
+        hasTokens = !!localStorage.getItem(ACCESS_TOKEN_KEY);
       } catch {
         // Storage can throw (privacy mode / quota); a read failure must not
         // crash focus handling — skip the refresh and let the next play fail.

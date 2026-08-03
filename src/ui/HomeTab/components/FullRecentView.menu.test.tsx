@@ -153,9 +153,9 @@ describe('FullRecentView now-playing highlight (currentTrack prop)', () => {
     expect(alpha).not.toBeNull();
     expect(alpha?.className).toContain('bg-gray-100 dark:bg-[#2a2b2f]');
     expect(alpha?.className).not.toContain('bg-[#4285F4]/10');
-    expect(alpha?.querySelector('h3')?.className).toContain('!text-[#4285F4]');
+    expect(alpha?.querySelector('h3')?.className).toContain('text-[#4285F4]!');
     expect(beta?.className).not.toContain('bg-gray-100 dark:bg-[#2a2b2f]');
-    expect(beta?.querySelector('h3')?.className).not.toContain('!text-[#4285F4]');
+    expect(beta?.querySelector('h3')?.className).not.toContain('text-[#4285F4]!');
   });
 
   it('leaves every card idle when currentTrack is null/undefined', () => {
@@ -165,6 +165,6 @@ describe('FullRecentView now-playing highlight (currentTrack prop)', () => {
     );
     const alpha = cardByTitle('Alpha');
     expect(alpha?.className).not.toContain('bg-gray-100 dark:bg-[#2a2b2f]');
-    expect(alpha?.querySelector('h3')?.className).not.toContain('!text-[#4285F4]');
+    expect(alpha?.querySelector('h3')?.className).not.toContain('text-[#4285F4]!');
   });
 });

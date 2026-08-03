@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeTab } from './HomeTab';
 import type { Track, UserProfile } from '../../types';
 import type { DriveFileItem } from '../../utils/driveApi';
+import { SYNC_EVENT_NAMES } from '../../utils/proSyncManager';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key, i18n: { language: 'en' } }),
@@ -208,6 +209,33 @@ describe('HomeTab Recently Added delta sync', () => {
     act(() => { window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED)); });
     await waitFor(() => expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2));
 
+    expect(screen.queryByText('Recently Added to Drive')).toBeNull();
+  });
+
+  it('10. refetches recently added when pro-sync-complete fires (sync worker detected new Drive files)', async () => {
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([driveFile({ id: 'a', name: 'First.mp3' })]);
+    render(<HomeTab {...baseProps()} />);
+    await screen.findByText('First.mp3');
+    expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([driveFile({ id: 'b', name: 'Second.mp3' })]);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.complete));
+    });
+
+    expect(await screen.findByText('Second.mp3')).toBeTruthy();
+    expect(screen.queryByText('First.mp3')).toBeNull();
+    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+    // Delta sync must not re-run the heavy local loads.
+    expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+  });
+
+  it('11. pro-sync-complete with null token does not fetch', async () => {
+    render(<HomeTab {...baseProps({ token: null })} />);
+    await waitFor(() => expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1));
+
+    act(() => { window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.complete)); });
+    expect(mocks.getRecentlyAddedAudioFiles).not.toHaveBeenCalled();
     expect(screen.queryByText('Recently Added to Drive')).toBeNull();
   });
 });

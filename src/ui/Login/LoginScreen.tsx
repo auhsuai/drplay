@@ -19,10 +19,11 @@ function classifyLoginError(err: unknown): string {
 interface LoginResult {
   access_token: string;
   refresh_token?: string;
+  expires_in?: number;
 }
 
 interface LoginScreenProps {
-  onLogin: (accessToken: string) => void;
+  onLogin: (tokens: LoginResult) => void;
 }
 
 export function LoginScreen({ onLogin }: LoginScreenProps) {
@@ -56,7 +57,10 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       // Call Rust backend directly
       const token = await invoke<LoginResult>("login_google_native");
       setIsLoading(false);
-      onLogin(token.access_token);
+      // Forward the full token payload — dropping refresh_token here starves
+      // the refresh machinery (apiClient.getValidToken), which later triggers
+      // an 'auth-logout' ~50 min after login (regression from 80c2984).
+      onLogin(token);
     } catch (error) {
       setIsLoading(false);
       const errStr = String(error);

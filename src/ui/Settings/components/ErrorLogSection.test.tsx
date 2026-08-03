@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { initReactI18next, useTranslation } from "react-i18next";
 import i18n from "i18next";
 import { ErrorLogSection } from "./ErrorLogSection";
@@ -34,7 +34,6 @@ i18n.use(initReactI18next).init({
 
 void useTranslation;
 import {
-  getErrorLogs,
   clearErrorLogs,
   exportErrorLogsSanitized,
   exportErrorLogsSanitizedForDate,
@@ -47,7 +46,6 @@ vi.mock("../../../utils/errorLog", async () => {
   );
   return {
     ...actual,
-    getErrorLogs: vi.fn(),
     clearErrorLogs: vi.fn(),
     exportErrorLogsSanitized: vi.fn(),
     exportErrorLogsSanitizedForDate: vi.fn(),
@@ -63,7 +61,18 @@ vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
   writeText: clipboardWriteTextMock,
 }));
 
-const getErrorLogsMock = vi.mocked(getErrorLogs);
+// ErrorLogSection reads logs via useLiveQuery(db.errorLogs). Mock the hook
+// with a controllable return value so a test can simulate a Dexie table
+// change (new entry added / table cleared) by flipping the mock + rerendering.
+const { useLiveQueryMock } = vi.hoisted(() => ({ useLiveQueryMock: vi.fn() }));
+vi.mock("dexie-react-hooks", () => ({
+  useLiveQuery: useLiveQueryMock,
+}));
+
+vi.mock("../../../db/db", () => ({
+  db: { errorLogs: { orderBy: vi.fn() } },
+}));
+
 const clearErrorLogsMock = vi.mocked(clearErrorLogs);
 const exportErrorLogsSanitizedMock = vi.mocked(exportErrorLogsSanitized);
 const exportErrorLogsSanitizedForDateMock = vi.mocked(
@@ -99,10 +108,11 @@ function makeEntries(): ErrorLogEntry[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText: vi.fn().mockResolvedValue(undefined) },
-    });
+  useLiveQueryMock.mockReturnValue([]);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  });
 });
 
 afterEach(() => {
@@ -110,15 +120,14 @@ afterEach(() => {
 });
 
 describe("ErrorLogSection", () => {
-  it("renders empty state when getErrorLogs() returns []", async () => {
-    getErrorLogsMock.mockResolvedValue([]);
+  it("renders empty state when the live query resolves to []", async () => {
     render(<ErrorLogSection />);
     expect(await screen.findByText(/No errors have been recorded yet/i)).toBeTruthy();
     expect(screen.queryByText("boom")).toBeNull();
   });
 
-  it("renders date groups when getErrorLogs() returns 2 entries on 2 days", async () => {
-    getErrorLogsMock.mockResolvedValue(makeEntries());
+  it("renders date groups when the live query resolves to 2 entries on 2 days", async () => {
+    useLiveQueryMock.mockReturnValue(makeEntries());
     render(<ErrorLogSection />);
     // Default view = grouped by day; shows date keys, not raw messages.
     expect(await screen.findByText(KEY_B)).toBeTruthy();
@@ -129,7 +138,7 @@ describe("ErrorLogSection", () => {
   });
 
   it("clicking a day shows that day's entries and nothing else", async () => {
-    getErrorLogsMock.mockResolvedValue(makeEntries());
+    useLiveQueryMock.mockReturnValue(makeEntries());
     render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
@@ -141,7 +150,7 @@ describe("ErrorLogSection", () => {
   });
 
   it("back button returns to the date-group view", async () => {
-    getErrorLogsMock.mockResolvedValue(makeEntries());
+    useLiveQueryMock.mockReturnValue(makeEntries());
     render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
@@ -153,7 +162,7 @@ describe("ErrorLogSection", () => {
   });
 
   it("copy in day view calls exportErrorLogsSanitizedForDate, not the all-logs export", async () => {
-    getErrorLogsMock.mockResolvedValue(makeEntries());
+    useLiveQueryMock.mockReturnValue(makeEntries());
     exportErrorLogsSanitizedForDateMock.mockResolvedValue("day report text");
     render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
@@ -169,7 +178,7 @@ describe("ErrorLogSection", () => {
   });
 
   it("copy button calls clipboard.writeText with sanitized text", async () => {
-    getErrorLogsMock.mockResolvedValue(makeEntries());
+    useLiveQueryMock.mockReturnValue(makeEntries());
     exportErrorLogsSanitizedForDateMock.mockResolvedValue(
       "2023-11-14T22:13:20.000Z [error] Player: boom"
     );
@@ -188,7 +197,6 @@ describe("ErrorLogSection", () => {
   });
 
   it("copy button is disabled when log is empty and in day view", async () => {
-    getErrorLogsMock.mockResolvedValue([]);
     render(<ErrorLogSection />);
     await screen.findByText(/No errors have been recorded yet/i);
     // Copy/Clear buttons are only rendered in day view (selectedDate != null).
@@ -198,14 +206,64 @@ describe("ErrorLogSection", () => {
   });
 
   it("clear button calls clearErrorLogs and empties the list", async () => {
-    getErrorLogsMock.mockResolvedValue(makeEntries());
+    useLiveQueryMock.mockReturnValue(makeEntries());
     clearErrorLogsMock.mockResolvedValue(undefined);
-    render(<ErrorLogSection />);
+    const { rerender } = render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
     await screen.findByText((c) => c.startsWith("boom"));
     fireEvent.click(screen.getByRole("button", { name: /Clear/i }));
     expect(clearErrorLogsMock).toHaveBeenCalledTimes(1);
+    // After clearErrorLogs() the Dexie table changed; the live query re-runs
+    // with [] — simulate that subscription push like the real hook would.
+    useLiveQueryMock.mockReturnValue([]);
+    act(() => {
+      rerender(<ErrorLogSection />);
+    });
     expect(await screen.findByText(/No errors have been recorded yet/i)).toBeTruthy();
+  });
+
+  it("renders a newly captured log without remounting (live table update)", async () => {
+    useLiveQueryMock.mockReturnValue([]);
+    const { rerender } = render(<ErrorLogSection />);
+    expect(await screen.findByText(/No errors have been recorded yet/i)).toBeTruthy();
+
+    // REGRESSION (BUG 1): captureError() wrote a new entry into db.errorLogs.
+    // The component must show it WITHOUT being remounted — the live query
+    // re-runs and pushes the new result.
+    useLiveQueryMock.mockReturnValue(makeEntries());
+    act(() => {
+      rerender(<ErrorLogSection />);
+    });
+
+    expect(await screen.findByText(KEY_A)).toBeTruthy();
+    expect(screen.queryByText(/No errors have been recorded yet/i)).toBeNull();
+  });
+
+  it("live table update is reflected while a day-detail view is open", async () => {
+    useLiveQueryMock.mockReturnValue(makeEntries());
+    const { rerender } = render(<ErrorLogSection />);
+    await screen.findByText(KEY_A);
+    fireEvent.click(screen.getByText(KEY_A));
+    await screen.findByText("boom day A");
+
+    // New entry lands on the SAME day while its detail view is open.
+    const withNewEntry: ErrorLogEntry[] = [
+      ...makeEntries(),
+      {
+        id: "a2",
+        ts: DAY_A + 60_000,
+        level: "error",
+        source: "Player",
+        message: "fresh crash on day A",
+      },
+    ];
+    useLiveQueryMock.mockReturnValue(withNewEntry);
+    act(() => {
+      rerender(<ErrorLogSection />);
+    });
+
+    expect(await screen.findByText("fresh crash on day A")).toBeTruthy();
+    expect(screen.getByText("boom day A")).toBeTruthy();
   });
 });

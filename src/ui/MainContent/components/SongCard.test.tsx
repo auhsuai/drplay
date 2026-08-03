@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
 import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import { SongCard } from './SongCard';
+import { DRAG_FOLDER_HOVER_EVENT } from '../../components/DropZone';
 import { getTrackMetadata } from '../../../utils/metadata';
 import type { DriveItem } from '../../../types';
 
@@ -906,10 +907,10 @@ describe('SongCard now-playing visual distinction (hover-like gray, no lift)', (
 
   it('playing card keeps the blue title and blue icon accents (hover-like)', () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} isPlaying />);
-    expect(container.querySelector('h3')?.className).toContain('!text-[#4285F4]');
+    expect(container.querySelector('h3')?.className).toContain('text-[#4285F4]!');
     const iconBox = container.querySelector('.lucide-music')?.parentElement;
-    expect(iconBox?.className).toContain('!bg-[#4285F4]/10');
-    expect(iconBox?.className).toContain('!text-[#4285F4]');
+    expect(iconBox?.className).toContain('bg-[#4285F4]/10!');
+    expect(iconBox?.className).toContain('text-[#4285F4]!');
   });
 
   it('idle card keeps the original bg/hover unchanged', () => {
@@ -974,5 +975,92 @@ describe('SongCard size text uses shared formatBytes semantics (not the old MB-o
   it('1.5 MB (1536 KB) → shows "1.5 MB" (fraction digits preserved for non-whole units)', async () => {
     renderWithMetaSize(1536 * 1024);
     expect(await screen.findByText('1.5 MB')).not.toBeNull();
+  });
+});
+
+describe('SongCard drag-over folder hover (folder drop target)', () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: 'Fetched Title',
+      artist: null,
+      duration: 0,
+      size: 0,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const folderItem = (): DriveItem => makeItem({ isFolder: true, trackInfo: undefined });
+  const innerDiv = (container: HTMLElement): Element | null => container.querySelector('.p-3');
+  const announceHover = (folderId: string | null): void => {
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DRAG_FOLDER_HOVER_EVENT, { detail: { folderId } }));
+    });
+  };
+  // The idle card always carries the :hover-prefixed classes (hover:shadow-md,
+  // group-hover:-translate-y-1, hover:bg-gray-100), so the drag-over state is
+  // only detectable via the unprefixed always-on forms — assert with word
+  // boundaries so 'hover:shadow-md' does not false-positive. The bg classes
+  // carry the Tailwind important modifier (trailing !) so they beat the card
+  // base bg (same specificity otherwise — order in the generated CSS wins).
+  const hasDragLift = /(^|\s)shadow-md(\s|$)/;
+  const hasDragTranslate = /(^|\s)-translate-y-1(\s|$)/;
+  const hasDragGrayBg = /(^|\s)bg-gray-100!(\s|$)/;
+
+  it('folder card marks its wrapper with data-folder-id (DropZone hit-test target)', () => {
+    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
+    const target = container.querySelector('[data-folder-id]');
+    expect(target).not.toBeNull();
+    expect(target?.getAttribute('data-folder-id')).toBe('track-1');
+  });
+
+  it('non-folder card does NOT carry data-folder-id (tracks are not drop targets)', () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(container.querySelector('[data-folder-id]')).toBeNull();
+  });
+
+  it('matching drag-hover event renders the same visual as a real mouse hover (shadow-md, -translate-y-1, gray bg with important prefix)', () => {
+    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
+    const inner = innerDiv(container);
+    expect(inner?.className).not.toMatch(hasDragLift);
+    announceHover('track-1');
+    expect(inner?.className).toMatch(hasDragLift);
+    expect(inner?.className).toMatch(hasDragTranslate);
+    expect(inner?.className).toMatch(hasDragGrayBg);
+    expect(inner?.className).toContain('dark:bg-[#2a2b2f]!');
+  });
+
+  it('selected folder card drag-hover keeps the accent tint with the important prefix (wins over base)', () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={folderItem()} isSelected isSelectionMode />,
+    );
+    announceHover('track-1');
+    expect(innerDiv(container)?.className).toContain('bg-[#4285F4]/20!');
+    expect(innerDiv(container)?.className).toContain('dark:bg-[#4285F4]/30!');
+  });
+
+  it('drag-hover event for a different folder does NOT highlight this card', () => {
+    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
+    announceHover('folder-other');
+    expect(innerDiv(container)?.className).not.toMatch(hasDragLift);
+  });
+
+  it('null folderId (drag left / dropped) clears the drag hover', () => {
+    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
+    announceHover('track-1');
+    expect(innerDiv(container)?.className).toMatch(hasDragLift);
+    announceHover(null);
+    expect(innerDiv(container)?.className).not.toMatch(hasDragLift);
+  });
+
+  it('non-folder cards ignore the drag-hover event entirely (no crash, no classes)', () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    announceHover('track-1');
+    expect(innerDiv(container)?.className).not.toMatch(hasDragLift);
   });
 });

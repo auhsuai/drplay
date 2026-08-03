@@ -1,7 +1,5 @@
 import React, { useRef, useEffect, useCallback } from "react";
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { Track } from "../../App";
-import type { DriveItem } from "../../types";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
@@ -10,22 +8,28 @@ import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { TABS, type TabKey } from "../../utils/driveConstants";
 
-import { SongCard } from './components/SongCard';
+import { VirtualizedSongList, type VirtualizedSongListHandle } from './components/VirtualizedSongList';
 import { BulkDeleteConfirmModal } from './components/BulkDeleteConfirmModal';
 import { NewFolderModal } from './components/NewFolderModal';
 
 import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
-import { getUploadProgress, getUploadState, isUploading, subscribe as subscribeUploads } from "../../utils/uploadManager";
+import { useEventListener } from "../../hooks/useEventListener";
+import { isUploading } from "../../utils/uploadManager";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { PaginationControls } from "./components/PaginationControls";
+import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 
-// Monotonic upload-status version: bumped on every uploadManager notify so the
-// virtualized list can re-derive each card's uploadState. Module-level (not
-// component state) so a list remounted mid-upload still starts from the latest
-// version — useSyncExternalStore re-reads the snapshot right after subscribing.
-let uploadVersion = 0;
+// How long to wait after switching to the target page before scrolling the
+// highlighted item into view — the new page must render first; 50ms is just
+// enough for React to flush and the virtualizer to lay out the new rows.
+const SCROLL_HIGHLIGHT_DELAY_MS = 50;
+
+// Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar)
+// — the file-list container sizes itself to fill the viewport below it
+// (applied as min-height: calc(100% - 140px) on the [data-drop-region] div).
+const HEADER_CHROME_HEIGHT_PX = 140;
 
 interface MainContentProps {
   activeTab: TabKey;
@@ -74,6 +78,10 @@ export const MainContent = React.memo(function MainContent({
   const [showNewFolderModal, setShowNewFolderModal] = React.useState(false);
   const [showBulkMoveScreen, setShowBulkMoveScreen] = React.useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = React.useState(false);
+  // While a native drag is in flight (DropZone announces it), the header
+  // chrome and pagination hide so the drop target area is unambiguous; the
+  // file-list container also doubles as the scoped dim region ([data-drop-region]).
+  const [isDragActive, setIsDragActive] = React.useState(false);
 
   const explorer = useDriveExplorer(
     currentFolderId,
@@ -84,43 +92,43 @@ export const MainContent = React.memo(function MainContent({
     sortOption
   );
 
+  const handleDragActive = (e: Event) => {
+    const detail = (e as CustomEvent<{ active: boolean }>).detail;
+    setIsDragActive(detail?.active ?? false);
+  };
+  useEventListener(DRAG_ACTIVE_EVENT, handleDragActive);
+
   useEffect(() => {
     isInitialMount.current = false;
   }, []);
 
   // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        e.preventDefault();
-        if (document.activeElement === searchInputRef.current) {
-          searchInputRef.current?.blur();
-          explorer.setSearchQuery("");
-        } else {
-          searchInputRef.current?.focus();
-        }
-      }
-      if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      if (document.activeElement === searchInputRef.current) {
         searchInputRef.current?.blur();
         explorer.setSearchQuery("");
+      } else {
+        searchInputRef.current?.focus();
       }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [explorer]);
+    }
+    if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
+      searchInputRef.current?.blur();
+      explorer.setSearchQuery("");
+    }
+  };
+  useEventListener('keydown', handleKeyDown, [explorer.setSearchQuery]);
 
   // Enable selection mode from events
-  useEffect(() => {
-    const handleEnableSelection = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail?.id) {
-        explorer.setIsSelectionMode(true);
-        explorer.setSelectedIds(new Set([customEvent.detail.id]));
-      }
-    };
-    window.addEventListener('enable-selection-mode', handleEnableSelection);
-    return () => window.removeEventListener('enable-selection-mode', handleEnableSelection);
-  }, [explorer]);
+  const handleEnableSelection = (e: Event) => {
+    const customEvent = e as CustomEvent;
+    if (customEvent.detail?.id) {
+      explorer.setIsSelectionMode(true);
+      explorer.setSelectedIds(new Set([customEvent.detail.id]));
+    }
+  };
+  useEventListener('enable-selection-mode', handleEnableSelection, [explorer.setIsSelectionMode, explorer.setSelectedIds]);
 
   // Scroll to top on folder change
   const prevFolderRef = useRef(currentFolderId);
@@ -135,7 +143,7 @@ export const MainContent = React.memo(function MainContent({
   }, [currentFolderId, highlightedFileId]);
 
   // Virtualizer is now isolated inside VirtualizedSongList
-  const virtualizedListRef = useRef<{ scrollToIndex: (index: number, options?: any) => void }>(null);
+  const virtualizedListRef = useRef<VirtualizedSongListHandle>(null);
 
   // Handle highlight scrolling
   useEffect(() => {
@@ -145,17 +153,18 @@ export const MainContent = React.memo(function MainContent({
         const targetPage = Math.floor(index / ITEMS_PER_PAGE) + 1;
         if (targetPage !== explorer.currentPage) {
           explorer.setCurrentPage(targetPage);
-          setTimeout(() => {
+          const timerId = setTimeout(() => {
             const pageIndex = index % ITEMS_PER_PAGE;
             virtualizedListRef.current?.scrollToIndex(pageIndex, { align: 'center' });
-          }, 50);
+          }, SCROLL_HIGHLIGHT_DELAY_MS);
+          return () => clearTimeout(timerId);
         } else {
           const pageIndex = index % ITEMS_PER_PAGE;
           virtualizedListRef.current?.scrollToIndex(pageIndex, { align: 'center' });
         }
       }
     }
-  }, [highlightedFileId, explorer.currentPage, explorer.filteredItems, explorer]);
+  }, [highlightedFileId, explorer.currentPage, explorer.filteredItems, explorer.setCurrentPage]);
 
   useEffect(() => {
     clearPrefetchedStreams();
@@ -181,7 +190,10 @@ export const MainContent = React.memo(function MainContent({
         />
       )}
 
-      <div className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
+      <div
+        data-testid="main-header-chrome"
+        className={`sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200 ${isDragActive ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+      >
         <TopNavigationBar
           isSelectionMode={explorer.isSelectionMode}
           selectedCount={explorer.selectedIds.size}
@@ -225,7 +237,7 @@ export const MainContent = React.memo(function MainContent({
         />
       </div>
         
-      <div className="px-8 pb-6 pt-4 min-h-[calc(100%-140px)]">
+      <div data-drop-region className="px-8 pb-6 pt-4" style={{ minHeight: `calc(100% - ${HEADER_CHROME_HEIGHT_PX}px)` }}>
         {activeTab === TABS.settings ? (
           <div className="text-gray-500">Settings page coming soon...</div>
         ) : isLoading ? (
@@ -261,12 +273,17 @@ export const MainContent = React.memo(function MainContent({
               onBulkDeleteClick={handleBulkDeleteClick}
             />
 
-            <PaginationControls
-              currentPage={explorer.currentPage}
-              totalPages={explorer.totalPages}
-              setCurrentPage={explorer.setCurrentPage}
-              onScrollTop={() => virtualizedListRef.current?.scrollToIndex(0, { align: 'start' })}
-            />
+            <div
+              data-testid="main-pagination-chrome"
+              className={`transition-opacity duration-200 ${isDragActive ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+            >
+              <PaginationControls
+                currentPage={explorer.currentPage}
+                totalPages={explorer.totalPages}
+                setCurrentPage={explorer.setCurrentPage}
+                onScrollTop={() => virtualizedListRef.current?.scrollToIndex(0, { align: 'start' })}
+              />
+            </div>
           </>
         )}
       </div>
@@ -288,145 +305,3 @@ export const MainContent = React.memo(function MainContent({
     </main>
   );
 });
-
-const VirtualizedSongList = React.memo(React.forwardRef(function VirtualizedSongList({
-  items,
-  scrollElementRef,
-  onPlay,
-  onOpenFolder,
-  token,
-  currentFolderId,
-  currentFolderName,
-  folderHistory,
-  highlightedFileId,
-  isPlaying,
-  onRefresh,
-  onRemoveItem,
-  isSelectionMode,
-  selectedIds,
-  setSelectedIds,
-  setIsSelectionMode,
-  onBulkMoveClick,
-  onBulkDeleteClick,
-}: {
-  items: DriveItem[];
-  scrollElementRef: React.RefObject<HTMLElement | null>;
-  onPlay: (track: Track) => void;
-  onOpenFolder: (id: string, name: string) => void;
-  token: string | null;
-  currentFolderId: string;
-  currentFolderName: string;
-  folderHistory: { id: string; name: string }[];
-  highlightedFileId: { id: string; ts: number } | null | undefined;
-  isPlaying: string | undefined;
-  onRefresh: () => void;
-  onRemoveItem?: (id: string) => void;
-  isSelectionMode: boolean;
-  selectedIds: Set<string>;
-  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
-  onBulkMoveClick: () => void;
-  onBulkDeleteClick: () => void;
-}, ref: React.ForwardedRef<{ scrollToIndex: (index: number, options?: any) => void }>) {
-  const rowVirtualizer = useVirtualizer({
-    count: items.length,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 92,
-    overscan: 15,
-    getItemKey: (index: number) => items[index].id,
-    useFlushSync: false,
-  });
-
-  // External-store subscription to uploadManager: every status change bumps
-  // uploadVersion and re-renders this list; each visible card then re-derives
-  // its own uploadState via getUploadState(item.id) and the SongCard memo
-  // comparator skips cards whose state did not change.
-  React.useSyncExternalStore(
-    (onStoreChange) => subscribeUploads(() => {
-      uploadVersion += 1;
-      onStoreChange();
-    }),
-    () => uploadVersion,
-  );
-
-  React.useImperativeHandle(ref, () => ({
-    scrollToIndex: (index, options) => {
-      rowVirtualizer.scrollToIndex(index, options);
-    }
-  }));
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
-
-  const handleToggleSelection = React.useCallback((id: string) => {
-    // Upload race guard (UI layer): an uploading item must never be toggled
-    // into the selection — bulk ops on it are impossible and the pending row
-    // disappears when the upload finishes.
-    if (isUploading(id)) return;
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, [setSelectedIds]);
-
-  const handleEnableSelectionMode = React.useCallback((id: string) => {
-    if (isUploading(id)) return;
-    setIsSelectionMode(true);
-    setSelectedIds(new Set([id]));
-  }, [setIsSelectionMode, setSelectedIds]);
-
-  return (
-    <div
-      style={{
-        position: 'relative',
-        width: '100%',
-        height: `${rowVirtualizer.getTotalSize()}px`,
-        pointerEvents: rowVirtualizer.isScrolling ? 'none' : 'auto',
-      }}
-    >
-      {virtualItems.map((virtualRow) => {
-        const item = items[virtualRow.index];
-        if (!item) return null;
-        return (
-          <div
-            key={virtualRow.key}
-            data-index={virtualRow.index}
-            className="pb-3"
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              height: `${virtualRow.size}px`,
-              transform: `translateY(${virtualRow.start}px)`,
-            }}
-          >
-            <SongCard
-              item={item}
-              onPlay={onPlay}
-              onOpenFolder={onOpenFolder}
-              token={token}
-              currentFolderId={currentFolderId}
-              currentFolderName={currentFolderName}
-              folderHistory={folderHistory}
-              isHighlighted={item.id === highlightedFileId?.id}
-              highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
-              isPlaying={!!isPlaying && item.trackInfo?.id === isPlaying}
-              onRefresh={onRefresh}
-              onRemoveItem={onRemoveItem}
-              isSelectionMode={isSelectionMode}
-              isSelected={selectedIds.has(item.id)}
-              onToggleSelection={handleToggleSelection}
-              onEnableSelectionMode={handleEnableSelectionMode}
-              onBulkMoveClick={onBulkMoveClick}
-              onBulkDeleteClick={onBulkDeleteClick}
-              uploadState={getUploadState(item.id)}
-              uploadProgress={getUploadProgress(item.id)}
-            />
-          </div>
-        );
-      })}
-    </div>
-  );
-}));

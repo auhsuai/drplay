@@ -14,12 +14,14 @@ use crate::thumbnail::validate_file_id;
 // counts each entry's byte length, so the cache evicts (LRU + TinyLFU admission)
 // once the summed weight passes this cap — preventing unbounded growth / OOM.
 const COVER_CACHE_MAX_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
-// Entries expire after this idle/write TTL so stale covers are re-fetched from R2.
+// Entries expire after this idle/write TTL so a stale entry is re-evaluated
+// on the next request instead of being served forever.
 const COVER_CACHE_TTL_SECS: u64 = 3600; // 1 hour
 // Max size accepted for an incoming POSTed cover payload (legacy local-cover path).
 const MAX_COVER_SIZE: usize = 52_428_800;
 /// Sentinel etag stored in COVER_CACHE when a track has no cover (NoCover).
-/// Checking this in step 0 avoids re-fetching from R2 on every mount.
+/// Checking this in step 0 returns NoCover early without re-inserting the
+/// marker on every request.
 const COVER_NOCOVER_ETAG: &str = "\"nocover\"";
 // Upper bound on how many concurrent requests may queue as waiters for one
 // in-flight cover fetch (singleflight per `cache_key`). A burst beyond this
@@ -55,9 +57,10 @@ pub static ETAG_CACHE: LazyLock<Cache<String, (String, Bytes)>> = LazyLock::new(
 });
 
 // In-RAM, bounded, TTL-expiring cover cache. Keyed by `{music_id}_{t|f}` (t = thumb,
-// f = full). Source of truth stays in R2 (aws-sdk-s3); this cache only avoids
-// re-fetching the same cover bytes on every UI paint. Bounded by total BYTES via the
-// weigher and by time via TTL — no unbounded growth, no disk writes.
+// f = full). The R2 remote backend was removed (2026-08-03), so covers always
+// resolve to the NoCover marker; this cache stores that marker to skip
+// re-evaluation on every UI paint. Bounded by total BYTES via the weigher and by
+// time via TTL — no unbounded growth, no disk writes.
 pub static COVER_CACHE: LazyLock<Cache<String, (String, Bytes)>> = LazyLock::new(|| {
     Cache::builder()
         .max_capacity(COVER_CACHE_MAX_BYTES as u64)
@@ -97,7 +100,8 @@ pub async fn handle_cover_get(
 
     let cache_key = cover_cache_key(raw_id, thumb);
 
-    // Step 0: in-RAM cache (bounded, TTL). Hits avoid any R2 round trip.
+    // Step 0: in-RAM cache (bounded, TTL). A hit short-circuits the NoCover
+    // path below without re-inserting the marker.
     if let Some(hit) = COVER_CACHE.get(&cache_key).await {
         if hit.0 == COVER_NOCOVER_ETAG {
             eprintln!("[PERF] handle_cover_get {} source=NOCOVER_CACHE took {:?}", raw_id, _start.elapsed());
@@ -110,8 +114,8 @@ pub async fn handle_cover_get(
         return Ok((hit.0, hit.1, "image/jpeg"));
     }
 
-    // Step 0.5: In-flight dedup — if another task is already fetching this
-    // cache_key, wait on its result instead of issuing a duplicate R2 call.
+    // Step 0.5: In-flight dedup — if another task is already handling this
+    // cache_key, wait on its result instead of duplicating the work.
     // The MutexGuard is scoped to NOT span the .await point (it is !Send).
     let subscribe_rx = {
         let mut in_flight = IN_FLIGHT.lock().unwrap();
@@ -153,10 +157,10 @@ pub async fn handle_cover_get(
     // Drop guard ensures IN_FLIGHT cleanup even on panic/cancellation.
     let _guard = InFlightGuard { cache_key: cache_key.clone() };
 
-    // Step 2: No real cover anywhere — covers live in R2; the SQLite blob
-    // backend was removed (2026-08-03), so there is no DB to fall back on.
-    // Cache a "no cover" marker so subsequent requests skip the R2 round trip,
-    // then return the music-note placeholder so the UI never shows a
+    // Step 2: No real cover anywhere — the R2 remote backend was removed
+    // alongside the SQLite blob backend (2026-08-03), so there is no source
+    // left to fetch from. Cache a "no cover" marker so subsequent requests skip
+    // this step, then return the music-note placeholder so the UI never shows a
     // black/transparent image. `has_cover` on the JS side stays false, so the
     // app knows there is no real cover.
     COVER_CACHE.insert(cache_key.clone(), (COVER_NOCOVER_ETAG.to_string(), Bytes::new())).await;
@@ -185,8 +189,8 @@ pub enum CoverError {
 }
 
 /// Invalidates every in-RAM cover/etag cache entry. Called by the frontend on
-/// logout / cache-clear (IPC contract: no args); covers re-fetch from R2 on
-/// the next request.
+/// logout / cache-clear (IPC contract: no args); covers re-resolve to the
+/// NoCover marker on the next request.
 #[tauri::command]
 pub async fn clear_local_cache(_app: tauri::AppHandle) -> Result<(), String> {
     COVER_CACHE.invalidate_all();
@@ -206,10 +210,11 @@ pub fn handle_cover_post(
     if body.len() > MAX_COVER_SIZE {
         return Err("payload too large".into());
     }
-    // Covers now live in R2 (server-side, keyed by cover_url/thumb_url) and are
-    // served from the in-RAM cache. We no longer persist cover bytes to disk, so
-    // this legacy local-cover write is intentionally a no-op: accepting the
-    // payload keeps the protocol contract stable without growing `.thumbnails/`.
+    // Covers always resolve to the NoCover placeholder (the R2 remote backend
+    // was removed 2026-08-03), so there is no cover payload to persist. We no
+    // longer write cover bytes to disk, so this legacy local-cover write is
+    // intentionally a no-op: accepting the payload keeps the protocol contract
+    // stable without growing `.thumbnails/`.
     Ok(())
 }
 

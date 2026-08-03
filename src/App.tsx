@@ -66,9 +66,6 @@ function App() {
   const [showTrashScreen, setShowTrashScreen] = useState(false);
   const [showRateLimitModal, setShowRateLimitModal] = useState(false);
 
-  // Initialize service worker
-  useServiceWorker();
-
   // Listen to Tauri events (Quota Exceeded, Repair Thumbnail)
   useTauriEvents(setShowRateLimitModal);
 
@@ -90,6 +87,10 @@ function App() {
     clearSessionState();
     setAppRootFolder(null);
   });
+
+  // Initialize service worker; pass the access token so the SW learns it on
+  // login/refresh/logout (it keeps its own in-memory copy, see useServiceWorker).
+  useServiceWorker(accessToken);
 
   // Global window events (Focus, blur, contextmenu, auth-logout)
   useAppGlobalEvents(handleLogout);
@@ -186,7 +187,7 @@ function App() {
   return (
     <div className="relative flex flex-col h-screen overflow-hidden bg-white dark:bg-[#121212] transition-colors duration-300">
       {/* Login Overlay */}
-      {!isLoggedIn && <LoginScreen onLogin={(token) => handleLoginSuccess({ access_token: token })} />}
+      {!isLoggedIn && <LoginScreen onLogin={(tokens) => handleLoginSuccess({ access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in })} />}
 
       {/* Folder Selection Overlay */}
       {(isLoggedIn && (!appRootFolder || showFolderSelection)) && (

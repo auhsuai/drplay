@@ -29,6 +29,10 @@ tauri-plugin-keepawake = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 oauth2 = "4.4.2"
+# Secure storage for the Google OAuth refresh token: keyring's v1 feature
+# (default) routes to the OS credential vault — Windows Credential Manager on
+# Windows (windows-native-keyring-store). Replaces plaintext localStorage.
+keyring = "4.1.6"
 base64 = "0.22.1"
 url = "2.5.0"
 reqwest = { version = "0.12.4", features = ["json", "stream", "rustls-tls"] }

@@ -2,16 +2,14 @@ import { useEffect, useRef, useCallback } from "react";
 import { useShallow } from 'zustand/react/shallow';
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "../store/authStore";
-import { listen } from "@tauri-apps/api/event";
 import { startProSyncWorker, stopProSyncWorker, setTokenRefreshHandler, updateWorkerToken } from '../utils/proSyncManager';
 import { invalidateCurrentSession } from "../utils/sessionGuard";
-import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh } from "../utils/apiClient";
+import { revokeGoogleToken, stopProactiveRefresh, fetchWithAuth, getValidToken, scheduleProactiveRefresh, TOKEN_EXPIRY_MS, writeRefreshToken, readRefreshToken, deleteRefreshToken } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
-import { showErrorToast } from "../utils/simpleToast";
 import { PLAYER_STOP_EVENT } from './usePlayer';
-import { USER_EMAIL_KEY } from '../utils/storageKeys';
+import { USER_EMAIL_KEY, ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, TOKEN_TIME_KEY } from '../utils/storageKeys';
 
 interface TokenData {
   access_token: string;
@@ -21,12 +19,7 @@ interface TokenData {
 
 const AUTH_MODULE = "useAuth";
 
-const DEFAULT_EXPIRES_SECONDS = 3600;
 const SYNC_INTERVAL_MS = 2 * 60 * 1000;
-
-const LS_ACCESS_TOKEN = 'drplay_access_token';
-const LS_REFRESH_TOKEN = 'drplay_refresh_token';
-const LS_TOKEN_TIME = 'drplay_token_time';
 
 const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 
@@ -43,10 +36,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
     setUserProfile: state.setUserProfile
   })));
 
-  // Guard against concurrent logout: handleLogout can fire from a manual click,
-  // the 'auth-logout' event (dispatched by apiClient), and the 'token-expired'
-  // listener at the same time. Without this, onLogoutExt and backend cleanup run
-  // multiple times (double navigation / redundant revoke calls).
+  // Guard against concurrent logout: handleLogout can fire from a manual click
+  // or the 'auth-logout' event (dispatched by apiClient) at the same time.
+  // Without this, onLogoutExt and backend cleanup run multiple times (double
+  // navigation / redundant revoke calls).
   const isLoggingOutRef = useRef(false);
   const onLogoutExtRef = useRef(onLogoutExt);
   onLogoutExtRef.current = onLogoutExt;
@@ -55,7 +48,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
   useEffect(() => {
     let savedToken: string | null = null;
     try {
-      savedToken = localStorage.getItem(LS_ACCESS_TOKEN);
+      savedToken = localStorage.getItem(ACCESS_TOKEN_KEY);
     } catch {
       captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-read-failed' });
     }
@@ -64,15 +57,18 @@ export const useAuth = (onLogoutExt?: () => void) => {
       setIsLoggedIn(true);
       let issueTime: number;
       try {
-        issueTime = parseInt(localStorage.getItem(LS_TOKEN_TIME) || "", 10);
+        issueTime = parseInt(localStorage.getItem(TOKEN_TIME_KEY) || "", 10);
       } catch {
         captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-read-failed' });
         issueTime = NaN;
       }
       // Corrupt/missing token_time -> treat as expired and refresh promptly
-      // (scheduleProactiveRefresh clamps the minimum to 5s).
+      // (scheduleProactiveRefresh clamps the minimum to 5s). The remaining
+      // lifetime is measured against TOKEN_EXPIRY_MS (the stale threshold
+      // getValidToken enforces), not the server's 3600s expires_in, so the
+      // proactive timer always fires before the token is considered stale.
       const remainingSec = Number.isFinite(issueTime) && issueTime > 0
-        ? DEFAULT_EXPIRES_SECONDS - (Date.now() - issueTime) / 1000
+        ? (TOKEN_EXPIRY_MS - (Date.now() - issueTime)) / 1000
         : 0;
       scheduleProactiveRefresh(remainingSec > 0 ? remainingSec : 0);
     }
@@ -85,10 +81,15 @@ export const useAuth = (onLogoutExt?: () => void) => {
       return;
     }
     try {
-      localStorage.setItem(LS_ACCESS_TOKEN, tokenData.access_token);
-      localStorage.setItem(LS_TOKEN_TIME, Date.now().toString());
+      localStorage.setItem(ACCESS_TOKEN_KEY, tokenData.access_token);
+      localStorage.setItem(TOKEN_TIME_KEY, Date.now().toString());
       if (tokenData.refresh_token) {
-        localStorage.setItem(LS_REFRESH_TOKEN, tokenData.refresh_token);
+        // The keyring (via writeRefreshToken) is the source of truth for the
+        // long-lived token; never persist it to localStorage directly.
+        // writeRefreshToken removes the legacy LS copy on keyring success and
+        // keeps it (logged) as a degraded fallback on failure — it never
+        // rejects, so this stays fire-and-forget.
+        void writeRefreshToken(tokenData.refresh_token);
       }
     } catch {
       captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-write-failed' });
@@ -96,7 +97,9 @@ export const useAuth = (onLogoutExt?: () => void) => {
     setAccessToken(tokenData.access_token);
     setIsLoggedIn(true);
 
-    scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_SECONDS);
+    // Fallback to TOKEN_EXPIRY_MS/1000 (the stale threshold) when the backend
+    // omits expires_in — consistent with apiClient's single expiry model.
+    scheduleProactiveRefresh(tokenData.expires_in || TOKEN_EXPIRY_MS / 1000);
   };
 
   const handleLogout = useCallback(async () => {
@@ -106,13 +109,26 @@ export const useAuth = (onLogoutExt?: () => void) => {
       invalidateCurrentSession();
       stopProSyncWorker();
 
+      // Read the long-lived refresh token BEFORE the localStorage clear
+      // below: readRefreshToken falls back to the legacy LS copy when the
+      // keyring read fails, so reading after the clear would silently skip
+      // the revoke. A read failure (keyring + LS both unreachable) must not
+      // block logout — log a warn and continue; deleteRefreshToken below
+      // still wipes any keyring/LS residue.
+      let refreshTokenToRevoke: string | null = null;
+      try {
+        refreshTokenToRevoke = await readRefreshToken();
+      } catch (e: unknown) {
+        captureError({ level: 'warn', source: AUTH_MODULE, message: `Failed to read refresh token for revoke — continuing logout: ${classifyError(e)}` });
+      }
+
       let tokenToRevoke: string | null = null;
       try {
-        tokenToRevoke = localStorage.getItem(LS_ACCESS_TOKEN);
+        tokenToRevoke = localStorage.getItem(ACCESS_TOKEN_KEY);
 
-        localStorage.removeItem(LS_ACCESS_TOKEN);
-        localStorage.removeItem(LS_REFRESH_TOKEN);
-        localStorage.removeItem(LS_TOKEN_TIME);
+        localStorage.removeItem(ACCESS_TOKEN_KEY);
+        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        localStorage.removeItem(TOKEN_TIME_KEY);
         localStorage.removeItem(USER_EMAIL_KEY);
       } catch {
         captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-clear-failed' });
@@ -140,6 +156,20 @@ export const useAuth = (onLogoutExt?: () => void) => {
         }
       }
 
+      // Revoke the long-lived refresh token too: the Google revoke endpoint
+      // accepts refresh tokens as well as access tokens, so a leaked refresh
+      // credential cannot stay valid after logout. revokeGoogleToken never
+      // throws (non-blocking, logs internally), so no local try/catch needed.
+      if (refreshTokenToRevoke) {
+        await revokeGoogleToken(refreshTokenToRevoke);
+      }
+
+      // Remove the long-lived refresh token from the OS credential vault
+      // (keyring) — the LS copy is already cleared above. Fire-and-forget:
+      // deleteRefreshToken never rejects, so a vault hiccup cannot break
+      // logout (shared-machine safety: no credential residue).
+      void deleteRefreshToken();
+
       onLogoutExtRef.current?.();
     } finally {
       isLoggingOutRef.current = false;
@@ -156,38 +186,42 @@ export const useAuth = (onLogoutExt?: () => void) => {
     };
     window.addEventListener('auth-logout', handleAuthLogout);
 
-    // Listen for token expiration from Rust proxy
-    let unlistenFn: (() => void) | null = null;
-    let listenerCancelled = false;
-    listen("token-expired", async () => {
-      captureError({ level: 'warn', source: AUTH_MODULE, message: 'Token expiry detected, attempting silent refresh' });
-      try {
-        const newToken = await getValidToken(true);
-        if (!newToken) {
-          showErrorToast("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục phát nhạc!");
-          handleAuthLogout();
-        }
-      } catch (e: unknown) {
-        captureError({ level: 'warn', source: AUTH_MODULE, message: `Silent token refresh failed (token-expired listener): ${classifyError(e)}` });
-      }
-    }).then(fn => {
-      if (listenerCancelled) { fn(); return; }
-      unlistenFn = fn;
-    }).catch((err: unknown) => {
-      // listenerCancelled just means the effect already cleaned up; an abort
-      // there is expected and silent. Surface anything else for observability.
-      if (!(err instanceof DOMException && err.name === 'AbortError') && !listenerCancelled) {
-        captureError({ level: 'warn', source: AUTH_MODULE, message: `token-expired listener registration failed: ${classifyError(err)}` });
-      }
-    });
-
     return () => {
-      listenerCancelled = true;
       window.removeEventListener('auth-logout', handleAuthLogout);
-      unlistenFn?.();
     };
   }, []);
 
+  // Listen for token refresh events unconditionally from mount. Registered
+  // OUTSIDE the login-gated effect because getValidToken can dispatch
+  // token-updated the moment a refresh succeeds — including the window
+  // between login completing and the gated effect's first commit. A
+  // listener that mounts only after login would miss that event and leave
+  // the store/props on the stale token (race R1). Safe to be unconditional:
+  // apiClient only dispatches token-updated after its session guard passes,
+  // so no stale post-logout event can arrive.
+  useEffect(() => {
+    const handleTokenUpdated = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (typeof detail?.token === 'string') {
+        setAccessToken(detail.token);
+        updateWorkerToken(detail.token);
+      }
+    };
+    window.addEventListener('token-updated', handleTokenUpdated);
+    return () => {
+      window.removeEventListener('token-updated', handleTokenUpdated);
+    };
+  }, []);
+
+  // Worker lifecycle is keyed ONLY on isLoggedIn (not accessToken): a token
+  // refresh re-renders with a new accessToken, but the worker must keep
+  // running — restarting it would terminate a sync in flight and lose
+  // isBusy/syncRetry/full-sync progress (race R9). New tokens reach the
+  // running worker via updateWorkerToken (B2 token-updated listener) and the
+  // periodic interval below re-reads localStorage, so the worker self-heals
+  // even if a token event is missed. accessToken is deliberately captured at
+  // login time (login always commits accessToken and isLoggedIn in one
+  // render); do not add it to deps.
   useEffect(() => {
     if (isLoggedIn && accessToken) {
       setTokenRefreshHandler(async () => {
@@ -204,23 +238,28 @@ export const useAuth = (onLogoutExt?: () => void) => {
       // Run periodic sync every 2 minutes
       const syncInterval = setInterval(() => {
         try {
-          const latestToken = localStorage.getItem(LS_ACCESS_TOKEN);
+          const latestToken = localStorage.getItem(ACCESS_TOKEN_KEY);
           if (latestToken) startProSyncWorker(latestToken);
         } catch {
           captureError({ level: 'warn', source: AUTH_MODULE, message: 'auth-storage-read-failed' });
         }
       }, SYNC_INTERVAL_MS);
 
-      const handleTokenUpdated = (e: Event) => {
-        const detail = (e as CustomEvent).detail;
-        if (typeof detail?.token === 'string') {
-          setAccessToken(detail.token);
-          updateWorkerToken(detail.token);
-        }
+      return () => {
+        clearInterval(syncInterval);
+        stopProSyncWorker();
+        setTokenRefreshHandler(null);
       };
-      window.addEventListener('token-updated', handleTokenUpdated);
+    }
+  }, [isLoggedIn]);
 
-      // Fetch User Profile (best-effort, fire-and-forget)
+  // Fetch User Profile (best-effort, fire-and-forget). Keyed on
+  // [isLoggedIn, accessToken] on purpose: profile should refetch whenever the
+  // token rotates (same behavior as the pre-split gated effect). The
+  // AbortController only cancels the in-flight fetch — it must NOT touch the
+  // worker, which is owned by the lifecycle effect above.
+  useEffect(() => {
+    if (isLoggedIn && accessToken) {
       const controller = new AbortController();
       void (async () => {
         try {
@@ -251,11 +290,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       })();
 
       return () => {
-        clearInterval(syncInterval);
-        stopProSyncWorker();
-        setTokenRefreshHandler(null);
         controller.abort();
-        window.removeEventListener('token-updated', handleTokenUpdated);
       };
     }
   }, [isLoggedIn, accessToken]);

@@ -10,6 +10,7 @@ import { MoreMenu } from "../../components/MoreMenu";
 import type { MoreMenuVariant } from "../../components/MoreMenu";
 import { cancelUpload } from "../../../utils/uploadManager";
 import type { UploadState } from "../../../utils/uploadManager";
+import { DRAG_FOLDER_HOVER_EVENT } from "../../components/DropZone";
 
 const SONG_CARD_MODULE = 'SongCard';
 
@@ -156,12 +157,25 @@ export const SongCard = React.memo(function SongCard({
     }
   }, []);
   const [isFlashOn, setIsFlashOn] = useState(false);
+  const [isDragHovered, setIsDragHovered] = useState(false);
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
   const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
+  // Drag-over ("drop target") visual mirrors the real mouse-hover classes 1:1
+  // (shadow-md + -translate-y-1, gray bg in the idle branch, accent tint in
+  // the selected branch) but rendered unconditionally — there is no :hover
+  // state while the OS drag is in flight. The bg classes carry the Tailwind
+  // important modifier (trailing !) because the card base bg (`bg-[#F8F9FA]
+  // dark:bg-[#202124]`) has the same specificity and generated-CSS order
+  // would otherwise decide — the existing bg-[#4285F4]/10! icon pattern is
+  // the same trick. The flash branch keeps its own bg: it is transient
+  // (400ms) and already overrides every other state.
+  const dragHoverClasses = isDragHovered
+    ? `shadow-md -translate-y-1 ${isSelected ? 'bg-[#4285F4]/20! dark:bg-[#4285F4]/30!' : isFlashOn ? '' : 'bg-gray-100! dark:bg-[#2a2b2f]!'}`
+    : '';
   // Shared by the idle and uploading title rows; the uploading row adds
   // flex-1 min-w-0 so the h3 truncates instead of pushing the ring out.
-  const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!text-[#4285F4]' : 'text-gray-800 dark:text-gray-200'}`;
+  const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? 'text-[#4285F4]!' : 'text-gray-800 dark:text-gray-200'}`;
 
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {
@@ -224,7 +238,7 @@ export const SongCard = React.memo(function SongCard({
     }, 150); // Debounce: only fetch if card is visible for 150ms (avoids IPC spam when scrolling fast)
 
     const handleMetadataUpdated = (e: Event) => {
-      const customEvent = e as CustomEvent;
+      const customEvent = e as CustomEvent<{ fileId?: string }>;
       if (customEvent.detail?.fileId === item.id) {
         fetchMetadata();
       }
@@ -243,6 +257,20 @@ export const SongCard = React.memo(function SongCard({
       window.removeEventListener('metadata-updated', handleMetadataUpdated);
     };
   }, [item.id, token]);
+
+  // DropZone's native drag-drop never triggers DOM hover, so folder cards
+  // subscribe to its CustomEvent bus. The compare-then-set pattern keeps
+  // non-target cards from re-rendering, and identical values bail React out —
+  // repeated 'over' events on the same folder produce no flicker.
+  React.useEffect(() => {
+    if (!item.isFolder) return;
+    const handleDragHover = (e: Event) => {
+      const detail = (e as CustomEvent<{ folderId: string | null }>).detail;
+      setIsDragHovered(detail?.folderId === item.id);
+    };
+    window.addEventListener(DRAG_FOLDER_HOVER_EVENT, handleDragHover);
+    return () => window.removeEventListener(DRAG_FOLDER_HOVER_EVENT, handleDragHover);
+  }, [item.id, item.isFolder]);
 
   const handleCardActivate = () => {
     // Upload race guard (UI layer): an item that is still uploading must not
@@ -279,6 +307,7 @@ export const SongCard = React.memo(function SongCard({
         ref={cardRef}
         role="button"
         tabIndex={0}
+        data-folder-id={item.isFolder ? item.id : undefined}
         onClick={handleCardActivate}
         onKeyDown={handleCardKeyDown}
         onContextMenu={(e) => {
@@ -297,7 +326,7 @@ export const SongCard = React.memo(function SongCard({
               : isPlaying
                 ? 'bg-gray-100 dark:bg-[#2a2b2f] shadow-sm'
                 : 'bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'
-        }`}>
+        } ${dragHoverClasses}`}>
       {isSelectionMode && (
         <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
           {isSelected ? (
@@ -307,7 +336,7 @@ export const SongCard = React.memo(function SongCard({
           )}
         </div>
       )}
-      <div className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-500' : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? '!bg-[#4285F4]/10 !text-[#4285F4]' : 'text-gray-400'}`}`}>
+          <div className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-500' : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? 'bg-[#4285F4]/10! text-[#4285F4]!' : 'text-gray-400'}`}`}>
         {coverUrl && !item.isFolder ? (
           <img ref={imgRef} src={coverUrl} alt={meta.title} decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover" />
         ) : item.isFolder ? (

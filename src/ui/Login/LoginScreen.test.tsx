@@ -96,13 +96,49 @@ describe('LoginScreen invoke login error handling', () => {
     );
   });
 
-  it('calls onLogin with the token on successful invoke', async () => {
+  it('forwards both access_token and refresh_token to onLogin on successful invoke', async () => {
+    invokeMock.mockResolvedValueOnce({ access_token: 'token-123', refresh_token: 'refresh-456' });
+    const { onLogin } = renderLogin();
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(onLogin).toHaveBeenCalledWith({ access_token: 'token-123', refresh_token: 'refresh-456' })
+    );
+    expect(toastRootText()).toBe('');
+    expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('forwards access_token to onLogin when refresh_token is absent', async () => {
     invokeMock.mockResolvedValueOnce({ access_token: 'token-123' });
     const { onLogin } = renderLogin();
 
     fireEvent.click(screen.getByRole('button'));
 
-    await waitFor(() => expect(onLogin).toHaveBeenCalledWith('token-123'));
+    await waitFor(() =>
+      expect(onLogin).toHaveBeenCalledWith({ access_token: 'token-123' })
+    );
+    expect(toastRootText()).toBe('');
+    expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('forwards expires_in from the Rust login payload to onLogin (type contract for B1)', async () => {
+    invokeMock.mockResolvedValueOnce({
+      access_token: 'token-123',
+      refresh_token: 'refresh-456',
+      expires_in: 3599,
+    });
+    const { onLogin } = renderLogin();
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(onLogin).toHaveBeenCalledWith({
+        access_token: 'token-123',
+        refresh_token: 'refresh-456',
+        expires_in: 3599,
+      })
+    );
     expect(toastRootText()).toBe('');
     expect(captureErrorMock).not.toHaveBeenCalled();
   });

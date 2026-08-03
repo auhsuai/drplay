@@ -1,17 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DropZone } from './DropZone';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { DropZone, DRAG_FOLDER_HOVER_EVENT, DRAG_ACTIVE_EVENT } from './DropZone';
 import { useDriveStore } from '../../store/driveStore';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
-}));
-
-vi.mock('lucide-react', () => ({
-  // CloudUpload is the canonical lucide export for "cloud-upload";
-  // UploadCloud is the deprecated alias (removed in a future lucide major).
-  CloudUpload: mocks.lucideCloudUpload,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   startUploads: vi.fn(),
   showErrorToast: vi.fn(),
   captureError: vi.fn(),
-  lucideCloudUpload: vi.fn((_props: { className?: string }) => null),
 }));
 
 vi.mock('@tauri-apps/api/webview', () => ({
@@ -35,7 +28,44 @@ vi.mock('../../utils/errorLog', () => ({ captureError: mocks.captureError }));
 
 const OVERLAY_TESTID = 'drop-overlay';
 const DROP_FAILED_TOAST = 'upload.drop_failed';
-const OVERLAY_TEXT = 'upload.drop_overlay';
+// Rect of the fake [data-drop-region] file-list container installed by
+// installDropRegion(). top=100 leaves a band above it (header/sidebar) that
+// must NOT be dimmed; inside/outside decisions are made against this rect.
+const REGION_RECT = { left: 0, top: 100, width: 800, height: 500 };
+
+interface Rect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+let regionElement: HTMLDivElement | null = null;
+
+// The real app renders [data-drop-region] inside MainContent; standalone
+// DropZone tests must install a stand-in so the overlay has a rect to cover.
+function installDropRegion(rect: Rect = REGION_RECT): void {
+  removeDropRegion();
+  regionElement = document.createElement('div');
+  regionElement.setAttribute('data-drop-region', '');
+  Object.defineProperty(regionElement, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      ...rect,
+      right: rect.left + rect.width,
+      bottom: rect.top + rect.height,
+      x: rect.left,
+      y: rect.top,
+      toJSON: () => ({}),
+    }),
+  });
+  document.body.appendChild(regionElement);
+}
+
+function removeDropRegion(): void {
+  regionElement?.remove();
+  regionElement = null;
+}
 
 interface DropPayload {
   type: string;
@@ -44,6 +74,34 @@ interface DropPayload {
 }
 
 let capturedHandler: ((event: { payload: DropPayload }) => void) | null = null;
+
+// jsdom does not implement document.elementFromPoint at all (undefined), so
+// tests install their own fake and drive it per-case (null = empty area,
+// element with data-folder-id = a folder card, child span = card interior).
+const elementFromPointMock = vi.fn<(x: number, y: number) => Element | null>(() => null);
+
+function folderCardElement(id: string, returnChild = false): Element {
+  const card = document.createElement('div');
+  card.setAttribute('data-folder-id', id);
+  const child = document.createElement('span');
+  child.textContent = 'card interior';
+  card.appendChild(child);
+  return returnChild ? child : card;
+}
+
+function hoverEvents(dispatchSpy: MockInstance): Array<{ folderId: string | null }> {
+  return dispatchSpy.mock.calls
+    .map((call) => call[0] as CustomEvent<{ folderId: string | null }>)
+    .filter((event) => event.type === DRAG_FOLDER_HOVER_EVENT)
+    .map((event) => event.detail);
+}
+
+function activeEvents(dispatchSpy: MockInstance): Array<{ active: boolean }> {
+  return dispatchSpy.mock.calls
+    .map((call) => call[0] as CustomEvent<{ active: boolean }>)
+    .filter((event) => event.type === DRAG_ACTIVE_EVENT)
+    .map((event) => event.detail);
+}
 
 function emit(event: { payload: DropPayload }): void {
   const handler = capturedHandler;
@@ -54,6 +112,15 @@ function emit(event: { payload: DropPayload }): void {
 describe('DropZone', () => {
   beforeEach(() => {
     capturedHandler = null;
+    removeDropRegion();
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      writable: true,
+      value: elementFromPointMock,
+    });
+    elementFromPointMock.mockReset();
+    elementFromPointMock.mockReturnValue(null);
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
     mocks.getCurrentWebview.mockReset();
     mocks.onDragDropEvent.mockReset();
     mocks.unlisten.mockReset();
@@ -66,11 +133,11 @@ describe('DropZone', () => {
       capturedHandler = handler as (event: { payload: DropPayload }) => void;
       return mocks.unlisten;
     });
-    mocks.lucideCloudUpload.mockReset();
     useDriveStore.setState({ currentFolderId: 'root' });
   });
 
   afterEach(() => {
+    removeDropRegion();
     cleanup();
     vi.clearAllMocks();
   });
@@ -114,51 +181,191 @@ describe('DropZone', () => {
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
-  it('shows the overlay on over and hides it on leave', async () => {
+  it('shows a mask scoped to the [data-drop-region] rect on over (no inset-0 full-window dim) and hides it on leave', async () => {
+    installDropRegion();
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
-    emit({ payload: { type: 'over', position: { x: 10, y: 20 } } });
-    expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
-    expect(screen.getByText(OVERLAY_TEXT)).toBeTruthy();
+    emit({ payload: { type: 'over', position: { x: 100, y: 200 } } });
+    const overlay = screen.getByTestId(OVERLAY_TESTID);
+    expect(overlay.textContent).toBe('');
+    expect(overlay.querySelector('svg, img, p')).toBeNull();
+    expect(overlay.className).toContain('fixed');
+    expect(overlay.className).not.toContain('inset-0');
+    expect(overlay.className).toContain('z-[10000]');
+    expect(overlay.className).toContain('bg-black/50');
+    expect(overlay.className).toContain('pointer-events-none');
+    expect(overlay.className).not.toContain('flex');
+    // Overlay must cover exactly the file-list rect, not the whole window.
+    expect(overlay.style.left).toBe('0px');
+    expect(overlay.style.top).toBe('100px');
+    expect(overlay.style.width).toBe('800px');
+    expect(overlay.style.height).toBe('500px');
     emit({ payload: { type: 'leave' } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
   it('shows the overlay on enter (Tauri emits enter before over)', async () => {
+    installDropRegion();
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
-    emit({ payload: { type: 'enter', paths: ['C:\\Music\\a.mp3'], position: { x: 1, y: 1 } } });
+    emit({ payload: { type: 'enter', paths: ['C:\\Music\\a.mp3'], position: { x: 100, y: 200 } } });
     expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
   });
 
   it('keeps the overlay stable across repeated over events (no flicker)', async () => {
+    installDropRegion();
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 100, y: 200 } } });
+    emit({ payload: { type: 'over', position: { x: 110, y: 210 } } });
+    expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
+  });
+
+  it('does NOT dim outside the drop region (sidebar/playerbar/header area): no overlay, drag still active', async () => {
+    installDropRegion();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    // Above the region rect (y < 100) — the header band.
+    emit({ payload: { type: 'over', position: { x: 10, y: 10 } } });
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    // Right of the region rect (x > 800) — the sidebar-adjacent band.
+    emit({ payload: { type: 'over', position: { x: 900, y: 200 } } });
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    expect(activeEvents(dispatchSpy)).toEqual([{ active: true }, { active: true }]);
+  });
+
+  it('no [data-drop-region] in the DOM (e.g. Home tab) → no overlay, but folder hit-test + drag-active still work', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 10, y: 200 } } });
+    expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: 'folder-1' }]);
+    expect(activeEvents(dispatchSpy)).toEqual([{ active: true }]);
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    // Empty area without a region: still no overlay, still active.
+    elementFromPointMock.mockReturnValue(null);
+    emit({ payload: { type: 'over', position: { x: 20, y: 210 } } });
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    expect(activeEvents(dispatchSpy)).toEqual([{ active: true }, { active: true }]);
+  });
+
+  it('announces drag-active=true on enter/over (even over a folder) and false on leave', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'enter', paths: [], position: { x: 10, y: 200 } } });
+    emit({ payload: { type: 'over', position: { x: 10, y: 200 } } });
+    emit({ payload: { type: 'leave' } });
+    expect(activeEvents(dispatchSpy)).toEqual([{ active: true }, { active: true }, { active: false }]);
+  });
+
+  it('announces drag-active=false on drop (header/pagination reappear)', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    mocks.statDiskPath.mockResolvedValue({ path: 'C:\\Music\\a.mp3', name: 'a.mp3', relativePath: 'a.mp3', isDirectory: false, size: 10 });
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 10, y: 200 } } });
+    emit({ payload: { type: 'drop', paths: ['C:\\Music\\a.mp3'], position: { x: 10, y: 200 } } });
+    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    expect(activeEvents(dispatchSpy)).toEqual([{ active: true }, { active: false }]);
+  });
+
+  it('resolves the nearest folder from the ±8px probe grid when the cursor sits in the padding gap', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    // Cursor in the 12px gap between cards: the center probe misses, the
+    // +8px vertical probe lands on the card below the gap.
+    elementFromPointMock.mockImplementation((_x: number, y: number) => {
+      if (y === 208) return folderCardElement('folder-gap');
+      return null;
+    });
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 100, y: 200 } } });
+    expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: 'folder-gap' }]);
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+  });
+
+  it('hides the overlay and announces the folder when over a folder card', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 10, y: 20 } } });
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: 'folder-1' }]);
+  });
+
+  it('resolves the folder even when elementFromPoint returns a child of the card (closest() hit-test)', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1', true));
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 10, y: 20 } } });
+    expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: 'folder-1' }]);
+  });
+
+  it('converts the physical drag position to CSS px via devicePixelRatio before hit-testing (probe grid too)', async () => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 200, y: 400 } } });
+    expect(elementFromPointMock).toHaveBeenCalledWith(100, 200);
+    // ±8px offsets are applied in CSS px AFTER the dpr conversion.
+    expect(elementFromPointMock).toHaveBeenCalledWith(100, 208);
+    expect(elementFromPointMock).toHaveBeenCalledWith(108, 200);
+  });
+
+  it('switches immediately between folder hover and the region overlay as the drag moves', async () => {
+    installDropRegion();
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'over', position: { x: 100, y: 200 } } });
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    elementFromPointMock.mockReturnValue(null);
+    emit({ payload: { type: 'over', position: { x: 110, y: 210 } } });
+    expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
+    emit({ payload: { type: 'over', position: { x: 120, y: 220 } } });
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+  });
+
+  it('stays stable across repeated over events on the same folder (same hover id, no flicker)', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
     emit({ payload: { type: 'over', position: { x: 1, y: 1 } } });
     emit({ payload: { type: 'over', position: { x: 2, y: 2 } } });
-    expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: 'folder-1' }, { folderId: 'folder-1' }]);
   });
 
-  it('renders the overlay with pointer-events-none and full-window styling', async () => {
+  it('leave clears both the overlay and the folder hover announcement', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
     emit({ payload: { type: 'over', position: { x: 1, y: 1 } } });
-    const overlay = screen.getByTestId(OVERLAY_TESTID);
-    expect(overlay.className).toContain('pointer-events-none');
-    expect(overlay.className).toContain('fixed');
-    expect(overlay.className).toContain('z-[10000]');
+    emit({ payload: { type: 'leave' } });
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+    expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: 'folder-1' }, { folderId: null }]);
   });
 
-  it('renders the overlay icon with the canonical CloudUpload (not deprecated UploadCloud) and the agreed sizing classes', async () => {
+  it('drop clears the folder hover (announce null) even when dropping outside any folder', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    mocks.statDiskPath.mockResolvedValue({ path: 'C:\\Music\\a.mp3', name: 'a.mp3', relativePath: 'a.mp3', isDirectory: false, size: 10 });
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
     emit({ payload: { type: 'over', position: { x: 1, y: 1 } } });
-    // The lucide-react mock records the icon component actually rendered.
-    expect(mocks.lucideCloudUpload).toHaveBeenCalledTimes(1);
-    const props = mocks.lucideCloudUpload.mock.calls[0][0] as { className?: string };
-    expect(props.className).toContain('w-12');
-    expect(props.className).toContain('h-12');
-    expect(props.className).toContain('text-white');
+    elementFromPointMock.mockReturnValue(null);
+    emit({ payload: { type: 'drop', paths: ['C:\\Music\\a.mp3'], position: { x: 50, y: 60 } } });
+    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: 'folder-1' }, { folderId: null }]);
   });
 
   it('uploads a dropped file into the current folder', async () => {
@@ -173,6 +380,33 @@ describe('DropZone', () => {
       'tok-1'
     );
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
+  });
+
+  it('uploads into the hovered folder when dropping on a folder card (parentId = that folder, not currentFolderId)', async () => {
+    useDriveStore.setState({ currentFolderId: 'root' });
+    mocks.statDiskPath.mockResolvedValue({ path: 'C:\\Music\\a.mp3', name: 'a.mp3', relativePath: 'a.mp3', isDirectory: false, size: 10 });
+    elementFromPointMock.mockReturnValue(folderCardElement('folder-9'));
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'drop', paths: ['C:\\Music\\a.mp3'], position: { x: 1, y: 1 } } });
+    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    expect(mocks.startUploads).toHaveBeenCalledWith(
+      [{ name: 'a.mp3', isFolder: false, parentId: 'folder-9', diskPath: 'C:\\Music\\a.mp3' }],
+      'tok-1'
+    );
+  });
+
+  it('falls back to the current folder when the drop payload has no position', async () => {
+    useDriveStore.setState({ currentFolderId: 'folder-1' });
+    mocks.statDiskPath.mockResolvedValue({ path: 'C:\\Music\\a.mp3', name: 'a.mp3', relativePath: 'a.mp3', isDirectory: false, size: 10 });
+    render(<DropZone token="tok-1" />);
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    emit({ payload: { type: 'drop', paths: ['C:\\Music\\a.mp3'] } });
+    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    expect(mocks.startUploads).toHaveBeenCalledWith(
+      [{ name: 'a.mp3', isFolder: false, parentId: 'folder-1', diskPath: 'C:\\Music\\a.mp3' }],
+      'tok-1'
+    );
   });
 
   it('uploads a dropped folder with isFolder true', async () => {

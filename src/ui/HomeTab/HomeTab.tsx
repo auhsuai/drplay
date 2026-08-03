@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { Track } from "../../App";
 import { getRecentlyPlayed, getHeavyRotation, getRandomDiscoveries, getMostVisitedFolders, FolderVisitEntry } from "../../utils/history";
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
+import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
 import greetingsData from "../../data/greetings.json";
@@ -113,14 +114,19 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
     loadData().catch(err => captureError({ level: 'error', source: HOME_TAB_MODULE, message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}` }));
 
     const handleUpdate = () => { loadData().catch(err => captureError({ level: 'error', source: HOME_TAB_MODULE, message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}` })); };
-    // Delta sync: upload done → refresh ONLY the Recently Added section
-    // (light, no re-running the heavy local loads).
-    const handleDriveFilesChanged = () => { loadRecentlyAdded(token); };
+    // Delta sync: refresh ONLY the Recently Added section (light, no re-running
+    // the heavy local loads). Fired by uploads completing in-app
+    // (drive-files-changed) and by the proSync worker completing a background
+    // poll (pro-sync-complete — the only way files added from OTHER devices/web
+    // reach the UI without a reload).
+    const handleDeltaRefresh = () => { loadRecentlyAdded(token); };
     window.addEventListener('recent-updated', handleUpdate);
-    window.addEventListener(DRIVE_FILES_CHANGED_EVENT, handleDriveFilesChanged);
+    window.addEventListener(DRIVE_FILES_CHANGED_EVENT, handleDeltaRefresh);
+    window.addEventListener(SYNC_EVENT_NAMES.complete, handleDeltaRefresh);
     return () => {
       window.removeEventListener('recent-updated', handleUpdate);
-      window.removeEventListener(DRIVE_FILES_CHANGED_EVENT, handleDriveFilesChanged);
+      window.removeEventListener(DRIVE_FILES_CHANGED_EVENT, handleDeltaRefresh);
+      window.removeEventListener(SYNC_EVENT_NAMES.complete, handleDeltaRefresh);
       recentlyAddedLoadGenRef.current++;
     };
   }, []);

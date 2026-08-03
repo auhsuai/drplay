@@ -112,9 +112,11 @@ pub async fn login_google_native() -> Result<Value, String> {
                         Ok(token) => {
                             let access_token = token.access_token().secret().to_string();
                             let refresh_token = token.refresh_token().map(|t| t.secret().to_string());
+                            let expires_in = token.expires_in().map(|d| d.as_secs());
                             return Ok(serde_json::json!({
                                 "access_token": access_token,
-                                "refresh_token": refresh_token
+                                "refresh_token": refresh_token,
+                                "expires_in": expires_in
                             }));
                         }
                         Err(e) => {
