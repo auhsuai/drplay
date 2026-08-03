@@ -21,6 +21,11 @@ const MAX_RETRIES = 4;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 32000;
 const DEFAULT_TIMEOUT_MS = 20000;
+// "Recently Added to Drive" fetches a single page of the newest files. 100 is
+// the largest page size Drive returns per request; it must exceed every
+// responsive grid count (2/4/5) so the grid can always tell "list is full →
+// more files may exist" apart from "list really is that short".
+const RECENTLY_ADDED_PAGE_SIZE = 100;
 
 export interface DriveFileItem {
   id: string; name: string; mimeType: string; size?: string;
@@ -331,7 +336,7 @@ export async function permanentlyDeleteFile(token: string, fileId: string): Prom
 
 export async function getRecentlyAddedAudioFiles(token: string): Promise<DriveFileItem[]> {
   const q = getAudioFilesQuery();
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=5`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${RECENTLY_ADDED_PAGE_SIZE}`;
   
   const response = await driveFetch(url, {
     headers: {

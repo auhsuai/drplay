@@ -225,8 +225,18 @@ function App() {
 
         <div id="content-area" className="flex-1 relative overflow-hidden flex flex-col">
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500">Loading...</div>}>
-            {activeTab === TABS.home ? (
+            {/* HomeTab stays mounted across tab switches (keep-alive): hiding
+                it with display:none instead of unmounting prevents the
+                refetch-on-remount churn of every home data load
+                (getRecentlyPlayed / getHeavyRotation / getRandomDiscoveries /
+                getMostVisitedFolders / getRecentlyAddedAudioFiles) and keeps
+                scroll/greeting state. The key forces a clean remount per login
+                session: logout -> login must not reuse the previous account's
+                HomeTab state. accessToken is deliberately NOT the key — it
+                rotates on every refresh and would remount constantly. */}
+            <div className={activeTab === TABS.home ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
               <HomeTab 
+                key={isLoggedIn ? 'session-in' : 'session-out'}
                 onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)} 
                 onOpenFolder={(id, name) => {
                   handleOpenFolder(id, name);
@@ -236,7 +246,8 @@ function App() {
                 userProfile={userProfile} 
                 currentTrack={currentTrack}
               />
-            ) : activeTab === TABS.myDrive ? (
+            </div>
+            {activeTab !== TABS.home && (activeTab === TABS.myDrive ? (
               <MainContent
                 activeTab={activeTab}
                 onPlay={handlePlayTrack}
@@ -289,7 +300,7 @@ function App() {
               <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">
                 <h1 className="text-2xl text-gray-500">Coming Soon: {activeTab}</h1>
               </main>
-            )}
+            ))}
           </Suspense>
 
           <div className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? 'h-0 overflow-hidden pointer-events-none opacity-0' : ''}`}>

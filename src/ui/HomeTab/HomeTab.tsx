@@ -4,7 +4,7 @@ import { getRecentlyPlayed, getHeavyRotation, getRandomDiscoveries, getMostVisit
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
-import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
+import { Clock, Sparkles, Folder, Repeat, PlusCircle, ChevronRight } from "lucide-react";
 import greetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { PremiumCard } from "./components/PremiumCard";
@@ -16,6 +16,9 @@ const HOME_TAB_MODULE = 'HomeTab';
 // Fired by uploadManager after each completed upload (slice 1) — the delta
 // sync trigger that keeps "Recently Added to Drive" fresh without a reload.
 const DRIVE_FILES_CHANGED_EVENT = 'drive-files-changed';
+// Shared by the section header and the full view header, so the label is
+// defined once instead of being duplicated in two places.
+const RECENTLY_ADDED_SECTION_TITLE = 'Recently Added to Drive';
 
 export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack }: { 
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
@@ -31,6 +34,10 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   const [mostVisitedFolders, setMostVisitedFolders] = useState<FolderVisitEntry[]>([]);
   const [recentlyAdded, setRecentlyAdded] = useState<Track[]>([]);
   const [showFullRecent, setShowFullRecent] = useState(false);
+  // Independent from showFullRecent: the two full views are mutually exclusive
+  // by construction (each grid card routes to exactly one of them), and keeping
+  // separate states means Back never has to guess which view it closes.
+  const [showFullRecentlyAdded, setShowFullRecentlyAdded] = useState(false);
   // Guards the Recently Added refetch against overlapping responses:
   // uploadManager fires drive-files-changed once per completed file, so a
   // multi-file batch triggers overlapping fetches. Every call bumps the
@@ -143,6 +150,10 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
     return <FullRecentView recent={recent} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
   }
 
+  if (showFullRecentlyAdded) {
+    return <FullRecentView recent={recentlyAdded} title={RECENTLY_ADDED_SECTION_TITLE} onBack={() => setShowFullRecentlyAdded(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
+  }
+
   const quickAccess = recent.slice(0, visibleCount);
   const discoverItems = discover.length > 0 ? discover.slice(0, visibleCount) : [];
   const heavyItems = heavy.length > 0 ? heavy.slice(0, visibleCount) : [];
@@ -189,14 +200,44 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
         {/* RECENTLY ADDED TO DRIVE */}
         {recentlyAdded.length > 0 && (
           <div className="mb-12">
-            <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-              <PlusCircle className="w-4 h-4" />
-              Recently Added to Drive
-            </h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                <PlusCircle className="w-4 h-4" />
+                {RECENTLY_ADDED_SECTION_TITLE}
+              </h3>
+              {/* Explicit entry point: the trailing overlay card only appears
+                  when the list overflows visibleCount, so short lists had no
+                  way to reach the full view at all. Always visible while the
+                  section renders; the overlay remains as a second entry. */}
+              <button
+                data-testid="view-all-recently-added"
+                onClick={() => setShowFullRecentlyAdded(true)}
+                className="text-sm font-semibold text-[#4285F4] hover:underline flex items-center gap-1 transition-colors"
+              >
+                {t('view_all', 'View All')}
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {recentlyAddedItems.map(track => (
-                <PremiumCard key={track.id} track={track} onPlay={() => onPlay(track, recentlyAddedItems)} token={token} />
-              ))}
+              {recentlyAddedItems.map((track, index) => {
+                // Mirror of the Recent Files overlay contract, with one
+                // deliberate difference: `>=` instead of `>`. The list is
+                // capped at RECENTLY_ADDED_PAGE_SIZE (100), so a list exactly
+                // as long as the grid (e.g. 5 == visibleCount on desktop)
+                // means the API page was FULL — more files may exist behind
+                // it, and the last card must open the full view. Recent Files
+                // keeps `>`: its data is an unbounded local history slice.
+                const isOverlay = index === visibleCount - 1 && recentlyAdded.length >= visibleCount;
+                return (
+                  <PremiumCard
+                    key={track.id}
+                    track={track}
+                    onPlay={() => isOverlay ? setShowFullRecentlyAdded(true) : onPlay(track, recentlyAddedItems)}
+                    token={token}
+                    isOverlayBtn={isOverlay}
+                  />
+                );
+              })}
             </div>
           </div>
         )}

@@ -92,6 +92,30 @@ function renderRecent(tracks: Track[]) {
   );
 }
 
+describe('FullRecentView title prop', () => {
+  it('defaults to "Recent Files" when title is not provided', () => {
+    renderRecent([makeTrack('t1', 'Alpha')]);
+    const span = screen.getByText('Recent Files');
+    expect(span).toBeTruthy();
+    expect(span.getAttribute('title')).toBe('Recent Files');
+  });
+
+  it('renders the provided title (Recently Added to Drive path)', () => {
+    render(
+      <FullRecentView
+        recent={[makeTrack('t1', 'Alpha')]}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="tok"
+        title="Recently Added to Drive"
+      />,
+    );
+    const span = screen.getByText('Recently Added to Drive');
+    expect(span).toBeTruthy();
+    expect(span.getAttribute('title')).toBe('Recently Added to Drive');
+  });
+});
+
 describe('FullRecentView menu delete flow', () => {
   it('shows the 3-dot menu on each recent track card (hideMenu removed)', () => {
     renderRecent([makeTrack('t1', 'Alpha'), makeTrack('t2', 'Beta')]);

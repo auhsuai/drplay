@@ -4,6 +4,7 @@ import {
   createFolder,
   driveFetch,
   getDriveStorageQuota,
+  getRecentlyAddedAudioFiles,
   saveAppConfig,
   withSaveConfigLock,
   type DriveFolderItem,
@@ -80,6 +81,35 @@ function makeLegacyRateLimitResponse(status: number, reason: string): Response {
   } as unknown as Response;
   return response;
 }
+
+describe("getRecentlyAddedAudioFiles", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("requests a full page (pageSize=100) of the newest audio files with audio fields preserved", async () => {
+    mockedFetch.mockResolvedValue(makeJsonResponse(200, { files: [] }));
+    await getRecentlyAddedAudioFiles("tok-test");
+
+    const url = String(mockedFetch.mock.calls[0][0]);
+    expect(url).toContain("pageSize=100");
+    expect(url).toContain("orderBy=createdTime desc");
+    expect(url).toContain("fields=files(id,name,mimeType,size,modifiedTime)");
+    expect(url).toContain("q=");
+  });
+
+  it("maps the Drive response files array into the returned list", async () => {
+    mockedFetch.mockResolvedValue(
+      makeJsonResponse(200, { files: [{ id: "x", name: "A.mp3", mimeType: "audio/mpeg" }] }),
+    );
+    const items = await getRecentlyAddedAudioFiles("tok-test");
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe("x");
+  });
+});
 
 describe("backoffDelay", () => {
   it("honors numeric Retry-After in seconds (capped at MAX_DELAY_MS)", () => {
