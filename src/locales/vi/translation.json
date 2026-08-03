@@ -2,9 +2,9 @@
   "login": {
     "welcome": "Chào mừng đến với DrPlay",
     "description": "Kết nối tài khoản Google Drive để nghe kho nhạc cá nhân của bạn một cách mượt mà.",
-    "connect_button": "Kết nối với Google Drive",
-    "error_question": "Có lỗi?",
-    "cancel_here": "Hủy ở đây",
+    "connect_button": "Đăng nhập bằng Google",
+    "error_question": "Gặp sự cố?",
+    "cancel_here": "Hủy",
     "cancelled_by_user": "Đã hủy thao tác kết nối.",
     "cancelled": "Đăng nhập đã bị hủy",
     "timeout_error": "Đăng nhập quá thời gian chờ, vui lòng thử lại.",
@@ -15,21 +15,25 @@
     "selected": "đã chọn",
     "delete": "Xóa",
     "move_to": "Chuyển đến...",
-    "download_error": "Tải xuống thất bại"
+    "download_error": "Tải xuống thất bại",
+    "unknown": "Không xác định",
+    "coming_soon": "Sắp ra mắt",
+    "profile_alt": "Hồ sơ",
+    "cover_alt": "Ảnh bìa"
   },
   "sidebar": {
     "home": "Trang chủ",
-    "my_drive": "Kho nhạc",
+    "my_drive": "Kho của tôi",
     "liked_songs": "Đã thích",
-    "create_playlist": "Tạo Danh sách phát",
-    "create_playlist_error": "Lỗi khi tạo playlist",
+    "create_playlist": "Tạo danh sách phát",
+    "create_playlist_error": "Lỗi khi tạo danh sách phát",
     "settings": "Cài đặt",
     "guest": "Khách",
     "not_authenticated": "Chưa đăng nhập",
     "log_out": "Đăng xuất",
     "playlists": "Danh sách phát",
     "new_playlist_placeholder": "Danh sách phát của tôi #1",
-    "storage_unlimited": "Đã dùng"
+    "storage_unlimited": "Đã sử dụng"
   },
   "folder_selection": {
     "select_root": "Chọn thư mục gốc",
@@ -37,7 +41,11 @@
     "cancel": "Hủy",
     "select_music_folder": "Chọn thư mục chứa nhạc chính của bạn",
     "from_subfolders": "Từ thư mục con",
-    "searching_deeper": "Đang tìm sâu hơn..."
+    "searching_deeper": "Đang tìm sâu hơn...",
+    "search_error": "Không thể tìm kiếm thư mục",
+    "folders_error": "Không thể tải thư mục",
+    "back_error": "Không thể quay lại",
+    "bulk_move_title": "Chọn thư mục đích"
   },
   "home": {
     "good_morning": "Chào buổi sáng",
@@ -48,17 +56,20 @@
     "discover": "Khám phá",
     "no_recent": "Chưa có bài hát nào nghe gần đây.",
     "no_rotation": "Chưa có dữ liệu bài hát nghe nhiều.",
-    "no_discover": "Hãy thêm nhạc để khám phá thêm."
+    "no_discover": "Hãy thêm nhạc để khám phá thêm.",
+    "recent_files": "Tệp gần đây",
+    "recently_added": "Mới thêm vào Drive",
+    "jump_back_in": "Truy cập lại"
   },
   "drive": {
-    "my_drive": "Kho nhạc",
+    "my_drive": "Kho của tôi",
     "no_folders": "Không có thư mục con nào.",
     "no_audio": "Không có bài hát nào trong thư mục này.",
     "no_search_results": "Không tìm thấy bài hát phù hợp.",
     "folders": "Thư mục",
     "tracks": "Bài hát",
     "new_folder": "Thư mục mới",
-    "new_folder_title": "Tạo Thư mục mới",
+    "new_folder_title": "Tạo thư mục mới",
     "folder_name_placeholder": "Tên thư mục",
     "create_folder_error": "Không thể tạo thư mục",
     "move_to": "Di chuyển đến...",
@@ -71,12 +82,16 @@
     "items_selected": "{{count}} mục đã chọn",
     "bulk_move": "Di chuyển",
     "bulk_delete_title": "Xác nhận xóa hàng loạt",
-    "bulk_delete_desc": "Bạn có chắc chắn muốn xóa {{count}} mục đã chọn không? Các mục này sẽ được chuyển vào Thùng rác Google Drive."
+    "bulk_delete_desc": "Bạn có chắc chắn muốn xóa {{count}} mục đã chọn không? Các mục này sẽ được chuyển vào Thùng rác Google Drive.",
+    "folder_name_invalid": "Tên thư mục chứa ký tự không hợp lệ",
+    "sort": "Sắp xếp",
+    "unknown_folder": "Thư mục không xác định"
   },
   "liked_songs": {
     "title": "Bài hát đã thích",
     "empty_title": "Các bài hát bạn thích sẽ xuất hiện ở đây",
-    "empty_subtitle": "Lưu bài hát bằng cách nhấn vào biểu tượng trái tim."
+    "empty_subtitle": "Lưu bài hát bằng cách nhấn vào biểu tượng trái tim.",
+    "remove_failed": "Không thể xóa khỏi yêu thích, vui lòng thử lại."
   },
   "playlist_name": "Danh sách phát",
   "song": "bài hát",
@@ -97,8 +112,8 @@
   "unknown_artist": "Không rõ ca sĩ",
   "view_all": "Xem tất cả",
   "playlist": {
-    "delete": "Xóa Danh sách phát",
-    "delete_error": "Lỗi khi xoá playlist",
+    "delete": "Xóa danh sách phát",
+    "delete_error": "Lỗi khi xóa danh sách phát",
     "empty": "Không có bài hát nào trong danh sách này.",
     "empty_state_title": "Ở đây hơi trống vắng...",
     "empty_state_subtitle": "Hãy thêm một vài bài hát vào danh sách phát nhé!",
@@ -109,8 +124,12 @@
     "close": "Đóng",
     "prev": "Trang trước",
     "next": "Trang sau",
-    "remove_error": "Lỗi khi xoá bài hát khỏi playlist",
-    "jump_page": "Nhấn để nhảy trang"
+    "remove_error": "Lỗi khi xóa bài hát khỏi danh sách phát",
+    "jump_page": "Nhấn để nhảy trang",
+    "load_error": "Không thể tải danh sách phát",
+    "cover_invalid_type": "Vui lòng chọn tệp hình ảnh",
+    "cover_too_large": "Ảnh phải nhỏ hơn hoặc bằng 5 MB",
+    "cover_read_error": "Không thể đọc ảnh đã chọn"
   },
   "confirm_delete_playlist": "Bạn có chắc chắn muốn xóa danh sách phát này?",
   "delete": "Xóa",
@@ -125,7 +144,12 @@
     "drive_quota_exceeded": "Google Drive đã vượt quá giới hạn, đang thử lại...",
     "access_denied": "Bạn không còn quyền truy cập file này, đang chuyển bài...",
     "download_quota": "File đã vượt giới hạn tải xuống của Google, đang chuyển bài...",
-    "seek_too_fast": "Không nên seek quá nhanh với file lossless. Đang chuyển bài..."
+    "seek_too_fast": "Không nên seek quá nhanh với file lossless. Đang chuyển bài...",
+    "view_now_playing": "Xem Đang Phát",
+    "add_favorite": "Thêm vào yêu thích",
+    "remove_favorite": "Bỏ khỏi yêu thích",
+    "exception_toast": "Đã xảy ra lỗi! Mở Developer Tools (Ctrl+Shift+I) để xem chi tiết.",
+    "playback_failed": "Không thể phát bài này. Vui lòng thử bài khác."
   },
   "song_card": {
     "unknown_title": "Không rõ tên",
@@ -135,8 +159,8 @@
     "play": "Phát nhạc",
     "add_to_liked": "Thêm vào Đã thích",
     "remove_from_liked": "Bỏ khỏi Đã thích",
-    "add_to_playlist": "Thêm vào Danh sách phát",
-    "add_to_playlist_error": "Lỗi khi thêm vào playlist",
+    "add_to_playlist": "Thêm vào danh sách phát",
+    "add_to_playlist_error": "Lỗi khi thêm vào danh sách phát",
     "no_playlists": "Chưa có danh sách phát nào",
     "download_song": "Tải bài hát xuống",
     "navigate": "Định vị file",
@@ -150,7 +174,10 @@
     "download_complete": "Tải xuống hoàn tất!",
     "download_failed": "Tải xuống thất bại",
     "create": "Tạo",
-    "select_multiple": "Chọn nhiều mục"
+    "select_multiple": "Chọn nhiều mục",
+    "saving": "Đang lưu...",
+    "save": "Lưu",
+    "untitled": "Không tên"
   },
   "settings": {
     "title": "Cài đặt",
@@ -185,10 +212,10 @@
     "trash": "Thùng rác",
     "trash_desc": "Quản lý và xóa vĩnh viễn các tệp.",
     "clear_cache": "Xóa bộ nhớ đệm",
-    "clear_cache_desc": "Giải phóng dung lượng bằng cách xóa cache ảnh. Bạn có thể cần khởi động lại ứng dụng.",
+    "clear_cache_desc": "Giải phóng dung lượng bằng cách xóa dữ liệu tạm. Dữ liệu sẽ được tải lại từ Drive khi cần.",
     "clear_cache_success": "Đã xóa bộ nhớ đệm thành công!",
     "clear_cache_error": "Lỗi khi xóa bộ nhớ đệm.",
-    "clear_cache_btn": "Xóa ngay",
+    "clear_cache_btn": "Xóa Cache",
     "download_location": "Nơi tải xuống",
     "download_location_desc": "Chọn nơi lưu các tệp được tải xuống",
     "select_download_folder": "Chọn thư mục tải xuống",
@@ -207,22 +234,25 @@
     "restore_error": "Lỗi khi khôi phục",
     "contact": "Liên hệ",
     "copy": "Sao chép",
-    "copied": "Đã copy!",
+    "copied": "Đã sao chép!",
     "open_link": "Mở liên kết",
     "open_link_error": "Không thể mở liên kết",
     "error_log_title": "Nhật ký lỗi",
     "error_log_copy": "Sao chép báo cáo",
     "error_log_copy_selected": "Sao chép vùng chọn",
-    "error_log_copied": "Đã copy!",
-    "error_log_clear": "Xoá",
+    "error_log_copied": "Đã sao chép!",
+    "error_log_clear": "Xóa nhật ký",
     "error_log_empty": "Chưa có lỗi nào được ghi nhận.",
     "error_log_note": "Nhật ký này đã được lọc bỏ thông tin cá nhân (ID, token, liên kết) trước khi rời khỏi thiết bị của bạn.",
     "error_log_stack": "Dấu vết ngăn xếp",
     "error_log_copy_error": "Không thể sao chép vào clipboard.",
-    "error_log_clear_error": "Lỗi khi xoá nhật ký.",
+    "error_log_clear_error": "Lỗi khi xóa nhật ký.",
     "error_log_by_date": "Lỗi theo ngày",
     "error_log_back": "Quay lại",
-    "error_log_count": "{{count}} lỗi"
+    "error_log_count": "{{count}} lỗi",
+    "trash_load_error": "Không thể tải thùng rác",
+    "close": "Đóng",
+    "coming_soon": "Sắp ra mắt"
   },
   "sort": {
     "name_asc": "A-Z",
@@ -231,12 +261,27 @@
     "modified_asc": "Cũ nhất",
     "name": "A-Z",
     "date": "Ngày",
-    "size": "Kích thước"
+    "size": "Kích thước",
+    "sort_label": "Sắp xếp",
+    "toggle_order": "Đổi thứ tự"
+  },
+  "error": {
+    "title": "Đã xảy ra lỗi",
+    "description": "Ứng dụng gặp lỗi không mong muốn. Vui lòng tải lại trang.",
+    "reload": "Thử lại"
   },
   "search_placeholder": "Tìm kiếm...",
   "loading": "Đang tải...",
   "rate_limit_title": "Nghỉ ngơi chút nhé!",
   "rate_limit_greeting": "Bạn đã hoạt động chăm chỉ ngày hôm nay, hãy thư giãn cơ thể nào!",
   "cancel": "Hủy",
-  "ok": "OK"
+  "ok": "OK",
+  "cache": {
+    "label": {
+      "metadata": "Bộ nhớ đệm metadata",
+      "files": "Bộ nhớ đệm danh sách tệp",
+      "covers": "Ảnh bìa & hình thu nhỏ",
+      "prefetch": "Dữ liệu tải trước"
+    }
+  }
 }

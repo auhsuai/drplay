@@ -158,7 +158,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
                   />
                 </span>
                 <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
-                  {CACHE_CATEGORY_LABELS[id]}
+                  {t(`cache.label.${id}`, CACHE_CATEGORY_LABELS[id])}
                 </span>
               </span>
               <span className="w-14 shrink-0 flex items-center justify-end">
@@ -191,7 +191,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
             className="px-5 py-2.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {clearing && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("settings.clear_cache_btn", "Clear Now")}
+            {t("settings.clear_cache_btn", "Clear Cache")}
           </button>
         </div>
       </div>

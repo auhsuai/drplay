@@ -47,7 +47,7 @@ const baseProps = {
   setShowTrashScreen: vi.fn(),
 };
 
-describe("Clear Now flow renders a real success toast", () => {
+describe("Clear Cache flow renders a real success toast", () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="toast-root"></div>';
     vi.mocked(clearAppCache).mockReset();
@@ -69,10 +69,10 @@ describe("Clear Now flow renders a real success toast", () => {
   it("appends an .app-toast--success element into #toast-root after confirming in the modal", async () => {
     render(<SettingsTab {...baseProps} />);
     // Settings trigger → modal opens (all categories default-checked).
-    fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     const modal = await screen.findByTestId("cache-manager-modal");
     await screen.findByText("Metadata cache");
-    fireEvent.click(within(modal).getByRole("button", { name: "Clear Now" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "Clear Cache" }));
 
     await waitFor(() => {
       const successToast = document.querySelector(".app-toast--success");

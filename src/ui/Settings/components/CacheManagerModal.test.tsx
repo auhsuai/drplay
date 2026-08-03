@@ -145,7 +145,7 @@ describe("CacheManagerModal", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     checkboxes.forEach((cb) => fireEvent.click(cb));
     expect(
-      (screen.getByRole("button", { name: "Clear Now" }) as HTMLButtonElement).disabled
+      (screen.getByRole("button", { name: "Clear Cache" }) as HTMLButtonElement).disabled
     ).toBe(true);
   });
 
@@ -155,7 +155,7 @@ describe("CacheManagerModal", () => {
     await screen.findByText("Metadata cache");
     const checkboxes = screen.getAllByRole("checkbox");
     fireEvent.click(checkboxes[1]);
-    fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
       expect(clearAppCache).toHaveBeenCalledWith(["metadata", "covers", "prefetch"]);
     });
@@ -175,7 +175,7 @@ describe("CacheManagerModal", () => {
     const onClose = vi.fn();
     renderOpen(onClose);
     await screen.findByText("Metadata cache");
-    fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
       expect(showSuccessToast).toHaveBeenCalledWith("Cache cleared successfully!");
     });
@@ -187,7 +187,7 @@ describe("CacheManagerModal", () => {
     vi.mocked(clearAppCache).mockRejectedValue(new Error("boom"));
     renderOpen();
     await screen.findByText("Metadata cache");
-    fireEvent.click(screen.getByRole("button", { name: "Clear Now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
       expect(showErrorToast).toHaveBeenCalledWith("Failed to clear cache.");
     });

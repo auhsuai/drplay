@@ -153,7 +153,7 @@ describe('LoginScreen invoke login error handling', () => {
       act(() => {
         vi.advanceTimersByTime(CANCEL_DELAY_MS);
       });
-      const cancelAction = screen.getByRole('button', { name: 'Hủy ở đây' });
+      const cancelAction = screen.getByRole('button', { name: 'Hủy' });
       expect(cancelAction.tagName).toBe('BUTTON');
     } finally {
       vi.useRealTimers();
@@ -170,7 +170,7 @@ describe('LoginScreen invoke login error handling', () => {
       act(() => {
         vi.advanceTimersByTime(CANCEL_DELAY_MS);
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Hủy ở đây' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Hủy' }));
       expect(toastRootText()).toContain('Đã hủy thao tác kết nối.');
     } finally {
       vi.useRealTimers();

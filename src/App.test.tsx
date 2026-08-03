@@ -64,6 +64,13 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 
+// App now consumes react-i18next (Suspense fallback + unknown-tab label);
+// stub useTranslation to return the fallback passed to t(), matching every
+// other component test in the repo.
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+}));
+
 vi.mock('./hooks/useAuth', () => ({ useAuth: mocks.useAuth }));
 vi.mock('./hooks/useDrive', () => ({ useDrive: mocks.useDrive }));
 vi.mock('./hooks/usePlayer', () => ({ usePlayer: mocks.usePlayer }));

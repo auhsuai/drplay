@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useShallow } from 'zustand/react/shallow';
 import { set as idbSet } from "../db/kv";
 import { start as keepAwakeStart, stop as keepAwakeStop } from "tauri-plugin-keepawake-api";
@@ -23,6 +24,7 @@ import { AudioController } from "../lib/AudioController";
 export const PLAYER_STOP_EVENT = 'player-stop';
 
 export const usePlayer = (accessToken: string | null) => {
+  const { t } = useTranslation();
   const {
     currentTrack, setCurrentTrack,
     loadNonce, triggerReload,
@@ -166,13 +168,13 @@ export const usePlayer = (accessToken: string | null) => {
     } catch (e: unknown) {
       if (isAbortError(e)) return;
       captureError({ level: 'error', source: 'usePlayer', message: `network-playback-error: ${e instanceof Error ? e.message : String(e)}` });
-      showErrorToast("An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.");
+      showErrorToast(t('player.exception_toast', 'An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.'));
     } finally {
       if (!signal.aborted) {
         setIsDownloading(false);
       }
     }
-  }, [accessToken, triggerReload, updateQueueContext, setIsPlaying, setIsDownloading, setCurrentTrack]);
+  }, [accessToken, triggerReload, updateQueueContext, setIsPlaying, setIsDownloading, setCurrentTrack, t]);
   handlePlayTrackRef.current = handlePlayTrack;
 
   const handleTogglePlay = useCallback(async () => {
@@ -212,7 +214,7 @@ export const usePlayer = (accessToken: string | null) => {
         } catch (e: unknown) {
           if (isAbortError(e)) return;
           captureError({ level: 'error', source: 'usePlayer', message: `stream-url-resume-fail: ${e instanceof Error ? e.message : String(e)}` });
-          showErrorToast("Could not start playback. Please try another track.");
+          showErrorToast(t('player.playback_failed', 'Could not start playback. Please try another track.'));
         } finally {
           if (!signal.aborted) setIsDownloading(false);
         }
@@ -221,7 +223,7 @@ export const usePlayer = (accessToken: string | null) => {
         setIsPlaying(!currentIsPlaying);
       }
     }
-  }, [currentTrack, triggerReload, setIsDownloading, setCurrentTrack, setIsPlaying]);
+  }, [currentTrack, triggerReload, setIsDownloading, setCurrentTrack, setIsPlaying, t]);
 
   return {
     currentTrack, setCurrentTrack, loadNonce, triggerReload,

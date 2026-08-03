@@ -16,7 +16,7 @@ i18n.use(initReactI18next).init({
           error_log_copy: "Copy Report",
           error_log_copy_selected: "Copy Selected",
           error_log_copied: "Copied!",
-          error_log_clear: "Clear",
+          error_log_clear: "Clear Log",
           error_log_empty: "No errors have been recorded yet.",
           error_log_note: "filtered",
           error_log_stack: "Stack trace",

@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Track } from '../../../App';
 
 export function useMediaSession(
@@ -7,12 +8,13 @@ export function useMediaSession(
   onPrevTrackRef: React.MutableRefObject<() => void>,
   onNextTrackRef: React.MutableRefObject<() => void>
 ) {
+  const { t } = useTranslation();
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
       const artwork: MediaImage[] = [{ src: '/sample.png', sizes: '512x512', type: 'image/png' }];
 
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentTrack.title || currentTrack.originalName || 'Unknown Title',
+        title: currentTrack.title || currentTrack.originalName || t('song_card.unknown_title', 'Unknown Title'),
         artist: currentTrack.artist || 'DrPlay',
         artwork,
       });
@@ -31,5 +33,5 @@ export function useMediaSession(
         navigator.mediaSession.setActionHandler('nexttrack', null);
       }
     };
-  }, [currentTrack, onTogglePlayRef, onPrevTrackRef, onNextTrackRef]);
+  }, [currentTrack, onTogglePlayRef, onPrevTrackRef, onNextTrackRef, t]);
 }

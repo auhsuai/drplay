@@ -16,9 +16,6 @@ const HOME_TAB_MODULE = 'HomeTab';
 // Fired by uploadManager after each completed upload (slice 1) — the delta
 // sync trigger that keeps "Recently Added to Drive" fresh without a reload.
 const DRIVE_FILES_CHANGED_EVENT = 'drive-files-changed';
-// Shared by the section header and the full view header, so the label is
-// defined once instead of being duplicated in two places.
-const RECENTLY_ADDED_SECTION_TITLE = 'Recently Added to Drive';
 
 export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack }: { 
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
@@ -151,7 +148,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   }
 
   if (showFullRecentlyAdded) {
-    return <FullRecentView recent={recentlyAdded} title={RECENTLY_ADDED_SECTION_TITLE} onBack={() => setShowFullRecentlyAdded(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
+    return <FullRecentView recent={recentlyAdded} title={t('home.recently_added', 'Recently Added to Drive')} onBack={() => setShowFullRecentlyAdded(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
   }
 
   const quickAccess = recent.slice(0, visibleCount);
@@ -177,7 +174,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                 <Clock className="w-4 h-4" />
-                Recent Files
+                {t('home.recent_files', 'Recent Files')}
               </h3>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
@@ -203,7 +200,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                 <PlusCircle className="w-4 h-4" />
-                {RECENTLY_ADDED_SECTION_TITLE}
+                {t('home.recently_added', 'Recently Added to Drive')}
               </h3>
               {/* Explicit entry point: the trailing overlay card only appears
                   when the list overflows visibleCount, so short lists had no
@@ -247,7 +244,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
           <div className="mb-12">
             <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
               <Folder className="w-4 h-4" />
-              Jump Back In
+              {t('home.jump_back_in', 'Jump Back In')}
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {mostVisitedFolders.map(folder => (
@@ -278,7 +275,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
           <div className="mb-12">
              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
               <Repeat className="w-4 h-4" />
-              Heavy Rotation
+              {t('home.heavy_rotation', 'Heavy Rotation')}
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {heavyItems.map(track => (

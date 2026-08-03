@@ -98,7 +98,7 @@ export const NowPlayingView = memo(function NowPlayingView({
             {coverUrl ? (
               <img 
                 src={coverUrl} 
-                alt="Cover" 
+                alt={t('common.cover_alt', 'Cover')} 
                 className="w-full h-full object-cover" 
               />
             ) : (

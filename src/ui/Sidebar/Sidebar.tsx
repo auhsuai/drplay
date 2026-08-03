@@ -247,7 +247,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
             {userProfile ? (
               <img 
                 src={userProfile.picture} 
-                alt="Profile" 
+                alt={t('common.profile_alt', 'Profile')} 
                 referrerPolicy="no-referrer"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';

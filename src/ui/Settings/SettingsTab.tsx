@@ -194,7 +194,7 @@ export function SettingsTab({
                 onClick={() => setShowCacheManager(true)}
                 className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
-                {t('settings.clear_cache_btn', 'Clear Now')}
+                {t('settings.clear_cache_btn', 'Clear Cache')}
               </button>
             </div>
           </div>

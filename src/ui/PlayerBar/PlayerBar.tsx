@@ -311,6 +311,16 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
 
   const realTitle = currentTrack?.title || t('player.no_track');
   const realArtist = currentTrack?.artist || t('unknown_artist');
+  // Why: AudioController keeps its VI-language strings as-is (not translated);
+  // PlayerBar maps the error codes to translated text so the toast matches the
+  // active locale, and falls back to the raw message for unmapped codes.
+  const errorText = errorInfo
+    ? errorInfo.code === 'network_interrupted'
+      ? t('player.network_interrupted', 'Network unstable or connection lost, please check again')
+      : errorInfo.code === 'format_error'
+        ? t('player.format_error', 'Audio format not supported, skipping to next track...')
+        : errorInfo.message
+    : null;
 
   return (
     <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
@@ -319,7 +329,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         <div 
           className="flex items-center gap-2 sm:gap-4 cursor-pointer group py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors min-w-0 flex-1 max-w-[320px]"
           onClick={() => currentTrack && onExpandNowPlaying()}
-          title={t('player.view_now_playing', 'Xem Đang Phát')}
+          title={t('player.view_now_playing', 'View Now Playing')}
         >
           <div className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400`}>
             {currentTrack ? (
@@ -448,7 +458,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
         <div className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 select-none">
           <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
             <ErrorIcon type={errorInfo.code} />
-            <span className="font-medium truncate">{errorInfo.message}</span>
+            <span className="font-medium truncate">{errorText}</span>
           </div>
           <div className="w-1.5 self-stretch bg-[#4285F4]" />
         </div>,

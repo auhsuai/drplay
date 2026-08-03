@@ -233,7 +233,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 className={MENU_ITEM_BASE_CLASS}
               >
                 <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">{t('menu.navigate', 'Navigate')}</span>
+                <span className="truncate">{t('menu.navigate', 'Locate File')}</span>
               </button>
             </>
           )}
@@ -272,7 +272,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
                 className={MENU_ITEM_BASE_CLASS}
               >
                 <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">{t('menu.navigate', 'Navigate')}</span>
+                <span className="truncate">{t('menu.navigate', 'Locate File')}</span>
               </button>
             </>
           )}

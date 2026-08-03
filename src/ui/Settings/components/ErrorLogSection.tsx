@@ -183,7 +183,7 @@ export function ErrorLogSection() {
         disabled={logList.length === 0 || busy}
         className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
-        {t("settings.error_log_clear") || "Clear"}
+        {t("settings.error_log_clear") || "Clear Log"}
       </button>
     </div>
   );

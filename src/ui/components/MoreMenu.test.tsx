@@ -101,10 +101,10 @@ afterEach(() => {
 });
 
 describe('MoreMenu recent variant', () => {
-  it('shows exactly 4 curated items (Delete / Download Song / Add to Playlist / Navigate) and no Select Multiple or Move to', () => {
+  it('shows exactly 4 curated items (Delete / Download Song / Add to Playlist / Locate File) and no Select Multiple or Move to', () => {
     render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Delete', 'Download Song', 'Navigate']);
+    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Delete', 'Download Song', 'Locate File']);
     expect(within(menuEl()).queryByRole('button', { name: 'Select Multiple' })).toBeNull();
     expect(within(menuEl()).queryByRole('button', { name: 'Move to...' })).toBeNull();
   });
@@ -112,22 +112,22 @@ describe('MoreMenu recent variant', () => {
   it('hides Delete when token is missing but keeps track-based items', () => {
     render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Navigate']);
+    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Locate File']);
   });
 
   it('hides Delete when driveItem is missing (track-only render) but keeps track-based items', () => {
     render(<MoreMenu variant="recent" track={makeTrack()} token="tok" />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Navigate']);
+    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Locate File']);
   });
 
-  it('dispatches the locate-file CustomEvent with fileId/parentId/parentName on Navigate', () => {
+  it('dispatches the locate-file CustomEvent with fileId/parentId/parentName on Locate File', () => {
     const spy = vi.fn();
     window.addEventListener('locate-file', spy);
     const onClose = vi.fn();
     render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" onClose={onClose} />);
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Navigate' }));
+    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Locate File' }));
     expect(spy).toHaveBeenCalledTimes(1);
     const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
     expect(detail).toEqual({ fileId: 'track-1', parentId: 'parent-1', parentName: 'Folder One' });
@@ -200,10 +200,10 @@ describe('MoreMenu default variant regression (file list)', () => {
 });
 
 describe('MoreMenu playerbar variant regression', () => {
-  it('keeps the original 2 track items (Download Song / Navigate) plus shared Add to Playlist, no Delete', () => {
+  it('keeps the original 2 track items (Download Song / Locate File) plus shared Add to Playlist, no Delete', () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Navigate']);
+    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Locate File']);
     expect(within(menuEl()).queryByRole('button', { name: 'Delete' })).toBeNull();
     expect(within(menuEl()).queryByRole('button', { name: 'Select Multiple' })).toBeNull();
   });
@@ -213,7 +213,7 @@ describe('MoreMenu playerbar variant regression', () => {
     window.addEventListener('locate-file', spy);
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Navigate' }));
+    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Locate File' }));
     const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
     expect(detail).toEqual({ fileId: 'track-1', parentId: 'parent-1', parentName: 'Folder One' });
   });
@@ -257,7 +257,7 @@ describe('MoreMenu upload race guards', () => {
     }
   });
 
-  it('disables Download Song + Add to Playlist for a track uploading in playerbar mode, keeps Navigate enabled', () => {
+  it('disables Download Song + Add to Playlist for a track uploading in playerbar mode, keeps Locate File enabled', () => {
     mocks.uploadManager.isUploading.mockReturnValue(true);
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
@@ -265,11 +265,11 @@ describe('MoreMenu upload race guards', () => {
     const byName = (name: string) => buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
     expect(byName('Download Song').disabled).toBe(true);
     expect(byName('Add to Playlist').disabled).toBe(true);
-    expect(byName('Navigate').disabled).toBe(false);
-    expect(byName('Navigate').title).toBe('');
+    expect(byName('Locate File').disabled).toBe(false);
+    expect(byName('Locate File').title).toBe('');
   });
 
-  it('disables Delete for an uploading driveItem in recent variant, keeps Navigate enabled', () => {
+  it('disables Delete for an uploading driveItem in recent variant, keeps Locate File enabled', () => {
     mocks.uploadManager.isUploading.mockReturnValue(true);
     render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
     openTrigger();
@@ -277,7 +277,7 @@ describe('MoreMenu upload race guards', () => {
     const byName = (name: string) => buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
     expect(byName('Delete').disabled).toBe(true);
     expect(byName('Delete').title).toBe('Blocked while uploading');
-    expect(byName('Navigate').disabled).toBe(false);
+    expect(byName('Locate File').disabled).toBe(false);
   });
 
   it('re-renders and disables the destructive items when an upload starts while the menu is open (subscription)', () => {

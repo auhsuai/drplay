@@ -2,6 +2,7 @@ import React from 'react';
 import { ArrowLeft, X, Search, FolderPlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SortDropdown } from '../../components/SortDropdown';
+import { MY_DRIVE_TAB } from '../../../utils/driveConstants';
 
 interface TopNavigationBarProps {
   isSelectionMode: boolean;
@@ -42,6 +43,12 @@ export function TopNavigationBar({
 }: TopNavigationBarProps) {
   const { t } = useTranslation();
 
+  // Why: the breadcrumb stores the raw root-folder label (MY_DRIVE_TAB) from
+  // the Drive state; translate it for display so the breadcrumb matches the
+  // sidebar's localized "My Drive" entry. Non-root folder names are untouched.
+  const displayFolderName = (name: string): string =>
+    name === MY_DRIVE_TAB ? t('drive.my_drive', 'My Drive') : name;
+
   const sortOptions = [
     { id: 'name', label: t('sort.name', 'A-Z') },
     { id: 'modifiedTime', label: t('sort.date', 'Ngày'), defaultDesc: true },
@@ -79,16 +86,16 @@ export function TopNavigationBar({
                 <button 
                   onClick={() => onBreadcrumbClick(folder.id, folder.name, index)}
                   className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] transition-colors truncate max-w-[150px]"
-                  title={folder.name}
+                  title={displayFolderName(folder.name)}
                 >
-                  {folder.name}
+                  {displayFolderName(folder.name)}
                 </button>
               </div>
             ))}
             <div className="flex items-center shrink-0">
               {folderHistory.length > 0 && <span className="text-gray-400 mx-1">/</span>}
-              <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={currentFolderName}>
-                {currentFolderName}
+              <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={displayFolderName(currentFolderName)}>
+                {displayFolderName(currentFolderName)}
               </span>
             </div>
           </div>

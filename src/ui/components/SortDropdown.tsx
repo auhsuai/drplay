@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Check } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export interface SortOption {
   id: string;
@@ -27,6 +28,7 @@ export function SortDropdown({
   fallbackLabel = 'Sort',
   isInitialMount: isInitialMountProp,
 }: SortDropdownProps) {
+  const { t } = useTranslation();
   const [showSortMenu, setShowSortMenu] = useState(false);
   const internalInitialMount = useRef(true);
   // Why: the arrow animation must be skipped on first render (the arrows
@@ -40,7 +42,11 @@ export function SortDropdown({
   }, []);
 
   const baseSortOption = sortOption.replace(' desc', '');
-  const currentSortLabel = options.find((opt) => opt.id === baseSortOption)?.label || fallbackLabel;
+  // Why: callers usually pass a pre-translated fallbackLabel (e.g. "Sort"),
+  // so it wins when provided; the default prop still reads as plain 'Sort',
+  // and this hook-side translate only covers the no-prop path.
+  const label = fallbackLabel ?? t('sort.sort_label', 'Sort');
+  const currentSortLabel = options.find((opt) => opt.id === baseSortOption)?.label || label;
 
   return (
     <div className="relative">
@@ -58,7 +64,7 @@ export function SortDropdown({
               onSortChange?.(sortOption + ' desc');
             }
           }}
-          title="Toggle Order"
+          title={t('sort.toggle_order', 'Toggle Order')}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 relative">
             <style>

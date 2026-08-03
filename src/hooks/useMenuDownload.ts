@@ -22,12 +22,12 @@ const DOWNLOAD_TIMEOUT_MS = 300_000;
 // device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) and trailing dots/spaces.
 // Copied verbatim from the removed GlobalContextMenu.tsx (the last known-good
 // download implementation) so the written name matches what worked before.
-const sanitizeFilename = (name: string): string => {
+const sanitizeFilename = (name: string, fallbackName: string = 'untitled'): string => {
   let s = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_');
   s = s.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i, '_$1$2');
   s = s.replace(/[\s.]+$/g, '');
   s = s.slice(0, 255);
-  return s || 'untitled';
+  return s || fallbackName;
 };
 
 export function useMenuDownload(t: TFunction) {
@@ -66,7 +66,7 @@ export function useMenuDownload(t: TFunction) {
       return;
     }
     setDownloadTrack(track);
-    setDownloadFileName(`${track.title} - ${track.artist || 'Unknown'}`);
+    setDownloadFileName(`${track.title} - ${track.artist || t('common.unknown', 'Unknown')}`);
     setShowDownloadDialog(true);
     setIsOpen(false);
   };
@@ -119,7 +119,7 @@ export function useMenuDownload(t: TFunction) {
       }
       const base = downloadFileName.trim() || 'audio';
       const ext = downloadTrack.originalName?.includes('.') ? downloadTrack.originalName.slice(downloadTrack.originalName.lastIndexOf('.')) : '.mp3';
-      const finalFileName = sanitizeFilename(`${base}${ext}`);
+      const finalFileName = sanitizeFilename(`${base}${ext}`, t('menu.untitled', 'Untitled'));
       // join() uses the platform-specific separator (Tauri v2 path API) so a
       // POSIX build no longer writes a literal backslash into the file name.
       const savePath = await join(dir, finalFileName);

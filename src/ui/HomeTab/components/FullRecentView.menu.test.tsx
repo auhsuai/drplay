@@ -129,7 +129,7 @@ describe('FullRecentView menu delete flow', () => {
     fireEvent.click(trigger);
     const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
     const names = Array.from(menu.querySelectorAll('button')).map((b) => b.textContent?.trim() ?? '');
-    expect(names.sort()).toEqual(['Add to Playlist', 'Delete', 'Download Song', 'Navigate']);
+    expect(names.sort()).toEqual(['Add to Playlist', 'Delete', 'Download Song', 'Locate File']);
   });
 
   it('deleting a track removes it from the visible list (local removal)', async () => {

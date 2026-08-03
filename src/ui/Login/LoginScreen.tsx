@@ -132,7 +132,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
         {showCancel && (
           <p className="mt-4 text-sm text-gray-500 dark:text-gray-400 animate-in fade-in duration-300">
-            {t('login.error_question', 'Có lỗi?')} <button type="button" onClick={handleCancel} className="text-[#4285F4] underline cursor-pointer hover:text-blue-600 transition-colors">{t('login.cancel_here', 'Hủy ở đây')}</button>
+            {t('login.error_question', 'Gặp sự cố?')} <button type="button" onClick={handleCancel} className="text-[#4285F4] underline cursor-pointer hover:text-blue-600 transition-colors">{t('login.cancel_here', 'Hủy')}</button>
           </p>
         )}
       </div>

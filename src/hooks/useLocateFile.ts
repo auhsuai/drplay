@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { db } from '../db/db';
 import { fetchWithAuth } from '../utils/apiClient';
 import { classifyDriveError } from '../utils/driveApi';
@@ -10,6 +11,9 @@ const HIGHLIGHT_DURATION_MS = 5000;
 const DRIVE_ID_PREFIX = 'drive_';
 const EVENT_LOCATE_FILE = 'locate-file';
 const STORAGE_KEY_ROOT = 'drplay_root_folder';
+// Kept as the fallback for t('drive.unknown_folder'): the breadcrumb name is
+// computed inside an async event handler, and the English default guarantees a
+// readable label even if a locale key is missing.
 const UNKNOWN_FOLDER = 'Unknown Folder';
 
 // localStorage can throw (privacy mode / disabled storage) — a failed root
@@ -32,6 +36,7 @@ export function useLocateFile(
   setActiveTab: (tab: TabKey) => void,
   setIsLoadingTracks: (loading: boolean) => void
 ) {
+  const { t } = useTranslation();
   const [highlightedFileId, setHighlightedFileId] = useState<{ id: string, ts: number } | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
 
@@ -93,11 +98,11 @@ export function useLocateFile(
                 const pData = await pRes.json();
                 newHistory.unshift({ id: pId, name: pData.name });
               } else {
-                newHistory.unshift({ id: pId, name: UNKNOWN_FOLDER });
+                newHistory.unshift({ id: pId, name: t('drive.unknown_folder', UNKNOWN_FOLDER) });
               }
             } catch (e: unknown) {
               captureError({ level: 'warn', source: 'useLocateFile', message: `Parent name fetch failed: ${classifyDriveError(e)}` });
-              newHistory.unshift({ id: pId, name: UNKNOWN_FOLDER });
+              newHistory.unshift({ id: pId, name: t('drive.unknown_folder', UNKNOWN_FOLDER) });
             }
           } else {
             newHistory.unshift({ id: parentInfo.id, name: parentInfo.name });
@@ -112,7 +117,7 @@ export function useLocateFile(
 
       try {
         let parentId: string | null = null;
-        let folderName = UNKNOWN_FOLDER;
+        let folderName = t('drive.unknown_folder', UNKNOWN_FOLDER);
         
         try {
           const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
@@ -189,7 +194,7 @@ export function useLocateFile(
       mounted = false;
       window.removeEventListener(EVENT_LOCATE_FILE, handleLocateFile);
     };
-  }, [accessToken, currentFolderId, setActiveTab, setCurrentFolderId, setCurrentFolderName, setFolderHistory, setIsLoadingTracks]);
+  }, [accessToken, currentFolderId, setActiveTab, setCurrentFolderId, setCurrentFolderName, setFolderHistory, setIsLoadingTracks, t]);
 
   return { highlightedFileId, pendingEnsuredFileId };
 }

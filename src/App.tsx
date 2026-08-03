@@ -1,4 +1,5 @@
 import React, { useState, useCallback, Suspense, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
@@ -61,6 +62,7 @@ export function loadMinimizeToTrayState(): boolean {
 }
 
 function App() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabKey>(TABS.home);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
@@ -224,7 +226,7 @@ function App() {
         />
 
         <div id="content-area" className="flex-1 relative overflow-hidden flex flex-col">
-          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500">Loading...</div>}>
+          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500">{t('loading', 'Loading...')}</div>}>
             {/* HomeTab stays mounted across tab switches (keep-alive): hiding
                 it with display:none instead of unmounting prevents the
                 refetch-on-remount churn of every home data load
@@ -298,7 +300,7 @@ function App() {
               />
             ) : (
               <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">
-                <h1 className="text-2xl text-gray-500">Coming Soon: {activeTab}</h1>
+                <h1 className="text-2xl text-gray-500">{t('common.coming_soon', 'Coming Soon')}: {activeTab}</h1>
               </main>
             ))}
           </Suspense>

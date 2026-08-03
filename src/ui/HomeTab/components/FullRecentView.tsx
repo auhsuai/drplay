@@ -8,9 +8,6 @@ import { SongCard } from '../../MainContent/components/SongCard';
 import { SortDropdown } from '../../components/SortDropdown';
 
 const DEFAULT_SORT_OPTION = 'modifiedTime';
-// Why: the header label is shared with HomeTab's "Recent Files" section; the
-// Recently Added view reuses this component and overrides it via the title prop.
-const DEFAULT_TITLE = 'Recent Files';
 
 function compareSizeAsc(a: Track, b: Track): number {
   const sizeA = a.size;
@@ -67,8 +64,12 @@ export function sortRecentTracks(items: Track[], sortOption: string): Track[] {
   return result;
 }
 
-export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, title = DEFAULT_TITLE }: { recent: Track[], onBack: () => void, onPlay: (track: Track, ctx: Track[]) => void, token: string | null, currentTrack?: Track | null, title?: string }) {
+export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, title }: { recent: Track[], onBack: () => void, onPlay: (track: Track, ctx: Track[]) => void, token: string | null, currentTrack?: Track | null, title?: string }) {
   const { t } = useTranslation();
+  // Why: the header label is shared with HomeTab's "Recent Files" section; the
+  // Recently Added view reuses this component and overrides it via the title
+  // prop. Undefined title falls back to the translated Recent Files label.
+  const resolvedTitle = title ?? t('home.recent_files', 'Recent Files');
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   // Why: the default "recent" order (newest first) maps to the Ngày option
@@ -127,8 +128,8 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
               <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
             </button>
             <div className="flex items-center gap-3">
-              <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={title}>
-                {title}
+              <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={resolvedTitle}>
+                {resolvedTitle}
               </span>
               <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-[#202124] px-2.5 py-0.5 rounded-full">
                 {filteredItems.length}
@@ -162,7 +163,7 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
               sortOption={sortOption}
               onSortChange={setSortOption}
               options={sortOptions}
-              fallbackLabel="Sort"
+              fallbackLabel={t('sort.sort_label', 'Sort')}
             />
           </div>
         </div>

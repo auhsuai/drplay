@@ -1,5 +1,6 @@
 import React from "react";
 import { captureError } from "../utils/errorLog";
+import i18n from "../i18n";
 
 /**
  * Top-level React Error Boundary (React 19 pattern).
@@ -13,8 +14,9 @@ import { captureError } from "../utils/errorLog";
  *         (also cited in REFACTOR_MASTER_PLAN.md — "Chuẩn tham chiếu 2026", Finding #2)
  *
  * i18n note: react-i18next `useTranslation`/`t()` are hooks and cannot run inside
- * a class component, so the fallback text is intentionally bilingual hardcoded
- * (no extra dependency, no behavior change to the app).
+ * a class component, so the fallback UI reads the shared i18n instance directly
+ * (initialized in src/i18n.ts, imported before App in main.tsx). Fallbacks stay
+ * English so the boundary renders readable text even if a locale key is missing.
  *
  * Error-handling standard (AGENTS.md Luật 4):
  * - componentDidCatch logs with context ([ErrorBoundary]) but ONLY the error and
@@ -72,19 +74,17 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           className="fixed inset-0 z-[10002] flex flex-col items-center justify-center gap-6 bg-white px-6 text-center dark:bg-[#121212]"
         >
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Đã xảy ra lỗi / Something went wrong
+            {i18n.t('error.title', 'Something went wrong')}
           </h1>
           <p className="max-w-md text-gray-600 dark:text-gray-300">
-            Ứng dụng gặp lỗi không mong muốn. Vui lòng tải lại trang.
-            <br />
-            The app hit an unexpected error. Please reload the page.
+            {i18n.t('error.description', 'The app hit an unexpected error. Please reload the page.')}
           </p>
           <button
             type="button"
             onClick={this.handleReload}
             className="rounded-full bg-[#4285F4] px-6 py-3 font-medium text-white shadow-md shadow-blue-500/20 transition-colors hover:bg-blue-600"
           >
-            Thử lại / Reload
+            {i18n.t('error.reload', 'Reload')}
           </button>
         </div>
       );

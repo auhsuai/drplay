@@ -186,7 +186,7 @@ export const MainContent = React.memo(function MainContent({
           token={token}
           onCancel={() => setShowBulkMoveScreen(false)}
           onSelectFolder={(destId) => explorer.handleBulkMove(destId, () => setShowBulkMoveScreen(false))}
-          title="Chọn thư mục đích"
+          title={t('folder_selection.bulk_move_title', 'Choose destination folder')}
         />
       )}
 
@@ -239,7 +239,7 @@ export const MainContent = React.memo(function MainContent({
         
       <div data-drop-region className="px-8 pb-6 pt-4" style={{ minHeight: `calc(100% - ${HEADER_CHROME_HEIGHT_PX}px)` }}>
         {activeTab === TABS.settings ? (
-          <div className="text-gray-500">Settings page coming soon...</div>
+          <div className="text-gray-500">{t('settings.coming_soon', 'Coming Soon')}</div>
         ) : isLoading ? (
           <div className="flex flex-col items-center justify-center h-[50vh] text-[#4285F4]">
             <Loader2 className="animate-spin h-10 w-10 mb-4 stroke-[1.5]" />
