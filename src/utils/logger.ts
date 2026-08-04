@@ -61,14 +61,14 @@ export const sanitizeString = (str: string): string => {
     // Reset lastIndex: global regex advances lastIndex on .test()/.exec(), nên
     // một pattern dùng chung có thể trả false negative ở lần gọi sau và leak.
     re.lastIndex = 0;
-    sanitized = sanitized.replace(re, (match, group1) =>
-      redact(match, group1 || ""),
+    sanitized = sanitized.replace(re, (match, group1: string | undefined) =>
+      redact(match, group1 ?? ""),
     );
   });
   return sanitized;
 };
 
-export const sanitizeArg = (arg: unknown): any => {
+export const sanitizeArg = (arg: unknown): unknown => {
   if (typeof arg === "string") {
     return sanitizeString(arg);
   }
@@ -90,9 +90,9 @@ export const sanitizeArg = (arg: unknown): any => {
           return re.test(str);
         })
       ) {
-        return JSON.parse(sanitizeString(str));
+        return JSON.parse(sanitizeString(str)) as unknown;
       }
-    } catch (e: unknown) {
+    } catch {
       // Circular structure không serialize được: trả placeholder thay vì trả raw
       // object (raw có thể chứa secret). An toàn hơn là im lặng bỏ qua.
       return "[REDACTED_UNSERIALIZABLE]";
@@ -109,15 +109,25 @@ export const initLogger = () => {
   const originalDebug = console.debug;
 
   // warn/error luôn được mã hóa link nhạy cảm (cả DEV lẫn PROD) để debug an toàn
-  console.warn = (...args) => originalWarn(...args.map(sanitizeArg));
-  console.error = (...args) => originalError(...args.map(sanitizeArg));
+  console.warn = (...args: unknown[]) => {
+    originalWarn(...args.map(sanitizeArg));
+  };
+  console.error = (...args: unknown[]) => {
+    originalError(...args.map(sanitizeArg));
+  };
 
   // 1. Chế độ Môi trường Dev (Mã hóa đường link nhạy cảm)
   // console.debug cũng route qua sanitizeArg để không lộ link/secret ở dev.
   if (import.meta.env.DEV) {
-    console.log = (...args) => originalLog(...args.map(sanitizeArg));
-    console.info = (...args) => originalInfo(...args.map(sanitizeArg));
-    console.debug = (...args) => originalDebug(...args.map(sanitizeArg));
+    console.log = (...args: unknown[]) => {
+      originalLog(...args.map(sanitizeArg));
+    };
+    console.info = (...args: unknown[]) => {
+      originalInfo(...args.map(sanitizeArg));
+    };
+    console.debug = (...args: unknown[]) => {
+      originalDebug(...args.map(sanitizeArg));
+    };
   }
 
   // 2. Chế độ Sản phẩm - Production (Khóa mõm hoàn toàn Console)

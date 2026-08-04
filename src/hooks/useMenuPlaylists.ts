@@ -16,6 +16,21 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
   const [playlistSubmenuOpenLeft, setPlaylistSubmenuOpenLeft] = useState(false);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
 
+  // Reset the submenu state during render (React 19 "adjusting state when
+  // props change" pattern) instead of in an effect: closing the menu must
+  // collapse the submenu, and closing the submenu must clear its search/page.
+  const [prevMenuOpen, setPrevMenuOpen] = useState(isMenuOpen);
+  if (!isMenuOpen && prevMenuOpen !== isMenuOpen) {
+    setPrevMenuOpen(isMenuOpen);
+    setShowPlaylistsSubmenu(false);
+  }
+  const [prevSubmenuOpen, setPrevSubmenuOpen] = useState(showPlaylistsSubmenu);
+  if (!showPlaylistsSubmenu && prevSubmenuOpen !== showPlaylistsSubmenu) {
+    setPrevSubmenuOpen(showPlaylistsSubmenu);
+    setPlaylistSearchQuery("");
+    setPlaylistCurrentPage(1);
+  }
+
   useEffect(() => {
     let ignore = false;
     if (isMenuOpen) {
@@ -24,26 +39,17 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
           if (!ignore) setPlaylists(data);
         })
         .catch((err: unknown) =>
-          captureError({
+          void captureError({
             level: "error",
             source: "useMenuPlaylists",
             message: `Failed to load playlists: ${err instanceof Error ? err.message : String(err)}`,
           }),
         );
-    } else {
-      setShowPlaylistsSubmenu(false);
     }
     return () => {
       ignore = true;
     };
   }, [isMenuOpen]);
-
-  useEffect(() => {
-    if (!showPlaylistsSubmenu) {
-      setPlaylistSearchQuery("");
-      setPlaylistCurrentPage(1);
-    }
-  }, [showPlaylistsSubmenu]);
 
   const handleAddToPlaylist = async (
     e: React.MouseEvent,
@@ -71,7 +77,7 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
         setIsOpen(false);
         onClose?.();
       } catch (err: unknown) {
-        captureError({
+        void captureError({
           level: "error",
           source: "useMenuPlaylists",
           message: `Failed to add track to playlist: ${err instanceof Error ? err.message : String(err)}`,

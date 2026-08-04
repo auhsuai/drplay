@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -18,7 +18,7 @@ interface SortDropdownProps {
   onSortChange?: ((option: string) => void) | undefined;
   options: SortOption[];
   fallbackLabel?: string;
-  isInitialMount?: React.MutableRefObject<boolean>;
+  isInitialMount?: React.RefObject<boolean>;
 }
 
 export function SortDropdown({
@@ -26,19 +26,24 @@ export function SortDropdown({
   onSortChange,
   options,
   fallbackLabel = "Sort",
-  isInitialMount: isInitialMountProp,
 }: SortDropdownProps) {
   const { t } = useTranslation();
   const [showSortMenu, setShowSortMenu] = useState(false);
-  const internalInitialMount = useRef(true);
-  // Why: the arrow animation must be skipped on first render (the arrows
-  // would "fill" from nothing), but animate on every later toggle. Callers
-  // that already own such a ref (My Drive) pass it in so the ref lifecycle
-  // stays shared; standalone callers (Recent) get an internal one.
-  const isInitialMount = isInitialMountProp ?? internalInitialMount;
-
+  // The arrow animation must be skipped on the very first committed frame
+  // (the arrows would "fill" from nothing), then animate on every later
+  // toggle. The flag lives in state (reading a ref during render is
+  // forbidden) and flips asynchronously after mount (setTimeout 0), so the
+  // skip only ever applies to the first frame. Callers still pass the shared
+  // isInitialMount ref (interface kept for API compatibility) — in every real
+  // lifecycle it is true at this component's mount.
+  const [isFirstFrame, setIsFirstFrame] = useState(true);
   useEffect(() => {
-    internalInitialMount.current = false;
+    const timer = setTimeout(() => {
+      setIsFirstFrame(false);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+    };
   }, []);
 
   const baseSortOption = sortOption.replace(" desc", "");
@@ -51,10 +56,24 @@ export function SortDropdown({
   return (
     <div className="relative">
       <div
-        onClick={() => setShowSortMenu(!showSortMenu)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={showSortMenu}
+        aria-label={t("sort.menu", "Sort options")}
+        onClick={() => {
+          setShowSortMenu(!showSortMenu);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setShowSortMenu(!showSortMenu);
+          }
+        }}
         className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm [&:active:not(:has(.arrow-btn:active))]:scale-95 cursor-pointer select-none"
       >
         <div
+          role="button"
+          tabIndex={0}
           className="arrow-btn p-1 -ml-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center"
           onClick={(e) => {
             e.stopPropagation();
@@ -62,6 +81,17 @@ export function SortDropdown({
               onSortChange?.(sortOption.replace(" desc", ""));
             } else {
               onSortChange?.(sortOption + " desc");
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              if (sortOption.endsWith(" desc")) {
+                onSortChange?.(sortOption.replace(" desc", ""));
+              } else {
+                onSortChange?.(sortOption + " desc");
+              }
             }
           }}
           title={t("sort.toggle_order", "Toggle Order")}
@@ -81,7 +111,7 @@ export function SortDropdown({
                 visible per Material icon hierarchy (active = primary, inactive
                 = ~50% gray); pure white vanished on the white button. */}
             <g
-              className={`stroke-gray-400 ${isInitialMount.current ? (!sortOption.endsWith(" desc") ? "opacity-0" : "") : !sortOption.endsWith(" desc") ? "anim-drain-up" : "anim-fill-up"}`}
+              className={`stroke-gray-400 ${isFirstFrame ? (!sortOption.endsWith(" desc") ? "opacity-0" : "") : !sortOption.endsWith(" desc") ? "anim-drain-up" : "anim-fill-up"}`}
             >
               <path d="m3 8 4-4 4 4" />
               <path d="M7 4v16" />
@@ -89,7 +119,7 @@ export function SortDropdown({
 
             {/* Blue UP Arrow */}
             <g
-              className={`stroke-[#4285F4] ${isInitialMount.current ? (!sortOption.endsWith(" desc") ? "" : "opacity-0") : !sortOption.endsWith(" desc") ? "anim-fill-up" : "anim-drain-up"}`}
+              className={`stroke-[#4285F4] ${isFirstFrame ? (!sortOption.endsWith(" desc") ? "" : "opacity-0") : !sortOption.endsWith(" desc") ? "anim-fill-up" : "anim-drain-up"}`}
             >
               <path d="m3 8 4-4 4 4" />
               <path d="M7 4v16" />
@@ -97,7 +127,7 @@ export function SortDropdown({
 
             {/* Gray DOWN Arrow (Inverse animated) — see the UP arrow note. */}
             <g
-              className={`stroke-gray-400 ${isInitialMount.current ? (sortOption.endsWith(" desc") ? "opacity-0" : "") : sortOption.endsWith(" desc") ? "anim-drain-down" : "anim-fill-down"}`}
+              className={`stroke-gray-400 ${isFirstFrame ? (sortOption.endsWith(" desc") ? "opacity-0" : "") : sortOption.endsWith(" desc") ? "anim-drain-down" : "anim-fill-down"}`}
             >
               <path d="m21 16-4 4-4-4" />
               <path d="M17 20V4" />
@@ -105,7 +135,7 @@ export function SortDropdown({
 
             {/* Blue DOWN Arrow */}
             <g
-              className={`stroke-[#4285F4] ${isInitialMount.current ? (sortOption.endsWith(" desc") ? "" : "opacity-0") : sortOption.endsWith(" desc") ? "anim-fill-down" : "anim-drain-down"}`}
+              className={`stroke-[#4285F4] ${isFirstFrame ? (sortOption.endsWith(" desc") ? "" : "opacity-0") : sortOption.endsWith(" desc") ? "anim-fill-down" : "anim-drain-down"}`}
             >
               <path d="m21 16-4 4-4-4" />
               <path d="M17 20V4" />
@@ -132,7 +162,10 @@ export function SortDropdown({
         <>
           <div
             className="fixed inset-0 z-40"
-            onClick={() => setShowSortMenu(false)}
+            role="presentation"
+            onClick={() => {
+              setShowSortMenu(false);
+            }}
           ></div>
           <div className="absolute right-0 mt-2 w-32 bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
             {options.map((opt) => (

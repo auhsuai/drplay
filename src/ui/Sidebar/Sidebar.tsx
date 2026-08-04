@@ -75,25 +75,26 @@ export function Sidebar({
       .then((data) => {
         if (!cancelled) setPlaylists(data);
       })
-      .catch((err) =>
-        captureError({
+      .catch((err: unknown) =>
+        void captureError({
           level: "error",
           source: SIDEBAR_MODULE,
           message: `failed-to-load-playlists: ${err instanceof Error ? err.message : String(err)}`,
         }),
       );
-    const handleUpdate = () =>
-      getPlaylists()
+    const handleUpdate = () => {
+      void getPlaylists()
         .then((data) => {
           if (!cancelled) setPlaylists(data);
         })
-        .catch((err) =>
-          captureError({
+        .catch((err: unknown) => {
+          void captureError({
             level: "error",
             source: SIDEBAR_MODULE,
             message: `failed-to-load-playlists: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
+          });
+        });
+    };
     window.addEventListener("playlists-updated", handleUpdate);
     window.addEventListener("user-changed", handleUpdate);
     return () => {
@@ -103,29 +104,31 @@ export function Sidebar({
     };
   }, []);
 
+  // Reset quota when the token goes away (logout) — adjusted during render
+  // (React "adjusting state during render" pattern) instead of in the effect,
+  // avoiding react-hooks/set-state-in-effect.
+  if (!token && quota !== null) setQuota(null);
+
   // Storage quota: only for a logged-in user (token present). Re-fetched on
-  // 'user-changed' (account switch re-keys Drive storage entirely) and reset
-  // when the token goes away (logout). Failure hides the section silently —
-  // getDriveStorageQuota never throws by contract; the catch is defensive so
-  // a future regression cannot crash the sidebar.
+  // 'user-changed' (account switch re-keys Drive storage entirely). Failure
+  // hides the section silently — getDriveStorageQuota never throws by
+  // contract; the catch is defensive so a future regression cannot crash the
+  // sidebar.
   useEffect(() => {
-    if (!token) {
-      setQuota(null);
-      return;
-    }
+    if (!token) return;
     let cancelled = false;
     const loadQuota = () => {
-      getDriveStorageQuota(token)
+      void getDriveStorageQuota(token)
         .then((data) => {
           if (!cancelled) setQuota(data);
         })
-        .catch((err) =>
-          captureError({
+        .catch((err: unknown) => {
+          void captureError({
             level: "warn",
             source: SIDEBAR_MODULE,
             message: `storage-quota-failed: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-        );
+          });
+        });
     };
     loadQuota();
     window.addEventListener("user-changed", loadQuota);
@@ -153,7 +156,7 @@ export function Sidebar({
   const safeZonePercent = Math.min(usagePercent, thresholdPercent);
   const excessPercent = Math.max(0, usagePercent - thresholdPercent);
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!newPlaylistName.trim()) {
       setIsCreating(false);
@@ -165,7 +168,7 @@ export function Sidebar({
         onTabChange(`playlist_${newPlaylist.id}`);
       }
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: SIDEBAR_MODULE,
         message: `create-playlist-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -184,8 +187,16 @@ export function Sidebar({
       className={`${isSidebarOpen ? "w-64" : "w-20"} bg-[#F8F9FA] dark:bg-[#121212] h-full flex flex-col shrink-0 transition-all duration-300 overflow-hidden border-r border-gray-200/50 dark:border-gray-800/50`}
     >
       <div
+        role="button"
+        tabIndex={0}
         className="px-7 py-6 flex items-center cursor-pointer transition-all duration-300"
         onClick={onToggleSidebar}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggleSidebar();
+          }
+        }}
       >
         <h1
           className="text-xl font-bold flex items-center text-[#4285F4] w-full"
@@ -268,15 +279,20 @@ export function Sidebar({
         <div
           className={`overflow-hidden transition-all duration-300 ${isCreating && isSidebarOpen ? "max-h-20 opacity-100 mb-2" : "max-h-0 opacity-0 m-0"}`}
         >
-          <form onSubmit={handleCreate}>
+          <form
+            onSubmit={(e) => {
+              void handleCreate(e);
+            }}
+          >
             <input
               type="text"
-              autoFocus
               value={newPlaylistName}
               onChange={(e) => {
                 setNewPlaylistName(e.target.value);
               }}
-              onBlur={() => !newPlaylistName && setIsCreating(false)}
+              onBlur={() => {
+                if (!newPlaylistName) setIsCreating(false);
+              }}
               className="w-full bg-gray-200/50 dark:bg-[#1c1d21] hover:bg-gray-200 dark:hover:bg-[#25262a] focus:bg-gray-200 dark:focus:bg-[#25262a] text-gray-900 dark:text-white text-sm rounded-lg px-3 py-2 outline-none transition-all duration-300 placeholder:text-gray-500"
               placeholder={
                 t("sidebar.new_playlist_placeholder") || "My Playlist #1"
@@ -327,13 +343,13 @@ export function Sidebar({
                 <div
                   data-testid="storage-quota-bar"
                   className={`h-full bg-[#4285F4] ${excessPercent > 0 ? "rounded-l-full" : "rounded-full"}`}
-                  style={{ width: `${safeZonePercent}%` }}
+                  style={{ width: `${String(safeZonePercent)}%` }}
                 />
                 {excessPercent > 0 && (
                   <div
                     data-testid="storage-quota-bar-red"
                     className="h-full bg-red-500 rounded-r-full"
-                    style={{ width: `${excessPercent}%` }}
+                    style={{ width: `${String(excessPercent)}%` }}
                   />
                 )}
               </div>
@@ -481,7 +497,15 @@ function NavItem({
 }) {
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       title={!isSidebarOpen ? label : undefined}
       className={`group flex items-center px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-200 active:scale-[0.98] font-medium ${
         active

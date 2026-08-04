@@ -62,7 +62,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     if (isMoreMenuOpen) {
       document.addEventListener("mousedown", handleClickOutside);
     }
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
   }, [isMoreMenuOpen]);
 
   const fetchTrashed = async () => {
@@ -80,7 +82,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         })),
       );
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: TRASH_MODULE,
         message: `fetch-trashed-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -92,7 +94,14 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   };
 
   useEffect(() => {
-    fetchTrashed();
+    // fetchTrashed sets isLoading synchronously — that IS the loading
+    // transition (skeleton), not a cascading render; delaying it would
+    // flash the stale empty list.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchTrashed();
+    // fetchTrashed only closes over token (already in deps); its identity
+    // changes every render but the effect must only run on token change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const handleRestore = async (id: string) => {
@@ -102,7 +111,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setItems((prev) => prev.filter((item) => item.id !== id));
       window.dispatchEvent(new CustomEvent("refresh-drive"));
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: TRASH_MODULE,
         message: `restore-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -134,7 +143,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       );
       onClose();
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: TRASH_MODULE,
         message: `empty-trash-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -158,7 +167,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: TRASH_MODULE,
         message: `bulk-restore-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -179,7 +188,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setSelectedIds(new Set());
       setIsSelectionMode(false);
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: TRASH_MODULE,
         message: `bulk-delete-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -195,11 +204,14 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
+      role="presentation"
+      onClick={(e) => {
+        // Only close when the backdrop itself (not the dialog) is clicked.
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div
         className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="px-6 py-5 flex items-center justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
@@ -278,7 +290,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                     </button>
                   ) : (
                     <button
-                      onClick={() => setIsMoreMenuOpen(!isMoreMenuOpen)}
+                      onClick={() => {
+                        setIsMoreMenuOpen(!isMoreMenuOpen);
+                      }}
                       className="p-1.5 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                     >
                       <MoreHorizontal className="w-5 h-5" />
@@ -309,6 +323,8 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                 const isSelected = selectedIds.has(item.id);
                 return (
                   <div
+                    role="button"
+                    tabIndex={0}
                     key={item.id}
                     className={`flex items-center justify-between p-3 rounded-xl transition-colors ${
                       isSelectionMode ? "cursor-pointer" : ""
@@ -325,6 +341,19 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                           else newSet.add(item.id);
                           return newSet;
                         });
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        if (isSelectionMode) {
+                          setSelectedIds((prev) => {
+                            const newSet = new Set(prev);
+                            if (newSet.has(item.id)) newSet.delete(item.id);
+                            else newSet.add(item.id);
+                            return newSet;
+                          });
+                        }
                       }
                     }}
                   >
@@ -361,7 +390,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleRestore(item.id);
+                          void handleRestore(item.id);
                         }}
                         disabled={restoringId === item.id}
                         className="px-4 py-1.5 text-xs font-semibold text-green-600 bg-green-50 hover:bg-green-100 dark:bg-green-900/20 dark:hover:bg-green-900/40 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 shrink-0"
@@ -392,7 +421,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
               </p>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={handleBulkRestore}
+                  onClick={() => {
+                    void handleBulkRestore();
+                  }}
                   disabled={selectedIds.size === 0 || isBulkActioning}
                   className="px-4 py-2.5 bg-[#4285F4] text-white rounded-xl text-sm font-medium hover:bg-[#3367d6] disabled:opacity-50 transition-colors flex items-center gap-2"
                 >
@@ -406,7 +437,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   </span>
                 </button>
                 <button
-                  onClick={handleBulkDelete}
+                  onClick={() => {
+                    void handleBulkDelete();
+                  }}
                   disabled={selectedIds.size === 0 || isBulkActioning}
                   className="px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 disabled:opacity-50 transition-colors flex items-center gap-2"
                 >
@@ -425,7 +458,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
             <>
               <p className="text-xs text-gray-500 hidden sm:block">
                 {items.length > 0
-                  ? `${items.length} ${t("settings.items_in_trash")}`
+                  ? `${String(items.length)} ${t("settings.items_in_trash")}`
                   : ""}
               </p>
               <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
@@ -436,7 +469,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   {t("folder_selection.cancel")}
                 </button>
                 <button
-                  onClick={handleEmptyTrash}
+                  onClick={() => {
+                    void handleEmptyTrash();
+                  }}
                   disabled={items.length === 0 || isEmptying}
                   className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
                 >

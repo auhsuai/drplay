@@ -41,14 +41,25 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
   const [selected, setSelected] = useState<Set<CacheCategoryId>>(ALL_SELECTED);
   const [clearing, setClearing] = useState(false);
 
+  // Reset sizes/selection when the modal (re)opens — adjusted during render
+  // (React "adjusting state during render" pattern) instead of inside the
+  // fetch effect, so the re-fetch never synchronously calls setState in an
+  // effect (react-hooks/set-state-in-effect).
+  const [lastOpen, setLastOpen] = useState(open);
+  if (lastOpen !== open) {
+    setLastOpen(open);
+    if (open) {
+      setSizes(nullSizes());
+      setSelected(ALL_SELECTED);
+    }
+  }
+
   // Sizes are re-fetched on every open so the numbers never go stale after a
   // previous clear; every category defaults to checked unless the user opts
   // out (clear-all is the primary use case).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setSizes(nullSizes());
-    setSelected(ALL_SELECTED);
     getCacheSizes()
       .then((results) => {
         if (cancelled) return;
@@ -64,7 +75,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
         // Per-category estimators already swallow their own failures, but a
         // hard rejection here still degrades to zeroed sizes (Clear stays
         // usable) instead of an unhandled promise rejection.
-        captureError({
+        void captureError({
           level: "error",
           source: CACHE_MANAGER_MODULE,
           message: `load-cache-sizes-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -83,7 +94,9 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
       if (e.key === "Escape" && !clearing) onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, [open, onClose, clearing]);
 
   if (!open) return null;
@@ -109,7 +122,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
         t("settings.clear_cache_success", "Cache cleared successfully!"),
       );
       onClose();
-    } catch (e: unknown) {
+    } catch {
       // clearAppCache already logs each failing category via captureError;
       // here we only surface the aggregated message and keep the modal open
       // so the user can retry with a narrower selection.
@@ -123,14 +136,17 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
     <div
       data-testid="cache-manager-overlay"
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4"
-      onClick={() => !clearing && onClose()}
+      role="presentation"
+      onClick={(e) => {
+        // Only close when the backdrop itself (not the dialog) is clicked.
+        if (e.target === e.currentTarget && !clearing) onClose();
+      }}
     >
       <div
         role="dialog"
         aria-modal="true"
         data-testid="cache-manager-modal"
         className="bg-white dark:bg-[#202124] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">
@@ -157,7 +173,9 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
                   <input
                     type="checkbox"
                     checked={selected.has(id)}
-                    onChange={() => toggleCategory(id)}
+                    onChange={() => {
+                      toggleCategory(id);
+                    }}
                     className="peer appearance-none w-4 h-4 rounded border-2 border-gray-400 dark:border-gray-500 bg-white dark:bg-[#2a2b2f] checked:bg-[#4285F4] checked:border-[#4285F4] cursor-pointer transition-colors"
                   />
                   <Check
@@ -177,7 +195,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
                   />
                 ) : (
                   <span className="text-sm text-gray-500 dark:text-gray-400">
-                    {formatBytes(sizes[id] as number)}
+                    {formatBytes(sizes[id])}
                   </span>
                 )}
               </span>
@@ -194,7 +212,9 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
             {t("menu.cancel", "Cancel")}
           </button>
           <button
-            onClick={handleClear}
+            onClick={() => {
+              void handleClear();
+            }}
             disabled={selected.size === 0 || clearing}
             className="px-5 py-2.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >

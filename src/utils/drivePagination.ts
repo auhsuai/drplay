@@ -27,7 +27,7 @@ async function fetchAllPages<T>(
   signal?: AbortSignal,
   orderBy: string = "name",
 ): Promise<T[]> {
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=${orderBy}&pageSize=${PAGINATION_PAGE_SIZE}`;
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=${orderBy}&pageSize=${String(PAGINATION_PAGE_SIZE)}`;
   const all: T[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
@@ -40,7 +40,7 @@ async function fetchAllPages<T>(
       ...(signal ? { signal } : {}),
     });
     if (!response.ok) {
-      throw new Error(`Failed to ${failureLabel} (${response.status})`);
+      throw new Error(`Failed to ${failureLabel} (${String(response.status)})`);
     }
     let data: { files?: T[]; nextPageToken?: string };
     try {

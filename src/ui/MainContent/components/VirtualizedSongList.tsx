@@ -138,7 +138,10 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
       }}
     >
       {virtualItems.map((virtualRow) => {
-        const item = items[virtualRow.index];
+        // The virtualizer can briefly report a stale index while the items
+        // list is being filtered/replaced (count changes async), so the
+        // runtime guard stays even though the array type says non-null.
+        const item = items[virtualRow.index] as DriveItem | undefined;
         if (!item) return null;
         return (
           <div

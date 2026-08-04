@@ -39,7 +39,10 @@ describe("logger sanitizeArg", () => {
     const err = new Error(
       "fetch failed: http://127.0.0.1:62216/stream?id=1RoFd1kOvoIn&ext=mp3",
     );
-    const san = sanitizeArg(err);
+    // sanitizeArg returns unknown (typed pass-through); cast for the
+    // assertions below. (minimal edit required for tsc after the
+    // no-explicit-any cleanup — the test-file lint round may rework this.)
+    const san = sanitizeArg(err) as Error;
     expect(san).toBeInstanceOf(Error);
     expect(san.message).toBe("fetch failed: [REDACTED_LINK]");
     expect(san.name).toBe("Error");
@@ -50,7 +53,7 @@ describe("logger sanitizeArg", () => {
       url: "http://127.0.0.1:62216/x?id=abc",
       token: "Bearer xyz.abc.def",
     };
-    const san = sanitizeArg(obj);
+    const san = sanitizeArg(obj) as Record<string, unknown>;
     expect(san.url).toBe("[REDACTED_LINK]");
     expect(san.token).toBe("Bearer [REDACTED_TOKEN]");
   });

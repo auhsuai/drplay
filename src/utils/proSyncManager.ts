@@ -122,13 +122,17 @@ export function startProSyncWorker(token: string) {
     };
 
     globalWorker.onmessage = (e) => {
-      void handleWorkerMessage(e.data, deps);
+      // Non-object payloads (e.g. a bare string) are ignored — same runtime
+      // behavior as before (msg.type would be undefined → default case).
+      if (typeof e.data === "object" && e.data !== null) {
+        void handleWorkerMessage(e.data as { type?: WorkerMsgType }, deps);
+      }
     };
     globalWorker.onerror = (e) => {
       void captureError({
         level: "error",
         source: "proSyncManager",
-        message: `worker-error: ${e.message ?? "unknown worker error"}`,
+        message: `worker-error: ${e.message}`,
       });
       window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
     };

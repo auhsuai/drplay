@@ -61,7 +61,7 @@ export async function recordPlay(track: Track) {
       await prunePlayCounts(email);
     });
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `recordPlay-failed: ${classifyHistoryError(e)}`,
@@ -94,7 +94,7 @@ async function prunePlayCounts(email: string): Promise<void> {
     );
   } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `playCounts-prune-failed: ${classifyHistoryError(e)}`,
@@ -130,7 +130,7 @@ async function pruneRecentTracks(email: string): Promise<void> {
       .delete();
   } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `recentTracks-prune-failed: ${classifyHistoryError(e)}`,
@@ -155,7 +155,7 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
     }
     return deduped.slice(0, RECENT_CAP);
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `getRecentlyPlayed-failed: ${classifyHistoryError(e)}`,
@@ -178,7 +178,7 @@ export async function getHeavyRotation(): Promise<Track[]> {
       .toArray();
     return rows.map((row) => row.track);
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `getHeavyRotation-failed: ${classifyHistoryError(e)}`,
@@ -195,7 +195,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
         const entry = r.entry as { data?: { v: number } } | undefined;
         return entry && entry.data && entry.data.v >= V_PLACEHOLDER;
       })
-      .map((r) => r.key as string)
+      .map((r) => r.key)
       .filter(
         (k) => typeof k === "string" && k.startsWith(METADATA_KEY_PREFIX),
       );
@@ -220,7 +220,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
     }
     return tracks;
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `getRandomDiscoveries-failed: ${classifyHistoryError(e)}`,
@@ -249,7 +249,7 @@ export async function recordFolderVisit(folderId: string, folderName: string) {
       await pruneFolderVisits(email);
     });
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `recordFolderVisit-failed: ${classifyHistoryError(e)}`,
@@ -279,7 +279,7 @@ async function pruneFolderVisits(email: string): Promise<void> {
     );
   } catch (e: unknown) {
     // Prune failure must not lose the visit record — log with context only.
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `folderVisits-prune-failed: ${classifyHistoryError(e)}`,
@@ -304,7 +304,7 @@ export async function getMostVisitedFolders(): Promise<FolderVisitEntry[]> {
         lastVisited: r.lastVisited,
       }));
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: HISTORY_MODULE,
       message: `getMostVisitedFolders-failed: ${classifyHistoryError(e)}`,

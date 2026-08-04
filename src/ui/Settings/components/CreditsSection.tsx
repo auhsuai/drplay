@@ -71,7 +71,7 @@ export function CreditsSection() {
       await openUrl(url);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      captureError({
+      void captureError({
         level: "error",
         source: CREDITS_MODULE,
         message: `open-external-url-failed: ${message}`,
@@ -85,10 +85,12 @@ export function CreditsSection() {
       const ok = await copyToClipboard(text);
       if (ok) {
         setCopiedIndex(index);
-        setTimeout(() => setCopiedIndex(null), 2000);
+        setTimeout(() => {
+          setCopiedIndex(null);
+        }, 2000);
       }
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: CREDITS_MODULE,
         message: `copy-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -113,7 +115,9 @@ export function CreditsSection() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleCopy(index, display)}
+              onClick={() => {
+                void handleCopy(index, display)();
+              }}
               className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
               title={t("settings.copy") || "Copy"}
             >
@@ -123,7 +127,9 @@ export function CreditsSection() {
             </button>
             <button
               type="button"
-              onClick={handleOpen(url)}
+              onClick={() => {
+                void handleOpen(url)();
+              }}
               aria-label={t("settings.open_link") || "Open link"}
               title={t("settings.open_link") || "Open link"}
               className="text-gray-400 hover:text-[#4285F4] transition-colors"

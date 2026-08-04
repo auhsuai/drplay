@@ -46,7 +46,7 @@ export function SettingsTab({
   const [showCacheManager, setShowCacheManager] = useState(false);
 
   useEffect(() => {
-    getEffectiveDownloadPath().then(setDownloadPath);
+    void getEffectiveDownloadPath().then(setDownloadPath);
   }, []);
 
   const handlePickDownloadPath = async () => {
@@ -60,7 +60,7 @@ export function SettingsTab({
         setCustomDownloadPath(selected);
         setDownloadPath(selected);
       }
-    } catch (e) {
+    } catch {
       showErrorToast(
         t("settings.select_folder_error") || "Failed to select folder",
       );
@@ -151,6 +151,10 @@ export function SettingsTab({
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
+                <span className="sr-only">
+                  {t("settings.minimize_to_tray") ||
+                    "Minimize to System Tray"}
+                </span>
                 <input
                   type="checkbox"
                   checked={minimizeToTray}
@@ -183,7 +187,9 @@ export function SettingsTab({
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
-                  onClick={handlePickDownloadPath}
+                  onClick={() => {
+                    void handlePickDownloadPath();
+                  }}
                   className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
                 >
                   <FolderOpen className="w-4 h-4" />

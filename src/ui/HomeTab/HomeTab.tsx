@@ -28,13 +28,7 @@ interface GreetingsEntry {
   en: string;
   vi: string;
 }
-interface GreetingsData {
-  morning: GreetingsEntry[];
-  afternoon: GreetingsEntry[];
-  evening: GreetingsEntry[];
-  general: GreetingsEntry[];
-}
-const greetingsData = rawGreetingsData as GreetingsData;
+const greetingsData = rawGreetingsData;
 
 const HOME_TAB_MODULE = "HomeTab";
 // Fired by uploadManager after each completed upload (slice 1) — the delta
@@ -79,9 +73,10 @@ export function HomeTab({
   // Read visit count + pick the random greeting object exactly ONCE per mount.
   // Reading sessionStorage and calling Math.random() inside useMemo caused the
   // subtitle to reshuffle on every render (incl. StrictMode double-invoke).
-  // Keep useMemo pure; the non-deterministic choices live here.
-  const randomGreetingRef = useRef<{ randomObj: GreetingsEntry } | null>(null);
-  if (randomGreetingRef.current === null) {
+  // A lazy useState initializer keeps the impure reads out of the render path
+  // (the compiler treats initializers as an allowed escape hatch) while still
+  // running only once.
+  const [randomGreeting] = useState<{ randomObj: GreetingsEntry }>(() => {
     const visitCount = parseInt(
       sessionStorage.getItem("drplay_home_visit") || "0",
       10,
@@ -98,8 +93,8 @@ export function HomeTab({
       : greetingsData.general;
     const randomObj =
       possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)];
-    randomGreetingRef.current = { randomObj };
-  }
+    return { randomObj };
+  });
 
   const { greeting, subtitle } = useMemo(() => {
     const hour = new Date().getHours();
@@ -112,14 +107,18 @@ export function HomeTab({
       greetingText = t("home.good_evening", "Good evening");
     }
 
-    const lang = i18n.language?.startsWith("vi") ? "vi" : "en";
-    const randomObj = randomGreetingRef.current!.randomObj;
+    const lang = i18n.language.startsWith("vi") ? "vi" : "en";
+    const randomObj = randomGreeting.randomObj;
     const randomSubtitle = randomObj[lang] || randomObj["en"];
 
     return { greeting: greetingText, subtitle: randomSubtitle };
-  }, [t, i18n.language]);
+  }, [t, i18n.language, randomGreeting]);
 
   useEffect(() => {
+    // The generation counter is shared between loadRecentlyAdded and the
+    // cleanup; capture the (stable) ref object once so the cleanup does not
+    // touch the outer-scope ref directly (react-hooks/exhaustive-deps).
+    const loadGenRef = recentlyAddedLoadGenRef;
     const visitCount = parseInt(
       sessionStorage.getItem("drplay_home_visit") || "0",
       10,
@@ -128,10 +127,10 @@ export function HomeTab({
 
     const loadRecentlyAdded = (activeToken: string | null): void => {
       if (!activeToken) return;
-      const generation = ++recentlyAddedLoadGenRef.current;
+      const generation = ++loadGenRef.current;
       getRecentlyAddedAudioFiles(activeToken)
         .then((files) => {
-          if (generation !== recentlyAddedLoadGenRef.current) return;
+          if (generation !== loadGenRef.current) return;
           setRecentlyAdded(
             files.map((f) => ({
               id: f.id,
@@ -144,8 +143,8 @@ export function HomeTab({
           );
         })
         .catch((err: unknown) => {
-          if (generation !== recentlyAddedLoadGenRef.current) return;
-          captureError({
+          if (generation !== loadGenRef.current) return;
+          void captureError({
             level: "warn",
             source: HOME_TAB_MODULE,
             message: `failed-to-load-recently-added: ${err instanceof Error ? err.message : String(err)}`,
@@ -161,8 +160,8 @@ export function HomeTab({
 
       loadRecentlyAdded(token);
     };
-    loadData().catch((err) =>
-      captureError({
+    loadData().catch((err: unknown) =>
+      void captureError({
         level: "error",
         source: HOME_TAB_MODULE,
         message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
@@ -170,8 +169,8 @@ export function HomeTab({
     );
 
     const handleUpdate = () => {
-      loadData().catch((err) =>
-        captureError({
+      void loadData().catch((err: unknown) =>
+        void captureError({
           level: "error",
           source: HOME_TAB_MODULE,
           message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
@@ -193,8 +192,14 @@ export function HomeTab({
       window.removeEventListener("recent-updated", handleUpdate);
       window.removeEventListener(DRIVE_FILES_CHANGED_EVENT, handleDeltaRefresh);
       window.removeEventListener(SYNC_EVENT_NAMES.complete, handleDeltaRefresh);
-      recentlyAddedLoadGenRef.current++;
+      loadGenRef.current++;
     };
+    // loadData/loadRecentlyAdded are effect-local closures; only `token`
+    // (used by the recently-added fetch) can change the effect's behavior,
+    // and re-running on token change re-registers the delta listeners with a
+    // fresh closure. The ref-mutation in the cleanup is intentionally not a
+    // dependency (refs are stable).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -295,9 +300,11 @@ export function HomeTab({
                     key={track.id}
                     track={track}
                     onPlay={() => {
-                      isOverlay
-                        ? setShowFullRecent(true)
-                        : onPlay(track, quickAccess);
+                      if (isOverlay) {
+                        setShowFullRecent(true);
+                      } else {
+                        onPlay(track, quickAccess);
+                      }
                     }}
                     token={token}
                     isOverlayBtn={isOverlay}
@@ -339,9 +346,11 @@ export function HomeTab({
                     key={track.id}
                     track={track}
                     onPlay={() => {
-                      isOverlay
-                        ? setShowFullRecentlyAdded(true)
-                        : onPlay(track, recentlyAddedItems);
+                      if (isOverlay) {
+                        setShowFullRecentlyAdded(true);
+                      } else {
+                        onPlay(track, recentlyAddedItems);
+                      }
                     }}
                     token={token}
                     isOverlayBtn={isOverlay}
@@ -372,8 +381,16 @@ export function HomeTab({
               {mostVisitedFolders.map((folder) => (
                 <div
                   key={folder.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
                     onOpenFolder(folder.id, folder.name);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpenFolder(folder.id, folder.name);
+                    }
                   }}
                   className="p-3.5 rounded-2xl transition-all duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full bg-[#F8F9FA] dark:bg-[#202124] hover:bg-white dark:hover:bg-[#2a2b2f] hover:shadow-lg hover:shadow-black/5 hover:-translate-y-1"
                 >

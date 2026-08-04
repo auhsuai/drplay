@@ -7,7 +7,7 @@ export function formatTime(seconds: number): string {
   const secs = Math.floor(seconds % 60);
 
   if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    return `${String(hrs)}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   }
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
+  return `${String(mins)}:${secs.toString().padStart(2, "0")}`;
 }

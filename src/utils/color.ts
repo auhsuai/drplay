@@ -42,10 +42,11 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
     img.crossOrigin = "Anonymous";
 
     let settled = false;
-    const timer = setTimeout(
-      () => finish(() => reject(new Error("Image load timeout"))),
-      IMAGE_LOAD_TIMEOUT_MS,
-    );
+    const timer = setTimeout(() => {
+      finish(() => {
+        reject(new Error("Image load timeout"));
+      });
+    }, IMAGE_LOAD_TIMEOUT_MS);
     const finish = (action: () => void) => {
       if (settled) return;
       settled = true;
@@ -59,11 +60,14 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
       }
     };
 
-    img.onload = () =>
+    img.onload = () => {
       finish(() => {
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
-        if (!ctx) return reject(new Error("No canvas context"));
+        if (!ctx) {
+          reject(new Error("No canvas context"));
+          return;
+        }
 
         const size = CANVAS_SIZE;
         canvas.width = size;
@@ -97,32 +101,38 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
 
           const darken = DARKEN_FACTOR;
           const palette = sum.map((s) => {
-            if (s.n === 0) return `rgba(0,0,0,${BG_ALPHA})`;
+            if (s.n === 0) return `rgba(0,0,0,${String(BG_ALPHA)})`;
             const r = Math.floor((s.r / s.n) * darken);
             const g = Math.floor((s.g / s.n) * darken);
             const b = Math.floor((s.b / s.n) * darken);
-            return `rgba(${r}, ${g}, ${b}, ${BG_ALPHA})`;
+            return `rgba(${String(r)}, ${String(g)}, ${String(b)}, ${String(BG_ALPHA)})`;
           });
           setPaletteCached(imgUrl, palette);
           resolve(palette);
         } catch (e: unknown) {
-          captureError({
+          // fire-and-forget: logging must not throw in this sync callback
+          // (captureError never rejects — it swallows failures internally).
+          void captureError({
             level: "warn",
             source: "color",
             message: `getPalette canvas error: ${e instanceof Error ? e.message : String(e)}`,
           });
-          reject(e);
+          reject(e instanceof Error ? e : new Error(String(e)));
         }
       });
-    img.onerror = () =>
+    };
+    img.onerror = () => {
       finish(() => {
-        captureError({
+        // fire-and-forget: logging must not throw in this sync callback
+        // (captureError never rejects — it swallows failures internally).
+        void captureError({
           level: "warn",
           source: "color",
           message: "getPalette image load failed",
         });
         reject(new Error("Image load error"));
       });
+    };
     img.src = imgUrl;
   });
 };

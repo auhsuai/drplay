@@ -28,8 +28,10 @@ import { captureError } from "../utils/errorLog";
 
 import { useLiveQuery } from "dexie-react-hooks";
 import { metadataCache } from "../utils/metadata";
+import type { CachedMetadata } from "../utils/metadata";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
+import type { DriveFilesListResponse } from "../utils/driveApi";
 
 const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 export const ITEMS_PER_PAGE = 50;
@@ -81,15 +83,29 @@ export function useDriveExplorer(
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isBulkOperating, setIsBulkOperating] = useState(false);
 
-  // Reset page when folder, search, or sort changes
-  useEffect(() => {
+  // Reset page when folder, search, or sort changes — and reset search on
+  // folder change. Done during render (React 19 "adjusting state when props
+  // change" pattern) instead of in an effect, which would cascade renders.
+  const [prevResetKey, setPrevResetKey] = useState<{
+    folder: string;
+    search: string;
+    sort: string;
+  }>({ folder: currentFolderId, search: searchQuery, sort: sortOption });
+  if (
+    prevResetKey.folder !== currentFolderId ||
+    prevResetKey.search !== searchQuery ||
+    prevResetKey.sort !== sortOption
+  ) {
+    setPrevResetKey({
+      folder: currentFolderId,
+      search: searchQuery,
+      sort: sortOption,
+    });
+    if (prevResetKey.folder !== currentFolderId) {
+      setSearchQuery("");
+    }
     setCurrentPage(1);
-  }, [currentFolderId, searchQuery, sortOption]);
-
-  // Reset highlight and search on folder change
-  useEffect(() => {
-    setSearchQuery("");
-  }, [currentFolderId]);
+  }
 
   // Re-render on every upload status change so the pin partition below re-runs
   // with fresh getUploadState() verdicts while an upload is in flight.
@@ -170,6 +186,8 @@ export function useDriveExplorer(
     // Nếu chưa có (dbFiles undefined hoặc = 0), hiện spinner.
     let isMounted = true;
     const abortController = new AbortController();
+    const stillMounted = () => isMounted;
+    const isAborted = () => abortController.signal.aborted;
 
     const fetchOnDemand = async () => {
       try {
@@ -202,22 +220,27 @@ export function useDriveExplorer(
             headers: { Authorization: `Bearer ${token}` },
             signal: abortController.signal,
           });
-          if (abortController.signal.aborted) break;
+          if (isAborted()) break;
 
           if (!res.ok) {
-            captureError({
+            void captureError({
               level: "warn",
               source: "useDriveExplorer",
-              message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})`,
+              message: `OnDemandFetch Drive API error: HTTP ${String(res.status)} (folder=${currentFolderId})`,
             });
             break;
           }
-          const data = await res.json();
-          if (abortController.signal.aborted) break;
+          const data = (await res.json()) as DriveFilesListResponse | null;
+          if (isAborted()) break;
 
           // Write each page to Dexie immediately instead of accumulating all
           // pages in memory (mirrors proSync.worker.ts full-sync pattern).
-          if (isMounted && Array.isArray(data.files) && data.files.length > 0) {
+          if (
+            stillMounted() &&
+            data &&
+            Array.isArray(data.files) &&
+            data.files.length > 0
+          ) {
             const filesToInsert = data.files.map((f: DriveFileItem) => ({
               id: f.id,
               name: f.name,
@@ -231,28 +254,28 @@ export function useDriveExplorer(
             try {
               await db.files.bulkPut(filesToInsert);
             } catch (dbErr) {
-              captureError({
+              void captureError({
                 level: "error",
                 source: "useDriveExplorer",
-                message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}`,
+                message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${String(filesToInsert.length)}): ${String(dbErr)}`,
               });
               break;
             }
           }
 
-          pageToken = data.nextPageToken;
+          pageToken = data?.nextPageToken;
           if (!pageToken) hasMore = false;
         }
       } catch (err) {
         if (abortController.signal.aborted) return;
         if (err instanceof TypeError) {
-          captureError({
+          void captureError({
             level: "warn",
             source: "useDriveExplorer",
             message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}`,
           });
         } else {
-          captureError({
+          void captureError({
             level: "error",
             source: "useDriveExplorer",
             message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}`,
@@ -263,7 +286,7 @@ export function useDriveExplorer(
       }
     };
 
-    fetchOnDemand();
+    void fetchOnDemand();
     return () => {
       isMounted = false;
       abortController.abort();
@@ -317,19 +340,25 @@ export function useDriveExplorer(
     }
 
     const collator = SORT_COLLATOR;
+    // metadataCache is typed Record<string, CachedMetadata> but is a sparse
+    // module-level cache — index access can still be undefined at runtime.
+    const cachedTitle = (id: string): string | undefined => {
+      const meta = metadataCache[id] as CachedMetadata | undefined;
+      return meta?.title;
+    };
     restItems.sort((a, b) => {
       if (a.isFolder && !b.isFolder) return -1;
       if (!a.isFolder && b.isFolder) return 1;
 
       switch (sortOption) {
         case "name": {
-          const titleA = metadataCache[a.id]?.title || a.title;
-          const titleB = metadataCache[b.id]?.title || b.title;
+          const titleA = cachedTitle(a.id) || a.title;
+          const titleB = cachedTitle(b.id) || b.title;
           return collator.compare(titleA, titleB);
         }
         case "name desc": {
-          const titleA = metadataCache[a.id]?.title || a.title;
-          const titleB = metadataCache[b.id]?.title || b.title;
+          const titleA = cachedTitle(a.id) || a.title;
+          const titleB = cachedTitle(b.id) || b.title;
           return collator.compare(titleB, titleA);
         }
         case "modifiedTime": {
@@ -355,8 +384,8 @@ export function useDriveExplorer(
           return diff;
         }
         default: {
-          const titleA = metadataCache[a.id]?.title || a.title;
-          const titleB = metadataCache[b.id]?.title || b.title;
+          const titleA = cachedTitle(a.id) || a.title;
+          const titleB = cachedTitle(b.id) || b.title;
           return collator.compare(titleA, titleB);
         }
       }
@@ -369,6 +398,11 @@ export function useDriveExplorer(
     if (uploadedItems.length === 0 && uploadingItems.length === 0)
       return restItems;
     return [...uploadedItems, ...uploadingItems, ...restItems];
+    // uploadStatusVersion IS load-bearing here: the memo must re-run when a
+    // started/finished upload changes the pin partition — the re-render that
+    // makes that visible is triggered by useSyncExternalStore, which the rule
+    // cannot see.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dbFiles, sortOption, currentFolderName, uploadStatusVersion]);
 
   const filteredItems = searchQuery ? globalSearchItems : items;
@@ -380,7 +414,7 @@ export function useDriveExplorer(
         (currentPage - 1) * ITEMS_PER_PAGE,
         currentPage * ITEMS_PER_PAGE,
       ),
-    [filteredItems, currentPage, ITEMS_PER_PAGE],
+    [filteredItems, currentPage],
   );
 
   const handleCreateFolder = async (
@@ -391,7 +425,7 @@ export function useDriveExplorer(
     setIsCreatingFolder(true);
     try {
       const res = await createFolder(token, folderName, currentFolderId);
-      if (res && res.id) {
+      if (res.id) {
         await db.files.put({
           id: res.id,
           name: res.name || folderName,
@@ -405,7 +439,7 @@ export function useDriveExplorer(
       onRefresh();
       onComplete();
     } catch (e: unknown) {
-      captureError({
+      void captureError({
         level: "error",
         source: "useDriveExplorer",
         message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -442,7 +476,7 @@ export function useDriveExplorer(
           deletedIds.push(id);
         } catch (e: unknown) {
           failedIds.push(id);
-          captureError({
+          void captureError({
             level: "error",
             source: "useDriveExplorer",
             message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
@@ -462,7 +496,7 @@ export function useDriveExplorer(
         );
       }
     } catch (e: unknown) {
-      captureError({
+      void captureError({
         level: "error",
         source: "useDriveExplorer",
         message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}`,
@@ -503,7 +537,7 @@ export function useDriveExplorer(
           movedIds.push(id);
         } catch (e: unknown) {
           failedIds.push(id);
-          captureError({
+          void captureError({
             level: "error",
             source: "useDriveExplorer",
             message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
@@ -528,7 +562,7 @@ export function useDriveExplorer(
         );
       }
     } catch (e: unknown) {
-      captureError({
+      void captureError({
         level: "error",
         source: "useDriveExplorer",
         message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}`,

@@ -43,6 +43,9 @@ export function PremiumCard({
     if (!token) return;
     const controller = new AbortController();
     let isMounted = true;
+    // The cleanup touches the img element; capture it at setup so the
+    // cleanup never reads the (possibly stale) ref.
+    const imgElement = imgRef.current;
     getTrackMetadata(
       track.id,
       token,
@@ -65,7 +68,7 @@ export function PremiumCard({
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
-        captureError({
+        void captureError({
           level: "warn",
           source: PREMIUM_CARD_MODULE,
           message: `metadata-load-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -75,13 +78,21 @@ export function PremiumCard({
       isMounted = false;
       controller.abort();
       releaseBlobUrl();
-      if (imgRef.current) imgRef.current.src = "";
+      if (imgElement) imgElement.src = "";
     };
-  }, [track.id, token]);
+  }, [track.id, token, track.size, track.originalName, releaseBlobUrl]);
 
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={onPlay}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onPlay();
+        }
+      }}
       className="group cursor-pointer active:scale-[0.98] transition-transform duration-200"
     >
       <div

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Track } from "../../App";
 import { Music, Play, X, Trash2, Camera } from "lucide-react";
 import type { Playlist } from "../../utils/playlists";
@@ -37,44 +37,51 @@ export function PlaylistView({
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
 
-  const loadPlaylist = async () => {
+  const loadPlaylist = useCallback(async () => {
     try {
       const data = await getPlaylistById(playlistId);
       setPlaylist(data);
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: PLAYLIST_VIEW_MODULE,
         message: `failed-to-load-playlist: ${e instanceof Error ? e.message : String(e)}`,
       });
       showErrorToast(t("playlist.load_error") || "Failed to load playlist");
     }
-  };
+  }, [playlistId, t]);
 
   useEffect(() => {
-    loadPlaylist().catch((err) =>
-      captureError({
+    loadPlaylist().catch((err: unknown) =>
+      void captureError({
         level: "error",
         source: PLAYLIST_VIEW_MODULE,
         message: `failed-to-load-playlist: ${err instanceof Error ? err.message : String(err)}`,
       }),
     );
-    window.addEventListener("playlists-updated", loadPlaylist);
-    window.addEventListener("user-changed", loadPlaylist);
-    return () => {
-      window.removeEventListener("playlists-updated", loadPlaylist);
-      window.removeEventListener("user-changed", loadPlaylist);
+    const handlePlaylistsUpdated = () => {
+      void loadPlaylist();
     };
-  }, [playlistId]);
+    const handleUserChanged = () => {
+      void loadPlaylist();
+    };
+    window.addEventListener("playlists-updated", handlePlaylistsUpdated);
+    window.addEventListener("user-changed", handleUserChanged);
+    return () => {
+      window.removeEventListener("playlists-updated", handlePlaylistsUpdated);
+      window.removeEventListener("user-changed", handleUserChanged);
+    };
+  }, [playlistId, loadPlaylist]);
 
   useEffect(() => {
     if (!playlist) return;
     const ids = playlist.tracks.map((t) => t.id).filter(Boolean);
     if (ids.length > 0) prefetchVisibleTracks(ids);
-  }, [playlist?.tracks]);
+  }, [playlist]);
 
   const tracks = playlist?.tracks ?? [];
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
   const rowVirtualizer = useVirtualizer({
     count: tracks.length,
     getScrollElement: () => scrollRef.current,
@@ -89,7 +96,7 @@ export function PlaylistView({
     try {
       await removeTrackFromPlaylist(playlistId, trackId);
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: PLAYLIST_VIEW_MODULE,
         message: `remove-track-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -104,7 +111,7 @@ export function PlaylistView({
         await deletePlaylist(playlistId);
         onDelete(); // Triggers tab change in App
       } catch (err) {
-        captureError({
+        void captureError({
           level: "error",
           source: PLAYLIST_VIEW_MODULE,
           message: `delete-playlist-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -144,10 +151,10 @@ export function PlaylistView({
       setIsCropperOpen(true);
     };
     reader.onerror = () => {
-      captureError({
+      void captureError({
         level: "error",
         source: PLAYLIST_VIEW_MODULE,
-        message: `read-cover-failed: name=${file.name}, size=${file.size}`,
+        message: `read-cover-failed: name=${file.name}, size=${String(file.size)}`,
       });
       showErrorToast(
         t("playlist.cover_read_error") || "Failed to read the selected image",
@@ -167,7 +174,7 @@ export function PlaylistView({
         setPlaylist(updated);
       }
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: PLAYLIST_VIEW_MODULE,
         message: `update-cover-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -188,8 +195,16 @@ export function PlaylistView({
 
       <div className="relative z-10 px-8 pt-20 pb-8 flex items-end gap-6 flex-shrink-0">
         <div
-          className="relative w-48 h-48 rounded-xl shadow-2xl shrink-0 group overflow-hidden cursor-pointer"
+          role="button"
+          tabIndex={0}
           onClick={() => fileInputRef.current?.click()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              fileInputRef.current?.click();
+            }
+          }}
+          className="relative w-48 h-48 rounded-xl shadow-2xl shrink-0 group overflow-hidden cursor-pointer"
         >
           {playlist.coverImage ? (
             <img
@@ -233,7 +248,9 @@ export function PlaylistView({
               {playlist.tracks.length === 1 ? t("song") : t("songs")}
             </span>
             <button
-              onClick={handleDelete}
+              onClick={() => {
+                void handleDelete();
+              }}
               className="text-red-500 hover:text-red-600 flex items-center gap-1 transition-colors"
             >
               <Trash2 className="w-4 h-4" /> {t("delete")}
@@ -266,7 +283,7 @@ export function PlaylistView({
           <div
             className="flex flex-col relative w-full"
             style={{
-              height: `${rowVirtualizer.getTotalSize()}px`,
+              height: `${String(rowVirtualizer.getTotalSize())}px`,
               contain: "strict",
             }}
           >
@@ -279,13 +296,21 @@ export function PlaylistView({
                     position: "absolute",
                     left: 0,
                     width: "100%",
-                    height: `${virtualRow.size}px`,
-                    transform: `translateY(${virtualRow.start}px)`,
+                    height: `${String(virtualRow.size)}px`,
+                    transform: `translateY(${String(virtualRow.start)}px)`,
                   }}
                 >
                   <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => {
                       onPlay(track, tracks);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onPlay(track, tracks);
+                      }
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -343,7 +368,9 @@ export function PlaylistView({
                     </div>
 
                     <button
-                      onClick={(e) => handleRemove(e, track.id)}
+                      onClick={(e) => {
+                        void handleRemove(e, track.id);
+                      }}
                       className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all text-gray-400 hover:text-red-500"
                       title={t("remove_from_playlist")}
                     >
@@ -364,9 +391,12 @@ export function PlaylistView({
             setIsCropperOpen(false);
             setSelectedImage(null);
           }}
-          onSave={handleSaveCover}
+          onSave={(img) => {
+            void handleSaveCover(img);
+          }}
         />
       )}
     </main>
   );
 }
+

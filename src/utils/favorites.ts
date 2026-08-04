@@ -21,7 +21,7 @@ export async function getFavorites(): Promise<Track[]> {
     // Sort descending by createdAt to simulate unshift
     return favs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: FAV_MODULE,
       message: `get-failed: ${classifyFavoriteError(e)}`,
@@ -47,7 +47,7 @@ export async function addFavorite(track: Track): Promise<void> {
       }
     });
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: FAV_MODULE,
       message: `add-failed: ${classifyFavoriteError(e)}`,
@@ -64,7 +64,7 @@ export async function removeFavorite(trackId: string): Promise<void> {
     await db.favorites.delete([email, trackId]);
     window.dispatchEvent(new CustomEvent("favorites-updated"));
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: FAV_MODULE,
       message: `remove-failed: ${classifyFavoriteError(e)}`,
@@ -81,7 +81,7 @@ export async function isFavorite(trackId: string): Promise<boolean> {
     const fav = await db.favorites.get([email, trackId]);
     return !!fav;
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: FAV_MODULE,
       message: `is-fav-failed: ${classifyFavoriteError(e)}`,

@@ -107,7 +107,7 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
       }));
       startUploads(seeds, token);
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: UPLOAD_BUTTON_MODULE,
         message: `open-file-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -135,7 +135,7 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
         token,
       );
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: UPLOAD_BUTTON_MODULE,
         message: `open-folder-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -148,7 +148,10 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
     <div
       className="relative shrink-0"
       ref={wrapperRef}
-      onClick={(e) => e.stopPropagation()}
+      role="presentation"
+      onClick={(e) => {
+        e.stopPropagation();
+      }}
     >
       <button
         onClick={handleToggleMenu}
@@ -172,14 +175,18 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
         >
           <button
             role="menuitem"
-            onClick={handleUploadFiles}
+            onClick={() => {
+              void handleUploadFiles();
+            }}
             className={MENU_ITEM_CLASS}
           >
             {t("upload.upload_file")}
           </button>
           <button
             role="menuitem"
-            onClick={handleUploadFolder}
+            onClick={() => {
+              void handleUploadFolder();
+            }}
             className={MENU_ITEM_CLASS}
           >
             {t("upload.upload_folder")}

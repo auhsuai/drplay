@@ -41,7 +41,7 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
   touch(streamUrl, controller);
 
   fetch(streamUrl, {
-    headers: { Range: `bytes=0-${PREFETCH_RANGE_BYTES - 1}` },
+    headers: { Range: `bytes=0-${String(PREFETCH_RANGE_BYTES - 1)}` },
     signal: AbortSignal.any([
       controller.signal,
       AbortSignal.timeout(PREFETCH_TIMEOUT_MS),
@@ -50,7 +50,9 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
     .then((response) => {
       if (!response.ok) return;
       const logCancelError = (err: unknown) => {
-        captureError({
+        // fire-and-forget: logging must not throw in this sync callback
+        // (captureError never rejects — it swallows failures internally).
+        void captureError({
           level: "warn",
           source: "nextTrackPrefetcher",
           message: `Prefetch body cancel failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -64,7 +66,9 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
     })
     .catch((err: unknown) => {
       const kind = classifyError(err);
-      captureError({
+      // fire-and-forget: logging must not throw in this sync callback
+      // (captureError never rejects — it swallows failures internally).
+      void captureError({
         level: "warn",
         source: "nextTrackPrefetcher",
         message: `Prefetch failed (${kind}): ${err instanceof Error ? err.message : String(err)}`,

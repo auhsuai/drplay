@@ -93,7 +93,7 @@ export async function registerUploadPath(path: string): Promise<void> {
       `Failed to extend fs read scope for "${path}"`,
       err,
     );
-    captureError({
+    await captureError({
       level: "warn",
       source: "diskFs",
       message: wrapped.message,
@@ -115,7 +115,7 @@ export async function statDiskPath(path: string): Promise<DiskEntry | null> {
   } catch (err: unknown) {
     if (NOT_FOUND_PATTERN.test(describeError(err))) return null;
     const wrapped = wrapError(`Failed to stat "${path}"`, err);
-    captureError({
+    await captureError({
       level: "warn",
       source: "diskFs",
       message: wrapped.message,
@@ -165,7 +165,7 @@ export async function openDiskReadStream(
     rid = await invoke<number>(FS_OPEN_CMD, { path, options: { read: true } });
   } catch (err: unknown) {
     const wrapped = wrapError(`Failed to open file "${path}"`, err);
-    captureError({
+    await captureError({
       level: "warn",
       source: "diskFs",
       message: wrapped.message,
@@ -183,7 +183,7 @@ export async function openDiskReadStream(
       });
     } catch (err: unknown) {
       const wrapped = wrapError(`Failed to read file "${path}"`, err);
-      captureError({
+      await captureError({
         level: "warn",
         source: "diskFs",
         message: wrapped.message,
@@ -195,13 +195,13 @@ export async function openDiskReadStream(
       payload instanceof ArrayBuffer
         ? new Uint8Array(payload)
         : Uint8Array.from(payload);
-    // The plugin guarantees ≥8 elements; anything shorter is a protocol
+    // The plugin guarantees â‰¥8 elements; anything shorter is a protocol
     // violation and would misparse nread into silently wrong chunk data.
     if (arr.byteLength < NREAD_BYTES) {
       const wrapped = new Error(
         `Failed to read file "${path}": malformed stream response`,
       );
-      captureError({
+      await captureError({
         level: "warn",
         source: "diskFs",
         message: wrapped.message,
@@ -221,7 +221,7 @@ export async function openDiskReadStream(
       await invoke(FS_CLOSE_CMD, { rid });
     } catch (err: unknown) {
       const wrapped = wrapError(`Failed to close file "${path}"`, err);
-      captureError({
+      await captureError({
         level: "warn",
         source: "diskFs",
         message: wrapped.message,
@@ -287,7 +287,7 @@ async function walkDirRecursive(
     });
   } catch (err: unknown) {
     const wrapped = wrapError(`Failed to read directory "${dirPath}"`, err);
-    captureError({
+    await captureError({
       level: "warn",
       source: "diskFs",
       message: wrapped.message,

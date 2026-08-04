@@ -16,7 +16,9 @@ function showToast(
 ): void {
   const root = document.getElementById("toast-root");
   if (!root) {
-    captureError({
+    // fire-and-forget: logging must not throw in this sync path (captureError
+    // never rejects — it swallows failures internally).
+    void captureError({
       level: "warn",
       source: "simpleToast",
       message: `[Toast fallback] ${message}`,

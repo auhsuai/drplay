@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { X, Download, LoaderCircle } from "lucide-react";
 
 interface DownloadDialogProps {
@@ -19,12 +20,23 @@ export function DownloadDialog({
   onConfirm,
   t,
 }: DownloadDialogProps) {
+  // Focus the file-name field when the dialog opens (replaces the autoFocus
+  // prop, which jsx-a11y/no-autofocus rejects). Hooks stay above the early
+  // return so they always run in the same order.
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (show) nameInputRef.current?.focus();
+  }, [show]);
+
   if (!show) return null;
 
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4"
-      onClick={(e) => e.stopPropagation()}
+      role="presentation"
+      onClick={(e) => {
+        e.stopPropagation();
+      }}
     >
       <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between">
@@ -32,7 +44,9 @@ export function DownloadDialog({
             {t("menu.download_title", "Download File")}
           </h3>
           <button
-            onClick={() => !isDownloadingFile && onClose()}
+            onClick={() => {
+              if (!isDownloadingFile) onClose();
+            }}
             disabled={isDownloadingFile}
             className="text-gray-400 hover:text-gray-900 dark:hover:text-white p-1 rounded-full transition-colors disabled:opacity-50"
           >
@@ -45,19 +59,23 @@ export function DownloadDialog({
             {t("menu.file_name", "File Name")}
           </label>
           <input
+            ref={nameInputRef}
             type="text"
             value={downloadFileName}
-            onChange={(e) => setDownloadFileName(e.target.value)}
+            onChange={(e) => {
+              setDownloadFileName(e.target.value);
+            }}
             disabled={isDownloadingFile}
             className="w-full bg-gray-100 dark:bg-[#25262a] hover:bg-gray-200/70 dark:hover:bg-[#2c2d32] focus:bg-gray-200 dark:focus:bg-[#2c2d32] text-gray-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none transition-all duration-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
             placeholder={t("menu.file_name", "File Name")}
-            autoFocus
           />
         </div>
 
         <div className="flex items-center justify-end gap-3 mt-2">
           <button
-            onClick={() => onClose()}
+            onClick={() => {
+              onClose();
+            }}
             disabled={isDownloadingFile}
             className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
           >

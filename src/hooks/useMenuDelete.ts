@@ -45,7 +45,7 @@ export function useMenuDelete(t: TFunction) {
       if (onRemoveItem) onRemoveItem(deleteDriveItem.id);
       else if (onRefresh) onRefresh();
     } catch (e: unknown) {
-      captureError({
+      void captureError({
         level: "error",
         source: "useMenuDelete",
         message: `Failed to delete item: ${e instanceof Error ? e.message : String(e)}`,

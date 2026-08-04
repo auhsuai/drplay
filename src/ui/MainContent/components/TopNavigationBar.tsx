@@ -19,7 +19,7 @@ interface TopNavigationBarProps {
   onSortChange?: ((option: string) => void) | undefined;
   token: string | null;
   onNewFolderClick: () => void;
-  isInitialMount: React.MutableRefObject<boolean>;
+  isInitialMount: React.RefObject<boolean>;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
 
@@ -86,9 +86,9 @@ export function TopNavigationBar({
               <div key={folder.id} className="flex items-center shrink-0">
                 <span className="text-gray-400 mx-1">/</span>
                 <button
-                  onClick={() =>
-                    onBreadcrumbClick(folder.id, folder.name, index)
-                  }
+                  onClick={() => {
+                    onBreadcrumbClick(folder.id, folder.name, index);
+                  }}
                   className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] transition-colors truncate max-w-[150px]"
                   title={displayFolderName(folder.name)}
                 >
@@ -121,12 +121,16 @@ export function TopNavigationBar({
               type="text"
               placeholder={t("search_placeholder", "Tìm kiếm...")}
               value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
+              onChange={(e) => {
+                onSearchChange(e.target.value);
+              }}
               className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-[#4285F4]/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
             />
             {searchQuery && (
               <button
-                onClick={() => onSearchChange("")}
+                onClick={() => {
+                  onSearchChange("");
+                }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
               >
                 <X className="w-3.5 h-3.5" />

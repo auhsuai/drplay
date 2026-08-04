@@ -99,16 +99,21 @@ function mapUploadHttpError(
   // Log the concrete status + sanitized reason BEFORE throwing: the caller
   // (uploadManager) only records the UploadError kind — the exact 4xx from Drive would otherwise be invisible in the log.
   const detail = uploadErrorDetail(errBody);
-  captureError({
+  // fire-and-forget: logging must not throw in this sync path (captureError
+  // never rejects — it swallows failures internally).
+  void captureError({
     level: "warn",
     source: DRIVE_MODULE,
-    message: `upload-http-error (status=${status})${detail ? `: ${detail}` : ""}`,
+    message: `upload-http-error (status=${String(status)})${detail ? `: ${detail}` : ""}`,
   });
   if (status === 401)
     return new UploadError("upload unauthorized (401)", "auth");
   if (status === 403 && isQuotaExceeded(errBody))
     return new UploadError("drive storage quota exceeded", "quota");
-  return new UploadError(`upload failed (status=${status})`, "invalid");
+  return new UploadError(
+    `upload failed (status=${String(status)})`,
+    "invalid",
+  );
 }
 
 // Step 1: initiate a resumable session. POST is idempotent (metadata only) so it reuses driveFetch's retry/backoff — unlike the PUT step.
@@ -160,7 +165,7 @@ async function putResumableBytes(
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": UPLOAD_MIME_TYPE,
-      "Content-Range": `bytes 0-${byteLength - 1}/${byteLength}`,
+      "Content-Range": `bytes 0-${String(byteLength - 1)}/${String(byteLength)}`,
     },
     body: data,
     signal,
@@ -177,10 +182,10 @@ async function putResumableBytes(
   try {
     return (await response.json()) as DriveFileItem;
   } catch (err) {
-    captureError({
+    await captureError({
       level: "error",
       source: DRIVE_MODULE,
-      message: `upload-parse-response-failed (status=${response.status}): ${classifyDriveError(err)}`,
+      message: `upload-parse-response-failed (status=${String(response.status)}): ${classifyDriveError(err)}`,
     });
     throw new UploadError("upload response was not valid JSON", "invalid");
   }
@@ -231,7 +236,7 @@ export async function uploadFileResumable(
     // Transient network/timeout — wrap so the manager's single retry layer can
     // classify it; a raw TypeError would NOT match `kind === 'network'` and
     // would bypass the retry entirely.
-    captureError({
+    await captureError({
       level: "warn",
       source: DRIVE_MODULE,
       message: `upload-transient-failure: ${classifyDriveError(err)}`,
@@ -286,7 +291,7 @@ async function putChunkWithRetry(
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": UPLOAD_MIME_TYPE,
-          "Content-Range": `bytes ${start}-${end}/${totalSize}`,
+          "Content-Range": `bytes ${String(start)}-${String(end)}/${String(totalSize)}`,
         },
         body: chunk,
         signal: mergedSignal,
@@ -315,7 +320,7 @@ async function putChunkWithRetry(
       continue;
     }
     throw new UploadError(
-      `upload failed (status=${response.status})`,
+      `upload failed (status=${String(response.status)})`,
       "network",
     );
   }
@@ -339,10 +344,10 @@ async function uploadChunksInSession(
       chunk = await readChunk(offset);
     } catch (err) {
       if (signal?.aborted) throw abortedUploadError();
-      captureError({
+      await captureError({
         level: "warn",
         source: DRIVE_MODULE,
-        message: `upload-chunk-read-failed (offset=${offset}): ${classifyDriveError(err)}`,
+        message: `upload-chunk-read-failed (offset=${String(offset)}): ${classifyDriveError(err)}`,
       });
       throw new UploadError("failed to read upload data", "invalid");
     }
@@ -381,10 +386,10 @@ async function uploadChunksInSession(
       try {
         return (await response.json()) as DriveFileItem;
       } catch (err) {
-        captureError({
+        await captureError({
           level: "error",
           source: DRIVE_MODULE,
-          message: `upload-parse-response-failed (status=${response.status}): ${classifyDriveError(err)}`,
+          message: `upload-parse-response-failed (status=${String(response.status)}): ${classifyDriveError(err)}`,
         });
         throw new UploadError("upload response was not valid JSON", "invalid");
       }
@@ -441,10 +446,10 @@ export async function uploadFileResumableChunked(
       if (err instanceof UploadError) throw err;
       // Initiate exhausted its own retries with a transient failure — try a fresh session (bounded by MAX_UPLOAD_ATTEMPTS).
       if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
-        captureError({
+        await captureError({
           level: "warn",
           source: DRIVE_MODULE,
-          message: `upload-session-restarted (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}`,
+          message: `upload-session-restarted (attempt=${String(attempt + 1)}/${String(MAX_UPLOAD_ATTEMPTS)}): ${classifyDriveError(err)}`,
         });
         continue;
       }
@@ -458,10 +463,10 @@ export async function uploadFileResumableChunked(
       // Session expired (404) or transient network/timeout — restart the whole upload from a fresh session URI, bounded by MAX_UPLOAD_ATTEMPTS.
       if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
         const expired = err instanceof SessionExpiredError;
-        captureError({
+        await captureError({
           level: "warn",
           source: DRIVE_MODULE,
-          message: `${expired ? "upload-session-expired" : "upload-session-restarted"} (attempt=${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}): ${classifyDriveError(err)}`,
+          message: `${expired ? "upload-session-expired" : "upload-session-restarted"} (attempt=${String(attempt + 1)}/${String(MAX_UPLOAD_ATTEMPTS)}): ${classifyDriveError(err)}`,
         });
         continue;
       }
@@ -469,7 +474,7 @@ export async function uploadFileResumableChunked(
     }
   }
   throw new UploadError(
-    `upload failed after ${MAX_UPLOAD_ATTEMPTS} attempts`,
+    `upload failed after ${String(MAX_UPLOAD_ATTEMPTS)} attempts`,
     "network",
   );
 }

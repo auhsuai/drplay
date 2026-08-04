@@ -26,7 +26,7 @@ function readStoredRootFolder(): string | null {
   try {
     return localStorage.getItem(STORAGE_KEY_ROOT);
   } catch {
-    captureError({
+    void captureError({
       level: "warn",
       source: "useLocateFile",
       message: "locate-root-read-failed",
@@ -53,9 +53,14 @@ export function useLocateFile(
 
   useEffect(() => {
     let mounted = true;
+    const stillMounted = () => mounted;
     const handleLocateFile = async (ev: Event) => {
-      let fileId = (ev as CustomEvent<{ fileId: string }>).detail?.fileId;
-      if (!fileId || !accessToken) return;
+      // Duck-typed event payload: locate-file is dispatched internally with
+      // { fileId }, but a corrupt/malformed event must not crash the listener.
+      const detail = (ev as CustomEvent<{ fileId?: unknown } | null>).detail;
+      const rawFileId = detail?.fileId;
+      if (typeof rawFileId !== "string" || !rawFileId || !accessToken) return;
+      let fileId: string = rawFileId;
 
       if (fileId.startsWith(DRIVE_ID_PREFIX)) {
         fileId = fileId.replace(DRIVE_ID_PREFIX, "");
@@ -86,13 +91,13 @@ export function useLocateFile(
                 },
               );
               if (res.ok) {
-                const data = await res.json();
+                const data = (await res.json()) as { parents?: string[] };
                 if (data.parents && data.parents.length > 0) {
                   pId = data.parents[0];
                 }
               }
             } catch (e: unknown) {
-              captureError({
+              void captureError({
                 level: "warn",
                 source: "useLocateFile",
                 message: `Failed to get parents via API: ${classifyDriveError(e)}`,
@@ -118,8 +123,14 @@ export function useLocateFile(
                 },
               );
               if (pRes.ok) {
-                const pData = await pRes.json();
-                newHistory.unshift({ id: pId, name: pData.name });
+                const pData = (await pRes.json()) as { name?: unknown };
+                newHistory.unshift({
+                  id: pId,
+                  name:
+                    typeof pData.name === "string"
+                      ? pData.name
+                      : t("drive.unknown_folder", UNKNOWN_FOLDER),
+                });
               } else {
                 newHistory.unshift({
                   id: pId,
@@ -127,7 +138,7 @@ export function useLocateFile(
                 });
               }
             } catch (e: unknown) {
-              captureError({
+              void captureError({
                 level: "warn",
                 source: "useLocateFile",
                 message: `Parent name fetch failed: ${classifyDriveError(e)}`,
@@ -160,14 +171,14 @@ export function useLocateFile(
             },
           );
           if (response.ok) {
-            const data = await response.json();
-            if (!mounted) return;
+            const data = (await response.json()) as { parents?: string[] };
+            if (!stillMounted()) return;
             if (data.parents && data.parents.length > 0) {
               parentId = data.parents[0];
             }
           }
         } catch (e: unknown) {
-          captureError({
+          void captureError({
             level: "warn",
             source: "useLocateFile",
             message: `Locate parent API failed: ${classifyDriveError(e)}`,
@@ -202,21 +213,26 @@ export function useLocateFile(
               },
             );
             if (pRes.ok) {
-              const pData = await pRes.json();
-              if (!mounted) return;
-              folderName = pData.name;
+              const pData = (await pRes.json()) as { name?: unknown };
+              if (!stillMounted()) return;
+              folderName =
+                typeof pData.name === "string"
+                  ? pData.name
+                  : t("drive.unknown_folder", UNKNOWN_FOLDER);
             }
           }
         }
 
         if (parentId === currentFolderId) {
           setHighlightedFileId({ id: fileId, ts: Date.now() });
-          setTimeout(() => setHighlightedFileId(null), HIGHLIGHT_DURATION_MS);
+          setTimeout(() => {
+            setHighlightedFileId(null);
+          }, HIGHLIGHT_DURATION_MS);
           return;
         }
 
         const newHistory = await rebuildHistory(parentId);
-        if (!mounted) return;
+        if (!stillMounted()) return;
 
         setFolderHistory(newHistory);
         pendingEnsuredFileId.current = fileId;
@@ -224,9 +240,11 @@ export function useLocateFile(
         setCurrentFolderName(folderName);
         setHighlightedFileId({ id: fileId, ts: Date.now() });
 
-        setTimeout(() => setHighlightedFileId(null), HIGHLIGHT_DURATION_MS);
+        setTimeout(() => {
+          setHighlightedFileId(null);
+        }, HIGHLIGHT_DURATION_MS);
       } catch (err: unknown) {
-        captureError({
+        void captureError({
           level: "error",
           source: "useLocateFile",
           message: `Locate file failed: ${classifyDriveError(err)}`,
@@ -236,10 +254,14 @@ export function useLocateFile(
       }
     };
 
-    window.addEventListener(EVENT_LOCATE_FILE, handleLocateFile);
+    const handleLocateListener = (ev: Event) => {
+      void handleLocateFile(ev);
+    };
+
+    window.addEventListener(EVENT_LOCATE_FILE, handleLocateListener);
     return () => {
       mounted = false;
-      window.removeEventListener(EVENT_LOCATE_FILE, handleLocateFile);
+      window.removeEventListener(EVENT_LOCATE_FILE, handleLocateListener);
     };
   }, [
     accessToken,

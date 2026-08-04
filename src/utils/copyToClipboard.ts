@@ -10,7 +10,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     await writeText(text);
     return true;
   } catch (err: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: "copyToClipboard",
       message: `Tauri clipboard failed: ${err instanceof Error ? err.message : "unknown"}`,
@@ -26,11 +26,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     document.body.appendChild(ta);
     ta.focus();
     ta.select();
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- intentional last-resort fallback: execCommand works synchronously in webviews where navigator.clipboard is unavailable (Tauri webview on older Windows); the modern API already failed above.
     const ok = document.execCommand("copy");
     ta.remove();
     return ok;
   } catch (err: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: "copyToClipboard",
       message: `Fallback clipboard failed: ${err instanceof Error ? err.message : "unknown"}`,

@@ -19,15 +19,15 @@ export function useAppGlobalEvents(handleLogout: () => void) {
       } catch {
         // Storage can throw (privacy mode / quota); a read failure must not
         // crash focus handling — skip the refresh and let the next play fail.
-        captureError({
+        void captureError({
           level: "warn",
           source: "useAppGlobalEvents",
           message: "auth-storage-read-failed",
         });
       }
       if (hasTokens) {
-        getValidToken().catch((e) =>
-          captureError({
+        getValidToken().catch((e: unknown) =>
+          void captureError({
             level: "warn",
             source: "useAppGlobalEvents",
             message: `Focus refresh failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -36,7 +36,9 @@ export function useAppGlobalEvents(handleLogout: () => void) {
       }
     };
 
-    const preventContextMenu = (e: MouseEvent) => e.preventDefault();
+    const preventContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
 
     window.addEventListener("focus", handleFocus);
     document.addEventListener("contextmenu", preventContextMenu);
@@ -53,6 +55,8 @@ export function useAppGlobalEvents(handleLogout: () => void) {
       handleLogout();
     };
     window.addEventListener("auth-logout", handleAuthLogout);
-    return () => window.removeEventListener("auth-logout", handleAuthLogout);
+    return () => {
+      window.removeEventListener("auth-logout", handleAuthLogout);
+    };
   }, [handleLogout]);
 }

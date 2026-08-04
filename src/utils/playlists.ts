@@ -34,16 +34,23 @@ function classifyPlaylistError(err: unknown): {
   return { name, message };
 }
 
+// The Playlist interface claims tracks is always present, but rows written
+// before the field existed lack it at runtime — this helper surfaces the true
+// shape so the ?? normalizer below is checked (and lint-visible).
+function getPlaylistTracks(p: Playlist): Track[] | undefined {
+  return p.tracks;
+}
+
 async function loadPlaylists(): Promise<Playlist[]> {
   const email = getCurrentUserEmail();
   const rows = await db.playlists.where("userEmail").equals(email).toArray();
-  return rows.map(({ id, userEmail, name, createdAt, tracks, coverImage }) => ({
-    id,
-    userEmail,
-    name,
-    createdAt,
-    tracks: tracks ?? [],
-    coverImage,
+  return rows.map((row) => ({
+    id: row.id,
+    userEmail: row.userEmail,
+    name: row.name,
+    createdAt: row.createdAt,
+    tracks: getPlaylistTracks(row) ?? [],
+    coverImage: row.coverImage,
   }));
 }
 
@@ -52,7 +59,7 @@ export async function getPlaylists(): Promise<Playlist[]> {
     return await loadPlaylists();
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
-    captureError({
+    await captureError({
       level: "error",
       source: PLAYLIST_MODULE,
       message: `get-failed: ${name}: ${message}`,
@@ -76,7 +83,7 @@ export async function createPlaylist(name: string): Promise<Playlist | null> {
     return newPlaylist;
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
-    captureError({
+    await captureError({
       level: "error",
       source: PLAYLIST_MODULE,
       message: `create-failed: ${name}: ${message}`,
@@ -92,7 +99,7 @@ export async function deletePlaylist(id: string): Promise<void> {
     window.dispatchEvent(new CustomEvent("playlists-updated"));
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
-    captureError({
+    await captureError({
       level: "error",
       source: PLAYLIST_MODULE,
       message: `delete-failed: ${name}: ${message}`,
@@ -123,7 +130,7 @@ export async function updatePlaylist(
     });
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
-    captureError({
+    await captureError({
       level: "error",
       source: PLAYLIST_MODULE,
       message: `update-failed: ${name}: ${message}`,
@@ -138,7 +145,7 @@ export async function addTrackToPlaylist(
   track: Track,
 ): Promise<void> {
   try {
-    return await db.transaction("rw", db.playlists, async () => {
+    await db.transaction("rw", db.playlists, async () => {
       const playlist = await db.playlists.get(playlistId);
       if (playlist) {
         if (!playlist.tracks.some((t) => t.id === track.id)) {
@@ -150,7 +157,7 @@ export async function addTrackToPlaylist(
     });
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
-    captureError({
+    await captureError({
       level: "error",
       source: PLAYLIST_MODULE,
       message: `add-track-failed: ${name}: ${message}`,
@@ -164,7 +171,7 @@ export async function removeTrackFromPlaylist(
   trackId: string,
 ): Promise<void> {
   try {
-    return await db.transaction("rw", db.playlists, async () => {
+    await db.transaction("rw", db.playlists, async () => {
       const playlist = await db.playlists.get(playlistId);
       if (playlist) {
         playlist.tracks = playlist.tracks.filter((t) => t.id !== trackId);
@@ -174,7 +181,7 @@ export async function removeTrackFromPlaylist(
     });
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
-    captureError({
+    await captureError({
       level: "error",
       source: PLAYLIST_MODULE,
       message: `remove-track-failed: ${name}: ${message}`,
@@ -192,12 +199,12 @@ export async function getPlaylistById(id: string): Promise<Playlist | null> {
       userEmail: row.userEmail,
       name: row.name,
       createdAt: row.createdAt,
-      tracks: row.tracks ?? [],
+      tracks: getPlaylistTracks(row) ?? [],
       coverImage: row.coverImage,
     };
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
-    captureError({
+    await captureError({
       level: "error",
       source: PLAYLIST_MODULE,
       message: `get-by-id-failed: ${name}: ${message}`,

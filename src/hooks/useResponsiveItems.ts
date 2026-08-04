@@ -25,7 +25,9 @@ function subscribe(onStoreChange: () => void): () => void {
     };
   }
   window.addEventListener("resize", onStoreChange);
-  return () => window.removeEventListener("resize", onStoreChange);
+  return () => {
+    window.removeEventListener("resize", onStoreChange);
+  };
 }
 
 export function useResponsiveItems(): number {

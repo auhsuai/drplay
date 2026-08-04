@@ -23,8 +23,8 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    loadFavorites().catch((err) =>
-      captureError({
+    loadFavorites().catch((err: unknown) =>
+      void captureError({
         level: "error",
         source: LIKED_SONGS_MODULE,
         message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
@@ -32,8 +32,8 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
     );
 
     const handleUpdate = () => {
-      loadFavorites().catch((err) =>
-        captureError({
+      void loadFavorites().catch((err: unknown) =>
+        void captureError({
           level: "error",
           source: LIKED_SONGS_MODULE,
           message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
@@ -53,7 +53,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       const favs = await getFavorites();
       setFavorites(favs);
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: LIKED_SONGS_MODULE,
         message: `failed-to-load-favorites: ${e instanceof Error ? e.message : String(e)}`,
@@ -66,6 +66,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
     if (ids.length > 0) prefetchVisibleTracks(ids);
   }, [favorites]);
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
   const rowVirtualizer = useVirtualizer({
     count: favorites.length,
     getScrollElement: () => scrollRef.current,
@@ -82,7 +83,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
         t("liked_songs.remove_failed") ||
           "Không thể xóa khỏi yêu thích, vui lòng thử lại.",
       );
-      captureError({
+      void captureError({
         level: "error",
         source: LIKED_SONGS_MODULE,
         message: `remove-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -119,9 +120,9 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       {/* Action Bar */}
       <div className="px-8 py-6 flex-shrink-0">
         <button
-          onClick={() =>
-            favorites.length > 0 && onPlay(favorites[0], favorites, 0)
-          }
+          onClick={() => {
+            if (favorites.length > 0) onPlay(favorites[0], favorites, 0);
+          }}
           className="w-14 h-14 bg-[#4285F4] hover:bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
           disabled={favorites.length === 0}
         >
@@ -150,7 +151,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
             <div
               className="flex flex-col relative w-full"
               style={{
-                height: `${rowVirtualizer.getTotalSize()}px`,
+                height: `${String(rowVirtualizer.getTotalSize())}px`,
                 contain: "strict",
               }}
             >
@@ -163,13 +164,21 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                       position: "absolute",
                       left: 0,
                       width: "100%",
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
+                      height: `${String(virtualRow.size)}px`,
+                      transform: `translateY(${String(virtualRow.start)}px)`,
                     }}
                   >
                     <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         onPlay(track, favorites, virtualRow.index);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onPlay(track, favorites, virtualRow.index);
+                        }
                       }}
                       onContextMenu={(e) => {
                         e.preventDefault();
@@ -226,7 +235,9 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
 
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
-                          onClick={(e) => handleUnlike(e, track.id)}
+                          onClick={(e) => {
+                            void handleUnlike(e, track.id);
+                          }}
                           className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all text-[#4285F4] hover:scale-110"
                           title={t("menu.remove_from_liked")}
                         >

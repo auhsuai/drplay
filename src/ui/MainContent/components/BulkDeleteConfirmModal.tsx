@@ -23,11 +23,14 @@ export function BulkDeleteConfirmModal({
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4"
-      onClick={() => !isOperating && onClose()}
+      role="presentation"
+      onClick={(e) => {
+        // Only close when the backdrop itself (not the dialog) is clicked.
+        if (e.target === e.currentTarget && !isOperating) onClose();
+      }}
     >
       <div
         className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">

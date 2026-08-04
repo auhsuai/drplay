@@ -31,16 +31,19 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
 
+  // The cancel prompt resets the moment loading stops — adjusted during
+  // render (React "adjusting state during render" pattern) instead of
+  // calling setState synchronously inside the effect below.
+  if (!isLoading && showCancel) setShowCancel(false);
+
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    if (isLoading) {
-      timer = setTimeout(() => {
-        setShowCancel(true);
-      }, CANCEL_PROMPT_MS);
-    } else {
-      setShowCancel(false);
-    }
-    return () => clearTimeout(timer);
+    if (!isLoading) return;
+    const timer = setTimeout(() => {
+      setShowCancel(true);
+    }, CANCEL_PROMPT_MS);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [isLoading]);
 
   const handleCancel = () => {
@@ -66,7 +69,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       const errStr = String(error);
       if (errStr.includes("cancel")) {
         showErrorToast(t("login.cancelled", "Đăng nhập đã bị hủy"));
-        captureError({
+        void captureError({
           level: "warn",
           source: LOGIN_MODULE,
           kind: "login-cancelled",
@@ -79,7 +82,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             "Đăng nhập quá thời gian chờ, vui lòng thử lại.",
           ),
         );
-        captureError({
+        void captureError({
           level: "warn",
           source: LOGIN_MODULE,
           kind: "login-timeout",
@@ -89,7 +92,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         showErrorToast(
           t("login.failed", "Đăng nhập thất bại, vui lòng thử lại."),
         );
-        captureError({
+        void captureError({
           level: "error",
           source: LOGIN_MODULE,
           kind: "login-failed",
@@ -117,7 +120,9 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
         {/* Google Brand Button */}
         <button
-          onClick={handleLoginClick}
+          onClick={() => {
+          void handleLoginClick();
+        }}
           disabled={isLoading}
           className="w-full flex items-center justify-center gap-3 bg-white text-gray-700 font-medium py-3 px-4 rounded-lg shadow-[0_1px_3px_rgba(0,0,0,0.1)] hover:shadow-[0_2px_6px_rgba(0,0,0,0.15)] hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-4 focus:ring-[#4285F4]/30 active:scale-[0.98] transition-all duration-200 disabled:opacity-70 disabled:cursor-not-allowed"
         >

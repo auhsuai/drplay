@@ -58,13 +58,12 @@ function errorMessage(e: unknown): string {
 }
 
 export async function getCacheSizes(): Promise<CacheCategoryInfo[]> {
-  const [metadataBytes, filesBytes, coversBytes, prefetchBytes] =
-    await Promise.all([
-      estimateMetadataBytes(),
-      estimateFilesBytes(),
-      estimateCoversBytes(),
-      estimatePrefetchBytes(),
-    ]);
+  const [metadataBytes, filesBytes, coversBytes, prefetchBytes] = [
+    await estimateMetadataBytes(),
+    await estimateFilesBytes(),
+    await estimateCoversBytes(),
+    estimatePrefetchBytes(),
+  ];
   return [
     {
       id: "metadata",
@@ -92,7 +91,7 @@ async function estimateMetadataBytes(): Promise<number> {
     // count of the on-disk IndexedDB record.
     return rows.reduce((sum, row) => sum + JSON.stringify(row.entry).length, 0);
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: "cache",
       message: `get-cache-size-metadata failed: ${errorMessage(e)}`,
@@ -106,7 +105,7 @@ async function estimateFilesBytes(): Promise<number> {
     const count = await db.files.count();
     return count * FILES_ROW_ESTIMATED_BYTES;
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: "cache",
       message: `get-cache-size-files failed: ${errorMessage(e)}`,
@@ -128,7 +127,7 @@ async function estimateCoversBytes(): Promise<number> {
       info.cover_cache_bytes + info.etag_cache_bytes + info.thumbnail_dir_bytes
     );
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: "cache",
       message: `get-cache-size-covers failed: ${errorMessage(e)}`,
@@ -137,12 +136,14 @@ async function estimateCoversBytes(): Promise<number> {
   }
 }
 
-async function estimatePrefetchBytes(): Promise<number> {
+function estimatePrefetchBytes(): number {
   try {
     const entries = getPrefetchedStreamCount() + getPendingPrefetchCount();
     return entries * PREFETCH_ENTRY_ESTIMATED_BYTES;
   } catch (e: unknown) {
-    captureError({
+    // fire-and-forget: logging must not throw in this sync path (captureError
+    // never rejects — it swallows failures internally).
+    void captureError({
       level: "warn",
       source: "cache",
       message: `get-cache-size-prefetch failed: ${errorMessage(e)}`,
@@ -168,7 +169,7 @@ async function clearMetadataCache(): Promise<void> {
     try {
       localStorage.removeItem(METADATA_LRU_KEY);
     } catch (removeErr: unknown) {
-      captureError({
+      await captureError({
         level: "warn",
         source: "cache",
         message: `clear-lru-key-failed: ${errorMessage(removeErr)}`,
@@ -181,7 +182,7 @@ async function clearMetadataCache(): Promise<void> {
   try {
     clearAllMetadataCache();
   } catch (metaErr: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: "cache",
       message: `clear-memory-metadata-cache failed: ${errorMessage(metaErr)}`,
@@ -189,20 +190,30 @@ async function clearMetadataCache(): Promise<void> {
     if (!deleteError) deleteError = metaErr;
   }
 
-  if (deleteError) throw deleteError;
+  if (deleteError) {
+    // Error instances are rethrown as-is; a non-Error throw is wrapped so the
+    // caller always receives a real Error (and stringification stays safe).
+    throw deleteError instanceof Error
+      ? deleteError
+      : new Error(
+          typeof deleteError === "string"
+            ? deleteError
+            : `unexpected error of type ${typeof deleteError}`,
+        );
+  }
 }
 
 async function clearCategory(
   category: CacheCategoryId,
   logPrefix: string,
   failures: Array<{ category: CacheCategoryId; error: unknown }>,
-  action: () => Promise<void>,
+  action: () => void | Promise<void>,
 ): Promise<void> {
   try {
     await action();
   } catch (e: unknown) {
     failures.push({ category, error: e });
-    captureError({
+    await captureError({
       level: "error",
       source: "cache",
       message: `${logPrefix} failed: ${errorMessage(e)}`,
@@ -239,7 +250,7 @@ export async function clearAppCache(
       "prefetch",
       "clear-prefetch-cache",
       failures,
-      async () => {
+      () => {
         clearPrefetchedStreams();
         clearNextTrackPrefetches();
       },

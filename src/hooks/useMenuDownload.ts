@@ -25,11 +25,15 @@ const DOWNLOAD_TIMEOUT_MS = 300_000;
 // device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) and trailing dots/spaces.
 // Copied verbatim from the removed GlobalContextMenu.tsx (the last known-good
 // download implementation) so the written name matches what worked before.
+// \p{Cc} matches Unicode control characters (incl. C0 \x00-\x1F plus the C1
+// range \x7F-\x9F) — slightly wider than the old literal class, but avoids
+// eslint no-control-regex (control chars cannot be written in a regex literal)
+// and is strictly safer for Windows file names.
 const sanitizeFilename = (
   name: string,
   fallbackName: string = "untitled",
 ): string => {
-  let s = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, "_");
+  let s = name.replace(/[/\\<>:"|?*\p{Cc}]/gu, "_");
   s = s.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i, "_$1$2");
   s = s.replace(/[\s.]+$/g, "");
   s = s.slice(0, 255);
@@ -134,7 +138,7 @@ export function useMenuDownload(t: TFunction) {
           // not block the main flow here, let write_file surface it.
           await invoke("register_download_path", { path: dir });
         } catch (scopeErr: unknown) {
-          captureError({
+          void captureError({
             level: "warn",
             source: "useMenuDownload",
             message: `Failed to extend fs scope for custom download dir: ${scopeErr instanceof Error ? scopeErr.message : String(scopeErr)}`,
@@ -179,7 +183,7 @@ export function useMenuDownload(t: TFunction) {
         // Deliberate cancel (unmount / superseded download): the component may
         // already be gone, so do NOT touch state — and do not surface a
         // failure message for a user-initiated cancel. Log for visibility.
-        captureError({
+        void captureError({
           level: "warn",
           source: "useMenuDownload",
           message:
@@ -188,15 +192,15 @@ export function useMenuDownload(t: TFunction) {
         return;
       }
       if (errName === "TimeoutError") {
-        captureError({
+        void captureError({
           level: "error",
           source: "useMenuDownload",
-          message: `Download timeout — no response within ${DOWNLOAD_TIMEOUT_MS}ms`,
+          message: `Download timeout — no response within ${String(DOWNLOAD_TIMEOUT_MS)}ms`,
         });
         setDownloadMessage(t("menu.download_failed", "Tải xuống thất bại"));
         return;
       }
-      captureError({
+      void captureError({
         level: "error",
         source: "useMenuDownload",
         message: `Download failed: ${errName || String(err)}`,

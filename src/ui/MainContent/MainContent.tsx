@@ -127,7 +127,9 @@ export const MainContent = React.memo(function MainContent({
   );
 
   const handleDragActive = (e: Event) => {
-    const detail = (e as CustomEvent<{ active: boolean }>).detail;
+    // detail is typed | null because a CustomEvent constructed without the
+    // detail option defaults to null at runtime.
+    const detail = (e as CustomEvent<{ active: boolean } | null>).detail;
     setIsDragActive(detail?.active ?? false);
   };
   useEventListener(DRAG_ACTIVE_EVENT, handleDragActive);
@@ -167,7 +169,9 @@ export const MainContent = React.memo(function MainContent({
 
   // Enable selection mode from events
   const handleEnableSelection = (e: Event) => {
-    const customEvent = e as CustomEvent;
+    // detail is typed | null because a CustomEvent constructed without the
+    // detail option defaults to null at runtime.
+    const customEvent = e as CustomEvent<{ id?: string } | null>;
     if (customEvent.detail?.id) {
       explorer.setIsSelectionMode(true);
       explorer.setSelectedIds(new Set([customEvent.detail.id]));
@@ -220,6 +224,10 @@ export const MainContent = React.memo(function MainContent({
         }
       }
     }
+    // The effect only reads the enumerated explorer members (adding the whole
+    // explorer object would re-run the highlight-scroll on every render since
+    // useDriveExplorer returns a fresh object each render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     highlightedFileId,
     explorer.currentPage,
@@ -236,7 +244,7 @@ export const MainContent = React.memo(function MainContent({
     (t: Track) => {
       const queue = explorer.filteredItems
         .filter((f) => !f.isFolder && f.trackInfo)
-        .map((f) => f.trackInfo!);
+        .map((f) => f.trackInfo as Track);
       onPlay(t, queue);
     },
     [explorer.filteredItems, onPlay],
@@ -261,11 +269,11 @@ export const MainContent = React.memo(function MainContent({
           onCancel={() => {
             setShowBulkMoveScreen(false);
           }}
-          onSelectFolder={(destId) =>
-            explorer.handleBulkMove(destId, () => {
+          onSelectFolder={(destId) => {
+            void explorer.handleBulkMove(destId, () => {
               setShowBulkMoveScreen(false);
-            })
-          }
+            });
+          }}
           title={t(
             "folder_selection.bulk_move_title",
             "Choose destination folder",
@@ -327,7 +335,7 @@ export const MainContent = React.memo(function MainContent({
       <div
         data-drop-region
         className="px-8 pb-6 pt-4"
-        style={{ minHeight: `calc(100% - ${HEADER_CHROME_HEIGHT_PX}px)` }}
+        style={{ minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)` }}
       >
         {activeTab === TABS.settings ? (
           <div className="text-gray-500">
@@ -343,7 +351,7 @@ export const MainContent = React.memo(function MainContent({
             role="status"
             aria-label={t("loading", "Loading...")}
             className="flex flex-col"
-            style={{ minHeight: `calc(100% - ${HEADER_CHROME_HEIGHT_PX}px)` }}
+            style={{ minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)` }}
           >
             <SkeletonRowList rows={skeletonRows} stretch className="flex-1" />
           </div>
@@ -401,11 +409,11 @@ export const MainContent = React.memo(function MainContent({
         onClose={() => {
           setShowBulkDeleteConfirm(false);
         }}
-        onConfirm={() =>
-          explorer.handleBulkDelete(() => {
+        onConfirm={() => {
+          void explorer.handleBulkDelete(() => {
             setShowBulkDeleteConfirm(false);
-          })
-        }
+          });
+        }}
         isOperating={explorer.isBulkOperating}
         selectedCount={explorer.selectedIds.size}
       />

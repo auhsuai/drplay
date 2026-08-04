@@ -195,9 +195,9 @@ export async function readDriveErrorBody(
   response: Response,
 ): Promise<DriveErrorBody | null> {
   try {
-    const data = await response.json();
+    const data: unknown = await response.json();
     if (typeof data !== "object" || data === null) return null;
-    return data as DriveErrorBody;
+    return data;
   } catch {
     return null;
   }
@@ -218,7 +218,7 @@ function isRateLimitError(
   if (Array.isArray(reasons)) {
     for (const r of reasons) {
       if (
-        typeof r?.reason === "string" &&
+        typeof r.reason === "string" &&
         DRIVE_RATE_LIMIT_REASONS.has(r.reason)
       )
         return true;
@@ -249,8 +249,38 @@ export async function isRateLimit403Response(
 // captureError + detail parsing in moveFile, quota, etc.).
 function assertDriveOk(response: Response, action: string): void {
   if (!response.ok) {
-    throw new Error(`Failed to ${action} (${response.status})`);
+    throw new Error(`Failed to ${action} (${String(response.status)})`);
   }
+}
+
+// Drive API JSON responses are untyped at the wire level — narrow a parsed
+// body's `parents` field to a string[]. Anything malformed → [] (same runtime
+// fallback as the previous any-typed reads).
+function parseParentsList(data: unknown): string[] {
+  if (typeof data !== "object" || data === null) return [];
+  const parents = (data as { parents?: unknown }).parents;
+  if (!Array.isArray(parents)) return [];
+  return parents.filter((p): p is string => typeof p === "string");
+}
+
+// Same narrowing for `files` — Drive list responses may be absent/malformed.
+function parseFilesList(data: unknown): DriveFileItem[] {
+  if (typeof data !== "object" || data === null) return [];
+  const files = (data as { files?: unknown }).files;
+  return Array.isArray(files) ? (files as DriveFileItem[]) : [];
+}
+
+function parseName(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const name = (data as { name?: unknown }).name;
+  return typeof name === "string" ? name : null;
+}
+
+// Never logs the raw body — only a string message field, if it is one.
+function getErrorMessage(errData: unknown): string | null {
+  if (typeof errData !== "object" || errData === null) return null;
+  const message = (errData as { error?: { message?: unknown } }).error?.message;
+  return typeof message === "string" ? message : null;
 }
 
 // signal?: AbortSignal wires a caller cancel (uploadManager batch controller)
@@ -282,7 +312,8 @@ export async function createFolder(
   );
 
   assertDriveOk(response, "create folder");
-  return response.json();
+  const data: unknown = await response.json();
+  return data as DriveFileItem;
 }
 
 export async function deleteFile(
@@ -310,7 +341,8 @@ export async function deleteFile(
   );
 
   assertDriveOk(response, "delete file");
-  return response.json();
+  const data: unknown = await response.json();
+  return data as DriveFileItem;
 }
 
 export async function moveFile(
@@ -331,12 +363,13 @@ export async function moveFile(
 
   let removeParents = currentParentId;
   if (getResponse.ok) {
-    const data = await getResponse.json();
-    if (data.parents && data.parents.length > 0) {
-      removeParents = data.parents.join(",");
+    const data: unknown = await getResponse.json();
+    const parents = parseParentsList(data);
+    if (parents.length > 0) {
+      removeParents = parents.join(",");
 
       // If the file is already in the new parent, do nothing to prevent 400 error
-      if (data.parents.includes(newParentId)) {
+      if (parents.includes(newParentId)) {
         return { success: true };
       }
     }
@@ -355,21 +388,19 @@ export async function moveFile(
   );
 
   if (!response.ok) {
-    const errData = await response.json().catch(() => null);
+    const errData: unknown = await response.json().catch(() => null);
     // Do NOT log the raw error body (errData) — it can contain file ids / user
     // data. Log only the public status and a sanitized message (never the object).
-    const detail =
-      errData?.error?.message && typeof errData.error.message === "string"
-        ? errData.error.message
-        : null;
-    captureError({
+    const detail = getErrorMessage(errData);
+    await captureError({
       level: "error",
       source: DRIVE_MODULE,
-      message: `move-file-failed (status=${response.status}): ${detail ?? "no detail"}`,
+      message: `move-file-failed (status=${String(response.status)}): ${detail ?? "no detail"}`,
     });
-    throw new Error(`Failed to move file (${response.status})`);
+    throw new Error(`Failed to move file (${String(response.status)})`);
   }
-  return response.json();
+  const data: unknown = await response.json();
+  return data as DriveFileItem;
 }
 
 export async function restoreFile(
@@ -396,7 +427,8 @@ export async function restoreFile(
   );
 
   assertDriveOk(response, "restore file");
-  return response.json();
+  const data: unknown = await response.json();
+  return data as DriveFileItem;
 }
 
 export async function permanentlyDeleteFile(
@@ -421,7 +453,7 @@ export async function getRecentlyAddedAudioFiles(
   token: string,
 ): Promise<DriveFileItem[]> {
   const q = getAudioFilesQuery();
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${RECENTLY_ADDED_PAGE_SIZE}`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${String(RECENTLY_ADDED_PAGE_SIZE)}`;
 
   const response = await driveFetch(url, {
     headers: {
@@ -431,8 +463,8 @@ export async function getRecentlyAddedAudioFiles(
 
   assertDriveOk(response, "fetch recently added audio files");
 
-  const data = await response.json();
-  return data.files || [];
+  const data: unknown = await response.json();
+  return parseFilesList(data);
 }
 
 // Return the parent ids of a file/folder. Returns null when the Drive request
@@ -450,8 +482,8 @@ export async function getFileParents(
   if (!response.ok) {
     return null;
   }
-  const data = await response.json();
-  return data.parents || [];
+  const data: unknown = await response.json();
+  return parseParentsList(data);
 }
 
 // Fetch a file/folder's display name. Returns null on failure.
@@ -468,8 +500,8 @@ export async function getFileName(
   if (!response.ok) {
     return null;
   }
-  const data = await response.json();
-  return typeof data.name === "string" ? data.name : null;
+  const data: unknown = await response.json();
+  return parseName(data);
 }
 
 // App Configuration in appDataFolder
@@ -491,21 +523,23 @@ export async function getAppConfig(
     });
 
     if (!searchRes.ok) return null;
-    const searchData = await searchRes.json();
+    const searchData: unknown = await searchRes.json();
+    const files = parseFilesList(searchData);
 
-    if (searchData.files && searchData.files.length > 0) {
-      const fileId = searchData.files[0].id;
+    if (files.length > 0) {
+      const fileId = files[0].id;
       const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
       const downloadRes = await driveFetch(downloadUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
       if (downloadRes.ok) {
-        return await downloadRes.json();
+        const config: unknown = await downloadRes.json();
+        return config as Record<string, unknown> | null;
       }
     }
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: DRIVE_MODULE,
       message: `get-config-failed: ${classifyDriveError(e)}`,
@@ -552,11 +586,12 @@ async function saveAppConfigInternal(
       headers: { Authorization: `Bearer ${token}` },
     });
 
-    let fileId = null;
+    let fileId: string | null = null;
     if (searchRes.ok) {
-      const searchData = await searchRes.json();
-      if (searchData.files && searchData.files.length > 0) {
-        fileId = searchData.files[0].id;
+      const searchData: unknown = await searchRes.json();
+      const files = parseFilesList(searchData);
+      if (files.length > 0) {
+        fileId = files[0].id;
       }
     }
 
@@ -593,16 +628,16 @@ async function saveAppConfigInternal(
     });
 
     if (!uploadRes.ok) {
-      captureError({
+      await captureError({
         level: "error",
         source: DRIVE_MODULE,
-        message: `save-config-upload-failed (status=${uploadRes.status})`,
+        message: `save-config-upload-failed (status=${String(uploadRes.status)})`,
       });
       return false;
     }
     return true;
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "error",
       source: DRIVE_MODULE,
       message: `save-config-failed: ${classifyDriveError(e)}`,
@@ -645,10 +680,10 @@ export async function getDriveStorageQuota(
       },
     );
     if (!response.ok) {
-      captureError({
+      await captureError({
         level: "warn",
         source: DRIVE_MODULE,
-        message: `get-storage-quota-failed (status=${response.status})`,
+        message: `get-storage-quota-failed (status=${String(response.status)})`,
       });
       return null;
     }
@@ -657,7 +692,7 @@ export async function getDriveStorageQuota(
     } | null;
     const quota = data?.storageQuota;
     if (!quota) {
-      captureError({
+      await captureError({
         level: "warn",
         source: DRIVE_MODULE,
         message: "get-storage-quota-malformed-response (missing storageQuota)",
@@ -671,7 +706,7 @@ export async function getDriveStorageQuota(
     // The three usage fields are mandatory on a valid storageQuota object;
     // a payload missing any of them is malformed → treat as failure, hide UI.
     if (usage === null || usageInDrive === null || usageInDriveTrash === null) {
-      captureError({
+      await captureError({
         level: "warn",
         source: DRIVE_MODULE,
         message: "get-storage-quota-malformed-response (missing usage field)",
@@ -680,7 +715,7 @@ export async function getDriveStorageQuota(
     }
     return { limit, usage, usageInDrive, usageInDriveTrash };
   } catch (err) {
-    captureError({
+    await captureError({
       level: "warn",
       source: DRIVE_MODULE,
       message: `get-storage-quota-failed: ${classifyDriveError(err)}`,

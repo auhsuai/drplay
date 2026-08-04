@@ -52,7 +52,7 @@ function ProgressRing({ fraction }: { fraction: number }): React.JSX.Element {
       role="img"
       // The % is announced to screen readers only — the ring itself stays a
       // pure arc (user design: no number inside the ring next to the title).
-      aria-label={`${percent}%`}
+      aria-label={`${String(percent)}%`}
     >
       <circle
         cx={RING_CENTER}
@@ -236,6 +236,10 @@ export const SongCard = React.memo(
 
       const controller = new AbortController();
       let isMounted = true;
+      // The metadata effect cleanup touches the img element; capture it at
+      // setup so the cleanup never reads the (possibly stale) ref
+      // (react-hooks/exhaustive-deps ref-cleanup rule).
+      const imgElement = imgRef.current;
 
       const fetchMetadata = async () => {
         try {
@@ -277,7 +281,7 @@ export const SongCard = React.memo(
           }
         } catch (e) {
           if (controller.signal.aborted) return; // deliberate cleanup abort — not an error (MDN AbortController)
-          captureError({
+          void captureError({
             level: "warn",
             source: SONG_CARD_MODULE,
             message: `metadata-load-failed (fileId=${item.id}): ${e instanceof Error ? e.message : String(e)}`,
@@ -286,13 +290,15 @@ export const SongCard = React.memo(
       };
 
       const timerId = setTimeout(() => {
-        fetchMetadata();
+        void fetchMetadata();
       }, 150); // Debounce: only fetch if card is visible for 150ms (avoids IPC spam when scrolling fast)
 
       const handleMetadataUpdated = (e: Event) => {
-        const customEvent = e as CustomEvent<{ fileId?: string }>;
+        // detail is typed | null because a CustomEvent constructed without
+        // the detail option defaults to null at runtime.
+        const customEvent = e as CustomEvent<{ fileId?: string } | null>;
         if (customEvent.detail?.fileId === item.id) {
-          fetchMetadata();
+          void fetchMetadata();
         }
       };
 
@@ -303,12 +309,20 @@ export const SongCard = React.memo(
         clearTimeout(timerId);
         controller.abort();
         releaseBlobUrl();
-        if (imgRef.current) {
-          imgRef.current.src = "";
+        if (imgElement) {
+          imgElement.src = "";
         }
         window.removeEventListener("metadata-updated", handleMetadataUpdated);
       };
-    }, [item.id, token]);
+    }, [
+      item.id,
+      token,
+      item.isFolder,
+      item.title,
+      item.trackInfo?.originalName,
+      item.trackInfo?.size,
+      releaseBlobUrl,
+    ]);
 
     // DropZone's native drag-drop never triggers DOM hover, so folder cards
     // subscribe to its CustomEvent bus. The compare-then-set pattern keeps
@@ -317,7 +331,9 @@ export const SongCard = React.memo(
     React.useEffect(() => {
       if (!item.isFolder) return;
       const handleDragHover = (e: Event) => {
-        const detail = (e as CustomEvent<{ folderId: string | null }>).detail;
+        const detail = (
+          e as CustomEvent<{ folderId: string | null } | null>
+        ).detail;
         setIsDragHovered(detail?.folderId === item.id);
       };
       window.addEventListener(DRAG_FOLDER_HOVER_EVENT, handleDragHover);

@@ -64,7 +64,7 @@ export function ImageCropperModal({
       const croppedImage = await getCroppedImg(imageSrc, croppedAreaPixels);
       onSave(croppedImage);
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: CROPPER_MODULE,
         message: `save-cover-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -80,7 +80,11 @@ export function ImageCropperModal({
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
-      onClick={handleOverlayClick}
+      role="presentation"
+      onClick={(e) => {
+        // Only close when the backdrop itself (not the dialog) is clicked.
+        if (e.target === e.currentTarget) handleOverlayClick();
+      }}
     >
       <div
         ref={dialogRef}
@@ -89,9 +93,6 @@ export function ImageCropperModal({
         aria-labelledby="cropper-title"
         tabIndex={-1}
         className="bg-white dark:bg-[#202124] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col animate-in duration-200"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
           <h3
@@ -151,7 +152,9 @@ export function ImageCropperModal({
               {t("menu.cancel", "Hủy")}
             </button>
             <button
-              onClick={handleSave}
+              onClick={() => {
+                void handleSave();
+              }}
               disabled={isProcessing}
               className="px-6 py-2 rounded-xl text-sm font-bold bg-[#4285F4] hover:bg-[#3367d6] text-white shadow-md shadow-[#4285F4]/20 transition-all active:scale-95 disabled:opacity-50"
             >

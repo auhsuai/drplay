@@ -16,6 +16,16 @@ import { shuffleQueueWithCurrent } from "./usePlayerQueue";
 const PLAYER_SESSION_MODULE = "usePlayerSession";
 const SAVE_THROTTLE_MS = 5000;
 
+// Shape of the persisted session payload (localStorage + kv). Optional fields
+// mirror the defensive `if (lastSession && lastSession.track)` guards below;
+// the real payload always carries them, but a corrupt/older session must not
+// crash the restore.
+interface StoredSession {
+  track?: Track;
+  time?: number;
+  duration?: number;
+}
+
 export function usePlayerSession(
   setCurrentTrack: (
     track: Track | null | ((prev: Track | null) => Track | null),
@@ -27,34 +37,39 @@ export function usePlayerSession(
 ) {
   useEffect(() => {
     const controller = new AbortController();
+    const isAborted = () => controller.signal.aborted;
     const loadSession = async (signal: AbortSignal) => {
       try {
         const lastSessionStr = localStorage.getItem(
           SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
         );
-        let lastSession;
+        let lastSession: StoredSession | undefined;
         if (lastSessionStr) {
           try {
-            lastSession = JSON.parse(lastSessionStr);
+            lastSession = JSON.parse(lastSessionStr) as StoredSession;
           } catch (e: unknown) {
-            captureError({
+            void captureError({
               level: "warn",
               source: PLAYER_SESSION_MODULE,
               message: `session-corrupt: ${classifyPlayerError(e).message}`,
             });
-            lastSession = await get(SESSION_CLEANUP_KEYS.lastSessionKv);
+            lastSession = await get<StoredSession>(
+              SESSION_CLEANUP_KEYS.lastSessionKv,
+            );
           }
         } else {
-          lastSession = await get(SESSION_CLEANUP_KEYS.lastSessionKv);
+          lastSession = await get<StoredSession>(
+            SESSION_CLEANUP_KEYS.lastSessionKv,
+          );
         }
 
         if (lastSession && lastSession.track) {
-          if (signal.aborted) {
+          if (isAborted()) {
             return;
           }
           let streamUrl = "";
           const freshToken = await getValidToken(false, signal);
-          if (signal.aborted) return;
+          if (isAborted()) return;
 
           if (freshToken) {
             try {
@@ -63,24 +78,30 @@ export function usePlayerSession(
                 streamUrl = `${DRIVE_STREAM_PREFIX}${lastSession.track.id}`;
               }
             } catch (e: unknown) {
-              captureError({
+              void captureError({
                 level: "warn",
                 source: PLAYER_SESSION_MODULE,
                 message: `session-restore-stream-fail: ${classifyPlayerError(e).message}`,
               });
             }
           }
-          if (signal.aborted) return;
+          if (isAborted()) return;
 
-          const savedQueue = await get(SESSION_CLEANUP_KEYS.queueKv);
+          const savedQueue = await get<Track[]>(SESSION_CLEANUP_KEYS.queueKv);
+          // unknown (the default get<T>): a corrupt/older persisted value must
+          // still hit the corrupt-log branch below instead of crashing.
           const savedPlayMode = await get(SESSION_CLEANUP_KEYS.playModeKv);
-          if (signal.aborted) return;
+          if (isAborted()) return;
 
           const restoredTrack: Track = {
             ...lastSession.track,
             streamUrl,
-            restoreTime: lastSession.time,
-            restoreDuration: lastSession.duration,
+            ...(lastSession.time !== undefined
+              ? { restoreTime: lastSession.time }
+              : undefined),
+            ...(lastSession.duration !== undefined
+              ? { restoreDuration: lastSession.duration }
+              : undefined),
           };
 
           if (
@@ -110,7 +131,7 @@ export function usePlayerSession(
           ) {
             setPlayMode(savedPlayMode);
           } else if (savedPlayMode) {
-            captureError({
+            void captureError({
               level: "warn",
               source: PLAYER_SESSION_MODULE,
               message: "session-playmode-corrupt",
@@ -121,15 +142,17 @@ export function usePlayerSession(
         }
       } catch (e: unknown) {
         if (isAbortError(e)) return;
-        captureError({
+        void captureError({
           level: "error",
           source: PLAYER_SESSION_MODULE,
           message: `session-load-failed: ${classifyPlayerError(e).message}`,
         });
       }
     };
-    loadSession(controller.signal);
-    return () => controller.abort();
+    void loadSession(controller.signal);
+    return () => {
+      controller.abort();
+    };
   }, [
     setCurrentTrack,
     setOriginalQueue,
@@ -169,7 +192,7 @@ export function usePlayerSession(
         );
         lastSaveTime = now;
       } catch (e: unknown) {
-        captureError({
+        void captureError({
           level: "warn",
           source: PLAYER_SESSION_MODULE,
           message: `session-save-fail: ${classifyPlayerError(e).message}`,
@@ -177,14 +200,22 @@ export function usePlayerSession(
       }
     };
 
-    const handleBeforeUnload = () => saveSession(true);
+    const handleBeforeUnload = () => {
+      saveSession(true);
+    };
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handleBeforeUnload);
 
     const audio = AudioController.getInstance();
-    const unsubTime = audio.on("timeupdate", () => saveSession(false));
-    const unsubPause = audio.on("pause", () => saveSession(true));
-    const unsubEnded = audio.on("ended", () => saveSession(true));
+    const unsubTime = audio.on("timeupdate", () => {
+      saveSession(false);
+    });
+    const unsubPause = audio.on("pause", () => {
+      saveSession(true);
+    });
+    const unsubEnded = audio.on("ended", () => {
+      saveSession(true);
+    });
 
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);

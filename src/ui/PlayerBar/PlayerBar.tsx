@@ -93,11 +93,17 @@ function PlayerBarImpl({
 
   const audio = AudioController.getInstance();
 
-  // Reset transient track state when the track changes
+  // Reset transient track state when the track changes. Done during render
+  // (React "adjusting state during render" pattern) so no setState happens
+  // synchronously inside an effect (react-hooks/set-state-in-effect).
   const prevTrackIdRef = useRef<string | undefined>(undefined);
   if (currentTrack?.id !== prevTrackIdRef.current) {
     prevTrackIdRef.current = currentTrack?.id;
     if (errorInfo) setErrorInfo(null);
+    if (currentTrack?.restoreDuration)
+      setDuration(currentTrack.restoreDuration);
+    else if (!currentTrack) setDuration(0);
+    if (!currentTrack && isLiked) setIsLiked(false);
   }
 
   // Subscribe to AudioController Events
@@ -108,7 +114,7 @@ function PlayerBarImpl({
       if (currentTimeTextRef.current)
         currentTimeTextRef.current.textContent = formatTime(currentTime);
       if (progressFillRef.current && duration > 0) {
-        progressFillRef.current.style.width = `${(currentTime / duration) * 100}%`;
+        progressFillRef.current.style.width = `${String((currentTime / duration) * 100)}%`;
       }
       // Buffer bar fallback: the last native `progress` event can fire with
       // buffered still empty before a small/fast file finishes loading (no
@@ -140,12 +146,12 @@ function PlayerBarImpl({
       unsubEnded();
       unsubProgress();
     };
-  }, [onNextTrack]);
+  }, [onNextTrack, audio]);
 
   // Handle Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const activeEl = document.activeElement as HTMLElement;
+      const activeEl = document.activeElement as HTMLElement | null;
       if (
         activeEl?.tagName === "INPUT" ||
         activeEl?.tagName === "TEXTAREA" ||
@@ -214,41 +220,42 @@ function PlayerBarImpl({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onNextTrack, onPrevTrack, onTogglePlay, onTogglePlayMode, toggleMute]);
+  }, [onNextTrack, onPrevTrack, onTogglePlay, onTogglePlayMode, toggleMute, audio]);
 
   // Handle Play/Pause from Props (Syncing)
   useEffect(() => {
     if (!currentTrack) return;
     if (isPlaying) {
-      audio.playTrack(currentTrack, currentTrack.restoreTime);
+      void audio.playTrack(currentTrack, currentTrack.restoreTime);
     } else {
       audio.pause();
     }
-  }, [isPlaying, currentTrack, loadNonce]);
+  }, [isPlaying, currentTrack, loadNonce, audio]);
 
   // Sync initial UI state from restored session data
   useEffect(() => {
     if (bufferFillRef.current) clearBufferBar(bufferFillRef.current);
     if (currentTrack) {
-      if (currentTrack.restoreDuration)
-        setDuration(currentTrack.restoreDuration);
-
       const time = currentTrack.restoreTime || 0;
       const dur = currentTrack.restoreDuration || duration || 0;
 
       if (currentTimeTextRef.current)
         currentTimeTextRef.current.textContent = formatTime(time);
       if (progressFillRef.current && dur > 0) {
-        progressFillRef.current.style.width = `${(time / dur) * 100}%`;
+        progressFillRef.current.style.width = `${String((time / dur) * 100)}%`;
       } else if (progressFillRef.current) {
         progressFillRef.current.style.width = "0%";
       }
     } else {
-      setDuration(0);
       if (currentTimeTextRef.current)
         currentTimeTextRef.current.textContent = "0:00";
       if (progressFillRef.current) progressFillRef.current.style.width = "0%";
     }
+    // ``duration`` is intentionally not a dependency: the effect only runs
+    // when the TRACK changes, and reads the latest duration closure value
+    // for tracks without a restoreDuration. Adding duration would reset the
+    // time display back to restoreTime on every timeupdate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack]);
 
   // Shared favorite-status check: re-reads the stored status for a track id
@@ -260,7 +267,7 @@ function PlayerBarImpl({
         const liked = await isFavorite(trackId);
         if (!isStale()) setIsLiked(liked);
       } catch (e: unknown) {
-        captureError({
+        void captureError({
           level: "warn",
           source: PLAYER_BAR_MODULE,
           message: `check-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -272,16 +279,15 @@ function PlayerBarImpl({
 
   // Check favorite status whenever the current track changes
   useEffect(() => {
+    if (!currentTrack) return;
     let cancelled = false;
-    if (!currentTrack) {
-      setIsLiked(false);
-      return;
-    }
-    checkFavorite(currentTrack.id, () => cancelled);
+    void (async () => {
+      await checkFavorite(currentTrack.id, () => cancelled);
+    })();
     return () => {
       cancelled = true;
     };
-  }, [currentTrack?.id, checkFavorite]);
+  }, [currentTrack, checkFavorite]);
 
   // Re-check the current track when favorites change elsewhere (favorites.ts
   // dispatches `favorites-updated` on add/remove), so the heart never shows a
@@ -289,13 +295,13 @@ function PlayerBarImpl({
   useEffect(() => {
     const handleFavoritesUpdated = () => {
       if (!currentTrack) return;
-      checkFavorite(currentTrack.id, () => false);
+      void checkFavorite(currentTrack.id, () => false);
     };
     window.addEventListener("favorites-updated", handleFavoritesUpdated);
     return () => {
       window.removeEventListener("favorites-updated", handleFavoritesUpdated);
     };
-  }, [currentTrack?.id, checkFavorite]);
+  }, [currentTrack, checkFavorite]);
 
   const isFavoriteTogglingRef = useRef(false);
   const handleToggleFavorite = async () => {
@@ -309,7 +315,7 @@ function PlayerBarImpl({
       }
       setIsLiked(!isLiked);
     } catch (e: unknown) {
-      captureError({
+      void captureError({
         level: "error",
         source: PLAYER_BAR_MODULE,
         message: `toggle-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -325,7 +331,7 @@ function PlayerBarImpl({
     try {
       progressBarRef.current.setPointerCapture(e.pointerId);
     } catch (err) {
-      captureError({
+      void captureError({
         level: "warn",
         source: PLAYER_BAR_MODULE,
         message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -339,7 +345,7 @@ function PlayerBarImpl({
         Math.min(1, (clientX - bounds.left) / bounds.width),
       );
       if (progressFillRef.current)
-        progressFillRef.current.style.width = `${percent * 100}%`;
+        progressFillRef.current.style.width = `${String(percent * 100)}%`;
       if (currentTimeTextRef.current)
         currentTimeTextRef.current.textContent = formatTime(percent * duration);
       return percent * duration;
@@ -460,8 +466,18 @@ function PlayerBarImpl({
       {/* Left: Track Info */}
       <div className="flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2">
         <div
+          role="button"
+          tabIndex={0}
           className="flex items-center gap-2 sm:gap-4 cursor-pointer group py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors min-w-0 flex-1 max-w-[320px]"
-          onClick={() => currentTrack && onExpandNowPlaying()}
+          onClick={() => {
+            if (currentTrack) onExpandNowPlaying();
+          }}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && currentTrack) {
+              e.preventDefault();
+              onExpandNowPlaying();
+            }
+          }}
           title={t("player.view_now_playing", "View Now Playing")}
         >
           <div
@@ -489,7 +505,9 @@ function PlayerBarImpl({
           <div className="hidden lg:flex items-center gap-1 shrink-0 ml-2">
             <button
               type="button"
-              onClick={handleToggleFavorite}
+              onClick={() => {
+                void handleToggleFavorite();
+              }}
               aria-label={
                 isLiked
                   ? t("player.remove_favorite", "Remove from favorites")
@@ -522,7 +540,13 @@ function PlayerBarImpl({
 
           <button
             onClick={
-              errorInfo ? () => audio.playTrack(currentTrack!) : onTogglePlay
+              errorInfo
+                ? () => {
+                    if (currentTrack) {
+                      void audio.playTrack(currentTrack, currentTrack.restoreTime);
+                    }
+                  }
+                : onTogglePlay
             }
             className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
             disabled={!currentTrack || isDownloading}
@@ -603,7 +627,7 @@ function PlayerBarImpl({
         >
           <div
             className={`absolute left-0 h-full bg-gray-500 dark:bg-gray-400 group-hover:bg-[#4285F4] ${isVolumeActive ? "!bg-[#4285F4]" : ""} rounded-full transition-colors`}
-            style={{ width: `${volumePercent}%` }}
+            style={{ width: `${String(volumePercent)}%` }}
           >
             <div
               className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 ${isVolumeActive ? "!opacity-100" : ""} transition-opacity shrink-0`}

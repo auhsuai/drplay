@@ -63,6 +63,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    const isCancelled = () => cancelled;
     hydratedRef.current = false;
 
     const initApp = async () => {
@@ -77,7 +78,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
         try {
           savedSort = localStorage.getItem(SORT_OPTION_KEY);
         } catch (err) {
-          captureError({
+          void captureError({
             level: "warn",
             source: "useDrive",
             message: `sort-option-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -91,7 +92,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
         try {
           localRoot = localStorage.getItem(ROOT_FOLDER_KEY);
         } catch (err) {
-          captureError({
+          void captureError({
             level: "warn",
             source: "useDrive",
             message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -101,12 +102,18 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
         if (isLoggedIn && accessToken) {
           try {
             const freshToken = await getValidToken();
-            if (cancelled) return;
+            if (isCancelled()) return;
             if (freshToken) {
               const remoteConfig = await getAppConfig(freshToken);
-              if (cancelled) return;
+              if (isCancelled()) return;
               if (remoteConfig && remoteConfig.rootFolderId) {
-                const rootId = String(remoteConfig.rootFolderId);
+                // The config id is a Drive file id (string) by contract; the
+                // typeof guard keeps String() off a truthy-narrowed value.
+                const rootIdRaw: unknown = remoteConfig.rootFolderId;
+                const rootId =
+                  typeof rootIdRaw === "string"
+                    ? rootIdRaw
+                    : String(rootIdRaw);
                 if (rootId !== localRoot) {
                   localRoot = rootId;
                 }
@@ -118,9 +125,9 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                     ROOT_VERIFY_TIMEOUT_MS,
                   ),
                 });
-                if (cancelled) return;
+                if (isCancelled()) return;
                 if (!verifyRes.ok) {
-                  captureError({
+                  void captureError({
                     level: "warn",
                     source: "useDrive",
                     message:
@@ -128,11 +135,14 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   });
                   localRoot = null;
                 } else {
-                  const verifyData = await verifyRes.json();
+                  const verifyData = (await verifyRes.json()) as {
+                    mimeType?: unknown;
+                    driveId?: unknown;
+                  };
                   if (
                     verifyData.mimeType !== "application/vnd.google-apps.folder"
                   ) {
-                    captureError({
+                    void captureError({
                       level: "warn",
                       source: "useDrive",
                       message:
@@ -140,7 +150,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                     });
                     localRoot = null;
                   } else if (verifyData.driveId) {
-                    captureError({
+                    void captureError({
                       level: "warn",
                       source: "useDrive",
                       message:
@@ -154,7 +164,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   try {
                     savedRoot = localStorage.getItem(ROOT_FOLDER_KEY);
                   } catch (err) {
-                    captureError({
+                    void captureError({
                       level: "warn",
                       source: "useDrive",
                       message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -164,7 +174,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                     try {
                       localStorage.setItem(ROOT_FOLDER_KEY, localRoot);
                     } catch (err) {
-                      captureError({
+                      void captureError({
                         level: "warn",
                         source: "useDrive",
                         message: `root-folder-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -175,7 +185,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                     await db.files.clear();
                     await invoke(CLEAR_LOCAL_CACHE_CMD);
                   } catch (e: unknown) {
-                    captureError({
+                    void captureError({
                       level: "warn",
                       source: "useDrive",
                       message: `clear-cache-failed: ${classifyError(e)}`,
@@ -189,8 +199,8 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               localRoot = null;
             }
           } catch (e: unknown) {
-            if (cancelled) return;
-            captureError({
+            if (isCancelled()) return;
+            void captureError({
               level: "error",
               source: "useDrive",
               message: `sync-config-failed: ${classifyError(e)}`,
@@ -199,7 +209,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
           }
         }
 
-        if (cancelled) return;
+        if (isCancelled()) return;
 
         if (localRoot) {
           setAppRootFolder(localRoot);
@@ -211,10 +221,10 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
           try {
             const state = await db.syncState.get(DB_NAV_STATE_KEY);
-            if (cancelled) return;
+            if (isCancelled()) return;
             if (state && state.value) {
               const raw = state.value;
-              if (raw && typeof raw === "object" && "id" in raw) {
+              if (typeof raw === "object" && "id" in raw) {
                 const obj = raw as Record<string, unknown>;
                 if (typeof obj.id === "string") {
                   const sv = {
@@ -254,7 +264,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               try {
                 savedCurrentId = localStorage.getItem(CURRENT_FOLDER_ID_KEY);
               } catch (err) {
-                captureError({
+                void captureError({
                   level: "warn",
                   source: "useDrive",
                   message: `current-folder-id-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -266,7 +276,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                   CURRENT_FOLDER_NAME_KEY,
                 );
               } catch (err) {
-                captureError({
+                void captureError({
                   level: "warn",
                   source: "useDrive",
                   message: `current-folder-name-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -276,7 +286,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               try {
                 savedHistoryStr = localStorage.getItem(FOLDER_HISTORY_KEY);
               } catch (err) {
-                captureError({
+                void captureError({
                   level: "warn",
                   source: "useDrive",
                   message: `folder-history-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -291,9 +301,14 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                     : savedCurrentName,
                 );
                 try {
-                  setFolderHistory(JSON.parse(savedHistoryStr));
+                  setFolderHistory(
+                    JSON.parse(savedHistoryStr) as {
+                      id: string;
+                      name: string;
+                    }[],
+                  );
                 } catch (e: unknown) {
-                  captureError({
+                  void captureError({
                     level: "warn",
                     source: "useDrive",
                     message: `nav-state-parse: corrupt localStorage folder history, ${classifyError(e)}`,
@@ -305,8 +320,8 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               }
             }
           } catch (e: unknown) {
-            if (cancelled) return;
-            captureError({
+            if (isCancelled()) return;
+            void captureError({
               level: "warn",
               source: "useDrive",
               message: `nav-state-restore-failed: ${classifyError(e)}`,
@@ -320,8 +335,8 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
         // Unexpected throw from initApp (e.g. an unhandled rejection). Fall back
         // to a safe state so the app is not stuck without an app root folder and
         // hydration still completes in the finally below.
-        if (cancelled) return;
-        captureError({
+        if (isCancelled()) return;
+        void captureError({
           level: "error",
           source: "useDrive",
           message: `init-app-unexpected: ${classifyError(e)}`,
@@ -339,8 +354,8 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
     // Defensive net: initApp's own try/finally already guarantees hydration, but
     // this catch logs any rejection that escapes initApp instead of swallowing it.
-    initApp().catch((e) =>
-      captureError({
+    initApp().catch((e: unknown) =>
+      void captureError({
         level: "error",
         source: "useDrive",
         message: `init-app-failed: ${classifyError(e)}`,
@@ -351,7 +366,15 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       cancelled = true;
       controller.abort();
     };
-  }, [isLoggedIn, accessToken, setSortOption]);
+  }, [
+    isLoggedIn,
+    accessToken,
+    setSortOption,
+    setAppRootFolder,
+    setCurrentFolderId,
+    setCurrentFolderName,
+    setFolderHistory,
+  ]);
 
   // Save folder navigation state whenever it changes
   useEffect(() => {
@@ -367,7 +390,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
           },
         })
         .catch((e: unknown) =>
-          captureError({
+          void captureError({
             level: "error",
             source: "useDrive",
             message: `nav-state-save-failed: ${classifyError(e)}`,
@@ -380,6 +403,10 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     folderHistory,
     isLoggedIn,
     appRootFolder,
+    setAppRootFolder,
+    setCurrentFolderId,
+    setCurrentFolderName,
+    setFolderHistory,
   ]);
 
   const handleOpenFolder = useCallback(
@@ -391,7 +418,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       ]);
       setCurrentFolderId(folderId);
       setCurrentFolderName(folderName);
-      recordFolderVisit(folderId, folderName);
+      void recordFolderVisit(folderId, folderName);
     },
     [
       currentFolderId,
@@ -433,7 +460,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       try {
         localStorage.setItem(ROOT_FOLDER_KEY, folderId);
       } catch (err) {
-        captureError({
+        void captureError({
           level: "warn",
           source: "useDrive",
           message: `root-folder-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -455,7 +482,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               updatedAt: Date.now(),
             });
             if (!saved) {
-              captureError({
+              void captureError({
                 level: "warn",
                 source: "useDrive",
                 message:
@@ -463,7 +490,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
               });
             }
           } catch (err: unknown) {
-            captureError({
+            void captureError({
               level: "error",
               source: "useDrive",
               message: `save-config-failed: ${classifyError(err)}`,
@@ -471,7 +498,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
           }
         }
       } catch (e: unknown) {
-        captureError({
+        void captureError({
           level: "error",
           source: "useDrive",
           message: `root-select-cleanup-failed: ${classifyError(e)}`,

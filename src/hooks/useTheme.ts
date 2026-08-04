@@ -42,7 +42,9 @@ export const useTheme = () => {
       if (theme === "system") applyTheme();
     };
     mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
+    return () => {
+      mediaQuery.removeEventListener("change", handleChange);
+    };
   }, [theme]);
 
   const changeTheme = (newTheme: ThemeType) => {
@@ -50,7 +52,7 @@ export const useTheme = () => {
     try {
       localStorage.setItem("drplay_theme", newTheme);
     } catch {
-      captureError({
+      void captureError({
         level: "warn",
         source: "useTheme",
         message: "theme-write-failed",

@@ -20,9 +20,13 @@ export function useEventListener(
     savedHandler.current = handler;
   }, [handler]);
   useEffect(() => {
-    const listener = (event: Event) => savedHandler.current(event);
+    const listener = (event: Event) => {
+      savedHandler.current(event);
+    };
     window.addEventListener(eventName, listener);
-    return () => window.removeEventListener(eventName, listener);
+    return () => {
+      window.removeEventListener(eventName, listener);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventName, ...deps]);
 }

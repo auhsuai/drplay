@@ -76,16 +76,16 @@ function classifyRequestError(err: unknown): "network" | "timeout" {
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`Token refresh timeout (no response within ${ms}ms)`));
+      reject(new Error(`Token refresh timeout (no response within ${String(ms)}ms)`));
     }, ms);
     promise.then(
       (value) => {
         clearTimeout(timer);
         resolve(value);
       },
-      (err) => {
+      (err: unknown) => {
         clearTimeout(timer);
-        reject(err);
+        reject(err instanceof Error ? err : new Error(String(err)));
       },
     );
   });
@@ -132,7 +132,7 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
     try {
       await getValidToken(true);
     } catch (e: unknown) {
-      captureError({
+      await captureError({
         level: "warn",
         source: "apiClient",
         message: `Proactive refresh failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -151,10 +151,10 @@ export async function revokeGoogleToken(token: string): Promise<void> {
       signal: AbortSignal.timeout(5000),
     });
   } catch (err: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: "apiClient",
-      message: `Revoke token failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
+      message: `refresh-token-keyring-read-failed, falling back to localStorage: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
 }
@@ -168,7 +168,9 @@ function getStoredTokenTime(): number {
     parsed <= 0 ||
     parsed > Date.now() + TOKEN_TIME_MAX_FUTURE_MS
   ) {
-    captureError({
+    // fire-and-forget: logging must not throw in this sync path (captureError
+    // never rejects — it swallows failures internally).
+    void captureError({
       level: "warn",
       source: "apiClient",
       message: "Invalid token_time detected, forcing refresh",
@@ -209,7 +211,7 @@ export const readRefreshToken = async (): Promise<string | null> => {
   } catch (err: unknown) {
     // Never log the token; the Rust side already strips it from its errors
     // (see token_store.rs).
-    captureError({
+    await captureError({
       level: "warn",
       source: "apiClient",
       message: `refresh-token-keyring-read-failed, falling back to localStorage: ${err instanceof Error ? err.message : String(err)}`,
@@ -236,7 +238,7 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
     // legacy localStorage copy so the credential never exists in two places.
     localStorage.removeItem(REFRESH_TOKEN_KEY);
   } catch (err: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: "apiClient",
       message: `refresh-token-keyring-write-failed, keeping localStorage fallback: ${err instanceof Error ? err.message : String(err)}`,
@@ -247,7 +249,7 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
       // localStorage unavailable (quota/private mode): nothing left to do —
       // log, never throw (the caller is fire-and-forget and the access token
       // is still usable for its ~1h lifetime).
-      captureError({
+      await captureError({
         level: "warn",
         source: "apiClient",
         message: `refresh-token-localstorage-write-failed: ${storageErr instanceof Error ? storageErr.message : String(storageErr)}`,
@@ -268,7 +270,7 @@ export const deleteRefreshToken = async (): Promise<void> => {
     // Never log the token; the Rust side strips it from its errors (see
     // token_store.rs). A vault failure must not block logout — the access
     // token is already gone, so the session ends regardless.
-    captureError({
+    await captureError({
       level: "warn",
       source: "apiClient",
       message: `refresh-token-keyring-delete-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -280,7 +282,7 @@ export const deleteRefreshToken = async (): Promise<void> => {
     // localStorage unavailable (privacy mode / quota): the keyring delete
     // already ran; there is no second store to clear. Never throw — the
     // caller is fire-and-forget.
-    captureError({
+    await captureError({
       level: "warn",
       source: "apiClient",
       message: "refresh-token-localstorage-clear-failed",
@@ -354,7 +356,9 @@ export const getValidToken = async (
       const accessToken = tokenData.access_token;
 
       if (mySessionId !== getCurrentSessionId()) {
-        refreshSubscribers.forEach((sub) => sub.resolve(""));
+        refreshSubscribers.forEach((sub) => {
+          sub.resolve("");
+        });
         return "";
       }
 
@@ -374,18 +378,20 @@ export const getValidToken = async (
         new CustomEvent("token-updated", { detail: { token: accessToken } }),
       );
 
-      refreshSubscribers.forEach((sub) => sub.resolve(accessToken));
+      refreshSubscribers.forEach((sub) => {
+        sub.resolve(accessToken);
+      });
       return accessToken;
     } catch (err: unknown) {
-      refreshSubscribers.forEach((sub) =>
-        sub.reject(err instanceof Error ? err : new Error(String(err))),
-      );
+      refreshSubscribers.forEach((sub) => {
+        sub.reject(err instanceof Error ? err : new Error(String(err)));
+      });
 
       if (err instanceof TokenRefreshError) {
         if (err.kind === "invalid_grant") {
           window.dispatchEvent(new CustomEvent("auth-logout"));
         } else {
-          captureError({
+          await captureError({
             level: "warn",
             source: "apiClient",
             message: `Token refresh failed (${err.kind}), will retry`,
@@ -416,7 +422,7 @@ export const fetchWithAuth = async (
   options: FetchWithAuthOptions = {},
 ): Promise<Response> => {
   const { timeoutMs, ...fetchOptions } = options;
-  let token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
 
   // Ensure headers exist and attach token
   const headers = new Headers(options.headers);

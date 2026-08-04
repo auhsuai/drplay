@@ -15,7 +15,9 @@ export function loadSidebarOpenState(): boolean {
   try {
     return localStorage.getItem(LS_SIDEBAR_OPEN) !== "false";
   } catch (err) {
-    captureError({
+    // fire-and-forget: logging must not throw in this sync path (captureError
+    // never rejects — it swallows failures internally).
+    void captureError({
       level: "warn",
       source: "sidebarState",
       message: `sidebar-open-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -28,7 +30,9 @@ export function saveSidebarOpenState(open: boolean): void {
   try {
     localStorage.setItem(LS_SIDEBAR_OPEN, String(open));
   } catch (err) {
-    captureError({
+    // fire-and-forget: logging must not throw in this sync path (captureError
+    // never rejects — it swallows failures internally).
+    void captureError({
       level: "warn",
       source: "sidebarState",
       message: `sidebar-open-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,

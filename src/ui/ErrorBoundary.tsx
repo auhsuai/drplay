@@ -54,7 +54,7 @@ export class ErrorBoundary extends React.Component<
     // Route the render error into the global error log (Slice 2).
     // Wrapped so a failure in captureError can NEVER loop/crash the boundary.
     try {
-      captureError({
+      void captureError({
         level: "error",
         source: "ErrorBoundary",
         message: error.message,

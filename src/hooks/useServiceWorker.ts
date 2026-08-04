@@ -19,7 +19,7 @@ function safePost(
   try {
     target.postMessage(message);
   } catch (e: unknown) {
-    captureError({
+    void captureError({
       level: "warn",
       source: "useServiceWorker",
       message: `sw-post-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -38,9 +38,9 @@ function safePost(
 // persists state to a file), so "migrating" there would not improve security —
 // any future hardening should go through the OS keychain/DPAPI/Stronghold.
 export function useServiceWorker(token?: string | null) {
-  const getToken = () => token ?? localStorage.getItem(ACCESS_TOKEN_KEY);
-
   useEffect(() => {
+    const getToken = () => token ?? localStorage.getItem(ACCESS_TOKEN_KEY);
+
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
         .register(SW_SCOPE)
@@ -53,10 +53,13 @@ export function useServiceWorker(token?: string | null) {
             // non-active worker and cannot throw a mislabeled "registration failed".
             navigator.serviceWorker.ready
               .then((readyReg) => {
-                safePost(readyReg.active, { type: MSG_UPDATE_TOKEN, token: t });
+                safePost(readyReg.active, {
+                  type: MSG_UPDATE_TOKEN,
+                  token: t,
+                });
               })
-              .catch((err) => {
-                captureError({
+              .catch((err: unknown) => {
+                void captureError({
                   level: "warn",
                   source: "useServiceWorker",
                   message: `SW ready failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -82,8 +85,8 @@ export function useServiceWorker(token?: string | null) {
             }
           });
         })
-        .catch((err) => {
-          captureError({
+        .catch((err: unknown) => {
+          void captureError({
             level: "error",
             source: "useServiceWorker",
             message: `SW Registration failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -103,11 +106,12 @@ export function useServiceWorker(token?: string | null) {
         "controllerchange",
         handleControllerChange,
       );
-      return () =>
+      return () => {
         navigator.serviceWorker.removeEventListener(
           "controllerchange",
           handleControllerChange,
         );
+      };
     }
   }, [token]);
 
@@ -128,8 +132,8 @@ export function useServiceWorker(token?: string | null) {
         if (target)
           safePost(target, { type: MSG_UPDATE_TOKEN, token: token ?? "" });
       })
-      .catch((err) => {
-        captureError({
+      .catch((err: unknown) => {
+        void captureError({
           level: "warn",
           source: "useServiceWorker",
           message: `sw-token-push-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -139,8 +143,9 @@ export function useServiceWorker(token?: string | null) {
 
   useEffect(() => {
     const handleTokenUpdated = (ev: Event) => {
-      const t = (ev as CustomEvent<{ token: string }>).detail?.token;
-      if (navigator.serviceWorker && navigator.serviceWorker.controller && t) {
+      const detail = (ev as CustomEvent<{ token?: unknown } | null>).detail;
+      const t = detail?.token;
+      if (navigator.serviceWorker.controller && typeof t === "string") {
         safePost(navigator.serviceWorker.controller, {
           type: MSG_UPDATE_TOKEN,
           token: t,
@@ -148,8 +153,9 @@ export function useServiceWorker(token?: string | null) {
       }
     };
     window.addEventListener(EVENT_TOKEN_UPDATED, handleTokenUpdated);
-    return () =>
+    return () => {
       window.removeEventListener(EVENT_TOKEN_UPDATED, handleTokenUpdated);
+    };
   }, []);
 
   // A 401 from /drive-stream/ means the token inside the SW is stale (SW
@@ -163,7 +169,7 @@ export function useServiceWorker(token?: string | null) {
       const data = event.data as { type?: unknown } | null;
       if (!data || data.type !== EVENT_SW_TOKEN_EXPIRED) return;
       getValidToken(true).catch((e: unknown) => {
-        captureError({
+        void captureError({
           level: "warn",
           source: "useServiceWorker",
           message: `sw-token-expired-refresh-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -171,7 +177,8 @@ export function useServiceWorker(token?: string | null) {
       });
     };
     navigator.serviceWorker.addEventListener("message", handleSwMessage);
-    return () =>
+    return () => {
       navigator.serviceWorker.removeEventListener("message", handleSwMessage);
+    };
   }, []);
 }

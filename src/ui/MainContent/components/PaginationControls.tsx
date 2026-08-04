@@ -31,7 +31,9 @@ export function PaginationControls({
             disabled={currentPage === 1}
             onClick={() => {
               setCurrentPage((p) => p - 1);
-              setTimeout(() => onScrollTop(), 0);
+              setTimeout(() => {
+                onScrollTop();
+              }, 0);
             }}
             className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
           >
@@ -44,6 +46,7 @@ export function PaginationControls({
             <div
               className="fixed inset-0 cursor-default bg-transparent"
               style={{ zIndex: -1 }}
+              role="presentation"
               onMouseDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -53,9 +56,19 @@ export function PaginationControls({
           )}
 
           <div
+            role="button"
+            tabIndex={0}
             className={`flex items-center text-sm font-medium text-gray-900 dark:text-white tracking-wider text-center drop-shadow-md transition-colors ${!isEditingPage ? "cursor-pointer hover:text-[#4285F4]" : ""}`}
             onClick={() => {
               if (!isEditingPage) {
+                setIsEditingPage(true);
+                setPageInputValue(currentPage.toString());
+                setTimeout(() => pageInputRef.current?.focus(), 0);
+              }
+            }}
+            onKeyDown={(e) => {
+              if ((e.key === "Enter" || e.key === " ") && !isEditingPage) {
+                e.preventDefault();
                 setIsEditingPage(true);
                 setPageInputValue(currentPage.toString());
                 setTimeout(() => pageInputRef.current?.focus(), 0);
@@ -67,9 +80,9 @@ export function PaginationControls({
               type="text"
               readOnly={!isEditingPage}
               value={isEditingPage ? pageInputValue : currentPage}
-              onChange={(e) =>
-                isEditingPage && setPageInputValue(e.target.value)
-              }
+              onChange={(e) => {
+                if (isEditingPage) setPageInputValue(e.target.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   const newPage = parseInt(pageInputValue.trim(), 10);
@@ -79,7 +92,9 @@ export function PaginationControls({
                     newPage <= totalPages
                   ) {
                     setCurrentPage(newPage);
-                    setTimeout(() => onScrollTop(), 0);
+                    setTimeout(() => {
+                      onScrollTop();
+                    }, 0);
                   }
                   setIsEditingPage(false);
                 }
@@ -96,14 +111,16 @@ export function PaginationControls({
                     newPage <= totalPages
                   ) {
                     setCurrentPage(newPage);
-                    setTimeout(() => onScrollTop(), 0);
+                    setTimeout(() => {
+                      onScrollTop();
+                    }, 0);
                   }
                   setIsEditingPage(false);
                 }
               }}
               className={`text-right bg-transparent outline-none p-0 m-0 text-inherit font-inherit ${!isEditingPage ? "cursor-pointer pointer-events-none" : ""}`}
               style={{
-                width: `${Math.max(1, (isEditingPage ? pageInputValue : currentPage.toString()).length)}ch`,
+                width: `${String(Math.max(1, (isEditingPage ? pageInputValue : currentPage.toString()).length))}ch`,
                 caretColor: isEditingPage ? "inherit" : "transparent",
               }}
             />
@@ -116,7 +133,9 @@ export function PaginationControls({
             disabled={currentPage === totalPages}
             onClick={() => {
               setCurrentPage((p) => p + 1);
-              setTimeout(() => onScrollTop(), 0);
+              setTimeout(() => {
+                onScrollTop();
+              }, 0);
             }}
             className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
           >

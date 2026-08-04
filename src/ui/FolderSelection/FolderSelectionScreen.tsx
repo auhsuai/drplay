@@ -48,6 +48,15 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
+// Race guard: cancelFolderFetch() aborts the controller from OUTSIDE this
+// function while an await is in flight, so signal.aborted is genuinely
+// reachable here even though typescript-eslint's flow analysis narrows a
+// freshly-created controller's signal to "never aborted". The indirection
+// keeps the check opaque to that narrowing.
+function isAborted(controller: AbortController): boolean {
+  return controller.signal.aborted;
+}
+
 interface FolderItem {
   id: string;
   name: string;
@@ -63,7 +72,15 @@ function FolderCard({
   const { t } = useTranslation();
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       className="p-4 rounded-xl bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] hover:shadow-md hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex items-center gap-4"
     >
       <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
@@ -116,7 +133,7 @@ export function FolderSelectionScreen({
   try {
     storedAppRoot = localStorage.getItem(ROOT_FOLDER_KEY);
   } catch (err) {
-    captureError({
+    void captureError({
       level: "warn",
       source: "FolderSelectionScreen",
       message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -153,6 +170,88 @@ export function FolderSelectionScreen({
     return folders.filter((f) => f.name.toLowerCase().includes(q));
   }, [folders, searchQuery]);
 
+  // React "adjusting state during render" pattern: instead of resetting the
+  // search in an effect (react-hooks/set-state-in-effect), reset it right
+  // here when the active folder changes — state is adjusted synchronously
+  // during render, before the browser paints the new folder.
+  const [lastFetchedFolderId, setLastFetchedFolderId] = useState(
+    currentFolderId,
+  );
+  if (lastFetchedFolderId !== currentFolderId) {
+    setLastFetchedFolderId(currentFolderId);
+    setSearchQuery("");
+    setApiSearchResults([]);
+  }
+
+  // API search results are only rendered while the query is non-empty AND
+  // the local filter matched nothing. When that precondition turns false the
+  // stale results/in-flight flag must be cleared — done here during render,
+  // not inside the debounce effect.
+  const apiSearchActive =
+    Boolean(searchQuery.trim()) && filteredFolders.length === 0;
+  const [lastApiSearchActive, setLastApiSearchActive] = useState(
+    apiSearchActive,
+  );
+  if (lastApiSearchActive !== apiSearchActive) {
+    setLastApiSearchActive(apiSearchActive);
+    if (!apiSearchActive) {
+      setApiSearchResults([]);
+      setIsSearchingApi(false);
+    }
+  }
+
+  const cancelFolderFetch = useCallback(() => {
+    foldersAbortRef.current?.abort();
+    foldersAbortRef.current = null;
+  }, []);
+
+  const fetchFolders = async (folderId: string) => {
+    cancelFolderFetch();
+    const controller = new AbortController();
+    foldersAbortRef.current = controller;
+
+    isLoadingRef.current = true;
+    setIsLoading(true);
+    setFolders([]);
+    try {
+      const dbFolders = await db.files
+        .where("parentId")
+        .equals(folderId)
+        .filter((f) => f.isFolder)
+        .toArray();
+      if (isAborted(controller)) return;
+      if (dbFolders.length > 0) {
+        setFolders(dbFolders.map((c) => ({ id: c.id, name: c.name })));
+      } else {
+        const freshToken = (await getValidToken()) || token;
+        if (isAborted(controller)) return;
+        const files = await listFolderChildren(
+          freshToken,
+          folderId,
+          controller.signal,
+        );
+        if (isAborted(controller)) return;
+        setFolders(files.map((f) => ({ id: f.id, name: f.name })));
+      }
+    } catch (e) {
+      if (isAbortError(e)) return;
+      void captureError({
+        level: "error",
+        source: FOLDER_MODULE,
+        message: `failed-to-fetch-folders: ${classifyFolderError(e)}`,
+      });
+      showErrorToast(
+        t("folder_selection.folders_error") || "Failed to load folders",
+      );
+      setFolders([]);
+    } finally {
+      if (foldersAbortRef.current === controller) {
+        isLoadingRef.current = false;
+        setIsLoading(false);
+      }
+    }
+  };
+
   const searchSubfolders = useCallback(
     async (query: string) => {
       apiSearchAbortRef.current?.abort();
@@ -173,7 +272,7 @@ export function FolderSelectionScreen({
       } catch (e: unknown) {
         if (!isAbortError(e)) {
           setApiSearchResults([]);
-          captureError({
+          void captureError({
             level: "warn",
             source: FOLDER_MODULE,
             message: `api-search-failed: ${classifyFolderError(e)}`,
@@ -186,16 +285,11 @@ export function FolderSelectionScreen({
         setIsSearchingApi(false);
       }
     },
-    [token, currentFolderId],
+    [token, currentFolderId, t],
   );
 
   useEffect(() => {
-    if (!searchQuery.trim() || filteredFolders.length > 0) {
-      setApiSearchResults([]);
-      setIsSearchingApi(false);
-      return;
-    }
-    setIsSearchingApi(true);
+    if (!searchQuery.trim() || filteredFolders.length > 0) return;
     const timer = setTimeout(
       () => searchSubfolders(searchQuery.trim()),
       SEARCH_DEBOUNCE_MS,
@@ -207,10 +301,20 @@ export function FolderSelectionScreen({
   }, [searchQuery, filteredFolders.length, searchSubfolders]);
 
   useEffect(() => {
-    fetchFolders(currentFolderId);
-    setSearchQuery("");
-    setApiSearchResults([]);
-    return () => cancelFolderFetch();
+    // fetchFolders sets isLoading/folders synchronously — that is the
+    // loading transition itself (skeleton state), not a cascading render:
+    // the effect IS the fetch trigger. The alternative (delaying the
+    // setState until after the first await) would flash the previous
+    // folder's content, so this is intentional.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchFolders(currentFolderId);
+    return () => {
+      cancelFolderFetch();
+    };
+    // fetchFolders/cancelFolderFetch are local functions whose identity
+    // changes every render; the effect only needs to refetch when the
+    // folder or token changes, so they are intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFolderId, token]);
 
   useEffect(() => {
@@ -233,60 +337,10 @@ export function FolderSelectionScreen({
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
-
-  const cancelFolderFetch = useCallback(() => {
-    foldersAbortRef.current?.abort();
-    foldersAbortRef.current = null;
-  }, []);
-
-  const fetchFolders = async (folderId: string) => {
-    cancelFolderFetch();
-    const controller = new AbortController();
-    foldersAbortRef.current = controller;
-
-    isLoadingRef.current = true;
-    setIsLoading(true);
-    setFolders([]);
-    try {
-      const dbFolders = await db.files
-        .where("parentId")
-        .equals(folderId)
-        .filter((f) => f.isFolder)
-        .toArray();
-      if (controller.signal.aborted) return;
-      if (dbFolders.length > 0) {
-        setFolders(dbFolders.map((c) => ({ id: c.id, name: c.name })));
-      } else {
-        const freshToken = (await getValidToken()) || token;
-        if (controller.signal.aborted) return;
-        const files = await listFolderChildren(
-          freshToken,
-          folderId,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        setFolders(files.map((f) => ({ id: f.id, name: f.name })));
-      }
-    } catch (e) {
-      if (isAbortError(e)) return;
-      captureError({
-        level: "error",
-        source: FOLDER_MODULE,
-        message: `failed-to-fetch-folders: ${classifyFolderError(e)}`,
-      });
-      showErrorToast(
-        t("folder_selection.folders_error") || "Failed to load folders",
-      );
-      setFolders([]);
-    } finally {
-      if (foldersAbortRef.current === controller) {
-        isLoadingRef.current = false;
-        setIsLoading(false);
-      }
-    }
-  };
 
   const handleOpenFolder = (folderId: string, folderName: string) => {
     if (isLoadingRef.current) return;
@@ -338,7 +392,7 @@ export function FolderSelectionScreen({
             const name = await getFileName(token, fetchedParentId);
             if (name) setCurrentFolderName(name);
           } catch (e) {
-            captureError({
+            void captureError({
               level: "warn",
               source: FOLDER_MODULE,
               message: `fetch-parent-name-failed: ${classifyFolderError(e)}`,
@@ -349,7 +403,7 @@ export function FolderSelectionScreen({
         setCurrentFolderId(ROOT_FOLDER_ID);
       }
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: FOLDER_MODULE,
         message: `fetch-parent-failed: ${classifyFolderError(e)}`,
@@ -378,13 +432,14 @@ export function FolderSelectionScreen({
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={() => {
-        if (onCancel) onCancel();
+      role="presentation"
+      onClick={(e) => {
+        // Only close when the backdrop itself (not the dialog) is clicked.
+        if (e.target === e.currentTarget && onCancel) onCancel();
       }}
     >
       <div
         className="bg-white dark:bg-[#121212] w-full max-w-3xl h-[75vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="px-6 py-5 flex items-center justify-between shrink-0">
@@ -422,7 +477,9 @@ export function FolderSelectionScreen({
         {/* Toolbar / Breadcrumb / Search */}
         <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
           <button
-            onClick={handleBack}
+            onClick={() => {
+              void handleBack();
+            }}
             disabled={
               folderHistory.length === 0 &&
               (currentFolderId === ROOT_FOLDER_ID ||
@@ -437,7 +494,17 @@ export function FolderSelectionScreen({
             {folderHistory.map((item, index) => (
               <React.Fragment key={index}>
                 <span
-                  onClick={() => handleBreadcrumbClick(index)}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    handleBreadcrumbClick(index);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleBreadcrumbClick(index);
+                    }
+                  }}
                   className="cursor-pointer text-gray-500 dark:text-gray-400 hover:text-[#4285F4] transition-colors"
                 >
                   {item.name}
@@ -457,7 +524,9 @@ export function FolderSelectionScreen({
               type="text"
               placeholder={t("search_placeholder", "Search...")}
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+              }}
               className="w-full pl-9 pr-3 py-2 text-sm bg-gray-100 dark:bg-[#1c1d21] hover:bg-gray-200 dark:hover:bg-[#25262a] focus:bg-white dark:focus:bg-[#1c1d21] text-gray-900 dark:text-gray-100 rounded-xl border border-transparent focus:border-[#4285F4]/50 outline-none transition-all placeholder:text-gray-500"
             />
           </div>
@@ -494,7 +563,9 @@ export function FolderSelectionScreen({
                 <FolderCard
                   key={folder.id}
                   folder={folder}
-                  onClick={() => handleOpenFolder(folder.id, folder.name)}
+                  onClick={() => {
+                    handleOpenFolder(folder.id, folder.name);
+                  }}
                 />
               ))}
               {filteredFolders.length > 0 && (
@@ -506,7 +577,9 @@ export function FolderSelectionScreen({
                 <FolderCard
                   key={folder.id}
                   folder={folder}
-                  onClick={() => handleOpenFolder(folder.id, folder.name)}
+                  onClick={() => {
+                    handleOpenFolder(folder.id, folder.name);
+                  }}
                 />
               ))}
               {isSearchingApi && (
@@ -531,7 +604,9 @@ export function FolderSelectionScreen({
                 <FolderCard
                   key={folder.id}
                   folder={folder}
-                  onClick={() => handleOpenFolder(folder.id, folder.name)}
+                  onClick={() => {
+                    handleOpenFolder(folder.id, folder.name);
+                  }}
                 />
               ))}
             </div>
@@ -549,7 +624,9 @@ export function FolderSelectionScreen({
             </button>
           )}
           <button
-            onClick={() => onSelectFolder(currentFolderId)}
+            onClick={() => {
+              onSelectFolder(currentFolderId);
+            }}
             className="flex items-center gap-2 bg-[#4285F4] hover:bg-[#3367d6] text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm"
           >
             <Check className="w-4 h-4" />

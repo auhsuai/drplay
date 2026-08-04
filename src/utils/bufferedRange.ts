@@ -42,7 +42,7 @@ export function updateBufferBar(
 
   const dur = source.duration;
   const buffered = source.buffered;
-  if (!Number.isFinite(dur) || dur <= 0 || !buffered || buffered.length === 0) {
+  if (!Number.isFinite(dur) || dur <= 0 || buffered.length === 0) {
     if (container.childElementCount > 0) container.innerHTML = "";
     return;
   }
@@ -89,8 +89,8 @@ export function updateBufferBar(
     const seg = container.children[i] as HTMLElement;
     const left = (start / dur) * 100;
     const width = ((end - start) / dur) * 100;
-    seg.style.left = `${left}%`;
-    seg.style.width = `${width}%`;
+    seg.style.left = `${String(left)}%`;
+    seg.style.width = `${String(width)}%`;
   }
 }
 

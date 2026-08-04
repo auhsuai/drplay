@@ -75,7 +75,7 @@ export function usePlayerQueue(
       sameTrack(item, currentTrack),
     );
     if (currentIndex === -1) {
-      captureError({
+      void captureError({
         level: "warn",
         source: "usePlayerQueue",
         message: "handleNextTrack: current track not found in playbackQueue",
@@ -99,7 +99,7 @@ export function usePlayerQueue(
       sameTrack(item, currentTrack),
     );
     if (currentIndex === -1) {
-      captureError({
+      void captureError({
         level: "warn",
         source: "usePlayerQueue",
         message: "handlePrevTrack: current track not found in playbackQueue",
@@ -160,12 +160,14 @@ export function usePlayerQueue(
 
       if (newOriginalQueue.length > 0) {
         setOriginalQueue(newOriginalQueue);
-        idbSet(SESSION_CLEANUP_KEYS.queueKv, newOriginalQueue).catch((e) =>
-          captureError({
-            level: "warn",
-            source: "usePlayerQueue",
-            message: `queue-save-fail: ${classifyPlayerError(e).message}`,
-          }),
+        idbSet(SESSION_CLEANUP_KEYS.queueKv, newOriginalQueue).catch(
+          (e: unknown) => {
+            void captureError({
+              level: "warn",
+              source: "usePlayerQueue",
+              message: `queue-save-fail: ${classifyPlayerError(e).message}`,
+            });
+          },
         );
         if (playMode === "shuffle") {
           const shuffled = shuffleQueueWithCurrent(
@@ -189,13 +191,13 @@ export function usePlayerQueue(
       } else {
         targetTrack = ensureQueueItemId(targetTrack);
         setPlaybackQueue([targetTrack]);
-        idbSet(SESSION_CLEANUP_KEYS.queueKv, []).catch((e) =>
-          captureError({
+        idbSet(SESSION_CLEANUP_KEYS.queueKv, []).catch((e: unknown) => {
+          void captureError({
             level: "warn",
             source: "usePlayerQueue",
             message: `queue-clear-fail: ${classifyPlayerError(e).message}`,
-          }),
-        );
+          });
+        });
       }
       return targetTrack;
     },

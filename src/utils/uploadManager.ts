@@ -329,7 +329,9 @@ function notify(): void {
     try {
       cb();
     } catch (err) {
-      captureError({
+      // fire-and-forget: logging must not throw in this sync path
+      // (captureError never rejects — it swallows failures internally).
+      void captureError({
         level: "warn",
         source: MODULE,
         message: `subscriber-failed: ${describeError(err)}`,
@@ -366,7 +368,9 @@ function createEntry(seed: UploadSeed, token: string): InternalEntry {
 function failSeed(entry: InternalEntry, reason: string): void {
   entry.status = "error";
   entry.error = ERROR_INVALID_SEED;
-  captureError({
+  // fire-and-forget: logging must not throw in this sync path (captureError
+  // never rejects — it swallows failures internally).
+  void captureError({
     level: "warn",
     source: MODULE,
     message: `invalid-seed name=${entry.name}: ${reason}`,
@@ -671,7 +675,7 @@ async function quotaAllows(
   try {
     quota = await getDriveStorageQuota(entry.token);
   } catch (err) {
-    captureError({
+    await captureError({
       level: "warn",
       source: MODULE,
       message: `quota-check-skipped name=${entry.name}: ${describeError(err)}`,
@@ -796,7 +800,7 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
   if (isAborted) {
     // A user-initiated cancel is not a failure: no error toast, warn-level log
     // only. entry.name is always a basename (never a disk path or token).
-    captureError({
+    await captureError({
       level: "warn",
       source: MODULE,
       message: `upload-cancelled name=${entry.name}`,
@@ -811,7 +815,7 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
     const uploadDetail =
       err instanceof UploadError ? ` message=${err.message}` : "";
     // Never log the disk path or token - only the shortened file name.
-    captureError({
+    await captureError({
       level: isQuota ? "warn" : "error",
       source: MODULE,
       message: `upload-entry-failed name=${entry.name} kind=${entry.error}${uploadDetail}`,
@@ -853,7 +857,7 @@ async function dbRowOp(
   try {
     await op();
   } catch (err) {
-    captureError({
+    await captureError({
       level: "warn",
       source: MODULE,
       message: `${label}-db-failed: ${describeError(err)}`,

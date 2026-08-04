@@ -190,7 +190,7 @@ export function MoreMenu({
       await db.files.update(itemId, { parentId: newParentId });
       if (onRemoveItem) onRemoveItem(itemId);
     } catch (e) {
-      captureError({
+      void captureError({
         level: "error",
         source: MORE_MENU_MODULE,
         message: `move-failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -475,9 +475,9 @@ export function MoreMenu({
             setPlaylistCurrentPage={setPlaylistCurrentPage}
             playlistSubmenuOpenLeft={playlistSubmenuOpenLeft}
             playlists={playlists}
-            onAddToPlaylist={(e, pId) =>
-              handleAddToPlaylist(e, pId, track, setIsOpen, onClose)
-            }
+            onAddToPlaylist={(e, pId) => {
+              void handleAddToPlaylist(e, pId, track, setIsOpen, onClose);
+            }}
             t={t}
           />
         </div>
@@ -489,6 +489,7 @@ export function MoreMenu({
     <div
       className="relative"
       ref={menuRef}
+      role="presentation"
       onClick={(e) => {
         e.stopPropagation();
       }}
@@ -524,10 +525,19 @@ export function MoreMenu({
           <div
             ref={dropdownRef}
             role="menu"
+            tabIndex={-1}
             className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none ${anchorPoint ? "" : openUpwards ? "origin-bottom-right" : "origin-top-right"}`}
             style={getContextMenuStyle()}
             onClick={(e) => {
               e.stopPropagation();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setIsOpen(false);
+                setShowPlaylistsSubmenu(false);
+                onClose?.();
+              }
             }}
             onContextMenu={(e) => {
               e.stopPropagation();
@@ -548,7 +558,9 @@ export function MoreMenu({
           onClose={() => {
             setShowDownloadDialog(false);
           }}
-          onConfirm={executeDownload}
+          onConfirm={() => {
+            void executeDownload();
+          }}
           t={t}
         />,
         document.body,
@@ -581,9 +593,15 @@ export function MoreMenu({
           onClose={() => {
             setShowDeleteConfirm(false);
           }}
-          onConfirm={() =>
-            handleDelete(token, setIsOpen, onClose, onRemoveItem, onRefresh)
-          }
+          onConfirm={() => {
+            void handleDelete(
+              token,
+              setIsOpen,
+              onClose,
+              onRemoveItem,
+              onRefresh,
+            );
+          }}
           t={t}
         />,
         document.body,
@@ -595,7 +613,9 @@ export function MoreMenu({
         createPortal(
           <FolderSelectionScreen
             token={token}
-            onSelectFolder={handleMove}
+            onSelectFolder={(folderId) => {
+              void handleMove(folderId);
+            }}
             onCancel={() => {
               setShowMoveScreen(false);
             }}
@@ -603,7 +623,7 @@ export function MoreMenu({
             initialFolderName={currentFolderName}
             initialFolderHistory={folderHistory}
             title={t("drive.move_to", "Move to...")}
-            subtitle={`${t("drive.move_item_desc", "Select destination for")} ${driveItem?.title}`}
+            subtitle={`${t("drive.move_item_desc", "Select destination for")} ${driveItem?.title ?? ""}`}
           />,
           document.body,
         )}

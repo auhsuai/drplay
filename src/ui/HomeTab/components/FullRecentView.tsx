@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import type { Track } from "../../../App";
+import type { DriveItem } from "../../../types";
 import { useTranslation } from "react-i18next";
 import { prefetchVisibleTracks } from "../../../utils/streamPrefetcher";
 import { ArrowLeft, Search, X } from "lucide-react";
@@ -75,7 +76,7 @@ export function FullRecentView({
 }: {
   recent: Track[];
   onBack: () => void;
-  onPlay: (track: Track, ctx?: Track[] | undefined) => void;
+  onPlay: (track: Track, ctx?: Track[]) => void;
   token: string | null;
   currentTrack?: Track | null | undefined;
   title?: string;
@@ -124,6 +125,7 @@ export function FullRecentView({
     { id: "size", label: t("sort.size", "Kích thước") },
   ];
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
   const rowVirtualizer = useVirtualizer({
     count: filteredItems.length,
     getScrollElement: () => parentRef.current,
@@ -163,12 +165,16 @@ export function FullRecentView({
                 type="text"
                 placeholder={t("search_placeholder", "Tìm kiếm...")}
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                }}
                 className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-[#4285F4]/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
               />
               {searchQuery && (
                 <button
-                  onClick={() => setSearchQuery("")}
+                  onClick={() => {
+                    setSearchQuery("");
+                  }}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -193,11 +199,11 @@ export function FullRecentView({
       >
         <div
           className="flex flex-col relative w-full"
-          style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+          style={{ height: `${String(rowVirtualizer.getTotalSize())}px` }}
         >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const track = filteredItems[virtualRow.index];
-            const driveItem = {
+            const driveItem: DriveItem = {
               id: track.id,
               title: track.title,
               isFolder: false,
@@ -211,14 +217,16 @@ export function FullRecentView({
                   position: "absolute",
                   left: 0,
                   width: "100%",
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
+                  height: `${String(virtualRow.size)}px`,
+                  transform: `translateY(${String(virtualRow.start)}px)`,
                 }}
                 className="pb-2"
               >
                 <SongCard
-                  item={driveItem as any}
-                  onPlay={(t) => onPlay(t, filteredItems)}
+                  item={driveItem}
+                  onPlay={(t) => {
+                    onPlay(t, filteredItems);
+                  }}
                   onOpenFolder={() => {}}
                   token={token}
                   currentFolderId="recent"

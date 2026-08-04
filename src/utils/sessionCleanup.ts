@@ -20,21 +20,27 @@ export function clearSessionState(): void {
     localStorage.removeItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage);
     localStorage.removeItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage);
   } catch (err) {
-    captureError({
+    // fire-and-forget: logging must not throw in this sync path (captureError
+    // never rejects — it swallows failures internally).
+    void captureError({
       level: "warn",
       source: "sessionCleanup",
       message: `localStorage cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
       kind: "localstorage-cleanup-failed",
     });
   }
-  Promise.allSettled([
+  // fire-and-forget: logout must not block on kv cleanup; failures are
+  // reported via captureError below (which never rejects).
+  void Promise.allSettled([
     kvDel(SESSION_CLEANUP_KEYS.lastSessionKv),
     kvDel(SESSION_CLEANUP_KEYS.playModeKv),
     kvDel(SESSION_CLEANUP_KEYS.queueKv),
   ]).then((results) => {
     results.forEach((r) => {
       if (r.status === "rejected") {
-        captureError({
+        // fire-and-forget: logging must not throw in this sync callback
+        // (captureError never rejects — it swallows failures internally).
+        void captureError({
           source: "sessionCleanup",
           message: `logout-cleanup-failed: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
           kind: "logout-cleanup-failed",

@@ -83,7 +83,7 @@ export function ErrorLogSection() {
         .reverse()
         .toArray()
         .catch((err: unknown) => {
-          captureError({
+          void captureError({
             level: "error",
             source: ERROR_LOG_SECTION_MODULE,
             message: `failed-to-load-logs: ${err instanceof Error ? err.message : String(err)}`,
@@ -108,11 +108,14 @@ export function ErrorLogSection() {
     const onSelectionChange = () => {
       const sel = window.getSelection();
       const text = sel?.toString().trim() ?? "";
-      setHasSelection(text.length > 0 && el.contains(sel!.anchorNode as Node));
+      setHasSelection(
+        text.length > 0 && sel !== null && el.contains(sel.anchorNode),
+      );
     };
     document.addEventListener("selectionchange", onSelectionChange);
-    return () =>
+    return () => {
       document.removeEventListener("selectionchange", onSelectionChange);
+    };
   }, []);
 
   const handleCopy = async () => {
@@ -123,7 +126,9 @@ export function ErrorLogSection() {
       const selectedText = sel?.toString().trim() ?? "";
       const hasSelection =
         selectedText.length > 0 &&
-        containerRef.current?.contains(sel!.anchorNode as Node);
+        sel !== null &&
+        containerRef.current !== null &&
+        containerRef.current.contains(sel.anchorNode);
       const text = hasSelection
         ? selectedText
         : selectedDate
@@ -132,14 +137,16 @@ export function ErrorLogSection() {
       const ok = await copyToClipboard(text);
       if (ok) {
         setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        setTimeout(() => {
+          setCopied(false);
+        }, 2000);
       } else {
         showErrorToast(
           t("settings.error_log_copy_error") || "Could not copy to clipboard.",
         );
       }
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: ERROR_LOG_SECTION_MODULE,
         message: `failed-to-export-copy-logs: ${err instanceof Error ? err.message : String(err)}`,
@@ -158,7 +165,7 @@ export function ErrorLogSection() {
     try {
       await clearErrorLogs();
     } catch (err) {
-      captureError({
+      void captureError({
         level: "error",
         source: ERROR_LOG_SECTION_MODULE,
         message: `failed-to-clear-logs: ${err instanceof Error ? err.message : String(err)}`,
@@ -174,7 +181,9 @@ export function ErrorLogSection() {
   const actionButtons = (
     <div className="flex items-center gap-2 shrink-0 -mt-[2px]">
       <button
-        onClick={handleCopy}
+        onClick={() => {
+          void handleCopy();
+        }}
         disabled={logList.length === 0 || busy}
         className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center"
       >
@@ -186,7 +195,9 @@ export function ErrorLogSection() {
             : t("settings.error_log_copy") || "Copy Report"}
       </button>
       <button
-        onClick={handleClear}
+        onClick={() => {
+          void handleClear();
+        }}
         disabled={logList.length === 0 || busy}
         className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
@@ -204,7 +215,9 @@ export function ErrorLogSection() {
       {selectedDate && (
         <div className="flex items-end justify-between">
           <button
-            onClick={() => setSelectedDate(null)}
+            onClick={() => {
+              setSelectedDate(null);
+            }}
             className="text-sm font-semibold text-gray-800 dark:text-gray-200 hover:text-[#4285F4] transition-colors py-2.5"
           >
             ← {t("settings.error_log_back") || "Back"}
@@ -228,7 +241,9 @@ export function ErrorLogSection() {
             {groupLogsByDate(logList).map((group) => (
               <button
                 key={group.dateKey}
-                onClick={() => setSelectedDate(group.dateKey)}
+                onClick={() => {
+                  setSelectedDate(group.dateKey);
+                }}
                 className="flex items-center justify-between w-full text-left px-3 py-2.5 rounded-lg bg-white dark:bg-[#222] hover:bg-gray-100 dark:hover:bg-[#2E2E2E] border border-gray-200 dark:border-[#2A2A2A] transition-all"
               >
                 <span className="text-sm font-medium text-gray-800 dark:text-gray-100">
@@ -237,7 +252,7 @@ export function ErrorLogSection() {
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gray-200 dark:bg-[#333] text-gray-600 dark:text-gray-300">
                   {t("settings.error_log_count", {
                     count: group.entries.length,
-                  }) || `${group.entries.length} errors`}
+                  }) || `${String(group.entries.length)} errors`}
                 </span>
               </button>
             ))}

@@ -26,11 +26,17 @@ let lruKeys: string[] = [];
 try {
   const stored = localStorage.getItem(METADATA_LRU_KEY);
   if (stored) {
-    const parsed = JSON.parse(stored);
-    if (Array.isArray(parsed)) lruKeys = parsed;
+    const parsed: unknown = JSON.parse(stored);
+    if (Array.isArray(parsed)) {
+      // Keep only string keys; non-string junk in a stored array is dropped
+      // (lruKeys is a string[] — assigning raw would be unsound).
+      lruKeys = parsed.filter((k: unknown): k is string => typeof k === "string");
+    }
   }
 } catch (e: unknown) {
-  captureError({
+  // fire-and-forget: logging must not throw in this module-init sync path
+  // (captureError never rejects — it swallows failures internally).
+  void captureError({
     level: "warn",
     source: META_MODULE,
     message: `lru-load-failed: ${classifyMetaError(e).message}`,
@@ -44,7 +50,7 @@ function updateLRU(key: string) {
   while (lruKeys.length > MAX_LRU_CACHE) {
     const oldest = lruKeys.shift();
     if (oldest) {
-      db.metadataCache.delete(oldest).catch((e) =>
+      db.metadataCache.delete(oldest).catch((e: unknown) =>
         captureError({
           level: "error",
           source: META_MODULE,
@@ -57,7 +63,9 @@ function updateLRU(key: string) {
   try {
     localStorage.setItem(METADATA_LRU_KEY, JSON.stringify(lruKeys));
   } catch (e: unknown) {
-    captureError({
+    // fire-and-forget: logging must not throw in this sync path (captureError
+    // never rejects — it swallows failures internally).
+    void captureError({
       level: "warn",
       source: META_MODULE,
       message: `lru-save-failed: ${classifyMetaError(e).message}`,
@@ -110,8 +118,16 @@ export const metadataCache: Record<string, CachedMetadata> = {};
 const MAX_MEM_CACHE = 1000; // 1000 entries cap; entries may carry pictureData (thumb) so real usage can reach tens of MB - bounded by count, not bytes.
 const memCacheKeys: string[] = [];
 
+// The Record type claims every key exists, but a fileId with no cached entry
+// is undefined at runtime — this helper surfaces the true shape so guards
+// below are checked (and lint-visible) instead of lying about nullability.
+function getMemCacheEntry(fileId: string): CachedMetadata | undefined {
+  return metadataCache[fileId];
+}
+
 function setMetadataCache(fileId: string, entry: CachedMetadata) {
-  if (metadataCache[fileId]) {
+  const existing = getMemCacheEntry(fileId);
+  if (existing) {
     const idx = memCacheKeys.indexOf(fileId);
     if (idx !== -1) memCacheKeys.splice(idx, 1);
   }
@@ -119,7 +135,10 @@ function setMetadataCache(fileId: string, entry: CachedMetadata) {
   metadataCache[fileId] = entry;
   while (memCacheKeys.length > MAX_MEM_CACHE) {
     const oldest = memCacheKeys.shift();
-    if (oldest) delete metadataCache[oldest];
+    if (oldest) {
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: the eviction cap must PHYSICALLY remove the key (assigning undefined would leave it enumerable and defeat the memory bound).
+      delete metadataCache[oldest];
+    }
   }
 }
 
@@ -129,7 +148,7 @@ export function cacheTrackMetadata(
 ): CachedMetadata {
   const stored: CachedMetadata = { ...entry, pictureDataFull: null };
   setMetadataCache(fileId, stored);
-  setCache(`${METADATA_KEY_PREFIX}${fileId}`, stored).catch((e) =>
+  setCache(`${METADATA_KEY_PREFIX}${fileId}`, stored).catch((e: unknown) =>
     captureError({
       level: "warn",
       source: META_MODULE,
@@ -143,7 +162,10 @@ let cacheGeneration = 0;
 
 export function clearAllMetadataCache(): void {
   cacheGeneration++;
-  for (const k of Object.keys(metadataCache)) delete metadataCache[k];
+  for (const k of Object.keys(metadataCache)) {
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: must fully drop every key so Object.keys(metadataCache) is 0 after clear (test asserts this; assigning undefined would keep the keys).
+    delete metadataCache[k];
+  }
   memCacheKeys.length = 0;
   lruKeys = [];
 }
@@ -153,8 +175,8 @@ async function setCache(key: string, newEntry: CachedMetadata): Promise<void> {
   const existing = await getCacheEntry(key);
   if (genAtStart !== cacheGeneration) return;
 
-  const newScore = newEntry.v ?? 0;
-  const oldScore = existing?.data?.v ?? 0;
+  const newScore = newEntry.v;
+  const oldScore = existing?.data.v ?? 0;
 
   if (existing && oldScore > newScore) return;
   if (
@@ -180,12 +202,10 @@ async function getTrackMetadataImpl(
   _signal?: AbortSignal,
   forceNetwork: boolean = false,
 ): Promise<CachedMetadata> {
-  if (
-    !forceNetwork &&
-    metadataCache[fileId] &&
-    metadataCache[fileId].v >= V_PLACEHOLDER
-  ) {
-    return metadataCache[fileId];
+  // fileId with no cached entry is undefined at runtime — guard it.
+  const memEntry = getMemCacheEntry(fileId);
+  if (!forceNetwork && memEntry && memEntry.v >= V_PLACEHOLDER) {
+    return memEntry;
   }
 
   const safeName = name ?? FALLBACK_AUDIO_FILENAME;
@@ -194,12 +214,12 @@ async function getTrackMetadataImpl(
   if (!forceNetwork) {
     try {
       const cached = await getCacheEntry(`${METADATA_KEY_PREFIX}${fileId}`);
-      if (cached && cached.data && cached.data.v >= V_PLACEHOLDER) {
+      if (cached && cached.data.v >= V_PLACEHOLDER) {
         setMetadataCache(fileId, cached.data);
         return cached.data;
       }
     } catch (e: unknown) {
-      captureError({
+      await captureError({
         level: "warn",
         source: META_MODULE,
         message: `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
@@ -235,7 +255,8 @@ export async function getTrackMetadata(
   forceNetwork: boolean = false,
 ): Promise<CachedMetadata> {
   if (!forceNetwork) {
-    const cached = metadataCache[fileId];
+    // fileId with no cached entry is undefined at runtime — guard it.
+    const cached = getMemCacheEntry(fileId);
     if (cached && cached.v >= V_PLACEHOLDER) return cached;
   }
 
@@ -255,14 +276,15 @@ export async function getTrackMetadata(
 
   inflightMetadata.set(fileId, promise);
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const cleanup = () => {
-    if (timer) clearTimeout(timer);
     if (inflightMetadata.get(fileId) === promise) {
       inflightMetadata.delete(fileId);
     }
   };
-  timer = setTimeout(cleanup, INFLIGHT_TIMEOUT);
+  // Once the timeout fires or the promise settles, cleanup removes the
+  // inflight entry — the guard makes the delete idempotent, so an early
+  // settle followed by the later timer firing is a harmless no-op.
+  setTimeout(cleanup, INFLIGHT_TIMEOUT);
 
   promise.then(
     (result) => {
@@ -271,7 +293,9 @@ export async function getTrackMetadata(
     },
     (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
-      captureError({
+      // fire-and-forget: logging must not throw in this sync callback
+      // (captureError never rejects — it swallows failures internally).
+      void captureError({
         level: "error",
         source: META_MODULE,
         message: `get-track-metadata-failed (fileId=${fileId}): ${msg}`,
@@ -287,9 +311,11 @@ export async function updateTrackDuration(
   fileId: string,
   accurateDuration: number,
 ): Promise<void> {
-  if (metadataCache[fileId]) {
-    metadataCache[fileId].duration = accurateDuration;
-    metadataCache[fileId].durationEstimated = false;
+  // fileId with no cached entry is undefined at runtime — guard it.
+  const memEntry = getMemCacheEntry(fileId);
+  if (memEntry) {
+    memEntry.duration = accurateDuration;
+    memEntry.durationEstimated = false;
   }
   // IDB persistence is best-effort: the memory cache above is the source of
   // truth for the current session, so a store failure must not reject the
@@ -304,7 +330,7 @@ export async function updateTrackDuration(
       await putCacheEntry(key, entry);
     }
   } catch (e: unknown) {
-    captureError({
+    await captureError({
       level: "warn",
       source: META_MODULE,
       message: `duration-persist-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,

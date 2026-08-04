@@ -76,7 +76,7 @@ function hitTestFolderId(position: DragPosition): string | null {
     }
     return null;
   } catch (err) {
-    captureError({
+    void captureError({
       level: "warn",
       source: DROPZONE_MODULE,
       message: `drag-hit-test-failed: ${describeError(err)}`,
@@ -112,7 +112,7 @@ async function toUploadSeed(
   try {
     entry = await statDiskPath(path);
   } catch (err) {
-    captureError({
+    void captureError({
       level: "warn",
       source: DROPZONE_MODULE,
       message: `drop-stat-failed name=${basename(path)}: ${describeError(err)}`,
@@ -120,7 +120,7 @@ async function toUploadSeed(
     return null;
   }
   if (entry === null) {
-    captureError({
+    void captureError({
       level: "warn",
       source: DROPZONE_MODULE,
       message: `drop-path-missing name=${basename(path)}`,
@@ -193,7 +193,7 @@ export function DropZone({ token }: DropZoneProps) {
                 announceDragHover(null);
                 announceDragActive(false);
                 break;
-              case "drop":
+              case "drop": {
                 announceDragHover(null);
                 announceDragActive(false);
                 // Handle independently of any prior 'over' — a drop can land
@@ -206,11 +206,12 @@ export function DropZone({ token }: DropZoneProps) {
                   folderId ?? useDriveStore.getState().currentFolderId;
                 void handleDrop(payload.paths, parentId);
                 break;
+              }
               default:
                 break;
             }
           } catch (err) {
-            captureError({
+            void captureError({
               level: "warn",
               source: DROPZONE_MODULE,
               message: `drag-event-failed: ${describeError(err)}`,
@@ -228,7 +229,7 @@ export function DropZone({ token }: DropZoneProps) {
         // Outside Tauri (plain browser) getCurrentWebview throws and
         // onDragDropEvent rejects — drop support is optional here; the app
         // must keep working without it.
-        captureError({
+        void captureError({
           level: "warn",
           source: DROPZONE_MODULE,
           message: `drag-drop-listener-failed: ${describeError(err)}`,

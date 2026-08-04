@@ -70,8 +70,11 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // Without this, onLogoutExt and backend cleanup run multiple times (double
   // navigation / redundant revoke calls).
   const isLoggingOutRef = useRef(false);
+  const isLoggingOut = () => isLoggingOutRef.current;
   const onLogoutExtRef = useRef(onLogoutExt);
-  onLogoutExtRef.current = onLogoutExt;
+  useEffect(() => {
+    onLogoutExtRef.current = onLogoutExt;
+  }, [onLogoutExt]);
 
   // Initialize token from localStorage
   useEffect(() => {
@@ -79,7 +82,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
     try {
       savedToken = localStorage.getItem(ACCESS_TOKEN_KEY);
     } catch {
-      captureError({
+      void captureError({
         level: "warn",
         source: AUTH_MODULE,
         message: "auth-storage-read-failed",
@@ -92,7 +95,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       try {
         issueTime = parseInt(localStorage.getItem(TOKEN_TIME_KEY) || "", 10);
       } catch {
-        captureError({
+        void captureError({
           level: "warn",
           source: AUTH_MODULE,
           message: "auth-storage-read-failed",
@@ -110,16 +113,16 @@ export const useAuth = (onLogoutExt?: () => void) => {
           : 0;
       scheduleProactiveRefresh(remainingSec > 0 ? remainingSec : 0);
     }
-  }, []);
+  }, [setAccessToken, setIsLoggedIn]);
 
-  const handleLoginSuccess = (tokenData: TokenData) => {
-    if (isLoggingOutRef.current) return;
+  const handleLoginSuccess = (tokenData: TokenData | null | undefined) => {
+    if (isLoggingOut()) return;
     if (
       !tokenData ||
       typeof tokenData.access_token !== "string" ||
       tokenData.access_token.length === 0
     ) {
-      captureError({
+      void captureError({
         level: "error",
         source: AUTH_MODULE,
         message:
@@ -139,7 +142,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         void writeRefreshToken(tokenData.refresh_token);
       }
     } catch {
-      captureError({
+      void captureError({
         level: "warn",
         source: AUTH_MODULE,
         message: "auth-storage-write-failed",
@@ -170,7 +173,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       try {
         refreshTokenToRevoke = await readRefreshToken();
       } catch (e: unknown) {
-        captureError({
+        void captureError({
           level: "warn",
           source: AUTH_MODULE,
           message: `Failed to read refresh token for revoke — continuing logout: ${classifyError(e)}`,
@@ -186,7 +189,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         localStorage.removeItem(TOKEN_TIME_KEY);
         localStorage.removeItem(USER_EMAIL_KEY);
       } catch {
-        captureError({
+        void captureError({
           level: "warn",
           source: AUTH_MODULE,
           message: "auth-storage-clear-failed",
@@ -204,7 +207,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         await invoke(CLEAR_LOCAL_CACHE_CMD);
         clearAllMetadataCache();
       } catch (e: unknown) {
-        captureError({
+        void captureError({
           level: "warn",
           source: AUTH_MODULE,
           message: `Failed to clear backend cache (clear_local_cache) — continuing logout: ${classifyError(e)}`,
@@ -215,7 +218,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         try {
           await revokeGoogleToken(tokenToRevoke);
         } catch (e: unknown) {
-          captureError({
+          void captureError({
             level: "warn",
             source: AUTH_MODULE,
             message: `Google token revoke failed — token may remain valid server-side: ${classifyError(e)}`,
@@ -244,13 +247,15 @@ export const useAuth = (onLogoutExt?: () => void) => {
   }, [setIsLoggedIn, setAccessToken, setUserProfile]);
 
   const handleLogoutRef = useRef(handleLogout);
-  handleLogoutRef.current = handleLogout;
+  useEffect(() => {
+    handleLogoutRef.current = handleLogout;
+  }, [handleLogout]);
 
   // Listen for auth-logout event from apiClient
   useEffect(() => {
     const handleAuthLogout = () => {
       handleLogoutRef.current().catch((err: unknown) =>
-        captureError({
+        void captureError({
           level: "error",
           source: AUTH_MODULE,
           message: `Logout failed: ${classifyError(err)}`,
@@ -274,17 +279,18 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // so no stale post-logout event can arrive.
   useEffect(() => {
     const handleTokenUpdated = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (typeof detail?.token === "string") {
-        setAccessToken(detail.token);
-        updateWorkerToken(detail.token);
+      const detail = (e as CustomEvent<{ token?: unknown } | null>).detail;
+      const token = detail?.token;
+      if (typeof token === "string") {
+        setAccessToken(token);
+        updateWorkerToken(token);
       }
     };
     window.addEventListener("token-updated", handleTokenUpdated);
     return () => {
       window.removeEventListener("token-updated", handleTokenUpdated);
     };
-  }, []);
+  }, [setAccessToken]);
 
   // Worker lifecycle is keyed ONLY on isLoggedIn (not accessToken): a token
   // refresh re-renders with a new accessToken, but the worker must keep
@@ -301,7 +307,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         try {
           return await getValidToken(true);
         } catch (e: unknown) {
-          captureError({
+          void captureError({
             level: "error",
             source: AUTH_MODULE,
             message: `Token refresh handler failed (getValidToken) — worker unable to refresh; fallback null: ${classifyError(e)}`,
@@ -318,7 +324,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
           const latestToken = localStorage.getItem(ACCESS_TOKEN_KEY);
           if (latestToken) startProSyncWorker(latestToken);
         } catch {
-          captureError({
+          void captureError({
             level: "warn",
             source: AUTH_MODULE,
             message: "auth-storage-read-failed",
@@ -332,6 +338,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
         setTokenRefreshHandler(null);
       };
     }
+    // accessToken is deliberately captured at login time (see comment above):
+    // the worker must keep running across token refreshes, and new tokens
+    // reach it via updateWorkerToken / the interval's localStorage re-read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn]);
 
   // Fetch User Profile (best-effort, fire-and-forget). Keyed on
@@ -349,7 +359,9 @@ export const useAuth = (onLogoutExt?: () => void) => {
             signal: controller.signal,
           });
           if (!res.ok)
-            throw new Error(`userinfo request failed (${res.status})`);
+            throw new Error(
+              `userinfo request failed (${String(res.status)})`,
+            );
           const data = (await res.json()) as Record<string, unknown> | null;
           if (data && typeof data.email === "string") {
             setUserProfile({
@@ -360,7 +372,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
             try {
               localStorage.setItem(USER_EMAIL_KEY, data.email);
             } catch {
-              captureError({
+              void captureError({
                 level: "warn",
                 source: AUTH_MODULE,
                 message: "auth-storage-write-failed",
@@ -370,7 +382,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
           }
         } catch (err: unknown) {
           if (err instanceof Error && err.name !== "AbortError") {
-            captureError({
+            void captureError({
               level: "error",
               source: AUTH_MODULE,
               message: `Failed to fetch user profile (best-effort): ${err.message}`,
@@ -383,7 +395,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         controller.abort();
       };
     }
-  }, [isLoggedIn, accessToken]);
+  }, [isLoggedIn, accessToken, setUserProfile]);
 
   return {
     isLoggedIn,
