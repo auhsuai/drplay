@@ -1,4 +1,4 @@
-import { X, Download, LoaderCircle } from 'lucide-react';
+import { X, Download, LoaderCircle } from "lucide-react";
 
 interface DownloadDialogProps {
   show: boolean;
@@ -7,7 +7,7 @@ interface DownloadDialogProps {
   setDownloadFileName: (name: string) => void;
   onClose: () => void;
   onConfirm: () => void;
-  t: import('i18next').TFunction;
+  t: import("i18next").TFunction;
 }
 
 export function DownloadDialog({
@@ -17,16 +17,21 @@ export function DownloadDialog({
   setDownloadFileName,
   onClose,
   onConfirm,
-  t
+  t,
 }: DownloadDialogProps) {
   if (!show) return null;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4" onClick={e => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4"
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white">{t('menu.download_title', 'Download File')}</h3>
-          <button 
+          <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+            {t("menu.download_title", "Download File")}
+          </h3>
+          <button
             onClick={() => !isDownloadingFile && onClose()}
             disabled={isDownloadingFile}
             className="text-gray-400 hover:text-gray-900 dark:hover:text-white p-1 rounded-full transition-colors disabled:opacity-50"
@@ -34,10 +39,10 @@ export function DownloadDialog({
             <X className="w-5 h-5" />
           </button>
         </div>
-        
+
         <div className="flex flex-col gap-2">
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            {t('menu.file_name', 'File Name')}
+            {t("menu.file_name", "File Name")}
           </label>
           <input
             type="text"
@@ -45,18 +50,18 @@ export function DownloadDialog({
             onChange={(e) => setDownloadFileName(e.target.value)}
             disabled={isDownloadingFile}
             className="w-full bg-gray-100 dark:bg-[#25262a] hover:bg-gray-200/70 dark:hover:bg-[#2c2d32] focus:bg-gray-200 dark:focus:bg-[#2c2d32] text-gray-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none transition-all duration-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
-            placeholder={t('menu.file_name', 'File Name')}
+            placeholder={t("menu.file_name", "File Name")}
             autoFocus
           />
         </div>
-        
+
         <div className="flex items-center justify-end gap-3 mt-2">
           <button
             onClick={() => onClose()}
             disabled={isDownloadingFile}
             className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
           >
-            {t('menu.cancel', 'Cancel')}
+            {t("menu.cancel", "Cancel")}
           </button>
           <button
             onClick={onConfirm}
@@ -68,7 +73,11 @@ export function DownloadDialog({
             ) : (
               <Download className="w-4 h-4" />
             )}
-            <span>{isDownloadingFile ? t('menu.downloading', 'Downloading...') : t('menu.confirm_download', 'Confirm')}</span>
+            <span>
+              {isDownloadingFile
+                ? t("menu.downloading", "Downloading...")
+                : t("menu.confirm_download", "Confirm")}
+            </span>
           </button>
         </div>
       </div>

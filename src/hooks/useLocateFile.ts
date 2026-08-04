@@ -1,20 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { db } from '../db/db';
-import { fetchWithAuth } from '../utils/apiClient';
-import { classifyDriveError } from '../utils/driveApi';
-import { ROOT_FOLDER_ID, MY_DRIVE_TAB, type TabKey } from '../utils/driveConstants';
-import { captureError } from '../utils/errorLog';
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { db } from "../db/db";
+import { fetchWithAuth } from "../utils/apiClient";
+import { classifyDriveError } from "../utils/driveApi";
+import {
+  ROOT_FOLDER_ID,
+  MY_DRIVE_TAB,
+  type TabKey,
+} from "../utils/driveConstants";
+import { captureError } from "../utils/errorLog";
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
-const DRIVE_ID_PREFIX = 'drive_';
-const EVENT_LOCATE_FILE = 'locate-file';
-const STORAGE_KEY_ROOT = 'drplay_root_folder';
+const DRIVE_ID_PREFIX = "drive_";
+const EVENT_LOCATE_FILE = "locate-file";
+const STORAGE_KEY_ROOT = "drplay_root_folder";
 // Kept as the fallback for t('drive.unknown_folder'): the breadcrumb name is
 // computed inside an async event handler, and the English default guarantees a
 // readable label even if a locale key is missing.
-const UNKNOWN_FOLDER = 'Unknown Folder';
+const UNKNOWN_FOLDER = "Unknown Folder";
 
 // localStorage can throw (privacy mode / disabled storage) — a failed root
 // read must never crash the locate flow; fall back to the Drive root.
@@ -22,7 +26,11 @@ function readStoredRootFolder(): string | null {
   try {
     return localStorage.getItem(STORAGE_KEY_ROOT);
   } catch {
-    captureError({ level: 'warn', source: 'useLocateFile', message: 'locate-root-read-failed' });
+    captureError({
+      level: "warn",
+      source: "useLocateFile",
+      message: "locate-root-read-failed",
+    });
     return null;
   }
 }
@@ -32,12 +40,15 @@ export function useLocateFile(
   currentFolderId: string,
   setCurrentFolderId: (id: string) => void,
   setCurrentFolderName: (name: string) => void,
-  setFolderHistory: (history: { id: string, name: string }[]) => void,
+  setFolderHistory: (history: { id: string; name: string }[]) => void,
   setActiveTab: (tab: TabKey) => void,
-  setIsLoadingTracks: (loading: boolean) => void
+  setIsLoadingTracks: (loading: boolean) => void,
 ) {
   const { t } = useTranslation();
-  const [highlightedFileId, setHighlightedFileId] = useState<{ id: string, ts: number } | null>(null);
+  const [highlightedFileId, setHighlightedFileId] = useState<{
+    id: string;
+    ts: number;
+  } | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
 
   useEffect(() => {
@@ -45,30 +56,35 @@ export function useLocateFile(
     const handleLocateFile = async (ev: Event) => {
       let fileId = (ev as CustomEvent<{ fileId: string }>).detail?.fileId;
       if (!fileId || !accessToken) return;
-      
+
       if (fileId.startsWith(DRIVE_ID_PREFIX)) {
-        fileId = fileId.replace(DRIVE_ID_PREFIX, '');
+        fileId = fileId.replace(DRIVE_ID_PREFIX, "");
       }
 
-      const rebuildHistory = async (targetFolderId: string): Promise<{ id: string, name: string }[]> => {
+      const rebuildHistory = async (
+        targetFolderId: string,
+      ): Promise<{ id: string; name: string }[]> => {
         const rootRaw = readStoredRootFolder();
         const rootId = rootRaw || ROOT_FOLDER_ID;
-        
+
         let current = targetFolderId;
-        const newHistory: { id: string, name: string }[] = [];
-        let limit = HISTORY_LIMIT; 
-        
+        const newHistory: { id: string; name: string }[] = [];
+        let limit = HISTORY_LIMIT;
+
         while (current !== rootId && current !== ROOT_FOLDER_ID && limit > 0) {
           limit--;
-          
+
           let pId: string | undefined;
           const folderInfo = await db.files.get(current);
-          
+
           if (!folderInfo || !folderInfo.parentId) {
             try {
-              const res = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${current}?fields=parents`, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-              });
+              const res = await fetchWithAuth(
+                `https://www.googleapis.com/drive/v3/files/${current}?fields=parents`,
+                {
+                  headers: { Authorization: `Bearer ${accessToken}` },
+                },
+              );
               if (res.ok) {
                 const data = await res.json();
                 if (data.parents && data.parents.length > 0) {
@@ -76,7 +92,11 @@ export function useLocateFile(
                 }
               }
             } catch (e: unknown) {
-              captureError({ level: 'warn', source: 'useLocateFile', message: `Failed to get parents via API: ${classifyDriveError(e)}` });
+              captureError({
+                level: "warn",
+                source: "useLocateFile",
+                message: `Failed to get parents via API: ${classifyDriveError(e)}`,
+              });
             }
             if (!pId) break;
           } else {
@@ -91,18 +111,31 @@ export function useLocateFile(
           const parentInfo = await db.files.get(pId);
           if (!parentInfo) {
             try {
-              const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${pId}?fields=name`, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-              });
+              const pRes = await fetchWithAuth(
+                `https://www.googleapis.com/drive/v3/files/${pId}?fields=name`,
+                {
+                  headers: { Authorization: `Bearer ${accessToken}` },
+                },
+              );
               if (pRes.ok) {
                 const pData = await pRes.json();
                 newHistory.unshift({ id: pId, name: pData.name });
               } else {
-                newHistory.unshift({ id: pId, name: t('drive.unknown_folder', UNKNOWN_FOLDER) });
+                newHistory.unshift({
+                  id: pId,
+                  name: t("drive.unknown_folder", UNKNOWN_FOLDER),
+                });
               }
             } catch (e: unknown) {
-              captureError({ level: 'warn', source: 'useLocateFile', message: `Parent name fetch failed: ${classifyDriveError(e)}` });
-              newHistory.unshift({ id: pId, name: t('drive.unknown_folder', UNKNOWN_FOLDER) });
+              captureError({
+                level: "warn",
+                source: "useLocateFile",
+                message: `Parent name fetch failed: ${classifyDriveError(e)}`,
+              });
+              newHistory.unshift({
+                id: pId,
+                name: t("drive.unknown_folder", UNKNOWN_FOLDER),
+              });
             }
           } else {
             newHistory.unshift({ id: parentInfo.id, name: parentInfo.name });
@@ -117,12 +150,15 @@ export function useLocateFile(
 
       try {
         let parentId: string | null = null;
-        let folderName = t('drive.unknown_folder', UNKNOWN_FOLDER);
-        
+        let folderName = t("drive.unknown_folder", UNKNOWN_FOLDER);
+
         try {
-          const response = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          });
+          const response = await fetchWithAuth(
+            `https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`,
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            },
+          );
           if (response.ok) {
             const data = await response.json();
             if (!mounted) return;
@@ -131,7 +167,11 @@ export function useLocateFile(
             }
           }
         } catch (e: unknown) {
-          captureError({ level: 'warn', source: 'useLocateFile', message: `Locate parent API failed: ${classifyDriveError(e)}` });
+          captureError({
+            level: "warn",
+            source: "useLocateFile",
+            message: `Locate parent API failed: ${classifyDriveError(e)}`,
+          });
         }
 
         if (!parentId) {
@@ -141,12 +181,12 @@ export function useLocateFile(
             parentId = fileInfo.parentId;
           }
         }
-        
+
         if (!parentId) throw new Error("Could not determine parent folder");
-        
+
         const rootRaw = readStoredRootFolder();
         const rootId = rootRaw || ROOT_FOLDER_ID;
-        
+
         if (parentId === rootId || parentId === ROOT_FOLDER_ID) {
           folderName = MY_DRIVE_TAB;
         } else {
@@ -155,14 +195,17 @@ export function useLocateFile(
           if (parentInfo) {
             folderName = parentInfo.name;
           } else {
-             const pRes = await fetchWithAuth(`https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-              });
-              if (pRes.ok) {
-                const pData = await pRes.json();
-                if (!mounted) return;
-                folderName = pData.name;
-              }
+            const pRes = await fetchWithAuth(
+              `https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`,
+              {
+                headers: { Authorization: `Bearer ${accessToken}` },
+              },
+            );
+            if (pRes.ok) {
+              const pData = await pRes.json();
+              if (!mounted) return;
+              folderName = pData.name;
+            }
           }
         }
 
@@ -174,16 +217,20 @@ export function useLocateFile(
 
         const newHistory = await rebuildHistory(parentId);
         if (!mounted) return;
-        
+
         setFolderHistory(newHistory);
         pendingEnsuredFileId.current = fileId;
         setCurrentFolderId(parentId);
         setCurrentFolderName(folderName);
-        setHighlightedFileId({id: fileId, ts: Date.now()});
+        setHighlightedFileId({ id: fileId, ts: Date.now() });
 
         setTimeout(() => setHighlightedFileId(null), HIGHLIGHT_DURATION_MS);
       } catch (err: unknown) {
-        captureError({ level: 'error', source: 'useLocateFile', message: `Locate file failed: ${classifyDriveError(err)}` });
+        captureError({
+          level: "error",
+          source: "useLocateFile",
+          message: `Locate file failed: ${classifyDriveError(err)}`,
+        });
       } finally {
         if (mounted) setIsLoadingTracks(false);
       }
@@ -194,7 +241,16 @@ export function useLocateFile(
       mounted = false;
       window.removeEventListener(EVENT_LOCATE_FILE, handleLocateFile);
     };
-  }, [accessToken, currentFolderId, setActiveTab, setCurrentFolderId, setCurrentFolderName, setFolderHistory, setIsLoadingTracks, t]);
+  }, [
+    accessToken,
+    currentFolderId,
+    setActiveTab,
+    setCurrentFolderId,
+    setCurrentFolderName,
+    setFolderHistory,
+    setIsLoadingTracks,
+    t,
+  ]);
 
   return { highlightedFileId, pendingEnsuredFileId };
 }

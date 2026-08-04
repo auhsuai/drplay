@@ -8,16 +8,26 @@ import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { basename } from "../../utils/pathUtils";
 
-const UPLOAD_BUTTON_MODULE = 'UploadButton';
+const UPLOAD_BUTTON_MODULE = "UploadButton";
 // Extensions the file picker filters to (no leading dot, per DialogFilter docs).
-const AUDIO_FILE_EXTENSIONS: ReadonlyArray<string> = ['mp3', 'flac', 'wav', 'm4a', 'ogg', 'aac', 'opus'];
+const AUDIO_FILE_EXTENSIONS: ReadonlyArray<string> = [
+  "mp3",
+  "flac",
+  "wav",
+  "m4a",
+  "ogg",
+  "aac",
+  "opus",
+];
 // Matches the "+" playlist button style (Sidebar.tsx) — gray, hover to dark,
 // fixed icon-sized hit area.
-const TOGGLE_BUTTON_CLASS = "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-all duration-300 w-6 h-6 flex items-center justify-center shrink-0";
-const MENU_ITEM_CLASS = "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all";
+const TOGGLE_BUTTON_CLASS =
+  "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-all duration-300 w-6 h-6 flex items-center justify-center shrink-0";
+const MENU_ITEM_CLASS =
+  "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all";
 
 export interface UploadButtonProps {
-  token?: string | null;
+  token?: string | null | undefined;
   // Uploads only make sense inside My Drive; elsewhere the button is dimmed
   // and shows a not-allowed cursor instead of opening the menu.
   disabled?: boolean;
@@ -28,9 +38,9 @@ export interface UploadButtonProps {
 // file result) to a uniform string[] of non-empty paths.
 function normalizePaths(selected: unknown): string[] {
   if (Array.isArray(selected)) {
-    return selected.filter((p): p is string => typeof p === 'string');
+    return selected.filter((p): p is string => typeof p === "string");
   }
-  if (typeof selected === 'string') {
+  if (typeof selected === "string") {
     return [selected];
   }
   return [];
@@ -46,18 +56,21 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
   useEffect(() => {
     if (!isMenuOpen) return;
     const handleMouseDownOutside = (event: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(event.target as Node)
+      ) {
         setIsMenuOpen(false);
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsMenuOpen(false);
+      if (event.key === "Escape") setIsMenuOpen(false);
     };
-    document.addEventListener('mousedown', handleMouseDownOutside);
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener("mousedown", handleMouseDownOutside);
+    document.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener('mousedown', handleMouseDownOutside);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener("mousedown", handleMouseDownOutside);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isMenuOpen]);
 
@@ -76,7 +89,12 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
       const selected = await open({
         directory: false,
         multiple: true,
-        filters: [{ name: t('upload.audio_files'), extensions: [...AUDIO_FILE_EXTENSIONS] }],
+        filters: [
+          {
+            name: t("upload.audio_files"),
+            extensions: [...AUDIO_FILE_EXTENSIONS],
+          },
+        ],
       });
       const paths = normalizePaths(selected);
       if (paths.length === 0) return;
@@ -90,11 +108,11 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
       startUploads(seeds, token);
     } catch (err) {
       captureError({
-        level: 'error',
+        level: "error",
         source: UPLOAD_BUTTON_MODULE,
         message: `open-file-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(t('upload.upload_error'));
+      showErrorToast(t("upload.upload_error"));
     }
   };
 
@@ -103,28 +121,46 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
     setIsMenuOpen(false);
     try {
       const selected = await open({ directory: true });
-      if (typeof selected !== 'string') return;
+      if (typeof selected !== "string") return;
       const parentId = useDriveStore.getState().currentFolderId;
-      startUploads([{ name: basename(selected), isFolder: true, parentId, diskPath: selected }], token);
+      startUploads(
+        [
+          {
+            name: basename(selected),
+            isFolder: true,
+            parentId,
+            diskPath: selected,
+          },
+        ],
+        token,
+      );
     } catch (err) {
       captureError({
-        level: 'error',
+        level: "error",
         source: UPLOAD_BUTTON_MODULE,
         message: `open-folder-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(t('upload.upload_error'));
+      showErrorToast(t("upload.upload_error"));
     }
   };
 
   return (
-    <div className="relative shrink-0" ref={wrapperRef} onClick={(e) => e.stopPropagation()}>
+    <div
+      className="relative shrink-0"
+      ref={wrapperRef}
+      onClick={(e) => e.stopPropagation()}
+    >
       <button
         onClick={handleToggleMenu}
-        title={disabled ? t('upload.disabled_title', 'Open My Drive to upload') : t('upload.button_title')}
+        title={
+          disabled
+            ? t("upload.disabled_title", "Open My Drive to upload")
+            : t("upload.button_title")
+        }
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
         aria-disabled={disabled}
-        className={`${TOGGLE_BUTTON_CLASS} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+        className={`${TOGGLE_BUTTON_CLASS} ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
       >
         {/* CloudUpload = lucide "cloud-arrow-up"; UploadCloud is the deprecated alias. */}
         <CloudUpload className="w-5 h-5" />
@@ -134,11 +170,19 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
           role="menu"
           className="absolute right-0 top-8 z-50 w-40 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col animate-in fade-in zoom-in-95 duration-200"
         >
-          <button role="menuitem" onClick={handleUploadFiles} className={MENU_ITEM_CLASS}>
-            {t('upload.upload_file')}
+          <button
+            role="menuitem"
+            onClick={handleUploadFiles}
+            className={MENU_ITEM_CLASS}
+          >
+            {t("upload.upload_file")}
           </button>
-          <button role="menuitem" onClick={handleUploadFolder} className={MENU_ITEM_CLASS}>
-            {t('upload.upload_folder')}
+          <button
+            role="menuitem"
+            onClick={handleUploadFolder}
+            className={MENU_ITEM_CLASS}
+          >
+            {t("upload.upload_folder")}
           </button>
         </div>
       )}

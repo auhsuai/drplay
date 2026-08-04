@@ -1,51 +1,54 @@
-import { db } from '../db/db';
-import type { ErrorLogEntry } from '../db/db';
-import { sanitizeString } from './logger';
+import { db } from "../db/db";
+import type { ErrorLogEntry } from "../db/db";
+import { sanitizeString } from "./logger";
 
 export const ERROR_LOG_MAX = 100;
 
 export type { ErrorLogEntry };
 
 export async function captureError(input: {
-  level?: ErrorLogEntry['level'];
+  level?: ErrorLogEntry["level"];
   source: string;
   message: string;
-  stack?: string;
-  kind?: string;
+  stack?: string | undefined;
+  kind?: string | undefined;
 }): Promise<void> {
   try {
     const entry: ErrorLogEntry = {
       id: crypto.randomUUID(),
       ts: Date.now(),
-      level: input.level ?? 'error',
+      level: input.level ?? "error",
       source: input.source,
       message: sanitizeString(input.message),
       stack: input.stack ? sanitizeString(input.stack) : undefined,
-      kind: input.kind
+      kind: input.kind,
     };
 
     // Add + count + prune trong 1 transaction để tránh race khi capture song song
     // (add rời + delete rời có thể xoá dư 1-2 entry vì count đọc giữa chừng).
-    await db.transaction('rw', db.errorLogs, async () => {
+    await db.transaction("rw", db.errorLogs, async () => {
       await db.errorLogs.add(entry);
 
       const count = await db.errorLogs.count();
       if (count > ERROR_LOG_MAX) {
         const excess = count - ERROR_LOG_MAX;
-        const keys = await db.errorLogs.orderBy('ts').limit(excess).primaryKeys();
+        const keys = await db.errorLogs
+          .orderBy("ts")
+          .limit(excess)
+          .primaryKeys();
         await db.errorLogs.bulkDelete(keys);
       }
     });
   } catch (err) {
-    logCaptureFailure('captureError', err);
+    logCaptureFailure("captureError", err);
   }
 }
 
 export async function getErrorLogs(): Promise<ErrorLogEntry[]> {
   try {
-    return await db.errorLogs.orderBy('ts').reverse().toArray();
+    return await db.errorLogs.orderBy("ts").reverse().toArray();
   } catch (err) {
-    logCaptureFailure('getErrorLogs', err);
+    logCaptureFailure("getErrorLogs", err);
     return [];
   }
 }
@@ -54,32 +57,32 @@ export async function clearErrorLogs(): Promise<void> {
   try {
     await db.errorLogs.clear();
   } catch (err) {
-    logCaptureFailure('clearErrorLogs', err);
+    logCaptureFailure("clearErrorLogs", err);
   }
 }
 
 function formatLogsToReport(entries: ErrorLogEntry[]): string {
-  if (entries.length === 0) return '';
+  if (entries.length === 0) return "";
   return entries
     .map((e) => {
       const lines = [
         `[${new Date(e.ts).toISOString()}] ${e.level} | ${e.source}`,
         e.message,
-        e.stack ?? ''
+        e.stack ?? "",
       ];
-      return lines.filter((l) => l !== '').join('\n');
+      return lines.filter((l) => l !== "").join("\n");
     })
-    .join('\n---\n');
+    .join("\n---\n");
 }
 
 export async function exportErrorLogsSanitized(): Promise<string> {
   try {
     const logs = await getErrorLogs();
-    if (logs.length === 0) return '';
+    if (logs.length === 0) return "";
     return formatLogsToReport(logs);
   } catch (err) {
-    logCaptureFailure('exportErrorLogsSanitized', err);
-    return '';
+    logCaptureFailure("exportErrorLogsSanitized", err);
+    return "";
   }
 }
 
@@ -128,19 +131,19 @@ export function groupLogsByDate(logs: ErrorLogEntry[]): LogDateGroup[] {
 }
 
 export async function exportErrorLogsSanitizedForDate(
-  dateKey: string
+  dateKey: string,
 ): Promise<string> {
   try {
     const logs = await getErrorLogs();
-    if (logs.length === 0) return '';
+    if (logs.length === 0) return "";
 
     const group = groupLogsByDate(logs).find((g) => g.dateKey === dateKey);
-    if (!group || group.entries.length === 0) return '';
+    if (!group || group.entries.length === 0) return "";
 
     return formatLogsToReport(group.entries);
   } catch (err) {
     logCaptureFailure(`exportErrorLogsSanitizedForDate:${dateKey}`, err);
-    return '';
+    return "";
   }
 }
 
@@ -149,6 +152,6 @@ function logCaptureFailure(scope: string, err: unknown): void {
   console.warn(
     `[${scope}] failed at ${new Date().toISOString()}: ${
       err instanceof Error ? err.message : String(err)
-    }`
+    }`,
   );
 }

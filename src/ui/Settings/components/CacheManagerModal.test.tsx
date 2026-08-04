@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  cleanup,
+} from "@testing-library/react";
 import { CacheManagerModal } from "./CacheManagerModal";
 import {
   getCacheSizes,
@@ -72,7 +78,9 @@ describe("CacheManagerModal", () => {
   });
 
   it("renders nothing when closed", () => {
-    const { container } = render(<CacheManagerModal open={false} onClose={vi.fn()} />);
+    const { container } = render(
+      <CacheManagerModal open={false} onClose={vi.fn()} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
@@ -95,7 +103,9 @@ describe("CacheManagerModal", () => {
 
     const checkboxes = screen.getAllByRole("checkbox");
     expect(checkboxes).toHaveLength(4);
-    expect(checkboxes.every((cb) => (cb as HTMLInputElement).checked)).toBe(true);
+    expect(checkboxes.every((cb) => (cb as HTMLInputElement).checked)).toBe(
+      true,
+    );
   });
 
   it("renders the 4 category rows immediately with per-row size spinners, then swaps in sizes", async () => {
@@ -104,7 +114,7 @@ describe("CacheManagerModal", () => {
     vi.mocked(getCacheSizes).mockReturnValue(
       new Promise((resolve) => {
         resolveSizes = resolve;
-      })
+      }),
     );
     renderOpen();
 
@@ -145,7 +155,8 @@ describe("CacheManagerModal", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     checkboxes.forEach((cb) => fireEvent.click(cb));
     expect(
-      (screen.getByRole("button", { name: "Clear Cache" }) as HTMLButtonElement).disabled
+      (screen.getByRole("button", { name: "Clear Cache" }) as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
   });
 
@@ -157,7 +168,11 @@ describe("CacheManagerModal", () => {
     fireEvent.click(checkboxes[1]);
     fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
-      expect(clearAppCache).toHaveBeenCalledWith(["metadata", "covers", "prefetch"]);
+      expect(clearAppCache).toHaveBeenCalledWith([
+        "metadata",
+        "covers",
+        "prefetch",
+      ]);
     });
   });
 
@@ -177,7 +192,9 @@ describe("CacheManagerModal", () => {
     await screen.findByText("Metadata cache");
     fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
-      expect(showSuccessToast).toHaveBeenCalledWith("Cache cleared successfully!");
+      expect(showSuccessToast).toHaveBeenCalledWith(
+        "Cache cleared successfully!",
+      );
     });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(showErrorToast).not.toHaveBeenCalled();

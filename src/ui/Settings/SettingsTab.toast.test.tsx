@@ -4,7 +4,14 @@
 // showSuccessToast → toast element appended to #toast-root. This catches
 // regressions where the success branch calls the wrong toast function.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  cleanup,
+  within,
+} from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
 import { clearAppCache, getCacheSizes } from "../../utils/cache";
@@ -33,10 +40,14 @@ vi.mock("../../utils/downloadPath", () => ({
   setCustomDownloadPath: vi.fn(),
 }));
 
-vi.mock("./components/LanguageDropdown", () => ({ LanguageDropdown: () => null }));
+vi.mock("./components/LanguageDropdown", () => ({
+  LanguageDropdown: () => null,
+}));
 vi.mock("./components/ThemeDropdown", () => ({ ThemeDropdown: () => null }));
 vi.mock("./components/CreditsSection", () => ({ CreditsSection: () => null }));
-vi.mock("./components/ErrorLogSection", () => ({ ErrorLogSection: () => null }));
+vi.mock("./components/ErrorLogSection", () => ({
+  ErrorLogSection: () => null,
+}));
 
 const baseProps = {
   theme: "dark" as ThemeType,

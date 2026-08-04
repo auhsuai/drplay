@@ -1,5 +1,4 @@
-import { Track } from "../../App";
-
+import type { Track } from "../../App";
 
 export interface PlayerBarProps {
   currentTrack: Track | null;
@@ -9,7 +8,7 @@ export interface PlayerBarProps {
   onPrevTrack: () => void;
   isDownloading?: boolean;
   loadNonce?: number;
-  playMode: 'normal' | 'shuffle' | 'repeat-all' | 'repeat-one';
+  playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
   onTogglePlayMode: () => void;
   onExpandNowPlaying: () => void;
 }

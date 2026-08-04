@@ -1,26 +1,26 @@
-import { useEffect } from 'react';
-import { useTranslation } from 'react-i18next';
-import { getCurrentWebview } from '@tauri-apps/api/webview';
-import type { UnlistenFn } from '@tauri-apps/api/event';
-import { statDiskPath } from '../../utils/diskFs';
-import { startUploads, type UploadSeed } from '../../utils/uploadManager';
-import { useDriveStore } from '../../store/driveStore';
-import { showErrorToast } from '../../utils/simpleToast';
-import { captureError } from '../../utils/errorLog';
-import { basename } from '../../utils/pathUtils';
+import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { statDiskPath } from "../../utils/diskFs";
+import { startUploads, type UploadSeed } from "../../utils/uploadManager";
+import { useDriveStore } from "../../store/driveStore";
+import { showErrorToast } from "../../utils/simpleToast";
+import { captureError } from "../../utils/errorLog";
+import { basename } from "../../utils/pathUtils";
 
-const DROPZONE_MODULE = 'DropZone';
+const DROPZONE_MODULE = "DropZone";
 // Bus between DropZone and folder cards: the OS drag is a Tauri event, not a
 // DOM event, so cards cannot react via :hover. DropZone announces the hovered
 // folder id; each folder card compares it against its own id.
-export const DRAG_FOLDER_HOVER_EVENT = 'drag-folder-hover';
+export const DRAG_FOLDER_HOVER_EVENT = "drag-folder-hover";
 // Bus between DropZone and MainContent: while a drag is in flight the header
 // chrome (TopNavigationBar/SelectionToolbar) and pagination must hide so the
 // drop target area is unambiguous. True on enter/over (anywhere), false on
 // leave/drop.
-export const DRAG_ACTIVE_EVENT = 'drag-active';
+export const DRAG_ACTIVE_EVENT = "drag-active";
 // Attribute DropZone hit-tests against; SongCard sets it only on folder cards.
-const FOLDER_HIT_ATTRIBUTE = 'data-folder-id';
+const FOLDER_HIT_ATTRIBUTE = "data-folder-id";
 const FOLDER_HIT_SELECTOR = `[${FOLDER_HIT_ATTRIBUTE}]`;
 // Identity fallback when devicePixelRatio is unavailable (non-browser env).
 const NO_SCALE_FACTOR = 1;
@@ -69,44 +69,74 @@ function hitTestFolderId(position: DragPosition): string | null {
     for (const probe of probePointsAround(pt)) {
       const element = document.elementFromPoint(probe.x, probe.y);
       if (element === null) continue;
-      const folderId = element.closest(FOLDER_HIT_SELECTOR)?.getAttribute(FOLDER_HIT_ATTRIBUTE);
+      const folderId = element
+        .closest(FOLDER_HIT_SELECTOR)
+        ?.getAttribute(FOLDER_HIT_ATTRIBUTE);
       if (folderId !== null && folderId !== undefined) return folderId;
     }
     return null;
   } catch (err) {
-    captureError({ level: 'warn', source: DROPZONE_MODULE, message: `drag-hit-test-failed: ${describeError(err)}` });
+    captureError({
+      level: "warn",
+      source: DROPZONE_MODULE,
+      message: `drag-hit-test-failed: ${describeError(err)}`,
+    });
     return null;
   }
 }
 
 function announceDragHover(folderId: string | null): void {
-  window.dispatchEvent(new CustomEvent<{ folderId: string | null }>(DRAG_FOLDER_HOVER_EVENT, { detail: { folderId } }));
+  window.dispatchEvent(
+    new CustomEvent<{ folderId: string | null }>(DRAG_FOLDER_HOVER_EVENT, {
+      detail: { folderId },
+    }),
+  );
 }
 
 function announceDragActive(active: boolean): void {
-  window.dispatchEvent(new CustomEvent<{ active: boolean }>(DRAG_ACTIVE_EVENT, { detail: { active } }));
+  window.dispatchEvent(
+    new CustomEvent<{ active: boolean }>(DRAG_ACTIVE_EVENT, {
+      detail: { active },
+    }),
+  );
 }
 
 // Classify one dropped path into an UploadSeed, or null when the path is not
 // usable (missing on disk or stat failed). Never throws: a single bad path
 // must not abort the rest of the drop batch.
-async function toUploadSeed(path: string, parentId: string): Promise<UploadSeed | null> {
+async function toUploadSeed(
+  path: string,
+  parentId: string,
+): Promise<UploadSeed | null> {
   let entry;
   try {
     entry = await statDiskPath(path);
   } catch (err) {
-    captureError({ level: 'warn', source: DROPZONE_MODULE, message: `drop-stat-failed name=${basename(path)}: ${describeError(err)}` });
+    captureError({
+      level: "warn",
+      source: DROPZONE_MODULE,
+      message: `drop-stat-failed name=${basename(path)}: ${describeError(err)}`,
+    });
     return null;
   }
   if (entry === null) {
-    captureError({ level: 'warn', source: DROPZONE_MODULE, message: `drop-path-missing name=${basename(path)}` });
+    captureError({
+      level: "warn",
+      source: DROPZONE_MODULE,
+      message: `drop-path-missing name=${basename(path)}`,
+    });
     return null;
   }
-  return { name: basename(path), isFolder: entry.isDirectory, parentId, diskPath: path };
+  return {
+    name: basename(path),
+    isFolder: entry.isDirectory,
+    parentId,
+    diskPath: path,
+  };
 }
 
 export interface DropZoneProps {
-  token?: string | null;
+  token?: string | null | undefined;
 }
 
 export function DropZone({ token }: DropZoneProps) {
@@ -118,7 +148,10 @@ export function DropZone({ token }: DropZoneProps) {
     let cancelled = false;
     let unlisten: UnlistenFn | null = null;
 
-    const handleDrop = async (paths: string[], parentId: string): Promise<void> => {
+    const handleDrop = async (
+      paths: string[],
+      parentId: string,
+    ): Promise<void> => {
       // A drop event may arrive in-flight AFTER the effect was cleaned up
       // (token change / unmount) — its closure must not process anything.
       if (cancelled) return;
@@ -131,7 +164,7 @@ export function DropZone({ token }: DropZoneProps) {
       // All paths unusable (e.g. moved/deleted meanwhile) → one toast for the
       // whole batch; per-path failures are logged silently above.
       if (seeds.length === 0) {
-        showErrorToast(t('upload.drop_failed'));
+        showErrorToast(t("upload.drop_failed"));
         return;
       }
       startUploads(seeds, token);
@@ -145,8 +178,8 @@ export function DropZone({ token }: DropZoneProps) {
             const payload = event.payload;
             switch (payload.type) {
               // Tauri emits 'enter' before 'over'; both mean "hovering now".
-              case 'enter':
-              case 'over': {
+              case "enter":
+              case "over": {
                 const folderId = hitTestFolderId(payload.position);
                 if (folderId !== null) {
                   announceDragHover(folderId);
@@ -156,11 +189,11 @@ export function DropZone({ token }: DropZoneProps) {
                 announceDragActive(true);
                 break;
               }
-              case 'leave':
+              case "leave":
                 announceDragHover(null);
                 announceDragActive(false);
                 break;
-              case 'drop':
+              case "drop":
                 announceDragHover(null);
                 announceDragActive(false);
                 // Handle independently of any prior 'over' — a drop can land
@@ -169,14 +202,19 @@ export function DropZone({ token }: DropZoneProps) {
                 // Read at drop time, not at mount: the user may have navigated
                 // folders since the listener was registered. A drop over a
                 // folder card overrides the current folder.
-                const parentId = folderId ?? useDriveStore.getState().currentFolderId;
+                const parentId =
+                  folderId ?? useDriveStore.getState().currentFolderId;
                 void handleDrop(payload.paths, parentId);
                 break;
               default:
                 break;
             }
           } catch (err) {
-            captureError({ level: 'warn', source: DROPZONE_MODULE, message: `drag-event-failed: ${describeError(err)}` });
+            captureError({
+              level: "warn",
+              source: DROPZONE_MODULE,
+              message: `drag-event-failed: ${describeError(err)}`,
+            });
           }
         });
         // Registration may resolve after the effect was cleaned up (unmount or
@@ -190,7 +228,11 @@ export function DropZone({ token }: DropZoneProps) {
         // Outside Tauri (plain browser) getCurrentWebview throws and
         // onDragDropEvent rejects — drop support is optional here; the app
         // must keep working without it.
-        captureError({ level: 'warn', source: DROPZONE_MODULE, message: `drag-drop-listener-failed: ${describeError(err)}` });
+        captureError({
+          level: "warn",
+          source: DROPZONE_MODULE,
+          message: `drag-drop-listener-failed: ${describeError(err)}`,
+        });
       }
     };
 

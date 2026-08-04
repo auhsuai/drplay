@@ -29,7 +29,7 @@ export default defineConfig(async ({ command }) => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-  
+
   // Ở production chỉ drop 'debugger'. KHÔNG drop 'console'.
   // WHY: logger.ts monkeypatch console ở RUNTIME (initLogger tại main.tsx) —
   //   - console.log/info/debug -> no-op (im lặng ở prod)
@@ -42,15 +42,23 @@ export default defineConfig(async ({ command }) => ({
   // Vite 8 (rolldown/oxc) đổi sang build.rolldownOptions...drop* nhưng hành vi drop giữ nguyên.
   // => KHÔNG tự thêm lại 'console' vào drop; muốn tắt log prod hãy sửa logger.ts.
   esbuild: {
-    drop: command === 'build' ? (['debugger'] as any) : undefined,
+    drop: command === "build" ? (["debugger"] as any) : undefined,
   },
   build: {
     rollupOptions: {
       output: {
         manualChunks: {
-          vendor: ['react', 'react-dom', 'react-i18next', 'i18next', 'dexie', 'dexie-react-hooks', '@tauri-apps/api']
-        }
-      }
-    }
-  }
+          vendor: [
+            "react",
+            "react-dom",
+            "react-i18next",
+            "i18next",
+            "dexie",
+            "dexie-react-hooks",
+            "@tauri-apps/api",
+          ],
+        },
+      },
+    },
+  },
 }));

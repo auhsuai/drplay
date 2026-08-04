@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testing-library/react';
-import { MoreMenu } from './MoreMenu';
-import type { Track } from '../../App';
-import type { DriveItem } from '../../types';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  waitFor,
+  within,
+  act,
+} from "@testing-library/react";
+import { MoreMenu } from "./MoreMenu";
+import type { Track } from "../../App";
+import type { DriveItem } from "../../types";
 
 const mocks = vi.hoisted(() => ({
   driveApi: {
@@ -23,50 +31,54 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('react-i18next', () => ({
+vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     // Keys without a defaultValue fallback in MoreMenu.tsx resolve to the
     // real key string via `t(key) || fallback`; map them to readable labels
     // so the assertions read naturally, everything else falls back as usual.
     t: (key: string, fallback?: string) =>
       ({
-        'menu.select_multiple': 'Select Multiple',
-        'drive.move_to': 'Move to...',
-        'drive.delete': 'Delete',
-        'menu.download': 'Download',
-        'menu.add_to_playlist': 'Add to Playlist',
-        'upload.uploading_blocked': 'Blocked while uploading',
-      })[key] ?? fallback ?? key,
+        "menu.select_multiple": "Select Multiple",
+        "drive.move_to": "Move to...",
+        "drive.delete": "Delete",
+        "menu.download": "Download",
+        "menu.add_to_playlist": "Add to Playlist",
+        "upload.uploading_blocked": "Blocked while uploading",
+      })[key] ??
+      fallback ??
+      key,
   }),
 }));
 
-vi.mock('../../utils/driveApi', () => mocks.driveApi);
-vi.mock('../../db/db', () => ({ db: mocks.db }));
-vi.mock('../../utils/errorLog', () => ({ captureError: mocks.captureError }));
-vi.mock('../../utils/simpleToast', () => ({ showErrorToast: mocks.showErrorToast }));
-vi.mock('../../utils/uploadManager', () => mocks.uploadManager);
-vi.mock('../../utils/playlists', () => ({
+vi.mock("../../utils/driveApi", () => mocks.driveApi);
+vi.mock("../../db/db", () => ({ db: mocks.db }));
+vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
+vi.mock("../../utils/simpleToast", () => ({
+  showErrorToast: mocks.showErrorToast,
+}));
+vi.mock("../../utils/uploadManager", () => mocks.uploadManager);
+vi.mock("../../utils/playlists", () => ({
   getPlaylists: mocks.getPlaylists,
   addTrackToPlaylist: mocks.addTrackToPlaylist,
 }));
 
 function makeTrack(over: Partial<Track> = {}): Track {
   return {
-    id: 'track-1',
-    title: 'My Song',
-    artist: 'Artist',
-    streamUrl: 'https://example.com/song',
+    id: "track-1",
+    title: "My Song",
+    artist: "Artist",
+    streamUrl: "https://example.com/song",
     size: 1000,
-    parentId: 'parent-1',
-    parentName: 'Folder One',
+    parentId: "parent-1",
+    parentName: "Folder One",
     ...over,
   };
 }
 
 function makeDriveItem(over: Partial<DriveItem> = {}): DriveItem {
   return {
-    id: 'track-1',
-    title: 'My Song',
+    id: "track-1",
+    title: "My Song",
     isFolder: false,
     size: 1000,
     trackInfo: makeTrack(),
@@ -81,60 +93,115 @@ function menuEl(): HTMLElement {
 }
 
 function openTrigger(): void {
-  const trigger = document.querySelector('[aria-haspopup="menu"]') as HTMLButtonElement;
+  const trigger = document.querySelector(
+    '[aria-haspopup="menu"]',
+  ) as HTMLButtonElement;
   expect(trigger).not.toBeNull();
   fireEvent.click(trigger);
 }
 
 function menuButtonNames(): string[] {
-  return within(menuEl()).getAllByRole('button').map((b) => b.textContent?.trim() ?? '');
+  return within(menuEl())
+    .getAllByRole("button")
+    .map((b) => b.textContent?.trim() ?? "");
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getPlaylists.mockResolvedValue([]);
-  mocks.driveApi.deleteFile.mockResolvedValue({ id: 'track-1', name: 'My Song', mimeType: 'audio/mpeg', trashed: true, isFolder: false, parentId: 'parent-1' });
+  mocks.driveApi.deleteFile.mockResolvedValue({
+    id: "track-1",
+    name: "My Song",
+    mimeType: "audio/mpeg",
+    trashed: true,
+    isFolder: false,
+    parentId: "parent-1",
+  });
 });
 
 afterEach(() => {
   cleanup();
 });
 
-describe('MoreMenu recent variant', () => {
-  it('shows exactly 4 curated items (Delete / Download Song / Add to Playlist / Locate File) and no Select Multiple or Move to', () => {
-    render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+describe("MoreMenu recent variant", () => {
+  it("shows exactly 4 curated items (Delete / Download Song / Add to Playlist / Locate File) and no Select Multiple or Move to", () => {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Delete', 'Download Song', 'Locate File']);
-    expect(within(menuEl()).queryByRole('button', { name: 'Select Multiple' })).toBeNull();
-    expect(within(menuEl()).queryByRole('button', { name: 'Move to...' })).toBeNull();
+    expect(menuButtonNames().sort()).toEqual([
+      "Add to Playlist",
+      "Delete",
+      "Download Song",
+      "Locate File",
+    ]);
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Select Multiple" }),
+    ).toBeNull();
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Move to..." }),
+    ).toBeNull();
   });
 
-  it('hides Delete when token is missing but keeps track-based items', () => {
-    render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} />);
+  it("hides Delete when token is missing but keeps track-based items", () => {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+      />,
+    );
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Locate File']);
+    expect(menuButtonNames().sort()).toEqual([
+      "Add to Playlist",
+      "Download Song",
+      "Locate File",
+    ]);
   });
 
-  it('hides Delete when driveItem is missing (track-only render) but keeps track-based items', () => {
+  it("hides Delete when driveItem is missing (track-only render) but keeps track-based items", () => {
     render(<MoreMenu variant="recent" track={makeTrack()} token="tok" />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Locate File']);
+    expect(menuButtonNames().sort()).toEqual([
+      "Add to Playlist",
+      "Download Song",
+      "Locate File",
+    ]);
   });
 
-  it('dispatches the locate-file CustomEvent with fileId/parentId/parentName on Locate File', () => {
+  it("dispatches the locate-file CustomEvent with fileId/parentId/parentName on Locate File", () => {
     const spy = vi.fn();
-    window.addEventListener('locate-file', spy);
+    window.addEventListener("locate-file", spy);
     const onClose = vi.fn();
-    render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" onClose={onClose} />);
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        onClose={onClose}
+      />,
+    );
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Locate File' }));
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Locate File" }),
+    );
     expect(spy).toHaveBeenCalledTimes(1);
     const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail).toEqual({ fileId: 'track-1', parentId: 'parent-1', parentName: 'Folder One' });
+    expect(detail).toEqual({
+      fileId: "track-1",
+      parentId: "parent-1",
+      parentName: "Folder One",
+    });
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('opens DeleteConfirmDialog on Delete and runs the delete path on confirm', async () => {
+  it("opens DeleteConfirmDialog on Delete and runs the delete path on confirm", async () => {
     const onRemoveItem = vi.fn();
     const onClose = vi.fn();
     render(
@@ -148,78 +215,123 @@ describe('MoreMenu recent variant', () => {
       />,
     );
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Delete' }));
-    expect(screen.getByText('Move to Trash?')).toBeTruthy();
+    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith('tok', 'track-1'));
-    await waitFor(() => expect(mocks.db.files.delete).toHaveBeenCalledWith('track-1'));
-    await waitFor(() => expect(onRemoveItem).toHaveBeenCalledWith('track-1'));
-    expect(screen.queryByText('Move to Trash?')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith("tok", "track-1"),
+    );
+    await waitFor(() =>
+      expect(mocks.db.files.delete).toHaveBeenCalledWith("track-1"),
+    );
+    await waitFor(() => expect(onRemoveItem).toHaveBeenCalledWith("track-1"));
+    expect(screen.queryByText("Move to Trash?")).toBeNull();
   });
 
-  it('opens DownloadDialog on Download Song without crashing', () => {
-    render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+  it("opens DownloadDialog on Download Song without crashing", () => {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Download Song' }));
-    expect(screen.getByText('Download File')).toBeTruthy();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Download Song" }),
+    );
+    expect(screen.getByText("Download File")).toBeTruthy();
   });
 
-  it('opens PlaylistsSubmenu on Add to Playlist', () => {
-    render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+  it("opens PlaylistsSubmenu on Add to Playlist", () => {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Add to Playlist' }));
-    expect(screen.getByText('Playlists')).toBeTruthy();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    );
+    expect(screen.getByText("Playlists")).toBeTruthy();
   });
 });
 
-describe('MoreMenu default variant regression (file list)', () => {
-  it('keeps the original 5 items (Select Multiple / Move to / Delete / Download / Add to Playlist)', () => {
-    render(<MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+describe("MoreMenu default variant regression (file list)", () => {
+  it("keeps the original 5 items (Select Multiple / Move to / Delete / Download / Add to Playlist)", () => {
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
     openTrigger();
     expect(menuButtonNames().sort()).toEqual([
-      'Add to Playlist',
-      'Delete',
-      'Download',
-      'Move to...',
-      'Select Multiple',
+      "Add to Playlist",
+      "Delete",
+      "Download",
+      "Move to...",
+      "Select Multiple",
     ]);
   });
 
   it('keeps the original items even when variant is explicitly "default"', () => {
-    render(<MoreMenu variant="default" track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+    render(
+      <MoreMenu
+        variant="default"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
     openTrigger();
     expect(menuButtonNames().sort()).toEqual([
-      'Add to Playlist',
-      'Delete',
-      'Download',
-      'Move to...',
-      'Select Multiple',
+      "Add to Playlist",
+      "Delete",
+      "Download",
+      "Move to...",
+      "Select Multiple",
     ]);
   });
 });
 
-describe('MoreMenu playerbar variant regression', () => {
-  it('keeps the original 2 track items (Download Song / Locate File) plus shared Add to Playlist, no Delete', () => {
+describe("MoreMenu playerbar variant regression", () => {
+  it("keeps the original 2 track items (Download Song / Locate File) plus shared Add to Playlist, no Delete", () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual(['Add to Playlist', 'Download Song', 'Locate File']);
-    expect(within(menuEl()).queryByRole('button', { name: 'Delete' })).toBeNull();
-    expect(within(menuEl()).queryByRole('button', { name: 'Select Multiple' })).toBeNull();
+    expect(menuButtonNames().sort()).toEqual([
+      "Add to Playlist",
+      "Download Song",
+      "Locate File",
+    ]);
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Delete" }),
+    ).toBeNull();
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Select Multiple" }),
+    ).toBeNull();
   });
 
-  it('still dispatches locate-file with the same detail as before', () => {
+  it("still dispatches locate-file with the same detail as before", () => {
     const spy = vi.fn();
-    window.addEventListener('locate-file', spy);
+    window.addEventListener("locate-file", spy);
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Locate File' }));
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Locate File" }),
+    );
     const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail).toEqual({ fileId: 'track-1', parentId: 'parent-1', parentName: 'Folder One' });
+    expect(detail).toEqual({
+      fileId: "track-1",
+      parentId: "parent-1",
+      parentName: "Folder One",
+    });
   });
 });
 
-describe('MoreMenu upload race guards', () => {
+describe("MoreMenu upload race guards", () => {
   let notify: (() => void) | undefined;
 
   beforeEach(() => {
@@ -232,96 +344,158 @@ describe('MoreMenu upload race guards', () => {
     });
   });
 
-  it('disables every destructive item with the blocking tooltip when driveItem is uploading (default variant)', () => {
+  it("disables every destructive item with the blocking tooltip when driveItem is uploading (default variant)", () => {
     mocks.uploadManager.isUploading.mockReturnValue(true);
-    render(<MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
     openTrigger();
-    const buttons = within(menuEl()).getAllByRole('button');
-    for (const name of ['Select Multiple', 'Move to...', 'Delete', 'Download', 'Add to Playlist']) {
+    const buttons = within(menuEl()).getAllByRole("button");
+    for (const name of [
+      "Select Multiple",
+      "Move to...",
+      "Delete",
+      "Download",
+      "Add to Playlist",
+    ]) {
       const btn = buttons.find((b) => b.textContent?.trim() === name);
       expect(btn, `button ${name} should exist`).toBeDefined();
-      expect((btn as HTMLButtonElement).disabled, `button ${name} disabled`).toBe(true);
-      expect((btn as HTMLButtonElement).title, `button ${name} tooltip`).toBe('Blocked while uploading');
+      expect(
+        (btn as HTMLButtonElement).disabled,
+        `button ${name} disabled`,
+      ).toBe(true);
+      expect((btn as HTMLButtonElement).title, `button ${name} tooltip`).toBe(
+        "Blocked while uploading",
+      );
     }
   });
 
-  it('leaves all items enabled and tooltip-free when the item is not uploading (old behavior)', () => {
-    render(<MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+  it("leaves all items enabled and tooltip-free when the item is not uploading (old behavior)", () => {
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
     openTrigger();
-    const buttons = within(menuEl()).getAllByRole('button');
-    for (const name of ['Select Multiple', 'Move to...', 'Delete', 'Download', 'Add to Playlist']) {
+    const buttons = within(menuEl()).getAllByRole("button");
+    for (const name of [
+      "Select Multiple",
+      "Move to...",
+      "Delete",
+      "Download",
+      "Add to Playlist",
+    ]) {
       const btn = buttons.find((b) => b.textContent?.trim() === name);
       expect(btn, `button ${name} should exist`).toBeDefined();
-      expect((btn as HTMLButtonElement).disabled, `button ${name} not disabled`).toBe(false);
-      expect((btn as HTMLButtonElement).title, `button ${name} no tooltip`).toBe('');
+      expect(
+        (btn as HTMLButtonElement).disabled,
+        `button ${name} not disabled`,
+      ).toBe(false);
+      expect(
+        (btn as HTMLButtonElement).title,
+        `button ${name} no tooltip`,
+      ).toBe("");
     }
   });
 
-  it('disables Download Song + Add to Playlist for a track uploading in playerbar mode, keeps Locate File enabled', () => {
+  it("disables Download Song + Add to Playlist for a track uploading in playerbar mode, keeps Locate File enabled", () => {
     mocks.uploadManager.isUploading.mockReturnValue(true);
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    const buttons = within(menuEl()).getAllByRole('button');
-    const byName = (name: string) => buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
-    expect(byName('Download Song').disabled).toBe(true);
-    expect(byName('Add to Playlist').disabled).toBe(true);
-    expect(byName('Locate File').disabled).toBe(false);
-    expect(byName('Locate File').title).toBe('');
+    const buttons = within(menuEl()).getAllByRole("button");
+    const byName = (name: string) =>
+      buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
+    expect(byName("Download Song").disabled).toBe(true);
+    expect(byName("Add to Playlist").disabled).toBe(true);
+    expect(byName("Locate File").disabled).toBe(false);
+    expect(byName("Locate File").title).toBe("");
   });
 
-  it('disables Delete for an uploading driveItem in recent variant, keeps Locate File enabled', () => {
+  it("disables Delete for an uploading driveItem in recent variant, keeps Locate File enabled", () => {
     mocks.uploadManager.isUploading.mockReturnValue(true);
-    render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
     openTrigger();
-    const buttons = within(menuEl()).getAllByRole('button');
-    const byName = (name: string) => buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
-    expect(byName('Delete').disabled).toBe(true);
-    expect(byName('Delete').title).toBe('Blocked while uploading');
-    expect(byName('Locate File').disabled).toBe(false);
+    const buttons = within(menuEl()).getAllByRole("button");
+    const byName = (name: string) =>
+      buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
+    expect(byName("Delete").disabled).toBe(true);
+    expect(byName("Delete").title).toBe("Blocked while uploading");
+    expect(byName("Locate File").disabled).toBe(false);
   });
 
-  it('re-renders and disables the destructive items when an upload starts while the menu is open (subscription)', () => {
-    render(<MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+  it("re-renders and disables the destructive items when an upload starts while the menu is open (subscription)", () => {
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
     openTrigger();
     expect(
-      (within(menuEl()).getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled,
+      (
+        within(menuEl()).getByRole("button", {
+          name: "Delete",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(false);
 
     mocks.uploadManager.isUploading.mockReturnValue(true);
     act(() => notify?.());
 
-    const btn = within(menuEl()).getByRole('button', { name: 'Delete' }) as HTMLButtonElement;
+    const btn = within(menuEl()).getByRole("button", {
+      name: "Delete",
+    }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
-    expect(btn.title).toBe('Blocked while uploading');
+    expect(btn.title).toBe("Blocked while uploading");
   });
 
-  it('blocks adding to playlist when the upload starts after the submenu is already open (handler guard)', async () => {
-    mocks.getPlaylists.mockResolvedValue([{ id: 'p1', name: 'Playlist One' }]);
-    render(<MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />);
+  it("blocks adding to playlist when the upload starts after the submenu is already open (handler guard)", async () => {
+    mocks.getPlaylists.mockResolvedValue([{ id: "p1", name: "Playlist One" }]);
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Add to Playlist' }));
-    expect(screen.getByText('Playlists')).toBeTruthy();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Playlist One' })).toBeTruthy());
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    );
+    expect(screen.getByText("Playlists")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Playlist One" })).toBeTruthy(),
+    );
 
     mocks.uploadManager.isUploading.mockReturnValue(true);
     act(() => notify?.());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Playlist One' }));
+    fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
     expect(mocks.addTrackToPlaylist).not.toHaveBeenCalled();
-    expect(mocks.showErrorToast).toHaveBeenCalledWith('Blocked while uploading');
+    expect(mocks.showErrorToast).toHaveBeenCalledWith(
+      "Blocked while uploading",
+    );
   });
 
-  it('blocks the delete confirm action when the upload starts after the dialog is open (handler guard)', () => {
-    render(<MoreMenu variant="recent" track={makeTrack()} driveItem={makeDriveItem()} token="tok" onRefresh={vi.fn()} />);
+  it("blocks the delete confirm action when the upload starts after the dialog is open (handler guard)", () => {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        onRefresh={vi.fn()}
+      />,
+    );
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole('button', { name: 'Delete' }));
-    expect(screen.getByText('Move to Trash?')).toBeTruthy();
+    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
 
     mocks.uploadManager.isUploading.mockReturnValue(true);
     act(() => notify?.());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(mocks.driveApi.deleteFile).not.toHaveBeenCalled();
-    expect(mocks.showErrorToast).toHaveBeenCalledWith('Blocked while uploading');
+    expect(mocks.showErrorToast).toHaveBeenCalledWith(
+      "Blocked while uploading",
+    );
   });
 });

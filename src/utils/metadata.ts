@@ -1,17 +1,17 @@
 import { db } from "../db/db";
-import { captureError } from './errorLog';
+import { captureError } from "./errorLog";
 
 const META_MODULE = "metadata";
-export const METADATA_LRU_KEY = '__drplay_metadata_lru';
-export const METADATA_KEY_PREFIX = 'metadata_';
-const UNKNOWN_ARTIST = 'Unknown Artist';
-const FALLBACK_AUDIO_FILENAME = 'audio.mp3';
-const METADATA_UPDATED_EVENT = 'metadata-updated';
+export const METADATA_LRU_KEY = "__drplay_metadata_lru";
+export const METADATA_KEY_PREFIX = "metadata_";
+const UNKNOWN_ARTIST = "Unknown Artist";
+const FALLBACK_AUDIO_FILENAME = "audio.mp3";
+const METADATA_UPDATED_EVENT = "metadata-updated";
 export const V_PLACEHOLDER = 9;
 const FRESH_WRITE_WINDOW_MS = 5_000;
 
 function stripExtension(name: string): string {
-  return name.replace(/\.[^.]+$/, '');
+  return name.replace(/\.[^.]+$/, "");
 }
 
 function classifyMetaError(err: unknown): { name: string; message: string } {
@@ -30,24 +30,38 @@ try {
     if (Array.isArray(parsed)) lruKeys = parsed;
   }
 } catch (e: unknown) {
-  captureError({ level: 'warn', source: META_MODULE, message: `lru-load-failed: ${classifyMetaError(e).message}` });
+  captureError({
+    level: "warn",
+    source: META_MODULE,
+    message: `lru-load-failed: ${classifyMetaError(e).message}`,
+  });
 }
 
 function updateLRU(key: string) {
-  lruKeys = lruKeys.filter(k => k !== key);
+  lruKeys = lruKeys.filter((k) => k !== key);
   lruKeys.push(key);
-  
+
   while (lruKeys.length > MAX_LRU_CACHE) {
     const oldest = lruKeys.shift();
     if (oldest) {
-      db.metadataCache.delete(oldest).catch(e => captureError({ level: 'error', source: META_MODULE, message: `lru-delete-failed: ${classifyMetaError(e).message}` }));
+      db.metadataCache.delete(oldest).catch((e) =>
+        captureError({
+          level: "error",
+          source: META_MODULE,
+          message: `lru-delete-failed: ${classifyMetaError(e).message}`,
+        }),
+      );
     }
   }
-  
+
   try {
     localStorage.setItem(METADATA_LRU_KEY, JSON.stringify(lruKeys));
   } catch (e: unknown) {
-    captureError({ level: 'warn', source: META_MODULE, message: `lru-save-failed: ${classifyMetaError(e).message}` });
+    captureError({
+      level: "warn",
+      source: META_MODULE,
+      message: `lru-save-failed: ${classifyMetaError(e).message}`,
+    });
   }
 }
 
@@ -78,7 +92,11 @@ interface CacheEntry {
 async function getCacheEntry(key: string): Promise<CacheEntry | undefined> {
   const row = await db.metadataCache.get(key);
   const entry = row?.entry;
-  if (entry && typeof entry === 'object' && (entry as { version?: unknown }).version === CACHE_VERSION) {
+  if (
+    entry &&
+    typeof entry === "object" &&
+    (entry as { version?: unknown }).version === CACHE_VERSION
+  ) {
     return entry as CacheEntry;
   }
   return undefined;
@@ -105,10 +123,19 @@ function setMetadataCache(fileId: string, entry: CachedMetadata) {
   }
 }
 
-export function cacheTrackMetadata(fileId: string, entry: CachedMetadata): CachedMetadata {
+export function cacheTrackMetadata(
+  fileId: string,
+  entry: CachedMetadata,
+): CachedMetadata {
   const stored: CachedMetadata = { ...entry, pictureDataFull: null };
   setMetadataCache(fileId, stored);
-  setCache(`${METADATA_KEY_PREFIX}${fileId}`, stored).catch((e) => captureError({ level: 'warn', source: META_MODULE, message: `cache-set-failed: ${classifyMetaError(e).message}` }));
+  setCache(`${METADATA_KEY_PREFIX}${fileId}`, stored).catch((e) =>
+    captureError({
+      level: "warn",
+      source: META_MODULE,
+      message: `cache-set-failed: ${classifyMetaError(e).message}`,
+    }),
+  );
   return entry;
 }
 
@@ -121,10 +148,7 @@ export function clearAllMetadataCache(): void {
   lruKeys = [];
 }
 
-async function setCache(
-  key: string,
-  newEntry: CachedMetadata,
-): Promise<void> {
+async function setCache(key: string, newEntry: CachedMetadata): Promise<void> {
   const genAtStart = cacheGeneration;
   const existing = await getCacheEntry(key);
   if (genAtStart !== cacheGeneration) return;
@@ -133,9 +157,18 @@ async function setCache(
   const oldScore = existing?.data?.v ?? 0;
 
   if (existing && oldScore > newScore) return;
-  if (existing && oldScore === newScore && existing.ts > Date.now() - FRESH_WRITE_WINDOW_MS) return;
+  if (
+    existing &&
+    oldScore === newScore &&
+    existing.ts > Date.now() - FRESH_WRITE_WINDOW_MS
+  )
+    return;
 
-  await putCacheEntry(key, { version: CACHE_VERSION, data: newEntry, ts: Date.now() });
+  await putCacheEntry(key, {
+    version: CACHE_VERSION,
+    data: newEntry,
+    ts: Date.now(),
+  });
   updateLRU(key);
 }
 
@@ -147,7 +180,11 @@ async function getTrackMetadataImpl(
   _signal?: AbortSignal,
   forceNetwork: boolean = false,
 ): Promise<CachedMetadata> {
-  if (!forceNetwork && metadataCache[fileId] && metadataCache[fileId].v >= V_PLACEHOLDER) {
+  if (
+    !forceNetwork &&
+    metadataCache[fileId] &&
+    metadataCache[fileId].v >= V_PLACEHOLDER
+  ) {
     return metadataCache[fileId];
   }
 
@@ -162,7 +199,11 @@ async function getTrackMetadataImpl(
         return cached.data;
       }
     } catch (e: unknown) {
-      captureError({ level: 'warn', source: META_MODULE, message: `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}` });
+      captureError({
+        level: "warn",
+        source: META_MODULE,
+        message: `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+      });
     }
   }
 
@@ -203,7 +244,14 @@ export async function getTrackMetadata(
     if (existing) return existing;
   }
 
-  const promise = getTrackMetadataImpl(fileId, token, size, name, signal, forceNetwork);
+  const promise = getTrackMetadataImpl(
+    fileId,
+    token,
+    size,
+    name,
+    signal,
+    forceNetwork,
+  );
 
   inflightMetadata.set(fileId, promise);
 
@@ -223,15 +271,22 @@ export async function getTrackMetadata(
     },
     (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
-      captureError({ level: 'error', source: META_MODULE, message: `get-track-metadata-failed (fileId=${fileId}): ${msg}` });
+      captureError({
+        level: "error",
+        source: META_MODULE,
+        message: `get-track-metadata-failed (fileId=${fileId}): ${msg}`,
+      });
       cleanup();
-    }
+    },
   );
 
   return promise;
 }
 
-export async function updateTrackDuration(fileId: string, accurateDuration: number): Promise<void> {
+export async function updateTrackDuration(
+  fileId: string,
+  accurateDuration: number,
+): Promise<void> {
   if (metadataCache[fileId]) {
     metadataCache[fileId].duration = accurateDuration;
     metadataCache[fileId].durationEstimated = false;
@@ -249,7 +304,13 @@ export async function updateTrackDuration(fileId: string, accurateDuration: numb
       await putCacheEntry(key, entry);
     }
   } catch (e: unknown) {
-    captureError({ level: 'warn', source: META_MODULE, message: `duration-persist-failed (fileId=${fileId}): ${classifyMetaError(e).message}` });
+    captureError({
+      level: "warn",
+      source: META_MODULE,
+      message: `duration-persist-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+    });
   }
-  window.dispatchEvent(new CustomEvent(METADATA_UPDATED_EVENT, { detail: { fileId } }));
+  window.dispatchEvent(
+    new CustomEvent(METADATA_UPDATED_EVENT, { detail: { fileId } }),
+  );
 }

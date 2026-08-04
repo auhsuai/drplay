@@ -2,7 +2,8 @@
 @import "tw-animate-css";
 
 @custom-variant dark (&:where(.dark, .dark *));
-html, body {
+html,
+body {
   background-color: #ffffff;
   color: #111827; /* gray-900 */
   user-select: none;
@@ -29,12 +30,17 @@ html, body {
 
 /* Hide scrollbar for IE, Edge and Firefox */
 * {
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
 }
 @keyframes flash-highlight {
-  0%, 100% { background-color: transparent; }
-  50% { background-color: rgba(59, 130, 246, 0.4); }
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(59, 130, 246, 0.4);
+  }
 }
 .flash-highlight {
   animation: flash-highlight 1s ease-in-out 4;
@@ -44,22 +50,46 @@ html, body {
    SortDropdown.tsx so the SVG is not re-parsed with a style node on every
    render/dropdown open). Names are SortDropdown-specific; keep in sync. */
 @keyframes fillUp {
-  from { clip-path: inset(100% 0 0 0); }
-  to { clip-path: inset(0 0 0 0); }
+  from {
+    clip-path: inset(100% 0 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
 }
 @keyframes drainUp {
-  from { clip-path: inset(0 0 0 0); }
-  to { clip-path: inset(0 0 100% 0); }
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    clip-path: inset(0 0 100% 0);
+  }
 }
 @keyframes fillDown {
-  from { clip-path: inset(0 0 100% 0); }
-  to { clip-path: inset(0 0 0 0); }
+  from {
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
 }
 @keyframes drainDown {
-  from { clip-path: inset(0 0 0 0); }
-  to { clip-path: inset(100% 0 0 0); }
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    clip-path: inset(100% 0 0 0);
+  }
 }
-.anim-fill-up { animation: fillUp 300ms ease-in-out forwards; }
-.anim-drain-up { animation: drainUp 300ms ease-in-out forwards; }
-.anim-fill-down { animation: fillDown 300ms ease-in-out forwards; }
-.anim-drain-down { animation: drainDown 300ms ease-in-out forwards; }
+.anim-fill-up {
+  animation: fillUp 300ms ease-in-out forwards;
+}
+.anim-drain-up {
+  animation: drainUp 300ms ease-in-out forwards;
+}
+.anim-fill-down {
+  animation: fillDown 300ms ease-in-out forwards;
+}
+.anim-drain-down {
+  animation: drainDown 300ms ease-in-out forwards;
+}

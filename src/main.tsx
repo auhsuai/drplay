@@ -46,8 +46,7 @@ export function registerGlobalErrorHandlers(): void {
         try {
           const r = e.reason;
           if (isIntentionalAbort(r)) return; // benign cancel, ignore
-          const isTimeout =
-            r instanceof Error && /timeout/i.test(r.message);
+          const isTimeout = r instanceof Error && /timeout/i.test(r.message);
           captureError({
             level: isTimeout ? "warn" : "error",
             source: "unhandledrejection",

@@ -90,7 +90,7 @@ export function ErrorLogSection() {
           });
           return [];
         }),
-    []
+    [],
   );
   // undefined until the first query resolves → same "Loading..." gate as the
   // old mount-only fetch (later live re-runs keep the last value, no flicker).
@@ -111,7 +111,8 @@ export function ErrorLogSection() {
       setHasSelection(text.length > 0 && el.contains(sel!.anchorNode as Node));
     };
     document.addEventListener("selectionchange", onSelectionChange);
-    return () => document.removeEventListener("selectionchange", onSelectionChange);
+    return () =>
+      document.removeEventListener("selectionchange", onSelectionChange);
   }, []);
 
   const handleCopy = async () => {
@@ -133,7 +134,9 @@ export function ErrorLogSection() {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       } else {
-        showErrorToast(t("settings.error_log_copy_error") || "Could not copy to clipboard.");
+        showErrorToast(
+          t("settings.error_log_copy_error") || "Could not copy to clipboard.",
+        );
       }
     } catch (err) {
       captureError({
@@ -141,7 +144,9 @@ export function ErrorLogSection() {
         source: ERROR_LOG_SECTION_MODULE,
         message: `failed-to-export-copy-logs: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(t("settings.error_log_copy_error") || "Could not copy to clipboard.");
+      showErrorToast(
+        t("settings.error_log_copy_error") || "Could not copy to clipboard.",
+      );
     } finally {
       setBusy(false);
     }
@@ -158,7 +163,9 @@ export function ErrorLogSection() {
         source: ERROR_LOG_SECTION_MODULE,
         message: `failed-to-clear-logs: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(t("settings.error_log_clear_error") || "Failed to clear logs.");
+      showErrorToast(
+        t("settings.error_log_clear_error") || "Failed to clear logs.",
+      );
     } finally {
       setBusy(false);
     }
@@ -213,7 +220,8 @@ export function ErrorLogSection() {
           </p>
         ) : logList.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {t("settings.error_log_empty") || "No errors have been recorded yet."}
+            {t("settings.error_log_empty") ||
+              "No errors have been recorded yet."}
           </p>
         ) : selectedDate === null ? (
           <div className="flex flex-col gap-2">
@@ -227,8 +235,9 @@ export function ErrorLogSection() {
                   {group.dateKey}
                 </span>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gray-200 dark:bg-[#333] text-gray-600 dark:text-gray-300">
-                  {t("settings.error_log_count", { count: group.entries.length }) ||
-                    `${group.entries.length} errors`}
+                  {t("settings.error_log_count", {
+                    count: group.entries.length,
+                  }) || `${group.entries.length} errors`}
                 </span>
               </button>
             ))}

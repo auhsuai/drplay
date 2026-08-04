@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { captureError } from "../utils/errorLog";
 
-export type ThemeType = 'light' | 'dark' | 'system';
+export type ThemeType = "light" | "dark" | "system";
 
 function isThemeType(value: unknown): value is ThemeType {
-  return value === 'light' || value === 'dark' || value === 'system';
+  return value === "light" || value === "dark" || value === "system";
 }
 
 export const useTheme = () => {
@@ -13,9 +13,9 @@ export const useTheme = () => {
   const [theme, setTheme] = useState<ThemeType>(() => {
     try {
       const v = localStorage.getItem("drplay_theme");
-      return isThemeType(v) ? v : 'system';
+      return isThemeType(v) ? v : "system";
     } catch {
-      return 'system';
+      return "system";
     }
   });
 
@@ -23,32 +23,38 @@ export const useTheme = () => {
   useEffect(() => {
     const applyTheme = () => {
       const root = window.document.documentElement;
-      const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const systemPrefersDark = window.matchMedia(
+        "(prefers-color-scheme: dark)",
+      ).matches;
 
-      root.classList.remove('light', 'dark');
+      root.classList.remove("light", "dark");
 
-      if (theme === 'dark' || (theme === 'system' && systemPrefersDark)) {
-        root.classList.add('dark');
+      if (theme === "dark" || (theme === "system" && systemPrefersDark)) {
+        root.classList.add("dark");
       } else {
-        root.classList.add('light');
+        root.classList.add("light");
       }
     };
     applyTheme();
 
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = () => {
-      if (theme === 'system') applyTheme();
+      if (theme === "system") applyTheme();
     };
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
   }, [theme]);
 
   const changeTheme = (newTheme: ThemeType) => {
     setTheme(newTheme);
     try {
-      localStorage.setItem('drplay_theme', newTheme);
+      localStorage.setItem("drplay_theme", newTheme);
     } catch {
-      captureError({ level: 'warn', source: 'useTheme', message: 'theme-write-failed' });
+      captureError({
+        level: "warn",
+        source: "useTheme",
+        message: "theme-write-failed",
+      });
     }
   };
 

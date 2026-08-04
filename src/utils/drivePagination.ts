@@ -1,5 +1,5 @@
-import { driveFetch, FOLDER_MIME } from './driveApi';
-import type { DriveFileItem, DriveFolderItem } from './driveApi';
+import { driveFetch, FOLDER_MIME } from "./driveApi";
+import type { DriveFileItem, DriveFolderItem } from "./driveApi";
 
 // Drive files.list caps each request at 1000 results (docs: values above 1000
 // are coerced to 1000). We aggregate pages so large folders/searches are never
@@ -25,7 +25,7 @@ async function fetchAllPages<T>(
   fields: string,
   failureLabel: string,
   signal?: AbortSignal,
-  orderBy: string = 'name'
+  orderBy: string = "name",
 ): Promise<T[]> {
   const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=${orderBy}&pageSize=${PAGINATION_PAGE_SIZE}`;
   const all: T[] = [];
@@ -36,8 +36,8 @@ async function fetchAllPages<T>(
       ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}`
       : baseUrl;
     const response = await driveFetch(url, {
-      headers: { 'Authorization': `Bearer ${token}` },
-      signal
+      headers: { Authorization: `Bearer ${token}` },
+      ...(signal ? { signal } : {}),
     });
     if (!response.ok) {
       throw new Error(`Failed to ${failureLabel} (${response.status})`);
@@ -65,21 +65,47 @@ async function fetchAllFolderPages(
   query: string,
   fields: string,
   failureLabel: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<DriveFolderItem[]> {
-  return fetchAllPages<DriveFolderItem>(token, query, fields, failureLabel, signal);
+  return fetchAllPages<DriveFolderItem>(
+    token,
+    query,
+    fields,
+    failureLabel,
+    signal,
+  );
 }
 
 // Search for folders matching a fully-built Drive query string.
 // `query` must already be a valid Drive q-expression (e.g. escaped/quoted).
-export async function searchFolders(token: string, query: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
-  return fetchAllFolderPages(token, query, 'nextPageToken,files(id,name)', 'search folders', signal);
+export async function searchFolders(
+  token: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<DriveFolderItem[]> {
+  return fetchAllFolderPages(
+    token,
+    query,
+    "nextPageToken,files(id,name)",
+    "search folders",
+    signal,
+  );
 }
 
 // List immediate folder children (subfolders only, not trashed).
-export async function listFolderChildren(token: string, folderId: string, signal?: AbortSignal): Promise<DriveFolderItem[]> {
+export async function listFolderChildren(
+  token: string,
+  folderId: string,
+  signal?: AbortSignal,
+): Promise<DriveFolderItem[]> {
   const q = `'${folderId}' in parents and trashed=false and mimeType='${FOLDER_MIME}'`;
-  return fetchAllFolderPages(token, q, 'nextPageToken,files(id,name)', 'list folder children', signal);
+  return fetchAllFolderPages(
+    token,
+    q,
+    "nextPageToken,files(id,name)",
+    "list folder children",
+    signal,
+  );
 }
 
 // Fetch trashed items matching a fully-built Drive query string.
@@ -88,13 +114,17 @@ export async function listFolderChildren(token: string, folderId: string, signal
 // (same pagination pattern as fetchAllFolderPages). nextPageToken MUST stay in
 // the fields mask — Drive's partial response drops it otherwise. Keep
 // orderBy=folder,name so folders sort before files in the trash screen.
-export async function getTrashedFiles(token: string, query: string, signal?: AbortSignal): Promise<DriveFileItem[]> {
+export async function getTrashedFiles(
+  token: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<DriveFileItem[]> {
   return fetchAllPages<DriveFileItem>(
     token,
     query,
-    'nextPageToken,files(id,name,mimeType)',
-    'fetch trashed files',
+    "nextPageToken,files(id,name,mimeType)",
+    "fetch trashed files",
     signal,
-    'folder,name'
+    "folder,name",
   );
 }

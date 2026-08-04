@@ -14,7 +14,7 @@ export interface BufferedSource {
 // stay robust regardless of Tailwind purging.
 // rounded-r-full: the segment's right end (its tail) must match the seek
 // bar's rounded progress fill when the buffer ends mid-track.
-const BUFFER_SEGMENT_BG = 'bg-gray-400 dark:bg-gray-500 rounded-r-full';
+const BUFFER_SEGMENT_BG = "bg-gray-400 dark:bg-gray-500 rounded-r-full";
 
 /**
  * Render the buffered ranges around the playhead as individual
@@ -43,7 +43,7 @@ export function updateBufferBar(
   const dur = source.duration;
   const buffered = source.buffered;
   if (!Number.isFinite(dur) || dur <= 0 || !buffered || buffered.length === 0) {
-    if (container.childElementCount > 0) container.innerHTML = '';
+    if (container.childElementCount > 0) container.innerHTML = "";
     return;
   }
 
@@ -71,12 +71,12 @@ export function updateBufferBar(
   // Sync the number of segment <div>s to the number of VISIBLE ranges — the
   // raw buffered.length may exceed it when past ranges were dropped.
   while (container.childElementCount < visible.length) {
-    const seg = document.createElement('div');
+    const seg = document.createElement("div");
     seg.className = BUFFER_SEGMENT_BG;
-    seg.style.position = 'absolute';
-    seg.style.top = '0';
-    seg.style.height = '100%';
-    seg.style.pointerEvents = 'none';
+    seg.style.position = "absolute";
+    seg.style.top = "0";
+    seg.style.height = "100%";
+    seg.style.pointerEvents = "none";
     container.appendChild(seg);
   }
   while (container.childElementCount > visible.length) {
@@ -96,5 +96,5 @@ export function updateBufferBar(
 
 /** Clear all buffer segments inside `container` (e.g. on track switch). */
 export function clearBufferBar(container: HTMLElement | null): void {
-  if (container && container.childElementCount > 0) container.innerHTML = '';
+  if (container && container.childElementCount > 0) container.innerHTML = "";
 }

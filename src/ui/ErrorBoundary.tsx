@@ -33,7 +33,10 @@ interface ErrorBoundaryProps {
   children: React.ReactNode;
 }
 
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class ErrorBoundary extends React.Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false };
@@ -43,7 +46,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+  override componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
     // Context-only logging. `error` (message/name) and `errorInfo.componentStack`
     // are safe to surface; no credentials/tokens/PII are ever included.
     console.error("[ErrorBoundary]", error, errorInfo);
@@ -66,7 +69,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     window.location.reload();
   };
 
-  render(): React.ReactNode {
+  override render(): React.ReactNode {
     if (this.state.hasError) {
       return (
         <div
@@ -74,17 +77,20 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           className="fixed inset-0 z-[10002] flex flex-col items-center justify-center gap-6 bg-white px-6 text-center dark:bg-[#121212]"
         >
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {i18n.t('error.title', 'Something went wrong')}
+            {i18n.t("error.title", "Something went wrong")}
           </h1>
           <p className="max-w-md text-gray-600 dark:text-gray-300">
-            {i18n.t('error.description', 'The app hit an unexpected error. Please reload the page.')}
+            {i18n.t(
+              "error.description",
+              "The app hit an unexpected error. Please reload the page.",
+            )}
           </p>
           <button
             type="button"
             onClick={this.handleReload}
             className="rounded-full bg-[#4285F4] px-6 py-3 font-medium text-white shadow-md shadow-blue-500/20 transition-colors hover:bg-blue-600"
           >
-            {i18n.t('error.reload', 'Reload')}
+            {i18n.t("error.reload", "Reload")}
           </button>
         </div>
       );

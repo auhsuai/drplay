@@ -1,8 +1,8 @@
-import React from 'react';
-import { ArrowLeft, X, Search, FolderPlus } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
-import { SortDropdown } from '../../components/SortDropdown';
-import { MY_DRIVE_TAB } from '../../../utils/driveConstants';
+import React from "react";
+import { ArrowLeft, X, Search, FolderPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { SortDropdown } from "../../components/SortDropdown";
+import { MY_DRIVE_TAB } from "../../../utils/driveConstants";
 
 interface TopNavigationBarProps {
   isSelectionMode: boolean;
@@ -10,13 +10,13 @@ interface TopNavigationBarProps {
   onClearSelection: () => void;
   onBack: () => void;
   hasHistory: boolean;
-  folderHistory: { id: string, name: string }[];
+  folderHistory: { id: string; name: string }[];
   currentFolderName: string;
   onBreadcrumbClick: (id: string, name: string, index: number) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
   sortOption: string;
-  onSortChange?: (option: string) => void;
+  onSortChange?: ((option: string) => void) | undefined;
   token: string | null;
   onNewFolderClick: () => void;
   isInitialMount: React.MutableRefObject<boolean>;
@@ -39,7 +39,7 @@ export function TopNavigationBar({
   token,
   onNewFolderClick,
   isInitialMount,
-  searchInputRef
+  searchInputRef,
 }: TopNavigationBarProps) {
   const { t } = useTranslation();
 
@@ -47,12 +47,12 @@ export function TopNavigationBar({
   // the Drive state; translate it for display so the breadcrumb matches the
   // sidebar's localized "My Drive" entry. Non-root folder names are untouched.
   const displayFolderName = (name: string): string =>
-    name === MY_DRIVE_TAB ? t('drive.my_drive', 'My Drive') : name;
+    name === MY_DRIVE_TAB ? t("drive.my_drive", "My Drive") : name;
 
   const sortOptions = [
-    { id: 'name', label: t('sort.name', 'A-Z') },
-    { id: 'modifiedTime', label: t('sort.date', 'Ngày'), defaultDesc: true },
-    { id: 'size', label: t('sort.size', 'Kích thước') },
+    { id: "name", label: t("sort.name", "A-Z") },
+    { id: "modifiedTime", label: t("sort.date", "Ngày"), defaultDesc: true },
+    { id: "size", label: t("sort.size", "Kích thước") },
   ];
 
   return (
@@ -66,25 +66,29 @@ export function TopNavigationBar({
             <X className="w-5 h-5 text-gray-700 dark:text-gray-300" />
           </button>
           <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold text-lg truncate">
-            {t('drive.items_selected', '{{count}} mục đã chọn', { count: selectedCount })}
+            {t("drive.items_selected", "{{count}} mục đã chọn", {
+              count: selectedCount,
+            })}
           </span>
         </div>
       ) : (
         <div className="flex items-center gap-2 text-sm font-medium flex-1 min-w-0">
-          <button 
+          <button
             onClick={onBack}
             disabled={!hasHistory}
             className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors shrink-0"
           >
             <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
           </button>
-          
+
           <div className="flex items-center overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0">
             {folderHistory.map((folder, index) => (
               <div key={folder.id} className="flex items-center shrink-0">
                 <span className="text-gray-400 mx-1">/</span>
-                <button 
-                  onClick={() => onBreadcrumbClick(folder.id, folder.name, index)}
+                <button
+                  onClick={() =>
+                    onBreadcrumbClick(folder.id, folder.name, index)
+                  }
                   className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] transition-colors truncate max-w-[150px]"
                   title={displayFolderName(folder.name)}
                 >
@@ -93,8 +97,13 @@ export function TopNavigationBar({
               </div>
             ))}
             <div className="flex items-center shrink-0">
-              {folderHistory.length > 0 && <span className="text-gray-400 mx-1">/</span>}
-              <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={displayFolderName(currentFolderName)}>
+              {folderHistory.length > 0 && (
+                <span className="text-gray-400 mx-1">/</span>
+              )}
+              <span
+                className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]"
+                title={displayFolderName(currentFolderName)}
+              >
                 {displayFolderName(currentFolderName)}
               </span>
             </div>
@@ -110,7 +119,7 @@ export function TopNavigationBar({
             <input
               ref={searchInputRef}
               type="text"
-              placeholder={t('search_placeholder', 'Tìm kiếm...')}
+              placeholder={t("search_placeholder", "Tìm kiếm...")}
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-[#4285F4]/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
@@ -131,18 +140,20 @@ export function TopNavigationBar({
               sortOption={sortOption}
               onSortChange={onSortChange}
               options={sortOptions}
-              fallbackLabel={t('drive.sort', 'Sort')}
+              fallbackLabel={t("drive.sort", "Sort")}
               isInitialMount={isInitialMount}
             />
           )}
 
           {token && (
-            <button 
+            <button
               onClick={onNewFolderClick}
               className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-lg transition-colors shadow-sm active:scale-95"
             >
               <FolderPlus className="w-4 h-4" />
-              <span className="hidden sm:inline">{t('drive.new_folder') || 'New Folder'}</span>
+              <span className="hidden sm:inline">
+                {t("drive.new_folder") || "New Folder"}
+              </span>
             </button>
           )}
         </div>

@@ -1,33 +1,82 @@
 import { memo, useRef, useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, LoaderCircle, Music, Shuffle, Repeat, Repeat1, Maximize2, RefreshCw, Heart } from "lucide-react";
+import {
+  CloudOff,
+  FileWarning,
+  WifiOff,
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  Volume2,
+  Volume1,
+  Volume,
+  VolumeX,
+  LoaderCircle,
+  Music,
+  Shuffle,
+  Repeat,
+  Repeat1,
+  Maximize2,
+  RefreshCw,
+  Heart,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { MoreMenu } from '../components/MoreMenu';
+import { MoreMenu } from "../components/MoreMenu";
 import { formatTime } from "../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from "../../utils/bufferedRange";
 import { captureError } from "../../utils/errorLog";
 import { isFavorite, addFavorite, removeFavorite } from "../../utils/favorites";
 import { AudioController } from "../../lib/AudioController";
-import { PlayerBarProps } from './types';
+import type { PlayerBarProps } from "./types";
 
-const PLAYER_BAR_MODULE = 'PlayerBar';
+const PLAYER_BAR_MODULE = "PlayerBar";
 
 // Các helper function nhỏ gọn
-function ErrorIcon({ type, className = "w-5 h-5 shrink-0" }: { type: string; className?: string }) {
-  const Icon = type === 'rate_limited' || type === 'drive_quota_exceeded' || type === 'download_quota' ? CloudOff : type === 'file_deleted' || type === 'format_error' || type === 'access_denied' ? FileWarning : WifiOff;
+function ErrorIcon({
+  type,
+  className = "w-5 h-5 shrink-0",
+}: {
+  type: string;
+  className?: string;
+}) {
+  const Icon =
+    type === "rate_limited" ||
+    type === "drive_quota_exceeded" ||
+    type === "download_quota"
+      ? CloudOff
+      : type === "file_deleted" ||
+          type === "format_error" ||
+          type === "access_denied"
+        ? FileWarning
+        : WifiOff;
   return <Icon className={`${className} text-[#4285F4]`} />;
 }
 
-function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onPrevTrack, isDownloading, loadNonce, playMode, onTogglePlayMode, onExpandNowPlaying }: PlayerBarProps) {
+function PlayerBarImpl({
+  currentTrack,
+  isPlaying,
+  onTogglePlay,
+  onNextTrack,
+  onPrevTrack,
+  isDownloading,
+  loadNonce,
+  playMode,
+  onTogglePlayMode,
+  onExpandNowPlaying,
+}: PlayerBarProps) {
   const { t } = useTranslation();
-  
+
   // Local UI state (không gây ảnh hưởng global)
   const [duration, setDuration] = useState(0);
   const [isBuffering, setIsBuffering] = useState(false);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isVolumeActive, setIsVolumeActive] = useState(false);
-  const [errorInfo, setErrorInfo] = useState<{ message: string, code: string } | null>(null);
+  const [errorInfo, setErrorInfo] = useState<{
+    message: string;
+    code: string;
+  } | null>(null);
   const [isLiked, setIsLiked] = useState(false);
 
   const toggleMute = useCallback(() => {
@@ -41,7 +90,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   const progressBarRef = useRef<HTMLDivElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
-  
+
   const audio = AudioController.getInstance();
 
   // Reset transient track state when the track changes
@@ -53,10 +102,11 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
 
   // Subscribe to AudioController Events
   useEffect(() => {
-    const unsubTime = audio.on('timeupdate', ({ currentTime, duration }) => {
+    const unsubTime = audio.on("timeupdate", ({ currentTime, duration }) => {
       setDuration(duration);
       if (isDraggingRef.current) return;
-      if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(currentTime);
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = formatTime(currentTime);
       if (progressFillRef.current && duration > 0) {
         progressFillRef.current.style.width = `${(currentTime / duration) * 100}%`;
       }
@@ -68,12 +118,18 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       updateBufferBar(bufferFillRef.current, audio.getBuffered());
     });
 
-    const unsubBuf = audio.on('buffering', ({ isBuffering }) => setIsBuffering(isBuffering));
-    const unsubErr = audio.on('error', (err) => setErrorInfo(err));
-    const unsubEnded = audio.on('ended', () => onNextTrack(true));
+    const unsubBuf = audio.on("buffering", ({ isBuffering }) => {
+      setIsBuffering(isBuffering);
+    });
+    const unsubErr = audio.on("error", (err) => {
+      setErrorInfo(err);
+    });
+    const unsubEnded = audio.on("ended", () => {
+      onNextTrack(true);
+    });
     // Buffer bar: the native `progress` event fires whenever audio.buffered
     // grows (paused or playing) — the industry-standard source (MDN).
-    const unsubProgress = audio.on('progress', () => {
+    const unsubProgress = audio.on("progress", () => {
       updateBufferBar(bufferFillRef.current, audio.getBuffered());
     });
 
@@ -90,10 +146,15 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement as HTMLElement;
-      if (activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || activeEl?.isContentEditable) return;
+      if (
+        activeEl?.tagName === "INPUT" ||
+        activeEl?.tagName === "TEXTAREA" ||
+        activeEl?.isContentEditable
+      )
+        return;
 
       switch (e.key) {
-        case 'ArrowLeft':
+        case "ArrowLeft":
           e.preventDefault();
           audio.seek(Math.max(0, audio.getCurrentTime() - 5));
           // Redraw immediately instead of clearing: updateBufferBar already
@@ -102,51 +163,57 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
           // every seek).
           updateBufferBar(bufferFillRef.current, audio.getBuffered());
           break;
-        case 'ArrowRight':
+        case "ArrowRight":
           e.preventDefault();
           audio.seek(Math.min(audio.getDuration(), audio.getCurrentTime() + 5));
           updateBufferBar(bufferFillRef.current, audio.getBuffered());
           break;
-        case 'ArrowUp':
+        case "ArrowUp":
           e.preventDefault();
-          setVolume(prev => {
+          setVolume((prev) => {
             const nv = Math.min(1, prev + 0.1);
             audio.setVolume(nv);
             return nv;
           });
           break;
-        case 'ArrowDown':
+        case "ArrowDown":
           e.preventDefault();
-          setVolume(prev => {
+          setVolume((prev) => {
             const nv = Math.max(0, prev - 0.1);
             audio.setVolume(nv);
             return nv;
           });
           break;
-        case 'm': case 'M':
+        case "m":
+        case "M":
           e.preventDefault();
           toggleMute();
           break;
-        case 'n': case 'N':
+        case "n":
+        case "N":
           e.preventDefault();
           onNextTrack(false);
           break;
-        case 'p': case 'P':
+        case "p":
+        case "P":
           e.preventDefault();
           onPrevTrack();
           break;
-        case 's': case 'S':
+        case "s":
+        case "S":
           e.preventDefault();
           onTogglePlayMode();
           break;
-        case ' ':
+        case " ":
           e.preventDefault();
           onTogglePlay();
           break;
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, [onNextTrack, onPrevTrack, onTogglePlay, onTogglePlayMode, toggleMute]);
 
   // Handle Play/Pause from Props (Syncing)
@@ -163,20 +230,23 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   useEffect(() => {
     if (bufferFillRef.current) clearBufferBar(bufferFillRef.current);
     if (currentTrack) {
-      if (currentTrack.restoreDuration) setDuration(currentTrack.restoreDuration);
-      
+      if (currentTrack.restoreDuration)
+        setDuration(currentTrack.restoreDuration);
+
       const time = currentTrack.restoreTime || 0;
       const dur = currentTrack.restoreDuration || duration || 0;
-      
-      if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(time);
+
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = formatTime(time);
       if (progressFillRef.current && dur > 0) {
         progressFillRef.current.style.width = `${(time / dur) * 100}%`;
       } else if (progressFillRef.current) {
-        progressFillRef.current.style.width = '0%';
+        progressFillRef.current.style.width = "0%";
       }
     } else {
       setDuration(0);
-      if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = "0:00";
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = "0:00";
       if (progressFillRef.current) progressFillRef.current.style.width = "0%";
     }
   }, [currentTrack]);
@@ -184,21 +254,33 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
   // Shared favorite-status check: re-reads the stored status for a track id
   // and applies it, unless the requesting scope went stale (track changed /
   // component unmounted) while the check was in flight.
-  const checkFavorite = useCallback(async (trackId: string, isStale: () => boolean) => {
-    try {
-      const liked = await isFavorite(trackId);
-      if (!isStale()) setIsLiked(liked);
-    } catch (e: unknown) {
-      captureError({ level: 'warn', source: PLAYER_BAR_MODULE, message: `check-favorite-failed: ${e instanceof Error ? e.message : String(e)}` });
-    }
-  }, []);
+  const checkFavorite = useCallback(
+    async (trackId: string, isStale: () => boolean) => {
+      try {
+        const liked = await isFavorite(trackId);
+        if (!isStale()) setIsLiked(liked);
+      } catch (e: unknown) {
+        captureError({
+          level: "warn",
+          source: PLAYER_BAR_MODULE,
+          message: `check-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+    },
+    [],
+  );
 
   // Check favorite status whenever the current track changes
   useEffect(() => {
     let cancelled = false;
-    if (!currentTrack) { setIsLiked(false); return; }
+    if (!currentTrack) {
+      setIsLiked(false);
+      return;
+    }
     checkFavorite(currentTrack.id, () => cancelled);
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [currentTrack?.id, checkFavorite]);
 
   // Re-check the current track when favorites change elsewhere (favorites.ts
@@ -209,8 +291,10 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       if (!currentTrack) return;
       checkFavorite(currentTrack.id, () => false);
     };
-    window.addEventListener('favorites-updated', handleFavoritesUpdated);
-    return () => window.removeEventListener('favorites-updated', handleFavoritesUpdated);
+    window.addEventListener("favorites-updated", handleFavoritesUpdated);
+    return () => {
+      window.removeEventListener("favorites-updated", handleFavoritesUpdated);
+    };
   }, [currentTrack?.id, checkFavorite]);
 
   const isFavoriteTogglingRef = useRef(false);
@@ -225,7 +309,11 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       }
       setIsLiked(!isLiked);
     } catch (e: unknown) {
-      captureError({ level: 'error', source: PLAYER_BAR_MODULE, message: `toggle-favorite-failed: ${e instanceof Error ? e.message : String(e)}` });
+      captureError({
+        level: "error",
+        source: PLAYER_BAR_MODULE,
+        message: `toggle-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
     } finally {
       isFavoriteTogglingRef.current = false;
     }
@@ -237,20 +325,29 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     try {
       progressBarRef.current.setPointerCapture(e.pointerId);
     } catch (err) {
-      captureError({ level: 'warn', source: PLAYER_BAR_MODULE, message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}` });
+      captureError({
+        level: "warn",
+        source: PLAYER_BAR_MODULE,
+        message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
-    
+
     const bounds = progressBarRef.current.getBoundingClientRect();
     const updateTime = (clientX: number) => {
-      const percent = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
-      if (progressFillRef.current) progressFillRef.current.style.width = `${percent * 100}%`;
-      if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(percent * duration);
+      const percent = Math.max(
+        0,
+        Math.min(1, (clientX - bounds.left) / bounds.width),
+      );
+      if (progressFillRef.current)
+        progressFillRef.current.style.width = `${percent * 100}%`;
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = formatTime(percent * duration);
       return percent * duration;
     };
 
     isDraggingRef.current = true;
     updateTime(e.clientX);
-    
+
     const onMove = (moveEvent: PointerEvent) => updateTime(moveEvent.clientX);
     const commit = (upEvent: PointerEvent) => {
       audio.seek(updateTime(upEvent.clientX));
@@ -262,24 +359,31 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       setTimeout(() => {
         isDraggingRef.current = false;
       }, 150);
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
     };
-    const onUp = (upEvent: PointerEvent) => commit(upEvent);
-    const onCancel = (cancelEvent: PointerEvent) => commit(cancelEvent);
+    const onUp = (upEvent: PointerEvent) => {
+      commit(upEvent);
+    };
+    const onCancel = (cancelEvent: PointerEvent) => {
+      commit(cancelEvent);
+    };
 
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   };
 
   const handleVolumePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!volumeBarRef.current) return;
     const bounds = volumeBarRef.current.getBoundingClientRect();
-    
+
     const updateVol = (clientX: number) => {
-      const percent = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+      const percent = Math.max(
+        0,
+        Math.min(1, (clientX - bounds.left) / bounds.width),
+      );
       setVolume(percent);
       audio.setVolume(percent);
       if (percent > 0) setIsMuted(false);
@@ -292,33 +396,62 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     };
     const onUp = () => {
       setIsVolumeActive(false);
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
     };
-    
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   };
 
   const volumePercent = isMuted ? 0 : volume * 100;
 
   const renderVolumeIcon = () => {
-    if (isMuted || volume === 0) return <VolumeX className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer" onClick={toggleMute} />;
-    if (volume < 0.33) return <Volume className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer" onClick={toggleMute} />;
-    if (volume < 0.66) return <Volume1 className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer" onClick={toggleMute} />;
-    return <Volume2 className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer" onClick={toggleMute} />;
+    if (isMuted || volume === 0)
+      return (
+        <VolumeX
+          className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer"
+          onClick={toggleMute}
+        />
+      );
+    if (volume < 0.33)
+      return (
+        <Volume
+          className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer"
+          onClick={toggleMute}
+        />
+      );
+    if (volume < 0.66)
+      return (
+        <Volume1
+          className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer"
+          onClick={toggleMute}
+        />
+      );
+    return (
+      <Volume2
+        className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer"
+        onClick={toggleMute}
+      />
+    );
   };
 
-  const realTitle = currentTrack?.title || t('player.no_track');
-  const realArtist = currentTrack?.artist || t('unknown_artist');
+  const realTitle = currentTrack?.title || t("player.no_track");
+  const realArtist = currentTrack?.artist || t("unknown_artist");
   // Why: AudioController keeps its VI-language strings as-is (not translated);
   // PlayerBar maps the error codes to translated text so the toast matches the
   // active locale, and falls back to the raw message for unmapped codes.
   const errorText = errorInfo
-    ? errorInfo.code === 'network_interrupted'
-      ? t('player.network_interrupted', 'Network unstable or connection lost, please check again')
-      : errorInfo.code === 'format_error'
-        ? t('player.format_error', 'Audio format not supported, skipping to next track...')
+    ? errorInfo.code === "network_interrupted"
+      ? t(
+          "player.network_interrupted",
+          "Network unstable or connection lost, please check again",
+        )
+      : errorInfo.code === "format_error"
+        ? t(
+            "player.format_error",
+            "Audio format not supported, skipping to next track...",
+          )
         : errorInfo.message
     : null;
 
@@ -326,12 +459,14 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
     <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
       {/* Left: Track Info */}
       <div className="flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2">
-        <div 
+        <div
           className="flex items-center gap-2 sm:gap-4 cursor-pointer group py-1.5 pl-1.5 pr-2 sm:pr-4 -ml-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors min-w-0 flex-1 max-w-[320px]"
           onClick={() => currentTrack && onExpandNowPlaying()}
-          title={t('player.view_now_playing', 'View Now Playing')}
+          title={t("player.view_now_playing", "View Now Playing")}
         >
-          <div className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400`}>
+          <div
+            className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400`}
+          >
             {currentTrack ? (
               <Music className="w-6 h-6 opacity-80 transition-transform duration-300 group-hover:scale-110" />
             ) : null}
@@ -355,10 +490,17 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             <button
               type="button"
               onClick={handleToggleFavorite}
-              aria-label={isLiked ? t('player.remove_favorite', 'Remove from favorites') : t('player.add_favorite', 'Add to favorites')}
-              className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? 'text-[#4285F4]' : 'text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
+              aria-label={
+                isLiked
+                  ? t("player.remove_favorite", "Remove from favorites")
+                  : t("player.add_favorite", "Add to favorites")
+              }
+              className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? "text-[#4285F4]" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
             >
-              <Heart className="w-5 h-5" fill={isLiked ? "currentColor" : "none"} />
+              <Heart
+                className="w-5 h-5"
+                fill={isLiked ? "currentColor" : "none"}
+              />
             </button>
             <MoreMenu track={currentTrack} isPlayerBarMode={true} />
           </div>
@@ -368,17 +510,21 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
       {/* Center: Controls */}
       <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] px-2 min-w-[200px]">
         <div className="flex w-full mb-1 items-center justify-center gap-3 sm:gap-6">
-          <button 
-            onClick={() => onPrevTrack()}
+          <button
+            onClick={() => {
+              onPrevTrack();
+            }}
             className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
             disabled={!currentTrack}
           >
             <SkipBack className="w-5 h-5" />
           </button>
-          
-          <button 
-            onClick={errorInfo ? () => audio.playTrack(currentTrack!) : onTogglePlay}
-            className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? 'bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg' : 'bg-gray-400 cursor-not-allowed'}`}
+
+          <button
+            onClick={
+              errorInfo ? () => audio.playTrack(currentTrack!) : onTogglePlay
+            }
+            className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
             disabled={!currentTrack || isDownloading}
           >
             {isDownloading || (isBuffering && isPlaying && !errorInfo) ? (
@@ -392,78 +538,92 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             )}
           </button>
 
-          <button 
-            onClick={() => onNextTrack(false)}
+          <button
+            onClick={() => {
+              onNextTrack(false);
+            }}
             className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
             disabled={!currentTrack}
           >
             <SkipForward className="w-5 h-5" />
           </button>
-          
+
           <div className="relative group flex items-center shrink-0">
-            <button 
+            <button
               onClick={onTogglePlayMode}
-              className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== 'normal' ? 'text-[#4285F4] hover:bg-[#4285F4]/10' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]'}`}
+              className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== "normal" ? "text-[#4285F4] hover:bg-[#4285F4]/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
               disabled={!currentTrack}
             >
-              {playMode === 'shuffle' && <Shuffle className="w-5 h-5" />}
-              {playMode === 'repeat-all' && <Repeat className="w-5 h-5" />}
-              {playMode === 'repeat-one' && <Repeat1 className="w-5 h-5" />}
-              {playMode === 'normal' && <Repeat className="w-5 h-5 opacity-40" />}
+              {playMode === "shuffle" && <Shuffle className="w-5 h-5" />}
+              {playMode === "repeat-all" && <Repeat className="w-5 h-5" />}
+              {playMode === "repeat-one" && <Repeat1 className="w-5 h-5" />}
+              {playMode === "normal" && (
+                <Repeat className="w-5 h-5 opacity-40" />
+              )}
             </button>
           </div>
         </div>
         <div className="w-full flex items-center gap-3">
-          <span ref={currentTimeTextRef} className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums">0:00</span>
-          <div 
+          <span
+            ref={currentTimeTextRef}
+            className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums"
+          >
+            0:00
+          </span>
+          <div
             ref={progressBarRef}
             className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
             onPointerDown={handlePointerDown}
           >
-            <div 
+            <div
               ref={bufferFillRef}
               data-testid="buffer-fill"
               className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
             ></div>
-            <div 
+            <div
               ref={progressFillRef}
               className={`absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width]`}
             >
               <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0"></div>
             </div>
           </div>
-          <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">{formatTime(duration)}</span>
+          <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">
+            {formatTime(duration)}
+          </span>
         </div>
       </div>
 
       {/* Right: Volume Controls */}
       <div className="flex items-center justify-end w-[30%] min-w-[120px] pl-2 gap-3">
         {renderVolumeIcon()}
-        <div 
+        <div
           ref={volumeBarRef}
           className="hidden xl:flex w-16 sm:w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center"
           onPointerDown={handleVolumePointerDown}
         >
-          <div 
-            className={`absolute left-0 h-full bg-gray-500 dark:bg-gray-400 group-hover:bg-[#4285F4] ${isVolumeActive ? '!bg-[#4285F4]' : ''} rounded-full transition-colors`}
+          <div
+            className={`absolute left-0 h-full bg-gray-500 dark:bg-gray-400 group-hover:bg-[#4285F4] ${isVolumeActive ? "!bg-[#4285F4]" : ""} rounded-full transition-colors`}
             style={{ width: `${volumePercent}%` }}
           >
-            <div className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 ${isVolumeActive ? '!opacity-100' : ''} transition-opacity shrink-0`}></div>
+            <div
+              className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 ${isVolumeActive ? "!opacity-100" : ""} transition-opacity shrink-0`}
+            ></div>
           </div>
         </div>
       </div>
 
       {/* Error Toast */}
-      {errorInfo && createPortal(
-        <div className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 select-none">
-          <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
-            <ErrorIcon type={errorInfo.code} />
-            <span className="font-medium truncate">{errorText}</span>
-          </div>
-          <div className="w-1.5 self-stretch bg-[#4285F4]" />
-        </div>,
-        document.getElementById('content-area') || document.body
-      )}
+      {errorInfo &&
+        createPortal(
+          <div className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 select-none">
+            <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
+              <ErrorIcon type={errorInfo.code} />
+              <span className="font-medium truncate">{errorText}</span>
+            </div>
+            <div className="w-1.5 self-stretch bg-[#4285F4]" />
+          </div>,
+          document.getElementById("content-area") || document.body,
+        )}
     </div>
   );
 }

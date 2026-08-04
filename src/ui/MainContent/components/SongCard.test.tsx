@@ -1,22 +1,40 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
-import { SongCard } from './SongCard';
-import { DRAG_FOLDER_HOVER_EVENT } from '../../components/DropZone';
-import { getTrackMetadata } from '../../../utils/metadata';
-import type { DriveItem } from '../../../types';
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+} from "vitest";
+import {
+  render,
+  screen,
+  cleanup,
+  waitFor,
+  act,
+  fireEvent,
+} from "@testing-library/react";
+import { SongCard } from "./SongCard";
+import { DRAG_FOLDER_HOVER_EVENT } from "../../components/DropZone";
+import { getTrackMetadata } from "../../../utils/metadata";
+import type { DriveItem } from "../../../types";
 
-vi.mock('../../../utils/metadata', () => ({
+vi.mock("../../../utils/metadata", () => ({
   getTrackMetadata: vi.fn(),
 }));
 
 // Slice 2: cancelUpload is imported (runtime) by SongCard now. Spy on the real
 // module's export (importOriginal spread keeps isUploading/subscribe real for
 // MoreMenu) so the X-cancel click can be asserted without side effects.
-const { cancelUploadMock, dismissUploadedMock } = vi.hoisted(() => ({ cancelUploadMock: vi.fn(), dismissUploadedMock: vi.fn() }));
+const { cancelUploadMock, dismissUploadedMock } = vi.hoisted(() => ({
+  cancelUploadMock: vi.fn(),
+  dismissUploadedMock: vi.fn(),
+}));
 
-vi.mock('../../../utils/uploadManager', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/uploadManager')>()),
+vi.mock("../../../utils/uploadManager", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/uploadManager")>()),
   cancelUpload: cancelUploadMock,
   dismissUploaded: dismissUploadedMock,
 }));
@@ -25,16 +43,16 @@ const mockedFetch = vi.mocked(getTrackMetadata);
 
 function makeItem(over: Partial<DriveItem> = {}): DriveItem {
   return {
-    id: 'track-1',
-    title: 'My Song',
+    id: "track-1",
+    title: "My Song",
     isFolder: false,
     trackInfo: {
-      id: 'track-1',
-      title: 'My Song',
-      artist: '',
-      streamUrl: '',
+      id: "track-1",
+      title: "My Song",
+      artist: "",
+      streamUrl: "",
       size: 1000,
-      originalName: 'my song.mp3',
+      originalName: "my song.mp3",
     },
     ...over,
   };
@@ -43,19 +61,19 @@ function makeItem(over: Partial<DriveItem> = {}): DriveItem {
 const baseProps = {
   onPlay: () => {},
   onOpenFolder: () => {},
-  token: 'tok',
-  currentFolderId: 'root',
-  currentFolderName: 'Root',
+  token: "tok",
+  currentFolderId: "root",
+  currentFolderName: "Root",
   folderHistory: [],
   onRefresh: () => {},
 };
 
-describe('SongCard metadata fetch', () => {
+describe("SongCard metadata fetch", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
-      artist: 'Fetched Artist',
+      title: "Fetched Title",
+      artist: "Fetched Artist",
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -65,109 +83,130 @@ describe('SongCard metadata fetch', () => {
     cleanup();
   });
 
-  it('self-fetches on mount and falls back to the music icon when metadata has no picture', async () => {
+  it("self-fetches on mount and falls back to the music icon when metadata has no picture", async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     // SongCard debounces the metadata fetch by 150ms (visible-card guard in
     // SongCard.tsx), so the fetch assertion must wait for the timer.
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
-    expect(mockedFetch).toHaveBeenCalledWith('track-1', 'tok', 1000, 'my song.mp3', expect.any(Object));
-    await screen.findByText('Fetched Title');
-    expect(container.querySelector('img')).toBeNull();
-    expect(container.querySelector('.lucide-music')).not.toBeNull();
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "track-1",
+      "tok",
+      1000,
+      "my song.mp3",
+      expect.any(Object),
+    );
+    await screen.findByText("Fetched Title");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
   });
 
-  it('re-fetches metadata on remount (no cross-mount cover cache)', async () => {
+  it("re-fetches metadata on remount (no cross-mount cover cache)", async () => {
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByText('Fetched Title');
+    await screen.findByText("Fetched Title");
 
     unmount();
     cleanup();
     mockedFetch.mockClear();
 
-    const { container: container2 } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByText('Fetched Title');
+    const { container: container2 } = render(
+      <SongCard {...baseProps} item={makeItem()} />,
+    );
+    await screen.findByText("Fetched Title");
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    expect(container2.querySelector('img')).toBeNull();
+    expect(container2.querySelector("img")).toBeNull();
   });
 
-  it('does not self-fetch for folder items', () => {
+  it("does not self-fetch for folder items", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem({ isFolder: true, trackInfo: undefined })} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem({ isFolder: true, trackInfo: undefined })}
+      />,
     );
     expect(mockedFetch).not.toHaveBeenCalled();
-    expect(container.querySelector('.lucide-folder')).not.toBeNull();
+    expect(container.querySelector(".lucide-folder")).not.toBeNull();
   });
 
-  it('non-folder without trackInfo: click is a no-op instead of crashing', () => {
+  it("non-folder without trackInfo: click is a no-op instead of crashing", () => {
     const onPlay = vi.fn();
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem({ trackInfo: undefined })} onPlay={onPlay} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem({ trackInfo: undefined })}
+        onPlay={onPlay}
+      />,
     );
-    const card = container.querySelector('.cursor-pointer');
+    const card = container.querySelector(".cursor-pointer");
     expect(card).not.toBeNull();
     expect(() => fireEvent.click(card as Element)).not.toThrow();
     expect(onPlay).not.toHaveBeenCalled();
   });
 
-  it('metadata-updated event for this fileId triggers a re-fetch that updates the title', async () => {
+  it("metadata-updated event for this fileId triggers a re-fetch that updates the title", async () => {
     mockedFetch.mockResolvedValue({
-      title: 'Updated Title',
-      artist: 'Updated Artist',
+      title: "Updated Title",
+      artist: "Updated Artist",
       pictureData: null,
       pictureFormat: undefined,
     } as never);
     render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByText('Updated Title');
+    await screen.findByText("Updated Title");
     mockedFetch.mockClear();
     mockedFetch.mockResolvedValue({
-      title: 'Re-fetched Title',
-      artist: 'Re-fetched Artist',
+      title: "Re-fetched Title",
+      artist: "Re-fetched Artist",
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
-    await screen.findByText('Re-fetched Title');
+    window.dispatchEvent(
+      new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
+    );
+    await screen.findByText("Re-fetched Title");
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('re-renders on same-id item change (trackInfo.queueItemId) so click uses fresh track (stale-prop fix)', () => {
+  it("re-renders on same-id item change (trackInfo.queueItemId) so click uses fresh track (stale-prop fix)", () => {
     const onPlay = vi.fn();
     const { rerender, container } = render(
       <SongCard
         {...baseProps}
-        item={makeItem({ trackInfo: { ...makeItem().trackInfo!, queueItemId: 'q-1' } })}
+        item={makeItem({
+          trackInfo: { ...makeItem().trackInfo!, queueItemId: "q-1" },
+        })}
         onPlay={onPlay}
       />,
     );
     rerender(
       <SongCard
         {...baseProps}
-        item={makeItem({ trackInfo: { ...makeItem().trackInfo!, queueItemId: 'q-2' } })}
+        item={makeItem({
+          trackInfo: { ...makeItem().trackInfo!, queueItemId: "q-2" },
+        })}
         onPlay={onPlay}
       />,
     );
-    const card = container.querySelector('.cursor-pointer');
+    const card = container.querySelector(".cursor-pointer");
     expect(card).not.toBeNull();
     fireEvent.click(card as Element);
     expect(onPlay).toHaveBeenCalledTimes(1);
-    expect(onPlay.mock.calls[0][0].queueItemId).toBe('q-2');
+    expect(onPlay.mock.calls[0][0].queueItemId).toBe("q-2");
   });
 });
 
-describe('SongCard blob URL lifecycle (create in async .then, revoke must follow consumer)', () => {
+describe("SongCard blob URL lifecycle (create in async .then, revoke must follow consumer)", () => {
   // jsdom does NOT implement URL.createObjectURL / revokeObjectURL (both are
   // undefined at runtime) — install observable spies once so the card's blob
   // URL lifecycle can be asserted (same pattern as useNowPlayingMetadata.test.ts).
   beforeAll(() => {
-    if (typeof URL.createObjectURL !== 'function') {
-      Object.defineProperty(URL, 'createObjectURL', {
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
         configurable: true,
         writable: true,
         value: vi.fn(),
       });
     }
-    if (typeof URL.revokeObjectURL !== 'function') {
-      Object.defineProperty(URL, 'revokeObjectURL', {
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
         configurable: true,
         writable: true,
         value: vi.fn(),
@@ -180,33 +219,39 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
 
   function metadataWithPicture(): never {
     return {
-      title: 'Blob Track',
-      artist: 'Blob Artist',
+      title: "Blob Track",
+      artist: "Blob Artist",
       duration: 0,
       size: 0,
       pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
-      pictureFormat: 'image/png',
+      pictureFormat: "image/png",
     } as never;
   }
 
   function deferred() {
     let resolve!: (value: never) => void;
-    const promise = new Promise<never>((res) => { resolve = res; });
+    const promise = new Promise<never>((res) => {
+      resolve = res;
+    });
     return { promise, resolve };
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
+      title: "Fetched Title",
       artist: null,
       duration: 0,
       size: 0,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-songcard-cover');
-    revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    createObjectURLSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:mock-songcard-cover");
+    revokeObjectURLSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -221,7 +266,7 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
     });
   }
 
-  it('revokes every blob URL exactly once when metadata-updated triggers concurrent re-fetches', async () => {
+  it("revokes every blob URL exactly once when metadata-updated triggers concurrent re-fetches", async () => {
     const d1 = deferred();
     const d2 = deferred();
     const d3 = deferred();
@@ -233,19 +278,29 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
 
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
-    await act(async () => { d1.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d1.resolve(metadataWithPicture());
+    });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
     await act(async () => {
-      window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
-      window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
+      window.dispatchEvent(
+        new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
+      );
     });
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(3));
 
-    await act(async () => { d2.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d2.resolve(metadataWithPicture());
+    });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
-    await act(async () => { d3.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d3.resolve(metadataWithPicture());
+    });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(3);
 
     unmount();
@@ -253,10 +308,12 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
 
     expect(createObjectURLSpy).toHaveBeenCalledTimes(3);
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(3);
-    expect(createObjectURLSpy.mock.calls.length).toBe(revokeObjectURLSpy.mock.calls.length);
+    expect(createObjectURLSpy.mock.calls.length).toBe(
+      revokeObjectURLSpy.mock.calls.length,
+    );
   });
 
-  it('never revokes a blob URL while it is still the displayed cover', async () => {
+  it("never revokes a blob URL while it is still the displayed cover", async () => {
     const d1 = deferred();
     const d2 = deferred();
     mockedFetch
@@ -266,18 +323,24 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
 
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
-    await act(async () => { d1.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d1.resolve(metadataWithPicture());
+    });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
     await act(async () => {
-      window.dispatchEvent(new CustomEvent('metadata-updated', { detail: { fileId: 'track-1' } }));
+      window.dispatchEvent(
+        new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
+      );
     });
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(2));
 
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
-    await act(async () => { d2.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d2.resolve(metadataWithPicture());
+    });
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
 
     unmount();
@@ -285,10 +348,12 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
 
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(createObjectURLSpy.mock.calls.length).toBe(revokeObjectURLSpy.mock.calls.length);
+    expect(createObjectURLSpy.mock.calls.length).toBe(
+      revokeObjectURLSpy.mock.calls.length,
+    );
   });
 
-  it('creates no blob URL when metadata resolves after unmount and keeps create === revoke', async () => {
+  it("creates no blob URL when metadata resolves after unmount and keeps create === revoke", async () => {
     const d = deferred();
     mockedFetch.mockImplementationOnce(() => d.promise);
 
@@ -298,45 +363,55 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
     unmount();
     cleanup();
 
-    await act(async () => { d.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d.resolve(metadataWithPicture());
+    });
     await flushMicrotasks();
 
     expect(createObjectURLSpy).not.toHaveBeenCalled();
-    expect(createObjectURLSpy.mock.calls.length).toBe(revokeObjectURLSpy.mock.calls.length);
+    expect(createObjectURLSpy.mock.calls.length).toBe(
+      revokeObjectURLSpy.mock.calls.length,
+    );
   });
 
-  it('revokes exactly once per created URL when the item id changes quickly', async () => {
+  it("revokes exactly once per created URL when the item id changes quickly", async () => {
     const d1 = deferred();
     const d2 = deferred();
     mockedFetch
       .mockImplementationOnce(() => d1.promise)
       .mockImplementationOnce(() => d2.promise);
 
-    const { rerender, unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const { rerender, unmount } = render(
+      <SongCard {...baseProps} item={makeItem()} />,
+    );
 
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
-    await act(async () => { d1.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d1.resolve(metadataWithPicture());
+    });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
 
     rerender(
       <SongCard
         {...baseProps}
         item={makeItem({
-          id: 'track-2',
-          title: 'Other Song',
+          id: "track-2",
+          title: "Other Song",
           trackInfo: {
-            id: 'track-2',
-            title: 'Other Song',
-            artist: '',
-            streamUrl: '',
+            id: "track-2",
+            title: "Other Song",
+            artist: "",
+            streamUrl: "",
             size: 1000,
-            originalName: 'other.mp3',
+            originalName: "other.mp3",
           },
         })}
       />,
     );
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(2));
-    await act(async () => { d2.resolve(metadataWithPicture()); });
+    await act(async () => {
+      d2.resolve(metadataWithPicture());
+    });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
 
     unmount();
@@ -344,16 +419,18 @@ describe('SongCard blob URL lifecycle (create in async .then, revoke must follow
 
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(createObjectURLSpy.mock.calls.length).toBe(revokeObjectURLSpy.mock.calls.length);
+    expect(createObjectURLSpy.mock.calls.length).toBe(
+      revokeObjectURLSpy.mock.calls.length,
+    );
   });
 });
 
-describe('SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG button pattern)', () => {
+describe("SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG button pattern)", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
-      artist: 'Fetched Artist',
+      title: "Fetched Title",
+      artist: "Fetched Artist",
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -365,66 +442,81 @@ describe('SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG bu
 
   it('card is an accessible button: role="button" + tabIndex=0', () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    const card = container.querySelector('.cursor-pointer');
+    const card = container.querySelector(".cursor-pointer");
     expect(card).not.toBeNull();
-    expect(card?.getAttribute('role')).toBe('button');
-    expect(card?.getAttribute('tabindex')).toBe('0');
+    expect(card?.getAttribute("role")).toBe("button");
+    expect(card?.getAttribute("tabindex")).toBe("0");
   });
 
-  it('Enter on the card activates like a click (track → onPlay)', () => {
+  it("Enter on the card activates like a click (track → onPlay)", () => {
     const onPlay = vi.fn();
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />);
-    const card = container.querySelector('.cursor-pointer') as Element;
-    fireEvent.keyDown(card, { key: 'Enter' });
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />,
+    );
+    const card = container.querySelector(".cursor-pointer") as Element;
+    fireEvent.keyDown(card, { key: "Enter" });
     expect(onPlay).toHaveBeenCalledTimes(1);
-    expect(onPlay.mock.calls[0][0].id).toBe('track-1');
+    expect(onPlay.mock.calls[0][0].id).toBe("track-1");
   });
 
-  it('Enter on a folder card opens the folder (onOpenFolder)', () => {
+  it("Enter on a folder card opens the folder (onOpenFolder)", () => {
     const onOpenFolder = vi.fn();
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem({ isFolder: true, trackInfo: undefined })} onOpenFolder={onOpenFolder} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem({ isFolder: true, trackInfo: undefined })}
+        onOpenFolder={onOpenFolder}
+      />,
     );
-    const card = container.querySelector('.cursor-pointer') as Element;
-    fireEvent.keyDown(card, { key: 'Enter' });
+    const card = container.querySelector(".cursor-pointer") as Element;
+    fireEvent.keyDown(card, { key: "Enter" });
     expect(onOpenFolder).toHaveBeenCalledTimes(1);
-    expect(onOpenFolder).toHaveBeenCalledWith('track-1', 'My Song');
+    expect(onOpenFolder).toHaveBeenCalledWith("track-1", "My Song");
   });
 
-  it('Space activates the card and preventDefaults (no page scroll)', () => {
+  it("Space activates the card and preventDefaults (no page scroll)", () => {
     const onPlay = vi.fn();
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />);
-    const card = container.querySelector('.cursor-pointer') as Element;
-    expect(fireEvent.keyDown(card, { key: ' ' })).toBe(false);
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />,
+    );
+    const card = container.querySelector(".cursor-pointer") as Element;
+    expect(fireEvent.keyDown(card, { key: " " })).toBe(false);
     expect(onPlay).toHaveBeenCalledTimes(1);
   });
 
-  it('in selection mode Enter toggles selection (onToggleSelection)', () => {
+  it("in selection mode Enter toggles selection (onToggleSelection)", () => {
     const onToggleSelection = vi.fn();
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} isSelectionMode onToggleSelection={onToggleSelection} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isSelectionMode
+        onToggleSelection={onToggleSelection}
+      />,
     );
-    const card = container.querySelector('.cursor-pointer') as Element;
-    fireEvent.keyDown(card, { key: 'Enter' });
+    const card = container.querySelector(".cursor-pointer") as Element;
+    fireEvent.keyDown(card, { key: "Enter" });
     expect(onToggleSelection).toHaveBeenCalledTimes(1);
-    expect(onToggleSelection).toHaveBeenCalledWith('track-1');
+    expect(onToggleSelection).toHaveBeenCalledWith("track-1");
   });
 
-  it('does not activate when keydown bubbles from a focused child (e.g. menu button)', () => {
+  it("does not activate when keydown bubbles from a focused child (e.g. menu button)", () => {
     const onPlay = vi.fn();
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />);
-    const titleEl = container.querySelector('h3') as Element;
-    fireEvent.keyDown(titleEl, { key: 'Enter' });
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />,
+    );
+    const titleEl = container.querySelector("h3") as Element;
+    fireEvent.keyDown(titleEl, { key: "Enter" });
     expect(onPlay).not.toHaveBeenCalled();
   });
 });
 
-describe('SongCard MoreMenu WAI-ARIA APG menu button pattern', () => {
+describe("SongCard MoreMenu WAI-ARIA APG menu button pattern", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
-      artist: 'Fetched Artist',
+      title: "Fetched Title",
+      artist: "Fetched Artist",
       pictureData: null,
       pictureFormat: undefined,
     } as never);
@@ -435,41 +527,41 @@ describe('SongCard MoreMenu WAI-ARIA APG menu button pattern', () => {
   });
 
   const triggerButton = (): HTMLButtonElement | null =>
-    document.querySelector('button');
+    document.querySelector("button");
 
   it('trigger has aria-haspopup="menu" and aria-expanded="false" while closed', () => {
     render(<SongCard {...baseProps} item={makeItem()} />);
     const trigger = triggerButton();
     expect(trigger).not.toBeNull();
-    expect(trigger?.getAttribute('aria-haspopup')).toBe('menu');
-    expect(trigger?.getAttribute('aria-expanded')).toBe('false');
+    expect(trigger?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it('opens a dropdown with role="menu" and sets aria-expanded="true"', () => {
     render(<SongCard {...baseProps} item={makeItem()} />);
     fireEvent.click(triggerButton() as Element);
     expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
-    expect(triggerButton()?.getAttribute('aria-expanded')).toBe('true');
+    expect(triggerButton()?.getAttribute("aria-expanded")).toBe("true");
   });
 
   it('Escape closes the menu and resets aria-expanded to "false"', () => {
     render(<SongCard {...baseProps} item={makeItem()} />);
     fireEvent.click(triggerButton() as Element);
     expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
-    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.keyDown(document, { key: "Escape" });
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
-    expect(triggerButton()?.getAttribute('aria-expanded')).toBe('false');
+    expect(triggerButton()?.getAttribute("aria-expanded")).toBe("false");
   });
 });
 
-describe('SongCard navigate/locate highlight flash (single on→off cycle)', () => {
+describe("SongCard navigate/locate highlight flash (single on→off cycle)", () => {
   const originalScrollIntoView = Element.prototype.scrollIntoView;
   const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
+      title: "Fetched Title",
       artist: null,
       duration: 0,
       size: 0,
@@ -478,7 +570,7 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
     } as never);
     vi.useFakeTimers();
     // jsdom does not implement scrollIntoView (logs "Not implemented") — stub it.
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
       writable: true,
       value: vi.fn(),
@@ -487,12 +579,12 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
 
   afterEach(() => {
     vi.useRealTimers();
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
       writable: true,
       value: originalScrollIntoView,
     });
-    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+    Object.defineProperty(Element.prototype, "getBoundingClientRect", {
       configurable: true,
       writable: true,
       value: originalGetBoundingClientRect,
@@ -501,14 +593,19 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
   });
 
   const flashCard = (container: HTMLElement): HTMLDivElement | null =>
-    container.querySelector<HTMLDivElement>('.p-3');
+    container.querySelector<HTMLDivElement>(".p-3");
 
-  const FLASH_ON_CLASS = 'bg-white dark:bg-[#383a40]';
-  const FLASH_OFF_CLASS = 'bg-[#F8F9FA] dark:bg-[#202124]';
+  const FLASH_ON_CLASS = "bg-white dark:bg-[#383a40]";
+  const FLASH_OFF_CLASS = "bg-[#F8F9FA] dark:bg-[#202124]";
 
-  it('flashes ON once on highlight, then OFF after one cycle, never re-toggling', async () => {
+  it("flashes ON once on highlight, then OFF after one cycle, never re-toggling", async () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={1}
+      />,
     );
 
     const card = flashCard(container);
@@ -517,85 +614,157 @@ describe('SongCard navigate/locate highlight flash (single on→off cycle)', () 
     expect(card?.className).toContain(FLASH_ON_CLASS);
 
     // (b) back to normal once the single flash duration elapses
-    await act(async () => { vi.advanceTimersByTime(400); });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
     expect(card?.className).not.toContain(FLASH_ON_CLASS);
     expect(card?.className).toContain(FLASH_OFF_CLASS);
 
     // (c) stays off — no further toggle (the old 7×@300ms loop blinked again here)
-    await act(async () => { vi.advanceTimersByTime(1000); });
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
     expect(card?.className).not.toContain(FLASH_ON_CLASS);
     expect(card?.className).toContain(FLASH_OFF_CLASS);
   });
 
-  it('bumping highlightTrigger re-runs a single flash', async () => {
+  it("bumping highlightTrigger re-runs a single flash", async () => {
     const { container, rerender } = render(
-      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={1}
+      />,
     );
     const card = flashCard(container) as HTMLDivElement;
     expect(card.className).toContain(FLASH_ON_CLASS);
-    await act(async () => { vi.advanceTimersByTime(400); });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
 
-    rerender(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={2} />);
+    rerender(
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={2}
+      />,
+    );
     expect(card.className).toContain(FLASH_ON_CLASS);
-    await act(async () => { vi.advanceTimersByTime(400); });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
   });
 
-  it('re-render with unchanged highlight props does not re-trigger the flash', async () => {
+  it("re-render with unchanged highlight props does not re-trigger the flash", async () => {
     const { container, rerender } = render(
-      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={1}
+      />,
     );
     const card = flashCard(container) as HTMLDivElement;
-    await act(async () => { vi.advanceTimersByTime(400); });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
 
-    rerender(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />);
+    rerender(
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={1}
+      />,
+    );
     expect(card.className).not.toContain(FLASH_ON_CLASS);
   });
 
-  it('scrolls into view only when the card is off-screen', async () => {
-    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+  it("scrolls into view only when the card is off-screen", async () => {
+    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<
+      typeof vi.fn
+    >;
 
     // off-screen (jsdom default rect is 0,0 — above the header band) → scroll
-    render(<SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />);
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
-    await act(async () => { vi.advanceTimersByTime(400); });
+    render(
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={1}
+      />,
+    );
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
     cleanup();
 
     // fully visible (inside header/player window band) → no scroll, still flashes
     scrollIntoView.mockClear();
-    Object.defineProperty(Element.prototype, 'getBoundingClientRect', {
+    Object.defineProperty(Element.prototype, "getBoundingClientRect", {
       configurable: true,
       writable: true,
-      value: () => ({ x: 0, y: 200, top: 200, bottom: 320, left: 0, right: 800, width: 800, height: 120, toJSON: () => ({}) }),
+      value: () => ({
+        x: 0,
+        y: 200,
+        top: 200,
+        bottom: 320,
+        left: 0,
+        right: 800,
+        width: 800,
+        height: 120,
+        toJSON: () => ({}),
+      }),
     });
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={1}
+      />,
     );
     expect(scrollIntoView).not.toHaveBeenCalled();
     const card = flashCard(container) as HTMLDivElement;
     expect(card.className).toContain(FLASH_ON_CLASS);
-    await act(async () => { vi.advanceTimersByTime(400); });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
   });
 
-  it('unmounting mid-flash cancels the pending timer without errors', async () => {
+  it("unmounting mid-flash cancels the pending timer without errors", async () => {
     const { unmount } = render(
-      <SongCard {...baseProps} item={makeItem()} isHighlighted highlightTrigger={1} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        isHighlighted
+        highlightTrigger={1}
+      />,
     );
     unmount();
     cleanup();
-    await act(async () => { vi.advanceTimersByTime(2000); });
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
     expect(true).toBe(true);
   });
 });
 
-describe('SongCard uploadState (dim + spinner)', () => {
+describe("SongCard uploadState (dim + spinner)", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
+      title: "Fetched Title",
       artist: null,
       duration: 0,
       size: 0,
@@ -609,39 +778,48 @@ describe('SongCard uploadState (dim + spinner)', () => {
   });
 
   const cardEl = (container: HTMLElement): Element =>
-    container.querySelector('.cursor-pointer') as Element;
+    container.querySelector(".cursor-pointer") as Element;
   // lucide-react v1.x renders <LoaderCircle> with class 'lucide-loader-circle'
   // (LoaderCircle is the deprecated alias — PlayerBar still imports it).
   const spinnerEl = (container: HTMLElement): Element | null =>
-    container.querySelector('.lucide-loader-circle');
+    container.querySelector(".lucide-loader-circle");
 
   it("'uploading' → card dimmed (opacity-50 + pointer-events-none); centered spinner removed (determinate ring replaces it)", () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" />,
     );
-    expect(cardEl(container).className).toContain('opacity-50');
-    expect(cardEl(container).className).toContain('pointer-events-none');
+    expect(cardEl(container).className).toContain("opacity-50");
+    expect(cardEl(container).className).toContain("pointer-events-none");
     expect(spinnerEl(container)).toBeNull();
   });
 
   it("'parent-uploading' → small spinner, NO dim", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="parent-uploading" />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="parent-uploading"
+      />,
     );
-    expect(cardEl(container).className).not.toContain('opacity-50');
+    expect(cardEl(container).className).not.toContain("opacity-50");
     expect(spinnerEl(container)).not.toBeNull();
   });
 
   it("'none' (default) → no spinner, no dim", () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     expect(spinnerEl(container)).toBeNull();
-    expect(cardEl(container).className).not.toContain('opacity-50');
+    expect(cardEl(container).className).not.toContain("opacity-50");
   });
 
   it("'uploading' → click does NOT fire onPlay (race guard)", () => {
     const onPlay = vi.fn();
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" onPlay={onPlay} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        onPlay={onPlay}
+      />,
     );
     fireEvent.click(cardEl(container));
     expect(onPlay).not.toHaveBeenCalled();
@@ -650,9 +828,14 @@ describe('SongCard uploadState (dim + spinner)', () => {
   it("'uploading' → Enter does NOT fire onPlay (keyboard guard)", () => {
     const onPlay = vi.fn();
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" onPlay={onPlay} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        onPlay={onPlay}
+      />,
     );
-    fireEvent.keyDown(cardEl(container), { key: 'Enter' });
+    fireEvent.keyDown(cardEl(container), { key: "Enter" });
     expect(onPlay).not.toHaveBeenCalled();
   });
 
@@ -668,7 +851,7 @@ describe('SongCard uploadState (dim + spinner)', () => {
     );
     fireEvent.click(cardEl(container));
     expect(onOpenFolder).toHaveBeenCalledTimes(1);
-    expect(onOpenFolder).toHaveBeenCalledWith('track-1', 'My Song');
+    expect(onOpenFolder).toHaveBeenCalledWith("track-1", "My Song");
   });
 
   it("'uploading' + selection mode → selection NOT toggled", () => {
@@ -687,7 +870,7 @@ describe('SongCard uploadState (dim + spinner)', () => {
   });
 });
 
-describe('SongCard upload progress ring + cancel X (slice 2)', () => {
+describe("SongCard upload progress ring + cancel X (slice 2)", () => {
   // The ring lives in a 24-unit viewBox with radius 10 (mirrors RING_RADIUS
   // in SongCard.tsx) — needed to assert the dash offset that renders the %.
   const RING_RADIUS = 10;
@@ -696,7 +879,7 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
+      title: "Fetched Title",
       artist: null,
       duration: 0,
       size: 0,
@@ -712,11 +895,11 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
   });
 
   const ringSvg = (container: HTMLElement): Element | null =>
-    container.querySelector('svg[aria-label]');
+    container.querySelector("svg[aria-label]");
   const ringTextEl = (container: HTMLElement): Element | null =>
-    container.querySelector('svg[aria-label] text');
+    container.querySelector("svg[aria-label] text");
   const progressCircle = (container: HTMLElement): Element | null =>
-    container.querySelector('circle[stroke-dashoffset]');
+    container.querySelector("circle[stroke-dashoffset]");
   const cancelButton = (container: HTMLElement): Element | null =>
     container.querySelector('button[aria-label="upload.cancel_upload"]');
   const menuButton = (container: HTMLElement): Element | null =>
@@ -724,31 +907,48 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
 
   it("'uploading' + uploadProgress=0.42 → ring beside title, dashoffset for the remaining 58%, NO % text", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.42} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.42}
+      />,
     );
     const svg = ringSvg(container);
     expect(svg).not.toBeNull();
     // The percentage is conveyed through aria-label only — never rendered as
     // visible text inside the ring.
-    expect(svg?.getAttribute('aria-label')).toBe('42%');
+    expect(svg?.getAttribute("aria-label")).toBe("42%");
     expect(ringTextEl(container)).toBeNull();
     const circle = progressCircle(container);
     expect(circle).not.toBeNull();
-    expect(Number(circle?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE * 0.58, 4);
-    expect(circle?.getAttribute('stroke-dasharray')).toBe(String(RING_CIRCUMFERENCE));
+    expect(Number(circle?.getAttribute("stroke-dashoffset"))).toBeCloseTo(
+      RING_CIRCUMFERENCE * 0.58,
+      4,
+    );
+    expect(circle?.getAttribute("stroke-dasharray")).toBe(
+      String(RING_CIRCUMFERENCE),
+    );
     // Ring starts at 12 o'clock (dash draws from the top, not 3 o'clock).
-    expect(circle?.getAttribute('transform')).toContain('rotate(-90');
+    expect(circle?.getAttribute("transform")).toContain("rotate(-90");
   });
 
   it("'uploading' → ring renders in the trailing menu slot (NOT beside the title); X cancel sits inside the ring", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.5}
+      />,
     );
-    const h3 = container.querySelector('h3');
+    const h3 = container.querySelector("h3");
     const svg = ringSvg(container);
     expect(h3).not.toBeNull();
     // The title row is a plain h3 now — the ring left the title area.
-    expect(h3?.parentElement?.className).not.toContain('flex items-center gap-2');
+    expect(h3?.parentElement?.className).not.toContain(
+      "flex items-center gap-2",
+    );
     const x = cancelButton(container);
     expect(x).not.toBeNull();
     // Ring and X share the same wrapper — the trailing menu slot.
@@ -762,88 +962,138 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
     expect(ringSvg(container)).not.toBeNull();
     expect(ringTextEl(container)).toBeNull();
     const circle = progressCircle(container);
-    expect(Number(circle?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE, 4);
+    expect(Number(circle?.getAttribute("stroke-dashoffset"))).toBeCloseTo(
+      RING_CIRCUMFERENCE,
+      4,
+    );
   });
 
-  it('rerender with a new uploadProgress updates the ring arc (memo comparator includes uploadProgress), no % text', () => {
+  it("rerender with a new uploadProgress updates the ring arc (memo comparator includes uploadProgress), no % text", () => {
     const { container, rerender } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.2} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.2}
+      />,
     );
-    expect(Number(progressCircle(container)?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE * 0.8, 4);
+    expect(
+      Number(progressCircle(container)?.getAttribute("stroke-dashoffset")),
+    ).toBeCloseTo(RING_CIRCUMFERENCE * 0.8, 4);
     rerender(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.8} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.8}
+      />,
     );
-    expect(Number(progressCircle(container)?.getAttribute('stroke-dashoffset'))).toBeCloseTo(RING_CIRCUMFERENCE * 0.2, 4);
+    expect(
+      Number(progressCircle(container)?.getAttribute("stroke-dashoffset")),
+    ).toBeCloseTo(RING_CIRCUMFERENCE * 0.2, 4);
     expect(ringTextEl(container)).toBeNull();
   });
 
-  it('clamps out-of-range progress into 0..1 (progress can overshoot from truncation)', () => {
+  it("clamps out-of-range progress into 0..1 (progress can overshoot from truncation)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={1.7} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={1.7}
+      />,
     );
     expect(ringTextEl(container)).toBeNull();
-    expect(Number(progressCircle(container)?.getAttribute('stroke-dashoffset'))).toBeCloseTo(0, 4);
+    expect(
+      Number(progressCircle(container)?.getAttribute("stroke-dashoffset")),
+    ).toBeCloseTo(0, 4);
   });
 
   it("'uploading' → X replaces the MoreMenu trigger; click calls cancelUpload(item.id) and does NOT bubble to onPlay", () => {
     const onPlay = vi.fn();
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} onPlay={onPlay} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.5}
+        onPlay={onPlay}
+      />,
     );
     expect(menuButton(container)).toBeNull();
     const x = cancelButton(container);
     expect(x).not.toBeNull();
     fireEvent.click(x as Element);
     expect(cancelUploadMock).toHaveBeenCalledTimes(1);
-    expect(cancelUploadMock).toHaveBeenCalledWith('track-1');
+    expect(cancelUploadMock).toHaveBeenCalledWith("track-1");
     expect(onPlay).not.toHaveBeenCalled();
   });
 
-  it('X cancel is hidden inside the ring by default and revealed on hover (w-3 h-3 fits the 20px ring)', () => {
+  it("X cancel is hidden inside the ring by default and revealed on hover (w-3 h-3 fits the 20px ring)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.3} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.3}
+      />,
     );
     const x = cancelButton(container) as Element;
-    expect(x.className).toContain('absolute inset-0');
-    expect(x.className).toContain('opacity-0');
+    expect(x.className).toContain("absolute inset-0");
+    expect(x.className).toContain("opacity-0");
     // jsdom exposes svg.className as SVGAnimatedString — read the class
     // attribute instead (same for the ring svg assertions below).
-    const icon = x.querySelector('.lucide-x');
-    expect(icon?.getAttribute('class')).toContain('w-3');
-    expect(icon?.getAttribute('class')).toContain('h-3');
+    const icon = x.querySelector(".lucide-x");
+    expect(icon?.getAttribute("class")).toContain("w-3");
+    expect(icon?.getAttribute("class")).toContain("h-3");
   });
 
   it("'uploaded' → green check replaces the MoreMenu trigger; play dismisses the tint (MoreMenu returns)", () => {
     const onPlay = vi.fn();
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploaded" onPlay={onPlay} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploaded"
+        onPlay={onPlay}
+      />,
     );
     // No menu, no X — a blue-green check in the menu slot instead.
     expect(menuButton(container)).toBeNull();
     expect(cancelButton(container)).toBeNull();
     // lucide v1 renders Check with class 'lucide-check' — the single-tick
     // check (user design), not the CircleCheck circle variant.
-    const check = container.querySelector('.lucide-check');
+    const check = container.querySelector(".lucide-check");
     expect(check).not.toBeNull();
-    expect(check?.getAttribute('class')).toContain('text-[#4285F4]');
+    expect(check?.getAttribute("class")).toContain("text-[#4285F4]");
 
     // Clicking the row to play clears the tint via dismissUploaded.
-    fireEvent.click(container.querySelector('.p-3') as Element);
+    fireEvent.click(container.querySelector(".p-3") as Element);
     expect(dismissUploadedMock).toHaveBeenCalledTimes(1);
-    expect(dismissUploadedMock).toHaveBeenCalledWith('track-1');
+    expect(dismissUploadedMock).toHaveBeenCalledWith("track-1");
     expect(onPlay).toHaveBeenCalledTimes(1);
   });
 
   it("'uploaded' + hideMenu → no check rendered (hideMenu wins)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploaded" hideMenu />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploaded"
+        hideMenu
+      />,
     );
-    expect(container.querySelector('.lucide-check')).toBeNull();
+    expect(container.querySelector(".lucide-check")).toBeNull();
   });
 
   it("'parent-uploading' → no X, MoreMenu still rendered, no ring", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="parent-uploading" uploadProgress={0.5} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="parent-uploading"
+        uploadProgress={0.5}
+      />,
     );
     expect(cancelButton(container)).toBeNull();
     expect(menuButton(container)).not.toBeNull();
@@ -859,49 +1109,68 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
 
   it("hideMenu + 'uploading' → no X (hideMenu wins)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.4} hideMenu />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.4}
+        hideMenu
+      />,
     );
     expect(cancelButton(container)).toBeNull();
   });
 
-  it('long title stays truncated (ellipsis); the ring lives in the menu slot, never squeezed by the title', () => {
+  it("long title stays truncated (ellipsis); the ring lives in the menu slot, never squeezed by the title", () => {
     const { container } = render(
       <SongCard
         {...baseProps}
         item={makeItem({
-          title: 'A very long song title that will definitely overflow the available space and must be truncated with an ellipsis',
+          title:
+            "A very long song title that will definitely overflow the available space and must be truncated with an ellipsis",
         })}
         uploadState="uploading"
         uploadProgress={0.6}
       />,
     );
-    const h3 = container.querySelector('h3');
-    expect(h3?.className).toContain('truncate');
+    const h3 = container.querySelector("h3");
+    expect(h3?.className).toContain("truncate");
     // Title is a plain block again — no flex-1/ring pairing in the row.
-    expect(h3?.className).not.toContain('flex-1');
+    expect(h3?.className).not.toContain("flex-1");
     expect(ringSvg(container)).not.toBeNull();
   });
 
-  it('X cancel button carries the i18n key upload.cancel_upload as aria-label', () => {
+  it("X cancel button carries the i18n key upload.cancel_upload as aria-label", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.1} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.1}
+      />,
     );
-    expect(cancelButton(container)?.getAttribute('aria-label')).toBe('upload.cancel_upload');
+    expect(cancelButton(container)?.getAttribute("aria-label")).toBe(
+      "upload.cancel_upload",
+    );
   });
 
   it("'uploading' → the old centered LoaderCircle overlay is gone (ring replaces it)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} />,
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.5}
+      />,
     );
-    expect(container.querySelector('.lucide-loader-circle')).toBeNull();
+    expect(container.querySelector(".lucide-loader-circle")).toBeNull();
   });
 });
 
-describe('SongCard now-playing visual distinction (hover-like gray, no lift)', () => {
+describe("SongCard now-playing visual distinction (hover-like gray, no lift)", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
+      title: "Fetched Title",
       artist: null,
       duration: 0,
       size: 0,
@@ -915,51 +1184,63 @@ describe('SongCard now-playing visual distinction (hover-like gray, no lift)', (
   });
 
   const cardDiv = (container: HTMLElement): HTMLDivElement | null =>
-    container.querySelector<HTMLDivElement>('.p-3');
+    container.querySelector<HTMLDivElement>(".p-3");
 
-  it('playing card uses the hover-like gray bg (same as idle hover), not the accent tint (light/dark)', () => {
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} isPlaying />);
+  it("playing card uses the hover-like gray bg (same as idle hover), not the accent tint (light/dark)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} isPlaying />,
+    );
     const card = cardDiv(container);
     expect(card).not.toBeNull();
-    expect(card?.className).toContain('bg-gray-100 dark:bg-[#2a2b2f]');
-    expect(card?.className).not.toContain('bg-[#4285F4]/10');
-    expect(card?.className).not.toContain('bg-[#F8F9FA]');
-    expect(card?.className).toContain('shadow-sm');
+    expect(card?.className).toContain("bg-gray-100 dark:bg-[#2a2b2f]");
+    expect(card?.className).not.toContain("bg-[#4285F4]/10");
+    expect(card?.className).not.toContain("bg-[#F8F9FA]");
+    expect(card?.className).toContain("shadow-sm");
   });
 
-  it('playing card is NOT lifted in its static state (no standalone -translate-y-1; only the shared group-hover lift survives)', () => {
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} isPlaying />);
+  it("playing card is NOT lifted in its static state (no standalone -translate-y-1; only the shared group-hover lift survives)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} isPlaying />,
+    );
     const card = cardDiv(container);
     expect(card?.className).not.toMatch(/(^|\s)-translate-y-1(\s|$)/);
   });
 
-  it('playing card keeps the blue title and blue icon accents (hover-like)', () => {
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} isPlaying />);
-    expect(container.querySelector('h3')?.className).toContain('text-[#4285F4]!');
-    const iconBox = container.querySelector('.lucide-music')?.parentElement;
-    expect(iconBox?.className).toContain('bg-[#4285F4]/10!');
-    expect(iconBox?.className).toContain('text-[#4285F4]!');
+  it("playing card keeps the blue title and blue icon accents (hover-like)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} isPlaying />,
+    );
+    expect(container.querySelector("h3")?.className).toContain(
+      "text-[#4285F4]!",
+    );
+    const iconBox = container.querySelector(".lucide-music")?.parentElement;
+    expect(iconBox?.className).toContain("bg-[#4285F4]/10!");
+    expect(iconBox?.className).toContain("text-[#4285F4]!");
   });
 
-  it('idle card keeps the original bg/hover unchanged', () => {
+  it("idle card keeps the original bg/hover unchanged", () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     const card = cardDiv(container);
-    expect(card?.className).toContain('bg-[#F8F9FA] dark:bg-[#202124]');
-    expect(card?.className).toContain('hover:bg-gray-100 dark:hover:bg-[#2a2b2f]');
-    expect(card?.className).not.toContain('bg-[#4285F4]/10');
+    expect(card?.className).toContain("bg-[#F8F9FA] dark:bg-[#202124]");
+    expect(card?.className).toContain(
+      "hover:bg-gray-100 dark:hover:bg-[#2a2b2f]",
+    );
+    expect(card?.className).not.toContain("bg-[#4285F4]/10");
   });
 
-  it('selected branch keeps priority and its own classes when selection mode is on', () => {
+  it("selected branch keeps priority and its own classes when selection mode is on", () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} isSelected isSelectionMode />,
     );
     const card = cardDiv(container);
-    expect(card?.className).toContain('bg-[#4285F4]/10 dark:bg-[#4285F4]/20 hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30');
-    expect(card?.className).not.toContain('hover:bg-white');
+    expect(card?.className).toContain(
+      "bg-[#4285F4]/10 dark:bg-[#4285F4]/20 hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30",
+    );
+    expect(card?.className).not.toContain("hover:bg-white");
   });
 });
 
-describe('SongCard size text uses shared formatBytes semantics (not the old MB-only formatSize)', () => {
+describe("SongCard size text uses shared formatBytes semantics (not the old MB-only formatSize)", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
   });
@@ -972,7 +1253,7 @@ describe('SongCard size text uses shared formatBytes semantics (not the old MB-o
   // size span with the shared util's semantics ("500 KB", "5 MB", "0 B").
   const renderWithMetaSize = (size: number, duration = 123) => {
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
+      title: "Fetched Title",
       artist: null,
       duration,
       size,
@@ -984,33 +1265,33 @@ describe('SongCard size text uses shared formatBytes semantics (not the old MB-o
 
   it('size 0 → shows "0 B" (old formatSize returned "0 MB"; guard hid the span entirely)', async () => {
     renderWithMetaSize(0, 0);
-    expect(await screen.findByText('0 B')).not.toBeNull();
-    expect(screen.getByText('00:00:00')).not.toBeNull();
+    expect(await screen.findByText("0 B")).not.toBeNull();
+    expect(screen.getByText("00:00:00")).not.toBeNull();
   });
 
   it('500 KB (512000 B) → shows "500 KB", not "0.5 MB"', async () => {
     renderWithMetaSize(500 * 1024);
-    expect(await screen.findByText('500 KB')).not.toBeNull();
-    expect(screen.queryByText('0.5 MB')).toBeNull();
+    expect(await screen.findByText("500 KB")).not.toBeNull();
+    expect(screen.queryByText("0.5 MB")).toBeNull();
   });
 
   it('5 MB → shows "5 MB", not "5.0 MB" (shared util trims trailing .0)', async () => {
     renderWithMetaSize(5 * 1024 * 1024);
-    expect(await screen.findByText('5 MB')).not.toBeNull();
-    expect(screen.queryByText('5.0 MB')).toBeNull();
+    expect(await screen.findByText("5 MB")).not.toBeNull();
+    expect(screen.queryByText("5.0 MB")).toBeNull();
   });
 
   it('1.5 MB (1536 KB) → shows "1.5 MB" (fraction digits preserved for non-whole units)', async () => {
     renderWithMetaSize(1536 * 1024);
-    expect(await screen.findByText('1.5 MB')).not.toBeNull();
+    expect(await screen.findByText("1.5 MB")).not.toBeNull();
   });
 });
 
-describe('SongCard drag-over folder hover (folder drop target)', () => {
+describe("SongCard drag-over folder hover (folder drop target)", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
-      title: 'Fetched Title',
+      title: "Fetched Title",
       artist: null,
       duration: 0,
       size: 0,
@@ -1023,11 +1304,15 @@ describe('SongCard drag-over folder hover (folder drop target)', () => {
     cleanup();
   });
 
-  const folderItem = (): DriveItem => makeItem({ isFolder: true, trackInfo: undefined });
-  const innerDiv = (container: HTMLElement): Element | null => container.querySelector('.p-3');
+  const folderItem = (): DriveItem =>
+    makeItem({ isFolder: true, trackInfo: undefined });
+  const innerDiv = (container: HTMLElement): Element | null =>
+    container.querySelector(".p-3");
   const announceHover = (folderId: string | null): void => {
     act(() => {
-      window.dispatchEvent(new CustomEvent(DRAG_FOLDER_HOVER_EVENT, { detail: { folderId } }));
+      window.dispatchEvent(
+        new CustomEvent(DRAG_FOLDER_HOVER_EVENT, { detail: { folderId } }),
+      );
     });
   };
   // The idle card always carries the :hover-prefixed classes (hover:shadow-md,
@@ -1040,55 +1325,68 @@ describe('SongCard drag-over folder hover (folder drop target)', () => {
   const hasDragTranslate = /(^|\s)-translate-y-1(\s|$)/;
   const hasDragGrayBg = /(^|\s)bg-gray-100!(\s|$)/;
 
-  it('folder card marks its wrapper with data-folder-id (DropZone hit-test target)', () => {
-    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
-    const target = container.querySelector('[data-folder-id]');
+  it("folder card marks its wrapper with data-folder-id (DropZone hit-test target)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={folderItem()} />,
+    );
+    const target = container.querySelector("[data-folder-id]");
     expect(target).not.toBeNull();
-    expect(target?.getAttribute('data-folder-id')).toBe('track-1');
+    expect(target?.getAttribute("data-folder-id")).toBe("track-1");
   });
 
-  it('non-folder card does NOT carry data-folder-id (tracks are not drop targets)', () => {
+  it("non-folder card does NOT carry data-folder-id (tracks are not drop targets)", () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    expect(container.querySelector('[data-folder-id]')).toBeNull();
+    expect(container.querySelector("[data-folder-id]")).toBeNull();
   });
 
-  it('matching drag-hover event renders the same visual as a real mouse hover (shadow-md, -translate-y-1, gray bg with important prefix)', () => {
-    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
+  it("matching drag-hover event renders the same visual as a real mouse hover (shadow-md, -translate-y-1, gray bg with important prefix)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={folderItem()} />,
+    );
     const inner = innerDiv(container);
     expect(inner?.className).not.toMatch(hasDragLift);
-    announceHover('track-1');
+    announceHover("track-1");
     expect(inner?.className).toMatch(hasDragLift);
     expect(inner?.className).toMatch(hasDragTranslate);
     expect(inner?.className).toMatch(hasDragGrayBg);
-    expect(inner?.className).toContain('dark:bg-[#2a2b2f]!');
+    expect(inner?.className).toContain("dark:bg-[#2a2b2f]!");
   });
 
-  it('selected folder card drag-hover keeps the accent tint with the important prefix (wins over base)', () => {
+  it("selected folder card drag-hover keeps the accent tint with the important prefix (wins over base)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={folderItem()} isSelected isSelectionMode />,
+      <SongCard
+        {...baseProps}
+        item={folderItem()}
+        isSelected
+        isSelectionMode
+      />,
     );
-    announceHover('track-1');
-    expect(innerDiv(container)?.className).toContain('bg-[#4285F4]/20!');
-    expect(innerDiv(container)?.className).toContain('dark:bg-[#4285F4]/30!');
+    announceHover("track-1");
+    expect(innerDiv(container)?.className).toContain("bg-[#4285F4]/20!");
+    expect(innerDiv(container)?.className).toContain("dark:bg-[#4285F4]/30!");
   });
 
-  it('drag-hover event for a different folder does NOT highlight this card', () => {
-    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
-    announceHover('folder-other');
+  it("drag-hover event for a different folder does NOT highlight this card", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={folderItem()} />,
+    );
+    announceHover("folder-other");
     expect(innerDiv(container)?.className).not.toMatch(hasDragLift);
   });
 
-  it('null folderId (drag left / dropped) clears the drag hover', () => {
-    const { container } = render(<SongCard {...baseProps} item={folderItem()} />);
-    announceHover('track-1');
+  it("null folderId (drag left / dropped) clears the drag hover", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={folderItem()} />,
+    );
+    announceHover("track-1");
     expect(innerDiv(container)?.className).toMatch(hasDragLift);
     announceHover(null);
     expect(innerDiv(container)?.className).not.toMatch(hasDragLift);
   });
 
-  it('non-folder cards ignore the drag-hover event entirely (no crash, no classes)', () => {
+  it("non-folder cards ignore the drag-hover event entirely (no crash, no classes)", () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    announceHover('track-1');
+    announceHover("track-1");
     expect(innerDiv(container)?.className).not.toMatch(hasDragLift);
   });
 });

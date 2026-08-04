@@ -14,7 +14,12 @@ import { captureError } from "../../../utils/errorLog";
 const CACHE_MANAGER_MODULE = "CacheManagerModal";
 
 // Fixed row order — labels come from CACHE_CATEGORY_LABELS (single source).
-const CATEGORY_IDS: CacheCategoryId[] = ["metadata", "files", "covers", "prefetch"];
+const CATEGORY_IDS: CacheCategoryId[] = [
+  "metadata",
+  "files",
+  "covers",
+  "prefetch",
+];
 
 const ALL_SELECTED: Set<CacheCategoryId> = new Set(CATEGORY_IDS);
 
@@ -31,7 +36,8 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
   const { t } = useTranslation();
   // Sizes are null until the fetch resolves; a null slot renders a spinner so
   // rows stay fixed and never jump while estimates are loading.
-  const [sizes, setSizes] = useState<Record<CacheCategoryId, number | null>>(nullSizes);
+  const [sizes, setSizes] =
+    useState<Record<CacheCategoryId, number | null>>(nullSizes);
   const [selected, setSelected] = useState<Set<CacheCategoryId>>(ALL_SELECTED);
   const [clearing, setClearing] = useState(false);
 
@@ -99,7 +105,9 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
     setClearing(true);
     try {
       await clearAppCache([...selected]);
-      showSuccessToast(t("settings.clear_cache_success", "Cache cleared successfully!"));
+      showSuccessToast(
+        t("settings.clear_cache_success", "Cache cleared successfully!"),
+      );
       onClose();
     } catch (e: unknown) {
       // clearAppCache already logs each failing category via captureError;

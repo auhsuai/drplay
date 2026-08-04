@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 
-const TAURI_EVENT_QUOTA = 'drive-quota-exceeded';
+const TAURI_EVENT_QUOTA = "drive-quota-exceeded";
 
 export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
   useEffect(() => {
@@ -10,8 +10,11 @@ export function useTauriEvents(setShowRateLimitModal: (v: boolean) => void) {
 
     listen(TAURI_EVENT_QUOTA, () => {
       setShowRateLimitModal(true);
-    }).then(fn => {
-      if (cancelled) { fn(); return; }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
       quotaFn = fn;
     });
 

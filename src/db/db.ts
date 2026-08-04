@@ -1,13 +1,14 @@
-import Dexie, { Table } from 'dexie';
-import type { Track } from '../types';
+import type { Table } from "dexie";
+import Dexie from "dexie";
+import type { Track } from "../types";
 
 export interface DriveFile {
   id: string;
   name: string;
   mimeType: string;
   parentId: string; // The primary parent ID
-  size?: number;
-  modifiedTime?: string;
+  size?: number | undefined;
+  modifiedTime?: string | undefined;
   trashed: boolean;
   isFolder: boolean;
   metadata?: unknown; // For future ID3 tag caching
@@ -21,24 +22,56 @@ export interface SyncState {
 export interface ErrorLogEntry {
   id: string;
   ts: number;
-  level: 'error' | 'warn' | 'info';
+  level: "error" | "warn" | "info";
   source: string;
   message: string;
-  stack?: string;
-  kind?: string;
+  stack?: string | undefined;
+  kind?: string | undefined;
 }
 
-export interface KvRow { key: string; value: unknown; }
-export interface PlaylistRow { id: string; name: string; createdAt: number; tracks: Track[]; coverImage?: string; userEmail: string; }
-export interface RecentTrackRow { id: string; track: Track; userEmail: string; createdAt: number; }
-export interface PlayCountRow { id: string; track: Track; count: number; userEmail: string; }
-export interface FolderVisitRow { id: string; name: string; count: number; lastVisited: number; userEmail: string; }
-export interface MetadataCacheRow { key: string; entry: unknown; }
+export interface KvRow {
+  key: string;
+  value: unknown;
+}
+export interface PlaylistRow {
+  id: string;
+  name: string;
+  createdAt: number;
+  tracks: Track[];
+  coverImage?: string | undefined;
+  userEmail: string;
+}
+export interface RecentTrackRow {
+  id: string;
+  track: Track;
+  userEmail: string;
+  createdAt: number;
+}
+export interface PlayCountRow {
+  id: string;
+  track: Track;
+  count: number;
+  userEmail: string;
+}
+export interface FolderVisitRow {
+  id: string;
+  name: string;
+  count: number;
+  lastVisited: number;
+  userEmail: string;
+}
+export interface MetadataCacheRow {
+  key: string;
+  entry: unknown;
+}
 
 export class DriveDatabase extends Dexie {
   files!: Table<DriveFile, string>; // Primary key is 'id'
   syncState!: Table<SyncState, string>; // Primary key is 'key'
-  favorites!: Table<Track & { userEmail: string; createdAt?: number }, [string, string]>; // Compound PK [userEmail+id] (schema v7)
+  favorites!: Table<
+    Track & { userEmail: string; createdAt?: number },
+    [string, string]
+  >; // Compound PK [userEmail+id] (schema v7)
   errorLogs!: Table<ErrorLogEntry, string>; // Primary key is 'id', index on 'ts'
   kv!: Table<KvRow, string>;
   playlists!: Table<PlaylistRow, string>;
@@ -50,39 +83,42 @@ export class DriveDatabase extends Dexie {
   recentTracksV2!: Table<RecentTrackRow, [string, string]>;
   playCountsV2!: Table<PlayCountRow, [string, string]>;
   folderVisitsV2!: Table<FolderVisitRow, [string, string]>;
-  favoritesV2!: Table<Track & { userEmail: string; createdAt?: number }, [string, string]>;
+  favoritesV2!: Table<
+    Track & { userEmail: string; createdAt?: number },
+    [string, string]
+  >;
 
   constructor() {
-    super('DrPlayDriveDB');
+    super("DrPlayDriveDB");
 
     // Keep old schema intact so existing data is preserved on upgrade.
     this.version(2).stores({
       // Primary key 'id', indexes on 'parentId', 'name', 'isFolder'
-      files: 'id, parentId, name, isFolder',
-      syncState: 'key',
-      favorites: 'id, userEmail'
+      files: "id, parentId, name, isFolder",
+      syncState: "key",
+      favorites: "id, userEmail",
     });
 
     // Version 3 adds the errorLogs table without touching the old tables.
     this.version(3).stores({
-      files: 'id, parentId, name, isFolder',
-      syncState: 'key',
-      favorites: 'id, userEmail',
-      errorLogs: 'id, ts'
+      files: "id, parentId, name, isFolder",
+      syncState: "key",
+      favorites: "id, userEmail",
+      errorLogs: "id, ts",
     });
 
     // Version 4 adds the consolidated typed storage tables.
     this.version(4).stores({
-      files: 'id, parentId, name, isFolder',
-      syncState: 'key',
-      favorites: 'id, userEmail',
-      errorLogs: 'id, ts',
-      kv: 'key',
-      playlists: 'id, userEmail',
-      recentTracks: 'id, userEmail, createdAt',
-      playCounts: 'id, userEmail',
-      folderVisits: 'id, userEmail',
-      metadataCache: 'key'
+      files: "id, parentId, name, isFolder",
+      syncState: "key",
+      favorites: "id, userEmail",
+      errorLogs: "id, ts",
+      kv: "key",
+      playlists: "id, userEmail",
+      recentTracks: "id, userEmail, createdAt",
+      playCounts: "id, userEmail",
+      folderVisits: "id, userEmail",
+      metadataCache: "key",
     });
 
     // Version 5 adds a compound [userEmail+createdAt] index on recentTracks
@@ -90,16 +126,16 @@ export class DriveDatabase extends Dexie {
     // user without reading the whole table. Adding an index preserves data
     // (only primary-key changes would clear it).
     this.version(5).stores({
-      files: 'id, parentId, name, isFolder',
-      syncState: 'key',
-      favorites: 'id, userEmail',
-      errorLogs: 'id, ts',
-      kv: 'key',
-      playlists: 'id, userEmail',
-      recentTracks: 'id, userEmail, createdAt, [userEmail+createdAt]',
-      playCounts: 'id, userEmail',
-      folderVisits: 'id, userEmail',
-      metadataCache: 'key'
+      files: "id, parentId, name, isFolder",
+      syncState: "key",
+      favorites: "id, userEmail",
+      errorLogs: "id, ts",
+      kv: "key",
+      playlists: "id, userEmail",
+      recentTracks: "id, userEmail, createdAt, [userEmail+createdAt]",
+      playCounts: "id, userEmail",
+      folderVisits: "id, userEmail",
+      metadataCache: "key",
     });
 
     // Version 6 adds compound [userEmail+count] indexes on playCounts and
@@ -109,16 +145,16 @@ export class DriveDatabase extends Dexie {
     // the top 10 by count straight from the index. Adding indexes preserves
     // data (only primary-key changes would clear it).
     this.version(6).stores({
-      files: 'id, parentId, name, isFolder',
-      syncState: 'key',
-      favorites: 'id, userEmail',
-      errorLogs: 'id, ts',
-      kv: 'key',
-      playlists: 'id, userEmail',
-      recentTracks: 'id, userEmail, createdAt, [userEmail+createdAt]',
-      playCounts: 'id, userEmail, [userEmail+count]',
-      folderVisits: 'id, userEmail, [userEmail+count]',
-      metadataCache: 'key'
+      files: "id, parentId, name, isFolder",
+      syncState: "key",
+      favorites: "id, userEmail",
+      errorLogs: "id, ts",
+      kv: "key",
+      playlists: "id, userEmail",
+      recentTracks: "id, userEmail, createdAt, [userEmail+createdAt]",
+      playCounts: "id, userEmail, [userEmail+count]",
+      folderVisits: "id, userEmail, [userEmail+count]",
+      metadataCache: "key",
     });
 
     // Version 7 fixes the cross-user primary-key collision: the 4 per-user
@@ -131,27 +167,37 @@ export class DriveDatabase extends Dexie {
     // first part of a compound key is an implicit index (where('userEmail')
     // stays valid) and put({id, userEmail, ...}) auto-builds the compound
     // key from the keyPath.
-    this.version(7).stores({
-      files: 'id, parentId, name, isFolder',
-      syncState: 'key',
-      favorites: 'id, userEmail',
-      errorLogs: 'id, ts',
-      kv: 'key',
-      playlists: 'id, userEmail',
-      recentTracks: 'id, userEmail, createdAt, [userEmail+createdAt]',
-      playCounts: 'id, userEmail, [userEmail+count]',
-      folderVisits: 'id, userEmail, [userEmail+count]',
-      metadataCache: 'key',
-      recentTracksV2: '[userEmail+id], createdAt, [userEmail+createdAt]',
-      playCountsV2: '[userEmail+id], [userEmail+count]',
-      folderVisitsV2: '[userEmail+id], [userEmail+count]',
-      favoritesV2: '[userEmail+id], createdAt'
-    }).upgrade(async (tx) => {
-      await tx.table('recentTracksV2').bulkPut(await tx.table('recentTracks').toArray());
-      await tx.table('playCountsV2').bulkPut(await tx.table('playCounts').toArray());
-      await tx.table('folderVisitsV2').bulkPut(await tx.table('folderVisits').toArray());
-      await tx.table('favoritesV2').bulkPut(await tx.table('favorites').toArray());
-    });
+    this.version(7)
+      .stores({
+        files: "id, parentId, name, isFolder",
+        syncState: "key",
+        favorites: "id, userEmail",
+        errorLogs: "id, ts",
+        kv: "key",
+        playlists: "id, userEmail",
+        recentTracks: "id, userEmail, createdAt, [userEmail+createdAt]",
+        playCounts: "id, userEmail, [userEmail+count]",
+        folderVisits: "id, userEmail, [userEmail+count]",
+        metadataCache: "key",
+        recentTracksV2: "[userEmail+id], createdAt, [userEmail+createdAt]",
+        playCountsV2: "[userEmail+id], [userEmail+count]",
+        folderVisitsV2: "[userEmail+id], [userEmail+count]",
+        favoritesV2: "[userEmail+id], createdAt",
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table("recentTracksV2")
+          .bulkPut(await tx.table("recentTracks").toArray());
+        await tx
+          .table("playCountsV2")
+          .bulkPut(await tx.table("playCounts").toArray());
+        await tx
+          .table("folderVisitsV2")
+          .bulkPut(await tx.table("folderVisits").toArray());
+        await tx
+          .table("favoritesV2")
+          .bulkPut(await tx.table("favorites").toArray());
+      });
 
     // Version 8 drops the obsolete raw-id tables now that every row lives in
     // the compound-key V2 tables.
@@ -160,10 +206,10 @@ export class DriveDatabase extends Dexie {
       recentTracks: null,
       playCounts: null,
       folderVisits: null,
-      recentTracksV2: '[userEmail+id], createdAt, [userEmail+createdAt]',
-      playCountsV2: '[userEmail+id], [userEmail+count]',
-      folderVisitsV2: '[userEmail+id], [userEmail+count]',
-      favoritesV2: '[userEmail+id], createdAt'
+      recentTracksV2: "[userEmail+id], createdAt, [userEmail+createdAt]",
+      playCountsV2: "[userEmail+id], [userEmail+count]",
+      folderVisitsV2: "[userEmail+id], [userEmail+count]",
+      favoritesV2: "[userEmail+id], createdAt",
     });
 
     // Bind the public table names to the new compound-key tables so app code

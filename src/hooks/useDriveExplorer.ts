@@ -1,31 +1,50 @@
-import { useState, useMemo, useEffect, useSyncExternalStore, useCallback } from 'react';
-import type { DriveItem } from '../types';
-import { useDebouncedLiveQuery } from './useDebouncedLiveQuery';
-import { db, DriveFile } from '../db/db';
-import { normalizeText } from '../utils/normalizeText';
-import { deleteFile, moveFile, createFolder, driveFetch } from '../utils/driveApi';
-import type { DriveFileItem } from '../utils/driveApi';
-import { isUploading, getUploadState, subscribe as subscribeUploads } from '../utils/uploadManager';
-import { showErrorToast } from '../utils/simpleToast';
-import { t } from 'i18next';
-import { captureError } from '../utils/errorLog';
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useSyncExternalStore,
+  useCallback,
+} from "react";
+import type { DriveItem } from "../types";
+import { useDebouncedLiveQuery } from "./useDebouncedLiveQuery";
+import type { DriveFile } from "../db/db";
+import { db } from "../db/db";
+import { normalizeText } from "../utils/normalizeText";
+import {
+  deleteFile,
+  moveFile,
+  createFolder,
+  driveFetch,
+} from "../utils/driveApi";
+import type { DriveFileItem } from "../utils/driveApi";
+import {
+  isUploading,
+  getUploadState,
+  subscribe as subscribeUploads,
+} from "../utils/uploadManager";
+import { showErrorToast } from "../utils/simpleToast";
+import { t } from "i18next";
+import { captureError } from "../utils/errorLog";
 
-import { useLiveQuery } from 'dexie-react-hooks';
-import { metadataCache } from '../utils/metadata';
-import { getFolderAudioQuery } from '../utils/audioQuery';
-import { useDriveStore } from '../store/driveStore';
+import { useLiveQuery } from "dexie-react-hooks";
+import { metadataCache } from "../utils/metadata";
+import { getFolderAudioQuery } from "../utils/audioQuery";
+import { useDriveStore } from "../store/driveStore";
 
-const GOOGLE_FOLDER_MIME = 'application/vnd.google-apps.folder';
+const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 export const ITEMS_PER_PAGE = 50;
 const GLOBAL_SEARCH_LIMIT = 100;
 const DRIVE_PAGE_SIZE = 1000;
 // Module-level so the items useMemo sort (re-run on every dbFiles change or
 // uploadStatusVersion bump) never re-initializes the collator — locale data
 // load has real cost and sorting is a hot path.
-const SORT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const SORT_COLLATOR = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
 const DEBOUNCE_DELAY_MS = 150;
-const SEARCH_RESULT_LABEL = 'Search Result';
-const UPLOADING_BLOCKED_FALLBACK = 'This item is being uploaded, please wait';
+const SEARCH_RESULT_LABEL = "Search Result";
+const UPLOADING_BLOCKED_FALLBACK = "This item is being uploaded, please wait";
 
 // Monotonic upload-status version: bumped on every uploadManager notify so the
 // explorer re-runs the pin partition below with fresh getUploadState()
@@ -48,16 +67,17 @@ export function useDriveExplorer(
   token: string | null,
   onRefresh: () => void,
   onRemoveItem?: (id: string) => void,
-  sortOption: string = "name_natural"
+  sortOption: string = "name_natural",
 ) {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
-  const stripExt = (name: string, isFolder: boolean) => isFolder ? name : name.replace(/\.[^/.]+$/, "");
+  const stripExt = (name: string, isFolder: boolean) =>
+    isFolder ? name : name.replace(/\.[^/.]+$/, "");
 
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  
+
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isBulkOperating, setIsBulkOperating] = useState(false);
 
@@ -77,30 +97,35 @@ export function useDriveExplorer(
   // different subscribe function is passed on a re-render (react.dev caveat),
   // so the uploadManager wrapper is memoized to keep the subscription stable.
   const subscribe = useCallback(
-    (onStoreChange: () => void) => subscribeUploads(() => {
-      uploadStatusVersion += 1;
-      onStoreChange();
-    }),
+    (onStoreChange: () => void) =>
+      subscribeUploads(() => {
+        uploadStatusVersion += 1;
+        onStoreChange();
+      }),
     [],
   );
 
   useSyncExternalStore(subscribe, () => uploadStatusVersion);
 
   // Global search data loading
-  const globalSearchItemsRaw = useDebouncedLiveQuery(async () => {
-    if (!searchQuery) return undefined;
-    const query = normalizeText(searchQuery);
-    const matches = await db.files
-      .filter(f => normalizeText(f.name).includes(query))
-      .limit(GLOBAL_SEARCH_LIMIT)
-      .toArray();
-    return matches;
-  }, [searchQuery], DEBOUNCE_DELAY_MS);
+  const globalSearchItemsRaw = useDebouncedLiveQuery(
+    async () => {
+      if (!searchQuery) return undefined;
+      const query = normalizeText(searchQuery);
+      const matches = await db.files
+        .filter((f) => normalizeText(f.name).includes(query))
+        .limit(GLOBAL_SEARCH_LIMIT)
+        .toArray();
+      return matches;
+    },
+    [searchQuery],
+    DEBOUNCE_DELAY_MS,
+  );
 
   const globalSearchItems = useMemo(() => {
     if (!globalSearchItemsRaw) return [];
-    
-    const mapped = globalSearchItemsRaw.map(file => {
+
+    const mapped = globalSearchItemsRaw.map((file) => {
       const title = stripExt(file.name, file.isFolder);
       return {
         id: file.id,
@@ -108,19 +133,21 @@ export function useDriveExplorer(
         isFolder: file.isFolder,
         size: file.size,
         modifiedTime: file.modifiedTime,
-        trackInfo: file.isFolder ? undefined : {
-          id: file.id,
-          title,
-          artist: "",
-          streamUrl: "",
-          size: file.size,
-          originalName: file.name,
-          parentId: file.parentId,
-          parentName: SEARCH_RESULT_LABEL,
-        }
+        trackInfo: file.isFolder
+          ? undefined
+          : {
+              id: file.id,
+              title,
+              artist: "",
+              streamUrl: "",
+              size: file.size,
+              originalName: file.name,
+              parentId: file.parentId,
+              parentName: SEARCH_RESULT_LABEL,
+            },
       };
     });
-    
+
     return mapped.sort((a, b) => {
       if (a.isFolder && !b.isFolder) return -1;
       if (!a.isFolder && b.isFolder) return 1;
@@ -128,28 +155,28 @@ export function useDriveExplorer(
     });
   }, [globalSearchItemsRaw]);
 
-  const dbFiles = useLiveQuery(
-    () => {
-      if (!currentFolderId) return Promise.resolve<DriveFile[]>([]);
-      return db.files.where('parentId').equals(currentFolderId).toArray()
-    },
-    [currentFolderId]
-  );
+  const dbFiles = useLiveQuery(() => {
+    if (!currentFolderId) return Promise.resolve<DriveFile[]>([]);
+    return db.files.where("parentId").equals(currentFolderId).toArray();
+  }, [currentFolderId]);
 
-  const setIsLoadingTracks = useDriveStore(state => state.setIsLoadingTracks);
+  const setIsLoadingTracks = useDriveStore((state) => state.setIsLoadingTracks);
 
   // On-Demand Fetching: Kéo nóng 1 trang từ Drive nếu thư mục chưa có trong Dexie
   useEffect(() => {
-    if (!token || !currentFolderId || currentFolderId === '') return;
-    
+    if (!token || !currentFolderId || currentFolderId === "") return;
+
     // Nếu có dữ liệu rồi thì fetch ngầm (không hiện spinner)
     // Nếu chưa có (dbFiles undefined hoặc = 0), hiện spinner.
     let isMounted = true;
     const abortController = new AbortController();
-    
+
     const fetchOnDemand = async () => {
       try {
-        const count = await db.files.where('parentId').equals(currentFolderId).count();
+        const count = await db.files
+          .where("parentId")
+          .equals(currentFolderId)
+          .count();
         if (count === 0) setIsLoadingTracks(true);
 
         const q = getFolderAudioQuery(currentFolderId);
@@ -157,11 +184,14 @@ export function useDriveExplorer(
         let pageToken: string | undefined = undefined;
 
         while (hasMore && isMounted && !abortController.signal.aborted) {
-          const url = new URL('https://www.googleapis.com/drive/v3/files');
-          url.searchParams.set('q', q);
-          url.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)');
-          url.searchParams.set('pageSize', String(DRIVE_PAGE_SIZE));
-          if (pageToken) url.searchParams.set('pageToken', pageToken);
+          const url = new URL("https://www.googleapis.com/drive/v3/files");
+          url.searchParams.set("q", q);
+          url.searchParams.set(
+            "fields",
+            "nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)",
+          );
+          url.searchParams.set("pageSize", String(DRIVE_PAGE_SIZE));
+          if (pageToken) url.searchParams.set("pageToken", pageToken);
 
           // driveFetch owns the retry policy (driveApi resilience layer):
           // 429/5xx and 403 rate-limit are retried with exponential backoff,
@@ -175,7 +205,11 @@ export function useDriveExplorer(
           if (abortController.signal.aborted) break;
 
           if (!res.ok) {
-            captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})` });
+            captureError({
+              level: "warn",
+              source: "useDriveExplorer",
+              message: `OnDemandFetch Drive API error: HTTP ${res.status} (folder=${currentFolderId})`,
+            });
             break;
           }
           const data = await res.json();
@@ -197,7 +231,11 @@ export function useDriveExplorer(
             try {
               await db.files.bulkPut(filesToInsert);
             } catch (dbErr) {
-              captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}` });
+              captureError({
+                level: "error",
+                source: "useDriveExplorer",
+                message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${filesToInsert.length}): ${String(dbErr)}`,
+              });
               break;
             }
           }
@@ -208,15 +246,23 @@ export function useDriveExplorer(
       } catch (err) {
         if (abortController.signal.aborted) return;
         if (err instanceof TypeError) {
-          captureError({ level: 'warn', source: 'useDriveExplorer', message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}` });
+          captureError({
+            level: "warn",
+            source: "useDriveExplorer",
+            message: `OnDemandFetch network error (folder=${currentFolderId}): ${err.message}`,
+          });
         } else {
-          captureError({ level: 'error', source: 'useDriveExplorer', message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}` });
+          captureError({
+            level: "error",
+            source: "useDriveExplorer",
+            message: `OnDemandFetch unexpected error (folder=${currentFolderId}): ${err instanceof Error ? err.message : String(err)}`,
+          });
         }
       } finally {
         if (isMounted) setIsLoadingTracks(false);
       }
     };
-    
+
     fetchOnDemand();
     return () => {
       isMounted = false;
@@ -226,7 +272,7 @@ export function useDriveExplorer(
 
   const items = useMemo(() => {
     if (!dbFiles) return [];
-    const _items: DriveItem[] = dbFiles.map(file => {
+    const _items: DriveItem[] = dbFiles.map((file) => {
       const title = stripExt(file.name, file.isFolder);
       return {
         id: file.id,
@@ -234,16 +280,18 @@ export function useDriveExplorer(
         isFolder: file.isFolder,
         size: file.size,
         modifiedTime: file.modifiedTime,
-        trackInfo: file.isFolder ? undefined : {
-          id: file.id,
-          title,
-          artist: "",
-          streamUrl: "",
-          size: file.size,
-          originalName: file.name,
-          parentId: file.parentId,
-          parentName: currentFolderName,
-        }
+        trackInfo: file.isFolder
+          ? undefined
+          : {
+              id: file.id,
+              title,
+              artist: "",
+              streamUrl: "",
+              size: file.size,
+              originalName: file.name,
+              parentId: file.parentId,
+              parentName: currentFolderName,
+            },
       };
     });
 
@@ -259,9 +307,9 @@ export function useDriveExplorer(
     const restItems: DriveItem[] = [];
     for (const item of _items) {
       const state = getUploadState(item.id);
-      if (state === 'uploaded') {
+      if (state === "uploaded") {
         uploadedItems.push(item);
-      } else if (state === 'uploading') {
+      } else if (state === "uploading") {
         uploadingItems.push(item);
       } else {
         restItems.push(item);
@@ -272,36 +320,36 @@ export function useDriveExplorer(
     restItems.sort((a, b) => {
       if (a.isFolder && !b.isFolder) return -1;
       if (!a.isFolder && b.isFolder) return 1;
-      
+
       switch (sortOption) {
-        case 'name': {
+        case "name": {
           const titleA = metadataCache[a.id]?.title || a.title;
           const titleB = metadataCache[b.id]?.title || b.title;
           return collator.compare(titleA, titleB);
         }
-        case 'name desc': {
+        case "name desc": {
           const titleA = metadataCache[a.id]?.title || a.title;
           const titleB = metadataCache[b.id]?.title || b.title;
           return collator.compare(titleB, titleA);
         }
-        case 'modifiedTime': {
+        case "modifiedTime": {
           const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
           const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
           if (timeA === timeB) return collator.compare(a.title, b.title);
           return timeA - timeB;
         }
-        case 'modifiedTime desc': {
+        case "modifiedTime desc": {
           const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
           const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
           if (timeA === timeB) return collator.compare(a.title, b.title);
           return timeB - timeA;
         }
-        case 'size': {
+        case "size": {
           const diff = (a.size || 0) - (b.size || 0);
           if (diff === 0) return collator.compare(a.title, b.title);
           return diff;
         }
-        case 'size desc': {
+        case "size desc": {
           const diff = (b.size || 0) - (a.size || 0);
           if (diff === 0) return collator.compare(a.title, b.title);
           return diff;
@@ -318,19 +366,27 @@ export function useDriveExplorer(
     // inserted in upload enqueue order and the queue is strictly sequential,
     // so this mirrors the order uploads started, not the active sort option.
     // Uploaded items sit ahead of them (fresh tint must be the most visible).
-    if (uploadedItems.length === 0 && uploadingItems.length === 0) return restItems;
+    if (uploadedItems.length === 0 && uploadingItems.length === 0)
+      return restItems;
     return [...uploadedItems, ...uploadingItems, ...restItems];
   }, [dbFiles, sortOption, currentFolderName, uploadStatusVersion]);
 
   const filteredItems = searchQuery ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);
-  
+
   const currentItems = useMemo(
-    () => filteredItems.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE),
-    [filteredItems, currentPage, ITEMS_PER_PAGE]
+    () =>
+      filteredItems.slice(
+        (currentPage - 1) * ITEMS_PER_PAGE,
+        currentPage * ITEMS_PER_PAGE,
+      ),
+    [filteredItems, currentPage, ITEMS_PER_PAGE],
   );
 
-  const handleCreateFolder = async (folderName: string, onComplete: () => void) => {
+  const handleCreateFolder = async (
+    folderName: string,
+    onComplete: () => void,
+  ) => {
     if (!token) return;
     setIsCreatingFolder(true);
     try {
@@ -343,14 +399,20 @@ export function useDriveExplorer(
           mimeType: GOOGLE_FOLDER_MIME,
           isFolder: true,
           trashed: false,
-          modifiedTime: new Date().toISOString()
+          modifiedTime: new Date().toISOString(),
         });
       }
       onRefresh();
       onComplete();
     } catch (e: unknown) {
-      captureError({ level: 'error', source: 'useDriveExplorer', message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}` });
-      showErrorToast(t('drive.create_folder_error') || "Failed to create folder");
+      captureError({
+        level: "error",
+        source: "useDriveExplorer",
+        message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      showErrorToast(
+        t("drive.create_folder_error") || "Failed to create folder",
+      );
     } finally {
       setIsCreatingFolder(false);
     }
@@ -361,14 +423,16 @@ export function useDriveExplorer(
 
     const itemsToDelete = filterUploading([...selectedIds]);
     if (itemsToDelete.length < selectedIds.size) {
-      showErrorToast(t('upload.uploading_blocked') || UPLOADING_BLOCKED_FALLBACK);
+      showErrorToast(
+        t("upload.uploading_blocked") || UPLOADING_BLOCKED_FALLBACK,
+      );
     }
     if (itemsToDelete.length === 0) return;
 
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);
-    
+
     const deletedIds: string[] = [];
     const failedIds: string[] = [];
     try {
@@ -378,38 +442,58 @@ export function useDriveExplorer(
           deletedIds.push(id);
         } catch (e: unknown) {
           failedIds.push(id);
-          captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
+          captureError({
+            level: "error",
+            source: "useDriveExplorer",
+            message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
+          });
         }
       }
       if (deletedIds.length > 0) {
         await db.files.bulkDelete(deletedIds);
-        if (onRemoveItem) deletedIds.forEach(id => onRemoveItem(id));
+        if (onRemoveItem)
+          deletedIds.forEach((id) => {
+            onRemoveItem(id);
+          });
       }
       if (failedIds.length > 0) {
-        showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
+        showErrorToast(
+          t("drive.delete_error") || "Failed to delete one or more items.",
+        );
       }
     } catch (e: unknown) {
-      captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}` });
-      showErrorToast(t('drive.delete_error') || "Failed to delete one or more items.");
+      captureError({
+        level: "error",
+        source: "useDriveExplorer",
+        message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      showErrorToast(
+        t("drive.delete_error") || "Failed to delete one or more items.",
+      );
     } finally {
       setIsBulkOperating(false);
       onComplete();
     }
   };
 
-  const handleBulkMove = async (destinationFolderId: string, onComplete: () => void) => {
+  const handleBulkMove = async (
+    destinationFolderId: string,
+    onComplete: () => void,
+  ) => {
     if (!token || selectedIds.size === 0) return;
 
     const itemsToMove = filterUploading([...selectedIds]);
     if (itemsToMove.length < selectedIds.size) {
-      showErrorToast(t('upload.uploading_blocked') || UPLOADING_BLOCKED_FALLBACK);
+      showErrorToast(
+        t("upload.uploading_blocked") || UPLOADING_BLOCKED_FALLBACK,
+      );
     }
     if (itemsToMove.length === 0) return;
 
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);
-    
+
     const movedIds: string[] = [];
     const failedIds: string[] = [];
     try {
@@ -419,19 +503,39 @@ export function useDriveExplorer(
           movedIds.push(id);
         } catch (e: unknown) {
           failedIds.push(id);
-          captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}` });
+          captureError({
+            level: "error",
+            source: "useDriveExplorer",
+            message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
+          });
         }
       }
       // Single transaction for the whole batch (vs. one update() per item);
       // missing keys are skipped without throwing, same as update().
-      await db.files.bulkUpdate(movedIds.map(id => ({ key: id, changes: { parentId: destinationFolderId } })));
-      if (onRemoveItem && movedIds.length > 0) movedIds.forEach(id => onRemoveItem(id));
+      await db.files.bulkUpdate(
+        movedIds.map((id) => ({
+          key: id,
+          changes: { parentId: destinationFolderId },
+        })),
+      );
+      if (onRemoveItem && movedIds.length > 0)
+        movedIds.forEach((id) => {
+          onRemoveItem(id);
+        });
       if (failedIds.length > 0) {
-        showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
+        showErrorToast(
+          t("drive.move_error") || "Failed to move one or more items.",
+        );
       }
     } catch (e: unknown) {
-      captureError({ level: 'error', source: 'useDriveExplorer', message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}` });
-      showErrorToast(t('drive.move_error') || "Failed to move one or more items.");
+      captureError({
+        level: "error",
+        source: "useDriveExplorer",
+        message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      showErrorToast(
+        t("drive.move_error") || "Failed to move one or more items.",
+      );
     } finally {
       setIsBulkOperating(false);
       onComplete();

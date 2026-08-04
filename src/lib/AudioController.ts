@@ -1,9 +1,9 @@
-import type { Track } from '../types';
-import { usePlayerStore } from '../store/playerStore';
-import { captureError } from '../utils/errorLog';
-import { DRIVE_STREAM_PREFIX } from '../utils/streamPrefetcher';
-import { isAbortError } from '../hooks/player/utils';
-import type { BufferedSource } from '../utils/bufferedRange';
+import type { Track } from "../types";
+import { usePlayerStore } from "../store/playerStore";
+import { captureError } from "../utils/errorLog";
+import { DRIVE_STREAM_PREFIX } from "../utils/streamPrefetcher";
+import { isAbortError } from "../hooks/player/utils";
+import type { BufferedSource } from "../utils/bufferedRange";
 
 type AudioEventMap = {
   timeupdate: { currentTime: number; duration: number };
@@ -22,7 +22,9 @@ type AudioEventMap = {
   pause: void;
 };
 
-type AudioEventHandler<K extends keyof AudioEventMap> = (payload: AudioEventMap[K]) => void;
+type AudioEventHandler<K extends keyof AudioEventMap> = (
+  payload: AudioEventMap[K],
+) => void;
 
 export class AudioController {
   private static readonly THROTTLE_MS = 200;
@@ -34,7 +36,7 @@ export class AudioController {
   private audio1: HTMLAudioElement;
   private audio2: HTMLAudioElement;
   private activeIndex: 0 | 1 = 0;
-  
+
   private currentTrackId: string | null = null;
   private retryCount = 0;
   // B1: pending retry timer + monotonic change token. playTrack()/release()
@@ -44,8 +46,9 @@ export class AudioController {
   private changeToken = 0;
   private volume = 1;
   private muted = false;
-  private listeners: { [K in keyof AudioEventMap]?: AudioEventHandler<K>[] } = {};
-  
+  private listeners: { [K in keyof AudioEventMap]?: AudioEventHandler<K>[] } =
+    {};
+
   private lastTimeUpdate = 0;
   private lastProgressEmit = 0;
 
@@ -54,12 +57,15 @@ export class AudioController {
   // can never be removeEventListener'd (MDN); holding the reference here makes
   // a future teardown able to detach them. WeakMap so the table itself never
   // keeps an element alive.
-  private readonly elementListeners = new WeakMap<HTMLAudioElement, Record<string, EventListener>>();
+  private readonly elementListeners = new WeakMap<
+    HTMLAudioElement,
+    Record<string, EventListener>
+  >();
 
   private constructor() {
     this.audio1 = new Audio();
     this.audio2 = new Audio();
-    
+
     // Attach listeners so the elements can play via the /drive-stream SW proxy
     this.setupAudio(this.audio1);
     this.setupAudio(this.audio2);
@@ -87,8 +93,15 @@ export class AudioController {
     try {
       await audio.play();
     } catch (e: unknown) {
-      if (!isAbortError(e) && !(e instanceof DOMException && e.name === 'NotAllowedError')) {
-        captureError({ level: 'warn', source: 'AudioController', message: `safe-play-failed: ${e instanceof Error ? e.name : String(e)}` });
+      if (
+        !isAbortError(e) &&
+        !(e instanceof DOMException && e.name === "NotAllowedError")
+      ) {
+        captureError({
+          level: "warn",
+          source: "AudioController",
+          message: `safe-play-failed: ${e instanceof Error ? e.name : String(e)}`,
+        });
       }
     }
   }
@@ -96,12 +109,15 @@ export class AudioController {
   // One-shot loadedmetadata listener: set currentTime once metadata arrives,
   // then detach itself (MDN pattern). Prevents the listener from leaking and
   // from re-applying the position on later metadata events.
-  private seekOnLoadedMetadata(audio: HTMLAudioElement, position: number): void {
+  private seekOnLoadedMetadata(
+    audio: HTMLAudioElement,
+    position: number,
+  ): void {
     const onMetadata = () => {
       audio.currentTime = position;
-      audio.removeEventListener('loadedmetadata', onMetadata);
+      audio.removeEventListener("loadedmetadata", onMetadata);
     };
-    audio.addEventListener('loadedmetadata', onMetadata);
+    audio.addEventListener("loadedmetadata", onMetadata);
   }
 
   private setupAudio(audio: HTMLAudioElement) {
@@ -113,9 +129,12 @@ export class AudioController {
     handlers.timeupdate = () => {
       if (audio !== this.activeAudio) return;
       const now = performance.now();
-      if (now - this.lastTimeUpdate > AudioController.THROTTLE_MS) { 
+      if (now - this.lastTimeUpdate > AudioController.THROTTLE_MS) {
         this.lastTimeUpdate = now;
-        this.emit('timeupdate', { currentTime: audio.currentTime, duration: audio.duration || 0 });
+        this.emit("timeupdate", {
+          currentTime: audio.currentTime,
+          duration: audio.duration || 0,
+        });
       }
     };
 
@@ -123,8 +142,8 @@ export class AudioController {
     // even before the first timeupdate (e.g. paused with metadata loaded).
     handlers.durationchange = () => {
       if (audio === this.activeAudio) {
-        this.emit('durationchange', { duration: audio.duration || 0 });
-        this.emit('progress', undefined);
+        this.emit("durationchange", { duration: audio.duration || 0 });
+        this.emit("progress", undefined);
       }
     };
 
@@ -136,19 +155,19 @@ export class AudioController {
     // getBuffered(). They fire rarely -> no throttle (no DOM churn).
     handlers.seeked = () => {
       if (audio === this.activeAudio) {
-        this.emit('progress', undefined);
+        this.emit("progress", undefined);
       }
     };
 
     handlers.loadeddata = () => {
       if (audio === this.activeAudio) {
-        this.emit('progress', undefined);
+        this.emit("progress", undefined);
       }
     };
 
     handlers.suspend = () => {
       if (audio === this.activeAudio) {
-        this.emit('progress', undefined);
+        this.emit("progress", undefined);
       }
     };
 
@@ -160,47 +179,65 @@ export class AudioController {
     handlers.progress = () => {
       if (audio !== this.activeAudio) return;
       const now = performance.now();
-      if (this.lastProgressEmit === 0 || now - this.lastProgressEmit > AudioController.THROTTLE_MS) {
+      if (
+        this.lastProgressEmit === 0 ||
+        now - this.lastProgressEmit > AudioController.THROTTLE_MS
+      ) {
         this.lastProgressEmit = now;
-        this.emit('progress', undefined);
+        this.emit("progress", undefined);
       }
     };
 
     handlers.waiting = () => {
       if (audio === this.activeAudio) {
-        this.emit('buffering', { isBuffering: true });
+        this.emit("buffering", { isBuffering: true });
       }
     };
 
     handlers.playing = () => {
       if (audio === this.activeAudio) {
-        this.emit('buffering', { isBuffering: false });
-        this.emit('play', undefined);
+        this.emit("buffering", { isBuffering: false });
+        this.emit("play", undefined);
         usePlayerStore.getState().setIsPlaying(true);
       }
     };
 
     handlers.pause = () => {
       if (audio === this.activeAudio) {
-        this.emit('pause', undefined);
+        this.emit("pause", undefined);
         usePlayerStore.getState().setIsPlaying(false);
       }
     };
 
     handlers.ended = () => {
       if (audio === this.activeAudio) {
-        if (audio.duration && audio.currentTime < audio.duration - AudioController.ENDED_THRESHOLD_SECONDS) return;
-        this.emit('ended', undefined);
+        if (
+          audio.duration &&
+          audio.currentTime <
+            audio.duration - AudioController.ENDED_THRESHOLD_SECONDS
+        )
+          return;
+        this.emit("ended", undefined);
       }
     };
 
     handlers.error = () => {
       if (audio !== this.activeAudio) return;
       this.retryCount++;
-      captureError({ level: 'error', source: 'AudioController', message: `Audio error (attempt ${this.retryCount})` });
-      
-      if (this.retryCount < AudioController.MAX_RETRIES && this.currentTrackId) {
-        this.emit('error', { message: 'Mạng không ổn định, đang thử lại...', code: 'network_interrupted' });
+      captureError({
+        level: "error",
+        source: "AudioController",
+        message: `Audio error (attempt ${this.retryCount})`,
+      });
+
+      if (
+        this.retryCount < AudioController.MAX_RETRIES &&
+        this.currentTrackId
+      ) {
+        this.emit("error", {
+          message: "Mạng không ổn định, đang thử lại...",
+          code: "network_interrupted",
+        });
         const pos = audio.currentTime;
         // B1: capture track id + change token at schedule time; when the timer
         // fires, a stale retry (track switched in between) is a no-op.
@@ -214,8 +251,11 @@ export class AudioController {
       } else {
         // B1: giving up — no zombie retry may fire later.
         this.clearRetryTimer();
-        this.emit('error', { message: 'File lỗi định dạng, đang bỏ qua...', code: 'format_error' });
-        this.emit('ended', undefined); 
+        this.emit("error", {
+          message: "File lỗi định dạng, đang bỏ qua...",
+          code: "format_error",
+        });
+        this.emit("ended", undefined);
       }
     };
 
@@ -225,12 +265,19 @@ export class AudioController {
     this.elementListeners.set(audio, handlers);
   }
 
-  private getHandlers<K extends keyof AudioEventMap>(event: K): AudioEventHandler<K>[] {
+  private getHandlers<K extends keyof AudioEventMap>(
+    event: K,
+  ): AudioEventHandler<K>[] {
     const list = this.listeners[event];
-    return list ? list as AudioEventHandler<K>[] : (this.listeners[event] = []) as AudioEventHandler<K>[];
+    return list
+      ? (list as AudioEventHandler<K>[])
+      : ((this.listeners[event] = []) as AudioEventHandler<K>[]);
   }
 
-  public on<K extends keyof AudioEventMap>(event: K, handler: AudioEventHandler<K>) {
+  public on<K extends keyof AudioEventMap>(
+    event: K,
+    handler: AudioEventHandler<K>,
+  ) {
     const list = this.getHandlers(event);
     list.push(handler);
     return () => {
@@ -239,10 +286,14 @@ export class AudioController {
     };
   }
 
-  private emit<K extends keyof AudioEventMap>(event: K, payload: AudioEventMap[K]) {
-    const handlers = this.listeners[event] as AudioEventHandler<K>[] | undefined;
+  private emit<K extends keyof AudioEventMap>(
+    event: K,
+    payload: AudioEventMap[K],
+  ) {
+    const handlers = this.listeners[event] as
+      AudioEventHandler<K>[] | undefined;
     if (handlers) {
-      handlers.forEach(h => h(payload));
+      handlers.forEach((h) => h(payload));
     }
   }
 
@@ -260,17 +311,17 @@ export class AudioController {
 
     this.currentTrackId = track.id;
     this.retryCount = 0;
-    
+
     const oldAudio = this.activeAudio;
     oldAudio.pause();
-    oldAudio.removeAttribute('src');
+    oldAudio.removeAttribute("src");
     // B2: MDN 3-step release — load() after removeAttribute('src') so the
     // old element's buffers/decoder are actually freed.
     oldAudio.load();
 
     this.activeIndex = this.activeIndex === 0 ? 1 : 0;
     const newAudio = this.activeAudio;
-    
+
     const url = track.streamUrl || `${DRIVE_STREAM_PREFIX}${track.id}`;
     newAudio.src = url;
     newAudio.volume = this.muted ? 0 : this.volume;
@@ -284,7 +335,11 @@ export class AudioController {
       await newAudio.play();
     } catch (e: unknown) {
       if (!isAbortError(e) && this.currentTrackId === track.id) {
-        captureError({ level: 'warn', source: 'AudioController', message: `play-failed: ${e instanceof Error ? e.name : String(e)}` });
+        captureError({
+          level: "warn",
+          source: "AudioController",
+          message: `play-failed: ${e instanceof Error ? e.name : String(e)}`,
+        });
         usePlayerStore.getState().setIsPlaying(false);
       }
     }
@@ -298,21 +353,26 @@ export class AudioController {
     const audio = this.activeAudio;
     const src = audio.src;
     audio.pause();
-    audio.removeAttribute('src');
+    audio.removeAttribute("src");
     // B2: MDN 3-step release before pointing the element at a new source.
     audio.load();
-    
+
     // Strip old query params and add new retry param
-    const baseUrl = src.split('?')[0];
-    audio.src = baseUrl + '?retry=' + Date.now();
+    const baseUrl = src.split("?")[0];
+    audio.src = baseUrl + "?retry=" + Date.now();
     audio.load();
-    
+
     this.seekOnLoadedMetadata(audio, position);
 
     try {
       await audio.play();
     } catch (e: unknown) {
-      if (!isAbortError(e)) captureError({ level: 'warn', source: 'AudioController', message: `Retry autoplay failed (${e instanceof Error ? e.name : String(e)})` });
+      if (!isAbortError(e))
+        captureError({
+          level: "warn",
+          source: "AudioController",
+          message: `Retry autoplay failed (${e instanceof Error ? e.name : String(e)})`,
+        });
     }
   }
 
@@ -344,14 +404,23 @@ export class AudioController {
 
   public toggleMute() {
     this.muted = !this.muted;
-    for (const a of [this.audio1, this.audio2]) a.volume = this.muted ? 0 : this.volume;
+    for (const a of [this.audio1, this.audio2])
+      a.volume = this.muted ? 0 : this.volume;
     return this.muted;
   }
 
-  public getVolume() { return this.volume; }
-  public isMuted() { return this.muted; }
-  public getCurrentTime() { return this.activeAudio.currentTime; }
-  public getDuration() { return this.activeAudio.duration || 0; }
+  public getVolume() {
+    return this.volume;
+  }
+  public isMuted() {
+    return this.muted;
+  }
+  public getCurrentTime() {
+    return this.activeAudio.currentTime;
+  }
+  public getDuration() {
+    return this.activeAudio.duration || 0;
+  }
 
   /**
    * Snapshot of the ACTIVE element's buffering state, for buffer-bar rendering.
@@ -360,7 +429,11 @@ export class AudioController {
    */
   public getBuffered(): BufferedSource {
     const audio = this.activeAudio;
-    return { duration: audio.duration, currentTime: audio.currentTime, buffered: audio.buffered };
+    return {
+      duration: audio.duration,
+      currentTime: audio.currentTime,
+      buffered: audio.buffered,
+    };
   }
 
   // B3: fully release audio resources (logout / player-stop). Each element is
@@ -384,10 +457,14 @@ export class AudioController {
     for (const el of [this.audio1, this.audio2]) {
       try {
         el.pause();
-        el.removeAttribute('src');
+        el.removeAttribute("src");
         el.load();
       } catch (err) {
-        captureError({ level: 'warn', source: 'AudioController', message: `release-element-failed: ${err instanceof Error ? err.message : String(err)}` });
+        captureError({
+          level: "warn",
+          source: "AudioController",
+          message: `release-element-failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     }
   }

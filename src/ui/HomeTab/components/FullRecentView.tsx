@@ -1,13 +1,13 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import type { Track } from '../../../App';
-import { useTranslation } from 'react-i18next';
-import { prefetchVisibleTracks } from '../../../utils/streamPrefetcher';
-import { ArrowLeft, Search, X } from 'lucide-react';
-import { useVirtualizer } from '@tanstack/react-virtual';
-import { SongCard } from '../../MainContent/components/SongCard';
-import { SortDropdown } from '../../components/SortDropdown';
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import type { Track } from "../../../App";
+import { useTranslation } from "react-i18next";
+import { prefetchVisibleTracks } from "../../../utils/streamPrefetcher";
+import { ArrowLeft, Search, X } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { SongCard } from "../../MainContent/components/SongCard";
+import { SortDropdown } from "../../components/SortDropdown";
 
-const DEFAULT_SORT_OPTION = 'modifiedTime';
+const DEFAULT_SORT_OPTION = "modifiedTime";
 
 function compareSizeAsc(a: Track, b: Track): number {
   const sizeA = a.size;
@@ -37,22 +37,23 @@ export function sortRecentTracks(items: Track[], sortOption: string): Track[] {
   // so the filtered index is a valid "date" proxy.
   const indexByTrack = new Map<Track, number>();
   result.forEach((track, index) => indexByTrack.set(track, index));
-  const byRecency = (a: Track, b: Track) => (indexByTrack.get(a) ?? 0) - (indexByTrack.get(b) ?? 0);
+  const byRecency = (a: Track, b: Track) =>
+    (indexByTrack.get(a) ?? 0) - (indexByTrack.get(b) ?? 0);
 
   switch (sortOption) {
-    case 'name':
+    case "name":
       result.sort((a, b) => a.title.localeCompare(b.title));
       break;
-    case 'name desc':
+    case "name desc":
       result.sort((a, b) => b.title.localeCompare(a.title));
       break;
-    case 'size':
+    case "size":
       result.sort(compareSizeAsc);
       break;
-    case 'size desc':
+    case "size desc":
       result.sort(compareSizeDesc);
       break;
-    case 'modifiedTime desc':
+    case "modifiedTime desc":
       result.sort((a, b) => byRecency(b, a));
       break;
     default:
@@ -64,12 +65,26 @@ export function sortRecentTracks(items: Track[], sortOption: string): Track[] {
   return result;
 }
 
-export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, title }: { recent: Track[], onBack: () => void, onPlay: (track: Track, ctx: Track[]) => void, token: string | null, currentTrack?: Track | null, title?: string }) {
+export function FullRecentView({
+  recent,
+  onBack,
+  onPlay,
+  token,
+  currentTrack,
+  title,
+}: {
+  recent: Track[];
+  onBack: () => void;
+  onPlay: (track: Track, ctx?: Track[] | undefined) => void;
+  token: string | null;
+  currentTrack?: Track | null | undefined;
+  title?: string;
+}) {
   const { t } = useTranslation();
   // Why: the header label is shared with HomeTab's "Recent Files" section; the
   // Recently Added view reuses this component and overrides it via the title
   // prop. Undefined title falls back to the translated Recent Files label.
-  const resolvedTitle = title ?? t('home.recent_files', 'Recent Files');
+  const resolvedTitle = title ?? t("home.recent_files", "Recent Files");
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   // Why: the default "recent" order (newest first) maps to the Ngày option
@@ -83,14 +98,14 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
   const [removedIds, setRemovedIds] = useState<string[]>([]);
 
   const handleRemoveTrack = useCallback((id: string) => {
-    setRemovedIds(prev => [...prev, id]);
+    setRemovedIds((prev) => [...prev, id]);
   }, []);
 
   useEffect(() => {
-    const ids = recent.map(t => t.id).filter(Boolean);
+    const ids = recent.map((t) => t.id).filter(Boolean);
     if (ids.length > 0) prefetchVisibleTracks(ids);
   }, [recent]);
-  
+
   const filteredItems = useMemo(() => {
     // Why: search filters first, then sort runs over the filtered subset so
     // the two never interfere (e.g. "size" cannot re-introduce filtered-out
@@ -98,15 +113,15 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
     const filtered = recent
       .filter((item) => !removedIds.includes(item.id))
       .filter((item) =>
-        item.title.toLowerCase().includes(searchQuery.toLowerCase())
+        item.title.toLowerCase().includes(searchQuery.toLowerCase()),
       );
     return sortRecentTracks(filtered, sortOption);
   }, [recent, searchQuery, sortOption, removedIds]);
 
   const sortOptions = [
-    { id: 'name', label: t('sort.name', 'A-Z') },
-    { id: 'modifiedTime', label: t('sort.date', 'Ngày') },
-    { id: 'size', label: t('sort.size', 'Kích thước') },
+    { id: "name", label: t("sort.name", "A-Z") },
+    { id: "modifiedTime", label: t("sort.date", "Ngày") },
+    { id: "size", label: t("sort.size", "Kích thước") },
   ];
 
   const rowVirtualizer = useVirtualizer({
@@ -121,14 +136,17 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
       <div className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <button 
+            <button
               onClick={onBack}
               className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors mr-2 shrink-0"
             >
               <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
             </button>
             <div className="flex items-center gap-3">
-              <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]" title={resolvedTitle}>
+              <span
+                className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]"
+                title={resolvedTitle}
+              >
                 {resolvedTitle}
               </span>
               <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-[#202124] px-2.5 py-0.5 rounded-full">
@@ -136,14 +154,14 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
               </span>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3 shrink-0">
             {/* Search Input */}
             <div className="relative">
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder={t('search_placeholder', 'Tìm kiếm...')}
+                placeholder={t("search_placeholder", "Tìm kiếm...")}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-[#4285F4]/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
@@ -163,14 +181,20 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
               sortOption={sortOption}
               onSortChange={setSortOption}
               options={sortOptions}
-              fallbackLabel={t('sort.sort_label', 'Sort')}
+              fallbackLabel={t("sort.sort_label", "Sort")}
             />
           </div>
         </div>
       </div>
-      
-      <div ref={parentRef} className="flex-1 overflow-y-auto px-8 pt-4 pb-24 min-h-0 custom-scrollbar">
-        <div className="flex flex-col relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+
+      <div
+        ref={parentRef}
+        className="flex-1 overflow-y-auto px-8 pt-4 pb-24 min-h-0 custom-scrollbar"
+      >
+        <div
+          className="flex flex-col relative w-full"
+          style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+        >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const track = filteredItems[virtualRow.index];
             const driveItem = {
@@ -178,15 +202,15 @@ export function FullRecentView({ recent, onBack, onPlay, token, currentTrack, ti
               title: track.title,
               isFolder: false,
               size: track.size,
-              trackInfo: track
+              trackInfo: track,
             };
             return (
               <div
                 key={virtualRow.key}
                 style={{
-                  position: 'absolute',
+                  position: "absolute",
                   left: 0,
-                  width: '100%',
+                  width: "100%",
                   height: `${virtualRow.size}px`,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}

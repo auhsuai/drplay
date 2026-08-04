@@ -2,19 +2,29 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { captureError } from "./errorLog";
 import { getCurrentSessionId } from "./sessionGuard";
-import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, TOKEN_TIME_KEY } from "./storageKeys";
+import {
+  ACCESS_TOKEN_KEY,
+  REFRESH_TOKEN_KEY,
+  TOKEN_TIME_KEY,
+} from "./storageKeys";
 
 export class TokenRefreshError extends Error {
+  readonly kind: "network" | "invalid_grant" | "timeout" | "unknown";
   constructor(
     message: string,
-    public readonly kind: 'network' | 'invalid_grant' | 'timeout' | 'unknown'
+    kind: "network" | "invalid_grant" | "timeout" | "unknown",
   ) {
     super(message);
-    this.name = 'TokenRefreshError';
+    this.name = "TokenRefreshError";
+    this.kind = kind;
   }
 }
 
-type TokenData = { access_token?: string; refresh_token?: string; expires_in?: number } | null;
+type TokenData = {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+} | null;
 
 const MAX_SAFE_TIMEOUT = 2_147_483_647; // 32-bit signed int limit (~24.8 days); larger values overflow and fire immediately
 
@@ -50,11 +60,12 @@ const DEFAULT_EXPIRES_IN_SEC = 3600;
 // older Chromium surfaced it as 'AbortError', so treat AbortError as a
 // timeout too. Anything else (DNS, TLS, connection refused) is a real
 // network failure. (Sources: MDN AbortSignal.timeout, authon.dev 2026.)
-function classifyRequestError(err: unknown): 'network' | 'timeout' {
+function classifyRequestError(err: unknown): "network" | "timeout" {
   if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return 'timeout';
+    if (err.name === "TimeoutError" || err.name === "AbortError")
+      return "timeout";
   }
-  return 'network';
+  return "network";
 }
 
 // Bound a promise that cannot be cancelled (Tauri invoke has no AbortSignal,
@@ -68,8 +79,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       reject(new Error(`Token refresh timeout (no response within ${ms}ms)`));
     }, ms);
     promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (err) => { clearTimeout(timer); reject(err); }
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
     );
   });
 }
@@ -93,12 +110,19 @@ export const stopProactiveRefresh = () => {
 // enforces), NOT the server-reported expires_in: without the cap a 3600s
 // expires_in would put the timer at 3300s while getValidToken already treats
 // the token as stale at 3000s — the timer could never win the race.
-export const computeProactiveRefreshDelayMs = (expiresInSeconds: number): number => {
-  const safeExpires = Number.isFinite(expiresInSeconds) ? expiresInSeconds : DEFAULT_EXPIRES_IN_SEC;
+export const computeProactiveRefreshDelayMs = (
+  expiresInSeconds: number,
+): number => {
+  const safeExpires = Number.isFinite(expiresInSeconds)
+    ? expiresInSeconds
+    : DEFAULT_EXPIRES_IN_SEC;
   const effectiveLifetimeSec = Math.min(safeExpires, TOKEN_EXPIRY_MS / 1000);
   return Math.min(
-    Math.max((effectiveLifetimeSec - PROACTIVE_REFRESH_MARGIN_SEC) * 1000, PROACTIVE_REFRESH_MIN_MS),
-    MAX_SAFE_TIMEOUT
+    Math.max(
+      (effectiveLifetimeSec - PROACTIVE_REFRESH_MARGIN_SEC) * 1000,
+      PROACTIVE_REFRESH_MIN_MS,
+    ),
+    MAX_SAFE_TIMEOUT,
   );
 };
 
@@ -108,7 +132,11 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
     try {
       await getValidToken(true);
     } catch (e: unknown) {
-      captureError({ level: 'warn', source: 'apiClient', message: `Proactive refresh failed: ${e instanceof Error ? e.message : String(e)}` });
+      captureError({
+        level: "warn",
+        source: "apiClient",
+        message: `Proactive refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
     }
   }, computeProactiveRefreshDelayMs(expiresInSeconds));
 };
@@ -116,33 +144,51 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
 export async function revokeGoogleToken(token: string): Promise<void> {
   if (!token) return;
   try {
-    await fetch('https://oauth2.googleapis.com/revoke', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    await fetch("https://oauth2.googleapis.com/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: `token=${encodeURIComponent(token)}`,
       signal: AbortSignal.timeout(5000),
     });
   } catch (err: unknown) {
-    captureError({ level: 'warn', source: 'apiClient', message: `Revoke token failed (non-blocking): ${err instanceof Error ? err.message : String(err)}` });
+    captureError({
+      level: "warn",
+      source: "apiClient",
+      message: `Revoke token failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
+    });
   }
 }
 
 function getStoredTokenTime(): number {
   const raw = localStorage.getItem(TOKEN_TIME_KEY);
-  const parsed = parseInt(raw || '', 10);
-  
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > Date.now() + TOKEN_TIME_MAX_FUTURE_MS) {
-    captureError({ level: 'warn', source: 'apiClient', message: 'Invalid token_time detected, forcing refresh' });
+  const parsed = parseInt(raw || "", 10);
+
+  if (
+    !Number.isFinite(parsed) ||
+    parsed <= 0 ||
+    parsed > Date.now() + TOKEN_TIME_MAX_FUTURE_MS
+  ) {
+    captureError({
+      level: "warn",
+      source: "apiClient",
+      message: "Invalid token_time detected, forcing refresh",
+    });
     return 0;
   }
-  
+
   return parsed;
 }
 
 function scheduleRetryRefresh() {
   if (refreshTimerId) clearTimeout(refreshTimerId);
   refreshTimerId = setTimeout(() => {
-    getValidToken(true).catch(() => captureError({ level: 'warn', source: 'apiClient', message: 'retry-refresh-failed' }));
+    getValidToken(true).catch(() =>
+      captureError({
+        level: "warn",
+        source: "apiClient",
+        message: "retry-refresh-failed",
+      }),
+    );
   }, RETRY_DELAY_MS);
 }
 
@@ -154,18 +200,18 @@ function scheduleRetryRefresh() {
 export const readRefreshToken = async (): Promise<string | null> => {
   try {
     const keyringToken = await withTimeout(
-      invoke<string | null>('get_refresh_token'),
-      KEYRING_TIMEOUT_MS
+      invoke<string | null>("get_refresh_token"),
+      KEYRING_TIMEOUT_MS,
     );
-    if (typeof keyringToken === 'string' && keyringToken.length > 0) {
+    if (typeof keyringToken === "string" && keyringToken.length > 0) {
       return keyringToken;
     }
   } catch (err: unknown) {
     // Never log the token; the Rust side already strips it from its errors
     // (see token_store.rs).
     captureError({
-      level: 'warn',
-      source: 'apiClient',
+      level: "warn",
+      source: "apiClient",
       message: `refresh-token-keyring-read-failed, falling back to localStorage: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
@@ -182,14 +228,17 @@ export const readRefreshToken = async (): Promise<string | null> => {
 // the next rotation retries the keyring write. Never rejects.
 export const writeRefreshToken = async (token: string): Promise<void> => {
   try {
-    await withTimeout(invoke('set_refresh_token', { token }), KEYRING_TIMEOUT_MS);
+    await withTimeout(
+      invoke("set_refresh_token", { token }),
+      KEYRING_TIMEOUT_MS,
+    );
     // Success: the keyring is now the single source of truth — drop the
     // legacy localStorage copy so the credential never exists in two places.
     localStorage.removeItem(REFRESH_TOKEN_KEY);
   } catch (err: unknown) {
     captureError({
-      level: 'warn',
-      source: 'apiClient',
+      level: "warn",
+      source: "apiClient",
       message: `refresh-token-keyring-write-failed, keeping localStorage fallback: ${err instanceof Error ? err.message : String(err)}`,
     });
     try {
@@ -199,8 +248,8 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
       // log, never throw (the caller is fire-and-forget and the access token
       // is still usable for its ~1h lifetime).
       captureError({
-        level: 'warn',
-        source: 'apiClient',
+        level: "warn",
+        source: "apiClient",
         message: `refresh-token-localstorage-write-failed: ${storageErr instanceof Error ? storageErr.message : String(storageErr)}`,
       });
     }
@@ -214,14 +263,14 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
 // after a logout intent.
 export const deleteRefreshToken = async (): Promise<void> => {
   try {
-    await withTimeout(invoke('delete_refresh_token'), KEYRING_TIMEOUT_MS);
+    await withTimeout(invoke("delete_refresh_token"), KEYRING_TIMEOUT_MS);
   } catch (err: unknown) {
     // Never log the token; the Rust side strips it from its errors (see
     // token_store.rs). A vault failure must not block logout — the access
     // token is already gone, so the session ends regardless.
     captureError({
-      level: 'warn',
-      source: 'apiClient',
+      level: "warn",
+      source: "apiClient",
       message: `refresh-token-keyring-delete-failed: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
@@ -231,12 +280,19 @@ export const deleteRefreshToken = async (): Promise<void> => {
     // localStorage unavailable (privacy mode / quota): the keyring delete
     // already ran; there is no second store to clear. Never throw — the
     // caller is fire-and-forget.
-    captureError({ level: 'warn', source: 'apiClient', message: 'refresh-token-localstorage-clear-failed' });
+    captureError({
+      level: "warn",
+      source: "apiClient",
+      message: "refresh-token-localstorage-clear-failed",
+    });
   }
 };
 
-export const getValidToken = async (forceRefresh: boolean = false, signal?: AbortSignal): Promise<string | null> => {
-  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+export const getValidToken = async (
+  forceRefresh: boolean = false,
+  signal?: AbortSignal,
+): Promise<string | null> => {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
   const token = localStorage.getItem(ACCESS_TOKEN_KEY);
   const issueTime = getStoredTokenTime();
@@ -245,11 +301,11 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
   if (isExpired || !token || forceRefresh) {
     const refreshToken = await readRefreshToken();
     if (!refreshToken) {
-      window.dispatchEvent(new CustomEvent('auth-logout'));
+      window.dispatchEvent(new CustomEvent("auth-logout"));
       return null;
     }
 
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
     if (isRefreshing) {
       return new Promise((resolve, reject) => {
@@ -263,28 +319,45 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
     try {
       let tokenData: TokenData;
       try {
-        tokenData = await withTimeout(invoke<TokenData>("refresh_google_token", { refreshToken }), REFRESH_TIMEOUT_MS);
+        tokenData = await withTimeout(
+          invoke<TokenData>("refresh_google_token", { refreshToken }),
+          REFRESH_TIMEOUT_MS,
+        );
       } catch (err: unknown) {
         const errStr = String(err);
-        if (errStr.includes("Failed to fetch") || errStr.includes("timeout") || errStr.includes("unreachable")) {
-          throw new TokenRefreshError('Network unreachable', 'network');
+        if (
+          errStr.includes("Failed to fetch") ||
+          errStr.includes("timeout") ||
+          errStr.includes("unreachable")
+        ) {
+          throw new TokenRefreshError("Network unreachable", "network");
         } else if (errStr.includes("invalid_grant")) {
-          throw new TokenRefreshError('Refresh token revoked/expired', 'invalid_grant');
+          throw new TokenRefreshError(
+            "Refresh token revoked/expired",
+            "invalid_grant",
+          );
         } else {
-          throw new TokenRefreshError(`Unexpected error: ${errStr}`, 'unknown');
+          throw new TokenRefreshError(`Unexpected error: ${errStr}`, "unknown");
         }
       }
 
-      if (!tokenData || typeof tokenData.access_token !== 'string' || tokenData.access_token.length === 0) {
-        throw new TokenRefreshError('Malformed refresh response: missing access_token', 'unknown');
+      if (
+        !tokenData ||
+        typeof tokenData.access_token !== "string" ||
+        tokenData.access_token.length === 0
+      ) {
+        throw new TokenRefreshError(
+          "Malformed refresh response: missing access_token",
+          "unknown",
+        );
       }
       const accessToken = tokenData.access_token;
 
       if (mySessionId !== getCurrentSessionId()) {
-        refreshSubscribers.forEach(sub => sub.resolve(''));
-        return '';
+        refreshSubscribers.forEach((sub) => sub.resolve(""));
+        return "";
       }
-      
+
       localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
       localStorage.setItem(TOKEN_TIME_KEY, Date.now().toString());
       if (tokenData.refresh_token) {
@@ -297,22 +370,30 @@ export const getValidToken = async (forceRefresh: boolean = false, signal?: Abor
       }
 
       scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_IN_SEC);
-      window.dispatchEvent(new CustomEvent('token-updated', { detail: { token: accessToken } }));
-      
-      refreshSubscribers.forEach(sub => sub.resolve(accessToken));
+      window.dispatchEvent(
+        new CustomEvent("token-updated", { detail: { token: accessToken } }),
+      );
+
+      refreshSubscribers.forEach((sub) => sub.resolve(accessToken));
       return accessToken;
     } catch (err: unknown) {
-      refreshSubscribers.forEach(sub => sub.reject(err instanceof Error ? err : new Error(String(err))));
-      
+      refreshSubscribers.forEach((sub) =>
+        sub.reject(err instanceof Error ? err : new Error(String(err))),
+      );
+
       if (err instanceof TokenRefreshError) {
-        if (err.kind === 'invalid_grant') {
-          window.dispatchEvent(new CustomEvent('auth-logout'));
+        if (err.kind === "invalid_grant") {
+          window.dispatchEvent(new CustomEvent("auth-logout"));
         } else {
-          captureError({ level: 'warn', source: 'apiClient', message: `Token refresh failed (${err.kind}), will retry` });
+          captureError({
+            level: "warn",
+            source: "apiClient",
+            message: `Token refresh failed (${err.kind}), will retry`,
+          });
           scheduleRetryRefresh();
         }
       } else {
-         window.dispatchEvent(new CustomEvent('auth-logout'));
+        window.dispatchEvent(new CustomEvent("auth-logout"));
       }
       return null;
     } finally {
@@ -330,7 +411,10 @@ export interface FetchWithAuthOptions extends RequestInit {
   timeoutMs?: number;
 }
 
-export const fetchWithAuth = async (url: RequestInfo, options: FetchWithAuthOptions = {}): Promise<Response> => {
+export const fetchWithAuth = async (
+  url: RequestInfo,
+  options: FetchWithAuthOptions = {},
+): Promise<Response> => {
   const { timeoutMs, ...fetchOptions } = options;
   let token = localStorage.getItem(ACCESS_TOKEN_KEY);
 
@@ -345,7 +429,7 @@ export const fetchWithAuth = async (url: RequestInfo, options: FetchWithAuthOpti
   // MAX_SAFE_TIMEOUT so an absurd value cannot overflow setTimeout and fire
   // immediately (see the MAX_SAFE_TIMEOUT note above).
   const effectiveTimeoutMs =
-    typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
       ? Math.min(timeoutMs, MAX_SAFE_TIMEOUT)
       : FETCH_TIMEOUT_MS;
 
@@ -354,9 +438,10 @@ export const fetchWithAuth = async (url: RequestInfo, options: FetchWithAuthOpti
   // (e.g. a component-unmount cancel) via AbortSignal.any so neither wins,
   // falling back to the timeout alone on runtimes lacking AbortSignal.any.
   const timeoutSignal = AbortSignal.timeout(effectiveTimeoutMs);
-  const signal = options.signal && typeof AbortSignal.any === 'function'
-    ? AbortSignal.any([options.signal, timeoutSignal])
-    : timeoutSignal;
+  const signal =
+    options.signal && typeof AbortSignal.any === "function"
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
 
   const requestOptions: RequestInit = { ...fetchOptions, headers, signal };
 
@@ -372,7 +457,11 @@ export const fetchWithAuth = async (url: RequestInfo, options: FetchWithAuthOpti
       retryHeaders.set("Authorization", `Bearer ${newToken}`);
       try {
         // Retry also uses the same bounded signal so it cannot hang either.
-        return await fetch(url, { ...fetchOptions, headers: retryHeaders, signal });
+        return await fetch(url, {
+          ...fetchOptions,
+          headers: retryHeaders,
+          signal,
+        });
       } catch (err: unknown) {
         // Retry failed: classify and throw a clear, typed error. We do NOT
         // swallow it (caller must know) and we do NOT hang.

@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  cleanup,
+  within,
+} from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
 import { clearAppCache, getCacheSizes } from "../../utils/cache";
@@ -42,10 +49,14 @@ vi.mock("../../utils/downloadPath", () => ({
 
 // Child sections pull in heavy dependencies (IndexedDB, i18n) — stub them out
 // so this test stays focused on the download-path display.
-vi.mock("./components/LanguageDropdown", () => ({ LanguageDropdown: () => null }));
+vi.mock("./components/LanguageDropdown", () => ({
+  LanguageDropdown: () => null,
+}));
 vi.mock("./components/ThemeDropdown", () => ({ ThemeDropdown: () => null }));
 vi.mock("./components/CreditsSection", () => ({ CreditsSection: () => null }));
-vi.mock("./components/ErrorLogSection", () => ({ ErrorLogSection: () => null }));
+vi.mock("./components/ErrorLogSection", () => ({
+  ErrorLogSection: () => null,
+}));
 
 const LONG_PATH = "C:\\Users\\thinkpad\\Desktop\\Antigravity\\drplay\\Music";
 const SHORT_PATH = "C:\\Music";

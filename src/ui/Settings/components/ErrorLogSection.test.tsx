@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  act,
+} from "@testing-library/react";
 import { initReactI18next, useTranslation } from "react-i18next";
 import i18n from "i18next";
 import { ErrorLogSection } from "./ErrorLogSection";
@@ -41,9 +47,9 @@ import {
 } from "../../../utils/errorLog";
 
 vi.mock("../../../utils/errorLog", async () => {
-  const actual = await vi.importActual<typeof import("../../../utils/errorLog")>(
-    "../../../utils/errorLog"
-  );
+  const actual = await vi.importActual<
+    typeof import("../../../utils/errorLog")
+  >("../../../utils/errorLog");
   return {
     ...actual,
     clearErrorLogs: vi.fn(),
@@ -56,7 +62,9 @@ vi.mock("../../../utils/simpleToast", () => ({
   showErrorToast: vi.fn(),
 }));
 
-const clipboardWriteTextMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const clipboardWriteTextMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined),
+);
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
   writeText: clipboardWriteTextMock,
 }));
@@ -76,7 +84,7 @@ vi.mock("../../../db/db", () => ({
 const clearErrorLogsMock = vi.mocked(clearErrorLogs);
 const exportErrorLogsSanitizedMock = vi.mocked(exportErrorLogsSanitized);
 const exportErrorLogsSanitizedForDateMock = vi.mocked(
-  exportErrorLogsSanitizedForDate
+  exportErrorLogsSanitizedForDate,
 );
 
 // Two distinct local dates so grouping has 2 buckets.
@@ -122,7 +130,9 @@ afterEach(() => {
 describe("ErrorLogSection", () => {
   it("renders empty state when the live query resolves to []", async () => {
     render(<ErrorLogSection />);
-    expect(await screen.findByText(/No errors have been recorded yet/i)).toBeTruthy();
+    expect(
+      await screen.findByText(/No errors have been recorded yet/i),
+    ).toBeTruthy();
     expect(screen.queryByText("boom")).toBeNull();
   });
 
@@ -180,7 +190,7 @@ describe("ErrorLogSection", () => {
   it("copy button calls clipboard.writeText with sanitized text", async () => {
     useLiveQueryMock.mockReturnValue(makeEntries());
     exportErrorLogsSanitizedForDateMock.mockResolvedValue(
-      "2023-11-14T22:13:20.000Z [error] Player: boom"
+      "2023-11-14T22:13:20.000Z [error] Player: boom",
     );
     render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
@@ -191,7 +201,7 @@ describe("ErrorLogSection", () => {
     await screen.findByText(/Copied!/i);
     await new Promise((r) => setTimeout(r, 0));
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(
-      "2023-11-14T22:13:20.000Z [error] Player: boom"
+      "2023-11-14T22:13:20.000Z [error] Player: boom",
     );
     expect(await screen.findByText(/Copied!/i)).toBeTruthy();
   });
@@ -220,13 +230,17 @@ describe("ErrorLogSection", () => {
     act(() => {
       rerender(<ErrorLogSection />);
     });
-    expect(await screen.findByText(/No errors have been recorded yet/i)).toBeTruthy();
+    expect(
+      await screen.findByText(/No errors have been recorded yet/i),
+    ).toBeTruthy();
   });
 
   it("renders a newly captured log without remounting (live table update)", async () => {
     useLiveQueryMock.mockReturnValue([]);
     const { rerender } = render(<ErrorLogSection />);
-    expect(await screen.findByText(/No errors have been recorded yet/i)).toBeTruthy();
+    expect(
+      await screen.findByText(/No errors have been recorded yet/i),
+    ).toBeTruthy();
 
     // REGRESSION (BUG 1): captureError() wrote a new entry into db.errorLogs.
     // The component must show it WITHOUT being remounted — the live query

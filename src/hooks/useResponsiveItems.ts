@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from "react";
 
 // Breakpoints match Tailwind: md = 768px, lg = 1024px
 function getSnapshot(): number {
@@ -14,18 +14,18 @@ function getSnapshot(): number {
 // NOT implement matchMedia (verified on jsdom 29) — fall back to the legacy
 // resize listener so the hook still works under test.
 function subscribe(onStoreChange: () => void): () => void {
-  if (typeof window.matchMedia === 'function') {
-    const mqLg = window.matchMedia('(min-width: 1024px)');
-    const mqMd = window.matchMedia('(min-width: 768px)');
-    mqLg.addEventListener('change', onStoreChange);
-    mqMd.addEventListener('change', onStoreChange);
+  if (typeof window.matchMedia === "function") {
+    const mqLg = window.matchMedia("(min-width: 1024px)");
+    const mqMd = window.matchMedia("(min-width: 768px)");
+    mqLg.addEventListener("change", onStoreChange);
+    mqMd.addEventListener("change", onStoreChange);
     return () => {
-      mqLg.removeEventListener('change', onStoreChange);
-      mqMd.removeEventListener('change', onStoreChange);
+      mqLg.removeEventListener("change", onStoreChange);
+      mqMd.removeEventListener("change", onStoreChange);
     };
   }
-  window.addEventListener('resize', onStoreChange);
-  return () => window.removeEventListener('resize', onStoreChange);
+  window.addEventListener("resize", onStoreChange);
+  return () => window.removeEventListener("resize", onStoreChange);
 }
 
 export function useResponsiveItems(): number {

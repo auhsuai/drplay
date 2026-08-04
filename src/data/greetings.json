@@ -1,52 +1,175 @@
 {
   "morning": [
-    { "en": "Let the rhythm guide your day.", "vi": "Để giai điệu dẫn lối ngày mới của bạn." },
-    { "en": "Turn up the volume, turn down the noise.", "vi": "Bật âm lượng lên, tắt đi những ồn ào." },
-    { "en": "New day, new tracks to discover.", "vi": "Ngày mới, những bài hát mới đang chờ khám phá." },
-    { "en": "Fuel your day with the perfect beat.", "vi": "Nạp năng lượng ngày mới bằng những nhịp điệu hoàn hảo." },
-    { "en": "Wake up, tune in, and stand out.", "vi": "Thức giấc, bật nhạc và tỏa sáng thôi nào." },
-    { "en": "Rise and shine, your playlist is ready.", "vi": "Dậy thôi nào, danh sách phát đã sẵn sàng rồi." },
-    { "en": "Start your day on a high note.", "vi": "Bắt đầu ngày mới bằng một nốt nhạc cao vút." },
-    { "en": "Chasing goals with a perfect soundtrack.", "vi": "Theo đuổi mục tiêu cùng bản nhạc nền hoàn hảo." },
-    { "en": "Good vibes only for this beautiful morning.", "vi": "Chỉ đón nhận những năng lượng tích cực cho buổi sáng này." }
+    {
+      "en": "Let the rhythm guide your day.",
+      "vi": "Để giai điệu dẫn lối ngày mới của bạn."
+    },
+    {
+      "en": "Turn up the volume, turn down the noise.",
+      "vi": "Bật âm lượng lên, tắt đi những ồn ào."
+    },
+    {
+      "en": "New day, new tracks to discover.",
+      "vi": "Ngày mới, những bài hát mới đang chờ khám phá."
+    },
+    {
+      "en": "Fuel your day with the perfect beat.",
+      "vi": "Nạp năng lượng ngày mới bằng những nhịp điệu hoàn hảo."
+    },
+    {
+      "en": "Wake up, tune in, and stand out.",
+      "vi": "Thức giấc, bật nhạc và tỏa sáng thôi nào."
+    },
+    {
+      "en": "Rise and shine, your playlist is ready.",
+      "vi": "Dậy thôi nào, danh sách phát đã sẵn sàng rồi."
+    },
+    {
+      "en": "Start your day on a high note.",
+      "vi": "Bắt đầu ngày mới bằng một nốt nhạc cao vút."
+    },
+    {
+      "en": "Chasing goals with a perfect soundtrack.",
+      "vi": "Theo đuổi mục tiêu cùng bản nhạc nền hoàn hảo."
+    },
+    {
+      "en": "Good vibes only for this beautiful morning.",
+      "vi": "Chỉ đón nhận những năng lượng tích cực cho buổi sáng này."
+    }
   ],
   "afternoon": [
-    { "en": "A gentle melody for your lunch break.", "vi": "Giai điệu nhẹ nhàng cho giờ nghỉ trưa của bạn." },
-    { "en": "Recharge your afternoon with these beats.", "vi": "Nạp lại năng lượng cho buổi chiều bằng những nhịp điệu này." },
-    { "en": "A quick musical escape from the midday rush.", "vi": "Trốn vào âm nhạc một chút giữa bộn bề buổi trưa." },
-    { "en": "Keep the momentum going all afternoon.", "vi": "Giữ vững nhịp độ suốt buổi chiều nhé." },
-    { "en": "Slowing down as the midday sun shines.", "vi": "Chậm lại một chút cùng vạt nắng trưa." },
-    { "en": "Beat the afternoon slump with some good music.", "vi": "Đập tan cơn buồn ngủ xế chiều bằng những giai điệu hay." },
-    { "en": "Golden hour deserves a golden soundtrack.", "vi": "Giờ hoàng hôn xế chiều xứng đáng với một bản nhạc tuyệt vời." },
-    { "en": "A little melody to power through the rest of the day.", "vi": "Một chút giai điệu để nạp năng lượng cho nửa ngày còn lại." },
-    { "en": "Take a deep breath and hit play.", "vi": "Hít một hơi thật sâu và nhấn nút phát nhạc nào." },
-    { "en": "Making the afternoon stretch a bit more musical.", "vi": "Biến khoảng thời gian xế chiều trở nên thơ mộng hơn." }
+    {
+      "en": "A gentle melody for your lunch break.",
+      "vi": "Giai điệu nhẹ nhàng cho giờ nghỉ trưa của bạn."
+    },
+    {
+      "en": "Recharge your afternoon with these beats.",
+      "vi": "Nạp lại năng lượng cho buổi chiều bằng những nhịp điệu này."
+    },
+    {
+      "en": "A quick musical escape from the midday rush.",
+      "vi": "Trốn vào âm nhạc một chút giữa bộn bề buổi trưa."
+    },
+    {
+      "en": "Keep the momentum going all afternoon.",
+      "vi": "Giữ vững nhịp độ suốt buổi chiều nhé."
+    },
+    {
+      "en": "Slowing down as the midday sun shines.",
+      "vi": "Chậm lại một chút cùng vạt nắng trưa."
+    },
+    {
+      "en": "Beat the afternoon slump with some good music.",
+      "vi": "Đập tan cơn buồn ngủ xế chiều bằng những giai điệu hay."
+    },
+    {
+      "en": "Golden hour deserves a golden soundtrack.",
+      "vi": "Giờ hoàng hôn xế chiều xứng đáng với một bản nhạc tuyệt vời."
+    },
+    {
+      "en": "A little melody to power through the rest of the day.",
+      "vi": "Một chút giai điệu để nạp năng lượng cho nửa ngày còn lại."
+    },
+    {
+      "en": "Take a deep breath and hit play.",
+      "vi": "Hít một hơi thật sâu và nhấn nút phát nhạc nào."
+    },
+    {
+      "en": "Making the afternoon stretch a bit more musical.",
+      "vi": "Biến khoảng thời gian xế chiều trở nên thơ mộng hơn."
+    }
   ],
   "evening": [
-    { "en": "A soundtrack for your midnight thoughts.", "vi": "Bản nhạc nền cho những suy tư nửa đêm." },
-    { "en": "Where words fail, music speaks.", "vi": "Nơi ngôn từ bất lực, âm nhạc lên tiếng." },
-    { "en": "Soft melodies for a quiet mind.", "vi": "Giai điệu êm dịu cho một tâm trí bình yên." },
-    { "en": "Under the stars, wrapped in sound.", "vi": "Dưới những ngôi sao, cuộn tròn trong âm thanh." },
-    { "en": "Unwind and let the music take over.", "vi": "Thả lỏng cơ thể và để âm nhạc tiếp quản không gian." },
-    { "en": "The night is young, and so is the music.", "vi": "Đêm còn dài, và âm nhạc cũng đang tuôn chảy." },
-    { "en": "Dim the lights, turn up the feelings.", "vi": "Hạ ánh đèn xuống, bật cảm xúc lên." },
-    { "en": "Your cozy corner for late-night melodies.", "vi": "Góc nhỏ ấm áp cho những giai điệu đêm muộn." },
-    { "en": "Let the bass slow down your heartbeat.", "vi": "Để tiếng bass làm chậm lại nhịp đập của một ngày hối hả." }
+    {
+      "en": "A soundtrack for your midnight thoughts.",
+      "vi": "Bản nhạc nền cho những suy tư nửa đêm."
+    },
+    {
+      "en": "Where words fail, music speaks.",
+      "vi": "Nơi ngôn từ bất lực, âm nhạc lên tiếng."
+    },
+    {
+      "en": "Soft melodies for a quiet mind.",
+      "vi": "Giai điệu êm dịu cho một tâm trí bình yên."
+    },
+    {
+      "en": "Under the stars, wrapped in sound.",
+      "vi": "Dưới những ngôi sao, cuộn tròn trong âm thanh."
+    },
+    {
+      "en": "Unwind and let the music take over.",
+      "vi": "Thả lỏng cơ thể và để âm nhạc tiếp quản không gian."
+    },
+    {
+      "en": "The night is young, and so is the music.",
+      "vi": "Đêm còn dài, và âm nhạc cũng đang tuôn chảy."
+    },
+    {
+      "en": "Dim the lights, turn up the feelings.",
+      "vi": "Hạ ánh đèn xuống, bật cảm xúc lên."
+    },
+    {
+      "en": "Your cozy corner for late-night melodies.",
+      "vi": "Góc nhỏ ấm áp cho những giai điệu đêm muộn."
+    },
+    {
+      "en": "Let the bass slow down your heartbeat.",
+      "vi": "Để tiếng bass làm chậm lại nhịp đập của một ngày hối hả."
+    }
   ],
   "general": [
-    { "en": "Press play and fade the world out.", "vi": "Bật nhạc lên và để thế giới lùi lại phía sau." },
-    { "en": "Just you, your thoughts, and this song.", "vi": "Chỉ có bạn, suy nghĩ của bạn, và bài hát này." },
-    { "en": "Lost in the rhythm, found in the melody.", "vi": "Lạc vào nhịp điệu, tìm lại chính mình trong giai điệu." },
-    { "en": "Pour a cup of coffee and let the music flow.", "vi": "Rót một tách cà phê và để âm nhạc khơi dòng." },
-    { "en": "Your life, set to music.", "vi": "Cuộc sống của bạn, viết bằng âm nhạc." },
-    { "en": "A soundtrack for every feeling.", "vi": "Giai điệu cho mọi cung bậc cảm xúc." },
-    { "en": "Ready to find your new favorite track?", "vi": "Sẵn sàng tìm kiếm bài hát yêu thích tiếp theo chưa?" },
-    { "en": "Your personalized escape awaits.", "vi": "Không gian trốn tìm dành riêng cho bạn đã sẵn sàng." },
+    {
+      "en": "Press play and fade the world out.",
+      "vi": "Bật nhạc lên và để thế giới lùi lại phía sau."
+    },
+    {
+      "en": "Just you, your thoughts, and this song.",
+      "vi": "Chỉ có bạn, suy nghĩ của bạn, và bài hát này."
+    },
+    {
+      "en": "Lost in the rhythm, found in the melody.",
+      "vi": "Lạc vào nhịp điệu, tìm lại chính mình trong giai điệu."
+    },
+    {
+      "en": "Pour a cup of coffee and let the music flow.",
+      "vi": "Rót một tách cà phê và để âm nhạc khơi dòng."
+    },
+    {
+      "en": "Your life, set to music.",
+      "vi": "Cuộc sống của bạn, viết bằng âm nhạc."
+    },
+    {
+      "en": "A soundtrack for every feeling.",
+      "vi": "Giai điệu cho mọi cung bậc cảm xúc."
+    },
+    {
+      "en": "Ready to find your new favorite track?",
+      "vi": "Sẵn sàng tìm kiếm bài hát yêu thích tiếp theo chưa?"
+    },
+    {
+      "en": "Your personalized escape awaits.",
+      "vi": "Không gian trốn tìm dành riêng cho bạn đã sẵn sàng."
+    },
     { "en": "Music on, world off.", "vi": "Bật nhạc lên, tắt thế giới đi." },
-    { "en": "Every song has a story. What's yours today?", "vi": "Mỗi bài hát là một câu chuyện. Câu chuyện hôm nay của bạn là gì?" },
-    { "en": "An ocean of sound just for you.", "vi": "Cả một đại dương âm thanh đang dành riêng cho bạn." },
-    { "en": "Escape reality for a few minutes.", "vi": "Tạm trốn khỏi thực tại trong vài phút." },
-    { "en": "Your mood, your rules, your music.", "vi": "Cảm xúc của bạn, luật của bạn, âm nhạc của bạn." },
-    { "en": "Finding comfort in between the lyrics.", "vi": "Tìm thấy sự an ủi ẩn sâu trong từng lời ca." }
+    {
+      "en": "Every song has a story. What's yours today?",
+      "vi": "Mỗi bài hát là một câu chuyện. Câu chuyện hôm nay của bạn là gì?"
+    },
+    {
+      "en": "An ocean of sound just for you.",
+      "vi": "Cả một đại dương âm thanh đang dành riêng cho bạn."
+    },
+    {
+      "en": "Escape reality for a few minutes.",
+      "vi": "Tạm trốn khỏi thực tại trong vài phút."
+    },
+    {
+      "en": "Your mood, your rules, your music.",
+      "vi": "Cảm xúc của bạn, luật của bạn, âm nhạc của bạn."
+    },
+    {
+      "en": "Finding comfort in between the lyrics.",
+      "vi": "Tìm thấy sự an ủi ẩn sâu trong từng lời ca."
+    }
   ]
 }

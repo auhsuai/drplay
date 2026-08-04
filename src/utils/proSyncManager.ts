@@ -1,42 +1,45 @@
-import { captureError } from './errorLog';
+import { captureError } from "./errorLog";
 
 // Named constants for the worker->main protocol (message types) and the
 // main->UI protocol (CustomEvent names). Worker messages were previously
 // matched by raw string literals; the worker file still posts the same
 // strings, so the runtime protocol is unchanged.
 export const SYNC_EVENT_NAMES = {
-  progress: 'pro-sync-progress',
-  complete: 'pro-sync-complete',
-  busy: 'pro-sync-busy',
-  noToken: 'pro-sync-no-token',
-  error: 'pro-sync-error',
+  progress: "pro-sync-progress",
+  complete: "pro-sync-complete",
+  busy: "pro-sync-busy",
+  noToken: "pro-sync-no-token",
+  error: "pro-sync-error",
 } as const;
 
 const WORKER_MSG_TYPES = {
-  tokenExpired: 'TOKEN_EXPIRED',
-  progress: 'SYNC_PROGRESS',
-  complete: 'SYNC_COMPLETE',
-  busy: 'SYNC_BUSY',
-  noToken: 'SYNC_NO_TOKEN',
-  error: 'SYNC_ERROR',
+  tokenExpired: "TOKEN_EXPIRED",
+  progress: "SYNC_PROGRESS",
+  complete: "SYNC_COMPLETE",
+  busy: "SYNC_BUSY",
+  noToken: "SYNC_NO_TOKEN",
+  error: "SYNC_ERROR",
 } as const;
 
 // Value union of the wire-level strings the worker can post (the switch
 // matches against these values, so the union is derived from the values).
-export type WorkerMsgType = (typeof WORKER_MSG_TYPES)[keyof typeof WORKER_MSG_TYPES];
+export type WorkerMsgType =
+  (typeof WORKER_MSG_TYPES)[keyof typeof WORKER_MSG_TYPES];
 // Union of the CustomEvent names dispatched to the UI layer.
 type SyncEventName = (typeof SYNC_EVENT_NAMES)[keyof typeof SYNC_EVENT_NAMES];
 
 let globalWorker: Worker | null = null;
 let onTokenRefreshRequest: (() => Promise<string | null>) | null = null;
 
-export function setTokenRefreshHandler(handler: (() => Promise<string | null>) | null) {
+export function setTokenRefreshHandler(
+  handler: (() => Promise<string | null>) | null,
+) {
   onTokenRefreshRequest = handler;
 }
 
 export function updateWorkerToken(token: string) {
   if (globalWorker) {
-    globalWorker.postMessage({ type: 'token', token });
+    globalWorker.postMessage({ type: "token", token });
   }
 }
 
@@ -54,7 +57,7 @@ export interface ProSyncHandlerDeps {
 // via logError + a CustomEvent so failures are never swallowed.
 export async function handleWorkerMessage(
   msg: { type?: WorkerMsgType },
-  deps: ProSyncHandlerDeps
+  deps: ProSyncHandlerDeps,
 ): Promise<void> {
   switch (msg.type) {
     case WORKER_MSG_TYPES.tokenExpired: {
@@ -66,7 +69,7 @@ export async function handleWorkerMessage(
         }
       } catch (err) {
         deps.logError(
-          `pro-sync: token refresh failed: ${err instanceof Error ? err.message : String(err)}`
+          `pro-sync: token refresh failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
       break;
@@ -82,11 +85,11 @@ export async function handleWorkerMessage(
       deps.dispatch(SYNC_EVENT_NAMES.busy);
       break;
     case WORKER_MSG_TYPES.noToken:
-      deps.logError('pro-sync: no token provided to worker');
+      deps.logError("pro-sync: no token provided to worker");
       deps.dispatch(SYNC_EVENT_NAMES.noToken);
       break;
     case WORKER_MSG_TYPES.error:
-      deps.logError('pro-sync: worker sync failed');
+      deps.logError("pro-sync: worker sync failed");
       deps.dispatch(SYNC_EVENT_NAMES.error);
       break;
     default:
@@ -97,9 +100,12 @@ export async function handleWorkerMessage(
 
 export function startProSyncWorker(token: string) {
   if (!globalWorker) {
-    globalWorker = new Worker(new URL('../workers/proSync.worker.ts', import.meta.url), {
-      type: 'module'
-    });
+    globalWorker = new Worker(
+      new URL("../workers/proSync.worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
 
     const deps: ProSyncHandlerDeps = {
       onTokenRefreshRequest,
@@ -107,7 +113,11 @@ export function startProSyncWorker(token: string) {
       dispatch: (name) => window.dispatchEvent(new CustomEvent(name)),
       logError: (msg) => {
         // captureError never throws; failure to persist is warned internally.
-        void captureError({ source: 'proSyncManager', message: msg, level: 'error' });
+        void captureError({
+          source: "proSyncManager",
+          message: msg,
+          level: "error",
+        });
       },
     };
 
@@ -116,22 +126,22 @@ export function startProSyncWorker(token: string) {
     };
     globalWorker.onerror = (e) => {
       void captureError({
-        level: 'error',
-        source: 'proSyncManager',
-        message: `worker-error: ${e.message ?? 'unknown worker error'}`,
+        level: "error",
+        source: "proSyncManager",
+        message: `worker-error: ${e.message ?? "unknown worker error"}`,
       });
       window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
     };
     globalWorker.onmessageerror = () => {
       void captureError({
-        level: 'error',
-        source: 'proSyncManager',
-        message: 'worker-messageerror: malformed message from worker',
+        level: "error",
+        source: "proSyncManager",
+        message: "worker-messageerror: malformed message from worker",
       });
     };
   }
 
-  globalWorker.postMessage({ type: 'sync', token });
+  globalWorker.postMessage({ type: "sync", token });
 }
 
 export function stopProSyncWorker() {

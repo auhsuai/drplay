@@ -1,4 +1,4 @@
-import { captureError } from './errorLog';
+import { captureError } from "./errorLog";
 
 const MAX_CONCURRENT = 3;
 const PREFETCH_TIMEOUT_MS = 15000;
@@ -20,13 +20,15 @@ function evictOldest(): void {
   abortControllers.delete(oldest);
 }
 
-function classifyError(err: unknown): 'timeout' | 'aborted' | 'network' | 'unknown' {
+function classifyError(
+  err: unknown,
+): "timeout" | "aborted" | "network" | "unknown" {
   if (err instanceof DOMException) {
-    if (err.name === 'TimeoutError') return 'timeout';
-    if (err.name === 'AbortError') return 'aborted';
+    if (err.name === "TimeoutError") return "timeout";
+    if (err.name === "AbortError") return "aborted";
   }
-  if (err instanceof TypeError) return 'network';
-  return 'unknown';
+  if (err instanceof TypeError) return "network";
+  return "unknown";
 }
 
 export function prefetchNextTrackAudio(streamUrl: string): void {
@@ -40,14 +42,17 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
 
   fetch(streamUrl, {
     headers: { Range: `bytes=0-${PREFETCH_RANGE_BYTES - 1}` },
-    signal: AbortSignal.any([controller.signal, AbortSignal.timeout(PREFETCH_TIMEOUT_MS)]),
+    signal: AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(PREFETCH_TIMEOUT_MS),
+    ]),
   })
     .then((response) => {
       if (!response.ok) return;
       const logCancelError = (err: unknown) => {
         captureError({
-          level: 'warn',
-          source: 'nextTrackPrefetcher',
+          level: "warn",
+          source: "nextTrackPrefetcher",
           message: `Prefetch body cancel failed: ${err instanceof Error ? err.message : String(err)}`,
         });
       };
@@ -60,8 +65,8 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
     .catch((err: unknown) => {
       const kind = classifyError(err);
       captureError({
-        level: 'warn',
-        source: 'nextTrackPrefetcher',
+        level: "warn",
+        source: "nextTrackPrefetcher",
         message: `Prefetch failed (${kind}): ${err instanceof Error ? err.message : String(err)}`,
       });
     })

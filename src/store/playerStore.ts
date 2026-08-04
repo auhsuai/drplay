@@ -1,5 +1,5 @@
-import { create } from 'zustand';
-import type { Track, PlayMode } from '../types';
+import { create } from "zustand";
+import type { Track, PlayMode } from "../types";
 
 interface PlayerState {
   currentTrack: Track | null;
@@ -9,8 +9,10 @@ interface PlayerState {
   playMode: PlayMode;
   originalQueue: Track[];
   playbackQueue: Track[];
-  
-  setCurrentTrack: (track: Track | null | ((prev: Track | null) => Track | null)) => void;
+
+  setCurrentTrack: (
+    track: Track | null | ((prev: Track | null) => Track | null),
+  ) => void;
   triggerReload: () => void;
   setIsPlaying: (isPlaying: boolean | ((prev: boolean) => boolean)) => void;
   setIsDownloading: (isDownloading: boolean) => void;
@@ -24,15 +26,43 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   loadNonce: 0,
   isPlaying: false,
   isDownloading: false,
-  playMode: 'normal',
+  playMode: "normal",
   originalQueue: [],
   playbackQueue: [],
 
-  setCurrentTrack: (track) => set((state) => ({ currentTrack: typeof track === 'function' ? track(state.currentTrack) : track })),
-  triggerReload: () => set((state) => ({ loadNonce: state.loadNonce + 1 })),
-  setIsPlaying: (isPlaying) => set((state) => ({ isPlaying: typeof isPlaying === 'function' ? isPlaying(state.isPlaying) : isPlaying })),
-  setIsDownloading: (isDownloading) => set({ isDownloading }),
-  setPlayMode: (playMode) => set((state) => ({ playMode: typeof playMode === 'function' ? playMode(state.playMode) : playMode })),
-  setOriginalQueue: (originalQueue) => set({ originalQueue }),
-  setPlaybackQueue: (queue) => set((state) => ({ playbackQueue: typeof queue === 'function' ? queue(state.playbackQueue) : queue })),
+  setCurrentTrack: (track) => {
+    set((state) => ({
+      currentTrack:
+        typeof track === "function" ? track(state.currentTrack) : track,
+    }));
+  },
+  triggerReload: () => {
+    set((state) => ({ loadNonce: state.loadNonce + 1 }));
+  },
+  setIsPlaying: (isPlaying) => {
+    set((state) => ({
+      isPlaying:
+        typeof isPlaying === "function"
+          ? isPlaying(state.isPlaying)
+          : isPlaying,
+    }));
+  },
+  setIsDownloading: (isDownloading) => {
+    set({ isDownloading });
+  },
+  setPlayMode: (playMode) => {
+    set((state) => ({
+      playMode:
+        typeof playMode === "function" ? playMode(state.playMode) : playMode,
+    }));
+  },
+  setOriginalQueue: (originalQueue) => {
+    set({ originalQueue });
+  },
+  setPlaybackQueue: (queue) => {
+    set((state) => ({
+      playbackQueue:
+        typeof queue === "function" ? queue(state.playbackQueue) : queue,
+    }));
+  },
 }));

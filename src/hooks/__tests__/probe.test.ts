@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
-import { renderHook } from '@testing-library/react';
-import { useState, useEffect } from 'react';
+import { describe, it, expect } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { useState, useEffect } from "react";
 
 function setStateHook() {
   const [v, setV] = useState(0);
@@ -12,12 +12,12 @@ function setStateHook() {
   return v;
 }
 
-describe('probe setState in effect', () => {
-  it('one', () => {
+describe("probe setState in effect", () => {
+  it("one", () => {
     const { result } = renderHook(() => setStateHook());
     expect(result.current).toBe(0);
   });
-  it('two', () => {
+  it("two", () => {
     const { result } = renderHook(() => setStateHook());
     expect(result.current).toBe(0);
   });

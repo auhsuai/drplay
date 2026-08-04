@@ -1,29 +1,44 @@
 // @vitest-environment jsdom
-import type { ComponentProps } from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Track } from '../../App';
-import { NowPlayingView } from './NowPlayingView';
+import type { ComponentProps } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Track } from "../../App";
+import { NowPlayingView } from "./NowPlayingView";
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string, fallback?: string) => fallback ?? key,
+  }),
 }));
 
-vi.mock('lucide-react', () => {
+vi.mock("lucide-react", () => {
   const icons = [
-    'Music', 'ChevronDown', 'Play', 'Pause', 'SkipBack', 'SkipForward',
-    'Repeat', 'Repeat1', 'Shuffle',
+    "Music",
+    "ChevronDown",
+    "Play",
+    "Pause",
+    "SkipBack",
+    "SkipForward",
+    "Repeat",
+    "Repeat1",
+    "Shuffle",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });
 
-vi.mock('./hooks/useNowPlayingMetadata', () => ({
+vi.mock("./hooks/useNowPlayingMetadata", () => ({
   useNowPlayingMetadata: () => ({
     coverUrl: null,
-    realTitle: 'Song',
-    realArtist: 'Artist',
-    bgColor: '',
+    realTitle: "Song",
+    realArtist: "Artist",
+    bgColor: "",
     bgPalette: [],
   }),
 }));
@@ -45,19 +60,27 @@ const { fakeController } = vi.hoisted(() => {
 });
 
 function installFakeOn() {
-  fakeController.on.mockImplementation((event: string, handler: (payload: any) => void) => {
-    (fakeController._handlers[event] ??= []).push(handler);
-    return () => {
-      fakeController._handlers[event] = (fakeController._handlers[event] ?? []).filter((h) => h !== handler);
-    };
-  });
+  fakeController.on.mockImplementation(
+    (event: string, handler: (payload: any) => void) => {
+      (fakeController._handlers[event] ??= []).push(handler);
+      return () => {
+        fakeController._handlers[event] = (
+          fakeController._handlers[event] ?? []
+        ).filter((h) => h !== handler);
+      };
+    },
+  );
 }
 
-vi.mock('../../lib/AudioController', () => ({
+vi.mock("../../lib/AudioController", () => ({
   AudioController: { getInstance: () => fakeController },
 }));
 
-function setBuffered(ranges: Array<[number, number]>, duration = 1000, currentTime = 10) {
+function setBuffered(
+  ranges: Array<[number, number]>,
+  duration = 1000,
+  currentTime = 10,
+) {
   fakeController.getBuffered.mockReturnValue({
     duration,
     currentTime,
@@ -71,10 +94,10 @@ function setBuffered(ranges: Array<[number, number]>, duration = 1000, currentTi
 
 function makeTrack(overrides: Partial<Track> = {}): Track {
   return {
-    id: 'track-1',
-    title: 'Song',
-    artist: 'Artist',
-    streamUrl: '/drive-stream/track-1',
+    id: "track-1",
+    title: "Song",
+    artist: "Artist",
+    streamUrl: "/drive-stream/track-1",
     ...overrides,
   };
 }
@@ -95,7 +118,7 @@ function renderView(overrides: Partial<ViewProps> = {}) {
       isOpen={true}
       token={null}
       {...overrides}
-    />
+    />,
   );
 }
 
@@ -116,10 +139,10 @@ afterEach(() => {
   fakeController._handlers = {};
 });
 
-describe('NowPlayingView buffer bar', () => {
-  it('BUG regression: buffer container is pinned full-width and transparent (segment children own the background)', () => {
+describe("NowPlayingView buffer bar", () => {
+  it("BUG regression: buffer container is pinned full-width and transparent (segment children own the background)", () => {
     renderView();
-    const buffer = screen.getByTestId('buffer-fill');
+    const buffer = screen.getByTestId("buffer-fill");
 
     // Container must be pinned to the full progress-bar track (inset-0 / w-full
     // / right-0) — never a shrink-to-fit `absolute left-0` box whose width
@@ -130,14 +153,14 @@ describe('NowPlayingView buffer bar', () => {
     expect(buffer.className).not.toMatch(/\bbg-/);
   });
 
-  it('BUG regression: emitting progress renders a visible segment child (bg-gray-400) inside the transparent container', () => {
+  it("BUG regression: emitting progress renders a visible segment child (bg-gray-400) inside the transparent container", () => {
     renderView();
-    const buffer = screen.getByTestId('buffer-fill');
+    const buffer = screen.getByTestId("buffer-fill");
     expect(buffer.childElementCount).toBe(0);
 
     setBuffered([[0, 300]]);
     act(() => {
-      fakeController._emit('progress');
+      fakeController._emit("progress");
     });
 
     expect(buffer.childElementCount).toBe(1);
@@ -149,14 +172,14 @@ describe('NowPlayingView buffer bar', () => {
     expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
   });
 
-  it('BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)', () => {
+  it("BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)", () => {
     renderView();
-    const buffer = screen.getByTestId('buffer-fill');
+    const buffer = screen.getByTestId("buffer-fill");
     expect(buffer.childElementCount).toBe(0);
 
     setBuffered([[0, 300]]);
     act(() => {
-      fakeController._emit('timeupdate', { currentTime: 10, duration: 1000 });
+      fakeController._emit("timeupdate", { currentTime: 10, duration: 1000 });
     });
 
     expect(buffer.childElementCount).toBe(1);
@@ -166,39 +189,51 @@ describe('NowPlayingView buffer bar', () => {
     expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
   });
 
-  it('unsubscribes the progress handler on unmount (no listener leak)', () => {
+  it("unsubscribes the progress handler on unmount (no listener leak)", () => {
     const { unmount } = renderView();
-    expect(fakeController._handlers['progress'] ?? []).toHaveLength(1);
+    expect(fakeController._handlers["progress"] ?? []).toHaveLength(1);
 
     unmount();
 
-    expect(fakeController._handlers['progress'] ?? []).toHaveLength(0);
+    expect(fakeController._handlers["progress"] ?? []).toHaveLength(0);
   });
 });
 
-describe('NowPlayingView a11y progressbar', () => {
+describe("NowPlayingView a11y progressbar", () => {
   it('exposes the progress bar with role="progressbar" and a bounded ARIA value range', () => {
     renderView();
-    const bar = screen.getByRole('progressbar');
-    expect(bar.getAttribute('aria-valuemin')).toBe('0');
-    expect(bar.getAttribute('aria-valuemax')).toBe('100');
-    expect(bar.getAttribute('aria-valuenow')).toBe('0');
+    const bar = screen.getByRole("progressbar");
+    expect(bar.getAttribute("aria-valuemin")).toBe("0");
+    expect(bar.getAttribute("aria-valuemax")).toBe("100");
+    expect(bar.getAttribute("aria-valuenow")).toBe("0");
   });
 
-  it('gives the progressbar an accessible name', () => {
+  it("gives the progressbar an accessible name", () => {
     renderView();
-    expect(screen.getByRole('progressbar').getAttribute('aria-label')).toBe('Playback progress');
+    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe(
+      "Playback progress",
+    );
   });
 
-  it('syncs aria-valuenow to the seek position when a drag is committed', () => {
+  it("syncs aria-valuenow to the seek position when a drag is committed", () => {
     renderView();
     act(() => {
-      fakeController._emit('durationchange', { duration: 240 });
+      fakeController._emit("durationchange", { duration: 240 });
     });
 
-    const bar = screen.getByRole('progressbar');
-    const rect = { left: 0, right: 200, top: 0, bottom: 10, width: 200, height: 10, x: 0, y: 0, toJSON: () => {} } as DOMRect;
-    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue(rect);
+    const bar = screen.getByRole("progressbar");
+    const rect = {
+      left: 0,
+      right: 200,
+      top: 0,
+      bottom: 10,
+      width: 200,
+      height: 10,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(bar, "getBoundingClientRect").mockReturnValue(rect);
 
     act(() => {
       fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
@@ -207,6 +242,6 @@ describe('NowPlayingView a11y progressbar', () => {
       fireEvent.pointerUp(window, { clientX: 50, pointerId: 1 });
     });
 
-    expect(bar.getAttribute('aria-valuenow')).toBe('25');
+    expect(bar.getAttribute("aria-valuenow")).toBe("25");
   });
 });

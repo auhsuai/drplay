@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
-import { act, renderHook } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getValidToken } from '../utils/apiClient';
-import { captureError } from '../utils/errorLog';
-import { useServiceWorker } from './useServiceWorker';
+import { act, renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getValidToken } from "../utils/apiClient";
+import { captureError } from "../utils/errorLog";
+import { useServiceWorker } from "./useServiceWorker";
 
-vi.mock('../utils/apiClient', () => ({
+vi.mock("../utils/apiClient", () => ({
   getValidToken: vi.fn(),
 }));
 
-vi.mock('../utils/errorLog', () => ({
+vi.mock("../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
 
@@ -23,8 +23,10 @@ const swListeners = new Map<string, SwContainerListener>();
 beforeEach(() => {
   swListeners.clear();
   vi.clearAllMocks();
-  const register = vi.fn().mockResolvedValue({ addEventListener: vi.fn(), installing: null });
-  Object.defineProperty(navigator, 'serviceWorker', {
+  const register = vi
+    .fn()
+    .mockResolvedValue({ addEventListener: vi.fn(), installing: null });
+  Object.defineProperty(navigator, "serviceWorker", {
     configurable: true,
     value: {
       addEventListener: (type: string, handler: SwContainerListener) => {
@@ -40,49 +42,59 @@ beforeEach(() => {
   });
 });
 
-describe('useServiceWorker SW_TOKEN_EXPIRED listener', () => {
-  it('forces a token refresh when the SW reports SW_TOKEN_EXPIRED', async () => {
-    mockedGetValidToken.mockResolvedValue('fresh-token');
+describe("useServiceWorker SW_TOKEN_EXPIRED listener", () => {
+  it("forces a token refresh when the SW reports SW_TOKEN_EXPIRED", async () => {
+    mockedGetValidToken.mockResolvedValue("fresh-token");
     renderHook(() => useServiceWorker());
 
     await act(async () => {
-      swListeners.get('message')?.({ data: { type: 'SW_TOKEN_EXPIRED' } } as MessageEvent);
+      swListeners.get("message")?.({
+        data: { type: "SW_TOKEN_EXPIRED" },
+      } as MessageEvent);
     });
 
     expect(mockedGetValidToken).toHaveBeenCalledWith(true);
   });
 
-  it('ignores messages that are not SW_TOKEN_EXPIRED', async () => {
+  it("ignores messages that are not SW_TOKEN_EXPIRED", async () => {
     renderHook(() => useServiceWorker());
 
     await act(async () => {
-      swListeners.get('message')?.({ data: { type: 'UPDATE_TOKEN', token: 'x' } } as MessageEvent);
+      swListeners.get("message")?.({
+        data: { type: "UPDATE_TOKEN", token: "x" },
+      } as MessageEvent);
     });
 
     expect(mockedGetValidToken).not.toHaveBeenCalled();
   });
 
-  it('captures refresh failures without logging the token', async () => {
-    mockedGetValidToken.mockRejectedValue(new Error('refresh backend unreachable'));
+  it("captures refresh failures without logging the token", async () => {
+    mockedGetValidToken.mockRejectedValue(
+      new Error("refresh backend unreachable"),
+    );
     renderHook(() => useServiceWorker());
 
     await act(async () => {
-      swListeners.get('message')?.({ data: { type: 'SW_TOKEN_EXPIRED' } } as MessageEvent);
+      swListeners.get("message")?.({
+        data: { type: "SW_TOKEN_EXPIRED" },
+      } as MessageEvent);
     });
 
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({
-        level: 'warn',
-        source: 'useServiceWorker',
-        message: expect.stringContaining('sw-token-expired-refresh-failed') as unknown as string,
-      })
+        level: "warn",
+        source: "useServiceWorker",
+        message: expect.stringContaining(
+          "sw-token-expired-refresh-failed",
+        ) as unknown as string,
+      }),
     );
   });
 
-  it('removes the message listener on unmount', async () => {
+  it("removes the message listener on unmount", async () => {
     const { unmount } = renderHook(() => useServiceWorker());
-    expect(swListeners.has('message')).toBe(true);
+    expect(swListeners.has("message")).toBe(true);
     unmount();
-    expect(swListeners.has('message')).toBe(false);
+    expect(swListeners.has("message")).toBe(false);
   });
 });

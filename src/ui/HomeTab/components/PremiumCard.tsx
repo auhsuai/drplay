@@ -1,19 +1,30 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Track } from '../../../App';
-import { getTrackMetadata } from '../../../utils/metadata';
-import { Play, Music, MoreHorizontal } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
-import { captureError } from '../../../utils/errorLog';
+import { useState, useEffect, useRef, useCallback } from "react";
+import type { Track } from "../../../App";
+import { getTrackMetadata } from "../../../utils/metadata";
+import { Play, Music, MoreHorizontal } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { captureError } from "../../../utils/errorLog";
 
-const PREMIUM_CARD_MODULE = 'PremiumCard';
-const GOOGLE_COLORS = ['#4285F4', '#EA4335', '#FBBC05', '#34A853'];
+const PREMIUM_CARD_MODULE = "PremiumCard";
+const GOOGLE_COLORS = ["#4285F4", "#EA4335", "#FBBC05", "#34A853"];
 export const getFillColor = (str: string) => {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  for (let i = 0; i < str.length; i++)
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
   return GOOGLE_COLORS[Math.abs(hash) % GOOGLE_COLORS.length];
 };
 
-export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Track, onPlay: () => void, token: string | null, isOverlayBtn?: boolean }) {
+export function PremiumCard({
+  track,
+  onPlay,
+  token,
+  isOverlayBtn,
+}: {
+  track: Track;
+  onPlay: () => void;
+  token: string | null;
+  isOverlayBtn?: boolean;
+}) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const blobUrlRef = useRef<string | null>(null);
@@ -27,52 +38,76 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
   const [title, setTitle] = useState(track.title);
   const [artist, setArtist] = useState(track.artist);
   const { t } = useTranslation();
-  
+
   useEffect(() => {
     if (!token) return;
     const controller = new AbortController();
     let isMounted = true;
-    getTrackMetadata(track.id, token, track.size, track.originalName, controller.signal).then(meta => {
-      if (!isMounted) return;
-      if (meta.title) setTitle(meta.title);
-      if (meta.artist) setArtist(meta.artist);
-      if (meta.pictureData && meta.pictureFormat) {
-        const blob = new Blob([new Uint8Array(meta.pictureData)], { type: meta.pictureFormat });
-        releaseBlobUrl();
-        blobUrlRef.current = URL.createObjectURL(blob);
-        setCoverUrl(blobUrlRef.current);
-      }
-    }).catch((e: unknown) => {
-      if (controller.signal.aborted) return;   // deliberate cleanup abort — not an error
-      captureError({ level: 'warn', source: PREMIUM_CARD_MODULE, message: `metadata-load-failed: ${e instanceof Error ? e.message : String(e)}` });
-    });
-    return () => { 
-      isMounted = false; 
+    getTrackMetadata(
+      track.id,
+      token,
+      track.size,
+      track.originalName,
+      controller.signal,
+    )
+      .then((meta) => {
+        if (!isMounted) return;
+        if (meta.title) setTitle(meta.title);
+        if (meta.artist) setArtist(meta.artist);
+        if (meta.pictureData && meta.pictureFormat) {
+          const blob = new Blob([new Uint8Array(meta.pictureData)], {
+            type: meta.pictureFormat,
+          });
+          releaseBlobUrl();
+          blobUrlRef.current = URL.createObjectURL(blob);
+          setCoverUrl(blobUrlRef.current);
+        }
+      })
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
+        captureError({
+          level: "warn",
+          source: PREMIUM_CARD_MODULE,
+          message: `metadata-load-failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      });
+    return () => {
+      isMounted = false;
       controller.abort();
       releaseBlobUrl();
       if (imgRef.current) imgRef.current.src = "";
     };
   }, [track.id, token]);
-  
+
   return (
-    <div 
+    <div
       onClick={onPlay}
       className="group cursor-pointer active:scale-[0.98] transition-transform duration-200"
     >
-      <div 
+      <div
         style={!coverUrl ? { background: fillColor } : undefined}
         className="w-full aspect-square rounded-2xl mb-4 relative overflow-hidden flex items-center justify-center shadow-sm"
       >
         {coverUrl ? (
-          <img ref={imgRef} src={coverUrl} alt={title} loading="lazy" decoding="async" onError={() => setCoverUrl(null)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+          <img
+            ref={imgRef}
+            src={coverUrl}
+            alt={title}
+            loading="lazy"
+            decoding="async"
+            onError={() => {
+              setCoverUrl(null);
+            }}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+          />
         ) : (
           <Music className="w-12 h-12 text-white opacity-80 group-hover:scale-110 transition-transform duration-700" />
         )}
-        
+
         {isOverlayBtn ? (
           <div className="absolute inset-0 bg-white/70 dark:bg-black/70 flex items-center justify-center opacity-80 group-hover:opacity-100 transition-opacity">
             <span className="font-bold text-gray-900 dark:text-white text-[15px] flex items-center gap-1">
-              <MoreHorizontal className="w-5 h-5" /> {t('view_all', 'View All')}
+              <MoreHorizontal className="w-5 h-5" /> {t("view_all", "View All")}
             </span>
           </div>
         ) : (
@@ -83,8 +118,12 @@ export function PremiumCard({ track, onPlay, token, isOverlayBtn }: { track: Tra
       </div>
       {!isOverlayBtn && (
         <div className="px-1">
-          <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1">{title}</h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{artist || t('unknown_artist', 'Unknown Artist')}</p>
+          <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1">
+            {title}
+          </h4>
+          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+            {artist || t("unknown_artist", "Unknown Artist")}
+          </p>
         </div>
       )}
     </div>

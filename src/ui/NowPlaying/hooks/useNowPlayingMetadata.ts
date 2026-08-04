@@ -1,16 +1,19 @@
 import { useState, useEffect } from "react";
-import { Track } from "../../../App";
+import type { Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
-import { getPalette } from '../../../utils/color';
+import { getPalette } from "../../../utils/color";
 import { captureError } from "../../../utils/errorLog";
 
-const NOW_PLAYING_MODULE = 'useNowPlayingMetadata';
+const NOW_PLAYING_MODULE = "useNowPlayingMetadata";
 
-export function useNowPlayingMetadata(currentTrack: Track | null, token: string | null) {
+export function useNowPlayingMetadata(
+  currentTrack: Track | null,
+  token: string | null,
+) {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [realTitle, setRealTitle] = useState("");
   const [realArtist, setRealArtist] = useState("");
-  const [bgColor, setBgColor] = useState<string>('');
+  const [bgColor, setBgColor] = useState<string>("");
   const [bgPalette, setBgPalette] = useState<string[]>([]);
 
   useEffect(() => {
@@ -18,7 +21,7 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
       setRealTitle(currentTrack.title);
       setRealArtist(currentTrack.artist || "");
       setCoverUrl(null);
-      
+
       let isCancelled = false;
       let objectUrl: string | null = null;
       const controller = new AbortController();
@@ -32,21 +35,29 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
 
       const resetPalette = () => {
         if (!isCancelled) {
-          setBgColor('');
+          setBgColor("");
           setBgPalette([]);
         }
       };
 
       void (async () => {
         try {
-          const metadata = await getTrackMetadata(currentTrack.id, token || undefined, currentTrack.size, currentTrack.originalName, controller.signal);
+          const metadata = await getTrackMetadata(
+            currentTrack.id,
+            token || undefined,
+            currentTrack.size,
+            currentTrack.originalName,
+            controller.signal,
+          );
           if (isCancelled) return;
           if (metadata.title) setRealTitle(metadata.title);
           if (metadata.artist) setRealArtist(metadata.artist);
 
           const picture = metadata.pictureDataFull ?? metadata.pictureData;
           if (picture && metadata.pictureFormat) {
-            const blob = new Blob([new Uint8Array(picture)], { type: metadata.pictureFormat });
+            const blob = new Blob([new Uint8Array(picture)], {
+              type: metadata.pictureFormat,
+            });
             const coverObjectUrl = URL.createObjectURL(blob);
             objectUrl = coverObjectUrl;
             setCoverUrl(coverObjectUrl);
@@ -58,29 +69,37 @@ export function useNowPlayingMetadata(currentTrack: Track | null, token: string 
               setBgPalette(colors);
             } catch (err) {
               resetPalette();
-              captureError({ level: 'warn', source: NOW_PLAYING_MODULE, message: `palette-failed: ${err instanceof Error ? err.message : String(err)}` });
+              captureError({
+                level: "warn",
+                source: NOW_PLAYING_MODULE,
+                message: `palette-failed: ${err instanceof Error ? err.message : String(err)}`,
+              });
             } finally {
               revokeCoverUrl();
             }
           } else {
-            setBgColor('');
+            setBgColor("");
             setBgPalette([]);
           }
         } catch (e) {
-          if (e instanceof DOMException && e.name === 'AbortError') return;
-          captureError({ level: 'error', source: NOW_PLAYING_MODULE, message: `track-metadata-failed: ${e instanceof Error ? e.message : String(e)}` });
+          if (e instanceof DOMException && e.name === "AbortError") return;
+          captureError({
+            level: "error",
+            source: NOW_PLAYING_MODULE,
+            message: `track-metadata-failed: ${e instanceof Error ? e.message : String(e)}`,
+          });
           resetPalette();
         }
       })();
-        
+
       return () => {
         isCancelled = true;
         controller.abort();
-        setBgColor('');
+        setBgColor("");
         setBgPalette([]);
       };
     } else {
-      setBgColor('');
+      setBgColor("");
       setBgPalette([]);
     }
   }, [currentTrack?.id, currentTrack?.streamUrl, token]);

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  act,
+} from "@testing-library/react";
 import { CreditsSection, TELEGRAM_URL, GITHUB_URL } from "./CreditsSection";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
@@ -66,7 +72,9 @@ describe("CreditsSection", () => {
 
   it("provides one open-link button per contact that calls openUrl with the right URL", () => {
     render(<CreditsSection />);
-    const openButtons = screen.getAllByRole("button", { name: "settings.open_link" });
+    const openButtons = screen.getAllByRole("button", {
+      name: "settings.open_link",
+    });
     expect(openButtons).toHaveLength(2);
     fireEvent.click(openButtons[0]);
     expect(openUrl).toHaveBeenCalledTimes(1);
@@ -80,11 +88,13 @@ describe("CreditsSection", () => {
     openUrl.mockRejectedValueOnce(new Error("bridge down"));
     render(<CreditsSection />);
     await act(async () => {
-      fireEvent.click(screen.getAllByRole("button", { name: "settings.open_link" })[0]);
+      fireEvent.click(
+        screen.getAllByRole("button", { name: "settings.open_link" })[0],
+      );
     });
     expect(showErrorToast).toHaveBeenCalledWith("settings.open_link_error");
     expect(captureError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "CreditsSection", level: "error" })
+      expect.objectContaining({ source: "CreditsSection", level: "error" }),
     );
   });
 
@@ -110,7 +120,9 @@ describe("CreditsSection", () => {
 
   it("renders each contact with static name, open-link button and copy button", () => {
     render(<CreditsSection />);
-    expect(screen.getAllByRole("button", { name: "settings.open_link" })).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: "settings.open_link" }),
+    ).toHaveLength(2);
     expect(screen.getAllByTitle("settings.copy")).toHaveLength(2);
     expect(screen.getByText("@nguyen_tan_an")).toBeTruthy();
     expect(screen.getByText("auhsuai/drplay")).toBeTruthy();

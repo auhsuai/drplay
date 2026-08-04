@@ -10,7 +10,11 @@ import {
   type DriveFolderItem,
   type DriveFileItem,
 } from "./driveApi";
-import { searchFolders, listFolderChildren, getTrashedFiles } from "./drivePagination";
+import {
+  searchFolders,
+  listFolderChildren,
+  getTrashedFiles,
+} from "./drivePagination";
 import { uploadFileResumable, uploadFileResumableChunked } from "./driveUpload";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
@@ -56,7 +60,13 @@ function makeJsonResponse(status: number, body: unknown): Response {
 // isRateLimit403Response for both the retry and the upload paths.
 function makeRateLimitResponse(status: number, reason: string): Response {
   const ok = status >= 200 && status < 300;
-  const body = { error: { code: status, message: "Rate Limit Exceeded", errors: [{ reason }] } };
+  const body = {
+    error: {
+      code: status,
+      message: "Rate Limit Exceeded",
+      errors: [{ reason }],
+    },
+  };
   const response = {
     status,
     ok,
@@ -71,7 +81,9 @@ function makeRateLimitResponse(status: number, reason: string): Response {
 // supported for backward compatibility (no regression on the old contract).
 function makeLegacyRateLimitResponse(status: number, reason: string): Response {
   const ok = status >= 200 && status < 300;
-  const body = { error: { code: status, message: "Rate Limit Exceeded", reason } };
+  const body = {
+    error: { code: status, message: "Rate Limit Exceeded", reason },
+  };
   const response = {
     status,
     ok,
@@ -103,7 +115,9 @@ describe("getRecentlyAddedAudioFiles", () => {
 
   it("maps the Drive response files array into the returned list", async () => {
     mockedFetch.mockResolvedValue(
-      makeJsonResponse(200, { files: [{ id: "x", name: "A.mp3", mimeType: "audio/mpeg" }] }),
+      makeJsonResponse(200, {
+        files: [{ id: "x", name: "A.mp3", mimeType: "audio/mpeg" }],
+      }),
     );
     const items = await getRecentlyAddedAudioFiles("tok-test");
     expect(items).toHaveLength(1);
@@ -204,7 +218,9 @@ describe("driveFetch retry", () => {
 
   it("retries a 403 rate-limit (userRateLimitExceeded) and returns the eventual 200", async () => {
     mockedFetch
-      .mockResolvedValueOnce(makeRateLimitResponse(403, "userRateLimitExceeded"))
+      .mockResolvedValueOnce(
+        makeRateLimitResponse(403, "userRateLimitExceeded"),
+      )
       .mockResolvedValueOnce(makeResponse(200));
 
     const p = driveFetch("https://www.googleapis.com/drive/v3/files");
@@ -217,7 +233,9 @@ describe("driveFetch retry", () => {
 
   it("still retries a 403 whose body uses the legacy top-level error.reason (no regression)", async () => {
     mockedFetch
-      .mockResolvedValueOnce(makeLegacyRateLimitResponse(403, "rateLimitExceeded"))
+      .mockResolvedValueOnce(
+        makeLegacyRateLimitResponse(403, "rateLimitExceeded"),
+      )
       .mockResolvedValueOnce(makeResponse(200));
 
     const p = driveFetch("https://www.googleapis.com/drive/v3/files");
@@ -230,7 +248,7 @@ describe("driveFetch retry", () => {
 
   it("does NOT retry a 403 with a non-rate-limit reason (permission error)", async () => {
     mockedFetch.mockResolvedValueOnce(
-      makeRateLimitResponse(403, "insufficientFilePermissions")
+      makeRateLimitResponse(403, "insufficientFilePermissions"),
     );
 
     const p = driveFetch("https://www.googleapis.com/drive/v3/files");
@@ -247,7 +265,9 @@ describe("driveFetch retry", () => {
       ok: false,
       headers: { get: () => null },
       clone: () => {
-        throw new TypeError("Failed to execute 'clone' on 'Response': body is already used");
+        throw new TypeError(
+          "Failed to execute 'clone' on 'Response': body is already used",
+        );
       },
     } as unknown as Response;
     mockedFetch.mockResolvedValueOnce(consumed);
@@ -280,18 +300,26 @@ describe("driveFetch forwards timeoutMs to fetchWithAuth", () => {
 
     expect(res.status).toBe(200);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    const opts = mockedFetch.mock.calls[0][1] as RequestInit & { timeoutMs?: number };
+    const opts = mockedFetch.mock.calls[0][1] as RequestInit & {
+      timeoutMs?: number;
+    };
     expect(opts.timeoutMs).toBe(20000);
   });
 
   it("forwards an explicit caller timeoutMs override", async () => {
     mockedFetch.mockResolvedValueOnce(makeResponse(200));
 
-    const res = await driveFetch("https://www.googleapis.com/drive/v3/files", {}, 5000);
+    const res = await driveFetch(
+      "https://www.googleapis.com/drive/v3/files",
+      {},
+      5000,
+    );
 
     expect(res.status).toBe(200);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    const opts = mockedFetch.mock.calls[0][1] as RequestInit & { timeoutMs?: number };
+    const opts = mockedFetch.mock.calls[0][1] as RequestInit & {
+      timeoutMs?: number;
+    };
     expect(opts.timeoutMs).toBe(5000);
   });
 });
@@ -307,9 +335,12 @@ describe("driveFetch timeout with caller signal (Bug 1a)", () => {
       setTimeout(
         () =>
           controller.abort(
-            new DOMException("The operation was aborted due to timeout", "TimeoutError")
+            new DOMException(
+              "The operation was aborted due to timeout",
+              "TimeoutError",
+            ),
           ),
-        ms
+        ms,
       );
       return controller.signal;
     });
@@ -335,9 +366,9 @@ describe("driveFetch timeout with caller signal (Bug 1a)", () => {
             return;
           }
           signal.addEventListener("abort", () =>
-            reject(signal.reason ?? new DOMException("aborted", "AbortError"))
+            reject(signal.reason ?? new DOMException("aborted", "AbortError")),
           );
-        })
+        }),
     );
   };
 
@@ -437,17 +468,28 @@ describe("createFolder abort propagation (Bug 1d)", () => {
 
   it("forwards the caller signal into driveFetch", async () => {
     mockedFetch.mockResolvedValueOnce(
-      makeJsonResponse(200, { id: "folder-1", name: "Album", mimeType: "application/vnd.google-apps.folder" })
+      makeJsonResponse(200, {
+        id: "folder-1",
+        name: "Album",
+        mimeType: "application/vnd.google-apps.folder",
+      }),
     );
     const controller = new AbortController();
 
-    const result = await createFolder("tok", "Album", "root", controller.signal);
+    const result = await createFolder(
+      "tok",
+      "Album",
+      "root",
+      controller.signal,
+    );
 
     expect(result.id).toBe("folder-1");
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     const [url, opts] = mockedFetch.mock.calls[0];
     expect(url).toBe("https://www.googleapis.com/drive/v3/files");
-    expect((opts as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
+    expect((opts as RequestInit | undefined)?.signal).toBeInstanceOf(
+      AbortSignal,
+    );
   });
 
   it("rejects without retrying when the caller aborts mid-flight", async () => {
@@ -468,10 +510,13 @@ describe("createFolder abort propagation (Bug 1d)", () => {
           }
           signal.addEventListener(
             "abort",
-            () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
-            { once: true }
+            () =>
+              reject(
+                signal.reason ?? new DOMException("aborted", "AbortError"),
+              ),
+            { once: true },
           );
-        })
+        }),
     );
 
     const p = createFolder("tok", "Album", "root", controller.signal);
@@ -500,9 +545,13 @@ describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
     mimeType: "application/vnd.google-apps.folder",
   });
   const makeFiles = (count: number, prefix: string): DriveFolderItem[] =>
-    Array.from({ length: count }, (_, i) => folder(`${prefix}${i}`, `${prefix}${i}`));
+    Array.from({ length: count }, (_, i) =>
+      folder(`${prefix}${i}`, `${prefix}${i}`),
+    );
 
-  const captureUrls = (pages: Array<{ files: DriveFolderItem[]; nextPageToken?: string }>): string[] => {
+  const captureUrls = (
+    pages: Array<{ files: DriveFolderItem[]; nextPageToken?: string }>,
+  ): string[] => {
     const urls: string[] = [];
     mockedFetch.mockImplementation(async (input: RequestInfo | URL) => {
       urls.push(String(input));
@@ -567,7 +616,7 @@ describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
     mockedFetch.mockResolvedValueOnce(makeResponse(404));
 
     await expect(searchFolders("tok", "name contains 'foo'")).rejects.toThrow(
-      "Failed to search folders (404)"
+      "Failed to search folders (404)",
     );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
@@ -594,10 +643,17 @@ describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
     const controller = new AbortController();
     mockedFetch.mockImplementation(async () => {
       if (!controller.signal.aborted) controller.abort();
-      return makeJsonResponse(200, { files: makeFiles(30, "brk"), nextPageToken: "tok2" });
+      return makeJsonResponse(200, {
+        files: makeFiles(30, "brk"),
+        nextPageToken: "tok2",
+      });
     });
 
-    const result = await searchFolders("tok", "name contains 'foo'", controller.signal);
+    const result = await searchFolders(
+      "tok",
+      "name contains 'foo'",
+      controller.signal,
+    );
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(30);
@@ -621,9 +677,13 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
     mimeType: "audio/mpeg",
   });
   const makeTrashed = (count: number, prefix: string): DriveFileItem[] =>
-    Array.from({ length: count }, (_, i) => trashed(`${prefix}${i}`, `${prefix}${i}`));
+    Array.from({ length: count }, (_, i) =>
+      trashed(`${prefix}${i}`, `${prefix}${i}`),
+    );
 
-  const captureTrashedUrls = (pages: Array<{ files: DriveFileItem[]; nextPageToken?: string }>): string[] => {
+  const captureTrashedUrls = (
+    pages: Array<{ files: DriveFileItem[]; nextPageToken?: string }>,
+  ): string[] => {
     const urls: string[] = [];
     mockedFetch.mockImplementation(async (input: RequestInfo | URL) => {
       urls.push(String(input));
@@ -688,7 +748,7 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
     mockedFetch.mockResolvedValueOnce(makeResponse(404));
 
     await expect(getTrashedFiles("tok", "trashed=true")).rejects.toThrow(
-      "Failed to fetch trashed files (404)"
+      "Failed to fetch trashed files (404)",
     );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
@@ -715,10 +775,17 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
     const controller = new AbortController();
     mockedFetch.mockImplementation(async () => {
       if (!controller.signal.aborted) controller.abort();
-      return makeJsonResponse(200, { files: makeTrashed(30, "brk"), nextPageToken: "tok2" });
+      return makeJsonResponse(200, {
+        files: makeTrashed(30, "brk"),
+        nextPageToken: "tok2",
+      });
     });
 
-    const result = await getTrashedFiles("tok", "trashed=true", controller.signal);
+    const result = await getTrashedFiles(
+      "tok",
+      "trashed=true",
+      controller.signal,
+    );
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(30);
@@ -744,12 +811,14 @@ describe("drivePagination malformed JSON body", () => {
       ok: true,
       headers: { get: () => null },
       json: async () => {
-        throw new SyntaxError("Unexpected token '<', \"<html>...\" is not valid JSON");
+        throw new SyntaxError(
+          "Unexpected token '<', \"<html>...\" is not valid JSON",
+        );
       },
     } as unknown as Response);
 
     await expect(searchFolders("tok", "name contains 'foo'")).rejects.toThrow(
-      "Failed to search folders (malformed response)"
+      "Failed to search folders (malformed response)",
     );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
@@ -776,15 +845,19 @@ describe("getDriveStorageQuota", () => {
           usageInDrive: "2500000000",
           usageInDriveTrash: "100000000",
         },
-      })
+      }),
     );
 
     const quota = await getDriveStorageQuota("tok-1");
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     const [url, opts] = mockedFetch.mock.calls[0];
-    expect(url).toBe("https://www.googleapis.com/drive/v3/about?fields=storageQuota");
-    expect((opts?.headers as Record<string, string>).Authorization).toBe("Bearer tok-1");
+    expect(url).toBe(
+      "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
+    );
+    expect((opts?.headers as Record<string, string>).Authorization).toBe(
+      "Bearer tok-1",
+    );
     expect(quota).toEqual({
       limit: 16106127360,
       usage: 2576980377,
@@ -796,8 +869,12 @@ describe("getDriveStorageQuota", () => {
   it("keeps already-numeric fields and returns limit null when absent (unlimited)", async () => {
     mockedFetch.mockResolvedValueOnce(
       makeJsonResponse(200, {
-        storageQuota: { usage: 123456789, usageInDrive: 100000000, usageInDriveTrash: 0 },
-      })
+        storageQuota: {
+          usage: 123456789,
+          usageInDrive: 100000000,
+          usageInDriveTrash: 0,
+        },
+      }),
     );
 
     const quota = await getDriveStorageQuota("tok-1");
@@ -817,7 +894,7 @@ describe("getDriveStorageQuota", () => {
 
     expect(quota).toBeNull();
     expect(captureError).toHaveBeenCalledWith(
-      expect.objectContaining({ level: "warn", source: "driveApi" })
+      expect.objectContaining({ level: "warn", source: "driveApi" }),
     );
   });
 
@@ -831,16 +908,20 @@ describe("getDriveStorageQuota", () => {
 
     expect(quota).toBeNull();
     expect(captureError).toHaveBeenCalledWith(
-      expect.objectContaining({ level: "warn", source: "driveApi" })
+      expect.objectContaining({ level: "warn", source: "driveApi" }),
     );
   });
 
   it("returns null when storageQuota is missing or a mandatory usage field is absent", async () => {
-    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, { kind: "drive#about" }));
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(200, { kind: "drive#about" }),
+    );
     expect(await getDriveStorageQuota("tok-1")).toBeNull();
 
     mockedFetch.mockResolvedValueOnce(
-      makeJsonResponse(200, { storageQuota: { usage: "10", usageInDrive: "5" } })
+      makeJsonResponse(200, {
+        storageQuota: { usage: "10", usageInDrive: "5" },
+      }),
     );
     expect(await getDriveStorageQuota("tok-1")).toBeNull();
   });
@@ -854,12 +935,17 @@ describe("getDriveStorageQuota", () => {
           usageInDrive: "50",
           usageInDriveTrash: "1",
         },
-      })
+      }),
     );
 
     const quota = await getDriveStorageQuota("tok-1");
 
-    expect(quota).toEqual({ limit: null, usage: 100, usageInDrive: 50, usageInDriveTrash: 1 });
+    expect(quota).toEqual({
+      limit: null,
+      usage: 100,
+      usageInDrive: 50,
+      usageInDriveTrash: 1,
+    });
   });
 });
 
@@ -878,7 +964,8 @@ describe("uploadFileResumable", () => {
   // slow upload dies to the internal timeout before the resumable limit.
   const PUT_TIMEOUT_MS = 120_000;
 
-  const INITIATE_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
+  const INITIATE_URL =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
   const LOCATION =
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=test-123";
   const uploadedFile: DriveFileItem = {
@@ -893,13 +980,18 @@ describe("uploadFileResumable", () => {
       status,
       ok,
       headers: {
-        get: (name: string) => (String(name).toLowerCase() === "location" ? location : null),
+        get: (name: string) =>
+          String(name).toLowerCase() === "location" ? location : null,
       },
       json: async () => ({}),
     } as unknown as Response;
   }
 
-  function makeErrorBodyResponse(status: number, message: string, reason?: string): Response {
+  function makeErrorBodyResponse(
+    status: number,
+    message: string,
+    reason?: string,
+  ): Response {
     return makeJsonResponse(status, {
       error: { code: status, message, reason: reason ?? "badRequest" },
     });
@@ -911,7 +1003,12 @@ describe("uploadFileResumable", () => {
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
 
     const blob = new Blob([new Uint8Array(10)]);
-    const result = await uploadFileResumable("tok", blob, "song.mp3", "parent-1");
+    const result = await uploadFileResumable(
+      "tok",
+      blob,
+      "song.mp3",
+      "parent-1",
+    );
 
     expect(result).toEqual(uploadedFile);
     expect(mockedFetch).toHaveBeenCalledTimes(2);
@@ -922,9 +1019,14 @@ describe("uploadFileResumable", () => {
     const postHeaders = postOpts?.headers as Record<string, string>;
     expect(postHeaders["Authorization"]).toBe("Bearer tok");
     expect(postHeaders["Content-Type"]).toBe("application/json; charset=UTF-8");
-    expect(postHeaders["X-Upload-Content-Type"]).toBe("application/octet-stream");
+    expect(postHeaders["X-Upload-Content-Type"]).toBe(
+      "application/octet-stream",
+    );
     expect(postHeaders["X-Upload-Content-Length"]).toBe("10");
-    expect(JSON.parse(String(postOpts?.body))).toEqual({ name: "song.mp3", parents: ["parent-1"] });
+    expect(JSON.parse(String(postOpts?.body))).toEqual({
+      name: "song.mp3",
+      parents: ["parent-1"],
+    });
 
     const [putUrl, putOpts] = mockedFetch.mock.calls[1];
     expect(putUrl).toBe(LOCATION);
@@ -936,10 +1038,12 @@ describe("uploadFileResumable", () => {
   });
 
   it("POST initiate 404 → UploadError kind invalid, no retry", async () => {
-    mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(404, "File not found"));
+    mockedFetch.mockResolvedValueOnce(
+      makeErrorBodyResponse(404, "File not found"),
+    );
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
     ).rejects.toMatchObject({ name: "UploadError", kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
@@ -949,12 +1053,12 @@ describe("uploadFileResumable", () => {
       makeErrorBodyResponse(
         403,
         "The user's Drive storage quota has been exceeded.",
-        "storageQuotaExceeded"
-      )
+        "storageQuotaExceeded",
+      ),
     );
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
     ).rejects.toMatchObject({ kind: "quota" });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
@@ -965,7 +1069,7 @@ describe("uploadFileResumable", () => {
       .mockResolvedValueOnce(makeErrorBodyResponse(401, "Unauthorized"));
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
     ).rejects.toMatchObject({ kind: "auth" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -978,7 +1082,7 @@ describe("uploadFileResumable", () => {
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
     ).rejects.toMatchObject({ kind: "network" });
     // Exactly one session: the leftover success mocks would have been consumed
     // by an internal retry — their non-use proves the retry loop is gone.
@@ -995,9 +1099,12 @@ describe("uploadFileResumable", () => {
       setTimeout(
         () =>
           controller.abort(
-            new DOMException("The operation was aborted due to timeout", "TimeoutError")
+            new DOMException(
+              "The operation was aborted due to timeout",
+              "TimeoutError",
+            ),
           ),
-        ms
+        ms,
       );
       return controller.signal;
     });
@@ -1012,9 +1119,11 @@ describe("uploadFileResumable", () => {
               return;
             }
             signal.addEventListener("abort", () =>
-              reject(signal.reason ?? new DOMException("aborted", "AbortError"))
+              reject(
+                signal.reason ?? new DOMException("aborted", "AbortError"),
+              ),
             );
-          })
+          }),
       );
 
     const p = uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
@@ -1033,7 +1142,13 @@ describe("uploadFileResumable", () => {
     controller.abort();
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p", controller.signal)
+      uploadFileResumable(
+        "tok",
+        new Uint8Array(3),
+        "a.mp3",
+        "p",
+        controller.signal,
+      ),
     ).rejects.toMatchObject({ kind: "aborted" });
     expect(mockedFetch).not.toHaveBeenCalled();
   });
@@ -1048,7 +1163,13 @@ describe("uploadFileResumable", () => {
       });
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p", controller.signal)
+      uploadFileResumable(
+        "tok",
+        new Uint8Array(3),
+        "a.mp3",
+        "p",
+        controller.signal,
+      ),
     ).rejects.toMatchObject({ kind: "aborted" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -1057,7 +1178,7 @@ describe("uploadFileResumable", () => {
     mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, {}));
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
@@ -1067,20 +1188,33 @@ describe("uploadFileResumable", () => {
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
 
-    await uploadFileResumable("tok", new Uint8Array([1, 2, 3, 4, 5]), "a.mp3", "p");
+    await uploadFileResumable(
+      "tok",
+      new Uint8Array([1, 2, 3, 4, 5]),
+      "a.mp3",
+      "p",
+    );
 
-    const postHeaders = mockedFetch.mock.calls[0][1]?.headers as Record<string, string>;
-    const putHeaders = mockedFetch.mock.calls[1][1]?.headers as Record<string, string>;
+    const postHeaders = mockedFetch.mock.calls[0][1]?.headers as Record<
+      string,
+      string
+    >;
+    const putHeaders = mockedFetch.mock.calls[1][1]?.headers as Record<
+      string,
+      string
+    >;
     expect(postHeaders["X-Upload-Content-Length"]).toBe("5");
     expect(putHeaders["Content-Range"]).toBe("bytes 0-4/5");
   });
 
   it("0-byte file → UploadError kind invalid (Google docs do not define Content-Range for empty files)", async () => {
-    await expect(uploadFileResumable("tok", new Blob([]), "empty.mp3", "p")).rejects.toMatchObject({
+    await expect(
+      uploadFileResumable("tok", new Blob([]), "empty.mp3", "p"),
+    ).rejects.toMatchObject({
       kind: "invalid",
     });
     await expect(
-      uploadFileResumable("tok", new Uint8Array(0), "empty.mp3", "p")
+      uploadFileResumable("tok", new Uint8Array(0), "empty.mp3", "p"),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).not.toHaveBeenCalled();
   });
@@ -1090,7 +1224,12 @@ describe("uploadFileResumable", () => {
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeJsonResponse(200, uploadedFile));
 
-    const result = await uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
+    const result = await uploadFileResumable(
+      "tok",
+      new Uint8Array(3),
+      "a.mp3",
+      "p",
+    );
 
     expect(result).toEqual(uploadedFile);
   });
@@ -1102,12 +1241,12 @@ describe("uploadFileResumable", () => {
         makeErrorBodyResponse(
           403,
           "The user's Drive storage quota has been exceeded.",
-          "storageQuotaExceeded"
-        )
+          "storageQuotaExceeded",
+        ),
       );
 
     await expect(
-      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
     ).rejects.toMatchObject({ kind: "quota" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -1117,14 +1256,19 @@ describe("uploadFileResumable", () => {
   // real 400/404/403 disappears from the log and the root cause is invisible.
   describe("upload 4xx diagnostics (captureError in mapUploadHttpError)", () => {
     function lastLogMessages(): string {
-      return vi.mocked(captureError).mock.calls.map((c) => c[0].message).join("\n");
+      return vi
+        .mocked(captureError)
+        .mock.calls.map((c) => c[0].message)
+        .join("\n");
     }
 
     it("logs warn captureError with status=404 + errBody message before throwing", async () => {
-      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(404, "File not found"));
+      mockedFetch.mockResolvedValueOnce(
+        makeErrorBodyResponse(404, "File not found"),
+      );
 
       await expect(
-        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
       ).rejects.toMatchObject({ name: "UploadError", kind: "invalid" });
 
       expect(captureError).toHaveBeenCalledWith(
@@ -1132,18 +1276,22 @@ describe("uploadFileResumable", () => {
           level: "warn",
           source: "driveApi",
           message: expect.stringContaining("status=404"),
-        })
+        }),
       );
       expect(lastLogMessages()).toContain("File not found");
     });
 
     it("logs status=403 for a quota 403 (kind mapping unchanged)", async () => {
       mockedFetch.mockResolvedValueOnce(
-        makeErrorBodyResponse(403, "The user's Drive storage quota has been exceeded.", "storageQuotaExceeded")
+        makeErrorBodyResponse(
+          403,
+          "The user's Drive storage quota has been exceeded.",
+          "storageQuotaExceeded",
+        ),
       );
 
       await expect(
-        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
       ).rejects.toMatchObject({ kind: "quota" });
 
       expect(lastLogMessages()).toContain("status=403");
@@ -1151,10 +1299,12 @@ describe("uploadFileResumable", () => {
     });
 
     it("logs status=400 for a generic 4xx", async () => {
-      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, "Bad Request"));
+      mockedFetch.mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Bad Request"),
+      );
 
       await expect(
-        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
       ).rejects.toMatchObject({ kind: "invalid" });
 
       expect(lastLogMessages()).toContain("status=400");
@@ -1164,27 +1314,36 @@ describe("uploadFileResumable", () => {
       mockedFetch.mockResolvedValueOnce(makeResponse(404));
 
       await expect(
-        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
       ).rejects.toMatchObject({ kind: "invalid" });
 
       expect(lastLogMessages()).toBe("upload-http-error (status=404)");
     });
 
     it("never logs the auth token", async () => {
-      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, "Bad Request"));
+      mockedFetch.mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Bad Request"),
+      );
 
       await expect(
-        uploadFileResumable("super-secret-token-42", new Uint8Array(3), "a.mp3", "p")
+        uploadFileResumable(
+          "super-secret-token-42",
+          new Uint8Array(3),
+          "a.mp3",
+          "p",
+        ),
       ).rejects.toMatchObject({ kind: "invalid" });
 
       expect(lastLogMessages()).not.toContain("super-secret-token-42");
     });
 
     it("redacts embedded id= values from the errBody message (sanitized)", async () => {
-      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, "file id=abc123 locked"));
+      mockedFetch.mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "file id=abc123 locked"),
+      );
 
       await expect(
-        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
       ).rejects.toMatchObject({ kind: "invalid" });
 
       expect(lastLogMessages()).not.toContain("abc123");
@@ -1193,10 +1352,12 @@ describe("uploadFileResumable", () => {
 
     it("caps a very long errBody message instead of bloating the log", async () => {
       const longMessage = "x".repeat(500);
-      mockedFetch.mockResolvedValueOnce(makeErrorBodyResponse(400, longMessage));
+      mockedFetch.mockResolvedValueOnce(
+        makeErrorBodyResponse(400, longMessage),
+      );
 
       await expect(
-        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p")
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
       ).rejects.toMatchObject({ kind: "invalid" });
 
       expect(lastLogMessages()).not.toContain(longMessage);
@@ -1217,7 +1378,8 @@ describe("uploadFileResumableChunked", () => {
     vi.useRealTimers();
   });
 
-  const INITIATE_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
+  const INITIATE_URL =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
   const LOCATION =
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=chunk-123";
   const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
@@ -1237,7 +1399,8 @@ describe("uploadFileResumableChunked", () => {
       status,
       ok,
       headers: {
-        get: (name: string) => (String(name).toLowerCase() === "location" ? location : null),
+        get: (name: string) =>
+          String(name).toLowerCase() === "location" ? location : null,
       },
       json: async () => ({}),
     } as unknown as Response;
@@ -1247,12 +1410,19 @@ describe("uploadFileResumableChunked", () => {
     return {
       status,
       ok: status >= 200 && status < 300,
-      headers: { get: (name: string) => (String(name).toLowerCase() === "range" ? range : null) },
+      headers: {
+        get: (name: string) =>
+          String(name).toLowerCase() === "range" ? range : null,
+      },
       json: async () => ({}),
     } as unknown as Response;
   }
 
-  function makeErrorBodyResponse(status: number, message: string, reason?: string): Response {
+  function makeErrorBodyResponse(
+    status: number,
+    message: string,
+    reason?: string,
+  ): Response {
     return makeJsonResponse(status, {
       error: { code: status, message, reason: reason ?? "badRequest" },
     });
@@ -1260,7 +1430,10 @@ describe("uploadFileResumableChunked", () => {
 
   // Offset-capable reader mirroring uploadManager's readChunk contract:
   // returns the slice at `offset`, null when past the end.
-  function makeReader(bytes: Uint8Array, chunkSize: number): {
+  function makeReader(
+    bytes: Uint8Array,
+    chunkSize: number,
+  ): {
     readChunk: (offset: number) => Promise<Uint8Array | null>;
     offsets: number[];
   } {
@@ -1304,7 +1477,9 @@ describe("uploadFileResumableChunked", () => {
     const [postUrl, postOpts] = mockedFetch.mock.calls[0];
     expect(postUrl).toBe(INITIATE_URL);
     expect(postOpts?.method).toBe("POST");
-    expect((postOpts?.headers as Record<string, string>)["X-Upload-Content-Length"]).toBe(String(TOTAL_SIZE));
+    expect(
+      (postOpts?.headers as Record<string, string>)["X-Upload-Content-Length"],
+    ).toBe(String(TOTAL_SIZE));
 
     const [put1Url, put1Opts] = mockedFetch.mock.calls[1];
     expect(put1Url).toBe(LOCATION);
@@ -1339,11 +1514,17 @@ describe("uploadFileResumableChunked", () => {
 
     expect(reader.offsets).toEqual([0, 4194304, 8388608, 16777216]);
     const [, put2Opts] = mockedFetch.mock.calls[2];
-    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 4194304-12582911/20000000");
+    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 4194304-12582911/20000000",
+    );
     const [, put3Opts] = mockedFetch.mock.calls[3];
-    expect((put3Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 8388608-16777215/20000000");
+    expect((put3Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 8388608-16777215/20000000",
+    );
     const [, put4Opts] = mockedFetch.mock.calls[4];
-    expect((put4Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 16777216-19999999/20000000");
+    expect((put4Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 16777216-19999999/20000000",
+    );
   });
 
   it("308 without a Range header → offset resets to 0, chunk resent from the start", async () => {
@@ -1364,8 +1545,12 @@ describe("uploadFileResumableChunked", () => {
     expect(reader.offsets).toEqual([0, 0]);
     const [, put1Opts] = mockedFetch.mock.calls[1];
     const [, put2Opts] = mockedFetch.mock.calls[2];
-    expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-8388607/8388608");
-    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-8388607/8388608");
+    expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 0-8388607/8388608",
+    );
+    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 0-8388607/8388608",
+    );
   });
 
   it("chunk 500 → retried twice with backoff [1s, 3s], then network UploadError", async () => {
@@ -1417,7 +1602,9 @@ describe("uploadFileResumableChunked", () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeRateLimitResponse(403, "rateLimitExceeded"))
-      .mockResolvedValueOnce(makeRateLimitResponse(403, "userRateLimitExceeded"))
+      .mockResolvedValueOnce(
+        makeRateLimitResponse(403, "userRateLimitExceeded"),
+      )
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
 
     const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
@@ -1441,7 +1628,9 @@ describe("uploadFileResumableChunked", () => {
     vi.useFakeTimers();
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockResolvedValueOnce(makeRateLimitResponse(403, "userRateLimitExceeded"))
+      .mockResolvedValueOnce(
+        makeRateLimitResponse(403, "userRateLimitExceeded"),
+      )
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
 
     const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
@@ -1469,7 +1658,7 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: CHUNK_SIZE,
         readChunk: reader.readChunk,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -1513,7 +1702,7 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: CHUNK_SIZE,
         readChunk: reader.readChunk,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "network" });
     expect(mockedFetch).toHaveBeenCalledTimes(4);
   });
@@ -1535,7 +1724,7 @@ describe("uploadFileResumableChunked", () => {
         totalSize: CHUNK_SIZE,
         readChunk: reader.readChunk,
         signal: controller.signal,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "aborted" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -1551,7 +1740,7 @@ describe("uploadFileResumableChunked", () => {
         totalSize: CHUNK_SIZE,
         readChunk: async () => makePayload(10),
         signal: controller.signal,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "aborted" });
     expect(mockedFetch).not.toHaveBeenCalled();
   });
@@ -1563,7 +1752,7 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: 0,
         readChunk: async () => null,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).not.toHaveBeenCalled();
   });
@@ -1575,8 +1764,8 @@ describe("uploadFileResumableChunked", () => {
         makeErrorBodyResponse(
           403,
           "The user's Drive storage quota has been exceeded.",
-          "storageQuotaExceeded"
-        )
+          "storageQuotaExceeded",
+        ),
       );
 
     const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
@@ -1586,7 +1775,7 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: CHUNK_SIZE,
         readChunk: reader.readChunk,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "quota" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -1603,7 +1792,7 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: CHUNK_SIZE,
         readChunk: reader.readChunk,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "auth" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -1621,7 +1810,7 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: TOTAL_SIZE,
         readChunk: reader.readChunk,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(reader.offsets).toEqual([0, 5]);
   });
@@ -1637,7 +1826,7 @@ describe("uploadFileResumableChunked", () => {
         readChunk: async () => {
           throw new Error("disk io error");
         },
-      })
+      }),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
@@ -1671,9 +1860,13 @@ describe("uploadFileResumableChunked", () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(3);
     const [, put1Opts] = mockedFetch.mock.calls[1];
-    expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-63/100");
+    expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 0-63/100",
+    );
     const [, put2Opts] = mockedFetch.mock.calls[2];
-    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 64-99/100");
+    expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 64-99/100",
+    );
     // The truncated final chunk is 36 bytes — not a 256 KB multiple, which is
     // fine: the multiple rule only applies to non-final chunks.
     expect((put2Opts?.body as Uint8Array).byteLength).toBe(36);
@@ -1693,10 +1886,18 @@ describe("uploadFileResumableChunked", () => {
       readChunk: async (offset) => (offset >= 100 ? null : makePayload(64)),
     });
 
-    const bodies: number[] = mockedFetch.mock.calls.slice(1).map(([, o]) => (o?.body as Uint8Array).byteLength);
+    const bodies: number[] = mockedFetch.mock.calls
+      .slice(1)
+      .map(([, o]) => (o?.body as Uint8Array).byteLength);
     expect(bodies).toEqual([50, 30, 10]);
-    const ranges = mockedFetch.mock.calls.slice(1).map(([, o]) => (o?.headers as Record<string, string>)["Content-Range"]);
-    expect(ranges).toEqual(["bytes 0-49/50", "bytes 20-49/50", "bytes 40-49/50"]);
+    const ranges = mockedFetch.mock.calls
+      .slice(1)
+      .map(([, o]) => (o?.headers as Record<string, string>)["Content-Range"]);
+    expect(ranges).toEqual([
+      "bytes 0-49/50",
+      "bytes 20-49/50",
+      "bytes 40-49/50",
+    ]);
   });
 
   it("file growth truncation is silent: chunk still truncated to totalSize, no upload-chunk-truncated log", async () => {
@@ -1719,12 +1920,14 @@ describe("uploadFileResumableChunked", () => {
       expect.objectContaining({
         level: "warn",
         message: expect.stringContaining("upload-chunk-truncated"),
-      })
+      }),
     );
     // Truncation behavior itself is unchanged: the 64-byte chunk is cut to the
     // remaining 50 bytes and sent with the exact Content-Range.
     const [, putOpts] = mockedFetch.mock.calls[1];
-    expect((putOpts?.headers as Record<string, string>)["Content-Range"]).toBe("bytes 0-49/50");
+    expect((putOpts?.headers as Record<string, string>)["Content-Range"]).toBe(
+      "bytes 0-49/50",
+    );
     expect((putOpts?.body as Uint8Array).byteLength).toBe(50);
   });
 
@@ -1738,8 +1941,9 @@ describe("uploadFileResumableChunked", () => {
         name: "big.flac",
         parentId: "p",
         totalSize: 10,
-        readChunk: async (offset) => (offset >= 10 ? null : makePayload(CHUNK_SIZE)),
-      })
+        readChunk: async (offset) =>
+          offset >= 10 ? null : makePayload(CHUNK_SIZE),
+      }),
     ).rejects.toMatchObject({ kind: "invalid" });
     // initiate + the single truncated PUT — never a resend past the announced size.
     expect(mockedFetch).toHaveBeenCalledTimes(2);
@@ -1748,7 +1952,9 @@ describe("uploadFileResumableChunked", () => {
   it("308 Range covering the whole file → invalid (server anomaly, would re-send out of range)", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockResolvedValueOnce(makeRangeResponse(308, `bytes=0-${TOTAL_SIZE - 1}`));
+      .mockResolvedValueOnce(
+        makeRangeResponse(308, `bytes=0-${TOTAL_SIZE - 1}`),
+      );
 
     const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
     await expect(
@@ -1757,7 +1963,7 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: TOTAL_SIZE,
         readChunk: reader.readChunk,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
@@ -1765,7 +1971,9 @@ describe("uploadFileResumableChunked", () => {
   it("logs warn captureError with status=400 when a chunk PUT hits a non-retryable 4xx", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockResolvedValueOnce(makeErrorBodyResponse(400, "Invalid upload request"));
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      );
 
     const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
     await expect(
@@ -1774,10 +1982,13 @@ describe("uploadFileResumableChunked", () => {
         parentId: "p",
         totalSize: CHUNK_SIZE,
         readChunk: reader.readChunk,
-      })
+      }),
     ).rejects.toMatchObject({ kind: "invalid" });
 
-    const message = vi.mocked(captureError).mock.calls.map((c) => c[0].message).join("\n");
+    const message = vi
+      .mocked(captureError)
+      .mock.calls.map((c) => c[0].message)
+      .join("\n");
     expect(message).toContain("status=400");
     expect(message).toContain("Invalid upload request");
   });
@@ -1792,7 +2003,8 @@ describe("uploadFileResumableChunked", () => {
       status: 429,
       ok: false,
       headers: {
-        get: (name: string) => (String(name).toLowerCase() === "retry-after" ? "5" : null),
+        get: (name: string) =>
+          String(name).toLowerCase() === "retry-after" ? "5" : null,
       },
       json: async () => ({}),
     } as unknown as Response;
@@ -1865,14 +2077,15 @@ describe("saveAppConfig serialization lock (promise-chain mutex)", () => {
   it("serializes concurrent saves: task 2's fetch only starts after task 1 fully finishes", async () => {
     let releaseFirstSearch!: () => void;
     const firstSearchGate = new Promise<Response>((resolve) => {
-      releaseFirstSearch = () => resolve(makeJsonResponse(200, { files: [{ id: "file-1" }] }));
+      releaseFirstSearch = () =>
+        resolve(makeJsonResponse(200, { files: [{ id: "file-1" }] }));
     });
 
     mockedFetch
-      .mockReturnValueOnce(firstSearchGate)                          // task 1: search (held open)
-      .mockResolvedValueOnce(makeResponse(200))                      // task 1: PATCH upload
-      .mockResolvedValueOnce(makeJsonResponse(200, { files: [] }))   // task 2: search (no file → POST)
-      .mockResolvedValueOnce(makeResponse(200));                     // task 2: POST upload
+      .mockReturnValueOnce(firstSearchGate) // task 1: search (held open)
+      .mockResolvedValueOnce(makeResponse(200)) // task 1: PATCH upload
+      .mockResolvedValueOnce(makeJsonResponse(200, { files: [] })) // task 2: search (no file → POST)
+      .mockResolvedValueOnce(makeResponse(200)); // task 2: POST upload
 
     const task1 = saveAppConfig("tok-1", { a: 1 });
     const task2 = saveAppConfig("tok-2", { a: 2 });

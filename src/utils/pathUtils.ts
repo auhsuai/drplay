@@ -19,7 +19,7 @@ const SEPARATOR_SPLIT = /[\\/]/;
  * byte-identical.
  */
 export function basename(path: string): string {
-  const trimmed = path.replace(TRAILING_SEPARATORS, '');
+  const trimmed = path.replace(TRAILING_SEPARATORS, "");
   const parts = trimmed.split(SEPARATOR_SPLIT);
   return parts[parts.length - 1] ?? path;
 }

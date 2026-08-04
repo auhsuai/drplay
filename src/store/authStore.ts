@@ -1,5 +1,5 @@
-import { create } from 'zustand';
-import type { UserProfile } from '../types';
+import { create } from "zustand";
+import type { UserProfile } from "../types";
 
 interface AuthState {
   isLoggedIn: boolean;
@@ -14,7 +14,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoggedIn: false,
   accessToken: null,
   userProfile: null,
-  setIsLoggedIn: (isLoggedIn) => set({ isLoggedIn }),
-  setAccessToken: (accessToken) => set({ accessToken }),
-  setUserProfile: (userProfile) => set({ userProfile }),
+  setIsLoggedIn: (isLoggedIn) => {
+    set({ isLoggedIn });
+  },
+  setAccessToken: (accessToken) => {
+    set({ accessToken });
+  },
+  setUserProfile: (userProfile) => {
+    set({ userProfile });
+  },
 }));

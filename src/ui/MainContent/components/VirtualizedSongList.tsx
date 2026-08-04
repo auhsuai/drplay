@@ -1,9 +1,14 @@
 import React from "react";
-import { useVirtualizer, type ScrollToOptions } from '@tanstack/react-virtual';
-import { Track } from "../../../App";
+import { useVirtualizer, type ScrollToOptions } from "@tanstack/react-virtual";
+import type { Track } from "../../../App";
 import type { DriveItem } from "../../../types";
-import { SongCard } from './SongCard';
-import { getUploadProgress, getUploadState, isUploading, subscribe as subscribeUploads } from "../../../utils/uploadManager";
+import { SongCard } from "./SongCard";
+import {
+  getUploadProgress,
+  getUploadState,
+  isUploading,
+  subscribe as subscribeUploads,
+} from "../../../utils/uploadManager";
 
 // Monotonic upload-status version: bumped on every uploadManager notify so the
 // virtualized list can re-derive each card's uploadState. Module-level (not
@@ -16,7 +21,9 @@ let uploadVersion = 0;
 // offsets and scrollToIndex jumps to the wrong position.
 const ROW_ESTIMATED_SIZE_PX = 92;
 
-export type VirtualizedSongListHandle = { scrollToIndex: (index: number, options?: ScrollToOptions) => void };
+export type VirtualizedSongListHandle = {
+  scrollToIndex: (index: number, options?: ScrollToOptions) => void;
+};
 
 export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   items,
@@ -50,7 +57,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   highlightedFileId: { id: string; ts: number } | null | undefined;
   isPlaying: string | undefined;
   onRefresh: () => void;
-  onRemoveItem?: (id: string) => void;
+  onRemoveItem?: ((id: string) => void) | undefined;
   isSelectionMode: boolean;
   selectedIds: Set<string>;
   setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
@@ -78,10 +85,11 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   // this list re-renders on every scroll frame, so memoize the wrapper to keep
   // the subscription stable.
   const subscribeUploadsStable = React.useCallback(
-    (onStoreChange: () => void) => subscribeUploads(() => {
-      uploadVersion += 1;
-      onStoreChange();
-    }),
+    (onStoreChange: () => void) =>
+      subscribeUploads(() => {
+        uploadVersion += 1;
+        onStoreChange();
+      }),
     [],
   );
 
@@ -90,37 +98,43 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   React.useImperativeHandle(ref, () => ({
     scrollToIndex: (index, options) => {
       rowVirtualizer.scrollToIndex(index, options);
-    }
+    },
   }));
 
   const virtualItems = rowVirtualizer.getVirtualItems();
 
-  const handleToggleSelection = React.useCallback((id: string) => {
-    // Upload race guard (UI layer): an uploading item must never be toggled
-    // into the selection — bulk ops on it are impossible and the pending row
-    // disappears when the upload finishes.
-    if (isUploading(id)) return;
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, [setSelectedIds]);
+  const handleToggleSelection = React.useCallback(
+    (id: string) => {
+      // Upload race guard (UI layer): an uploading item must never be toggled
+      // into the selection — bulk ops on it are impossible and the pending row
+      // disappears when the upload finishes.
+      if (isUploading(id)) return;
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    },
+    [setSelectedIds],
+  );
 
-  const handleEnableSelectionMode = React.useCallback((id: string) => {
-    if (isUploading(id)) return;
-    setIsSelectionMode(true);
-    setSelectedIds(new Set([id]));
-  }, [setIsSelectionMode, setSelectedIds]);
+  const handleEnableSelectionMode = React.useCallback(
+    (id: string) => {
+      if (isUploading(id)) return;
+      setIsSelectionMode(true);
+      setSelectedIds(new Set([id]));
+    },
+    [setIsSelectionMode, setSelectedIds],
+  );
 
   return (
     <div
       ref={rowVirtualizer.containerRef}
       style={{
-        position: 'relative',
-        width: '100%',
-        pointerEvents: rowVirtualizer.isScrolling ? 'none' : 'auto',
+        position: "relative",
+        width: "100%",
+        pointerEvents: rowVirtualizer.isScrolling ? "none" : "auto",
       }}
     >
       {virtualItems.map((virtualRow) => {
@@ -133,10 +147,10 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
             data-index={virtualRow.index}
             className="pb-3"
             style={{
-              position: 'absolute',
+              position: "absolute",
               top: 0,
               left: 0,
-              width: '100%',
+              width: "100%",
             }}
           >
             <SongCard
@@ -148,7 +162,11 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
               currentFolderName={currentFolderName}
               folderHistory={folderHistory}
               isHighlighted={item.id === highlightedFileId?.id}
-              highlightTrigger={item.id === highlightedFileId?.id ? highlightedFileId.ts : undefined}
+              highlightTrigger={
+                item.id === highlightedFileId?.id
+                  ? highlightedFileId.ts
+                  : undefined
+              }
               isPlaying={!!isPlaying && item.trackInfo?.id === isPlaying}
               onRefresh={onRefresh}
               onRemoveItem={onRemoveItem}

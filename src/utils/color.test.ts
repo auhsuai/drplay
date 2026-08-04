@@ -14,7 +14,7 @@ import { captureError } from "./errorLog";
 import { getPalette } from "./color";
 
 vi.mock("./errorLog", () => ({
-  captureError: vi.fn().mockResolvedValue(undefined)
+  captureError: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockedCaptureError = vi.mocked(captureError);
@@ -111,11 +111,13 @@ describe("getPalette — memoization (P0-2 regression)", () => {
     };
     (globalThis as any).Image = ctor;
 
-    await expect(getPalette("http://x/broken-cover")).rejects.toThrow("Image load error");
+    await expect(getPalette("http://x/broken-cover")).rejects.toThrow(
+      "Image load error",
+    );
     expect(mockedCaptureError).toHaveBeenCalledWith({
       level: "warn",
       source: "color",
-      message: "getPalette image load failed"
+      message: "getPalette image load failed",
     });
   });
 });

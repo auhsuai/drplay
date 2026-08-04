@@ -22,7 +22,10 @@ const SEGMENT_SEPARATOR = /[\\/]/;
  * - the last segment always appears, even if it must be clipped at the
  *   `maxChars` budget (rare: a single folder name longer than ~32 chars).
  */
-export function truncatePathMiddle(path: string, maxChars: number = MAX_VISIBLE_CHARS): string {
+export function truncatePathMiddle(
+  path: string,
+  maxChars: number = MAX_VISIBLE_CHARS,
+): string {
   if (typeof path !== "string") return "";
   if (path.length <= maxChars) return path;
 
@@ -42,7 +45,12 @@ export function truncatePathMiddle(path: string, maxChars: number = MAX_VISIBLE_
   // `\\server\share` as the prefix so the share name stays visible.
   const prefix =
     parts[0] === "" && parts[1] === ""
-      ? sep + sep + parts.slice(2, 4).filter((s) => s !== "").join(sep)
+      ? sep +
+        sep +
+        parts
+          .slice(2, 4)
+          .filter((s) => s !== "")
+          .join(sep)
       : parts.slice(0, 2).join(sep);
 
   const suffix = parts[lastIdx];
@@ -52,7 +60,10 @@ export function truncatePathMiddle(path: string, maxChars: number = MAX_VISIBLE_
   // separator is kept on both sides of the ellipsis so `C:\Users\…\Music`
   // reads as a real path, not `C:\Users…Music`.
   const overhead = sep.length * 2 + ELLIPSIS.length;
-  const suffixBudget = Math.min(suffix.length, Math.max(1, maxChars - overhead - prefix.length));
+  const suffixBudget = Math.min(
+    suffix.length,
+    Math.max(1, maxChars - overhead - prefix.length),
+  );
   const shownSuffix = suffix.slice(0, suffixBudget);
   const prefixBudget = Math.max(1, maxChars - overhead - shownSuffix.length);
   const shownPrefix = prefix.slice(0, prefixBudget);

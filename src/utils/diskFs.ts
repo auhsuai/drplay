@@ -1,18 +1,18 @@
-import { invoke } from '@tauri-apps/api/core';
-import { captureError } from './errorLog';
-import { basename } from './pathUtils';
+import { invoke } from "@tauri-apps/api/core";
+import { captureError } from "./errorLog";
+import { basename } from "./pathUtils";
 
 // tauri-plugin-fs v2 command names, verified against the plugins-workspace v2
 // guest-js (raw.githubusercontent.com/tauri-apps/plugins-workspace/v2/plugins/fs/guest-js/index.ts,
 // fetched 2026-08-02). The repo does NOT use @tauri-apps/plugin-fs npm
 // bindings — it invokes the plugin commands directly (same pattern as
 // useMenuDownload.ts:121).
-const FS_READ_DIR_CMD = 'plugin:fs|read_dir';
-const FS_STAT_CMD = 'plugin:fs|stat';
+const FS_READ_DIR_CMD = "plugin:fs|read_dir";
+const FS_STAT_CMD = "plugin:fs|stat";
 // Streaming read commands (guest-js FileHandle pattern): open returns a
 // resource id (rid) that sequential read() calls consume, and close releases.
-const FS_OPEN_CMD = 'plugin:fs|open';
-const FS_READ_CMD = 'plugin:fs|read';
+const FS_OPEN_CMD = "plugin:fs|open";
+const FS_READ_CMD = "plugin:fs|read";
 // tauri-plugin-fs v2 has NO `plugin:fs|close` command (verified in
 // tauri-plugin-fs 2.5.1 lib.rs invoke_handler: only create/open/read/seek/
 // fstat/... are registered). File handles are core Resources: the official
@@ -20,7 +20,7 @@ const FS_READ_CMD = 'plugin:fs|read';
 // invokes `plugin:resources|close` (core.js:272). That core command is
 // enabled by default (`core:resources` allow-close in tauri build.rs
 // core:default), so no capability change is required.
-const FS_CLOSE_CMD = 'plugin:resources|close';
+const FS_CLOSE_CMD = "plugin:resources|close";
 
 // Default streaming read granularity. The Drive resumable protocol requires
 // upload chunks to be multiples of 256 KiB (except the final chunk), and 8 MiB
@@ -35,7 +35,7 @@ const NREAD_BYTES = 8;
 // Custom Rust command registered in src-tauri/src/lib.rs (same shape as the
 // existing register_download_path; the runtime scope it extends is checked by
 // the plugin's resolve_path as `fs_scope.scope.is_allowed(...)`).
-const REGISTER_UPLOAD_PATH_CMD = 'register_upload_path';
+const REGISTER_UPLOAD_PATH_CMD = "register_upload_path";
 
 // ENOENT from std::fs — the plugin formats io errors as
 // "with error: <msg> (os error N)". os error 2 is the same value on Windows
@@ -89,8 +89,16 @@ export async function registerUploadPath(path: string): Promise<void> {
   try {
     await invoke(REGISTER_UPLOAD_PATH_CMD, { path });
   } catch (err: unknown) {
-    const wrapped = wrapError(`Failed to extend fs read scope for "${path}"`, err);
-    captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'scope' });
+    const wrapped = wrapError(
+      `Failed to extend fs read scope for "${path}"`,
+      err,
+    );
+    captureError({
+      level: "warn",
+      source: "diskFs",
+      message: wrapped.message,
+      kind: "scope",
+    });
     throw wrapped;
   }
 }
@@ -107,7 +115,12 @@ export async function statDiskPath(path: string): Promise<DiskEntry | null> {
   } catch (err: unknown) {
     if (NOT_FOUND_PATTERN.test(describeError(err))) return null;
     const wrapped = wrapError(`Failed to stat "${path}"`, err);
-    captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stat' });
+    captureError({
+      level: "warn",
+      source: "diskFs",
+      message: wrapped.message,
+      kind: "stat",
+    });
     throw wrapped;
   }
   const name = basename(path);
@@ -145,32 +158,55 @@ function fromBigEndian(bytes: Uint8Array): number {
 
 export async function openDiskReadStream(
   path: string,
-  chunkSize: number = DEFAULT_READ_CHUNK_SIZE
+  chunkSize: number = DEFAULT_READ_CHUNK_SIZE,
 ): Promise<DiskReadStream> {
   let rid: number;
   try {
     rid = await invoke<number>(FS_OPEN_CMD, { path, options: { read: true } });
   } catch (err: unknown) {
     const wrapped = wrapError(`Failed to open file "${path}"`, err);
-    captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-open' });
+    captureError({
+      level: "warn",
+      source: "diskFs",
+      message: wrapped.message,
+      kind: "stream-open",
+    });
     throw wrapped;
   }
 
   async function read(): Promise<Uint8Array | null> {
     let payload: ArrayBuffer | number[];
     try {
-      payload = await invoke<ArrayBuffer | number[]>(FS_READ_CMD, { rid, len: chunkSize });
+      payload = await invoke<ArrayBuffer | number[]>(FS_READ_CMD, {
+        rid,
+        len: chunkSize,
+      });
     } catch (err: unknown) {
       const wrapped = wrapError(`Failed to read file "${path}"`, err);
-      captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-read' });
+      captureError({
+        level: "warn",
+        source: "diskFs",
+        message: wrapped.message,
+        kind: "stream-read",
+      });
       throw wrapped;
     }
-    const arr = payload instanceof ArrayBuffer ? new Uint8Array(payload) : Uint8Array.from(payload);
+    const arr =
+      payload instanceof ArrayBuffer
+        ? new Uint8Array(payload)
+        : Uint8Array.from(payload);
     // The plugin guarantees ≥8 elements; anything shorter is a protocol
     // violation and would misparse nread into silently wrong chunk data.
     if (arr.byteLength < NREAD_BYTES) {
-      const wrapped = new Error(`Failed to read file "${path}": malformed stream response`);
-      captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-read' });
+      const wrapped = new Error(
+        `Failed to read file "${path}": malformed stream response`,
+      );
+      captureError({
+        level: "warn",
+        source: "diskFs",
+        message: wrapped.message,
+        kind: "stream-read",
+      });
       throw wrapped;
     }
     const nread = fromBigEndian(arr.slice(arr.byteLength - NREAD_BYTES));
@@ -185,7 +221,12 @@ export async function openDiskReadStream(
       await invoke(FS_CLOSE_CMD, { rid });
     } catch (err: unknown) {
       const wrapped = wrapError(`Failed to close file "${path}"`, err);
-      captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'stream-close' });
+      captureError({
+        level: "warn",
+        source: "diskFs",
+        message: wrapped.message,
+        kind: "stream-close",
+      });
     }
   }
 
@@ -202,14 +243,23 @@ export async function openDiskReadStream(
  * calls with an AbortError — the batch caller normalizes it to its own
  * 'aborted' error kind.
  */
-export async function walkDiskFolder(dirPath: string, signal?: AbortSignal): Promise<DiskEntry[]> {
+export async function walkDiskFolder(
+  dirPath: string,
+  signal?: AbortSignal,
+): Promise<DiskEntry[]> {
   // Fail fast on an already-aborted walk: a cancel must never descend into IPC.
   throwIfWalkAborted(signal);
   const entries: DiskEntry[] = [];
   await walkDirRecursive(dirPath, dirPath, entries, signal);
   // Plain code-unit comparison: stable across machines/locales (localeCompare
   // depends on the host locale, which would break snapshot expectations).
-  entries.sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
+  entries.sort((a, b) =>
+    a.relativePath < b.relativePath
+      ? -1
+      : a.relativePath > b.relativePath
+        ? 1
+        : 0,
+  );
   return entries;
 }
 
@@ -219,18 +269,30 @@ export async function walkDiskFolder(dirPath: string, signal?: AbortSignal): Pro
 // A cancel is deliberately NOT wrapped in wrapError/captureError: it is not a
 // disk failure, and logging the walk path would leak it into the error log.
 function throwIfWalkAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  if (signal?.aborted) throw new DOMException("aborted", "AbortError");
 }
 
-async function walkDirRecursive(dirPath: string, rootPath: string, out: DiskEntry[], signal?: AbortSignal): Promise<void> {
+async function walkDirRecursive(
+  dirPath: string,
+  rootPath: string,
+  out: DiskEntry[],
+  signal?: AbortSignal,
+): Promise<void> {
   // Fail before every read_dir IPC so an abort never schedules new work.
   throwIfWalkAborted(signal);
   let rawEntries: DirEntryDto[];
   try {
-    rawEntries = await invoke<DirEntryDto[]>(FS_READ_DIR_CMD, { path: dirPath });
+    rawEntries = await invoke<DirEntryDto[]>(FS_READ_DIR_CMD, {
+      path: dirPath,
+    });
   } catch (err: unknown) {
     const wrapped = wrapError(`Failed to read directory "${dirPath}"`, err);
-    captureError({ level: 'warn', source: 'diskFs', message: wrapped.message, kind: 'read-dir' });
+    captureError({
+      level: "warn",
+      source: "diskFs",
+      message: wrapped.message,
+      kind: "read-dir",
+    });
     throw wrapped;
   }
   for (const entry of rawEntries) {
@@ -257,7 +319,12 @@ function joinPath(dirPath: string, name: string): string {
 // Strip the walked root and normalize separators: "C:\Music\sub\a.mp3" with
 // root "C:\Music" becomes "sub/a.mp3" (no leading slash). Forward slashes
 // are valid on Windows and keep relativePath portable to the Drive API.
-function toForwardSlashRelative(rootPath: string, absolutePath: string): string {
-  const rel = absolutePath.startsWith(rootPath) ? absolutePath.slice(rootPath.length) : absolutePath;
-  return rel.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+function toForwardSlashRelative(
+  rootPath: string,
+  absolutePath: string,
+): string {
+  const rel = absolutePath.startsWith(rootPath)
+    ? absolutePath.slice(rootPath.length)
+    : absolutePath;
+  return rel.replace(/^[\\/]+/, "").replace(/\\/g, "/");
 }

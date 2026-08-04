@@ -141,6 +141,7 @@ PRs welcome. Local conventions:
 - Tests first (TDD), `npm test` must stay green
 - TypeScript strict, no `any`
 - Follow existing patterns in `src/utils/` for error handling (typed catch, contextual logging, no secrets in logs)
+- Lint & format before committing: `npm run lint`, `npm run format`
 
 ## License
 

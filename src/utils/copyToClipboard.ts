@@ -1,9 +1,9 @@
-import { writeText } from '@tauri-apps/plugin-clipboard-manager';
-import { captureError } from './errorLog';
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { captureError } from "./errorLog";
 
-const FALLBACK_STYLE_POSITION = 'fixed';
-const FALLBACK_STYLE_LEFT = '-9999px';
-const FALLBACK_STYLE_TOP = '-9999px';
+const FALLBACK_STYLE_POSITION = "fixed";
+const FALLBACK_STYLE_LEFT = "-9999px";
+const FALLBACK_STYLE_TOP = "-9999px";
 
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -11,9 +11,9 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return true;
   } catch (err: unknown) {
     captureError({
-      level: 'warn',
-      source: 'copyToClipboard',
-      message: `Tauri clipboard failed: ${err instanceof Error ? err.message : 'unknown'}`,
+      level: "warn",
+      source: "copyToClipboard",
+      message: `Tauri clipboard failed: ${err instanceof Error ? err.message : "unknown"}`,
     });
   }
 
@@ -31,9 +31,9 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return ok;
   } catch (err: unknown) {
     captureError({
-      level: 'error',
-      source: 'copyToClipboard',
-      message: `Fallback clipboard failed: ${err instanceof Error ? err.message : 'unknown'}`,
+      level: "error",
+      source: "copyToClipboard",
+      message: `Fallback clipboard failed: ${err instanceof Error ? err.message : "unknown"}`,
     });
     return false;
   }

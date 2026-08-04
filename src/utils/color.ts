@@ -1,4 +1,4 @@
-import { captureError } from './errorLog';
+import { captureError } from "./errorLog";
 
 const IMAGE_LOAD_TIMEOUT_MS = 10000;
 const CANVAS_SIZE = 64;
@@ -42,70 +42,87 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
     img.crossOrigin = "Anonymous";
 
     let settled = false;
-    const timer = setTimeout(() => finish(() => reject(new Error("Image load timeout"))), IMAGE_LOAD_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => finish(() => reject(new Error("Image load timeout"))),
+      IMAGE_LOAD_TIMEOUT_MS,
+    );
     const finish = (action: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       img.onload = null;
       img.onerror = null;
-      try { action(); } finally { img.src = ""; }
+      try {
+        action();
+      } finally {
+        img.src = "";
+      }
     };
 
-    img.onload = () => finish(() => {
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return reject(new Error("No canvas context"));
+    img.onload = () =>
+      finish(() => {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return reject(new Error("No canvas context"));
 
-      const size = CANVAS_SIZE;
-      canvas.width = size;
-      canvas.height = size;
-      ctx.drawImage(img, 0, 0, size, size);
-      
-      try {
-        const half = size / 2;
+        const size = CANVAS_SIZE;
+        canvas.width = size;
+        canvas.height = size;
+        ctx.drawImage(img, 0, 0, size, size);
 
-        // Single canvas read instead of 4 quadrant reads. Bucketing each
-        // sampled pixel into its quadrant avoids 3 extra GPU->RAM buffer
-        // copies and the 4 intermediate typed-array views.
-        const imgData = ctx.getImageData(0, 0, size, size).data;
-        const sum = [
-          { r: 0, g: 0, b: 0, n: 0 }, // TL
-          { r: 0, g: 0, b: 0, n: 0 }, // TR
-          { r: 0, g: 0, b: 0, n: 0 }, // BL
-          { r: 0, g: 0, b: 0, n: 0 }, // BR
-        ];
-        // Sample every 4th pixel (RGBA = 4 bytes) -> step 16 bytes.
-        for (let i = 0; i < imgData.length; i += SAMPLE_STEP) {
-          const p = i / 4;
-          const x = p % size;
-          const y = (p / size) | 0;
-          const q = (y < half ? 0 : 2) + (x < half ? 0 : 1);
-          sum[q].r += imgData[i];
-          sum[q].g += imgData[i + 1];
-          sum[q].b += imgData[i + 2];
-          sum[q].n++;
+        try {
+          const half = size / 2;
+
+          // Single canvas read instead of 4 quadrant reads. Bucketing each
+          // sampled pixel into its quadrant avoids 3 extra GPU->RAM buffer
+          // copies and the 4 intermediate typed-array views.
+          const imgData = ctx.getImageData(0, 0, size, size).data;
+          const sum = [
+            { r: 0, g: 0, b: 0, n: 0 }, // TL
+            { r: 0, g: 0, b: 0, n: 0 }, // TR
+            { r: 0, g: 0, b: 0, n: 0 }, // BL
+            { r: 0, g: 0, b: 0, n: 0 }, // BR
+          ];
+          // Sample every 4th pixel (RGBA = 4 bytes) -> step 16 bytes.
+          for (let i = 0; i < imgData.length; i += SAMPLE_STEP) {
+            const p = i / 4;
+            const x = p % size;
+            const y = (p / size) | 0;
+            const q = (y < half ? 0 : 2) + (x < half ? 0 : 1);
+            sum[q].r += imgData[i];
+            sum[q].g += imgData[i + 1];
+            sum[q].b += imgData[i + 2];
+            sum[q].n++;
+          }
+
+          const darken = DARKEN_FACTOR;
+          const palette = sum.map((s) => {
+            if (s.n === 0) return `rgba(0,0,0,${BG_ALPHA})`;
+            const r = Math.floor((s.r / s.n) * darken);
+            const g = Math.floor((s.g / s.n) * darken);
+            const b = Math.floor((s.b / s.n) * darken);
+            return `rgba(${r}, ${g}, ${b}, ${BG_ALPHA})`;
+          });
+          setPaletteCached(imgUrl, palette);
+          resolve(palette);
+        } catch (e: unknown) {
+          captureError({
+            level: "warn",
+            source: "color",
+            message: `getPalette canvas error: ${e instanceof Error ? e.message : String(e)}`,
+          });
+          reject(e);
         }
-
-        const darken = DARKEN_FACTOR;
-        const palette = sum.map((s) => {
-          if (s.n === 0) return `rgba(0,0,0,${BG_ALPHA})`;
-          const r = Math.floor((s.r / s.n) * darken);
-          const g = Math.floor((s.g / s.n) * darken);
-          const b = Math.floor((s.b / s.n) * darken);
-          return `rgba(${r}, ${g}, ${b}, ${BG_ALPHA})`;
+      });
+    img.onerror = () =>
+      finish(() => {
+        captureError({
+          level: "warn",
+          source: "color",
+          message: "getPalette image load failed",
         });
-        setPaletteCached(imgUrl, palette);
-        resolve(palette);
-      } catch (e: unknown) {
-        captureError({ level: 'warn', source: 'color', message: `getPalette canvas error: ${e instanceof Error ? e.message : String(e)}` });
-        reject(e);
-      }
-    });
-    img.onerror = () => finish(() => {
-      captureError({ level: 'warn', source: 'color', message: 'getPalette image load failed' });
-      reject(new Error("Image load error"));
-    });
+        reject(new Error("Image load error"));
+      });
     img.src = imgUrl;
   });
 };

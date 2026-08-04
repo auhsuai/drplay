@@ -1,17 +1,36 @@
-import { db } from '../db/db';
-import type { DriveFile as DriveFileRow } from '../db/db';
-import { getAudioQuery, isAudioFile } from '../utils/audioQuery';
-import { FOLDER_MIME } from '../utils/driveApi';
-import { ROOT_FOLDER_ID } from '../utils/driveConstants';
-import { classifyWorkerError, logWorkerError, WorkerAbortError } from './workerError';
+import { db } from "../db/db";
+import type { DriveFile as DriveFileRow } from "../db/db";
+import { getAudioQuery, isAudioFile } from "../utils/audioQuery";
+import { FOLDER_MIME } from "../utils/driveApi";
+import { ROOT_FOLDER_ID } from "../utils/driveConstants";
+import {
+  classifyWorkerError,
+  logWorkerError,
+  WorkerAbortError,
+} from "./workerError";
 
 interface DriveFile {
-  id?: string; name?: string; mimeType?: string; size?: string;
-  parents?: string[]; trashed?: boolean; createdTime?: string;
-  modifiedTime?: string; md5Checksum?: string;
+  id?: string | undefined;
+  name?: string;
+  mimeType?: string;
+  size?: string;
+  parents?: string[];
+  trashed?: boolean;
+  createdTime?: string;
+  modifiedTime?: string;
+  md5Checksum?: string;
 }
-interface DriveChangesList { changes?: DriveChange[]; nextPageToken?: string; newStartPageToken?: string; }
-interface DriveChange { file?: DriveFile; fileId?: string; removed?: boolean; changeType?: string; }
+interface DriveChangesList {
+  changes?: DriveChange[];
+  nextPageToken?: string;
+  newStartPageToken?: string;
+}
+interface DriveChange {
+  file?: DriveFile;
+  fileId?: string;
+  removed?: boolean;
+  changeType?: string;
+}
 
 let isBusy = false;
 let currentToken: string | null = null;
@@ -35,10 +54,13 @@ const MAX_RETRY_DELAY_MS = 8000;
 const RETRY_JITTER_MAX_MS = 500;
 // Google Drive reports rate limiting as 403 with these `error.errors[].reason`
 // values (usage limits): https://developers.google.com/drive/api/guides/handle-errors
-const DRIVE_RATE_LIMIT_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded']);
+const DRIVE_RATE_LIMIT_REASONS = new Set([
+  "rateLimitExceeded",
+  "userRateLimitExceeded",
+]);
 
 function toSize(raw: string | undefined | null): number | undefined {
-  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (raw === undefined || raw === null || raw === "") return undefined;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) ? n : undefined;
 }
@@ -64,14 +86,17 @@ export function toDriveFileRow(f: DriveFile, isFolder: boolean): DriveFileRow {
 // from failing an entire full-sync page, since Dexie bulkPut aborts its
 // whole transaction on an invalid primary key.
 export function isValidDriveFile(f: DriveFile): boolean {
-  return typeof f.id === 'string' && f.id.length > 0;
+  return typeof f.id === "string" && f.id.length > 0;
 }
 
 // Partitions a page of Drive files into the subset that can be persisted
 // (has a usable id) and a count of silently-unpersistable ones. Callers log a
 // single summary line when skippedCount > 0 so missing-id files are never
 // dropped without a trace (AGENTS.md Luật 4 — no silent error swallowing).
-export function partitionValidFiles(files: DriveFile[]): { valid: DriveFile[]; skippedCount: number } {
+export function partitionValidFiles(files: DriveFile[]): {
+  valid: DriveFile[];
+  skippedCount: number;
+} {
   let skippedCount = 0;
   const valid: DriveFile[] = [];
   for (const f of files) {
@@ -81,7 +106,9 @@ export function partitionValidFiles(files: DriveFile[]): { valid: DriveFile[]; s
   return { valid, skippedCount };
 }
 
-async function waitForTokenRefresh(timeoutMs = TOKEN_REFRESH_TIMEOUT_MS): Promise<boolean> {
+async function waitForTokenRefresh(
+  timeoutMs = TOKEN_REFRESH_TIMEOUT_MS,
+): Promise<boolean> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       tokenRefreshResolver = null;
@@ -120,16 +147,16 @@ export async function refreshTokenAndRetry(
 ): Promise<boolean> {
   if (state.count >= state.max) {
     logWorkerError(
-      'proSync/' + ctx,
-      { kind: 'auth', status: 401, reason: 'max-retries' },
-      new Error('token refresh retries exhausted'),
-      'error'
+      "proSync/" + ctx,
+      { kind: "auth", status: 401, reason: "max-retries" },
+      new Error("token refresh retries exhausted"),
+      "error",
     );
-    deps.postMessage({ type: 'SYNC_ERROR' });
+    deps.postMessage({ type: "SYNC_ERROR" });
     return false;
   }
   state.count += 1;
-  deps.postMessage({ type: 'TOKEN_EXPIRED' });
+  deps.postMessage({ type: "TOKEN_EXPIRED" });
   const refreshed = await deps.waitForTokenRefresh();
   if (refreshed) {
     state.count = 0;
@@ -146,46 +173,56 @@ const syncRetryDeps: RefreshTokenRetryDeps = {
 };
 
 type WorkerRequestMessage =
-  | { type: 'sync'; token: string }
-  | { type: 'token'; token: string };
+  { type: "sync"; token: string } | { type: "token"; token: string };
 
-export function isWorkerRequestMessage(data: unknown): data is WorkerRequestMessage {
+export function isWorkerRequestMessage(
+  data: unknown,
+): data is WorkerRequestMessage {
   return (
-    typeof data === 'object' && data !== null &&
-    'type' in data && (data.type === 'sync' || data.type === 'token') &&
-    'token' in data && typeof data.token === 'string'
+    typeof data === "object" &&
+    data !== null &&
+    "type" in data &&
+    (data.type === "sync" || data.type === "token") &&
+    "token" in data &&
+    typeof data.token === "string"
   );
 }
 
 // Guard so the module can be imported in node-based unit tests (vitest), where
 // `self` does not exist. In a real worker `self` is always defined, so the
 // listener registration is unchanged.
-if (typeof self !== 'undefined') {
-self.addEventListener('message', async (e: MessageEvent) => {
-  if (!isWorkerRequestMessage(e.data)) return;
-  const { type, token } = e.data;
+if (typeof self !== "undefined") {
+  self.addEventListener("message", async (e: MessageEvent) => {
+    if (!isWorkerRequestMessage(e.data)) return;
+    const { type, token } = e.data;
 
-  if (type === 'token') {
-    currentToken = token;
-    if (tokenRefreshResolver) {
-      tokenRefreshResolver(true);
-      tokenRefreshResolver = null;
+    if (type === "token") {
+      currentToken = token;
+      if (tokenRefreshResolver) {
+        tokenRefreshResolver(true);
+        tokenRefreshResolver = null;
+      }
+      return;
     }
-    return;
-  }
 
-  if (type !== 'sync') return;
-  if (isBusy) { self.postMessage({ type: 'SYNC_BUSY' }); return; }
-  if (!token) { self.postMessage({ type: 'SYNC_NO_TOKEN' }); return; }
+    if (type !== "sync") return;
+    if (isBusy) {
+      self.postMessage({ type: "SYNC_BUSY" });
+      return;
+    }
+    if (!token) {
+      self.postMessage({ type: "SYNC_NO_TOKEN" });
+      return;
+    }
 
-  currentToken = token;
-  isBusy = true;
-  try {
-    await startProSync();
-  } finally {
-    isBusy = false;
-  }
-});
+    currentToken = token;
+    isBusy = true;
+    try {
+      await startProSync();
+    } finally {
+      isBusy = false;
+    }
+  });
 }
 
 // Resolves after `ms`, used as the exponential backoff between transient
@@ -207,14 +244,18 @@ export function isTransientStatus(status: number): boolean {
 // the response as non-transient (fail as before) instead of guessing.
 function isDriveRateLimitBody(bodyText: string): boolean {
   try {
-    const parsed = JSON.parse(bodyText) as { error?: { errors?: Array<{ reason?: unknown }> } };
+    const parsed = JSON.parse(bodyText) as {
+      error?: { errors?: Array<{ reason?: unknown }> };
+    };
     const errors = parsed?.error?.errors;
     return (
       Array.isArray(errors) &&
       errors.some((e) => {
         if (e === undefined || e === null) return false;
         const reason = e.reason;
-        return typeof reason === 'string' && DRIVE_RATE_LIMIT_REASONS.has(reason);
+        return (
+          typeof reason === "string" && DRIVE_RATE_LIMIT_REASONS.has(reason)
+        );
       })
     );
   } catch {
@@ -226,12 +267,20 @@ function isDriveRateLimitBody(bodyText: string): boolean {
 // via a clone so the response passed back to the call site keeps its body
 // intact. Body/parse failures fall back to "not a rate limit": a 403 we cannot
 // identify is returned as-is, matching the pre-upgrade behavior.
-async function isDriveRateLimitResponse(ctx: string, res: Response): Promise<boolean> {
+async function isDriveRateLimitResponse(
+  ctx: string,
+  res: Response,
+): Promise<boolean> {
   try {
     const bodyText = await res.clone().text();
     return isDriveRateLimitBody(bodyText);
   } catch (err) {
-    logWorkerError('proSync/' + ctx, { status: res.status, kind: 'rate-limit-body' }, err, 'warn');
+    logWorkerError(
+      "proSync/" + ctx,
+      { status: res.status, kind: "rate-limit-body" },
+      err,
+      "warn",
+    );
     return false;
   }
 }
@@ -239,8 +288,8 @@ async function isDriveRateLimitResponse(ctx: string, res: Response): Promise<boo
 // Retry-After as <delay-seconds> (RFC 9110). The HTTP-date form and malformed
 // values fall back to the regular exponential backoff.
 function parseRetryAfterSeconds(res: Response): number | null {
-  const raw = res.headers.get('Retry-After');
-  if (raw === null || raw.trim() === '') return null;
+  const raw = res.headers.get("Retry-After");
+  if (raw === null || raw.trim() === "") return null;
   const seconds = Number(raw);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
 }
@@ -253,7 +302,11 @@ function parseRetryAfterSeconds(res: Response): number | null {
 // returned untouched so the call site's token-refresh flow
 // (refreshTokenAndRetry) keeps working, and aborted/timeout fetches are never
 // retried.
-export async function fetchDrive(ctx: string, token: string, url: URL): Promise<Response> {
+export async function fetchDrive(
+  ctx: string,
+  token: string,
+  url: URL,
+): Promise<Response> {
   let attempt = 0;
   while (true) {
     let res: Response;
@@ -264,14 +317,19 @@ export async function fetchDrive(ctx: string, token: string, url: URL): Promise<
       });
     } catch (err) {
       const kind = classifyWorkerError(err);
-      if (kind === 'abort') {
-        logWorkerError('proSync/' + ctx, { kind }, err, 'warn');
+      if (kind === "abort") {
+        logWorkerError("proSync/" + ctx, { kind }, err, "warn");
         throw new WorkerAbortError(`aborted during ${ctx}`);
       }
-      if (kind === 'timeout') {
-        logWorkerError('proSync/' + ctx, { kind, timeoutMs: SYNC_FETCH_TIMEOUT_MS }, err, 'error');
+      if (kind === "timeout") {
+        logWorkerError(
+          "proSync/" + ctx,
+          { kind, timeoutMs: SYNC_FETCH_TIMEOUT_MS },
+          err,
+          "error",
+        );
       } else {
-        logWorkerError('proSync/' + ctx, { kind }, err, 'error');
+        logWorkerError("proSync/" + ctx, { kind }, err, "error");
       }
       throw err;
     }
@@ -292,21 +350,27 @@ export async function fetchDrive(ctx: string, token: string, url: URL): Promise<
 
     const backoffMs = TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** attempt;
     const retryAfterMs = parseRetryAfterSeconds(res);
-    const cappedRetryAfterMs = retryAfterMs === null ? null : Math.min(retryAfterMs * 1000, MAX_RETRY_DELAY_MS);
+    const cappedRetryAfterMs =
+      retryAfterMs === null
+        ? null
+        : Math.min(retryAfterMs * 1000, MAX_RETRY_DELAY_MS);
     const jitterMs = Math.floor(Math.random() * (RETRY_JITTER_MAX_MS + 1));
     const delayMs = (cappedRetryAfterMs ?? backoffMs) + jitterMs;
     logWorkerError(
-      'proSync/' + ctx,
+      "proSync/" + ctx,
       {
-        kind: res.status === 429 || res.status === 403 ? 'rate-limit' : 'server',
+        kind:
+          res.status === 429 || res.status === 403 ? "rate-limit" : "server",
         status: res.status,
         attempt: attempt + 1,
         delayMs,
-        ...(cappedRetryAfterMs !== null ? { retryAfterMs: cappedRetryAfterMs } : {}),
+        ...(cappedRetryAfterMs !== null
+          ? { retryAfterMs: cappedRetryAfterMs }
+          : {}),
         jitterMs,
       },
       new Error(`transient HTTP ${res.status}, retrying in ${delayMs}ms`),
-      'warn'
+      "warn",
     );
     await delay(delayMs);
     attempt += 1;
@@ -315,11 +379,19 @@ export async function fetchDrive(ctx: string, token: string, url: URL): Promise<
 
 // Parse a Drive JSON response, surfacing malformed bodies as a logged failure
 // instead of an unhandled rejection that aborts the whole sync.
-async function parseDriveJson<T = Record<string, unknown>>(ctx: string, res: Response): Promise<T> {
+async function parseDriveJson<T = Record<string, unknown>>(
+  ctx: string,
+  res: Response,
+): Promise<T> {
   try {
     return await res.json();
   } catch (err) {
-    logWorkerError('proSync/' + ctx, { status: res.status, kind: 'parse' }, err, 'error');
+    logWorkerError(
+      "proSync/" + ctx,
+      { status: res.status, kind: "parse" },
+      err,
+      "error",
+    );
     throw err;
   }
 }
@@ -327,7 +399,7 @@ async function parseDriveJson<T = Record<string, unknown>>(ctx: string, res: Res
 async function startProSync() {
   if (!currentToken) return;
   try {
-    const tokenState = await db.syncState.get('startPageToken');
+    const tokenState = await db.syncState.get("startPageToken");
 
     if (!tokenState || !tokenState.value) {
       await performFullSync();
@@ -337,14 +409,14 @@ async function startProSync() {
   } catch (err) {
     // Safety net for the Dexie read above and any error that escaped the
     // per-function handlers. We still inform the main thread.
-    logWorkerError('proSync/start', {}, err, 'error');
-    self.postMessage({ type: 'SYNC_ERROR' });
+    logWorkerError("proSync/start", {}, err, "error");
+    self.postMessage({ type: "SYNC_ERROR" });
   }
 }
 
 async function performFullSync() {
   if (!currentToken) return;
-  let startToken = '';
+  let startToken = "";
 
   // Retry the whole pass only when the startPageToken fetch hits 401 and the
   // main thread successfully refreshes the token.
@@ -353,89 +425,134 @@ async function performFullSync() {
     retryFullSync = false;
 
     try {
-      const tokenUrl = new URL('https://www.googleapis.com/drive/v3/changes/startPageToken');
-      const tokenRes = await fetchDrive('startPageToken', currentToken, tokenUrl);
+      const tokenUrl = new URL(
+        "https://www.googleapis.com/drive/v3/changes/startPageToken",
+      );
+      const tokenRes = await fetchDrive(
+        "startPageToken",
+        currentToken,
+        tokenUrl,
+      );
 
       if (tokenRes.status === 401) {
-        if (!(await refreshTokenAndRetry(syncRetry, syncRetryDeps, 'full-sync/startPageToken'))) return;
+        if (
+          !(await refreshTokenAndRetry(
+            syncRetry,
+            syncRetryDeps,
+            "full-sync/startPageToken",
+          ))
+        )
+          return;
         retryFullSync = true;
         continue;
       }
       if (tokenRes.ok) {
-        const tokenData = await parseDriveJson<{ startPageToken: string }>('startPageToken', tokenRes);
+        const tokenData = await parseDriveJson<{ startPageToken: string }>(
+          "startPageToken",
+          tokenRes,
+        );
         startToken = tokenData.startPageToken;
       }
     } catch (err) {
       if (err instanceof WorkerAbortError) return;
-      logWorkerError('proSync/full-sync', { phase: 'startPageToken' }, err, 'error');
+      logWorkerError(
+        "proSync/full-sync",
+        { phase: "startPageToken" },
+        err,
+        "error",
+      );
       return;
     }
 
     let pageToken: string | undefined = undefined;
     try {
       do {
-        const url = new URL('https://www.googleapis.com/drive/v3/files');
-        url.searchParams.append('q', getAudioQuery());
-        url.searchParams.append('fields', 'nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)');
-        url.searchParams.append('pageSize', '1000');
-        if (pageToken) url.searchParams.append('pageToken', pageToken);
+        const url = new URL("https://www.googleapis.com/drive/v3/files");
+        url.searchParams.append("q", getAudioQuery());
+        url.searchParams.append(
+          "fields",
+          "nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)",
+        );
+        url.searchParams.append("pageSize", "1000");
+        if (pageToken) url.searchParams.append("pageToken", pageToken);
 
-        const res = await fetchDrive('files', currentToken, url);
+        const res = await fetchDrive("files", currentToken, url);
 
         if (!res.ok) {
           if (res.status === 401) {
-            if (await refreshTokenAndRetry(syncRetry, syncRetryDeps, 'full-sync/files')) continue;
+            if (
+              await refreshTokenAndRetry(
+                syncRetry,
+                syncRetryDeps,
+                "full-sync/files",
+              )
+            )
+              continue;
           }
           break;
         }
 
-        const data = await parseDriveJson<{ files?: DriveFile[]; nextPageToken?: string }>('files', res);
+        const data = await parseDriveJson<{
+          files?: DriveFile[];
+          nextPageToken?: string;
+        }>("files", res);
 
         const rawFiles = data.files || [];
-        const { valid: validFiles, skippedCount } = partitionValidFiles(rawFiles);
+        const { valid: validFiles, skippedCount } =
+          partitionValidFiles(rawFiles);
         // A page with unpersistable files is not a failure of this sync pass,
         // but dropping them silently hides data-loss from the user; emit one
         // summary line per page instead of spamming one line per file.
         if (skippedCount > 0) {
           logWorkerError(
-            'proSync/full-sync/files',
-            { kind: 'skip', skippedCount, total: rawFiles.length },
+            "proSync/full-sync/files",
+            { kind: "skip", skippedCount, total: rawFiles.length },
             new Error(`${skippedCount} file(s) skipped: missing id`),
-            'warn'
+            "warn",
           );
         }
 
         const filesToInsert = validFiles.map((f: DriveFile) =>
-          toDriveFileRow(f, f.mimeType === FOLDER_MIME)
+          toDriveFileRow(f, f.mimeType === FOLDER_MIME),
         );
 
         if (filesToInsert.length > 0) {
           try {
             await db.files.bulkPut(filesToInsert);
-            self.postMessage({ type: 'SYNC_PROGRESS' });
+            self.postMessage({ type: "SYNC_PROGRESS" });
           } catch (err) {
-            logWorkerError('proSync/full-sync', { phase: 'bulkPut', count: filesToInsert.length }, err, 'error');
+            logWorkerError(
+              "proSync/full-sync",
+              { phase: "bulkPut", count: filesToInsert.length },
+              err,
+              "error",
+            );
             break;
           }
         }
 
-      pageToken = data.nextPageToken ?? '';
+        pageToken = data.nextPageToken ?? "";
       } while (pageToken);
     } catch (err) {
       if (err instanceof WorkerAbortError) return;
-      logWorkerError('proSync/full-sync', { phase: 'files' }, err, 'error');
+      logWorkerError("proSync/full-sync", { phase: "files" }, err, "error");
     }
   }
 
   if (startToken) {
     try {
-      await db.syncState.put({ key: 'startPageToken', value: startToken });
+      await db.syncState.put({ key: "startPageToken", value: startToken });
     } catch (err) {
-      logWorkerError('proSync/full-sync', { phase: 'saveStartToken' }, err, 'error');
+      logWorkerError(
+        "proSync/full-sync",
+        { phase: "saveStartToken" },
+        err,
+        "error",
+      );
     }
   }
 
-  self.postMessage({ type: 'SYNC_COMPLETE' });
+  self.postMessage({ type: "SYNC_COMPLETE" });
 }
 
 async function performDeltaSync(startPageToken: string) {
@@ -448,30 +565,45 @@ async function performDeltaSync(startPageToken: string) {
 
   try {
     do {
-      const url = new URL('https://www.googleapis.com/drive/v3/changes');
-      url.searchParams.append('pageToken', pageToken);
-      url.searchParams.append('fields', 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,size,modifiedTime,trashed))');
+      const url = new URL("https://www.googleapis.com/drive/v3/changes");
+      url.searchParams.append("pageToken", pageToken);
+      url.searchParams.append(
+        "fields",
+        "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,size,modifiedTime,trashed))",
+      );
 
-      const res = await fetchDrive('changes', currentToken, url);
+      const res = await fetchDrive("changes", currentToken, url);
 
       if (!res.ok) {
         if (res.status === 410) {
           syncRetry.count = 0;
           try {
-            await db.syncState.delete('startPageToken');
+            await db.syncState.delete("startPageToken");
           } catch (err) {
-            logWorkerError('proSync/delta-sync', { phase: 'deleteStartToken' }, err, 'error');
+            logWorkerError(
+              "proSync/delta-sync",
+              { phase: "deleteStartToken" },
+              err,
+              "error",
+            );
           }
           await performFullSync();
           return;
         }
         if (res.status === 401) {
-          if (await refreshTokenAndRetry(syncRetry, syncRetryDeps, 'delta-sync/changes')) continue;
+          if (
+            await refreshTokenAndRetry(
+              syncRetry,
+              syncRetryDeps,
+              "delta-sync/changes",
+            )
+          )
+            continue;
         }
         break;
       }
 
-      const data = await parseDriveJson<DriveChangesList>('changes', res);
+      const data = await parseDriveJson<DriveChangesList>("changes", res);
 
       const changes = data.changes || [];
       let hasValidChanges = false;
@@ -487,7 +619,10 @@ async function performDeltaSync(startPageToken: string) {
             // (per-change isolation, matching the try/catch below). The count
             // is accumulated across pages and reported in one summary line
             // after the pagination loop.
-            if (!isValidDriveFile(file)) { skippedDeltaFiles += 1; continue; }
+            if (!isValidDriveFile(file)) {
+              skippedDeltaFiles += 1;
+              continue;
+            }
             const isFolder = file.mimeType === FOLDER_MIME;
 
             if (isFolder || isAudioFile(file.mimeType!, file.name!)) {
@@ -497,17 +632,22 @@ async function performDeltaSync(startPageToken: string) {
           }
         } catch (err) {
           // One bad change must not abort the whole delta batch.
-          logWorkerError('proSync/delta-sync', { phase: 'applyChange', fileId: change.fileId }, err, 'error');
+          logWorkerError(
+            "proSync/delta-sync",
+            { phase: "applyChange", fileId: change.fileId },
+            err,
+            "error",
+          );
         }
       }
 
       if (data.newStartPageToken) {
         newStartPageToken = data.newStartPageToken;
       }
-      pageToken = data.nextPageToken ?? '';
+      pageToken = data.nextPageToken ?? "";
 
       if (hasValidChanges) {
-        self.postMessage({ type: 'SYNC_PROGRESS' });
+        self.postMessage({ type: "SYNC_PROGRESS" });
       }
     } while (pageToken);
 
@@ -515,23 +655,31 @@ async function performDeltaSync(startPageToken: string) {
     // missing-id files is never silently incomplete.
     if (skippedDeltaFiles > 0) {
       logWorkerError(
-        'proSync/delta-sync/changes',
-        { kind: 'skip', skippedCount: skippedDeltaFiles },
+        "proSync/delta-sync/changes",
+        { kind: "skip", skippedCount: skippedDeltaFiles },
         new Error(`${skippedDeltaFiles} file(s) skipped: missing id`),
-        'warn'
+        "warn",
       );
     }
 
     if (newStartPageToken !== startPageToken) {
       try {
-        await db.syncState.put({ key: 'startPageToken', value: newStartPageToken });
+        await db.syncState.put({
+          key: "startPageToken",
+          value: newStartPageToken,
+        });
       } catch (err) {
-        logWorkerError('proSync/delta-sync', { phase: 'saveStartToken' }, err, 'error');
+        logWorkerError(
+          "proSync/delta-sync",
+          { phase: "saveStartToken" },
+          err,
+          "error",
+        );
       }
-      self.postMessage({ type: 'SYNC_COMPLETE' });
+      self.postMessage({ type: "SYNC_COMPLETE" });
     }
   } catch (err) {
     if (err instanceof WorkerAbortError) return;
-    logWorkerError('proSync/delta-sync', { phase: 'changes' }, err, 'error');
+    logWorkerError("proSync/delta-sync", { phase: "changes" }, err, "error");
   }
 }

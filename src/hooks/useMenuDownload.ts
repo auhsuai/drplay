@@ -1,14 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { join } from '@tauri-apps/api/path';
-import { getValidToken } from '../utils/apiClient';
-import { getEffectiveDownloadPath, getCustomDownloadPath } from '../utils/downloadPath';
-import { mergeWithTimeoutSignal } from '../utils/driveApi';
-import { isUploading } from '../utils/uploadManager';
-import { showErrorToast } from '../utils/simpleToast';
-import { captureError } from '../utils/errorLog';
-import type { Track } from '../types';
-import { TFunction } from 'i18next';
+import { useState, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { join } from "@tauri-apps/api/path";
+import { getValidToken } from "../utils/apiClient";
+import {
+  getEffectiveDownloadPath,
+  getCustomDownloadPath,
+} from "../utils/downloadPath";
+import { mergeWithTimeoutSignal } from "../utils/driveApi";
+import { isUploading } from "../utils/uploadManager";
+import { showErrorToast } from "../utils/simpleToast";
+import { captureError } from "../utils/errorLog";
+import type { Track } from "../types";
+import type { TFunction } from "i18next";
 
 // The download buffers the ENTIRE file into RAM via arrayBuffer(), so an
 // unresponsive server would hold the bytes (and memory) forever. 5 minutes is
@@ -22,10 +25,13 @@ const DOWNLOAD_TIMEOUT_MS = 300_000;
 // device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) and trailing dots/spaces.
 // Copied verbatim from the removed GlobalContextMenu.tsx (the last known-good
 // download implementation) so the written name matches what worked before.
-const sanitizeFilename = (name: string, fallbackName: string = 'untitled'): string => {
-  let s = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, '_');
-  s = s.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i, '_$1$2');
-  s = s.replace(/[\s.]+$/g, '');
+const sanitizeFilename = (
+  name: string,
+  fallbackName: string = "untitled",
+): string => {
+  let s = name.replace(/[/\\<>:"|?*\x00-\x1f]/g, "_");
+  s = s.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i, "_$1$2");
+  s = s.replace(/[\s.]+$/g, "");
   s = s.slice(0, 255);
   return s || fallbackName;
 };
@@ -50,23 +56,38 @@ export function useMenuDownload(t: TFunction) {
 
   useEffect(() => {
     if (downloadMessage) {
-      const timer = setTimeout(() => setDownloadMessage(null), 5000);
-      return () => clearTimeout(timer);
+      const timer = setTimeout(() => {
+        setDownloadMessage(null);
+      }, 5000);
+      return () => {
+        clearTimeout(timer);
+      };
     }
   }, [downloadMessage]);
 
-  const handleDownloadClick = (e: React.MouseEvent, track: Track | undefined, setIsOpen: (o: boolean) => void) => {
+  const handleDownloadClick = (
+    e: React.MouseEvent,
+    track: Track | undefined,
+    setIsOpen: (o: boolean) => void,
+  ) => {
     e.stopPropagation();
     if (!track) return;
     // Race guard (2nd layer behind the disabled menu item): an item that is
     // still uploading has no playable media yet — downloading it would fetch a
     // non-existent file.
     if (isUploading(track.id)) {
-      showErrorToast(t('upload.uploading_blocked', 'This item is being uploaded, please wait'));
+      showErrorToast(
+        t(
+          "upload.uploading_blocked",
+          "This item is being uploaded, please wait",
+        ),
+      );
       return;
     }
     setDownloadTrack(track);
-    setDownloadFileName(`${track.title} - ${track.artist || t('common.unknown', 'Unknown')}`);
+    setDownloadFileName(
+      `${track.title} - ${track.artist || t("common.unknown", "Unknown")}`,
+    );
     setShowDownloadDialog(true);
     setIsOpen(false);
   };
@@ -84,7 +105,10 @@ export function useMenuDownload(t: TFunction) {
     // Merge the cancel signal with a bounded timeout so a stalled server
     // cannot hold the RAM-buffered bytes forever (MDN AbortSignal.any /
     // AbortSignal.timeout; same pattern as useDrive.ts:72).
-    const signal = mergeWithTimeoutSignal(controller.signal, DOWNLOAD_TIMEOUT_MS);
+    const signal = mergeWithTimeoutSignal(
+      controller.signal,
+      DOWNLOAD_TIMEOUT_MS,
+    );
 
     try {
       const freshToken = await getValidToken(false, signal);
@@ -93,9 +117,9 @@ export function useMenuDownload(t: TFunction) {
       const downloadUrl = `https://www.googleapis.com/drive/v3/files/${downloadTrack.id}?alt=media`;
       const response = await fetch(downloadUrl, {
         headers: {
-          Authorization: `Bearer ${freshToken}`
+          Authorization: `Bearer ${freshToken}`,
         },
-        signal
+        signal,
       });
 
       if (!response.ok) throw new Error("Fetch failed");
@@ -111,15 +135,22 @@ export function useMenuDownload(t: TFunction) {
           await invoke("register_download_path", { path: dir });
         } catch (scopeErr: unknown) {
           captureError({
-            level: 'warn',
-            source: 'useMenuDownload',
-            message: `Failed to extend fs scope for custom download dir: ${scopeErr instanceof Error ? scopeErr.message : String(scopeErr)}`
+            level: "warn",
+            source: "useMenuDownload",
+            message: `Failed to extend fs scope for custom download dir: ${scopeErr instanceof Error ? scopeErr.message : String(scopeErr)}`,
           });
         }
       }
-      const base = downloadFileName.trim() || 'audio';
-      const ext = downloadTrack.originalName?.includes('.') ? downloadTrack.originalName.slice(downloadTrack.originalName.lastIndexOf('.')) : '.mp3';
-      const finalFileName = sanitizeFilename(`${base}${ext}`, t('menu.untitled', 'Untitled'));
+      const base = downloadFileName.trim() || "audio";
+      const ext = downloadTrack.originalName?.includes(".")
+        ? downloadTrack.originalName.slice(
+            downloadTrack.originalName.lastIndexOf("."),
+          )
+        : ".mp3";
+      const finalFileName = sanitizeFilename(
+        `${base}${ext}`,
+        t("menu.untitled", "Untitled"),
+      );
       // join() uses the platform-specific separator (Tauri v2 path API) so a
       // POSIX build no longer writes a literal backslash into the file name.
       const savePath = await join(dir, finalFileName);
@@ -133,28 +164,44 @@ export function useMenuDownload(t: TFunction) {
         headers: { path: encodeURIComponent(savePath) },
       });
 
-      setDownloadMessage(`${t('menu.saved_at', 'Đã lưu tại:')} ${savePath}`);
+      setDownloadMessage(`${t("menu.saved_at", "Đã lưu tại:")} ${savePath}`);
     } catch (err: unknown) {
       // Duck-typed name extraction: DOMException is NOT instanceof Error in
       // some environments (jsdom), yet carries a reliable .name ('AbortError'
       // for cancels, 'TimeoutError' for AbortSignal.timeout).
-      const errName = err && typeof err === 'object' && typeof (err as { name?: unknown }).name === 'string'
-        ? (err as { name: string }).name
-        : '';
-      if (errName === 'AbortError') {
+      const errName =
+        err &&
+        typeof err === "object" &&
+        typeof (err as { name?: unknown }).name === "string"
+          ? (err as { name: string }).name
+          : "";
+      if (errName === "AbortError") {
         // Deliberate cancel (unmount / superseded download): the component may
         // already be gone, so do NOT touch state — and do not surface a
         // failure message for a user-initiated cancel. Log for visibility.
-        captureError({ level: 'warn', source: 'useMenuDownload', message: 'Download aborted — download was cancelled (unmount or superseded)' });
+        captureError({
+          level: "warn",
+          source: "useMenuDownload",
+          message:
+            "Download aborted — download was cancelled (unmount or superseded)",
+        });
         return;
       }
-      if (errName === 'TimeoutError') {
-        captureError({ level: 'error', source: 'useMenuDownload', message: `Download timeout — no response within ${DOWNLOAD_TIMEOUT_MS}ms` });
-        setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
+      if (errName === "TimeoutError") {
+        captureError({
+          level: "error",
+          source: "useMenuDownload",
+          message: `Download timeout — no response within ${DOWNLOAD_TIMEOUT_MS}ms`,
+        });
+        setDownloadMessage(t("menu.download_failed", "Tải xuống thất bại"));
         return;
       }
-      captureError({ level: 'error', source: 'useMenuDownload', message: `Download failed: ${errName || String(err)}` });
-      setDownloadMessage(t('menu.download_failed', 'Tải xuống thất bại'));
+      captureError({
+        level: "error",
+        source: "useMenuDownload",
+        message: `Download failed: ${errName || String(err)}`,
+      });
+      setDownloadMessage(t("menu.download_failed", "Tải xuống thất bại"));
     } finally {
       setIsDownloadingFile(false);
     }
@@ -168,6 +215,6 @@ export function useMenuDownload(t: TFunction) {
     setDownloadFileName,
     downloadMessage,
     handleDownloadClick,
-    executeDownload
+    executeDownload,
   };
 }

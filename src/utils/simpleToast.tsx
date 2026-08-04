@@ -1,22 +1,30 @@
-import { captureError } from './errorLog';
+import { captureError } from "./errorLog";
 
 const FADE_OUT_MS = 200;
 
-type ToastVariant = 'error' | 'success';
+type ToastVariant = "error" | "success";
 
 const TOAST_DEFAULT_DURATION: Record<ToastVariant, number> = {
   error: 4000,
   success: 3000,
 };
 
-function showToast(message: string, variant: ToastVariant, durationOverride?: number): void {
-  const root = document.getElementById('toast-root');
+function showToast(
+  message: string,
+  variant: ToastVariant,
+  durationOverride?: number,
+): void {
+  const root = document.getElementById("toast-root");
   if (!root) {
-    captureError({ level: 'warn', source: 'simpleToast', message: `[Toast fallback] ${message}` });
+    captureError({
+      level: "warn",
+      source: "simpleToast",
+      message: `[Toast fallback] ${message}`,
+    });
     return;
   }
 
-  const toastEl = document.createElement('div');
+  const toastEl = document.createElement("div");
   toastEl.className = `app-toast app-toast--${variant}`;
   toastEl.textContent = message;
   root.appendChild(toastEl);
@@ -30,18 +38,27 @@ function showToast(message: string, variant: ToastVariant, durationOverride?: nu
     toastEl.remove();
   };
 
-  const duration = Math.max(0, durationOverride ?? TOAST_DEFAULT_DURATION[variant]);
+  const duration = Math.max(
+    0,
+    durationOverride ?? TOAST_DEFAULT_DURATION[variant],
+  );
   setTimeout(() => {
-    toastEl.style.opacity = '0';
-    toastEl.style.transform = 'translateY(10px) scale(0.95)';
+    toastEl.style.opacity = "0";
+    toastEl.style.transform = "translateY(10px) scale(0.95)";
     removeTimer = setTimeout(removeToast, FADE_OUT_MS);
   }, duration);
 }
 
-export function showErrorToast(message: string, options?: { duration?: number }): void {
-  showToast(message, 'error', options?.duration);
+export function showErrorToast(
+  message: string,
+  options?: { duration?: number },
+): void {
+  showToast(message, "error", options?.duration);
 }
 
-export function showSuccessToast(message: string, options?: { duration?: number }): void {
-  showToast(message, 'success', options?.duration);
+export function showSuccessToast(
+  message: string,
+  options?: { duration?: number },
+): void {
+  showToast(message, "success", options?.duration);
 }

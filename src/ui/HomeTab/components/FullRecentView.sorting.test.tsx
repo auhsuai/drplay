@@ -1,232 +1,313 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { FullRecentView, sortRecentTracks } from './FullRecentView';
-import type { Track } from '../../../types';
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { FullRecentView, sortRecentTracks } from "./FullRecentView";
+import type { Track } from "../../../types";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so we stub useTranslation to return
 // the defaultValue passed to t().
-vi.mock('react-i18next', () => ({
+vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (_key: string, defaultValue?: string) => defaultValue ?? _key,
   }),
 }));
 
-vi.mock('@tanstack/react-virtual', () => ({
+vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(({ count }: { count: number }) => ({
-    getVirtualItems: () => Array.from({ length: count }, (_, i) => ({
-      index: i,
-      key: i,
-      size: 92,
-      start: i * 92,
-    })),
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, i) => ({
+        index: i,
+        key: i,
+        size: 92,
+        start: i * 92,
+      })),
     getTotalSize: () => count * 92,
     measureElement: vi.fn(),
     scrollToIndex: vi.fn(),
-    containerRef: { current: document.createElement('div') },
+    containerRef: { current: document.createElement("div") },
   })),
 }));
 
-vi.mock('../../../utils/streamPrefetcher', () => ({
+vi.mock("../../../utils/streamPrefetcher", () => ({
   prefetchVisibleTracks: vi.fn(),
 }));
 
-vi.mock('../../MainContent/components/SongCard', () => ({
+vi.mock("../../MainContent/components/SongCard", () => ({
   SongCard: ({ item }: { item: { id: string } }) => (
     <div data-testid="song-card" data-item-id={item.id} />
   ),
 }));
 
 function makeTrack(id: string, title: string, size?: number): Track {
-  return { id, title, artist: '', streamUrl: '', size };
+  return { id, title, artist: "", streamUrl: "", size };
 }
 
-const SORT_OPTIONS = ['name', 'name desc', 'modifiedTime', 'modifiedTime desc', 'size', 'size desc'];
+const SORT_OPTIONS = [
+  "name",
+  "name desc",
+  "modifiedTime",
+  "modifiedTime desc",
+  "size",
+  "size desc",
+];
 
-describe('sortRecentTracks', () => {
+describe("sortRecentTracks", () => {
   it('sorts A-Z by title for "name"', () => {
-    const input = [makeTrack('b', 'Bravo'), makeTrack('a', 'Alpha'), makeTrack('c', 'Charlie')];
-    expect(sortRecentTracks(input, 'name').map((t) => t.id)).toEqual(['a', 'b', 'c']);
+    const input = [
+      makeTrack("b", "Bravo"),
+      makeTrack("a", "Alpha"),
+      makeTrack("c", "Charlie"),
+    ];
+    expect(sortRecentTracks(input, "name").map((t) => t.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
   });
 
   it('sorts Z-A for "name desc"', () => {
-    const input = [makeTrack('a', 'Alpha'), makeTrack('c', 'Charlie'), makeTrack('b', 'Bravo')];
-    expect(sortRecentTracks(input, 'name desc').map((t) => t.id)).toEqual(['c', 'b', 'a']);
+    const input = [
+      makeTrack("a", "Alpha"),
+      makeTrack("c", "Charlie"),
+      makeTrack("b", "Bravo"),
+    ];
+    expect(sortRecentTracks(input, "name desc").map((t) => t.id)).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
   });
 
   it('keeps relative order for duplicate titles ("name")', () => {
-    const input = [makeTrack('x1', 'Song'), makeTrack('m', 'Middle'), makeTrack('x3', 'Song')];
-    const out = sortRecentTracks(input, 'name').map((t) => t.id);
-    expect(out.indexOf('x1')).toBeLessThan(out.indexOf('x3'));
+    const input = [
+      makeTrack("x1", "Song"),
+      makeTrack("m", "Middle"),
+      makeTrack("x3", "Song"),
+    ];
+    const out = sortRecentTracks(input, "name").map((t) => t.id);
+    expect(out.indexOf("x1")).toBeLessThan(out.indexOf("x3"));
   });
 
-  it('handles Vietnamese diacritic titles without crashing, deterministically', () => {
-    const input = [makeTrack('e', 'Én'), makeTrack('a', 'An'), makeTrack('b', 'Bà')];
-    const out = sortRecentTracks(input, 'name').map((t) => t.title);
+  it("handles Vietnamese diacritic titles without crashing, deterministically", () => {
+    const input = [
+      makeTrack("e", "Én"),
+      makeTrack("a", "An"),
+      makeTrack("b", "Bà"),
+    ];
+    const out = sortRecentTracks(input, "name").map((t) => t.title);
     const reference = [...out].sort((x, y) => x.localeCompare(y));
     expect(out).toEqual(reference);
   });
 
-  it('sorts by size ascending with undefined size always last', () => {
+  it("sorts by size ascending with undefined size always last", () => {
     const input = [
-      makeTrack('big', 'Big', 1000),
-      makeTrack('none', 'None'),
-      makeTrack('small', 'Small', 10),
+      makeTrack("big", "Big", 1000),
+      makeTrack("none", "None"),
+      makeTrack("small", "Small", 10),
     ];
-    expect(sortRecentTracks(input, 'size').map((t) => t.id)).toEqual(['small', 'big', 'none']);
+    expect(sortRecentTracks(input, "size").map((t) => t.id)).toEqual([
+      "small",
+      "big",
+      "none",
+    ]);
   });
 
-  it('sorts by size descending with undefined size always last', () => {
+  it("sorts by size descending with undefined size always last", () => {
     const input = [
-      makeTrack('small', 'Small', 10),
-      makeTrack('none', 'None'),
-      makeTrack('big', 'Big', 1000),
+      makeTrack("small", "Small", 10),
+      makeTrack("none", "None"),
+      makeTrack("big", "Big", 1000),
     ];
-    expect(sortRecentTracks(input, 'size desc').map((t) => t.id)).toEqual(['big', 'small', 'none']);
+    expect(sortRecentTracks(input, "size desc").map((t) => t.id)).toEqual([
+      "big",
+      "small",
+      "none",
+    ]);
   });
 
-  it('keeps stable order when every track has undefined size (both directions)', () => {
-    const input = [makeTrack('a', 'Alpha'), makeTrack('b', 'Bravo'), makeTrack('c', 'Charlie')];
-    expect(sortRecentTracks(input, 'size').map((t) => t.id)).toEqual(['a', 'b', 'c']);
-    expect(sortRecentTracks(input, 'size desc').map((t) => t.id)).toEqual(['a', 'b', 'c']);
+  it("keeps stable order when every track has undefined size (both directions)", () => {
+    const input = [
+      makeTrack("a", "Alpha"),
+      makeTrack("b", "Bravo"),
+      makeTrack("c", "Charlie"),
+    ];
+    expect(sortRecentTracks(input, "size").map((t) => t.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(sortRecentTracks(input, "size desc").map((t) => t.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
   });
 
   it('keeps newest-first order for "modifiedTime"', () => {
-    const input = [makeTrack('new', 'Newest'), makeTrack('mid', 'Middle'), makeTrack('old', 'Oldest')];
-    expect(sortRecentTracks(input, 'modifiedTime').map((t) => t.id)).toEqual(['new', 'mid', 'old']);
+    const input = [
+      makeTrack("new", "Newest"),
+      makeTrack("mid", "Middle"),
+      makeTrack("old", "Oldest"),
+    ];
+    expect(sortRecentTracks(input, "modifiedTime").map((t) => t.id)).toEqual([
+      "new",
+      "mid",
+      "old",
+    ]);
   });
 
   it('reverses to oldest-first for "modifiedTime desc"', () => {
-    const input = [makeTrack('new', 'Newest'), makeTrack('mid', 'Middle'), makeTrack('old', 'Oldest')];
-    expect(sortRecentTracks(input, 'modifiedTime desc').map((t) => t.id)).toEqual(['old', 'mid', 'new']);
+    const input = [
+      makeTrack("new", "Newest"),
+      makeTrack("mid", "Middle"),
+      makeTrack("old", "Oldest"),
+    ];
+    expect(
+      sortRecentTracks(input, "modifiedTime desc").map((t) => t.id),
+    ).toEqual(["old", "mid", "new"]);
   });
 
-  it('keeps the given order for unknown sort options (default = recency)', () => {
-    const input = [makeTrack('a', 'Alpha'), makeTrack('b', 'Bravo')];
-    expect(sortRecentTracks(input, 'recent').map((t) => t.id)).toEqual(['a', 'b']);
-    expect(sortRecentTracks(input, 'bogus').map((t) => t.id)).toEqual(['a', 'b']);
+  it("keeps the given order for unknown sort options (default = recency)", () => {
+    const input = [makeTrack("a", "Alpha"), makeTrack("b", "Bravo")];
+    expect(sortRecentTracks(input, "recent").map((t) => t.id)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(sortRecentTracks(input, "bogus").map((t) => t.id)).toEqual([
+      "a",
+      "b",
+    ]);
   });
 
-  it('does not crash on an empty list for any sort option', () => {
+  it("does not crash on an empty list for any sort option", () => {
     for (const opt of SORT_OPTIONS) {
       expect(sortRecentTracks([], opt)).toEqual([]);
     }
   });
 
-  it('does not mutate the input array', () => {
-    const input = [makeTrack('b', 'Bravo'), makeTrack('a', 'Alpha')];
-    sortRecentTracks(input, 'name');
-    expect(input.map((t) => t.id)).toEqual(['b', 'a']);
+  it("does not mutate the input array", () => {
+    const input = [makeTrack("b", "Bravo"), makeTrack("a", "Alpha")];
+    sortRecentTracks(input, "name");
+    expect(input.map((t) => t.id)).toEqual(["b", "a"]);
   });
 });
 
-describe('FullRecentView sort UI', () => {
+describe("FullRecentView sort UI", () => {
   afterEach(() => cleanup());
 
   function renderRecent(tracks: Track[]) {
     render(
-      <FullRecentView recent={tracks} onBack={vi.fn()} onPlay={vi.fn()} token="token" />
+      <FullRecentView
+        recent={tracks}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="token"
+      />,
     );
   }
 
   const cardOrder = () =>
-    screen.getAllByTestId('song-card').map((el) => el.getAttribute('data-item-id'));
+    screen
+      .getAllByTestId("song-card")
+      .map((el) => el.getAttribute("data-item-id"));
 
   const openSortMenu = () => {
-    const arrow = screen.getByTitle('Toggle Order');
+    const arrow = screen.getByTitle("Toggle Order");
     fireEvent.click(arrow.parentElement as HTMLElement);
   };
 
   const clickSortOption = (label: string) => {
-    fireEvent.click(screen.getByRole('button', { name: label }));
+    fireEvent.click(screen.getByRole("button", { name: label }));
   };
 
-  it('renders cards in newest-first input order by default with Ngày label', () => {
+  it("renders cards in newest-first input order by default with Ngày label", () => {
     renderRecent([
-      makeTrack('new', 'Newest'),
-      makeTrack('mid', 'Middle'),
-      makeTrack('old', 'Oldest'),
+      makeTrack("new", "Newest"),
+      makeTrack("mid", "Middle"),
+      makeTrack("old", "Oldest"),
     ]);
-    expect(cardOrder()).toEqual(['new', 'mid', 'old']);
-    expect(screen.getAllByText('Ngày').length).toBeGreaterThan(0);
+    expect(cardOrder()).toEqual(["new", "mid", "old"]);
+    expect(screen.getAllByText("Ngày").length).toBeGreaterThan(0);
   });
 
-  it('shows exactly 3 sort options in the menu (A-Z / Ngày / Kích thước)', () => {
-    renderRecent([makeTrack('a', 'Alpha')]);
+  it("shows exactly 3 sort options in the menu (A-Z / Ngày / Kích thước)", () => {
+    renderRecent([makeTrack("a", "Alpha")]);
     openSortMenu();
-    const menu = document.querySelector('.w-32') as HTMLElement;
-    const labels = Array.from(menu.querySelectorAll('button')).map((b) => b.textContent);
-    expect(labels.sort()).toEqual(['A-Z', 'Kích thước', 'Ngày']);
+    const menu = document.querySelector(".w-32") as HTMLElement;
+    const labels = Array.from(menu.querySelectorAll("button")).map(
+      (b) => b.textContent,
+    );
+    expect(labels.sort()).toEqual(["A-Z", "Kích thước", "Ngày"]);
   });
 
-  it('sorts by size ascending (undefined last) when Kích thước is chosen', () => {
+  it("sorts by size ascending (undefined last) when Kích thước is chosen", () => {
     renderRecent([
-      makeTrack('a', 'Alpha', 50),
-      makeTrack('b', 'Bravo'),
-      makeTrack('c', 'Charlie', 10),
-    ]);
-    openSortMenu();
-    clickSortOption('Kích thước');
-    expect(cardOrder()).toEqual(['c', 'a', 'b']);
-  });
-
-  it('sorts A-Z when A-Z is chosen', () => {
-    renderRecent([
-      makeTrack('b', 'Bravo'),
-      makeTrack('a', 'Alpha'),
-      makeTrack('c', 'Charlie'),
+      makeTrack("a", "Alpha", 50),
+      makeTrack("b", "Bravo"),
+      makeTrack("c", "Charlie", 10),
     ]);
     openSortMenu();
-    clickSortOption('A-Z');
-    expect(cardOrder()).toEqual(['a', 'b', 'c']);
+    clickSortOption("Kích thước");
+    expect(cardOrder()).toEqual(["c", "a", "b"]);
   });
 
-  it('keeps newest-first order when Ngày is chosen (default recency behavior)', () => {
+  it("sorts A-Z when A-Z is chosen", () => {
     renderRecent([
-      makeTrack('new', 'Newest'),
-      makeTrack('mid', 'Middle'),
-      makeTrack('old', 'Oldest'),
+      makeTrack("b", "Bravo"),
+      makeTrack("a", "Alpha"),
+      makeTrack("c", "Charlie"),
     ]);
     openSortMenu();
-    clickSortOption('Ngày');
-    expect(cardOrder()).toEqual(['new', 'mid', 'old']);
+    clickSortOption("A-Z");
+    expect(cardOrder()).toEqual(["a", "b", "c"]);
   });
 
-  it('arrow toggle flips asc/desc repeatedly without opening the menu', () => {
+  it("keeps newest-first order when Ngày is chosen (default recency behavior)", () => {
     renderRecent([
-      makeTrack('new', 'Newest'),
-      makeTrack('mid', 'Middle'),
-      makeTrack('old', 'Oldest'),
+      makeTrack("new", "Newest"),
+      makeTrack("mid", "Middle"),
+      makeTrack("old", "Oldest"),
     ]);
-    const arrow = screen.getByTitle('Toggle Order');
+    openSortMenu();
+    clickSortOption("Ngày");
+    expect(cardOrder()).toEqual(["new", "mid", "old"]);
+  });
+
+  it("arrow toggle flips asc/desc repeatedly without opening the menu", () => {
+    renderRecent([
+      makeTrack("new", "Newest"),
+      makeTrack("mid", "Middle"),
+      makeTrack("old", "Oldest"),
+    ]);
+    const arrow = screen.getByTitle("Toggle Order");
     fireEvent.click(arrow);
-    expect(cardOrder()).toEqual(['old', 'mid', 'new']);
-    expect(screen.queryByRole('button', { name: 'A-Z' })).toBeNull();
+    expect(cardOrder()).toEqual(["old", "mid", "new"]);
+    expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
     fireEvent.click(arrow);
-    expect(cardOrder()).toEqual(['new', 'mid', 'old']);
+    expect(cardOrder()).toEqual(["new", "mid", "old"]);
   });
 
-  it('applies search filter first, then sort', () => {
+  it("applies search filter first, then sort", () => {
     renderRecent([
-      makeTrack('x', 'Zulu'),
-      makeTrack('y', 'Alpha'),
-      makeTrack('z', 'Zen'),
+      makeTrack("x", "Zulu"),
+      makeTrack("y", "Alpha"),
+      makeTrack("z", "Zen"),
     ]);
-    fireEvent.change(screen.getByPlaceholderText('Tìm kiếm...'), {
-      target: { value: 'z' },
+    fireEvent.change(screen.getByPlaceholderText("Tìm kiếm..."), {
+      target: { value: "z" },
     });
-    expect(cardOrder()).toEqual(['x', 'z']);
+    expect(cardOrder()).toEqual(["x", "z"]);
     openSortMenu();
-    clickSortOption('A-Z');
-    expect(cardOrder()).toEqual(['z', 'x']);
+    clickSortOption("A-Z");
+    expect(cardOrder()).toEqual(["z", "x"]);
   });
 
-  it('renders zero items on an empty list without crashing', () => {
+  it("renders zero items on an empty list without crashing", () => {
     renderRecent([]);
-    expect(screen.queryAllByTestId('song-card').length).toBe(0);
+    expect(screen.queryAllByTestId("song-card").length).toBe(0);
     openSortMenu();
-    const menu = document.querySelector('.w-32') as HTMLElement;
-    expect(menu.querySelectorAll('button').length).toBe(3);
+    const menu = document.querySelector(".w-32") as HTMLElement;
+    expect(menu.querySelectorAll("button").length).toBe(3);
   });
 });

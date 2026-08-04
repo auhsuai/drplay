@@ -1,23 +1,33 @@
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
-import { clearAllMetadataCache, METADATA_KEY_PREFIX, METADATA_LRU_KEY } from "./metadata";
+import {
+  clearAllMetadataCache,
+  METADATA_KEY_PREFIX,
+  METADATA_LRU_KEY,
+} from "./metadata";
 import { captureError } from "./errorLog";
-import { clearPrefetchedStreams, getPrefetchedStreamCount } from "./streamPrefetcher";
-import { clearNextTrackPrefetches, getPendingPrefetchCount } from "./nextTrackPrefetcher";
+import {
+  clearPrefetchedStreams,
+  getPrefetchedStreamCount,
+} from "./streamPrefetcher";
+import {
+  clearNextTrackPrefetches,
+  getPendingPrefetchCount,
+} from "./nextTrackPrefetcher";
 
-export const CLEAR_LOCAL_CACHE_CMD = 'clear_local_cache';
-export const CLEAR_THUMBNAIL_DIR_CMD = 'clear_thumbnail_dir';
-export const GET_CACHE_INFO_CMD = 'get_cache_info';
+export const CLEAR_LOCAL_CACHE_CMD = "clear_local_cache";
+export const CLEAR_THUMBNAIL_DIR_CMD = "clear_thumbnail_dir";
+export const GET_CACHE_INFO_CMD = "get_cache_info";
 
-export type CacheCategoryId = 'metadata' | 'files' | 'covers' | 'prefetch';
+export type CacheCategoryId = "metadata" | "files" | "covers" | "prefetch";
 
 // Single source of truth for category display names — the UI renders rows
 // from this map while getCacheSizes uses the same labels for its results.
 export const CACHE_CATEGORY_LABELS: Record<CacheCategoryId, string> = {
-  metadata: 'Metadata cache',
-  files: 'File listing cache',
-  covers: 'Covers & thumbnails',
-  prefetch: 'Prefetched data',
+  metadata: "Metadata cache",
+  files: "File listing cache",
+  covers: "Covers & thumbnails",
+  prefetch: "Prefetched data",
 };
 
 export interface CacheCategoryInfo {
@@ -36,24 +46,38 @@ export const FILES_ROW_ESTIMATED_BYTES = 200;
 // nextTrackPrefetcher holds an AbortController + URL per in-flight fetch.
 export const PREFETCH_ENTRY_ESTIMATED_BYTES = 128;
 
-const ALL_CACHE_CATEGORIES: CacheCategoryId[] = ['metadata', 'files', 'covers', 'prefetch'];
+const ALL_CACHE_CATEGORIES: CacheCategoryId[] = [
+  "metadata",
+  "files",
+  "covers",
+  "prefetch",
+];
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
 export async function getCacheSizes(): Promise<CacheCategoryInfo[]> {
-  const [metadataBytes, filesBytes, coversBytes, prefetchBytes] = await Promise.all([
-    estimateMetadataBytes(),
-    estimateFilesBytes(),
-    estimateCoversBytes(),
-    estimatePrefetchBytes(),
-  ]);
+  const [metadataBytes, filesBytes, coversBytes, prefetchBytes] =
+    await Promise.all([
+      estimateMetadataBytes(),
+      estimateFilesBytes(),
+      estimateCoversBytes(),
+      estimatePrefetchBytes(),
+    ]);
   return [
-    { id: 'metadata', label: CACHE_CATEGORY_LABELS.metadata, bytes: metadataBytes },
-    { id: 'files', label: CACHE_CATEGORY_LABELS.files, bytes: filesBytes },
-    { id: 'covers', label: CACHE_CATEGORY_LABELS.covers, bytes: coversBytes },
-    { id: 'prefetch', label: CACHE_CATEGORY_LABELS.prefetch, bytes: prefetchBytes },
+    {
+      id: "metadata",
+      label: CACHE_CATEGORY_LABELS.metadata,
+      bytes: metadataBytes,
+    },
+    { id: "files", label: CACHE_CATEGORY_LABELS.files, bytes: filesBytes },
+    { id: "covers", label: CACHE_CATEGORY_LABELS.covers, bytes: coversBytes },
+    {
+      id: "prefetch",
+      label: CACHE_CATEGORY_LABELS.prefetch,
+      bytes: prefetchBytes,
+    },
   ];
 }
 
@@ -69,8 +93,8 @@ async function estimateMetadataBytes(): Promise<number> {
     return rows.reduce((sum, row) => sum + JSON.stringify(row.entry).length, 0);
   } catch (e: unknown) {
     captureError({
-      level: 'warn',
-      source: 'cache',
+      level: "warn",
+      source: "cache",
       message: `get-cache-size-metadata failed: ${errorMessage(e)}`,
     });
     return 0;
@@ -83,8 +107,8 @@ async function estimateFilesBytes(): Promise<number> {
     return count * FILES_ROW_ESTIMATED_BYTES;
   } catch (e: unknown) {
     captureError({
-      level: 'warn',
-      source: 'cache',
+      level: "warn",
+      source: "cache",
       message: `get-cache-size-files failed: ${errorMessage(e)}`,
     });
     return 0;
@@ -100,11 +124,13 @@ interface RustCacheInfo {
 async function estimateCoversBytes(): Promise<number> {
   try {
     const info = await invoke<RustCacheInfo>(GET_CACHE_INFO_CMD);
-    return info.cover_cache_bytes + info.etag_cache_bytes + info.thumbnail_dir_bytes;
+    return (
+      info.cover_cache_bytes + info.etag_cache_bytes + info.thumbnail_dir_bytes
+    );
   } catch (e: unknown) {
     captureError({
-      level: 'warn',
-      source: 'cache',
+      level: "warn",
+      source: "cache",
       message: `get-cache-size-covers failed: ${errorMessage(e)}`,
     });
     return 0;
@@ -117,8 +143,8 @@ async function estimatePrefetchBytes(): Promise<number> {
     return entries * PREFETCH_ENTRY_ESTIMATED_BYTES;
   } catch (e: unknown) {
     captureError({
-      level: 'warn',
-      source: 'cache',
+      level: "warn",
+      source: "cache",
       message: `get-cache-size-prefetch failed: ${errorMessage(e)}`,
     });
     return 0;
@@ -143,8 +169,8 @@ async function clearMetadataCache(): Promise<void> {
       localStorage.removeItem(METADATA_LRU_KEY);
     } catch (removeErr: unknown) {
       captureError({
-        level: 'warn',
-        source: 'cache',
+        level: "warn",
+        source: "cache",
         message: `clear-lru-key-failed: ${errorMessage(removeErr)}`,
       });
     }
@@ -156,8 +182,8 @@ async function clearMetadataCache(): Promise<void> {
     clearAllMetadataCache();
   } catch (metaErr: unknown) {
     captureError({
-      level: 'error',
-      source: 'cache',
+      level: "error",
+      source: "cache",
       message: `clear-memory-metadata-cache failed: ${errorMessage(metaErr)}`,
     });
     if (!deleteError) deleteError = metaErr;
@@ -177,8 +203,8 @@ async function clearCategory(
   } catch (e: unknown) {
     failures.push({ category, error: e });
     captureError({
-      level: 'error',
-      source: 'cache',
+      level: "error",
+      source: "cache",
       message: `${logPrefix} failed: ${errorMessage(e)}`,
     });
   }
@@ -189,25 +215,35 @@ export async function clearAppCache(
 ): Promise<void> {
   const failures: Array<{ category: CacheCategoryId; error: unknown }> = [];
 
-  if (selected.includes('metadata')) {
-    await clearCategory('metadata', 'clear-metadata-cache', failures, clearMetadataCache);
+  if (selected.includes("metadata")) {
+    await clearCategory(
+      "metadata",
+      "clear-metadata-cache",
+      failures,
+      clearMetadataCache,
+    );
   }
-  if (selected.includes('files')) {
-    await clearCategory('files', 'clear-files-cache', failures, async () => {
+  if (selected.includes("files")) {
+    await clearCategory("files", "clear-files-cache", failures, async () => {
       await db.files.clear();
     });
   }
-  if (selected.includes('covers')) {
-    await clearCategory('covers', 'clear_local_cache', failures, async () => {
+  if (selected.includes("covers")) {
+    await clearCategory("covers", "clear_local_cache", failures, async () => {
       await invoke(CLEAR_LOCAL_CACHE_CMD);
       await invoke(CLEAR_THUMBNAIL_DIR_CMD);
     });
   }
-  if (selected.includes('prefetch')) {
-    await clearCategory('prefetch', 'clear-prefetch-cache', failures, async () => {
-      clearPrefetchedStreams();
-      clearNextTrackPrefetches();
-    });
+  if (selected.includes("prefetch")) {
+    await clearCategory(
+      "prefetch",
+      "clear-prefetch-cache",
+      failures,
+      async () => {
+        clearPrefetchedStreams();
+        clearNextTrackPrefetches();
+      },
+    );
   }
 
   // Aggregate failure: SettingsTab surfaces the message in its error toast,
@@ -215,7 +251,7 @@ export async function clearAppCache(
   if (failures.length > 0) {
     const detail = failures
       .map((f) => `${f.category} (${errorMessage(f.error)})`)
-      .join(', ');
+      .join(", ");
     throw new Error(`Failed to clear cache for: ${detail}`);
   }
 }

@@ -10,7 +10,7 @@ export function getCustomDownloadPath(): string | null {
     captureError({
       level: "warn",
       source: "downloadPath",
-      message: `custom-path-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`
+      message: `custom-path-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
     });
     return null;
   }
@@ -23,7 +23,7 @@ export function setCustomDownloadPath(path: string): void {
     captureError({
       level: "warn",
       source: "downloadPath",
-      message: `custom-path-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`
+      message: `custom-path-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
     });
   }
 }

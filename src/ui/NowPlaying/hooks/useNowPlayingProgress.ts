@@ -1,15 +1,18 @@
 import { useState, useEffect, useRef } from "react";
-import { Track } from "../../../App";
+import type { Track } from "../../../App";
 import { formatTime } from "../../../utils/formatTime";
-import { updateBufferBar, clearBufferBar } from '../../../utils/bufferedRange';
+import { updateBufferBar, clearBufferBar } from "../../../utils/bufferedRange";
 import { captureError } from "../../../utils/errorLog";
 import { AudioController } from "../../../lib/AudioController";
 
-const NOW_PLAYING_PROGRESS_MODULE = 'useNowPlayingProgress';
+const NOW_PLAYING_PROGRESS_MODULE = "useNowPlayingProgress";
 const PROGRESS_DELTA_THRESHOLD_PCT = 0.05;
 const RESTORE_GUARD_SECONDS = 1;
 
-export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolean) {
+export function useNowPlayingProgress(
+  currentTrack: Track | null,
+  isOpen: boolean,
+) {
   const [duration, setDuration] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
@@ -33,16 +36,21 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
   useEffect(() => {
     if (currentTrack) {
       if (currentTrack.restoreTime !== undefined) {
-         const restoredDuration = currentTrack.restoreDuration || 0;
-         durationRef.current = restoredDuration;
-         setDuration(restoredDuration);
-         if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(currentTrack.restoreTime);
-         if (progressFillRef.current) progressFillRef.current.style.width = `${(currentTrack.restoreTime / (currentTrack.restoreDuration || 1)) * 100}%`;
+        const restoredDuration = currentTrack.restoreDuration || 0;
+        durationRef.current = restoredDuration;
+        setDuration(restoredDuration);
+        if (currentTimeTextRef.current)
+          currentTimeTextRef.current.textContent = formatTime(
+            currentTrack.restoreTime,
+          );
+        if (progressFillRef.current)
+          progressFillRef.current.style.width = `${(currentTrack.restoreTime / (currentTrack.restoreDuration || 1)) * 100}%`;
       } else {
-         durationRef.current = 0;
-         setDuration(0);
-         if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = '0:00';
-         if (progressFillRef.current) progressFillRef.current.style.width = '0%';
+        durationRef.current = 0;
+        setDuration(0);
+        if (currentTimeTextRef.current)
+          currentTimeTextRef.current.textContent = "0:00";
+        if (progressFillRef.current) progressFillRef.current.style.width = "0%";
       }
       if (bufferFillRef.current) clearBufferBar(bufferFillRef.current);
     }
@@ -54,7 +62,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
   useEffect(() => {
     const audio = AudioController.getInstance();
 
-    const unsubDuration = audio.on('durationchange', ({ duration }) => {
+    const unsubDuration = audio.on("durationchange", ({ duration }) => {
       const d = duration || 0;
       durationRef.current = d;
       setDuration(d);
@@ -81,7 +89,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     if (!currentTrack) return;
     const audio = AudioController.getInstance();
 
-    const unsubProgress = audio.on('progress', () => {
+    const unsubProgress = audio.on("progress", () => {
       updateBufferBar(bufferFillRef.current, audio.getBuffered());
     });
 
@@ -97,12 +105,28 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     let lastProgressWidth = "";
     const audio = AudioController.getInstance();
 
-    const updateProgressUI = ({ currentTime, duration }: { currentTime: number; duration: number }) => {
-      if (isDraggingRef.current || !progressFillRef.current || !currentTimeTextRef.current) return;
+    const updateProgressUI = ({
+      currentTime,
+      duration,
+    }: {
+      currentTime: number;
+      duration: number;
+    }) => {
+      if (
+        isDraggingRef.current ||
+        !progressFillRef.current ||
+        !currentTimeTextRef.current
+      )
+        return;
       const time = currentTime;
 
       // Prevent UI jump to 0:00 when waiting for track to restore (sync with PlayerBar)
-      if (currentTrack && currentTrack.restoreTime !== undefined && time === 0 && currentTrack.restoreTime > RESTORE_GUARD_SECONDS) {
+      if (
+        currentTrack &&
+        currentTrack.restoreTime !== undefined &&
+        time === 0 &&
+        currentTrack.restoreTime > RESTORE_GUARD_SECONDS
+      ) {
         return;
       }
 
@@ -110,12 +134,16 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
       if (dur > 0) {
         const progressPercent = (time / dur) * 100;
         const newWidth = `${progressPercent}%`;
-        
-        if (Math.abs(parseFloat(lastProgressWidth) - progressPercent) > PROGRESS_DELTA_THRESHOLD_PCT || lastProgressWidth === "") {
+
+        if (
+          Math.abs(parseFloat(lastProgressWidth) - progressPercent) >
+            PROGRESS_DELTA_THRESHOLD_PCT ||
+          lastProgressWidth === ""
+        ) {
           progressFillRef.current.style.width = newWidth;
           lastProgressWidth = newWidth;
         }
-        
+
         const newTimeText = formatTime(time);
         if (lastTimeText !== newTimeText) {
           currentTimeTextRef.current.textContent = newTimeText;
@@ -131,7 +159,7 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
       updateBufferBar(bufferFillRef.current, audio.getBuffered());
     };
 
-    const unsubTime = audio.on('timeupdate', updateProgressUI);
+    const unsubTime = audio.on("timeupdate", updateProgressUI);
 
     return () => {
       unsubTime();
@@ -141,11 +169,14 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
   // Unmount safety net: if the component unmounts mid-drag (view closed /
   // track switched while dragging), the window listeners added by
   // handlePointerDown would otherwise never be removed.
-  useEffect(() => () => {
-    window.removeEventListener('pointermove', pointerMoveRef.current);
-    window.removeEventListener('pointerup', pointerUpRef.current);
-    window.removeEventListener('pointercancel', pointerCancelRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      window.removeEventListener("pointermove", pointerMoveRef.current);
+      window.removeEventListener("pointerup", pointerUpRef.current);
+      window.removeEventListener("pointercancel", pointerCancelRef.current);
+    },
+    [],
+  );
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!progressBarRef.current) return;
@@ -154,24 +185,33 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     try {
       progressBarRef.current.setPointerCapture(e.pointerId);
     } catch (err) {
-      captureError({ level: 'warn', source: NOW_PLAYING_PROGRESS_MODULE, message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}` });
+      captureError({
+        level: "warn",
+        source: NOW_PLAYING_PROGRESS_MODULE,
+        message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
     const bounds = progressBarRef.current.getBoundingClientRect();
-    
+
     const updateTimeUI = (clientX: number) => {
-      const percent = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+      const percent = Math.max(
+        0,
+        Math.min(1, (clientX - bounds.left) / bounds.width),
+      );
       const newTime = percent * (durationRef.current || duration);
-      if (progressFillRef.current) progressFillRef.current.style.width = `${percent * 100}%`;
-      if (currentTimeTextRef.current) currentTimeTextRef.current.textContent = formatTime(newTime);
+      if (progressFillRef.current)
+        progressFillRef.current.style.width = `${percent * 100}%`;
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = formatTime(newTime);
       return newTime;
     };
-    
+
     updateTimeUI(e.clientX);
-    
+
     const onPointerMove = (moveEvent: PointerEvent) => {
       updateTimeUI(moveEvent.clientX);
     };
-    
+
     const commit = (clientX: number) => {
       setIsDragging(false);
       isDraggingRef.current = false;
@@ -180,10 +220,13 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
       // Redraw immediately (not clear): updateBufferBar drops stale pre-seek
       // ranges, so the bar shows the real buffer at the new position without
       // the empty-bar blink a synchronous clear would cause.
-      updateBufferBar(bufferFillRef.current, AudioController.getInstance().getBuffered());
-      window.removeEventListener('pointermove', pointerMoveRef.current);
-      window.removeEventListener('pointerup', pointerUpRef.current);
-      window.removeEventListener('pointercancel', pointerCancelRef.current);
+      updateBufferBar(
+        bufferFillRef.current,
+        AudioController.getInstance().getBuffered(),
+      );
+      window.removeEventListener("pointermove", pointerMoveRef.current);
+      window.removeEventListener("pointerup", pointerUpRef.current);
+      window.removeEventListener("pointercancel", pointerCancelRef.current);
     };
 
     const onPointerUp = (upEvent: PointerEvent) => {
@@ -197,9 +240,9 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     pointerMoveRef.current = onPointerMove;
     pointerUpRef.current = onPointerUp;
     pointerCancelRef.current = onPointerCancel;
-    window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-    window.addEventListener('pointercancel', onPointerCancel);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
   };
 
   return {
@@ -209,6 +252,6 @@ export function useNowPlayingProgress(currentTrack: Track | null, isOpen: boolea
     progressFillRef,
     bufferFillRef,
     currentTimeTextRef,
-    handlePointerDown
+    handlePointerDown,
   };
 }

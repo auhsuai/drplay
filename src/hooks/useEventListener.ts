@@ -1,19 +1,19 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
 export function useEventListener<K extends keyof WindowEventMap>(
   eventName: K,
   handler: (event: WindowEventMap[K]) => void,
-  deps?: ReadonlyArray<unknown>
+  deps?: ReadonlyArray<unknown>,
 ): void;
 export function useEventListener(
   eventName: string,
   handler: (event: Event) => void,
-  deps?: ReadonlyArray<unknown>
+  deps?: ReadonlyArray<unknown>,
 ): void;
 export function useEventListener(
   eventName: string,
   handler: (event: Event) => void,
-  deps: ReadonlyArray<unknown> = []
+  deps: ReadonlyArray<unknown> = [],
 ): void {
   const savedHandler = useRef(handler);
   useEffect(() => {

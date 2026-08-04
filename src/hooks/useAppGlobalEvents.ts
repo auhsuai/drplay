@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
-import { getValidToken } from '../utils/apiClient';
-import { captureError } from '../utils/errorLog';
-import { ACCESS_TOKEN_KEY } from '../utils/storageKeys';
+import { useEffect } from "react";
+import { getValidToken } from "../utils/apiClient";
+import { captureError } from "../utils/errorLog";
+import { ACCESS_TOKEN_KEY } from "../utils/storageKeys";
 
 export function useAppGlobalEvents(handleLogout: () => void) {
   useEffect(() => {
@@ -19,21 +19,31 @@ export function useAppGlobalEvents(handleLogout: () => void) {
       } catch {
         // Storage can throw (privacy mode / quota); a read failure must not
         // crash focus handling — skip the refresh and let the next play fail.
-        captureError({ level: 'warn', source: 'useAppGlobalEvents', message: 'auth-storage-read-failed' });
+        captureError({
+          level: "warn",
+          source: "useAppGlobalEvents",
+          message: "auth-storage-read-failed",
+        });
       }
       if (hasTokens) {
-        getValidToken().catch(e => captureError({ level: 'warn', source: 'useAppGlobalEvents', message: `Focus refresh failed: ${e instanceof Error ? e.message : String(e)}` }));
+        getValidToken().catch((e) =>
+          captureError({
+            level: "warn",
+            source: "useAppGlobalEvents",
+            message: `Focus refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+        );
       }
     };
-    
+
     const preventContextMenu = (e: MouseEvent) => e.preventDefault();
-    
+
     window.addEventListener("focus", handleFocus);
-    document.addEventListener('contextmenu', preventContextMenu);
-    
+    document.addEventListener("contextmenu", preventContextMenu);
+
     return () => {
       window.removeEventListener("focus", handleFocus);
-      document.removeEventListener('contextmenu', preventContextMenu);
+      document.removeEventListener("contextmenu", preventContextMenu);
     };
   }, []);
 
@@ -42,7 +52,7 @@ export function useAppGlobalEvents(handleLogout: () => void) {
     const handleAuthLogout = () => {
       handleLogout();
     };
-    window.addEventListener('auth-logout', handleAuthLogout);
-    return () => window.removeEventListener('auth-logout', handleAuthLogout);
+    window.addEventListener("auth-logout", handleAuthLogout);
+    return () => window.removeEventListener("auth-logout", handleAuthLogout);
   }, [handleLogout]);
 }

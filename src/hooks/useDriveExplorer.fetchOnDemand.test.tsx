@@ -1,28 +1,28 @@
 // @vitest-environment jsdom
-import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
-import { db } from '../db/db';
-import { useDriveExplorer } from './useDriveExplorer';
-import { useDriveStore } from '../store/driveStore';
+import "fake-indexeddb/auto";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
+import { db } from "../db/db";
+import { useDriveExplorer } from "./useDriveExplorer";
+import { useDriveStore } from "../store/driveStore";
 
 // Mock network layer only; keep real Dexie (fake-indexeddb) to assert DB writes.
-vi.mock('../utils/apiClient', () => ({
+vi.mock("../utils/apiClient", () => ({
   fetchWithAuth: vi.fn(),
 }));
-import { fetchWithAuth } from '../utils/apiClient';
+import { fetchWithAuth } from "../utils/apiClient";
 const mockedFetch = vi.mocked(fetchWithAuth);
 
-const FOLDER_ID = 'folder-under-test';
+const FOLDER_ID = "folder-under-test";
 
 function makeDriveFile(page: number, idx: number) {
   return {
     id: `p${page}-f${idx}`,
     name: `track-p${page}-${idx}.mp3`,
-    mimeType: 'audio/mpeg',
+    mimeType: "audio/mpeg",
     parents: [FOLDER_ID],
-    size: '1000',
-    modifiedTime: '2024-01-01T00:00:00.000Z',
+    size: "1000",
+    modifiedTime: "2024-01-01T00:00:00.000Z",
   };
 }
 
@@ -33,7 +33,7 @@ function makePage(files: any[], nextPageToken?: string) {
   } as unknown as Response;
 }
 
-describe('useDriveExplorer fetchOnDemand (incremental DB writes)', () => {
+describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
   beforeEach(async () => {
     await db.files.clear();
     useDriveStore.setState({ isLoadingTracks: false });
@@ -44,19 +44,33 @@ describe('useDriveExplorer fetchOnDemand (incremental DB writes)', () => {
     await db.files.clear();
   });
 
-  it('writes each fetched page to Dexie immediately (bulkPut per page), not one accumulated write', async () => {
+  it("writes each fetched page to Dexie immediately (bulkPut per page), not one accumulated write", async () => {
     // 3 pages x 5 files each
     mockedFetch
-      .mockResolvedValueOnce(makePage([0, 1, 2, 3, 4].map(i => makeDriveFile(1, i)), 'token-2'))
-      .mockResolvedValueOnce(makePage([0, 1, 2, 3, 4].map(i => makeDriveFile(2, i)), 'token-3'))
-      .mockResolvedValueOnce(makePage([0, 1, 2, 3, 4].map(i => makeDriveFile(3, i))));
+      .mockResolvedValueOnce(
+        makePage(
+          [0, 1, 2, 3, 4].map((i) => makeDriveFile(1, i)),
+          "token-2",
+        ),
+      )
+      .mockResolvedValueOnce(
+        makePage(
+          [0, 1, 2, 3, 4].map((i) => makeDriveFile(2, i)),
+          "token-3",
+        ),
+      )
+      .mockResolvedValueOnce(
+        makePage([0, 1, 2, 3, 4].map((i) => makeDriveFile(3, i))),
+      );
 
-    const bulkPutSpy = vi.spyOn(db.files, 'bulkPut');
+    const bulkPutSpy = vi.spyOn(db.files, "bulkPut");
 
-    renderHook(() => useDriveExplorer(FOLDER_ID, 'Folder', 'fake-token', () => {}));
+    renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+    );
 
     await waitFor(async () => {
-      const count = await db.files.where('parentId').equals(FOLDER_ID).count();
+      const count = await db.files.where("parentId").equals(FOLDER_ID).count();
       expect(count).toBe(15);
     });
 
@@ -73,39 +87,55 @@ describe('useDriveExplorer fetchOnDemand (incremental DB writes)', () => {
     bulkPutSpy.mockRestore();
   });
 
-  it('still writes earlier pages when a later page request fails', async () => {
+  it("still writes earlier pages when a later page request fails", async () => {
     mockedFetch
-      .mockResolvedValueOnce(makePage([0, 1].map(i => makeDriveFile(1, i)), 'token-2'))
+      .mockResolvedValueOnce(
+        makePage(
+          [0, 1].map((i) => makeDriveFile(1, i)),
+          "token-2",
+        ),
+      )
       // 404 is non-retryable for driveFetch — the fetch breaks immediately.
       // (500 would now be retried up to 4x with real-time exponential backoff,
       // which would stall the test.)
       .mockResolvedValueOnce({ ok: false, status: 404 } as unknown as Response);
 
-    renderHook(() => useDriveExplorer(FOLDER_ID, 'Folder', 'fake-token', () => {}));
+    renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+    );
 
     await waitFor(async () => {
-      const count = await db.files.where('parentId').equals(FOLDER_ID).count();
+      const count = await db.files.where("parentId").equals(FOLDER_ID).count();
       expect(count).toBe(2);
     });
   });
 
-  it('retries a 429 rate-limit response (Retry-After) and continues pagination', async () => {
+  it("retries a 429 rate-limit response (Retry-After) and continues pagination", async () => {
     // driveFetch (driveApi) owns the retry policy now: 429 is retryable.
     // Retry-After: 0 keeps the test off real-time backoff sleeps while still
     // proving the retry path (Google handle-errors guidance).
     mockedFetch
-      .mockResolvedValueOnce(makePage([0, 1].map(i => makeDriveFile(1, i)), 'token-2'))
+      .mockResolvedValueOnce(
+        makePage(
+          [0, 1].map((i) => makeDriveFile(1, i)),
+          "token-2",
+        ),
+      )
       .mockResolvedValueOnce({
         ok: false,
         status: 429,
-        headers: { get: (name: string) => (name === 'Retry-After' ? '0' : null) },
+        headers: {
+          get: (name: string) => (name === "Retry-After" ? "0" : null),
+        },
       } as unknown as Response)
-      .mockResolvedValueOnce(makePage([0, 1].map(i => makeDriveFile(2, i))));
+      .mockResolvedValueOnce(makePage([0, 1].map((i) => makeDriveFile(2, i))));
 
-    renderHook(() => useDriveExplorer(FOLDER_ID, 'Folder', 'fake-token', () => {}));
+    renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+    );
 
     await waitFor(async () => {
-      const count = await db.files.where('parentId').equals(FOLDER_ID).count();
+      const count = await db.files.where("parentId").equals(FOLDER_ID).count();
       expect(count).toBe(4);
     });
 
@@ -113,24 +143,27 @@ describe('useDriveExplorer fetchOnDemand (incremental DB writes)', () => {
     expect(mockedFetch).toHaveBeenCalledTimes(3);
   });
 
-  it('does not write anything when the component unmounts before first page resolves', async () => {
+  it("does not write anything when the component unmounts before first page resolves", async () => {
     let resolveFirst: (v: Response) => void = () => {};
     mockedFetch.mockImplementationOnce(
-      () => new Promise<Response>(res => { resolveFirst = res; })
+      () =>
+        new Promise<Response>((res) => {
+          resolveFirst = res;
+        }),
     );
 
     const { unmount } = renderHook(() =>
-      useDriveExplorer(FOLDER_ID, 'Folder', 'fake-token', () => {})
+      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
     );
 
     // Unmount before the first page arrives.
     unmount();
-    resolveFirst(makePage([0, 1].map(i => makeDriveFile(1, i))));
+    resolveFirst(makePage([0, 1].map((i) => makeDriveFile(1, i))));
 
     // Give the microtask queue a chance to flush.
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
 
-    const count = await db.files.where('parentId').equals(FOLDER_ID).count();
+    const count = await db.files.where("parentId").equals(FOLDER_ID).count();
     expect(count).toBe(0);
   });
 });
