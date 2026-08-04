@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeTab } from './HomeTab';
 import type { Track, UserProfile } from '../../types';
 import type { DriveFileItem } from '../../utils/driveApi';
+import type { FolderVisitEntry } from '../../utils/history';
 import { SYNC_EVENT_NAMES } from '../../utils/proSyncManager';
 
 vi.mock('react-i18next', () => ({
@@ -407,27 +408,8 @@ describe('HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     expect(context.map((t: Track) => t.id)).toEqual(['ra-0', 'ra-1', 'ra-2', 'ra-3']);
     expect(mocks.FullRecentViewSpy).not.toHaveBeenCalled();
   });
-});
 
-describe('HomeTab Recently Added View All (header button)', () => {
-  beforeEach(() => {
-    mocks.getRecentlyPlayed.mockResolvedValue([]);
-    mocks.getHeavyRotation.mockResolvedValue([]);
-    mocks.getRandomDiscoveries.mockResolvedValue([]);
-    mocks.getMostVisitedFolders.mockResolvedValue([]);
-    mocks.getRecentlyAddedAudioFiles.mockReset();
-    mocks.captureError.mockReset();
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.clearAllMocks();
-  });
-
-  const sixRecentlyAdded = () =>
-    Array.from({ length: 6 }, (_, i) => driveFile({ id: `ra-${i}`, name: `Track ${i}.mp3` }));
-
-  it('a. header View All button exists when 3 <= visibleCount and opens full view with all tracks', async () => {
+  it('g. guard: removed header View All button must not come back (3 <= visibleCount); section still renders cards', async () => {
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue([
       driveFile({ id: 'ra-0', name: 'Track 0.mp3' }),
       driveFile({ id: 'ra-1', name: 'Track 1.mp3' }),
@@ -436,63 +418,248 @@ describe('HomeTab Recently Added View All (header button)', () => {
     render(<HomeTab {...baseProps()} />);
     await screen.findByText('Track 0.mp3');
 
-    // Explicit entry point: visible while the section renders, even when the
-    // list fits inside visibleCount (the old overlay never appears then).
-    const viewAllBtn = screen.getByTestId('view-all-recently-added');
-    expect(screen.queryByTestId('premium-card-overlay')).toBeNull();
-
-    fireEvent.click(viewAllBtn);
-
-    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
-    const props = mocks.FullRecentViewSpy.mock.calls[0][0];
-    expect(props.recent.map((t: Track) => t.id)).toEqual(['ra-0', 'ra-1', 'ra-2']);
-    expect(props.title).toBe('Recently Added to Drive');
-    expect(typeof props.onBack).toBe('function');
-  });
-
-  it('b. header button coexists with the trailing overlay card (6 > 5); overlay click still opens full view', async () => {
-    mocks.getRecentlyAddedAudioFiles.mockResolvedValue(sixRecentlyAdded());
-    render(<HomeTab {...baseProps()} />);
-    await screen.findByText('Track 4.mp3');
-
-    expect(screen.getByTestId('view-all-recently-added')).toBeTruthy();
-    const overlayCard = screen.getByTestId('premium-card-overlay');
-    expect(overlayCard.getAttribute('data-overlay')).toBe('true');
-
-    fireEvent.click(overlayCard);
-
-    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
-    const props = mocks.FullRecentViewSpy.mock.calls[0][0];
-    expect(props.recent.map((t: Track) => t.id)).toHaveLength(6);
-    expect(props.title).toBe('Recently Added to Drive');
-  });
-
-  it('c. empty recentlyAdded renders no section and no header button', async () => {
-    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
-    render(<HomeTab {...baseProps()} />);
-    await waitFor(() => expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1));
-
-    expect(screen.queryByText('Recently Added to Drive')).toBeNull();
+    // The removed header entry point must stay gone while the section renders.
     expect(screen.queryByTestId('view-all-recently-added')).toBeNull();
+    // Short list still renders all cards; 3 <= visibleCount → no overlay.
+    expect(screen.getAllByTestId('premium-card').length).toBe(3);
+    expect(screen.queryByTestId('premium-card-overlay')).toBeNull();
+  });
+});
+
+describe('HomeTab skeleton loading (null-state contract)', () => {
+  beforeEach(() => {
+    mocks.getRecentlyPlayed.mockReset();
+    mocks.getHeavyRotation.mockReset();
+    mocks.getRandomDiscoveries.mockReset();
+    mocks.getMostVisitedFolders.mockReset();
+    mocks.getRecentlyAddedAudioFiles.mockReset();
+    mocks.captureError.mockReset();
+    mocks.prefetchVisibleTracks.mockReset();
   });
 
-  it('d. back from full view opened via header button returns to the grid', async () => {
-    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([
-      driveFile({ id: 'ra-0', name: 'Track 0.mp3' }),
-      driveFile({ id: 'ra-1', name: 'Track 1.mp3' }),
-    ]);
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  const track = (over: Partial<Track> = {}): Track => ({
+    id: 't-1',
+    title: 'Track 1',
+    artist: 'Artist 1',
+    streamUrl: 'stream://t-1',
+    ...over,
+  });
+
+  const folder = (over: Partial<FolderVisitEntry> = {}): FolderVisitEntry => ({
+    id: 'v-1',
+    name: 'Folder 1',
+    count: 3,
+    lastVisited: Date.now(),
+    ...over,
+  });
+
+  // Deferred promises keep every fetch pending until the test resolves them,
+  // so the component stays in its "never loaded" (null) state on demand.
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((res) => { resolve = res; });
+    return { promise, resolve };
+  }
+
+  function mockAllPending(d: {
+    recent: { promise: Promise<Track[]>; resolve: (v: Track[]) => void };
+    heavy: { promise: Promise<Track[]>; resolve: (v: Track[]) => void };
+    discover: { promise: Promise<Track[]>; resolve: (v: Track[]) => void };
+    folders: { promise: Promise<FolderVisitEntry[]>; resolve: (v: FolderVisitEntry[]) => void };
+    added: { promise: Promise<DriveFileItem[]>; resolve: (v: DriveFileItem[]) => void };
+  }) {
+    mocks.getRecentlyPlayed.mockReturnValue(d.recent.promise);
+    mocks.getHeavyRotation.mockReturnValue(d.heavy.promise);
+    mocks.getRandomDiscoveries.mockReturnValue(d.discover.promise);
+    mocks.getMostVisitedFolders.mockReturnValue(d.folders.promise);
+    mocks.getRecentlyAddedAudioFiles.mockReturnValue(d.added.promise);
+  }
+
+  it('a. shows 5 section skeletons + greeting skeleton while every fetch is pending (null state)', () => {
+    mockAllPending({
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+      added: deferred<DriveFileItem[]>(),
+    });
     render(<HomeTab {...baseProps()} />);
-    await screen.findByText('Track 0.mp3');
 
-    fireEvent.click(screen.getByTestId('view-all-recently-added'));
-    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByTestId('home-skeleton-section')).toHaveLength(5);
+    expect(screen.getByTestId('home-greeting-skeleton')).toBeTruthy();
+    expect(screen.queryByText('Recent Files')).toBeNull();
+    expect(screen.queryByText('Recently Added to Drive')).toBeNull();
+    expect(screen.queryByText('Heavy Rotation')).toBeNull();
+    expect(screen.queryByText('home.discover')).toBeNull();
+    expect(screen.queryByText('Jump Back In')).toBeNull();
+  });
 
-    act(() => {
-      mocks.FullRecentViewSpy.mock.calls[0][0].onBack();
+  it('b. resolving every fetch replaces all skeletons with real sections', async () => {
+    const d = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+      added: deferred<DriveFileItem[]>(),
+    };
+    mockAllPending(d);
+    render(<HomeTab {...baseProps()} />);
+    expect(screen.getAllByTestId('home-skeleton-section')).toHaveLength(5);
+
+    await act(async () => {
+      d.recent.resolve([track({ id: 'r1' }), track({ id: 'r2' }), track({ id: 'r3' })]);
+      d.heavy.resolve([track({ id: 'h1' }), track({ id: 'h2' }), track({ id: 'h3' })]);
+      d.discover.resolve([track({ id: 'd1' }), track({ id: 'd2' }), track({ id: 'd3' })]);
+      d.folders.resolve([folder({ id: 'v1' })]);
+      d.added.resolve([
+        driveFile({ id: 'a1', name: 'New 1.mp3' }),
+        driveFile({ id: 'a2', name: 'New 2.mp3' }),
+        driveFile({ id: 'a3', name: 'New 3.mp3' }),
+      ]);
     });
 
-    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('home-skeleton-section')).toBeNull();
+    expect(screen.queryByTestId('home-greeting-skeleton')).toBeNull();
+    expect(screen.getByText('Recent Files')).toBeTruthy();
     expect(screen.getByText('Recently Added to Drive')).toBeTruthy();
-    expect(screen.getByTestId('view-all-recently-added')).toBeTruthy();
+    expect(screen.getByText('Heavy Rotation')).toBeTruthy();
+    expect(screen.getByText('home.discover')).toBeTruthy();
+    expect(screen.getByText('Jump Back In')).toBeTruthy();
+    expect(screen.getAllByTestId('premium-card')).toHaveLength(12);
+  });
+
+  it('c. partial resolve: only the resolved section renders, the other four stay skeleton', async () => {
+    const d = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+      added: deferred<DriveFileItem[]>(),
+    };
+    mockAllPending(d);
+    render(<HomeTab {...baseProps()} />);
+
+    await act(async () => {
+      d.recent.resolve([track({ id: 'r1' }), track({ id: 'r2' }), track({ id: 'r3' })]);
+    });
+
+    expect(screen.getByText('Recent Files')).toBeTruthy();
+    expect(screen.getAllByTestId('premium-card')).toHaveLength(3);
+    expect(screen.getAllByTestId('home-skeleton-section')).toHaveLength(4);
+    expect(screen.queryByText('Recently Added to Drive')).toBeNull();
+    expect(screen.queryByText('Heavy Rotation')).toBeNull();
+    expect(screen.queryByText('home.discover')).toBeNull();
+    expect(screen.queryByText('Jump Back In')).toBeNull();
+  });
+
+  it('d. delta sync after a completed load never re-shows skeletons (no flicker)', async () => {
+    const d = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+      added: deferred<DriveFileItem[]>(),
+    };
+    mockAllPending(d);
+    render(<HomeTab {...baseProps()} />);
+
+    await act(async () => {
+      d.recent.resolve([track({ id: 'r1' }), track({ id: 'r2' }), track({ id: 'r3' })]);
+      d.heavy.resolve([]);
+      d.discover.resolve([]);
+      d.folders.resolve([]);
+      d.added.resolve([driveFile({ id: 'a1', name: 'New.mp3' })]);
+    });
+    expect(screen.queryByTestId('home-skeleton-section')).toBeNull();
+
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+    act(() => { window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED)); });
+    await waitFor(() => expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByTestId('home-skeleton-section')).toBeNull();
+    expect(screen.queryByTestId('home-greeting-skeleton')).toBeNull();
+    expect(screen.getByText('Recent Files')).toBeTruthy();
+  });
+
+  it('e. all fetches resolving to [] means truly empty: no skeleton, no section', async () => {
+    const d = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+      added: deferred<DriveFileItem[]>(),
+    };
+    mockAllPending(d);
+    render(<HomeTab {...baseProps()} />);
+    expect(screen.getAllByTestId('home-skeleton-section')).toHaveLength(5);
+
+    await act(async () => {
+      d.recent.resolve([]);
+      d.heavy.resolve([]);
+      d.discover.resolve([]);
+      d.folders.resolve([]);
+      d.added.resolve([]);
+    });
+
+    expect(screen.queryByTestId('home-skeleton-section')).toBeNull();
+    expect(screen.queryByTestId('home-greeting-skeleton')).toBeNull();
+    expect(screen.queryByText('Recent Files')).toBeNull();
+    expect(screen.queryByText('Recently Added to Drive')).toBeNull();
+    expect(screen.queryByText('Heavy Rotation')).toBeNull();
+    expect(screen.queryByText('home.discover')).toBeNull();
+    expect(screen.queryByText('Jump Back In')).toBeNull();
+  });
+
+  it('f. prefetch effect survives the all-null state and receives exactly the resolved ids', async () => {
+    const d = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+      added: deferred<DriveFileItem[]>(),
+    };
+    mockAllPending(d);
+    render(<HomeTab {...baseProps()} />);
+
+    // All-null state: the spread must not throw and nothing is prefetched yet.
+    expect(mocks.prefetchVisibleTracks).not.toHaveBeenCalled();
+
+    await act(async () => {
+      d.recent.resolve([track({ id: 'r1' }), track({ id: 'r2' })]);
+    });
+
+    expect(mocks.prefetchVisibleTracks).toHaveBeenCalledTimes(1);
+    expect(mocks.prefetchVisibleTracks).toHaveBeenCalledWith(['r1', 'r2']);
+  });
+
+  it('g. greeting skeleton shows only while recent is null, then the real greeting replaces it', async () => {
+    const d = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+      added: deferred<DriveFileItem[]>(),
+    };
+    mockAllPending(d);
+    render(<HomeTab {...baseProps()} />);
+
+    expect(screen.getByTestId('home-greeting-skeleton')).toBeTruthy();
+    expect(screen.queryByText(/^Good (morning|afternoon|evening)/)).toBeNull();
+
+    await act(async () => {
+      d.recent.resolve([track({ id: 'r1' })]);
+      d.heavy.resolve([]);
+      d.discover.resolve([]);
+      d.folders.resolve([]);
+      d.added.resolve([]);
+    });
+
+    expect(screen.queryByTestId('home-greeting-skeleton')).toBeNull();
+    expect(screen.getByText(/^Good (morning|afternoon|evening)/)).toBeTruthy();
   });
 });

@@ -1,6 +1,5 @@
 import React, { useRef, useEffect, useCallback } from "react";
 import { Track } from "../../App";
-import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 
@@ -20,6 +19,7 @@ import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { PaginationControls } from "./components/PaginationControls";
 import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
+import { SkeletonRowList } from "../components/Skeleton";
 
 // How long to wait after switching to the target page before scrolling the
 // highlighted item into view — the new page must render first; 50ms is just
@@ -241,9 +241,13 @@ export const MainContent = React.memo(function MainContent({
         {activeTab === TABS.settings ? (
           <div className="text-gray-500">{t('settings.coming_soon', 'Coming Soon')}</div>
         ) : isLoading ? (
-          <div className="flex flex-col items-center justify-center h-[50vh] text-[#4285F4]">
-            <Loader2 className="animate-spin h-10 w-10 mb-4 stroke-[1.5]" />
-            <span className="text-base font-medium">{t('loading', 'Loading...')}</span>
+          // [data-drop-region] sizes itself with min-height only, so a
+          // percentage h-full inside it would not resolve. Give the skeleton
+          // wrapper the same min-height formula instead, then let
+          // SkeletonRowList (h-full + flex-1) and its rows (flex-1) share the
+          // space so the skeleton covers the whole loading region.
+          <div role="status" aria-label={t('loading', 'Loading...')} className="flex flex-col" style={{ minHeight: `calc(100% - ${HEADER_CHROME_HEIGHT_PX}px)` }}>
+            <SkeletonRowList rows={8} stretch className="flex-1" />
           </div>
         ) : explorer.filteredItems.length === 0 ? (
           <div className="text-gray-500 py-10 text-center">

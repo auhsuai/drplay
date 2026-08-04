@@ -180,3 +180,56 @@ describe('MainContent drag-active chrome hiding (DRAG_ACTIVE_EVENT)', () => {
     expect(pagination.className).not.toContain('opacity-0');
   });
 });
+
+describe('MainContent loading state (skeleton rows replace centered spinner)', () => {
+  beforeEach(() => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('renders a skeleton row list (8 rows) with role="status" instead of the Loader2 spinner while loading', () => {
+    render(<MainContent {...baseProps} isLoading={true} />);
+    const status = screen.getByRole('status');
+    expect(status.getAttribute('aria-label')).toBe('loading');
+    expect(screen.getAllByTestId('skeleton-row')).toHaveLength(8);
+    // The old centered spinner (Loader2 with animate-spin) must be gone.
+    expect(document.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('hides the skeleton and renders the real list once loading finishes', () => {
+    render(<MainContent {...baseProps} isLoading={false} />);
+    expect(screen.queryByTestId('skeleton-row')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getAllByTestId('song-card').length).toBe(3);
+  });
+
+  it('keeps the empty state (no audio) when loading finished with no items', () => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState([]));
+    render(<MainContent {...baseProps} isLoading={false} />);
+    expect(screen.queryByTestId('skeleton-row')).toBeNull();
+    expect(screen.getByText('drive.no_audio')).toBeTruthy();
+    expect(screen.queryByTestId('song-card')).toBeNull();
+  });
+
+  it('stretch: loading skeleton fills the drop region (minHeight formula + h-full container + flex-1 rows) and never shows the empty state', () => {
+    render(<MainContent {...baseProps} isLoading={true} />);
+    const status = screen.getByRole('status', { name: 'loading' });
+    // The wrapper must size itself to the region below the header chrome
+    // (HEADER_CHROME_HEIGHT_PX = 140) — a plain h-full would not resolve
+    // against the auto-height [data-drop-region] container.
+    expect(status.style.minHeight).toBe('calc(100% - 140px)');
+    expect(status.className).toContain('flex');
+    const rows = screen.getAllByTestId('skeleton-row');
+    expect(rows).toHaveLength(8);
+    for (const row of rows) {
+      expect(row.className).toContain('flex-1');
+    }
+    // The SkeletonRowList container itself stretches to fill the wrapper.
+    expect(rows[0].parentElement!.className).toContain('h-full');
+    // While loading, the empty-state branch must never be reachable.
+    expect(screen.queryByText('drive.no_audio')).toBeNull();
+  });
+});

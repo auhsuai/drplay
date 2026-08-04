@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { SkeletonRowList } from "../components/Skeleton";
 import { restoreFile, permanentlyDeleteFile } from '../../utils/driveApi';
 import { getTrashedFiles } from '../../utils/drivePagination';
 import { showErrorToast, showSuccessToast } from '../../utils/simpleToast';
@@ -22,7 +23,10 @@ interface TrashedItem {
 export function TrashScreen({ token, onClose }: TrashScreenProps) {
   const { t } = useTranslation();
   const [items, setItems] = useState<TrashedItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  // Loading starts TRUE so the first committed frame shows the skeleton —
+  // starting false flashed the "Trash is empty" state for one frame before
+  // the effect set loading on (RC-B).
+  const [isLoading, setIsLoading] = useState(true);
   const [isEmptying, setIsEmptying] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   
@@ -163,8 +167,11 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         {/* List */}
         <div className="flex-1 overflow-y-auto p-4 bg-white dark:bg-[#121212]">
           {isLoading ? (
-            <div className="flex justify-center py-20">
-              <div className="w-8 h-8 border-3 border-[#4285F4] border-t-transparent rounded-full animate-spin"></div>
+            // The list area is a definite-height flex child (dialog h-[70vh]
+            // flex-col), so h-full resolves and the stretch skeleton fills
+            // the whole region instead of leaving a blank band (RC-C).
+            <div role="status" aria-label={t('loading')} className="p-4 h-full">
+              <SkeletonRowList rows={6} variant="trash" stretch containerClassName="flex flex-col gap-2 h-full" />
             </div>
           ) : items.length === 0 ? (
             <div className="text-center py-20 text-gray-500 flex flex-col items-center">

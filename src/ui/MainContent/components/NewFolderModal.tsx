@@ -60,6 +60,7 @@ export function NewFolderModal({
             onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); }}
             className="w-full bg-gray-100 dark:bg-[#25262a] hover:bg-gray-200/70 dark:hover:bg-[#2c2d32] focus:bg-gray-200 dark:focus:bg-[#2c2d32] text-gray-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none transition-all duration-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
             placeholder={t('drive.folder_name_placeholder') || 'Folder name'}
+            spellCheck={false}
             autoFocus
           />
         </div>

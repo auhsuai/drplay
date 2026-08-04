@@ -93,8 +93,10 @@ export function SortDropdown({
               `}
             </style>
             
-            {/* White UP Arrow (Inverse animated) */}
-            <g className={`stroke-white ${isInitialMount.current ? (!sortOption.endsWith(' desc') ? 'opacity-0' : '') : (!sortOption.endsWith(' desc') ? 'anim-drain-up' : 'anim-fill-up')}`}>
+            {/* Gray UP Arrow (Inverse animated) — the inactive arrow must stay
+                visible per Material icon hierarchy (active = primary, inactive
+                = ~50% gray); pure white vanished on the white button. */}
+            <g className={`stroke-gray-400 ${isInitialMount.current ? (!sortOption.endsWith(' desc') ? 'opacity-0' : '') : (!sortOption.endsWith(' desc') ? 'anim-drain-up' : 'anim-fill-up')}`}>
               <path d="m3 8 4-4 4 4"/>
               <path d="M7 4v16"/>
             </g>
@@ -105,8 +107,8 @@ export function SortDropdown({
               <path d="M7 4v16"/>
             </g>
             
-            {/* White DOWN Arrow (Inverse animated) */}
-            <g className={`stroke-white ${isInitialMount.current ? (sortOption.endsWith(' desc') ? 'opacity-0' : '') : (sortOption.endsWith(' desc') ? 'anim-drain-down' : 'anim-fill-down')}`}>
+            {/* Gray DOWN Arrow (Inverse animated) — see the UP arrow note. */}
+            <g className={`stroke-gray-400 ${isInitialMount.current ? (sortOption.endsWith(' desc') ? 'opacity-0' : '') : (sortOption.endsWith(' desc') ? 'anim-drain-down' : 'anim-fill-down')}`}>
               <path d="m21 16-4 4-4-4"/>
               <path d="M17 20V4"/>
             </g>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Folder, ArrowLeft, HardDrive, Check, Search, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { SkeletonRowList } from "../components/Skeleton";
 import { db } from '../../db/db';
 import { getValidToken } from '../../utils/apiClient';
 import { getFileParents, getFileName } from '../../utils/driveApi';
@@ -93,7 +94,10 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
   const [currentFolderName, setCurrentFolderName] = useState(initialFolderName || t('drive.my_drive'));
   const [folderHistory, setFolderHistory] = useState<{id: string, name: string}[]>(initialFolderHistory);
   const [folders, setFolders] = useState<FolderItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  // Loading starts TRUE so the first committed frame shows the skeleton —
+  // starting false flashed the "no folders" empty state for one frame before
+  // the effect set loading on (RC-B).
+  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [apiSearchResults, setApiSearchResults] = useState<FolderItem[]>([]);
@@ -348,8 +352,12 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
         {/* Folder List */}
         <div className="flex-1 overflow-y-auto p-6 bg-white dark:bg-[#121212]">
           {isLoading && !isSearchingApi ? (
-            <div className="flex justify-center py-20">
-              <div className="w-8 h-8 border-3 border-[#4285F4] border-t-transparent rounded-full animate-spin"></div>
+            // The folder list is a definite-height flex child (dialog
+            // h-[75vh] flex-col), so h-full resolves and the stretch
+            // skeleton fills the whole region instead of leaving a blank
+            // band (RC-C).
+            <div role="status" aria-label={t('loading')} className="p-6 h-full">
+              <SkeletonRowList rows={6} variant="folder" containerClassName="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 h-full auto-rows-fr" />
             </div>
           ) : searchQuery.trim() && filteredFolders.length === 0 && apiSearchResults.length === 0 && !isSearchingApi ? (
             <div className="text-center py-20 text-gray-500">

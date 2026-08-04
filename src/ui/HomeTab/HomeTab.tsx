@@ -4,13 +4,14 @@ import { getRecentlyPlayed, getHeavyRotation, getRandomDiscoveries, getMostVisit
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
-import { Clock, Sparkles, Folder, Repeat, PlusCircle, ChevronRight } from "lucide-react";
+import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
 import greetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { PremiumCard } from "./components/PremiumCard";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 import { captureError } from "../../utils/errorLog";
+import { Skeleton, SkeletonCardGrid, SkeletonRowList } from "../components/Skeleton";
 
 const HOME_TAB_MODULE = 'HomeTab';
 // Fired by uploadManager after each completed upload (slice 1) — the delta
@@ -25,11 +26,12 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   currentTrack?: Track | null 
 }) {
   const { t, i18n } = useTranslation();
-  const [recent, setRecent] = useState<Track[]>([]);
-  const [heavy, setHeavy] = useState<Track[]>([]);
-  const [discover, setDiscover] = useState<Track[]>([]);
-  const [mostVisitedFolders, setMostVisitedFolders] = useState<FolderVisitEntry[]>([]);
-  const [recentlyAdded, setRecentlyAdded] = useState<Track[]>([]);
+  // null = first load still in flight (skeleton); [] = genuinely empty.
+  const [recent, setRecent] = useState<Track[] | null>(null);
+  const [heavy, setHeavy] = useState<Track[] | null>(null);
+  const [discover, setDiscover] = useState<Track[] | null>(null);
+  const [mostVisitedFolders, setMostVisitedFolders] = useState<FolderVisitEntry[] | null>(null);
+  const [recentlyAdded, setRecentlyAdded] = useState<Track[] | null>(null);
   const [showFullRecent, setShowFullRecent] = useState(false);
   // Independent from showFullRecent: the two full views are mutually exclusive
   // by construction (each grid card routes to exactly one of them), and keeping
@@ -136,7 +138,10 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   }, []);
 
   useEffect(() => {
-    const tracks = [...recent, ...heavy, ...discover, ...recentlyAdded];
+    // Spread without `?? []` would throw "null is not iterable" while any of
+    // the five states is still null on the first load — prefetch must be
+    // null-safe and only ever see real track arrays.
+    const tracks = [...(recent ?? []), ...(heavy ?? []), ...(discover ?? []), ...(recentlyAdded ?? [])];
     const ids = tracks.map(t => t.id).filter(Boolean);
     if (ids.length > 0) prefetchVisibleTracks(ids);
   }, [recent, heavy, discover, recentlyAdded]);
@@ -144,32 +149,44 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   const visibleCount = useResponsiveItems();
 
   if (showFullRecent) {
-    return <FullRecentView recent={recent} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
+    return <FullRecentView recent={recent ?? []} onBack={() => setShowFullRecent(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
   }
 
   if (showFullRecentlyAdded) {
-    return <FullRecentView recent={recentlyAdded} title={t('home.recently_added', 'Recently Added to Drive')} onBack={() => setShowFullRecentlyAdded(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
+    return <FullRecentView recent={recentlyAdded ?? []} title={t('home.recently_added', 'Recently Added to Drive')} onBack={() => setShowFullRecentlyAdded(false)} onPlay={onPlay} token={token} currentTrack={currentTrack} />;
   }
 
-  const quickAccess = recent.slice(0, visibleCount);
-  const discoverItems = discover.length > 0 ? discover.slice(0, visibleCount) : [];
-  const heavyItems = heavy.length > 0 ? heavy.slice(0, visibleCount) : [];
-  const recentlyAddedItems = recentlyAdded.length > 0 ? recentlyAdded.slice(0, visibleCount) : [];
+  const quickAccess = (recent ?? []).slice(0, visibleCount);
+  const discoverItems = (discover ?? []).length > 0 ? (discover ?? []).slice(0, visibleCount) : [];
+  const heavyItems = (heavy ?? []).length > 0 ? (heavy ?? []).slice(0, visibleCount) : [];
+  const recentlyAddedItems = (recentlyAdded ?? []).length > 0 ? (recentlyAdded ?? []).slice(0, visibleCount) : [];
 
   return (
     <main className="flex-1 bg-white dark:bg-[#0A0A0A] overflow-y-auto custom-scrollbar transition-colors duration-300">
       <div className="max-w-6xl mx-auto p-8 pb-32">
-        <header className="mb-10 mt-4 flex flex-col gap-1">
-           <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
-             {greeting}{userProfile?.name ? `, ${userProfile.name.split(' ')[0]}` : ''}
-           </h2>
-           <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
-             {subtitle}
-           </p>
-        </header>
+        {recent === null ? (
+          <div data-testid="home-greeting-skeleton" className="space-y-2 mb-10">
+            <Skeleton className="h-8 w-64" />
+            <Skeleton className="h-4 w-40" />
+          </div>
+        ) : (
+          <header className="mb-10 mt-4 flex flex-col gap-1">
+            <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+              {greeting}{userProfile?.name ? `, ${userProfile.name.split(' ')[0]}` : ''}
+            </h2>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+              {subtitle}
+            </p>
+          </header>
+        )}
         
         {/* QUICK ACCESS: Sleek List View */}
-        {quickAccess.length > 0 && (
+        {recent === null ? (
+          <div data-testid="home-skeleton-section" className="mb-12">
+            <Skeleton className="h-4 w-32 mb-4" />
+            <SkeletonCardGrid rows={1} cols={visibleCount} />
+          </div>
+        ) : quickAccess.length > 0 ? (
           <div className="mb-12">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
@@ -192,28 +209,21 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
               })}
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* RECENTLY ADDED TO DRIVE */}
-        {recentlyAdded.length > 0 && (
+        {recentlyAdded === null ? (
+          <div data-testid="home-skeleton-section" className="mb-12">
+            <Skeleton className="h-4 w-32 mb-4" />
+            <SkeletonCardGrid rows={1} cols={visibleCount} />
+          </div>
+        ) : recentlyAdded.length > 0 ? (
           <div className="mb-12">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                 <PlusCircle className="w-4 h-4" />
                 {t('home.recently_added', 'Recently Added to Drive')}
               </h3>
-              {/* Explicit entry point: the trailing overlay card only appears
-                  when the list overflows visibleCount, so short lists had no
-                  way to reach the full view at all. Always visible while the
-                  section renders; the overlay remains as a second entry. */}
-              <button
-                data-testid="view-all-recently-added"
-                onClick={() => setShowFullRecentlyAdded(true)}
-                className="text-sm font-semibold text-[#4285F4] hover:underline flex items-center gap-1 transition-colors"
-              >
-                {t('view_all', 'View All')}
-                <ChevronRight className="w-4 h-4" />
-              </button>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {recentlyAddedItems.map((track, index) => {
@@ -237,10 +247,15 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
               })}
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* JUMP BACK IN: Most Visited Folders */}
-        {mostVisitedFolders.length > 0 && (
+        {mostVisitedFolders === null ? (
+          <div data-testid="home-skeleton-section" className="mb-12">
+            <Skeleton className="h-4 w-32 mb-4" />
+            <SkeletonRowList rows={4} variant="folder" containerClassName="grid grid-cols-2 md:grid-cols-4 gap-4" />
+          </div>
+        ) : mostVisitedFolders.length > 0 ? (
           <div className="mb-12">
             <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
               <Folder className="w-4 h-4" />
@@ -268,10 +283,15 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
               ))}
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* HEAVY ROTATION */}
-        {heavyItems.length > 0 && (
+        {heavy === null ? (
+          <div data-testid="home-skeleton-section" className="mb-12">
+            <Skeleton className="h-4 w-32 mb-4" />
+            <SkeletonCardGrid rows={1} cols={visibleCount} />
+          </div>
+        ) : heavyItems.length > 0 ? (
           <div className="mb-12">
              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
               <Repeat className="w-4 h-4" />
@@ -283,10 +303,15 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
               ))}
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* DISCOVER: Premium Cards */}
-        {discoverItems.length > 0 && (
+        {discover === null ? (
+          <div data-testid="home-skeleton-section" className="mb-12">
+            <Skeleton className="h-4 w-32 mb-4" />
+            <SkeletonCardGrid rows={1} cols={visibleCount} />
+          </div>
+        ) : discoverItems.length > 0 ? (
           <div className="mb-12">
              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
               <Sparkles className="w-4 h-4" />
@@ -298,7 +323,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
               ))}
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </main>
   );

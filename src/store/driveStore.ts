@@ -31,7 +31,10 @@ export const useDriveStore = create<DriveState>((set) => ({
   currentFolderName: MY_DRIVE_TAB,
   folderHistory: [],
   sortOption: 'name',
-  isLoadingTracks: false,
+  // Loading starts TRUE so the first committed frame of My Drive is the
+  // skeleton — useDriveExplorer turns it off once the folder fetch settles.
+  // Starting false flashed the "no audio" empty state for one frame (RC-B).
+  isLoadingTracks: true,
 
   setAppRootFolder: (appRootFolder) => set({ appRootFolder }),
   setCurrentFolderId: (currentFolderId) => set({ currentFolderId }),

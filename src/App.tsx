@@ -1,5 +1,6 @@
 import React, { useState, useCallback, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
@@ -226,7 +227,11 @@ function App() {
         />
 
         <div id="content-area" className="flex-1 relative overflow-hidden flex flex-col">
-          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-500">{t('loading', 'Loading...')}</div>}>
+          {/* Lazy tab chunks load on first visit — a compact blue spinner
+              (the familiar pre-skeleton loading) instead of a heavy skeleton
+              list: settings and other non-list tabs have no file rows to
+              mirror, so a skeleton would just sit there unrelated. */}
+          <Suspense fallback={<div role="status" aria-label={t('loading')} className="flex-1 flex items-center justify-center"><Loader2 className="animate-spin h-10 w-10 text-[#4285F4] stroke-[1.5]" /></div>}>
             {/* HomeTab stays mounted across tab switches (keep-alive): hiding
                 it with display:none instead of unmounting prevents the
                 refetch-on-remount churn of every home data load

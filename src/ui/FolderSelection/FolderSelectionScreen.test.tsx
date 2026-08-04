@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Profiler } from 'react';
 import { FolderSelectionScreen } from './FolderSelectionScreen';
 
 vi.mock('react-i18next', () => ({
@@ -58,6 +59,19 @@ function installListFolderChildrenMock() {
         signal?.addEventListener('abort', () => {
           reject(new DOMException('The operation was aborted', 'AbortError'));
         });
+      })
+  );
+}
+
+// Deferred promise for the debounced API search, used to pin isLoading=true
+// and isSearchingApi=true at the same time (search while folder fetch pending).
+let searchDeferredCalls: DeferredCall[] = [];
+
+function installSearchFoldersMock() {
+  mocks.driveApi.searchFolders.mockImplementation(
+    (_token: string, _query: string, signal?: AbortSignal) =>
+      new Promise<Array<{ id: string; name: string }>>((resolve, reject) => {
+        searchDeferredCalls.push({ resolve, reject, signal });
       })
   );
 }
@@ -173,5 +187,132 @@ describe('FolderSelectionScreen', () => {
     } finally {
       getItemSpy.mockRestore();
     }
+  });
+});
+
+describe('FolderSelectionScreen skeleton loading', () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    searchDeferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    installSearchFoldersMock();
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue('test-token');
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('shows 6 skeleton rows inside a status region instead of the spinner while loading folders', async () => {
+    renderScreen();
+    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+
+    const rows = await screen.findAllByTestId('skeleton-row');
+    expect(rows).toHaveLength(6);
+    expect(screen.getByRole('status', { name: 'loading' })).toBeTruthy();
+    expect(document.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('keeps the "Searching deeper..." branch while an API search is in flight (no skeleton)', async () => {
+    renderScreen();
+    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+
+    fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'abc' } });
+    await waitFor(() => expect(searchDeferredCalls).toHaveLength(1));
+
+    expect(screen.getByText('folder_selection.searching_deeper')).not.toBeNull();
+    expect(screen.queryAllByTestId('skeleton-row')).toHaveLength(0);
+    expect(document.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('renders the real folder list once loading finishes', async () => {
+    renderScreen();
+    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+
+    await act(async () => {
+      deferredCalls[0].resolve([{ id: 'f1', name: 'Folder 1' }]);
+    });
+
+    expect(await screen.findByText('Folder 1')).not.toBeNull();
+    expect(screen.queryAllByTestId('skeleton-row')).toHaveLength(0);
+  });
+
+  it('keeps the empty state when no folders are returned', async () => {
+    renderScreen();
+    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+
+    await act(async () => {
+      deferredCalls[0].resolve([]);
+    });
+
+    expect(await screen.findByText('drive.no_folders')).not.toBeNull();
+    expect(screen.queryAllByTestId('skeleton-row')).toHaveLength(0);
+  });
+
+  it('never flashes the "no folders" empty state before the skeleton (first commit is already loading)', async () => {
+    // The flash lives in the FIRST commit (isLoading starts false) which
+    // act() flushes away before returning. Profiler.onRender fires
+    // synchronously after EVERY commit — reading the DOM there captures each
+    // committed frame in order, including frame 1.
+    const markers: string[] = [];
+    const recordMarkers = () => {
+      const hasSkeleton = document.querySelector('[data-testid="skeleton-row"]') !== null;
+      const hasEmpty = (document.body.textContent ?? '').includes('drive.no_folders');
+      if (hasSkeleton && !markers.includes('skeleton')) markers.push('skeleton');
+      if (hasEmpty && !markers.includes('empty')) markers.push('empty');
+    };
+
+    const { unmount } = render(
+      <Profiler id="folder-frame-probe" onRender={recordMarkers}>
+        <FolderSelectionScreen
+          token="test-token"
+          onSelectFolder={vi.fn()}
+          initialFolderId="folderB"
+          initialFolderHistory={[{ id: 'root', name: 'My Drive' }]}
+        />
+      </Profiler>
+    );
+    await act(async () => {});
+    unmount();
+
+    expect(markers).toContain('skeleton');
+    expect(markers).not.toContain('empty');
+  });
+
+  it('grid: the loading skeleton mirrors the real folder grid (3-col, h-full, auto-rows-fr)', async () => {
+    renderScreen();
+    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+
+    const status = screen.getByRole('status', { name: 'loading' });
+    // The folder list is a definite-height flex child (overlay root is
+    // fixed inset-0, dialog h-[75vh]) so h-full resolves here.
+    expect(status.className).toContain('h-full');
+    const rows = screen.getAllByTestId('skeleton-row');
+    expect(rows).toHaveLength(6);
+    // The skeleton container mirrors the real list container
+    // (FolderSelectionScreen.tsx:393 grid grid-cols-1 sm:grid-cols-2
+    // lg:grid-cols-3 gap-3) so the shape does not jump when data loads.
+    const container = rows[0].parentElement!;
+    expect(container.className).toContain('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3');
+    expect(container.className).toContain('auto-rows-fr');
+    expect(container.className).toContain('h-full');
+  });
+
+  it('never shows the empty "no folders" state while loading with a search query typed (API-search branch wins)', async () => {
+    renderScreen();
+    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+
+    // While the folder fetch is still pending, typing a query must not swap
+    // into the empty state: the loading/API-search branches take precedence
+    // over every empty-state branch (drive.no_folders).
+    fireEvent.change(screen.getByPlaceholderText('Search...'), { target: { value: 'abc' } });
+    await waitFor(() => expect(searchDeferredCalls).toHaveLength(1));
+
+    expect(screen.queryByText('drive.no_folders')).toBeNull();
+    expect(screen.queryAllByTestId('skeleton-row').length).toBe(0);
+    expect(screen.getByText('folder_selection.searching_deeper')).not.toBeNull();
   });
 });
