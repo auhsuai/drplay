@@ -7,9 +7,16 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tests](https://img.shields.io/badge/tests-960%2B%20passing-3fb950)](#testing)
 
-![DrPlay screenshot](docs/screenshot.png)
+![DrPlay home (dark)](docs/screenshot-home-dark.png)
+![DrPlay home (light)](docs/screenshot-home-light.png)
 
-> Screenshot placeholder — replace `docs/screenshot.png` with a real capture (light + dark mode).
+<p align="center">
+  <img src="docs/screenshot-login-light.png" width="45%" alt="Login (light)" />
+  <img src="docs/screenshot-login-dark.png" width="45%" alt="Login (dark)" />
+</p>
+
+> Screenshots are demo captures (mock library data). My Drive screens will be
+> added once a real capture with actual account data is available.
 
 DrPlay is a **Windows desktop app** (Windows 10 and later) that turns your **Google Drive** into a music library. No downloading hundreds of gigabytes first — it streams straight from Drive, builds your library locally, and keeps everything on your machine.
 
