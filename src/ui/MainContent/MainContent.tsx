@@ -279,7 +279,7 @@ export const MainContent = React.memo(function MainContent({
 
             <div
               data-testid="main-pagination-chrome"
-              className={`transition-opacity duration-200 ${isDragActive ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+              className={`sticky bottom-0 py-1 transition-opacity duration-200 ${isDragActive ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
             >
               <PaginationControls
                 currentPage={explorer.currentPage}

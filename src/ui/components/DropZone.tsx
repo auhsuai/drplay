@@ -10,10 +10,6 @@ import { captureError } from '../../utils/errorLog';
 import { basename } from '../../utils/pathUtils';
 
 const DROPZONE_MODULE = 'DropZone';
-// Overlay must sit above every other layer (modals use z-50); Tauri's native
-// drag-drop events are not DOM events, so the overlay only needs to LOOK like
-// a mask — pointer-events-none keeps it from blocking clicks.
-const OVERLAY_Z_CLASS = 'z-[10000]';
 // Bus between DropZone and folder cards: the OS drag is a Tauri event, not a
 // DOM event, so cards cannot react via :hover. DropZone announces the hovered
 // folder id; each folder card compares it against its own id.
@@ -173,7 +169,9 @@ export interface DropZoneProps {
 
 export function DropZone({ token }: DropZoneProps) {
   const { t } = useTranslation();
-  const [overlayRect, setOverlayRect] = useState<OverlayRect | null>(null);
+  // Rect tracking only exists to hit-test the drop region (and keep the
+  // state machinery alive); no overlay is rendered from it anymore.
+  const [, setOverlayRect] = useState<OverlayRect | null>(null);
 
   useEffect(() => {
     // Dropping before login is meaningless: the seeds would fail auth anyway.
@@ -273,18 +271,7 @@ export function DropZone({ token }: DropZoneProps) {
     };
   }, [token, t]);
 
-  if (overlayRect === null) return null;
-
-  return (
-    <div
-      data-testid="drop-overlay"
-      className={`fixed ${OVERLAY_Z_CLASS} bg-black/50 pointer-events-none`}
-      style={{
-        left: overlayRect.left,
-        top: overlayRect.top,
-        width: overlayRect.width,
-        height: overlayRect.height,
-      }}
-    />
-  );
+  // The dim overlay was removed on user feedback — dragging files in must not
+  // darken the whole app. Drop listeners above stay fully functional.
+  return null;
 }

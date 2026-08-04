@@ -175,7 +175,9 @@ export const SongCard = React.memo(function SongCard({
     : '';
   // Shared by the idle and uploading title rows; the uploading row adds
   // flex-1 min-w-0 so the h3 truncates instead of pushing the ring out.
-  const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? 'text-[#4285F4]!' : 'text-gray-800 dark:text-gray-200'}`;
+  // Drag-over mirrors the real group-hover accent on the title too — during
+  // an OS drag there is no :hover, so the accent must be forced on.
+  const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isDragHovered || isFlashOn || isPlaying ? 'text-[#4285F4]!' : 'text-gray-800 dark:text-gray-200'} ${isDragHovered ? '' : 'group-hover:text-[#4285F4]'}`;
 
   React.useEffect(() => {
     if (isHighlighted && cardRef.current) {

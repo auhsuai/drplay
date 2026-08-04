@@ -23,7 +23,7 @@ export function PaginationControls({
   if (totalPages <= 1) return null;
 
   return (
-    <div className={`sticky bottom-0 w-full flex justify-center items-end pb-0 pt-6 pointer-events-none ${isEditingPage ? 'z-50' : 'z-20'}`}>
+    <div className={`w-full flex justify-center items-end pb-1 pointer-events-none ${isEditingPage ? 'z-50' : 'z-20'}`}>
       <div className="flex items-center justify-center gap-3 sm:gap-6 pointer-events-auto pb-1 w-full max-w-[400px]">
         <div className="flex justify-end">
           <button 
@@ -32,7 +32,7 @@ export function PaginationControls({
               setCurrentPage(p => p - 1);
               setTimeout(() => onScrollTop(), 0);
             }}
-            className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
+            className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
           >
             {t('playlist.prev', 'Previous')}
           </button>
@@ -107,7 +107,7 @@ export function PaginationControls({
               setCurrentPage(p => p + 1);
               setTimeout(() => onScrollTop(), 0);
             }}
-            className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:opacity-40 disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
+            className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
           >
             {t('playlist.next', 'Next')}
           </button>

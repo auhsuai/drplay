@@ -181,44 +181,32 @@ describe('DropZone', () => {
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
-  it('shows a mask scoped to the [data-drop-region] rect on over (no inset-0 full-window dim) and hides it on leave', async () => {
+  it('guard: the dim drag overlay is gone (removed on user feedback) — drop listeners still register', async () => {
     installDropRegion();
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
     emit({ payload: { type: 'over', position: { x: 100, y: 200 } } });
-    const overlay = screen.getByTestId(OVERLAY_TESTID);
-    expect(overlay.textContent).toBe('');
-    expect(overlay.querySelector('svg, img, p')).toBeNull();
-    expect(overlay.className).toContain('fixed');
-    expect(overlay.className).not.toContain('inset-0');
-    expect(overlay.className).toContain('z-[10000]');
-    expect(overlay.className).toContain('bg-black/50');
-    expect(overlay.className).toContain('pointer-events-none');
-    expect(overlay.className).not.toContain('flex');
-    // Overlay must cover exactly the file-list rect, not the whole window.
-    expect(overlay.style.left).toBe('0px');
-    expect(overlay.style.top).toBe('100px');
-    expect(overlay.style.width).toBe('800px');
-    expect(overlay.style.height).toBe('500px');
+    // No mask may come back, with or without a drag in flight.
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
     emit({ payload: { type: 'leave' } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
-  it('shows the overlay on enter (Tauri emits enter before over)', async () => {
+  it('guard: no dim overlay on enter either (Tauri emits enter before over)', async () => {
     installDropRegion();
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
     emit({ payload: { type: 'enter', paths: ['C:\\Music\\a.mp3'], position: { x: 100, y: 200 } } });
-    expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
-  it('keeps the overlay stable across repeated over events (no flicker)', async () => {
+  it('guard: no overlay across repeated over events either (mask is gone entirely)', async () => {
     installDropRegion();
     render(<DropZone token="tok-1" />);
     await waitFor(() => expect(capturedHandler).not.toBeNull());
     emit({ payload: { type: 'over', position: { x: 100, y: 200 } } });
     emit({ payload: { type: 'over', position: { x: 110, y: 210 } } });
-    expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
   it('does NOT dim outside the drop region (sidebar/playerbar/header area): no overlay, drag still active', async () => {
@@ -318,7 +306,7 @@ describe('DropZone', () => {
     expect(elementFromPointMock).toHaveBeenCalledWith(108, 200);
   });
 
-  it('switches immediately between folder hover and the region overlay as the drag moves', async () => {
+  it('guard: folder hover vs region switching works without any dim overlay', async () => {
     installDropRegion();
     elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
     render(<DropZone token="tok-1" />);
@@ -327,7 +315,7 @@ describe('DropZone', () => {
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
     elementFromPointMock.mockReturnValue(null);
     emit({ payload: { type: 'over', position: { x: 110, y: 210 } } });
-    expect(screen.getByTestId(OVERLAY_TESTID)).toBeTruthy();
+    expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
     elementFromPointMock.mockReturnValue(folderCardElement('folder-1'));
     emit({ payload: { type: 'over', position: { x: 120, y: 220 } } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
