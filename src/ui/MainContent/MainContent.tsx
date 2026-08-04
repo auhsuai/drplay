@@ -83,6 +83,20 @@ export const MainContent = React.memo(function MainContent({
   // file-list container also doubles as the scoped dim region ([data-drop-region]).
   const [isDragActive, setIsDragActive] = React.useState(false);
 
+  // Skeleton rows must fill the whole list area on every screen size — a
+  // fixed count leaves a blank band on tall/wide displays. Estimate the
+  // count from the viewport (row ≈ 72px: 48px icon + p-3 padding) and
+  // recompute on resize, like Spotify/YouTube skeletons do.
+  const [skeletonRows, setSkeletonRows] = React.useState(() =>
+    Math.max(4, Math.ceil((window.innerHeight - HEADER_CHROME_HEIGHT_PX) / 72))
+  );
+  React.useEffect(() => {
+    const onResize = () =>
+      setSkeletonRows(Math.max(4, Math.ceil((window.innerHeight - HEADER_CHROME_HEIGHT_PX) / 72)));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   const explorer = useDriveExplorer(
     currentFolderId,
     currentFolderName,
@@ -247,7 +261,7 @@ export const MainContent = React.memo(function MainContent({
           // SkeletonRowList (h-full + flex-1) and its rows (flex-1) share the
           // space so the skeleton covers the whole loading region.
           <div role="status" aria-label={t('loading', 'Loading...')} className="flex flex-col" style={{ minHeight: `calc(100% - ${HEADER_CHROME_HEIGHT_PX}px)` }}>
-            <SkeletonRowList rows={8} stretch className="flex-1" />
+            <SkeletonRowList rows={skeletonRows} stretch className="flex-1" />
           </div>
         ) : explorer.filteredItems.length === 0 ? (
           <div className="text-gray-500 py-10 text-center">
