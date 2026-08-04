@@ -18,6 +18,9 @@ const MENU_ITEM_CLASS = "w-full text-left px-3 py-2 text-sm text-gray-700 dark:t
 
 export interface UploadButtonProps {
   token?: string | null;
+  // Uploads only make sense inside My Drive; elsewhere the button is dimmed
+  // and shows a not-allowed cursor instead of opening the menu.
+  disabled?: boolean;
 }
 
 // The dialog returns string[] with multiple:true and string with
@@ -33,7 +36,7 @@ function normalizePaths(selected: unknown): string[] {
   return [];
 }
 
-export function UploadButton({ token }: UploadButtonProps) {
+export function UploadButton({ token, disabled = false }: UploadButtonProps) {
   const { t } = useTranslation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -62,6 +65,7 @@ export function UploadButton({ token }: UploadButtonProps) {
 
   const handleToggleMenu = (event: React.MouseEvent) => {
     event.stopPropagation();
+    if (disabled) return;
     setIsMenuOpen((prev) => !prev);
   };
 
@@ -116,10 +120,11 @@ export function UploadButton({ token }: UploadButtonProps) {
     <div className="relative shrink-0" ref={wrapperRef} onClick={(e) => e.stopPropagation()}>
       <button
         onClick={handleToggleMenu}
-        title={t('upload.button_title')}
+        title={disabled ? t('upload.disabled_title', 'Open My Drive to upload') : t('upload.button_title')}
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
-        className={TOGGLE_BUTTON_CLASS}
+        aria-disabled={disabled}
+        className={`${TOGGLE_BUTTON_CLASS} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
       >
         {/* CloudUpload = lucide "cloud-arrow-up"; UploadCloud is the deprecated alias. */}
         <CloudUpload className="w-5 h-5" />

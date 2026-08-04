@@ -228,8 +228,17 @@ export function getUploadProgress(id: string): number | undefined {
 // - 'uploading'        → the item itself is being uploaded (dim + spinner)
 // - 'parent-uploading' → a child of this folder is uploading (spinner only,
 //                        the folder already exists on Drive — no dim)
+// - 'uploaded'         → the item finished uploading recently (green check,
+//                        dismissed on play or after UPLOADED_TINT_MS)
 // - 'none'             → idle
-export type UploadState = 'none' | 'uploading' | 'parent-uploading';
+export type UploadState = 'none' | 'uploading' | 'parent-uploading' | 'uploaded';
+
+// How long the "just uploaded" green check stays visible before the row
+// returns to the idle MoreMenu state.
+const UPLOADED_TINT_MS = 10_000;
+// Ids (entry or drive id) that finished uploading recently — presentation
+// only, cleared by timer or when the user plays the item.
+const recentlyDoneIds = new Set<string>();
 
 export function getUploadState(id: string): UploadState {
   // Mirrors getUploadingIds' coverage (entry id + driveId + parentId) but
@@ -242,7 +251,38 @@ export function getUploadState(id: string): UploadState {
     if (entry.id === id || entry.driveId === id) return 'uploading';
     if (entry.parentId === id && id !== ROOT_FOLDER_ID) isParent = true;
   }
-  return isParent ? 'parent-uploading' : 'none';
+  // A folder that just finished must still show its child-upload spinner while
+  // a child uploads under it — parent-uploading beats the transient check.
+  if (isParent) return 'parent-uploading';
+  if (recentlyDoneIds.has(id)) return 'uploaded';
+  return 'none';
+}
+
+// Mark an id as just-finished so the row shows the green check; auto-clears
+// after UPLOADED_TINT_MS. No immediate notify: the caller (markComplete) runs
+// this right before finishEntry, whose own notify picks up the new state.
+function markRecentlyDone(id: string): void {
+  recentlyDoneIds.add(id);
+  window.setTimeout(() => {
+    recentlyDoneIds.delete(id);
+    notify();
+  }, UPLOADED_TINT_MS);
+}
+
+// Hide the green check early (e.g. the user clicked the row to play it) and
+// return the row to its idle MoreMenu state.
+export function dismissUploaded(id: string): void {
+  if (recentlyDoneIds.delete(id)) notify();
+}
+
+// Clear EVERY "just uploaded" check at once (e.g. the user left the My Drive
+// tab and MainContent unmounted) — the tint is presentation-only, so a fresh
+// visit must show no stale checks. No-op (and no notify) when already empty,
+// same silent pattern as dismissUploaded.
+export function clearUploadedTint(): void {
+  if (recentlyDoneIds.size === 0) return;
+  recentlyDoneIds.clear();
+  notify();
 }
 
 export function subscribe(cb: () => void): () => void {
@@ -625,6 +665,11 @@ async function markDone(entry: InternalEntry, driveItem: DriveFileItem): Promise
   }
   await dbRowOp(() => db.files.put(realRow(entry, driveItem)), 'real-row');
   entry.status = 'done';
+  // The row shows a green check for a short while after finishing — a driveId
+  // is the id the live list knows the item by, so mark that one. Notify runs
+  // BEFORE finishEntry removes the entry so the final status snapshot still
+  // shows 'done'.
+  markRecentlyDone(driveItem.id);
   await finishEntry(entry);
   window.dispatchEvent(new CustomEvent<{ count: number }>(DRIVE_FILES_CHANGED_EVENT, { detail: { count: 1 } }));
 }

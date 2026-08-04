@@ -13,7 +13,7 @@ import { NewFolderModal } from './components/NewFolderModal';
 
 import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
 import { useEventListener } from "../../hooks/useEventListener";
-import { isUploading } from "../../utils/uploadManager";
+import { isUploading, clearUploadedTint } from "../../utils/uploadManager";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
@@ -114,6 +114,14 @@ export const MainContent = React.memo(function MainContent({
 
   useEffect(() => {
     isInitialMount.current = false;
+  }, []);
+
+  // Leaving the My Drive tab unmounts MainContent — clear every transient
+  // "uploaded" check so a fresh visit shows no stale completion tint.
+  useEffect(() => {
+    return () => {
+      clearUploadedTint();
+    };
   }, []);
 
   // Keyboard shortcuts

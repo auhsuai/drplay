@@ -38,7 +38,7 @@ const mockedDriveFetch = vi.mocked(driveFetch);
 const FOLDER_ID = 'pin-folder';
 const TOKEN = 'pin-token';
 
-type MockUploadState = 'none' | 'uploading' | 'parent-uploading';
+type MockUploadState = 'none' | 'uploading' | 'parent-uploading' | 'uploaded';
 
 // Captured by the subscribe mock; the hook wraps it with its module-level
 // version bump, so invoking it re-runs the pin partition (RED→GREEN proof
@@ -132,6 +132,37 @@ describe('useDriveExplorer upload pin: uploading items are pinned to the top', (
     });
 
     expect(result.current.filteredItems.map(i => i.id)).toEqual(['id-z1', 'id-z2', 'id-a', 'id-m']);
+  });
+
+  it('pins a just-finished ("uploaded") item ABOVE uploading items and the rest (tint must be immediately visible)', async () => {
+    await db.files.bulkPut([
+      makeFile('id-a', 'A.mp3'),
+      makeFile('id-u', 'Zed Uploading.mp3'),
+      makeFile('id-done', 'M Done.mp3'),
+    ]);
+    mockUploadStates({ 'id-done': 'uploaded', 'id-u': 'uploading' });
+
+    const { result } = renderExplorer();
+    await waitFor(() => {
+      expect(result.current.filteredItems).toHaveLength(3);
+    });
+
+    // uploaded trước, uploading sau, rồi restItems theo sort bình thường —
+    // file vừa tải xong nổi bật nhất + check thấy ngay.
+    expect(result.current.filteredItems.map(i => i.id)).toEqual(['id-done', 'id-u', 'id-a']);
+    expect(result.current.currentItems.map(i => i.id)).toEqual(['id-done', 'id-u', 'id-a']);
+  });
+
+  it('does NOT pin an item whose state is none (tint dismissed/expired → sorted position)', async () => {
+    await db.files.bulkPut([makeFile('id-a', 'A.mp3'), makeFile('id-b', 'B.mp3')]);
+    mockUploadStates({ 'id-b': 'none' });
+
+    const { result } = renderExplorer();
+    await waitFor(() => {
+      expect(result.current.filteredItems).toHaveLength(2);
+    });
+
+    expect(result.current.filteredItems.map(i => i.id)).toEqual(['id-a', 'id-b']);
   });
 
   it('does NOT pin when a global search query is active (search results keep their own sort)', async () => {

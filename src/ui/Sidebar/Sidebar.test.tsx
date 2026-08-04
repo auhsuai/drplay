@@ -438,18 +438,22 @@ describe('Sidebar UploadButton (header "+")', () => {
     vi.clearAllMocks();
   });
 
+  // Uploads only make sense while My Drive is active — these tests pin the
+  // active tab so the button is enabled (title = upload.button_title).
+  const myDriveProps = { activeTab: 'My Drive', token: 'tok-1' } as const;
+
   it('renders the UploadButton when the sidebar is expanded', () => {
-    render(<Sidebar {...baseProps({ token: 'tok-1' })} />);
+    render(<Sidebar {...baseProps(myDriveProps)} />);
     expect(screen.getByTitle('upload.button_title')).toBeTruthy();
   });
 
   it('hides the UploadButton when the sidebar is collapsed', () => {
-    render(<Sidebar {...baseProps({ isSidebarOpen: false, token: 'tok-1' })} />);
+    render(<Sidebar {...baseProps({ isSidebarOpen: false, token: 'tok-1', activeTab: 'My Drive' })} />);
     expect(screen.queryByTitle('upload.button_title')).toBeNull();
   });
 
   it('pushes the + to the right of the header via an ml-auto wrapper (aligned with the nav hover zone, not trailing the DrPlay text)', () => {
-    render(<Sidebar {...baseProps({ token: 'tok-1' })} />);
+    render(<Sidebar {...baseProps(myDriveProps)} />);
     const btn = screen.getByTitle('upload.button_title');
     // The button itself lives inside UploadButton's own div — the ml-auto
     // wrapper sits between it and the header <h1>.
@@ -457,7 +461,7 @@ describe('Sidebar UploadButton (header "+")', () => {
   });
 
   it('offsets the + wrapper right by -mr-3 so its right edge aligns flush with the nav hover zone (header px-7 28px − 12px = nav px-4 16px)', () => {
-    render(<Sidebar {...baseProps({ token: 'tok-1' })} />);
+    render(<Sidebar {...baseProps(myDriveProps)} />);
     const btn = screen.getByTitle('upload.button_title');
     const wrapper = btn.closest('.ml-auto');
     expect(wrapper).not.toBeNull();
@@ -469,6 +473,15 @@ describe('Sidebar UploadButton (header "+")', () => {
   it('renders no UploadButton when not logged in (no token), even expanded', () => {
     render(<Sidebar {...baseProps({ token: null })} />);
     expect(screen.queryByTitle('upload.button_title')).toBeNull();
+  });
+
+  it('dims the UploadButton and disables it while a non-MyDrive tab is active', () => {
+    render(<Sidebar {...baseProps({ activeTab: 'Liked Songs' })} />);
+    // The i18n mock resolves t(key, fallback) to the fallback string.
+    const btn = screen.getByTitle('Open My Drive to upload');
+    expect(btn.className).toContain('opacity-40');
+    expect(btn.className).toContain('cursor-not-allowed');
+    expect(btn.getAttribute('aria-disabled')).toBe('true');
   });
 });
 

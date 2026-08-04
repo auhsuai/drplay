@@ -13,11 +13,12 @@ vi.mock('../../../utils/metadata', () => ({
 // Slice 2: cancelUpload is imported (runtime) by SongCard now. Spy on the real
 // module's export (importOriginal spread keeps isUploading/subscribe real for
 // MoreMenu) so the X-cancel click can be asserted without side effects.
-const { cancelUploadMock } = vi.hoisted(() => ({ cancelUploadMock: vi.fn() }));
+const { cancelUploadMock, dismissUploadedMock } = vi.hoisted(() => ({ cancelUploadMock: vi.fn(), dismissUploadedMock: vi.fn() }));
 
 vi.mock('../../../utils/uploadManager', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../utils/uploadManager')>()),
   cancelUpload: cancelUploadMock,
+  dismissUploaded: dismissUploadedMock,
 }));
 
 const mockedFetch = vi.mocked(getTrackMetadata);
@@ -703,6 +704,7 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
       pictureFormat: undefined,
     } as never);
     cancelUploadMock.mockClear();
+    dismissUploadedMock.mockClear();
   });
 
   afterEach(() => {
@@ -738,21 +740,19 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
     expect(circle?.getAttribute('transform')).toContain('rotate(-90');
   });
 
-  it("'uploading' → ring sits BESIDE the title h3 (same flex row, 8px gap); X stays in the MoreMenu slot", () => {
+  it("'uploading' → ring renders in the trailing menu slot (NOT beside the title); X cancel sits inside the ring", () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} />,
     );
     const h3 = container.querySelector('h3');
     const svg = ringSvg(container);
     expect(h3).not.toBeNull();
-    // Ring and title share the same flex row (gap-2 = 8px between them).
-    expect(h3?.parentElement).toBe(svg?.parentElement);
-    expect(h3?.parentElement?.className).toContain('flex items-center gap-2 min-w-0');
-    expect(svg?.getAttribute('class')).toContain('shrink-0');
+    // The title row is a plain h3 now — the ring left the title area.
+    expect(h3?.parentElement?.className).not.toContain('flex items-center gap-2');
     const x = cancelButton(container);
     expect(x).not.toBeNull();
-    // The X is NOT part of the title row — it renders in the trailing menu slot.
-    expect(x?.parentElement).not.toBe(h3?.parentElement);
+    // Ring and X share the same wrapper — the trailing menu slot.
+    expect(x?.parentElement).toBe(svg?.parentElement);
   });
 
   it("'uploading' + uploadProgress undefined → ring at 0% (no indeterminate state, no % text)", () => {
@@ -799,17 +799,46 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
     expect(onPlay).not.toHaveBeenCalled();
   });
 
-  it('X button keeps WCAG 2.5.8 minimum target size (p-1.5 + w-4 h-4 icon = 28px hit area)', () => {
+  it('X cancel is hidden inside the ring by default and revealed on hover (w-3 h-3 fits the 20px ring)', () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.3} />,
     );
     const x = cancelButton(container) as Element;
-    expect(x.className).toContain('p-1.5');
+    expect(x.className).toContain('absolute inset-0');
+    expect(x.className).toContain('opacity-0');
     // jsdom exposes svg.className as SVGAnimatedString — read the class
     // attribute instead (same for the ring svg assertions below).
     const icon = x.querySelector('.lucide-x');
-    expect(icon?.getAttribute('class')).toContain('w-4');
-    expect(icon?.getAttribute('class')).toContain('h-4');
+    expect(icon?.getAttribute('class')).toContain('w-3');
+    expect(icon?.getAttribute('class')).toContain('h-3');
+  });
+
+  it("'uploaded' → green check replaces the MoreMenu trigger; play dismisses the tint (MoreMenu returns)", () => {
+    const onPlay = vi.fn();
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploaded" onPlay={onPlay} />,
+    );
+    // No menu, no X — a blue-green check in the menu slot instead.
+    expect(menuButton(container)).toBeNull();
+    expect(cancelButton(container)).toBeNull();
+    // lucide v1 renders Check with class 'lucide-check' — the single-tick
+    // check (user design), not the CircleCheck circle variant.
+    const check = container.querySelector('.lucide-check');
+    expect(check).not.toBeNull();
+    expect(check?.getAttribute('class')).toContain('text-[#4285F4]');
+
+    // Clicking the row to play clears the tint via dismissUploaded.
+    fireEvent.click(container.querySelector('.p-3') as Element);
+    expect(dismissUploadedMock).toHaveBeenCalledTimes(1);
+    expect(dismissUploadedMock).toHaveBeenCalledWith('track-1');
+    expect(onPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("'uploaded' + hideMenu → no check rendered (hideMenu wins)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploaded" hideMenu />,
+    );
+    expect(container.querySelector('.lucide-check')).toBeNull();
   });
 
   it("'parent-uploading' → no X, MoreMenu still rendered, no ring", () => {
@@ -835,7 +864,7 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
     expect(cancelButton(container)).toBeNull();
   });
 
-  it('long title stays truncated (ellipsis) and the ring never gets squeezed (h3 flex-1 + ring shrink-0)', () => {
+  it('long title stays truncated (ellipsis); the ring lives in the menu slot, never squeezed by the title', () => {
     const { container } = render(
       <SongCard
         {...baseProps}
@@ -848,10 +877,9 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
     );
     const h3 = container.querySelector('h3');
     expect(h3?.className).toContain('truncate');
-    expect(h3?.className).toContain('flex-1');
-    const titleRow = h3?.parentElement;
-    expect(titleRow?.className).toContain('flex items-center gap-2 min-w-0');
-    expect(ringSvg(container)?.getAttribute('class')).toContain('shrink-0');
+    // Title is a plain block again — no flex-1/ring pairing in the row.
+    expect(h3?.className).not.toContain('flex-1');
+    expect(ringSvg(container)).not.toBeNull();
   });
 
   it('X cancel button carries the i18n key upload.cancel_upload as aria-label', () => {

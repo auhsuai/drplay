@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Folder, Music, Square, CheckSquare, Loader2, X } from "lucide-react";
+import { Folder, Music, Square, CheckSquare, Loader2, X, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Track } from "../../../App";
 import type { DriveItem } from "../../../types";
@@ -8,7 +8,7 @@ import { formatBytes } from "../../../utils/formatBytes";
 import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
 import type { MoreMenuVariant } from "../../components/MoreMenu";
-import { cancelUpload } from "../../../utils/uploadManager";
+import { cancelUpload, dismissUploaded } from "../../../utils/uploadManager";
 import type { UploadState } from "../../../utils/uploadManager";
 import { DRAG_FOLDER_HOVER_EVENT } from "../../components/DropZone";
 
@@ -287,6 +287,9 @@ export const SongCard = React.memo(function SongCard({
       onOpenFolder(item.id, meta.title);
       return;
     }
+    // Playing the item clears the transient "uploaded" check — the row goes
+    // back to the idle MoreMenu (the check is only a completion cue).
+    dismissUploaded(item.id);
     const track = item.trackInfo;
     if (!track) return;
     onPlay({
@@ -318,7 +321,7 @@ export const SongCard = React.memo(function SongCard({
           setContextMenuPos({ x: e.clientX, y: e.clientY });
           setIsContextMenuOpen(true);
         }}
-        className={`group w-full rounded-xl cursor-pointer ${uploadState === 'uploading' ? 'opacity-50 pointer-events-none' : ''}`}
+        className={`group group/upload w-full rounded-xl cursor-pointer ${uploadState === 'uploading' ? 'opacity-50 pointer-events-none' : ''}`}
       >
       <div className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${
           isFlashOn
@@ -348,21 +351,9 @@ export const SongCard = React.memo(function SongCard({
         )}
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">
-        {uploadState === 'uploading' ? (
-          <div className="flex items-center gap-2 min-w-0">
-            {/* flex-1 + min-w-0 keeps the long title truncating against the
-                fixed 8px gap (gap-2); the ring is shrink-0 so it never gets
-                squeezed off by an overflowing title. */}
-            <h3 className={`${titleClass} flex-1 min-w-0`}>
-              {meta.title}
-            </h3>
-            <ProgressRing fraction={clampFraction(uploadProgress)} />
-          </div>
-        ) : (
-          <h3 className={titleClass}>
-            {meta.title}
-          </h3>
-        )}
+        <h3 className={titleClass}>
+          {meta.title}
+        </h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           {item.isFolder ? (
             <span className="truncate">{t('drive.folders')}</span>
@@ -384,23 +375,33 @@ export const SongCard = React.memo(function SongCard({
         </div>
       </div>
       {!hideMenu && (
-        <div className={`transition-opacity ml-2 shrink-0 ${uploadState === 'uploading' || isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+        <div className={`transition-opacity ml-2 shrink-0 ${uploadState === 'uploading' || uploadState === 'uploaded' || isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
           {uploadState === 'uploading' ? (
-            // Cancel replaces the menu while the file is uploading (the menu
-            // cannot open then anyway). pointer-events-auto is required: the
-            // dimmed card is pointer-events-none. p-1.5 + 16px icon = 28px hit
-            // area (WCAG 2.5.8 minimum target size is 24×24).
-            <button
-              type="button"
-              aria-label={t('upload.cancel_upload')}
-              className="pointer-events-auto p-1.5 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
-              onClick={(e) => {
-                e.stopPropagation();
-                cancelUpload(item.id);
-              }}
-            >
-              <X className="w-4 h-4" />
-            </button>
+            // The determinate ring lives where the menu sits (right edge), not
+            // next to the title. Hovering the ring reveals the X cancel button
+            // inside it (pointer-events-auto: the dimmed card is
+            // pointer-events-none, but cancel must stay clickable).
+            <div className="relative w-5 h-5 shrink-0">
+              <ProgressRing fraction={clampFraction(uploadProgress)} />
+              <button
+                type="button"
+                aria-label={t('upload.cancel_upload')}
+                className="pointer-events-auto absolute inset-0 flex items-center justify-center rounded-full opacity-0 group-hover/upload:opacity-100 hover:text-red-500 transition-opacity text-gray-500"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  cancelUpload(item.id);
+                }}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ) : uploadState === 'uploaded' ? (
+            // Just-finished upload: single-tick check (user design) in place
+            // of the menu; disappears on play, on tab switch, or after the
+            // short tint.
+            <div className="w-5 h-5 flex items-center justify-center pointer-events-none" aria-label={t('upload.uploaded')}>
+              <Check className="w-4 h-4 text-[#4285F4]" />
+            </div>
           ) : (
             <MoreMenu 
               track={item.trackInfo} 

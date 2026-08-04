@@ -239,15 +239,21 @@ export function useDriveExplorer(
       };
     });
 
-    // Pin items that are THEMSELVES uploading to the top of the list while the
-    // upload runs — a just-started upload must be visible in My Drive even
-    // when its name would sort to page 2+. Only 'uploading' pins: a folder
-    // whose child is uploading ('parent-uploading') already exists on Drive
-    // and must keep its normal sorted position (spinner only, no dim).
+    // Pin items with an active upload presentation state to the top of the
+    // list while it lasts — a just-started upload must be visible in My Drive
+    // even when its name would sort to page 2+. Order matters: 'uploaded'
+    // (just-finished tint) ranks FIRST so the fresh check is immediately
+    // visible, then 'uploading', then the normal sorted rest. A folder whose
+    // child is uploading ('parent-uploading') already exists on Drive and must
+    // keep its normal sorted position (spinner only, no dim).
+    const uploadedItems: DriveItem[] = [];
     const uploadingItems: DriveItem[] = [];
     const restItems: DriveItem[] = [];
     for (const item of _items) {
-      if (getUploadState(item.id) === 'uploading') {
+      const state = getUploadState(item.id);
+      if (state === 'uploaded') {
+        uploadedItems.push(item);
+      } else if (state === 'uploading') {
         uploadingItems.push(item);
       } else {
         restItems.push(item);
@@ -303,7 +309,9 @@ export function useDriveExplorer(
     // Uploading items keep their _items (dbFiles) order — pending rows are
     // inserted in upload enqueue order and the queue is strictly sequential,
     // so this mirrors the order uploads started, not the active sort option.
-    return uploadingItems.length === 0 ? restItems : [...uploadingItems, ...restItems];
+    // Uploaded items sit ahead of them (fresh tint must be the most visible).
+    if (uploadedItems.length === 0 && uploadingItems.length === 0) return restItems;
+    return [...uploadedItems, ...uploadingItems, ...restItems];
   }, [dbFiles, sortOption, currentFolderName, uploadStatusVersion]);
 
   const filteredItems = searchQuery ? globalSearchItems : items;

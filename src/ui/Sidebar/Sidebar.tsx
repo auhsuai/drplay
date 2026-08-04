@@ -133,7 +133,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
               nav rows' px-4 (16px) right padding, so the + lines up flush
               with the nav rows' hover zone below (right edge 240px) instead
               of stopping 12px short of it. */}
-          {isSidebarOpen && <div className="ml-auto -mr-3"><UploadButton token={token} /></div>}
+          {isSidebarOpen && <div className="ml-auto -mr-3"><UploadButton token={token} disabled={activeTab !== TABS.myDrive} /></div>}
         </h1>
       </div>
       <nav className="px-4 space-y-1 mb-2">
@@ -312,7 +312,7 @@ function NavItem({ icon, label, active, onClick, isSidebarOpen }: { icon: React.
         {icon}
       </div>
       <div className={`overflow-hidden transition-all duration-300 whitespace-nowrap ${isSidebarOpen ? 'max-w-[150px] opacity-100 ml-3 flex-1' : 'max-w-0 opacity-0 ml-0'}`}>
-        <span className="text-sm block truncate">{label}</span>
+        <span className="text-sm block truncate group-hover:text-[#4285F4]">{label}</span>
       </div>
     </div>
   );

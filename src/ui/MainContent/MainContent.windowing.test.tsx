@@ -51,6 +51,15 @@ vi.mock('../../hooks/useDriveExplorer', () => ({
   useDriveExplorer: useDriveExplorerMock,
 }));
 
+// uploadManager stays REAL (isUploading drives Select All) except
+// clearUploadedTint — spied so the unmount cleanup can be asserted.
+const { clearUploadedTintMock } = vi.hoisted(() => ({ clearUploadedTintMock: vi.fn() }));
+
+vi.mock('../../utils/uploadManager', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/uploadManager')>()),
+  clearUploadedTint: clearUploadedTintMock,
+}));
+
 vi.mock('./components/SongCard', () => ({
   SongCard: vi.fn(({ item }: { item: DriveItem }) => (
     <div data-testid="song-card" data-item-id={item.id} />
@@ -178,6 +187,29 @@ describe('MainContent drag-active chrome hiding (DRAG_ACTIVE_EVENT)', () => {
     dispatchDragActive(false);
     expect(chrome.className).not.toContain('opacity-0');
     expect(pagination.className).not.toContain('opacity-0');
+  });
+});
+
+describe('MainContent clears the uploaded tint on unmount (tab switch)', () => {
+  beforeEach(() => {
+    clearUploadedTintMock.mockClear();
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('calls clearUploadedTint when unmounting (leaving My Drive tab → every uploaded check disappears)', () => {
+    const { unmount } = render(<MainContent {...baseProps} />);
+    expect(clearUploadedTintMock).not.toHaveBeenCalled();
+    unmount();
+    expect(clearUploadedTintMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call clearUploadedTint while mounted', () => {
+    render(<MainContent {...baseProps} />);
+    expect(clearUploadedTintMock).not.toHaveBeenCalled();
   });
 });
 
