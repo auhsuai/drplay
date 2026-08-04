@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Folder, Music, Square, CheckSquare, Loader2, X, Check } from "lucide-react";
+import { Folder, Music, Square, CheckSquare, LoaderCircle, X, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Track } from "../../../App";
 import type { DriveItem } from "../../../types";
@@ -432,7 +432,7 @@ export const SongCard = React.memo(function SongCard({
       )}
       {uploadState === 'parent-uploading' && (
         <div className="absolute top-2 right-2 pointer-events-none">
-          <Loader2 className="w-4 h-4 animate-spin text-[#4285F4]" />
+          <LoaderCircle className="w-4 h-4 animate-spin text-[#4285F4]" />
         </div>
       )}
       </div>

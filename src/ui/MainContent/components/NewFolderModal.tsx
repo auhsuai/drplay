@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Loader2, FolderPlus } from "lucide-react";
+import { X, LoaderCircle, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { showErrorToast } from "../../../utils/simpleToast";
 
@@ -29,12 +29,8 @@ export function NewFolderModal({
       showErrorToast(t('drive.folder_name_invalid') || "Folder name contains invalid characters");
       return;
     }
-    try {
-      await onCreate(name);
-      setNewFolderName(""); // Reset only on success
-    } catch (e) {
-      // Error is handled and alerted by parent
-    }
+    await onCreate(name);
+    setNewFolderName(""); // Reset only on success
   };
 
   return (
@@ -78,7 +74,7 @@ export function NewFolderModal({
             disabled={isCreating || !newFolderName.trim()}
             className="px-5 py-2.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-blue-600 rounded-xl shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
           >
-            {isCreating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderPlus className="w-4 h-4" />}
+            {isCreating ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <FolderPlus className="w-4 h-4" />}
             <span>{t('menu.create') || 'Create'}</span>
           </button>
         </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { MoreHorizontal, Download, FolderOutput, Trash2, Loader2, CheckCircle2, Music, ChevronRight, CheckSquare, MapPin } from "lucide-react";
+import { MoreHorizontal, Download, FolderOutput, Trash2, LoaderCircle, CheckCircle2, Music, ChevronRight, CheckSquare, MapPin } from "lucide-react";
 import { Track } from "../../App";
 import type { DriveItem } from "../../types";
 import { moveFile } from "../../utils/driveApi";
@@ -392,7 +392,7 @@ export function MoreMenu({ track, driveItem, token, currentFolderId, currentFold
         className={`relative p-2 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-[#4285F4]/40 ${isDownloadingFile ? 'cursor-default opacity-50' : 'text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]'}`}
       >
         {isDownloadingFile ? (
-          <Loader2 className="w-5 h-5 animate-spin text-[#4285F4]" />
+          <LoaderCircle className="w-5 h-5 animate-spin text-[#4285F4]" />
         ) : (
           <MoreHorizontal className="w-5 h-5" />
         )}

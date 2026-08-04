@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Trash2, X, RefreshCw, Loader2, AlertTriangle, FileAudio, Folder, Check, CheckSquare, MoreHorizontal } from 'lucide-react';
+import { Trash2, X, RefreshCw, LoaderCircle, AlertTriangle, FileAudio, Folder, Check, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SkeletonRowList } from "../components/Skeleton";
 import { restoreFile, permanentlyDeleteFile } from '../../utils/driveApi';
@@ -266,7 +266,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                         disabled={restoringId === item.id}
                         className="px-4 py-1.5 text-xs font-semibold text-green-600 bg-green-50 hover:bg-green-100 dark:bg-green-900/20 dark:hover:bg-green-900/40 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 shrink-0"
                       >
-                        {restoringId === item.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                        {restoringId === item.id ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                         <span className="hidden sm:inline">{t('settings.restore')}</span>
                       </button>
                     )}
@@ -290,7 +290,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   disabled={selectedIds.size === 0 || isBulkActioning}
                   className="px-4 py-2.5 bg-[#4285F4] text-white rounded-xl text-sm font-medium hover:bg-[#3367d6] disabled:opacity-50 transition-colors flex items-center gap-2"
                 >
-                  {isBulkActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  {isBulkActioning ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                   <span className="hidden sm:inline">{t('settings.restore') || 'Restore'}</span>
                 </button>
                 <button 
@@ -298,7 +298,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   disabled={selectedIds.size === 0 || isBulkActioning}
                   className="px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 disabled:opacity-50 transition-colors flex items-center gap-2"
                 >
-                  {isBulkActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  {isBulkActioning ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                   <span className="hidden sm:inline">{t('common.delete') || 'Delete'}</span>
                 </button>
               </div>
@@ -320,7 +320,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   disabled={items.length === 0 || isEmptying}
                   className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
                 >
-                  {isEmptying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  {isEmptying ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                   {t('settings.empty_trash')}
                 </button>
               </div>

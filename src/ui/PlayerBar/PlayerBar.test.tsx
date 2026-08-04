@@ -12,7 +12,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('lucide-react', () => {
   const icons = [
     'CloudOff', 'FileWarning', 'WifiOff', 'Play', 'Pause', 'SkipBack', 'SkipForward',
-    'Volume2', 'Volume1', 'Volume', 'VolumeX', 'Loader2', 'Music', 'Shuffle',
+    'Volume2', 'Volume1', 'Volume', 'VolumeX', 'LoaderCircle', 'Music', 'Shuffle',
     'Repeat', 'Repeat1', 'Maximize2', 'RefreshCw', 'Heart',
   ];
   const Stub = () => null;

@@ -1,6 +1,6 @@
 import { memo, useRef, useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, Loader2, Music, Shuffle, Repeat, Repeat1, Maximize2, RefreshCw, Heart } from "lucide-react";
+import { CloudOff, FileWarning, WifiOff, Play, Pause, SkipBack, SkipForward, Volume2, Volume1, Volume, VolumeX, LoaderCircle, Music, Shuffle, Repeat, Repeat1, Maximize2, RefreshCw, Heart } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from '../components/MoreMenu';
 import { formatTime } from "../../utils/formatTime";
@@ -382,7 +382,7 @@ function PlayerBarImpl({ currentTrack, isPlaying, onTogglePlay, onNextTrack, onP
             disabled={!currentTrack || isDownloading}
           >
             {isDownloading || (isBuffering && isPlaying && !errorInfo) ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
+              <LoaderCircle className="w-5 h-5 animate-spin" />
             ) : errorInfo ? (
               <RefreshCw className="w-5 h-5" />
             ) : isPlaying ? (

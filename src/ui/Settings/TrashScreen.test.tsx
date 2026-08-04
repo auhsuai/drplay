@@ -11,7 +11,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('lucide-react', () => {
-  const icons = ['Trash2', 'X', 'RefreshCw', 'Loader2', 'AlertTriangle', 'FileAudio', 'Folder', 'Check', 'CheckSquare', 'MoreHorizontal'];
+  const icons = ['Trash2', 'X', 'RefreshCw', 'LoaderCircle', 'AlertTriangle', 'FileAudio', 'Folder', 'Check', 'CheckSquare', 'MoreHorizontal'];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });

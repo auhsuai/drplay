@@ -19,9 +19,9 @@ vi.mock("react-i18next", () => ({
 }));
 
 vi.mock("lucide-react", () => {
-  // Spread props so data-testid from Loader2 survives in the DOM.
+  // Spread props so data-testid from LoaderCircle survives in the DOM.
   const Stub = (props: Record<string, unknown>) => <div {...props} />;
-  return { X: Stub, Loader2: Stub, Check: Stub };
+  return { X: Stub, LoaderCircle: Stub, Check: Stub };
 });
 
 vi.mock("../../../utils/cache", () => ({

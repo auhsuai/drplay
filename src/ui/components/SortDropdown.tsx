@@ -42,10 +42,9 @@ export function SortDropdown({
   }, []);
 
   const baseSortOption = sortOption.replace(' desc', '');
-  // Why: callers usually pass a pre-translated fallbackLabel (e.g. "Sort"),
-  // so it wins when provided; the default prop still reads as plain 'Sort',
-  // and this hook-side translate only covers the no-prop path.
-  const label = fallbackLabel ?? t('sort.sort_label', 'Sort');
+  // Why: callers always pass a pre-translated fallbackLabel (e.g. "Sort");
+  // the default prop is a plain 'Sort' safety fallback.
+  const label = fallbackLabel;
   const currentSortLabel = options.find((opt) => opt.id === baseSortOption)?.label || label;
 
   return (
@@ -67,32 +66,6 @@ export function SortDropdown({
           title={t('sort.toggle_order', 'Toggle Order')}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 relative">
-            <style>
-              {`
-                @keyframes fillUp { 
-                  from { clip-path: inset(100% 0 0 0); } 
-                  to { clip-path: inset(0 0 0 0); } 
-                }
-                @keyframes drainUp { 
-                  from { clip-path: inset(0 0 0 0); } 
-                  to { clip-path: inset(0 0 100% 0); } 
-                }
-                @keyframes fillDown { 
-                  from { clip-path: inset(0 0 100% 0); } 
-                  to { clip-path: inset(0 0 0 0); } 
-                }
-                @keyframes drainDown { 
-                  from { clip-path: inset(0 0 0 0); } 
-                  to { clip-path: inset(100% 0 0 0); } 
-                }
-                
-                .anim-fill-up { animation: fillUp 300ms ease-in-out forwards; }
-                .anim-drain-up { animation: drainUp 300ms ease-in-out forwards; }
-                .anim-fill-down { animation: fillDown 300ms ease-in-out forwards; }
-                .anim-drain-down { animation: drainDown 300ms ease-in-out forwards; }
-              `}
-            </style>
-            
             {/* Gray UP Arrow (Inverse animated) — the inactive arrow must stay
                 visible per Material icon hierarchy (active = primary, inactive
                 = ~50% gray); pure white vanished on the white button. */}

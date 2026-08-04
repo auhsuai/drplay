@@ -222,13 +222,13 @@ describe('MainContent loading state (skeleton rows replace centered spinner)', (
     cleanup();
   });
 
-  it('renders a skeleton row list (count derived from viewport height) with role="status" instead of the Loader2 spinner while loading', () => {
+  it('renders a skeleton row list (count derived from viewport height) with role="status" instead of the LoaderCircle spinner while loading', () => {
     render(<MainContent {...baseProps} isLoading={true} />);
     const status = screen.getByRole('status');
     expect(status.getAttribute('aria-label')).toBe('loading');
     const expectedRows = Math.max(4, Math.ceil((window.innerHeight - 140) / 72));
     expect(screen.getAllByTestId('skeleton-row')).toHaveLength(expectedRows);
-    // The old centered spinner (Loader2 with animate-spin) must be gone.
+    // The old centered spinner (LoaderCircle with animate-spin) must be gone.
     expect(document.querySelector('.animate-spin')).toBeNull();
   });
 

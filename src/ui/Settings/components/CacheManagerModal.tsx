@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, Loader2, Check } from "lucide-react";
+import { X, LoaderCircle, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   clearAppCache,
@@ -163,7 +163,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
               </span>
               <span className="w-14 shrink-0 flex items-center justify-end">
                 {sizes[id] === null ? (
-                  <Loader2
+                  <LoaderCircle
                     data-testid="size-spinner"
                     className="w-3.5 h-3.5 animate-spin text-gray-400"
                   />
@@ -190,7 +190,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
             disabled={selected.size === 0 || clearing}
             className="px-5 py-2.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
-            {clearing && <Loader2 className="w-4 h-4 animate-spin" />}
+            {clearing && <LoaderCircle className="w-4 h-4 animate-spin" />}
             {t("settings.clear_cache_btn", "Clear Cache")}
           </button>
         </div>

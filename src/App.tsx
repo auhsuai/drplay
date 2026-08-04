@@ -1,6 +1,6 @@
 import React, { useState, useCallback, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { Sidebar } from "./ui/Sidebar/Sidebar";
 import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
@@ -231,7 +231,7 @@ function App() {
               (the familiar pre-skeleton loading) instead of a heavy skeleton
               list: settings and other non-list tabs have no file rows to
               mirror, so a skeleton would just sit there unrelated. */}
-          <Suspense fallback={<div role="status" aria-label={t('loading')} className="flex-1 flex items-center justify-center"><Loader2 className="animate-spin h-10 w-10 text-[#4285F4] stroke-[1.5]" /></div>}>
+          <Suspense fallback={<div role="status" aria-label={t('loading')} className="flex-1 flex items-center justify-center"><LoaderCircle className="animate-spin h-10 w-10 text-[#4285F4] stroke-[1.5]" /></div>}>
             {/* HomeTab stays mounted across tab switches (keep-alive): hiding
                 it with display:none instead of unmounting prevents the
                 refetch-on-remount churn of every home data load

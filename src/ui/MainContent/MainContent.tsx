@@ -31,6 +31,18 @@ const SCROLL_HIGHLIGHT_DELAY_MS = 50;
 // (applied as min-height: calc(100% - 140px) on the [data-drop-region] div).
 const HEADER_CHROME_HEIGHT_PX = 140;
 
+// Skeleton row ≈ 72px tall: 48px icon + p-3 (12px) padding top/bottom.
+const SKELETON_ROW_HEIGHT_PX = 72;
+// Minimum skeleton rows so short viewports never collapse the loading UI.
+const SKELETON_MIN_ROWS = 4;
+
+// Skeleton rows must fill the whole list area on every screen size — a
+// fixed count leaves a blank band on tall/wide displays. Estimate the
+// count from the viewport and recompute on resize, like Spotify/YouTube
+// skeletons do.
+const calcSkeletonRows = () =>
+  Math.max(SKELETON_MIN_ROWS, Math.ceil((window.innerHeight - HEADER_CHROME_HEIGHT_PX) / SKELETON_ROW_HEIGHT_PX));
+
 interface MainContentProps {
   activeTab: TabKey;
   onPlay: (track: Track, contextQueue?: Track[]) => void;
@@ -83,16 +95,11 @@ export const MainContent = React.memo(function MainContent({
   // file-list container also doubles as the scoped dim region ([data-drop-region]).
   const [isDragActive, setIsDragActive] = React.useState(false);
 
-  // Skeleton rows must fill the whole list area on every screen size — a
-  // fixed count leaves a blank band on tall/wide displays. Estimate the
-  // count from the viewport (row ≈ 72px: 48px icon + p-3 padding) and
-  // recompute on resize, like Spotify/YouTube skeletons do.
-  const [skeletonRows, setSkeletonRows] = React.useState(() =>
-    Math.max(4, Math.ceil((window.innerHeight - HEADER_CHROME_HEIGHT_PX) / 72))
-  );
+  // Recompute the skeleton row count on resize so the loading state keeps
+  // filling the list area after a window size change.
+  const [skeletonRows, setSkeletonRows] = React.useState(calcSkeletonRows);
   React.useEffect(() => {
-    const onResize = () =>
-      setSkeletonRows(Math.max(4, Math.ceil((window.innerHeight - HEADER_CHROME_HEIGHT_PX) / 72)));
+    const onResize = () => setSkeletonRows(calcSkeletonRows());
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);

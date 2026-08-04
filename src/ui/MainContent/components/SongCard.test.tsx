@@ -610,8 +610,8 @@ describe('SongCard uploadState (dim + spinner)', () => {
 
   const cardEl = (container: HTMLElement): Element =>
     container.querySelector('.cursor-pointer') as Element;
-  // lucide-react v1.x renders <Loader2> with class 'lucide-loader-circle'
-  // (Loader2 is the deprecated alias — PlayerBar still imports it).
+  // lucide-react v1.x renders <LoaderCircle> with class 'lucide-loader-circle'
+  // (LoaderCircle is the deprecated alias — PlayerBar still imports it).
   const spinnerEl = (container: HTMLElement): Element | null =>
     container.querySelector('.lucide-loader-circle');
 
@@ -889,7 +889,7 @@ describe('SongCard upload progress ring + cancel X (slice 2)', () => {
     expect(cancelButton(container)?.getAttribute('aria-label')).toBe('upload.cancel_upload');
   });
 
-  it("'uploading' → the old centered Loader2 overlay is gone (ring replaces it)", () => {
+  it("'uploading' → the old centered LoaderCircle overlay is gone (ring replaces it)", () => {
     const { container } = render(
       <SongCard {...baseProps} item={makeItem()} uploadState="uploading" uploadProgress={0.5} />,
     );

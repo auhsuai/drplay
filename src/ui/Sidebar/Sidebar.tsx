@@ -47,6 +47,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
   const [isCreating, setIsCreating] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [quota, setQuota] = useState<DriveStorageQuota | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,18 +86,15 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
     };
   }, [token]);
 
-  const usageFraction = quota && quota.limit !== null && quota.limit > 0 ? quota.usageInDrive / quota.limit : 0;
+  const quotaAvailable = quota && quota.limit !== null && quota.limit > 0;
+  const usageFraction = quotaAvailable ? quota.usageInDrive / (quota.limit as number) : 0;
   const isOverThreshold = usageFraction > STORAGE_WARNING_THRESHOLD;
   // Two-segment fill: the safe zone (0 → threshold) stays blue, and only the
   // excess above the threshold turns red; the remaining track stays gray.
   // Clamped so the segments never exceed the track width, even when usage is
   // past the account limit (the two segments cap at 100% total).
-  const usagePercent = quota && quota.limit !== null && quota.limit > 0
-    ? Math.min(100, Math.round((quota.usageInDrive / quota.limit) * 100))
-    : 0;
-  const thresholdPercent = quota && quota.limit !== null && quota.limit > 0
-    ? Math.round((quota.limit * STORAGE_WARNING_THRESHOLD / quota.limit) * 100)
-    : 0;
+  const usagePercent = quotaAvailable ? Math.min(100, Math.round(usageFraction * 100)) : 0;
+  const thresholdPercent = quotaAvailable ? Math.round(STORAGE_WARNING_THRESHOLD * 100) : 0;
   const safeZonePercent = Math.min(usagePercent, thresholdPercent);
   const excessPercent = Math.max(0, usagePercent - thresholdPercent);
 
@@ -245,27 +243,22 @@ export function Sidebar({ activeTab, onTabChange, onLogout, userProfile, isSideb
         <div className="mt-4 pt-4 flex items-center transition-all duration-300">
           <div className="ml-1 shrink-0 flex items-center justify-center">
             {userProfile ? (
-              <img 
-                src={userProfile.picture} 
-                alt={t('common.profile_alt', 'Profile')} 
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                  if (e.currentTarget.nextElementSibling) {
-                    (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
-                  }
-                }}
-                className="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-800 object-cover" 
-              />
-            ) : null}
-            
-            {(!userProfile) ? (
+              avatarFailed ? (
+                <div className="w-10 h-10 rounded-full bg-[#4285F4]/20 flex items-center justify-center">
+                  <span className="text-[#4285F4] font-bold">{userProfile.name.charAt(0).toUpperCase()}</span>
+                </div>
+              ) : (
+                <img 
+                  src={userProfile.picture} 
+                  alt={t('common.profile_alt', 'Profile')} 
+                  referrerPolicy="no-referrer"
+                  onError={() => setAvatarFailed(true)}
+                  className="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-800 object-cover" 
+                />
+              )
+            ) : (
               <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
                 <span className="text-gray-400 font-bold">?</span>
-              </div>
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-[#4285F4]/20 hidden items-center justify-center">
-                <span className="text-[#4285F4] font-bold">{userProfile.name.charAt(0).toUpperCase()}</span>
               </div>
             )}
           </div>

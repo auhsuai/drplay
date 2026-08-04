@@ -1,4 +1,4 @@
-import { Loader2, Trash2 } from 'lucide-react';
+import { LoaderCircle, Trash2 } from 'lucide-react';
 import type { DriveItem } from '../../../types';
 
 interface DeleteConfirmDialogProps {
@@ -44,7 +44,7 @@ export function DeleteConfirmDialog({
             disabled={isDeleting}
             className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
           >
-            {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            {isDeleting ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
             <span>{t('drive.delete', 'Delete')}</span>
           </button>
         </div>

@@ -9,7 +9,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('lucide-react', () => {
-  const icons = ['Folder', 'ArrowLeft', 'HardDrive', 'Check', 'Search', 'Loader2'];
+  const icons = ['Folder', 'ArrowLeft', 'HardDrive', 'Check', 'Search', 'LoaderCircle'];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });

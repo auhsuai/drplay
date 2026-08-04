@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Folder, ArrowLeft, HardDrive, Check, Search, Loader2 } from 'lucide-react';
+import { Folder, ArrowLeft, HardDrive, Check, Search, LoaderCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SkeletonRowList } from "../components/Skeleton";
 import { db } from '../../db/db';
@@ -387,7 +387,7 @@ export function FolderSelectionScreen({ token, onSelectFolder, onCancel, initial
               ))}
               {isSearchingApi && (
                 <div className="col-span-full flex items-center justify-center gap-2 py-4 text-sm text-gray-400">
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <LoaderCircle className="w-4 h-4 animate-spin" />
                   {t('folder_selection.searching_deeper')}
                 </div>
               )}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { HardDrive, Loader2 } from "lucide-react";
+import { HardDrive, LoaderCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { showErrorToast } from "../../utils/simpleToast";
@@ -115,7 +115,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           className="w-full flex items-center justify-center gap-3 bg-white text-gray-700 font-medium py-3 px-4 rounded-lg shadow-[0_1px_3px_rgba(0,0,0,0.1)] hover:shadow-[0_2px_6px_rgba(0,0,0,0.15)] hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-4 focus:ring-[#4285F4]/30 active:scale-[0.98] transition-all duration-200 disabled:opacity-70 disabled:cursor-not-allowed"
         >
           {isLoading ? (
-            <Loader2 className="w-6 h-6 animate-spin text-[#4285F4]" />
+            <LoaderCircle className="w-6 h-6 animate-spin text-[#4285F4]" />
           ) : (
             <>
               {/* Google G Logo SVG */}

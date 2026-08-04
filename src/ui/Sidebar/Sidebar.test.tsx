@@ -485,6 +485,41 @@ describe('Sidebar UploadButton (header "+")', () => {
   });
 });
 
+describe('Sidebar avatar fallback', () => {
+  beforeEach(() => {
+    mocks.getPlaylists.mockResolvedValue([]);
+    mocks.getDriveStorageQuota.mockResolvedValue(makeQuota());
+    mocks.captureError.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('shows the img when the profile picture loads', () => {
+    render(<Sidebar {...baseProps({ userProfile: { name: 'Alice', email: 'a@b.c', picture: 'https://example.com/pic.jpg' } })} />);
+    expect(screen.getByAltText('Profile')).toBeTruthy();
+    expect(screen.queryByText('A')).toBeNull();
+  });
+
+  it('replaces the img with the initial-letter fallback when the picture fails to load (onError)', () => {
+    render(<Sidebar {...baseProps({ userProfile: { name: 'Alice', email: 'a@b.c', picture: 'https://example.com/pic.jpg' } })} />);
+    const img = screen.getByAltText('Profile');
+    fireEvent.error(img);
+    expect(screen.queryByAltText('Profile')).toBeNull();
+    const letter = screen.getByText('A');
+    expect(letter.className).toContain('text-[#4285F4]');
+    expect(letter.parentElement!.className).toContain('flex');
+  });
+
+  it('keeps the question-mark guest avatar when not logged in', () => {
+    render(<Sidebar {...baseProps({ token: null, userProfile: null })} />);
+    expect(screen.getByText('?')).toBeTruthy();
+    expect(screen.queryByAltText('Profile')).toBeNull();
+  });
+});
+
 describe('Sidebar playlist row + button alignment', () => {
   afterEach(() => {
     cleanup();

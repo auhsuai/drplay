@@ -19,6 +19,10 @@ const GOOGLE_FOLDER_MIME = 'application/vnd.google-apps.folder';
 export const ITEMS_PER_PAGE = 50;
 const GLOBAL_SEARCH_LIMIT = 100;
 const DRIVE_PAGE_SIZE = 1000;
+// Module-level so the items useMemo sort (re-run on every dbFiles change or
+// uploadStatusVersion bump) never re-initializes the collator — locale data
+// load has real cost and sorting is a hot path.
+const SORT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 const DEBOUNCE_DELAY_MS = 150;
 const SEARCH_RESULT_LABEL = 'Search Result';
 const UPLOADING_BLOCKED_FALLBACK = 'This item is being uploaded, please wait';
@@ -153,14 +157,18 @@ export function useDriveExplorer(
         let pageToken: string | undefined = undefined;
 
         while (hasMore && isMounted && !abortController.signal.aborted) {
-          const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)&pageSize=${DRIVE_PAGE_SIZE}${pageToken ? `&pageToken=${pageToken}` : ''}`;
+          const url = new URL('https://www.googleapis.com/drive/v3/files');
+          url.searchParams.set('q', q);
+          url.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)');
+          url.searchParams.set('pageSize', String(DRIVE_PAGE_SIZE));
+          if (pageToken) url.searchParams.set('pageToken', pageToken);
 
           // driveFetch owns the retry policy (driveApi resilience layer):
           // 429/5xx and 403 rate-limit are retried with exponential backoff,
           // honoring Retry-After when present; a caller abort propagates as an
           // immediate rejection (Google handle-errors guidance). A response
           // returned here is final — retried or non-retryable.
-          const res = await driveFetch(url, {
+          const res = await driveFetch(url.toString(), {
             headers: { Authorization: `Bearer ${token}` },
             signal: abortController.signal,
           });
@@ -260,7 +268,7 @@ export function useDriveExplorer(
       }
     }
 
-    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    const collator = SORT_COLLATOR;
     restItems.sort((a, b) => {
       if (a.isFolder && !b.isFolder) return -1;
       if (!a.isFolder && b.isFolder) return 1;

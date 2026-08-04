@@ -1,17 +1,30 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { Track } from "../../App";
+import type { UserProfile } from "../../types";
 import { getRecentlyPlayed, getHeavyRotation, getRandomDiscoveries, getMostVisitedFolders, FolderVisitEntry } from "../../utils/history";
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
-import greetingsData from "../../data/greetings.json";
+import rawGreetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { PremiumCard } from "./components/PremiumCard";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 import { captureError } from "../../utils/errorLog";
 import { Skeleton, SkeletonCardGrid, SkeletonRowList } from "../components/Skeleton";
+
+interface GreetingsEntry {
+  en: string;
+  vi: string;
+}
+interface GreetingsData {
+  morning: GreetingsEntry[];
+  afternoon: GreetingsEntry[];
+  evening: GreetingsEntry[];
+  general: GreetingsEntry[];
+}
+const greetingsData = rawGreetingsData as GreetingsData;
 
 const HOME_TAB_MODULE = 'HomeTab';
 // Fired by uploadManager after each completed upload (slice 1) — the delta
@@ -22,7 +35,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   onPlay: (track: Track, contextQueue?: Track[]) => void, 
   onOpenFolder: (id: string, name: string) => void,
   token: string | null, 
-  userProfile?: any,
+  userProfile?: UserProfile | null,
   currentTrack?: Track | null 
 }) {
   const { t, i18n } = useTranslation();
@@ -49,7 +62,7 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
   // Reading sessionStorage and calling Math.random() inside useMemo caused the
   // subtitle to reshuffle on every render (incl. StrictMode double-invoke).
   // Keep useMemo pure; the non-deterministic choices live here.
-  const randomGreetingRef = useRef<{ randomObj: Record<string, string> } | null>(null);
+  const randomGreetingRef = useRef<{ randomObj: GreetingsEntry } | null>(null);
   if (randomGreetingRef.current === null) {
     const visitCount = parseInt(sessionStorage.getItem('drplay_home_visit') || '0', 10);
     // Cycle: Time-specific -> General -> General -> Time-specific ...
@@ -60,8 +73,8 @@ export function HomeTab({ onPlay, onOpenFolder, token, userProfile, currentTrack
     else if (hour < 18) timeKey = 'afternoon';
     else timeKey = 'evening';
     const possibleSubtitles = isTimeSpecific
-      ? (greetingsData as any)[timeKey]
-      : (greetingsData as any)['general'];
+      ? greetingsData[timeKey]
+      : greetingsData.general;
     const randomObj = possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)];
     randomGreetingRef.current = { randomObj };
   }

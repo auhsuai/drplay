@@ -1,4 +1,4 @@
-import { X, Loader2 } from "lucide-react";
+import { X, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 interface BulkDeleteConfirmModalProps {
@@ -51,7 +51,7 @@ export function BulkDeleteConfirmModal({
             disabled={isOperating}
             className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm active:scale-95 disabled:opacity-50 flex items-center gap-2"
           >
-            {isOperating && <Loader2 className="w-4 h-4 animate-spin" />}
+            {isOperating && <LoaderCircle className="w-4 h-4 animate-spin" />}
             {t('drive.delete', 'Xóa ngay')}
           </button>
         </div>

@@ -39,3 +39,27 @@ html, body {
 .flash-highlight {
   animation: flash-highlight 1s ease-in-out 4;
 }
+
+/* SortDropdown arrow fill/drain animations (moved from inline <style> in
+   SortDropdown.tsx so the SVG is not re-parsed with a style node on every
+   render/dropdown open). Names are SortDropdown-specific; keep in sync. */
+@keyframes fillUp {
+  from { clip-path: inset(100% 0 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes drainUp {
+  from { clip-path: inset(0 0 0 0); }
+  to { clip-path: inset(0 0 100% 0); }
+}
+@keyframes fillDown {
+  from { clip-path: inset(0 0 100% 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes drainDown {
+  from { clip-path: inset(0 0 0 0); }
+  to { clip-path: inset(100% 0 0 0); }
+}
+.anim-fill-up { animation: fillUp 300ms ease-in-out forwards; }
+.anim-drain-up { animation: drainUp 300ms ease-in-out forwards; }
+.anim-fill-down { animation: fillDown 300ms ease-in-out forwards; }
+.anim-drain-down { animation: drainDown 300ms ease-in-out forwards; }
