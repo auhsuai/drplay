@@ -38,12 +38,13 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
         .then((data) => {
           if (!ignore) setPlaylists(data);
         })
-        .catch((err: unknown) =>
-          void captureError({
-            level: "error",
-            source: "useMenuPlaylists",
-            message: `Failed to load playlists: ${err instanceof Error ? err.message : String(err)}`,
-          }),
+        .catch(
+          (err: unknown) =>
+            void captureError({
+              level: "error",
+              source: "useMenuPlaylists",
+              message: `Failed to load playlists: ${err instanceof Error ? err.message : String(err)}`,
+            }),
         );
     }
     return () => {
@@ -82,9 +83,7 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
           source: "useMenuPlaylists",
           message: `Failed to add track to playlist: ${err instanceof Error ? err.message : String(err)}`,
         });
-        showErrorToast(
-          t("menu.add_to_playlist_error", "Failed to add to playlist"),
-        );
+        showErrorToast(t("menu.add_to_playlist_error"));
       }
     }
   };

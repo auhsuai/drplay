@@ -3,6 +3,7 @@ import type { Track } from "../types";
 import { showErrorToast } from "./simpleToast";
 import { captureError } from "./errorLog";
 import { getCurrentUserEmail } from "./storageKeys";
+import i18n from "../i18n";
 
 export interface Playlist {
   id: string;
@@ -88,7 +89,7 @@ export async function createPlaylist(name: string): Promise<Playlist | null> {
       source: PLAYLIST_MODULE,
       message: `create-failed: ${name}: ${message}`,
     });
-    showErrorToast("Failed to create playlist");
+    showErrorToast(i18n.t("sidebar.create_playlist_error"));
     return null;
   }
 }
@@ -104,7 +105,7 @@ export async function deletePlaylist(id: string): Promise<void> {
       source: PLAYLIST_MODULE,
       message: `delete-failed: ${name}: ${message}`,
     });
-    showErrorToast("Failed to delete playlist");
+    showErrorToast(i18n.t("playlist.delete_error"));
   }
 }
 
@@ -135,7 +136,7 @@ export async function updatePlaylist(
       source: PLAYLIST_MODULE,
       message: `update-failed: ${name}: ${message}`,
     });
-    showErrorToast("Failed to update playlist");
+    showErrorToast(i18n.t("playlist.update_error"));
     return null;
   }
 }
@@ -162,7 +163,7 @@ export async function addTrackToPlaylist(
       source: PLAYLIST_MODULE,
       message: `add-track-failed: ${name}: ${message}`,
     });
-    showErrorToast("Failed to add track to playlist");
+    showErrorToast(i18n.t("playlist.add_track_error"));
   }
 }
 
@@ -186,7 +187,7 @@ export async function removeTrackFromPlaylist(
       source: PLAYLIST_MODULE,
       message: `remove-track-failed: ${name}: ${message}`,
     });
-    showErrorToast("Failed to remove track from playlist");
+    showErrorToast(i18n.t("playlist.remove_track_error"));
   }
 }
 

@@ -37,7 +37,7 @@ export function PaginationControls({
             }}
             className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
           >
-            {t("playlist.prev", "Previous")}
+            {t("playlist.prev")}
           </button>
         </div>
 
@@ -139,7 +139,7 @@ export function PaginationControls({
             }}
             className="whitespace-nowrap px-3 sm:px-4 py-2 text-sm font-medium rounded-xl bg-gray-100 dark:bg-[#2a2b2f] text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-[#3a3b3f] disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed disabled:hover:bg-gray-100 dark:disabled:hover:bg-[#2a2b2f] transition-colors"
           >
-            {t("playlist.next", "Next")}
+            {t("playlist.next")}
           </button>
         </div>
       </div>

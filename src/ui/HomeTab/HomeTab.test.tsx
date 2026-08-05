@@ -9,17 +9,33 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeTab } from "./HomeTab";
+import en from "../../locales/en/translation.json";
 import type { Track, UserProfile } from "../../types";
 import type { DriveFileItem } from "../../utils/driveApi";
 import type { FolderVisitEntry } from "../../utils/history";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
-    i18n: { language: "en" },
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+      i18n: { language: "en" },
+    }),
+  };
+});
 
 vi.mock("lucide-react", () => {
   const icons = [
@@ -443,7 +459,8 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
 
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
     const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
-    if (firstCall === undefined) throw new Error("expected FullRecentView call");
+    if (firstCall === undefined)
+      throw new Error("expected FullRecentView call");
     const props = firstCall[0];
     expect(props.recent.map((t: Track) => t.id)).toEqual([
       "ra-0",
@@ -528,7 +545,8 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
 
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
     const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
-    if (firstCall === undefined) throw new Error("expected FullRecentView call");
+    if (firstCall === undefined)
+      throw new Error("expected FullRecentView call");
     const props = firstCall[0];
     expect(props.recent.map((t: Track) => t.id)).toEqual([
       "ra-0",
@@ -559,7 +577,8 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
 
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
     const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
-    if (firstCall === undefined) throw new Error("expected FullRecentView call");
+    if (firstCall === undefined)
+      throw new Error("expected FullRecentView call");
     const props = firstCall[0];
     expect(props.recent).toHaveLength(100);
     expect(props.recent[99]?.id).toBe("ra-99");
@@ -692,7 +711,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.queryByText("Recent Files")).toBeNull();
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
     expect(screen.queryByText("Heavy Rotation")).toBeNull();
-    expect(screen.queryByText("home.discover")).toBeNull();
+    expect(screen.queryByText("Discover")).toBeNull();
     expect(screen.queryByText("Jump Back In")).toBeNull();
   });
 
@@ -738,7 +757,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.getByText("Recent Files")).toBeTruthy();
     expect(screen.getByText("Recently Added to Drive")).toBeTruthy();
     expect(screen.getByText("Heavy Rotation")).toBeTruthy();
-    expect(screen.getByText("home.discover")).toBeTruthy();
+    expect(screen.getByText("Discover")).toBeTruthy();
     expect(screen.getByText("Jump Back In")).toBeTruthy();
     expect(screen.getAllByTestId("premium-card")).toHaveLength(12);
   });
@@ -768,7 +787,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.getAllByTestId("home-skeleton-section")).toHaveLength(4);
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
     expect(screen.queryByText("Heavy Rotation")).toBeNull();
-    expect(screen.queryByText("home.discover")).toBeNull();
+    expect(screen.queryByText("Discover")).toBeNull();
     expect(screen.queryByText("Jump Back In")).toBeNull();
   });
 
@@ -836,7 +855,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.queryByText("Recent Files")).toBeNull();
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
     expect(screen.queryByText("Heavy Rotation")).toBeNull();
-    expect(screen.queryByText("home.discover")).toBeNull();
+    expect(screen.queryByText("Discover")).toBeNull();
     expect(screen.queryByText("Jump Back In")).toBeNull();
   });
 

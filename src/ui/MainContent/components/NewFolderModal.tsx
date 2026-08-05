@@ -52,12 +52,10 @@ export function NewFolderModal({
         if (e.target === e.currentTarget && !isCreating) onClose();
       }}
     >
-      <div
-        className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
-      >
+      <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-            {t("drive.new_folder_title") || "Create New Folder"}
+            {t("drive.new_folder_title")}
           </h3>
           <button
             onClick={onClose}
@@ -83,7 +81,7 @@ export function NewFolderModal({
               }
             }}
             className="w-full bg-gray-100 dark:bg-[#25262a] hover:bg-gray-200/70 dark:hover:bg-[#2c2d32] focus:bg-gray-200 dark:focus:bg-[#2c2d32] text-gray-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none transition-all duration-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
-            placeholder={t("drive.folder_name_placeholder") || "Folder name"}
+            placeholder={t("drive.folder_name_placeholder")}
             spellCheck={false}
           />
         </div>
@@ -108,7 +106,7 @@ export function NewFolderModal({
             ) : (
               <FolderPlus className="w-4 h-4" />
             )}
-            <span>{t("menu.create") || "Create"}</span>
+            <span>{t("menu.create")}</span>
           </button>
         </div>
       </div>

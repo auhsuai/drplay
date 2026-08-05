@@ -59,7 +59,7 @@ export function SortDropdown({
         role="button"
         tabIndex={0}
         aria-expanded={showSortMenu}
-        aria-label={t("sort.menu", "Sort options")}
+        aria-label={t("sort.menu")}
         onClick={() => {
           setShowSortMenu(!showSortMenu);
         }}
@@ -94,7 +94,7 @@ export function SortDropdown({
               }
             }
           }}
-          title={t("sort.toggle_order", "Toggle Order")}
+          title={t("sort.toggle_order")}
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

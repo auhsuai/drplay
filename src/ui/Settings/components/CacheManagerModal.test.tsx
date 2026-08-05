@@ -8,6 +8,7 @@ import {
   cleanup,
 } from "@testing-library/react";
 import { CacheManagerModal } from "./CacheManagerModal";
+import en from "../../../locales/en/translation.json";
 import {
   getCacheSizes,
   clearAppCache,
@@ -18,11 +19,27 @@ import {
 // react-i18next has no initialized instance in the node test env, so stub
 // useTranslation to return the defaultValue passed to t() (same as
 // SettingsTab.test.tsx).
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (_key: string, defaultValue?: string) => defaultValue ?? _key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, defaultValue?: string) =>
+        resolveKey(key) ?? defaultValue ?? key,
+    }),
+  };
+});
 
 vi.mock("lucide-react", () => {
   // Spread props so data-testid from LoaderCircle survives in the DOM.
@@ -203,9 +220,7 @@ describe("CacheManagerModal", () => {
     await screen.findByText("Metadata cache");
     fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
-      expect(showSuccessToast).toHaveBeenCalledWith(
-        "Cache cleared successfully!",
-      );
+      expect(showSuccessToast).toHaveBeenCalledWith("Cache cleared");
     });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(showErrorToast).not.toHaveBeenCalled();
@@ -217,7 +232,9 @@ describe("CacheManagerModal", () => {
     await screen.findByText("Metadata cache");
     fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
-      expect(showErrorToast).toHaveBeenCalledWith("Failed to clear cache.");
+      expect(showErrorToast).toHaveBeenCalledWith(
+        "Couldn't clear cache. Try again.",
+      );
     });
     expect(showSuccessToast).not.toHaveBeenCalled();
     expect(screen.getByText("Clear App Cache")).toBeTruthy();

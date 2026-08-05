@@ -63,7 +63,7 @@ export const NowPlayingView = memo(function NowPlayingView({
           <Music className="w-24 h-24 text-[#4285F4]/40 dark:text-[#34A853]/50 drop-shadow-sm" />
         </div>
         <h2 className="text-xl font-bold text-gray-500 dark:text-gray-400">
-          {t("player.no_track", "Chưa có bài hát nào")}
+          {t("player.no_track")}
         </h2>
       </main>
     );
@@ -112,7 +112,7 @@ export const NowPlayingView = memo(function NowPlayingView({
               {coverUrl ? (
                 <img
                   src={coverUrl}
-                  alt={t("common.cover_alt", "Cover")}
+                  alt={t("common.cover_alt")}
                   className="w-full h-full object-cover"
                 />
               ) : (
@@ -155,7 +155,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                 <div
                   ref={progressBarRef}
                   role="progressbar"
-                  aria-label={t("now_playing.progress", "Playback progress")}
+                  aria-label={t("now_playing.progress")}
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={progressPercent}

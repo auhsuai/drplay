@@ -9,13 +9,29 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../App";
 import { PlayerBar } from "./PlayerBar";
+import en from "../../locales/en/translation.json";
 import type { PlayerBarProps } from "./types";
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+    }),
+  };
+});
 
 vi.mock("lucide-react", () => {
   const icons = [

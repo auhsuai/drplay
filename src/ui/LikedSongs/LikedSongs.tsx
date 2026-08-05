@@ -23,21 +23,23 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    loadFavorites().catch((err: unknown) =>
-      void captureError({
-        level: "error",
-        source: LIKED_SONGS_MODULE,
-        message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
-      }),
-    );
-
-    const handleUpdate = () => {
-      void loadFavorites().catch((err: unknown) =>
+    loadFavorites().catch(
+      (err: unknown) =>
         void captureError({
           level: "error",
           source: LIKED_SONGS_MODULE,
           message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
         }),
+    );
+
+    const handleUpdate = () => {
+      void loadFavorites().catch(
+        (err: unknown) =>
+          void captureError({
+            level: "error",
+            source: LIKED_SONGS_MODULE,
+            message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
+          }),
       );
     };
     window.addEventListener("favorites-updated", handleUpdate);
@@ -79,10 +81,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
     try {
       await removeFavorite(trackId);
     } catch (e) {
-      showErrorToast(
-        t("liked_songs.remove_failed") ||
-          "Không thể xóa khỏi yêu thích, vui lòng thử lại.",
-      );
+      showErrorToast(t("liked_songs.remove_failed"));
       void captureError({
         level: "error",
         source: LIKED_SONGS_MODULE,
@@ -110,8 +109,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
               {t("liked_songs.title")}
             </h1>
             <p className="text-sm font-medium opacity-80">
-              {favorites.length}{" "}
-              {favorites.length === 1 ? t("song") : t("songs")}
+              {t("song", { count: favorites.length })}
             </p>
           </div>
         </div>

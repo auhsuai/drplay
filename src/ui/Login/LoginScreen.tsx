@@ -49,7 +49,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const handleCancel = () => {
     setIsLoading(false);
     setShowCancel(false);
-    showErrorToast(t("login.cancelled_by_user", "Đã hủy thao tác kết nối."));
+    showErrorToast(t("login.cancelled_by_user"));
   };
 
   const handleLoginClick = async () => {
@@ -68,7 +68,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       setIsLoading(false);
       const errStr = String(error);
       if (errStr.includes("cancel")) {
-        showErrorToast(t("login.cancelled", "Đăng nhập đã bị hủy"));
+        showErrorToast(t("login.cancelled"));
         void captureError({
           level: "warn",
           source: LOGIN_MODULE,
@@ -76,12 +76,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           message: `login-cancelled: ${classifyLoginError(error)}`,
         });
       } else if (TIMEOUT_MATCH.test(errStr)) {
-        showErrorToast(
-          t(
-            "login.timeout_error",
-            "Đăng nhập quá thời gian chờ, vui lòng thử lại.",
-          ),
-        );
+        showErrorToast(t("login.timeout_error"));
         void captureError({
           level: "warn",
           source: LOGIN_MODULE,
@@ -89,9 +84,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           message: `login-timeout: ${classifyLoginError(error)}`,
         });
       } else {
-        showErrorToast(
-          t("login.failed", "Đăng nhập thất bại, vui lòng thử lại."),
-        );
+        showErrorToast(t("login.failed"));
         void captureError({
           level: "error",
           source: LOGIN_MODULE,
@@ -121,8 +114,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         {/* Google Brand Button */}
         <button
           onClick={() => {
-          void handleLoginClick();
-        }}
+            void handleLoginClick();
+          }}
           disabled={isLoading}
           className="w-full flex items-center justify-center gap-3 bg-white text-gray-700 font-medium py-3 px-4 rounded-lg shadow-[0_1px_3px_rgba(0,0,0,0.1)] hover:shadow-[0_2px_6px_rgba(0,0,0,0.15)] hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-4 focus:ring-[#4285F4]/30 active:scale-[0.98] transition-all duration-200 disabled:opacity-70 disabled:cursor-not-allowed"
         >
@@ -162,13 +155,13 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
         {showCancel && (
           <p className="mt-4 text-sm text-gray-500 dark:text-gray-400 animate-in fade-in duration-300">
-            {t("login.error_question", "Gặp sự cố?")}{" "}
+            {t("login.error_question")}{" "}
             <button
               type="button"
               onClick={handleCancel}
               className="text-[#4285F4] underline cursor-pointer hover:text-blue-600 transition-colors"
             >
-              {t("login.cancel_here", "Hủy")}
+              {t("login.cancel_here")}
             </button>
           </p>
         )}

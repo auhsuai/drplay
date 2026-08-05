@@ -75,12 +75,13 @@ export function Sidebar({
       .then((data) => {
         if (!cancelled) setPlaylists(data);
       })
-      .catch((err: unknown) =>
-        void captureError({
-          level: "error",
-          source: SIDEBAR_MODULE,
-          message: `failed-to-load-playlists: ${err instanceof Error ? err.message : String(err)}`,
-        }),
+      .catch(
+        (err: unknown) =>
+          void captureError({
+            level: "error",
+            source: SIDEBAR_MODULE,
+            message: `failed-to-load-playlists: ${err instanceof Error ? err.message : String(err)}`,
+          }),
       );
     const handleUpdate = () => {
       void getPlaylists()
@@ -173,9 +174,7 @@ export function Sidebar({
         source: SIDEBAR_MODULE,
         message: `create-playlist-failed: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(
-        t("sidebar.create_playlist_error") || "Failed to create playlist",
-      );
+      showErrorToast(t("sidebar.create_playlist_error"));
     } finally {
       setNewPlaylistName("");
       setIsCreating(false);
@@ -208,13 +207,11 @@ export function Sidebar({
           >
             <span className="truncate">DrPlay</span>
           </div>
-          {/* ml-auto pushes the + to the header's right edge; -mr-3 (12px)
-              cancels the difference between the header's px-7 (28px) and the
-              nav rows' px-4 (16px) right padding, so the + lines up flush
-              with the nav rows' hover zone below (right edge 240px) instead
-              of stopping 12px short of it. */}
+          {/* ml-auto pushes the upload button to the header's right edge,
+              vertically centered against the heading — no negative margin
+              so it stays inside the header's px-7 padding. */}
           {isSidebarOpen && (
-            <div className="ml-auto -mr-3">
+            <div className="ml-auto flex items-center">
               <UploadButton
                 token={token}
                 disabled={activeTab !== TABS.myDrive}
@@ -294,9 +291,7 @@ export function Sidebar({
                 if (!newPlaylistName) setIsCreating(false);
               }}
               className="w-full bg-gray-200/50 dark:bg-[#1c1d21] hover:bg-gray-200 dark:hover:bg-[#25262a] focus:bg-gray-200 dark:focus:bg-[#25262a] text-gray-900 dark:text-white text-sm rounded-lg px-3 py-2 outline-none transition-all duration-300 placeholder:text-gray-500"
-              placeholder={
-                t("sidebar.new_playlist_placeholder") || "My Playlist #1"
-              }
+              placeholder={t("sidebar.new_playlist_placeholder")}
             />
           </form>
         </div>
@@ -433,7 +428,7 @@ export function Sidebar({
               ) : (
                 <img
                   src={userProfile.picture}
-                  alt={t("common.profile_alt", "Profile")}
+                  alt={t("common.profile_alt")}
                   referrerPolicy="no-referrer"
                   onError={() => {
                     setAvatarFailed(true);

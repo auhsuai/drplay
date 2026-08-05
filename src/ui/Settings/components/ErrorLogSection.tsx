@@ -58,7 +58,7 @@ function LogEntryCard({ entry }: { entry: ErrorLogEntry }) {
       {entry.stack ? (
         <details className="mt-1">
           <summary className="text-xs text-gray-400 cursor-pointer select-none">
-            {t("settings.error_log_stack") || "Stack trace"}
+            {t("settings.error_log_stack")}
           </summary>
           <pre className="whitespace-pre-wrap break-all text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono m-0 select-text">
             {entry.stack}
@@ -141,9 +141,7 @@ export function ErrorLogSection() {
           setCopied(false);
         }, 2000);
       } else {
-        showErrorToast(
-          t("settings.error_log_copy_error") || "Could not copy to clipboard.",
-        );
+        showErrorToast(t("settings.error_log_copy_error"));
       }
     } catch (err) {
       void captureError({
@@ -151,9 +149,7 @@ export function ErrorLogSection() {
         source: ERROR_LOG_SECTION_MODULE,
         message: `failed-to-export-copy-logs: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(
-        t("settings.error_log_copy_error") || "Could not copy to clipboard.",
-      );
+      showErrorToast(t("settings.error_log_copy_error"));
     } finally {
       setBusy(false);
     }
@@ -170,9 +166,7 @@ export function ErrorLogSection() {
         source: ERROR_LOG_SECTION_MODULE,
         message: `failed-to-clear-logs: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(
-        t("settings.error_log_clear_error") || "Failed to clear logs.",
-      );
+      showErrorToast(t("settings.error_log_clear_error"));
     } finally {
       setBusy(false);
     }
@@ -189,10 +183,10 @@ export function ErrorLogSection() {
       >
         <ScrollText className="w-4 h-4" />
         {copied
-          ? t("settings.error_log_copied") || "Copied!"
+          ? t("settings.error_log_copied")
           : hasSelection
-            ? t("settings.error_log_copy_selected") || "Copy Selected"
-            : t("settings.error_log_copy") || "Copy Report"}
+            ? t("settings.error_log_copy_selected")
+            : t("settings.error_log_copy")}
       </button>
       <button
         onClick={() => {
@@ -201,7 +195,7 @@ export function ErrorLogSection() {
         disabled={logList.length === 0 || busy}
         className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
-        {t("settings.error_log_clear") || "Clear Log"}
+        {t("settings.error_log_clear")}
       </button>
     </div>
   );
@@ -209,7 +203,7 @@ export function ErrorLogSection() {
   return (
     <div ref={containerRef} className="flex flex-col gap-2 mt-6 mb-8">
       <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
-        {t("settings.error_log_title") || "Error Log"}
+        {t("settings.error_log_title")}
       </h2>
 
       {selectedDate && (
@@ -220,7 +214,7 @@ export function ErrorLogSection() {
             }}
             className="text-sm font-semibold text-gray-800 dark:text-gray-200 hover:text-[#4285F4] transition-colors py-2.5"
           >
-            ← {t("settings.error_log_back") || "Back"}
+            ← {t("settings.error_log_back")}
           </button>
           {actionButtons}
         </div>
@@ -229,12 +223,11 @@ export function ErrorLogSection() {
       <div className="max-h-80 overflow-y-auto">
         {loading ? (
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {t("loading") || "Loading..."}
+            {t("loading")}
           </p>
         ) : logList.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {t("settings.error_log_empty") ||
-              "No errors have been recorded yet."}
+            {t("settings.error_log_empty")}
           </p>
         ) : selectedDate === null ? (
           <div className="flex flex-col gap-2">

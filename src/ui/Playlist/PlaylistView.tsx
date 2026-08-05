@@ -47,17 +47,18 @@ export function PlaylistView({
         source: PLAYLIST_VIEW_MODULE,
         message: `failed-to-load-playlist: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(t("playlist.load_error") || "Failed to load playlist");
+      showErrorToast(t("playlist.load_error"));
     }
   }, [playlistId, t]);
 
   useEffect(() => {
-    loadPlaylist().catch((err: unknown) =>
-      void captureError({
-        level: "error",
-        source: PLAYLIST_VIEW_MODULE,
-        message: `failed-to-load-playlist: ${err instanceof Error ? err.message : String(err)}`,
-      }),
+    loadPlaylist().catch(
+      (err: unknown) =>
+        void captureError({
+          level: "error",
+          source: PLAYLIST_VIEW_MODULE,
+          message: `failed-to-load-playlist: ${err instanceof Error ? err.message : String(err)}`,
+        }),
     );
     const handlePlaylistsUpdated = () => {
       void loadPlaylist();
@@ -101,7 +102,7 @@ export function PlaylistView({
         source: PLAYLIST_VIEW_MODULE,
         message: `remove-track-failed: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(t("playlist.remove_error") || "Failed to remove track");
+      showErrorToast(t("playlist.remove_error"));
     }
   };
 
@@ -116,9 +117,7 @@ export function PlaylistView({
           source: PLAYLIST_VIEW_MODULE,
           message: `delete-playlist-failed: ${err instanceof Error ? err.message : String(err)}`,
         });
-        showErrorToast(
-          t("playlist.delete_error") || "Failed to delete playlist",
-        );
+        showErrorToast(t("playlist.delete_error"));
       }
     }
   };
@@ -133,15 +132,11 @@ export function PlaylistView({
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      showErrorToast(
-        t("playlist.cover_invalid_type") || "Please choose an image file",
-      );
+      showErrorToast(t("playlist.cover_invalid_type"));
       return;
     }
     if (file.size > MAX_COVER_BYTES) {
-      showErrorToast(
-        t("playlist.cover_too_large") || "Image must be 5 MB or smaller",
-      );
+      showErrorToast(t("playlist.cover_too_large"));
       return;
     }
 
@@ -156,9 +151,7 @@ export function PlaylistView({
         source: PLAYLIST_VIEW_MODULE,
         message: `read-cover-failed: name=${file.name}, size=${String(file.size)}`,
       });
-      showErrorToast(
-        t("playlist.cover_read_error") || "Failed to read the selected image",
-      );
+      showErrorToast(t("playlist.cover_read_error"));
     };
     reader.readAsDataURL(file);
   };
@@ -179,9 +172,7 @@ export function PlaylistView({
         source: PLAYLIST_VIEW_MODULE,
         message: `update-cover-failed: ${err instanceof Error ? err.message : String(err)}`,
       });
-      showErrorToast(
-        t("playlist.cover_save_error") || "Failed to save cover image",
-      );
+      showErrorToast(t("playlist.cover_save_error"));
     }
   };
 
@@ -221,7 +212,7 @@ export function PlaylistView({
           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center transition-opacity duration-200">
             <Camera className="w-8 h-8 text-white mb-2" />
             <span className="text-white text-sm font-medium">
-              {t("playlist.change_cover", "Đổi ảnh bìa")}
+              {t("playlist.change_cover")}
             </span>
           </div>
           <input
@@ -243,10 +234,7 @@ export function PlaylistView({
             {playlist.name}
           </h1>
           <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-300 font-medium">
-            <span>
-              {playlist.tracks.length}{" "}
-              {playlist.tracks.length === 1 ? t("song") : t("songs")}
-            </span>
+            <span>{t("song", { count: playlist.tracks.length })}</span>
             <button
               onClick={() => {
                 void handleDelete();
@@ -402,4 +390,3 @@ export function PlaylistView({
     </main>
   );
 }
-

@@ -76,7 +76,7 @@ export function CreditsSection() {
         source: CREDITS_MODULE,
         message: `open-external-url-failed: ${message}`,
       });
-      showErrorToast(t("settings.open_link_error") || "Failed to open link");
+      showErrorToast(t("settings.open_link_error"));
     }
   };
 
@@ -101,7 +101,7 @@ export function CreditsSection() {
   return (
     <div className="flex flex-col gap-2 mt-6 mb-8">
       <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
-        {t("settings.contact") || "Contact"}
+        {t("settings.contact")}
       </h2>
       {CREDIT_LINKS.map(({ label, display, url, Icon }, index) => (
         <div key={url} className="flex items-center justify-between gap-4 py-4">
@@ -119,19 +119,17 @@ export function CreditsSection() {
                 void handleCopy(index, display)();
               }}
               className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
-              title={t("settings.copy") || "Copy"}
+              title={t("settings.copy")}
             >
-              {copiedIndex === index
-                ? t("settings.copied") || "Copied!"
-                : display}
+              {copiedIndex === index ? t("settings.copied") : display}
             </button>
             <button
               type="button"
               onClick={() => {
                 void handleOpen(url)();
               }}
-              aria-label={t("settings.open_link") || "Open link"}
-              title={t("settings.open_link") || "Open link"}
+              aria-label={t("settings.open_link")}
+              title={t("settings.open_link")}
               className="text-gray-400 hover:text-[#4285F4] transition-colors"
             >
               <ExternalLink className="w-5 h-5" aria-hidden="true" />

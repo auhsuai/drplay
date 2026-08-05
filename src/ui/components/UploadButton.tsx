@@ -155,11 +155,7 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
     >
       <button
         onClick={handleToggleMenu}
-        title={
-          disabled
-            ? t("upload.disabled_title", "Open My Drive to upload")
-            : t("upload.button_title")
-        }
+        title={disabled ? t("upload.disabled_title") : t("upload.button_title")}
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
         aria-disabled={disabled}

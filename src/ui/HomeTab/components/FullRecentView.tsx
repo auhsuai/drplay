@@ -85,7 +85,7 @@ export function FullRecentView({
   // Why: the header label is shared with HomeTab's "Recent Files" section; the
   // Recently Added view reuses this component and overrides it via the title
   // prop. Undefined title falls back to the translated Recent Files label.
-  const resolvedTitle = title ?? t("home.recent_files", "Recent Files");
+  const resolvedTitle = title ?? t("home.recent_files");
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   // Why: the default "recent" order (newest first) maps to the Ngày option
@@ -120,9 +120,9 @@ export function FullRecentView({
   }, [recent, searchQuery, sortOption, removedIds]);
 
   const sortOptions = [
-    { id: "name", label: t("sort.name", "A-Z") },
-    { id: "modifiedTime", label: t("sort.date", "Ngày") },
-    { id: "size", label: t("sort.size", "Kích thước") },
+    { id: "name", label: t("sort.name") },
+    { id: "modifiedTime", label: t("sort.date") },
+    { id: "size", label: t("sort.size") },
   ];
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
@@ -163,7 +163,7 @@ export function FullRecentView({
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder={t("search_placeholder", "Tìm kiếm...")}
+                placeholder={t("search_placeholder")}
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
@@ -187,7 +187,7 @@ export function FullRecentView({
               sortOption={sortOption}
               onSortChange={setSortOption}
               options={sortOptions}
-              fallbackLabel={t("sort.sort_label", "Sort")}
+              fallbackLabel={t("sort.sort_label")}
             />
           </div>
         </div>

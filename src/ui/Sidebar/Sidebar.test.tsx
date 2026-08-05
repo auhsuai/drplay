@@ -10,13 +10,29 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar, type SidebarProps } from "./Sidebar";
+import en from "../../locales/en/translation.json";
 import type { DriveStorageQuota } from "../../utils/driveApi";
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+    }),
+  };
+});
 
 vi.mock("lucide-react", () => {
   const icons = [
@@ -511,10 +527,8 @@ describe("Sidebar storage quota", () => {
     render(<Sidebar {...baseProps({ onTabChange })} />);
 
     const user = userEvent.setup();
-    await user.click(screen.getByTitle("sidebar.create_playlist"));
-    const input = screen.getByPlaceholderText(
-      "sidebar.new_playlist_placeholder",
-    );
+    await user.click(screen.getByTitle("Create Playlist"));
+    const input = screen.getByPlaceholderText("My Playlist #1");
     await user.type(input, "New{Enter}");
 
     await waitFor(() => {
@@ -535,7 +549,7 @@ describe('Sidebar UploadButton (header "+")', () => {
 
   it("renders the UploadButton when the sidebar is expanded", () => {
     render(<Sidebar {...baseProps(myDriveProps)} />);
-    expect(screen.getByTitle("upload.button_title")).toBeTruthy();
+    expect(screen.getByTitle("Upload")).toBeTruthy();
   });
 
   it("hides the UploadButton when the sidebar is collapsed", () => {
@@ -548,32 +562,31 @@ describe('Sidebar UploadButton (header "+")', () => {
         })}
       />,
     );
-    expect(screen.queryByTitle("upload.button_title")).toBeNull();
+    expect(screen.queryByTitle("Upload")).toBeNull();
   });
 
-  it("pushes the + to the right of the header via an ml-auto wrapper (aligned with the nav hover zone, not trailing the DrPlay text)", () => {
+  it("pushes the upload button to the right of the header via an ml-auto wrapper (centered against the heading, not trailing the DrPlay text)", () => {
     render(<Sidebar {...baseProps(myDriveProps)} />);
-    const btn = screen.getByTitle("upload.button_title");
+    const btn = screen.getByTitle("Upload");
     // The button itself lives inside UploadButton's own div — the ml-auto
     // wrapper sits between it and the header <h1>.
     expect(btn.closest(".ml-auto")).not.toBeNull();
   });
 
-  it("offsets the + wrapper right by -mr-3 so its right edge aligns flush with the nav hover zone (header px-7 28px − 12px = nav px-4 16px)", () => {
+  it("keeps the upload wrapper inside the header padding (no negative margin — button stays within px-7, vertically centered)", () => {
     render(<Sidebar {...baseProps(myDriveProps)} />);
-    const btn = screen.getByTitle("upload.button_title");
+    const btn = screen.getByTitle("Upload");
     const wrapper = btn.closest(".ml-auto");
     expect(wrapper).not.toBeNull();
-    // Same convention as the storage bar test: assert the exact class that
-    // carries the 12px offset that closes the header/nav 12px gap.
     if (wrapper) {
-      expect(wrapper.className).toContain("-mr-3");
+      expect(wrapper.className).toContain("flex items-center");
+      expect(wrapper.className).not.toContain("-mr-3");
     }
   });
 
   it("renders no UploadButton when not logged in (no token), even expanded", () => {
     render(<Sidebar {...baseProps({ token: null })} />);
-    expect(screen.queryByTitle("upload.button_title")).toBeNull();
+    expect(screen.queryByTitle("Upload")).toBeNull();
   });
 
   it("dims the UploadButton and disables it while a non-MyDrive tab is active", () => {
@@ -653,7 +666,7 @@ describe("Sidebar playlist row + button alignment", () => {
 
   it("pushes the playlist + button to the row right edge (justify-between) when expanded, aligning it with the header upload +", () => {
     render(<Sidebar {...baseProps({ token: "tok-1" })} />);
-    const btn = screen.getByTitle("sidebar.create_playlist");
+    const btn = screen.getByTitle("Create Playlist");
     // The button's parent is the playlist row container.
     const row = btn.parentElement;
     expect(row).not.toBeNull();
@@ -668,7 +681,7 @@ describe("Sidebar playlist row + button alignment", () => {
     render(
       <Sidebar {...baseProps({ isSidebarOpen: false, token: "tok-1" })} />,
     );
-    const btn = screen.getByTitle("sidebar.create_playlist");
+    const btn = screen.getByTitle("Create Playlist");
     const row = btn.parentElement;
     expect(row).not.toBeNull();
     if (row) {

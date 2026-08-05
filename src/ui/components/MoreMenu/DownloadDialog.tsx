@@ -41,7 +41,7 @@ export function DownloadDialog({
       <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-            {t("menu.download_title", "Download File")}
+            {t("menu.download_title")}
           </h3>
           <button
             onClick={() => {
@@ -56,7 +56,7 @@ export function DownloadDialog({
 
         <div className="flex flex-col gap-2">
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            {t("menu.file_name", "File Name")}
+            {t("menu.file_name")}
           </label>
           <input
             ref={nameInputRef}
@@ -67,7 +67,7 @@ export function DownloadDialog({
             }}
             disabled={isDownloadingFile}
             className="w-full bg-gray-100 dark:bg-[#25262a] hover:bg-gray-200/70 dark:hover:bg-[#2c2d32] focus:bg-gray-200 dark:focus:bg-[#2c2d32] text-gray-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none transition-all duration-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
-            placeholder={t("menu.file_name", "File Name")}
+            placeholder={t("menu.file_name")}
           />
         </div>
 
@@ -79,7 +79,7 @@ export function DownloadDialog({
             disabled={isDownloadingFile}
             className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
           >
-            {t("menu.cancel", "Cancel")}
+            {t("menu.cancel")}
           </button>
           <button
             onClick={onConfirm}
@@ -93,8 +93,8 @@ export function DownloadDialog({
             )}
             <span>
               {isDownloadingFile
-                ? t("menu.downloading", "Downloading...")
-                : t("menu.confirm_download", "Confirm")}
+                ? t("menu.downloading")
+                : t("menu.confirm_download")}
             </span>
           </button>
         </div>

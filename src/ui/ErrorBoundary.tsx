@@ -77,20 +77,17 @@ export class ErrorBoundary extends React.Component<
           className="fixed inset-0 z-[10002] flex flex-col items-center justify-center gap-6 bg-white px-6 text-center dark:bg-[#121212]"
         >
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {i18n.t("error.title", "Something went wrong")}
+            {i18n.t("error.title")}
           </h1>
           <p className="max-w-md text-gray-600 dark:text-gray-300">
-            {i18n.t(
-              "error.description",
-              "The app hit an unexpected error. Please reload the page.",
-            )}
+            {i18n.t("error.description")}
           </p>
           <button
             type="button"
             onClick={this.handleReload}
             className="rounded-full bg-[#4285F4] px-6 py-3 font-medium text-white shadow-md shadow-blue-500/20 transition-colors hover:bg-blue-600"
           >
-            {i18n.t("error.reload", "Reload")}
+            {i18n.t("error.reload")}
           </button>
         </div>
       );

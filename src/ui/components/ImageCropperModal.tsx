@@ -69,9 +69,7 @@ export function ImageCropperModal({
         source: CROPPER_MODULE,
         message: `save-cover-failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(
-        t("playlist.cover_save_error") || "Failed to save cover image",
-      );
+      showErrorToast(t("playlist.cover_save_error"));
     } finally {
       setIsProcessing(false);
     }
@@ -99,7 +97,7 @@ export function ImageCropperModal({
             id="cropper-title"
             className="text-lg font-bold text-gray-900 dark:text-white"
           >
-            {t("playlist.adjust_cover", "Điều chỉnh ảnh bìa")}
+            {t("playlist.adjust_cover")}
           </h3>
           <button
             onClick={onClose}
@@ -127,7 +125,7 @@ export function ImageCropperModal({
         <div className="p-4 space-y-4">
           <div>
             <label className="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-2 uppercase tracking-wider">
-              {t("playlist.zoom", "Phóng to")}
+              {t("playlist.zoom")}
             </label>
             <input
               type="range"
@@ -149,7 +147,7 @@ export function ImageCropperModal({
               disabled={isProcessing}
               className="px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors"
             >
-              {t("menu.cancel", "Hủy")}
+              {t("menu.cancel")}
             </button>
             <button
               onClick={() => {
@@ -158,9 +156,7 @@ export function ImageCropperModal({
               disabled={isProcessing}
               className="px-6 py-2 rounded-xl text-sm font-bold bg-[#4285F4] hover:bg-[#3367d6] text-white shadow-md shadow-[#4285F4]/20 transition-all active:scale-95 disabled:opacity-50"
             >
-              {isProcessing
-                ? t("menu.saving", "Đang lưu...")
-                : t("menu.save", "Lưu")}
+              {isProcessing ? t("menu.saving") : t("menu.save")}
             </button>
           </div>
         </div>

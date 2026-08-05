@@ -24,14 +24,12 @@ export function LanguageDropdown() {
   }, [isOpen]);
 
   const languages = [
-    { code: "en", label: t("settings.english") || "English" },
-    { code: "vi", label: t("settings.vietnamese") || "Tiếng Việt" },
+    { code: "en", label: t("settings.english") },
+    { code: "vi", label: t("settings.vietnamese") },
   ];
 
-  const currentLang =
-    languages.find((l) => l.code === i18n.language) ??
-    languages[0] ??
-    { code: "en", label: "English" };
+  const currentLang = languages.find((l) => l.code === i18n.language) ??
+    languages[0] ?? { code: "en", label: "English" };
 
   const handleSelect = (code: string) => {
     void i18n.changeLanguage(code);

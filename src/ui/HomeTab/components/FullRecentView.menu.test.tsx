@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { FullRecentView } from "./FullRecentView";
+import en from "../../../locales/en/translation.json";
 import type { Track } from "../../../types";
 
 const mocks = vi.hoisted(() => ({
@@ -25,20 +26,26 @@ const mocks = vi.hoisted(() => ({
   getTrackMetadata: vi.fn(),
 }));
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, fallback?: string) =>
-      ({
-        "menu.select_multiple": "Select Multiple",
-        "drive.move_to": "Move to...",
-        "drive.delete": "Delete",
-        "menu.download": "Download",
-        "menu.add_to_playlist": "Add to Playlist",
-      })[key] ??
-      fallback ??
-      key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+    }),
+  };
+});
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(({ count }: { count: number }) => ({

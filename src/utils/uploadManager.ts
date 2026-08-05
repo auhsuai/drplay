@@ -1,6 +1,6 @@
 import { t } from "i18next";
 import { db } from "../db/db";
-import type { DriveFile } from "../db/db";
+import type { DriveFile, UploadSessionRow } from "../db/db";
 import {
   backoffDelay,
   createFolder,
@@ -9,6 +9,7 @@ import {
 } from "./driveApi";
 import { ROOT_FOLDER_ID } from "./driveConstants";
 import {
+  generateClientId,
   uploadFileResumable,
   uploadFileResumableChunked,
   UploadError,
@@ -24,6 +25,7 @@ import type { DiskEntry } from "./diskFs";
 import { captureError } from "./errorLog";
 import { basename } from "./pathUtils";
 import { showErrorToast } from "./simpleToast";
+import { getCurrentUserEmail } from "./storageKeys";
 
 // Sequential queue (1 upload at a time) + pending db.files rows that render as
 // dimmed cards; CustomEvents drive cards, race guards, Recently Added refresh.
@@ -37,6 +39,7 @@ const UPLOAD_STATUS_EVENT = "upload-status-changed";
 const DRIVE_FILES_CHANGED_EVENT = "drive-files-changed";
 const ERROR_INVALID_SEED = "invalid-seed";
 const ERROR_QUOTA = "quota";
+const ERROR_TOO_LARGE = "too-large";
 const ERROR_PARENT_FOLDER_MISSING = "parent-folder-missing";
 const ERROR_FAILED = "failed";
 const ERROR_ABORTED = "aborted";
@@ -44,6 +47,13 @@ const ERROR_ABORTED = "aborted";
 // folder root); named constants keep one spelling across all call sites.
 const ERROR_MISSING_DISK_PATH = "missing disk path";
 const ERROR_QUOTA_EXCEEDED = "drive storage quota exceeded";
+const ERROR_TOO_LARGE_MESSAGE = "file exceeds 5 TB limit";
+// Google Drive's documented maximum uploadable file size (5 TB per file —
+// https://developers.google.com/workspace/drive/api/guides/limits). Files
+// beyond it fail mid-upload server-side, so they are rejected BEFORE any
+// upload call starts (fail-early). The daily 750 GB/user upload limit is
+// enforced server-side only — it is NOT tracked locally.
+const MAX_FILE_BYTES = 5 * 1024 ** 4;
 // Subscribers get at most one progress notify per this window; onProgress can
 // fire once per chunk (128× on a 1 GB file) and per-chunk notifies would spam
 // renders, so progress bursts are coalesced into a single trailing-edge notify.
@@ -80,6 +90,12 @@ interface InternalEntry extends UploadEntry {
   driveId?: string;
   relativeDir?: string; // dir path within a folder batch ('sub/sub2'; '' = batch root)
   batchMemo?: Map<string, string>; // shared per batch: relativeDir -> driveId ('' marker = enqueued)
+  // Slice 5.2 resume metadata (from a persisted session row) — internal only:
+  // uploadDiskPathChunked feeds these into the chunked uploader. `| undefined`
+  // is explicit because a size-change drop CLEARS them mid-flight.
+  resumeUri?: string | undefined; // persisted session URI (undefined = fresh upload)
+  resumeTotalSize?: number | undefined; // persisted totalSize — for the size-change check
+  resumeClientGeneratedId?: string | undefined; // persisted pre-generated id — reused for idempotency
 }
 
 interface FolderBatch {
@@ -94,8 +110,35 @@ class ParentFolderMissingError extends Error {
   }
 }
 
+// Marker for a RESUMED upload whose file vanished from disk (deleted, moved or
+// renamed): distinct from a fresh-upload file-missing so markError can surface
+// the dedicated upload.resume_not_found toast. Self-created message (basename
+// only — no disk path), so it is safe to log.
+class ResumeFileMissingError extends Error {
+  constructor(name: string) {
+    super(`file not found on disk: ${name}`);
+    this.name = "ResumeFileMissingError";
+  }
+}
+
+// Manager-level guard error (NOT an UploadError — the driveUpload kind union
+// has no 'too-large' member and that module is not part of this slice's scope).
+// Raised by the 5 TB pre-check so markError can map it to its own kind and
+// toast; `size` is carried for the log (bytes, never a path).
+class FileTooLargeError extends Error {
+  readonly size: number;
+  constructor(size: number) {
+    super(ERROR_TOO_LARGE_MESSAGE);
+    this.name = "FileTooLargeError";
+    this.size = size;
+  }
+}
+
 let entries: InternalEntry[] = [];
 let busy = false;
+// Slice 5.2: re-entrancy guard for resumeInterruptedUploads — set synchronously
+// before the first await so a second concurrent call returns immediately.
+let resumeRunning = false;
 const subscribers = new Set<() => void>();
 
 // One AbortController per in-flight upload: created when the entry turns
@@ -195,6 +238,111 @@ export function startUploads(seeds: UploadSeed[], token: string): void {
   void pump();
 }
 
+// Build a queue entry from a persisted session row (slice 5.2). Returns null
+// when the row cannot be resumed — such rows only count toward the aggregated
+// interrupted toast: 'bytes' (payload lost with the old process), 'folderRoot'
+// (re-walking would create a DUPLICATE Drive folder) and 'folderChild'
+// (no diskPath ever persisted) are never resumed; a 'folderChildFile' whose
+// session never initiated has a placeholder parentId (the batch root's, not a
+// resolved Drive id) and cannot resolve its parent without the lost batch memo.
+function resumeEntryFromRow(
+  row: UploadSessionRow,
+  token: string,
+): InternalEntry | null {
+  if (row.diskPath === undefined) return null;
+  if (row.kind === "folderRoot" || row.kind === "folderChild") return null;
+  if (row.kind === "folderChildFile" && row.uploadUri === undefined)
+    return null;
+  const entry: InternalEntry = {
+    // Fresh id — the old row (same id) was deleted by the caller first, so
+    // there is no clash and cancel-by-id stays unambiguous.
+    id: `${PENDING_ID_PREFIX}${crypto.randomUUID()}`,
+    name: row.name,
+    isFolder: row.isFolder,
+    parentId: row.parentId,
+    diskPath: row.diskPath,
+    status: "queued",
+    token,
+    kind: row.kind,
+    ...(row.uploadUri !== undefined ? { resumeUri: row.uploadUri } : {}),
+    ...(row.totalSize !== undefined ? { resumeTotalSize: row.totalSize } : {}),
+    ...(row.clientGeneratedId !== undefined
+      ? { resumeClientGeneratedId: row.clientGeneratedId }
+      : {}),
+  };
+  if (row.kind === "folderChildFile") {
+    // The parent Drive folder id was resolved BEFORE the session initiated
+    // (handleChildFile runs before the chunked upload), so row.parentId is the
+    // real destination. Feed it back through a single-entry batch memo so
+    // handleChildFile resolves it without a live batch.
+    entry.relativeDir = "";
+    entry.batchMemo = new Map<string, string>([["", row.parentId]]);
+  }
+  return entry;
+}
+
+/**
+ * Re-queue every resumable upload this user left interrupted (slice 5.2):
+ * disk-path rows become fresh queue entries carrying their persisted session
+ * URI (resumed at the server-confirmed byte) — non-resumable rows (bytes,
+ * folder roots, unresolved children) are counted and surfaced with ONE
+ * aggregated toast. Rows of OTHER users are never touched. Runs at most one
+ * scan at a time (module guard); enqueued entries flow through the same
+ * sequential pump as new uploads, so both can coexist safely.
+ * @param token Drive access token for this batch's requests.
+ * @param userEmail The user whose interrupted uploads are resumed.
+ */
+export async function resumeInterruptedUploads(
+  token: string,
+  userEmail: string,
+): Promise<void> {
+  if (resumeRunning) return;
+  resumeRunning = true;
+  let interruptedCount = 0;
+  const resumed: InternalEntry[] = [];
+  try {
+    let rows: UploadSessionRow[];
+    try {
+      rows = await db.uploadSessions
+        .where("userEmail")
+        .equals(userEmail)
+        .toArray();
+    } catch (err) {
+      await captureError({
+        level: "warn",
+        source: MODULE,
+        message: `resume-read-failed: ${describeError(err)}`,
+      });
+      return;
+    }
+    // Oldest first — the queue processes in the original order.
+    rows.sort((a, b) => a.createdAt - b.createdAt);
+    for (const row of rows) {
+      const entry = resumeEntryFromRow(row, token);
+      // Delete the OLD row before the new entry can persist its own row under
+      // a fresh id (best-effort — a failed delete is logged and the scan
+      // continues; the stale row would just be re-scanned next launch).
+      await dbRowOp(
+        () => db.uploadSessions.delete(row.id),
+        "session-resume-delete",
+      );
+      if (entry === null) interruptedCount += 1;
+      else resumed.push(entry);
+    }
+  } finally {
+    resumeRunning = false;
+  }
+  if (interruptedCount > 0) {
+    // ONE aggregated toast for every non-resumable row — never one per file.
+    showErrorToast(t("upload.interrupted"));
+  }
+  if (resumed.length > 0) {
+    entries.push(...resumed);
+    notify();
+    void pump();
+  }
+}
+
 export function getUploadingIds(): ReadonlySet<string> {
   const ids = new Set<string>();
   for (const entry of entries) {
@@ -237,6 +385,8 @@ function cancelQueuedEntry(entry: InternalEntry): void {
   entry.status = "error";
   entry.error = ERROR_ABORTED;
   void dbRowOp(() => db.files.delete(entry.id), "pending-row-delete");
+  // Sync path: fire-and-forget — clearSession swallows its own failures.
+  void clearSession(entry);
   clearProgressNotifyTimer();
   notify();
   pruneEntry(entry);
@@ -440,19 +590,26 @@ async function processEntry(entry: InternalEntry): Promise<void> {
   notify();
   createControllerFor(entry);
   lastNotifiedProgress = 0;
-  await dbRowOp(
-    () =>
-      db.files.put({
-        id: entry.id,
-        name: entry.name,
-        mimeType: entry.isFolder ? FOLDER_MIME : AUDIO_FILE_MIME,
-        parentId: entry.parentId,
-        trashed: false,
-        isFolder: entry.isFolder,
-        modifiedTime: new Date().toISOString(),
-      }),
-    "pending-row",
-  );
+  // The pending files row and the active-session snapshot are independent
+  // best-effort writes — issue them in the SAME batch so the session row
+  // exists before handleByKind without adding a DB roundtrip to the upload
+  // pipeline.
+  await Promise.all([
+    dbRowOp(
+      () =>
+        db.files.put({
+          id: entry.id,
+          name: entry.name,
+          mimeType: entry.isFolder ? FOLDER_MIME : AUDIO_FILE_MIME,
+          parentId: entry.parentId,
+          trashed: false,
+          isFolder: entry.isFolder,
+          modifiedTime: new Date().toISOString(),
+        }),
+      "pending-row",
+    ),
+    persistActiveSession(entry),
+  ]);
   try {
     const driveItem = await handleByKind(entry);
     await markDone(entry, driveItem);
@@ -514,10 +671,31 @@ async function uploadDiskFileStreaming(
 ): Promise<DriveFileItem> {
   const stat = await statDiskPath(path);
   if (stat === null || stat.isDirectory) {
+    // A RESUMED file that vanished (deleted/moved/renamed) gets a distinct
+    // failure + toast so the user knows the file is gone; a fresh upload keeps
+    // the legacy plain Error (generic failed entry, same behavior as before).
+    if (entry.resumeUri !== undefined) {
+      throw new ResumeFileMissingError(basename(path));
+    }
     // Plain Error (not UploadError) so the entry shows 'failed', same as the
     // old whole-file read failure.
     throw new Error(`file not found on disk: ${basename(path)}`);
   }
+  // The file changed size since the interruption: the old session's
+  // Content-Range is invalid, and its pre-generated id may already own a
+  // server-side file of the OLD size (a same-id retry would resolve DONE
+  // against the stale file). Drop BOTH — the upload silently restarts from 0
+  // with the new size and a fresh id.
+  if (
+    entry.resumeTotalSize !== undefined &&
+    stat.size !== entry.resumeTotalSize
+  ) {
+    entry.resumeUri = undefined;
+    entry.resumeClientGeneratedId = undefined;
+  }
+  // Persist the freshly-statted size so a FUTURE resume can run the same
+  // size-change check (best-effort — persistActiveSession logs its own warn).
+  await persistActiveSession(entry, { totalSize: stat.size });
   if (!(await quotaAllows(entry, stat.size))) {
     throw new UploadError(ERROR_QUOTA_EXCEEDED, "quota");
   }
@@ -529,6 +707,14 @@ async function uploadDiskPathChunked(
   path: string,
   totalSize: number,
 ): Promise<DriveFileItem> {
+  // Generated ONCE per logical upload: the chunked uploader restarts its
+  // session internally (MAX_UPLOAD_ATTEMPTS), and every session must stay
+  // bound to the same pre-generated id (idempotent retry — see tryGenerateClientId).
+  // A RESUMED upload REUSES the id persisted with its session (slice 5.2): a
+  // retry that already completed server-side then answers 409 → resolve DONE
+  // with the real file instead of creating a duplicate.
+  const clientGeneratedId =
+    entry.resumeClientGeneratedId ?? (await tryGenerateClientId(entry));
   let stream = await openDiskReadStream(path);
   let consumed = 0;
   // Tail of a chunk that straddled the requested skip offset, served before
@@ -581,6 +767,22 @@ async function uploadDiskPathChunked(
       // cancelUpload aborts the in-flight Drive request (driveApi rejects
       // with UploadError('aborted')).
       signal: controllerFor(entry)?.signal,
+      clientGeneratedId,
+      // Slice 5.2: seed the uploader with the persisted session URI — attempt
+      // 0 queries its status (308 → continue at the server byte, 200 → done,
+      // 404 → fresh session). Undefined for fresh uploads and after a
+      // size-change drop, both meaning "start from 0".
+      initialUploadUri: entry.resumeUri,
+      // Persist the live session URI as soon as a session exists (best-effort,
+      // fire-and-forget): a crash after this point can still resume. A failed
+      // write costs only the resume — persistActiveSession never throws.
+      onSessionUpdate: (uploadUri) => {
+        void persistActiveSession(entry, {
+          uploadUri,
+          ...(clientGeneratedId !== undefined ? { clientGeneratedId } : {}),
+          totalSize,
+        });
+      },
       // Progress is written silently on the entry and surfaced via a throttled
       // notify (at most one per PROGRESS_NOTIFY_INTERVAL_MS): onProgress can
       // fire once per chunk (128× on a 1 GB file = 128 chunks) and per-chunk
@@ -715,6 +917,13 @@ async function quotaAllows(
   entry: InternalEntry,
   byteLength: number,
 ): Promise<boolean> {
+  // Fail-early guard (single choke point for BOTH the bytes and the disk
+  // path): reject >5 TB files before any quota fetch or upload call, because
+  // Google fails such uploads mid-transfer — a >5 TB file is a defective
+  // seed, so it should fail in milliseconds, not hours.
+  if (byteLength > MAX_FILE_BYTES) {
+    throw new FileTooLargeError(byteLength);
+  }
   let quota: DriveStorageQuota | null;
   try {
     quota = await getDriveStorageQuota(entry.token);
@@ -731,12 +940,35 @@ async function quotaAllows(
   return quota.usage + byteLength <= quota.limit;
 }
 
+// ONE pre-generated id per logical upload: retry attempts must bind their
+// sessions to the SAME id or Drive would create a duplicate file when the
+// first PUT succeeded server-side but its response was lost (the idempotent
+// retry fix — driveUpload turns the retry's 409 into a resolve-DONE). A
+// failure only degrades to the legacy non-idempotent upload — never blocks.
+async function tryGenerateClientId(
+  entry: InternalEntry,
+): Promise<string | undefined> {
+  try {
+    return await generateClientId(entry.token, controllerFor(entry)?.signal);
+  } catch (err) {
+    await captureError({
+      level: "warn",
+      source: MODULE,
+      message: `client-id-generation-failed name=${entry.name}: ${describeError(err)}`,
+    });
+    return undefined;
+  }
+}
+
 // Only transient network failures are retried (bounded backoff); pending row stays.
 async function uploadWithRetry(
   entry: InternalEntry,
   data: Blob | Uint8Array,
 ): Promise<DriveFileItem> {
   const signal = controllerFor(entry)?.signal;
+  // Generated BEFORE the retry loop so every attempt creates a session bound
+  // to the same pre-generated id — the core of the idempotent-retry fix.
+  const clientGeneratedId = await tryGenerateClientId(entry);
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
     if (signal?.aborted) throw abortedUploadError();
@@ -747,6 +979,7 @@ async function uploadWithRetry(
         entry.name,
         entry.parentId,
         signal,
+        { clientGeneratedId },
       );
     } catch (err) {
       lastErr = err;
@@ -822,6 +1055,8 @@ async function markDone(
   // BEFORE finishEntry removes the entry so the final status snapshot still
   // shows 'done'.
   markRecentlyDone(driveItem.id);
+  // Terminal: the active session row is stale the moment the upload is done.
+  await clearSession(entry);
   await finishEntry(entry);
   window.dispatchEvent(
     new CustomEvent<{ count: number }>(DRIVE_FILES_CHANGED_EVENT, {
@@ -833,13 +1068,16 @@ async function markDone(
 async function markError(entry: InternalEntry, err: unknown): Promise<void> {
   clearProgressNotifyTimer();
   const isAborted = err instanceof UploadError && err.kind === ERROR_ABORTED;
+  const isResumeMissing = err instanceof ResumeFileMissingError;
   entry.error = isAborted
     ? ERROR_ABORTED
-    : err instanceof ParentFolderMissingError
-      ? ERROR_PARENT_FOLDER_MISSING
-      : err instanceof UploadError
-        ? err.kind
-        : ERROR_FAILED;
+    : err instanceof FileTooLargeError
+      ? ERROR_TOO_LARGE
+      : err instanceof ParentFolderMissingError
+        ? ERROR_PARENT_FOLDER_MISSING
+        : err instanceof UploadError
+          ? err.kind
+          : ERROR_FAILED;
   entry.status = "error";
   if (isAborted) {
     // A user-initiated cancel is not a failure: no error toast, warn-level log
@@ -851,22 +1089,35 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
       kind: ERROR_ABORTED,
     });
   } else {
+    const isTooLarge = entry.error === ERROR_TOO_LARGE;
     const isQuota = entry.error === ERROR_QUOTA;
+    // The resumed file vanished from disk — keep the entry kind 'failed' (no
+    // new public error value) but log + toast the dedicated reason so the user
+    // knows the file is gone rather than "upload failed".
+    const resumeMissingDetail = isResumeMissing
+      ? " reason=resume-file-missing"
+      : "";
     // UploadError messages are self-created constants (status/quota text — never
     // PII), so they are safe to log and carry the concrete 4xx that the kind
     // alone hides. A plain Error from diskFs can embed the full disk path, so
     // its message stays out of the log — only name + kind are recorded.
     const uploadDetail =
       err instanceof UploadError ? ` message=${err.message}` : "";
+    const tooLargeDetail =
+      err instanceof FileTooLargeError ? ` size=${String(err.size)}` : "";
     // Never log the disk path or token - only the shortened file name.
     await captureError({
-      level: isQuota ? "warn" : "error",
+      level: isQuota || isTooLarge ? "warn" : "error",
       source: MODULE,
-      message: `upload-entry-failed name=${entry.name} kind=${entry.error}${uploadDetail}`,
+      message: `upload-entry-failed name=${entry.name} kind=${entry.error}${resumeMissingDetail}${uploadDetail}${tooLargeDetail}`,
       kind: entry.error,
     });
-    if (isQuota) {
+    if (isTooLarge) {
+      showErrorToast(t("upload.too_large"));
+    } else if (isQuota) {
       showErrorToast(t("upload.quota_exceeded"));
+    } else if (isResumeMissing) {
+      showErrorToast(t("upload.resume_not_found"));
     } else if (
       entry.error !== ERROR_INVALID_SEED &&
       entry.error !== ERROR_PARENT_FOLDER_MISSING
@@ -874,6 +1125,9 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
       showErrorToast(t("upload.error"));
     }
   }
+  // Terminal (error/cancel): the active session row is stale — drop it so a
+  // future resume never retries a dead entry.
+  await clearSession(entry);
   await finishEntry(entry);
 }
 
@@ -905,6 +1159,72 @@ async function dbRowOp(
       level: "warn",
       source: MODULE,
       message: `${label}-db-failed: ${describeError(err)}`,
+    });
+  }
+}
+
+// Resume metadata that only becomes known AFTER processEntry's first persist
+// (slice 5.2): the stat size, the generated id and the live session URI.
+interface SessionPersistExtra {
+  totalSize?: number;
+  uploadUri?: string;
+  clientGeneratedId?: string;
+}
+
+// Best-effort IndexedDB snapshot of an ACTIVE upload (schema v9 uploadSessions)
+// so a crashed/interrupted upload can be resumed on the next launch (slice
+// 5.2). NEVER throws and never blocks the upload: the row is resume metadata
+// only — a failed write only costs the resume, not the upload. Called from
+// processEntry before handleByKind (base fields) and again as the upload
+// progresses (stat size, session URI). A put with the SAME id overwrites the
+// row, so later calls just enrich it.
+async function persistActiveSession(
+  entry: InternalEntry,
+  extra?: SessionPersistExtra,
+): Promise<void> {
+  const now = Date.now();
+  try {
+    await db.uploadSessions.put({
+      id: entry.id,
+      userEmail: getCurrentUserEmail(),
+      name: entry.name,
+      isFolder: entry.isFolder,
+      kind: entry.kind,
+      // exactOptionalPropertyTypes: omit diskPath (bytes/folderChild have none)
+      // instead of writing undefined.
+      ...(entry.diskPath !== undefined ? { diskPath: entry.diskPath } : {}),
+      parentId: entry.parentId,
+      ...(extra?.totalSize !== undefined ? { totalSize: extra.totalSize } : {}),
+      ...(extra?.uploadUri !== undefined ? { uploadUri: extra.uploadUri } : {}),
+      ...(extra?.clientGeneratedId !== undefined
+        ? { clientGeneratedId: extra.clientGeneratedId }
+        : {}),
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (err) {
+    await captureError({
+      level: "warn",
+      source: MODULE,
+      message: `session-persist-failed name=${entry.name}: ${describeError(err)}`,
+    });
+  }
+}
+
+// Best-effort removal of the session row for a terminal entry (done / error /
+// cancelled). A failed delete leaves a stale 'active' row that a future resume
+// would retry pointlessly — so the failure is logged and the upload still
+// completes. delete() of a never-persisted id resolves without error, making
+// this safe for queued cancels too.
+async function clearSession(entry: InternalEntry): Promise<void> {
+  try {
+    await db.uploadSessions.delete(entry.id);
+  } catch (err) {
+    await captureError({
+      level: "warn",
+      source: MODULE,
+      message: `session-clear-failed name=${entry.name}: ${describeError(err)}`,
     });
   }
 }

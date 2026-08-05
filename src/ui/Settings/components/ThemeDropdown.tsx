@@ -29,15 +29,13 @@ export function ThemeDropdown({
   }, [isOpen]);
 
   const themes: { code: ThemeType; label: string }[] = [
-    { code: "light", label: t("settings.light_mode") || "Light" },
-    { code: "dark", label: t("settings.dark_mode") || "Dark" },
-    { code: "system", label: t("settings.system_mode") || "System Default" },
+    { code: "light", label: t("settings.light_mode") },
+    { code: "dark", label: t("settings.dark_mode") },
+    { code: "system", label: t("settings.system_mode") },
   ];
 
-  const currentOption =
-    themes.find((tm) => tm.code === currentTheme) ??
-    themes[2] ??
-    { code: "system", label: "System Default" };
+  const currentOption = themes.find((tm) => tm.code === currentTheme) ??
+    themes[2] ?? { code: "system", label: "System Default" };
 
   const handleSelect = (code: ThemeType) => {
     onChange(code);

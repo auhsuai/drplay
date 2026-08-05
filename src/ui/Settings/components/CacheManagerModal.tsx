@@ -118,15 +118,13 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
     setClearing(true);
     try {
       await clearAppCache([...selected]);
-      showSuccessToast(
-        t("settings.clear_cache_success", "Cache cleared successfully!"),
-      );
+      showSuccessToast(t("settings.clear_cache_success"));
       onClose();
     } catch {
       // clearAppCache already logs each failing category via captureError;
       // here we only surface the aggregated message and keep the modal open
       // so the user can retry with a narrower selection.
-      showErrorToast(t("settings.clear_cache_error", "Failed to clear cache."));
+      showErrorToast(t("settings.clear_cache_error"));
     } finally {
       setClearing(false);
     }
@@ -150,12 +148,12 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
       >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-            {t("settings.clear_cache", "Clear App Cache")}
+            {t("settings.clear_cache")}
           </h3>
           <button
             onClick={onClose}
             disabled={clearing}
-            aria-label={t("settings.close", "Close")}
+            aria-label={t("settings.close")}
             className="text-gray-400 hover:text-gray-900 dark:hover:text-white p-1 rounded-full transition-colors disabled:opacity-50"
           >
             <X className="w-5 h-5" />
@@ -209,7 +207,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
             disabled={clearing}
             className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
           >
-            {t("menu.cancel", "Cancel")}
+            {t("menu.cancel")}
           </button>
           <button
             onClick={() => {
@@ -219,7 +217,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
             className="px-5 py-2.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {clearing && <LoaderCircle className="w-4 h-4 animate-spin" />}
-            {t("settings.clear_cache_btn", "Clear Cache")}
+            {t("settings.clear_cache_btn")}
           </button>
         </div>
       </div>

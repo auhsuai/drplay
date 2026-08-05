@@ -10,12 +10,28 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler } from "react";
 import { FolderSelectionScreen } from "./FolderSelectionScreen";
+import en from "../../locales/en/translation.json";
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+    }),
+  };
+});
 
 vi.mock("lucide-react", () => {
   const icons = [
@@ -232,8 +248,8 @@ describe("FolderSelectionScreen", () => {
       );
       // Component still mounts and starts the normal folder fetch.
       await waitFor(() => {
-      expect(deferredCalls).toHaveLength(1);
-    });
+        expect(deferredCalls).toHaveLength(1);
+      });
       expect(mocks.captureError).toHaveBeenCalledWith(
         expect.objectContaining({
           level: "warn",
@@ -273,7 +289,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
 
     const rows = await screen.findAllByTestId("skeleton-row");
     expect(rows).toHaveLength(6);
-    expect(screen.getByRole("status", { name: "loading" })).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Loading..." })).toBeTruthy();
     expect(document.querySelector(".animate-spin")).toBeNull();
   });
 
@@ -290,9 +306,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
       expect(searchDeferredCalls).toHaveLength(1);
     });
 
-    expect(
-      screen.getByText("folder_selection.searching_deeper"),
-    ).not.toBeNull();
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
     expect(document.querySelector(".animate-spin")).toBeNull();
   });
@@ -323,7 +337,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
       await Promise.resolve();
     });
 
-    expect(await screen.findByText("drive.no_folders")).not.toBeNull();
+    expect(await screen.findByText("No folders here.")).not.toBeNull();
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
   });
 
@@ -337,7 +351,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
       const hasSkeleton =
         document.querySelector('[data-testid="skeleton-row"]') !== null;
       const hasEmpty = (document.body.textContent ?? "").includes(
-        "drive.no_folders",
+        "No folders here.",
       );
       if (hasSkeleton && !markers.includes("skeleton"))
         markers.push("skeleton");
@@ -367,7 +381,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
       expect(deferredCalls).toHaveLength(1);
     });
 
-    const status = screen.getByRole("status", { name: "loading" });
+    const status = screen.getByRole("status", { name: "Loading..." });
     // The folder list is a definite-height flex child (overlay root is
     // fixed inset-0, dialog h-[75vh]) so h-full resolves here.
     expect(status.className).toContain("h-full");
@@ -405,10 +419,8 @@ describe("FolderSelectionScreen skeleton loading", () => {
       expect(searchDeferredCalls).toHaveLength(1);
     });
 
-    expect(screen.queryByText("drive.no_folders")).toBeNull();
+    expect(screen.queryByText("No folders here.")).toBeNull();
     expect(screen.queryAllByTestId("skeleton-row").length).toBe(0);
-    expect(
-      screen.getByText("folder_selection.searching_deeper"),
-    ).not.toBeNull();
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
   });
 });

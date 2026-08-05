@@ -46,14 +46,14 @@ export function PlaylistsSubmenu({
     >
       <div className="px-3 py-2 flex items-center justify-between gap-2">
         <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider whitespace-nowrap">
-          {t("sidebar.playlists", "Playlists")}
+          {t("sidebar.playlists")}
         </div>
 
         <div className="relative flex-1 max-w-[120px]">
           <Search className="w-3 h-3 text-gray-400 absolute left-2 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder={t("search_placeholder", "Search...")}
+            placeholder={t("search_placeholder")}
             value={playlistSearchQuery}
             onChange={(e) => {
               setPlaylistSearchQuery(e.target.value);
@@ -70,7 +70,7 @@ export function PlaylistsSubmenu({
       <div className="flex flex-col gap-0.5">
         {filteredPlaylists.length === 0 ? (
           <div className="px-3 py-3 text-sm text-gray-400 text-center italic">
-            {t("menu.no_playlists", "No Playlists")}
+            {t("menu.no_playlists")}
           </div>
         ) : (
           currentPlaylists.map((p) => (

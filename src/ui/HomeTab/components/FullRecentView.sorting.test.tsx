@@ -3,16 +3,33 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FullRecentView, sortRecentTracks } from "./FullRecentView";
+import en from "../../../locales/en/translation.json";
 import type { Track } from "../../../types";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so we stub useTranslation to return
 // the defaultValue passed to t().
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (_key: string, defaultValue?: string) => defaultValue ?? _key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, defaultValue?: string) =>
+        resolveKey(key) ?? defaultValue ?? key,
+    }),
+  };
+});
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(({ count }: { count: number }) => ({
@@ -217,7 +234,7 @@ describe("FullRecentView sort UI", () => {
 
   const openSortMenu = async () => {
     const user = userEvent.setup();
-    const arrow = screen.getByTitle("Toggle Order");
+    const arrow = screen.getByTitle("Toggle order");
     await user.click(arrow.parentElement as HTMLElement);
   };
 
@@ -226,34 +243,34 @@ describe("FullRecentView sort UI", () => {
     await user.click(screen.getByRole("button", { name: label }));
   };
 
-  it("renders cards in newest-first input order by default with Ngày label", () => {
+  it("renders cards in newest-first input order by default with Date label", () => {
     renderRecent([
       makeTrack("new", "Newest"),
       makeTrack("mid", "Middle"),
       makeTrack("old", "Oldest"),
     ]);
     expect(cardOrder()).toEqual(["new", "mid", "old"]);
-    expect(screen.getAllByText("Ngày").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Date").length).toBeGreaterThan(0);
   });
 
-  it("shows exactly 3 sort options in the menu (A-Z / Ngày / Kích thước)", async () => {
+  it("shows exactly 3 sort options in the menu (A-Z / Date / Size)", async () => {
     renderRecent([makeTrack("a", "Alpha")]);
     await openSortMenu();
     const menu = document.querySelector(".w-32") as HTMLElement;
     const labels = Array.from(menu.querySelectorAll("button")).map(
       (b) => b.textContent,
     );
-    expect(labels.sort()).toEqual(["A-Z", "Kích thước", "Ngày"]);
+    expect(labels.sort()).toEqual(["A-Z", "Date", "Size"]);
   });
 
-  it("sorts by size ascending (undefined last) when Kích thước is chosen", async () => {
+  it("sorts by size ascending (undefined last) when Size is chosen", async () => {
     renderRecent([
       makeTrack("a", "Alpha", 50),
       makeTrack("b", "Bravo"),
       makeTrack("c", "Charlie", 10),
     ]);
     await openSortMenu();
-    await clickSortOption("Kích thước");
+    await clickSortOption("Size");
     expect(cardOrder()).toEqual(["c", "a", "b"]);
   });
 
@@ -268,14 +285,14 @@ describe("FullRecentView sort UI", () => {
     expect(cardOrder()).toEqual(["a", "b", "c"]);
   });
 
-  it("keeps newest-first order when Ngày is chosen (default recency behavior)", async () => {
+  it("keeps newest-first order when Date is chosen (default recency behavior)", async () => {
     renderRecent([
       makeTrack("new", "Newest"),
       makeTrack("mid", "Middle"),
       makeTrack("old", "Oldest"),
     ]);
     await openSortMenu();
-    await clickSortOption("Ngày");
+    await clickSortOption("Date");
     expect(cardOrder()).toEqual(["new", "mid", "old"]);
   });
 
@@ -286,7 +303,7 @@ describe("FullRecentView sort UI", () => {
       makeTrack("old", "Oldest"),
     ]);
     const user = userEvent.setup();
-    const arrow = screen.getByTitle("Toggle Order");
+    const arrow = screen.getByTitle("Toggle order");
     await user.click(arrow);
     expect(cardOrder()).toEqual(["old", "mid", "new"]);
     expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
@@ -301,7 +318,7 @@ describe("FullRecentView sort UI", () => {
       makeTrack("z", "Zen"),
     ]);
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("Tìm kiếm..."), "z");
+    await user.type(screen.getByPlaceholderText("Search..."), "z");
     expect(cardOrder()).toEqual(["x", "z"]);
     await openSortMenu();
     await clickSortOption("A-Z");

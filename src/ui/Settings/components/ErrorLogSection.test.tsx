@@ -21,7 +21,7 @@ void i18n.use(initReactI18next).init({
           error_log_title: "Error Log",
           error_log_copy: "Copy Report",
           error_log_copy_selected: "Copy Selected",
-          error_log_copied: "Copied!",
+          error_log_copied: "Copied",
           error_log_clear: "Clear Log",
           error_log_empty: "No errors have been recorded yet.",
           error_log_note: "filtered",
@@ -198,12 +198,12 @@ describe("ErrorLogSection", () => {
     await screen.findByText((c) => c.startsWith("boom"));
     fireEvent.click(screen.getByRole("button", { name: /Copy Report/i }));
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledTimes(1);
-    await screen.findByText(/Copied!/i);
+    await screen.findByText(/Copied/);
     await new Promise((r) => setTimeout(r, 0));
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(
       "2023-11-14T22:13:20.000Z [error] Player: boom",
     );
-    expect(await screen.findByText(/Copied!/i)).toBeTruthy();
+    expect(await screen.findByText(/Copied/)).toBeTruthy();
   });
 
   it("copy button is disabled when log is empty and in day view", async () => {

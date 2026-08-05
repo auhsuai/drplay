@@ -26,6 +26,19 @@ vi.mock("../../../utils/metadata", () => ({
   getTrackMetadata: vi.fn(),
 }));
 
+// react-i18next has no initialized instance in the node test env (i18n.ts
+// touches localStorage at import time), so stub useTranslation to return the
+// fallback passed to t(), matching every other component test in the repo.
+// initReactI18next is stubbed too: the real src/i18n module (pulled in
+// transitively via MoreMenu → playlists) calls i18n.use(initReactI18next),
+// which i18next would reject with "passing an undefined module" otherwise.
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string, fallback?: string) => fallback ?? key,
+  }),
+  initReactI18next: { type: "3rdParty", init: () => {} },
+}));
+
 // Slice 2: cancelUpload is imported (runtime) by SongCard now. Spy on the real
 // module's export (importOriginal spread keeps isUploading/subscribe real for
 // MoreMenu) so the X-cancel click can be asserted without side effects.
@@ -200,9 +213,7 @@ describe("SongCard metadata fetch", () => {
     expect(onPlay).toHaveBeenCalledTimes(1);
     const firstCall = onPlay.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected onPlay call");
-    expect(
-      (firstCall[0] as { queueItemId: string }).queueItemId,
-    ).toBe("q-2");
+    expect((firstCall[0] as { queueItemId: string }).queueItemId).toBe("q-2");
   });
 });
 
@@ -596,8 +607,7 @@ describe("SongCard MoreMenu WAI-ARIA APG menu button pattern", () => {
 describe("SongCard navigate/locate highlight flash (single on→off cycle)", () => {
   const originalScrollIntoView = (
     Element.prototype.scrollIntoView as
-      | ((options?: ScrollIntoViewOptions) => void)
-      | undefined
+      ((options?: ScrollIntoViewOptions) => void) | undefined
   )?.bind(Element.prototype);
   // jsdom WebIDL brand-checks `this` on getBoundingClientRect — binding it
   // (the lint-recommended fix) breaks every restore/instance call, so the
@@ -1208,6 +1218,15 @@ describe("SongCard upload progress ring + cancel X (slice 2)", () => {
     expect(cancelButton(container)?.getAttribute("aria-label")).toBe(
       "upload.cancel_upload",
     );
+  });
+
+  it("'uploaded' check wrapper carries the i18n key upload.uploaded as aria-label (key must exist in both locales)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem()} uploadState="uploaded" />,
+    );
+    expect(
+      container.querySelector('[aria-label="upload.uploaded"]'),
+    ).not.toBeNull();
   });
 
   it("'uploading' → the old centered LoaderCircle overlay is gone (ring replaces it)", () => {

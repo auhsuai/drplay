@@ -65,6 +65,28 @@ export interface MetadataCacheRow {
   entry: unknown;
 }
 
+// One row per ACTIVE or INTERRUPTED upload (schema v9). Written by
+// uploadManager at processEntry (status 'active'), deleted at any terminal
+// transition (done/error/cancel). On the next launch, rows whose upload was
+// interrupted mid-flight are the resume source (slice 5.2); 'bytes' rows carry
+// no diskPath — their payload is gone with the old process, so they can only
+// be reported as interrupted, never resumed.
+export interface UploadSessionRow {
+  id: string; // = entry.id ('pending-<uuid>') — PK
+  userEmail: string; // per-user (index)
+  name: string;
+  isFolder: boolean;
+  kind: "diskFile" | "folderChildFile" | "folderRoot" | "folderChild" | "bytes";
+  diskPath?: string; // undefined cho bytes
+  parentId: string;
+  totalSize?: number; // undefined khi chưa stat / bytes
+  uploadUri?: string; // session URI Google — undefined khi chưa initiate
+  clientGeneratedId?: string;
+  status: "active" | "interrupted";
+  createdAt: number;
+  updatedAt: number;
+}
+
 /**
  * Local IndexedDB mirror of the signed-in user's Drive data (file list,
  * favorites, play history, play counts, folder visits, error logs, app
@@ -88,6 +110,7 @@ export class DriveDatabase extends Dexie {
   playCounts!: Table<PlayCountRow, [string, string]>;
   folderVisits!: Table<FolderVisitRow, [string, string]>;
   metadataCache!: Table<MetadataCacheRow, string>;
+  uploadSessions!: Table<UploadSessionRow, string>; // Primary key is 'id'
   // Compound-key tables that replaced the raw-id versions (schema v7).
   recentTracksV2!: Table<RecentTrackRow, [string, string]>;
   playCountsV2!: Table<PlayCountRow, [string, string]>;
@@ -219,6 +242,23 @@ export class DriveDatabase extends Dexie {
       playCountsV2: "[userEmail+id], [userEmail+count]",
       folderVisitsV2: "[userEmail+id], [userEmail+count]",
       favoritesV2: "[userEmail+id], createdAt",
+    });
+
+    // Version 9 adds the uploadSessions table (upload-resume feature, slice
+    // 5.1) without touching the existing tables — forward-only, same as every
+    // earlier version. Rows are indexed by userEmail (resume is per-account)
+    // and status ('active' vs 'interrupted').
+    this.version(9).stores({
+      files: "id, parentId, name, isFolder",
+      syncState: "key",
+      errorLogs: "id, ts",
+      kv: "key",
+      playlists: "id, userEmail",
+      recentTracksV2: "[userEmail+id], createdAt, [userEmail+createdAt]",
+      playCountsV2: "[userEmail+id], [userEmail+count]",
+      folderVisitsV2: "[userEmail+id], [userEmail+count]",
+      favoritesV2: "[userEmail+id], createdAt",
+      uploadSessions: "id, userEmail, status",
     });
 
     // Bind the public table names to the new compound-key tables so app code

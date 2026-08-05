@@ -195,7 +195,7 @@ export function MoreMenu({
         source: MORE_MENU_MODULE,
         message: `move-failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(t("drive.move_error", "Failed to move item"));
+      showErrorToast(t("drive.move_error"));
       if (onRefresh) onRefresh();
     }
   };
@@ -301,9 +301,7 @@ export function MoreMenu({
                 title={uploadBlockedTitle}
               >
                 <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">
-                  {t("menu.download_song", "Download Song")}
-                </span>
+                <span className="truncate">{t("menu.download_song")}</span>
               </button>
 
               <button
@@ -311,9 +309,7 @@ export function MoreMenu({
                 className={MENU_ITEM_BASE_CLASS}
               >
                 <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">
-                  {t("menu.navigate", "Locate File")}
-                </span>
+                <span className="truncate">{t("menu.navigate")}</span>
               </button>
             </>
           )}
@@ -333,7 +329,7 @@ export function MoreMenu({
               title={uploadBlockedTitle}
             >
               <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-              <span className="truncate">{t("drive.delete") || "Delete"}</span>
+              <span className="truncate">{t("drive.delete")}</span>
             </button>
           )}
 
@@ -350,9 +346,7 @@ export function MoreMenu({
                 title={uploadBlockedTitle}
               >
                 <Download className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">
-                  {t("menu.download_song", "Download Song")}
-                </span>
+                <span className="truncate">{t("menu.download_song")}</span>
               </button>
 
               <button
@@ -360,9 +354,7 @@ export function MoreMenu({
                 className={MENU_ITEM_BASE_CLASS}
               >
                 <MapPin className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">
-                  {t("menu.navigate", "Locate File")}
-                </span>
+                <span className="truncate">{t("menu.navigate")}</span>
               </button>
             </>
           )}
@@ -383,7 +375,7 @@ export function MoreMenu({
                 title={uploadBlockedTitle}
               >
                 <CheckSquare className="w-4 h-4 text-gray-400 group-hover:text-[#4285F4]" />
-                {t("menu.select_multiple", "Đa chọn")}
+                {t("menu.select_multiple")}
               </button>
               <button
                 onClick={(e) => {
@@ -403,9 +395,7 @@ export function MoreMenu({
                 title={uploadBlockedTitle}
               >
                 <FolderOutput className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">
-                  {t("drive.move_to") || "Move to..."}
-                </span>
+                <span className="truncate">{t("drive.move_to")}</span>
               </button>
               <button
                 onClick={(e) => {
@@ -425,9 +415,7 @@ export function MoreMenu({
                 title={uploadBlockedTitle}
               >
                 <Trash2 className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                <span className="truncate">
-                  {t("drive.delete") || "Delete"}
-                </span>
+                <span className="truncate">{t("drive.delete")}</span>
               </button>
             </>
           )}
@@ -622,8 +610,8 @@ export function MoreMenu({
             initialFolderId={currentFolderId || ROOT_FOLDER_ID}
             initialFolderName={currentFolderName}
             initialFolderHistory={folderHistory}
-            title={t("drive.move_to", "Move to...")}
-            subtitle={`${t("drive.move_item_desc", "Select destination for")} ${driveItem?.title ?? ""}`}
+            title={t("drive.move_to")}
+            subtitle={`${t("drive.move_item_desc")} ${driveItem?.title ?? ""}`}
           />,
           document.body,
         )}

@@ -91,10 +91,10 @@ export function HomeTab({
     const possibleSubtitles = isTimeSpecific
       ? greetingsData[timeKey]
       : greetingsData.general;
-    const randomObj =
-      possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)] ??
-      possibleSubtitles[0] ??
-      { en: "", vi: "" };
+    const randomObj = possibleSubtitles[
+      Math.floor(Math.random() * possibleSubtitles.length)
+    ] ??
+      possibleSubtitles[0] ?? { en: "", vi: "" };
     return { randomObj };
   });
 
@@ -102,11 +102,11 @@ export function HomeTab({
     const hour = new Date().getHours();
     let greetingText = "";
     if (hour < 12) {
-      greetingText = t("home.good_morning", "Good morning");
+      greetingText = t("home.good_morning");
     } else if (hour < 18) {
-      greetingText = t("home.good_afternoon", "Good afternoon");
+      greetingText = t("home.good_afternoon");
     } else {
-      greetingText = t("home.good_evening", "Good evening");
+      greetingText = t("home.good_evening");
     }
 
     const lang = i18n.language.startsWith("vi") ? "vi" : "en";
@@ -162,21 +162,23 @@ export function HomeTab({
 
       loadRecentlyAdded(token);
     };
-    loadData().catch((err: unknown) =>
-      void captureError({
-        level: "error",
-        source: HOME_TAB_MODULE,
-        message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
-      }),
-    );
-
-    const handleUpdate = () => {
-      void loadData().catch((err: unknown) =>
+    loadData().catch(
+      (err: unknown) =>
         void captureError({
           level: "error",
           source: HOME_TAB_MODULE,
           message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
         }),
+    );
+
+    const handleUpdate = () => {
+      void loadData().catch(
+        (err: unknown) =>
+          void captureError({
+            level: "error",
+            source: HOME_TAB_MODULE,
+            message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
+          }),
       );
     };
     // Delta sync: refresh ONLY the Recently Added section (light, no re-running
@@ -238,7 +240,7 @@ export function HomeTab({
     return (
       <FullRecentView
         recent={recentlyAdded ?? []}
-        title={t("home.recently_added", "Recently Added to Drive")}
+        title={t("home.recently_added")}
         onBack={() => {
           setShowFullRecentlyAdded(false);
         }}
@@ -292,7 +294,7 @@ export function HomeTab({
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                 <Clock className="w-4 h-4" />
-                {t("home.recent_files", "Recent Files")}
+                {t("home.recent_files")}
               </h3>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
@@ -330,7 +332,7 @@ export function HomeTab({
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                 <PlusCircle className="w-4 h-4" />
-                {t("home.recently_added", "Recently Added to Drive")}
+                {t("home.recently_added")}
               </h3>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
@@ -379,7 +381,7 @@ export function HomeTab({
           <div className="mb-12">
             <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
               <Folder className="w-4 h-4" />
-              {t("home.jump_back_in", "Jump Back In")}
+              {t("home.jump_back_in")}
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {mostVisitedFolders.map((folder) => (
@@ -406,9 +408,7 @@ export function HomeTab({
                       {folder.name}
                     </h3>
                     <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
-                      <span className="truncate">
-                        {t("drive.folders", "Folders")}
-                      </span>
+                      <span className="truncate">{t("drive.folders")}</span>
                     </div>
                   </div>
                 </div>
@@ -427,7 +427,7 @@ export function HomeTab({
           <div className="mb-12">
             <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
               <Repeat className="w-4 h-4" />
-              {t("home.heavy_rotation", "Heavy Rotation")}
+              {t("home.heavy_rotation")}
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {heavyItems.map((track) => (

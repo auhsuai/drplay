@@ -335,12 +335,12 @@ export const MainContent = React.memo(function MainContent({
       <div
         data-drop-region
         className="px-8 pb-6 pt-4"
-        style={{ minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)` }}
+        style={{
+          minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)`,
+        }}
       >
         {activeTab === TABS.settings ? (
-          <div className="text-gray-500">
-            {t("settings.coming_soon", "Coming Soon")}
-          </div>
+          <div className="text-gray-500">{t("settings.coming_soon")}</div>
         ) : isLoading ? (
           // [data-drop-region] sizes itself with min-height only, so a
           // percentage h-full inside it would not resolve. Give the skeleton
@@ -349,9 +349,11 @@ export const MainContent = React.memo(function MainContent({
           // space so the skeleton covers the whole loading region.
           <div
             role="status"
-            aria-label={t("loading", "Loading...")}
+            aria-label={t("loading")}
             className="flex flex-col"
-            style={{ minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)` }}
+            style={{
+              minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)`,
+            }}
           >
             <SkeletonRowList rows={skeletonRows} stretch className="flex-1" />
           </div>

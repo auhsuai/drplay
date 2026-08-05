@@ -14,13 +14,30 @@ import {
 } from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
+import en from "../../locales/en/translation.json";
 import { clearAppCache, getCacheSizes } from "../../utils/cache";
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (_key: string, defaultValue?: string) => defaultValue ?? _key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, defaultValue?: string) =>
+        resolveKey(key) ?? defaultValue ?? key,
+    }),
+  };
+});
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
@@ -38,6 +55,16 @@ vi.mock("../../utils/cache", () => ({
 vi.mock("../../utils/downloadPath", () => ({
   getEffectiveDownloadPath: vi.fn().mockResolvedValue(""),
   setCustomDownloadPath: vi.fn(),
+}));
+
+// The uploads section (slice 5.3) imports uploadManager, which transitively
+// pulls Tauri APIs (diskFs) that must not load in the jsdom env — the section
+// is covered in SettingsTab.test.tsx, so a minimal mock keeps this file
+// focused on the cache-toast flow.
+vi.mock("../../utils/uploadManager", () => ({
+  subscribe: () => () => {},
+  getEntries: () => [],
+  cancelUpload: vi.fn(),
 }));
 
 vi.mock("./components/LanguageDropdown", () => ({
@@ -88,7 +115,7 @@ describe("Clear Cache flow renders a real success toast", () => {
     await waitFor(() => {
       const successToast = document.querySelector(".app-toast--success");
       expect(successToast).not.toBeNull();
-      expect(successToast?.textContent).toBe("Cache cleared successfully!");
+      expect(successToast?.textContent).toBe("Cache cleared");
     });
     expect(document.querySelector(".app-toast--error")).toBeNull();
   });

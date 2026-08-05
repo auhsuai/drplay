@@ -52,6 +52,23 @@ class InMemoryPlaylists {
 
 const store = new InMemoryPlaylists();
 
+const { showErrorToastMock } = vi.hoisted(() => ({
+  showErrorToastMock: vi.fn(),
+}));
+
+// i18n util modules are not hooks — they call i18n.t() directly. The toast
+// contract is the KEY (locale text lives in the translation JSONs, checked
+// separately by the en/vi parity test), so t is stubbed to return the key.
+vi.mock("../i18n", () => ({
+  default: { t: (key: string) => key },
+}));
+vi.mock("./simpleToast", () => ({
+  showErrorToast: showErrorToastMock,
+}));
+vi.mock("./errorLog", () => ({
+  captureError: vi.fn(),
+}));
+
 vi.mock("../db/db", () => {
   const playlistsTable = {
     get: (id: string) => store.get(id),
@@ -108,6 +125,7 @@ const track = (id: string): Track => ({
 beforeEach(() => {
   store.clear();
   localStorage.clear();
+  vi.clearAllMocks();
 });
 
 // Assert the optional value is present and return it narrowed — replaces the
@@ -231,5 +249,83 @@ describe("playlists (Dexie-backed)", () => {
     expect(firstCall[0]).toBe("rw");
     expect(firstCall[1]).toBe(db.playlists);
     spy.mockRestore();
+  });
+
+  it("createPlaylist shows the localized toast key when the write fails (no hardcoded language)", async () => {
+    setUser(EMAIL_A);
+    // Spy on the mocked table method (not the store) — the db mock's put
+    // closure does not forward the returned promise, so a store-level
+    // rejection would be swallowed.
+    const putSpy = vi
+      .spyOn(db.playlists, "put")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const result = await createPlaylist("My Mix");
+
+    expect(result).toBeNull();
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith(
+      "sidebar.create_playlist_error",
+    );
+    putSpy.mockRestore();
+  });
+
+  it("deletePlaylist shows the localized toast key when the delete fails (no hardcoded language)", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Temp"), "playlist");
+    const deleteSpy = vi
+      .spyOn(db.playlists, "delete")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    await deletePlaylist(p.id);
+
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith("playlist.delete_error");
+    deleteSpy.mockRestore();
+  });
+
+  it("updatePlaylist shows the localized toast key when the write fails (no hardcoded language)", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    const txnSpy = vi
+      .spyOn(store, "transaction")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const result = await updatePlaylist(p.id, { name: "Renamed" });
+
+    expect(result).toBeNull();
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith("playlist.update_error");
+    txnSpy.mockRestore();
+  });
+
+  it("addTrackToPlaylist shows the localized toast key when the write fails (no hardcoded language)", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    const txnSpy = vi
+      .spyOn(store, "transaction")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    await addTrackToPlaylist(p.id, track("1"));
+
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith("playlist.add_track_error");
+    txnSpy.mockRestore();
+  });
+
+  it("removeTrackFromPlaylist shows the localized toast key when the write fails (no hardcoded language)", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    const txnSpy = vi
+      .spyOn(store, "transaction")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    await removeTrackFromPlaylist(p.id, "1");
+
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith(
+      "playlist.remove_track_error",
+    );
+    txnSpy.mockRestore();
   });
 });

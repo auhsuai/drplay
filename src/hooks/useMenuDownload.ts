@@ -80,17 +80,12 @@ export function useMenuDownload(t: TFunction) {
     // still uploading has no playable media yet — downloading it would fetch a
     // non-existent file.
     if (isUploading(track.id)) {
-      showErrorToast(
-        t(
-          "upload.uploading_blocked",
-          "This item is being uploaded, please wait",
-        ),
-      );
+      showErrorToast(t("upload.uploading_blocked"));
       return;
     }
     setDownloadTrack(track);
     setDownloadFileName(
-      `${track.title} - ${track.artist || t("common.unknown", "Unknown")}`,
+      `${track.title} - ${track.artist || t("common.unknown")}`,
     );
     setShowDownloadDialog(true);
     setIsOpen(false);
@@ -153,7 +148,7 @@ export function useMenuDownload(t: TFunction) {
         : ".mp3";
       const finalFileName = sanitizeFilename(
         `${base}${ext}`,
-        t("menu.untitled", "Untitled"),
+        t("menu.untitled"),
       );
       // join() uses the platform-specific separator (Tauri v2 path API) so a
       // POSIX build no longer writes a literal backslash into the file name.
@@ -168,7 +163,7 @@ export function useMenuDownload(t: TFunction) {
         headers: { path: encodeURIComponent(savePath) },
       });
 
-      setDownloadMessage(`${t("menu.saved_at", "Đã lưu tại:")} ${savePath}`);
+      setDownloadMessage(`${t("menu.saved_at")} ${savePath}`);
     } catch (err: unknown) {
       // Duck-typed name extraction: DOMException is NOT instanceof Error in
       // some environments (jsdom), yet carries a reliable .name ('AbortError'
@@ -197,7 +192,7 @@ export function useMenuDownload(t: TFunction) {
           source: "useMenuDownload",
           message: `Download timeout — no response within ${String(DOWNLOAD_TIMEOUT_MS)}ms`,
         });
-        setDownloadMessage(t("menu.download_failed", "Tải xuống thất bại"));
+        setDownloadMessage(t("menu.download_failed"));
         return;
       }
       void captureError({
@@ -205,7 +200,7 @@ export function useMenuDownload(t: TFunction) {
         source: "useMenuDownload",
         message: `Download failed: ${errName || String(err)}`,
       });
-      setDownloadMessage(t("menu.download_failed", "Tải xuống thất bại"));
+      setDownloadMessage(t("menu.download_failed"));
     } finally {
       setIsDownloadingFile(false);
     }

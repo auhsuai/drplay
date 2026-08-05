@@ -3,15 +3,32 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type React from "react";
 import { TopNavigationBar } from "./TopNavigationBar";
+import en from "../../../locales/en/translation.json";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so we stub useTranslation to return
 // the defaultValue passed to t().
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (_key: string, defaultValue?: string) => defaultValue ?? _key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, defaultValue?: string) =>
+        resolveKey(key) ?? defaultValue ?? key,
+    }),
+  };
+});
 
 interface TopNavProps {
   isSelectionMode: boolean;
@@ -57,7 +74,7 @@ function makeProps(overrides: Partial<TopNavProps> = {}): TopNavProps {
 }
 
 const openSortMenu = () => {
-  const arrow = screen.getByTitle("Toggle Order");
+  const arrow = screen.getByTitle("Toggle order");
   fireEvent.click(arrow.parentElement as HTMLElement);
 };
 
@@ -77,20 +94,20 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
     expect(screen.getAllByText("Sort").length).toBeGreaterThan(0);
   });
 
-  it("opens a menu with exactly 3 options: A-Z / Ngày / Kích thước", () => {
+  it("opens a menu with exactly 3 options: A-Z / Date / Size", () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
     const menu = document.querySelector(".w-32") as HTMLElement;
     const labels = Array.from(menu.querySelectorAll("button")).map(
       (b) => b.textContent,
     );
-    expect(labels.sort()).toEqual(["A-Z", "Kích thước", "Ngày"]);
+    expect(labels.sort()).toEqual(["A-Z", "Date", "Size"]);
   });
 
-  it('clicking Ngày sets "modifiedTime desc"', () => {
+  it('clicking Date sets "modifiedTime desc"', () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Ngày" }));
+    fireEvent.click(screen.getByRole("button", { name: "Date" }));
     expect(onSortChange).toHaveBeenCalledWith("modifiedTime desc");
   });
 
@@ -103,28 +120,28 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
     expect(onSortChange).toHaveBeenCalledWith("name");
   });
 
-  it('clicking Kích thước sets "size"', () => {
+  it('clicking Size sets "size"', () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Kích thước" }));
+    fireEvent.click(screen.getByRole("button", { name: "Size" }));
     expect(onSortChange).toHaveBeenCalledWith("size");
   });
 
   it('arrow toggle appends/removes " desc" and does not open the menu', () => {
     render(<TopNavigationBar {...makeProps()} />);
-    fireEvent.click(screen.getByTitle("Toggle Order"));
+    fireEvent.click(screen.getByTitle("Toggle order"));
     expect(onSortChange).toHaveBeenCalledWith("name desc");
     expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
   });
 
   it('arrow toggle removes " desc" when already descending', () => {
     render(<TopNavigationBar {...makeProps({ sortOption: "name desc" })} />);
-    fireEvent.click(screen.getByTitle("Toggle Order"));
+    fireEvent.click(screen.getByTitle("Toggle order"));
     expect(onSortChange).toHaveBeenCalledWith("name");
   });
 
   it("renders no sort UI when token is null", () => {
     render(<TopNavigationBar {...makeProps({ token: null })} />);
-    expect(screen.queryByTitle("Toggle Order")).toBeNull();
+    expect(screen.queryByTitle("Toggle order")).toBeNull();
   });
 });

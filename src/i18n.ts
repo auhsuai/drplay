@@ -50,6 +50,33 @@ const syncDocumentLang = (lng: string) => {
 
 i18n.on("languageChanged", syncDocumentLang);
 
+// Missing-key tracking is dev-only: each miss fires a handler call, and the
+// log noise is pointless in production where keys are frozen at build time
+// (compile-time keys + `npm run i18n:check` cover CI). saveMissing must be
+// true for missingKeyHandler to fire at all (docs: configuration-options).
+// Deliberately NO fs/http backend: saveMissing would otherwise write missing
+// keys into resource files, and writing files from untrusted t() input is
+// the prototype-pollution sink the project avoids (CVE-2026-48713 class).
+const MISSING_KEY_HANDLER_MODULE = "i18n";
+const DEV_MISSING_KEY_OPTIONS = import.meta.env.DEV
+  ? {
+      saveMissing: true,
+      missingKeyHandler: (
+        lngs: readonly string[],
+        _ns: string,
+        key: string,
+      ) => {
+        // Key strings come from source code, not user input — safe to log.
+        // fallbackValue is deliberately NOT logged (it may carry user data).
+        void captureError({
+          level: "warn",
+          source: MISSING_KEY_HANDLER_MODULE,
+          message: `i18n-missing-key lng=${lngs.join(",")} key=${key}`,
+        });
+      },
+    }
+  : {};
+
 // Fire-and-forget: i18next init() returns a completion promise the app does
 // not await (resources are bundled, init is synchronous in practice).
 void i18n.use(initReactI18next).init({
@@ -61,6 +88,7 @@ void i18n.use(initReactI18next).init({
   interpolation: {
     escapeValue: false, // react already safes from xss
   },
+  ...DEV_MISSING_KEY_OPTIONS,
 });
 
 // Belt-and-suspenders: init is synchronous here, but if a future backend makes

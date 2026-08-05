@@ -11,16 +11,32 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { captureError } from "../../utils/errorLog";
 import { LoginScreen } from "./LoginScreen";
+import en from "../../locales/en/translation.json";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (_key: string, fallback?: string) => fallback ?? _key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+    }),
+  };
+});
 
 vi.mock("../../utils/errorLog", () => ({
   captureError: vi.fn().mockResolvedValue(undefined),
@@ -57,7 +73,7 @@ describe("LoginScreen invoke login error handling", () => {
     fireEvent.click(screen.getByRole("button"));
 
     await waitFor(() => {
-      expect(toastRootText()).toContain("Đăng nhập đã bị hủy");
+      expect(toastRootText()).toContain("Login cancelled");
     });
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -77,9 +93,7 @@ describe("LoginScreen invoke login error handling", () => {
     fireEvent.click(screen.getByRole("button"));
 
     await waitFor(() => {
-      expect(toastRootText()).toContain(
-        "Đăng nhập quá thời gian chờ, vui lòng thử lại.",
-      );
+      expect(toastRootText()).toContain("Login timed out. Try again.");
     });
   });
 
@@ -90,9 +104,7 @@ describe("LoginScreen invoke login error handling", () => {
     fireEvent.click(screen.getByRole("button"));
 
     await waitFor(() => {
-      expect(toastRootText()).toContain(
-        "Đăng nhập thất bại, vui lòng thử lại.",
-      );
+      expect(toastRootText()).toContain("Login failed. Try again.");
     });
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -166,7 +178,7 @@ describe("LoginScreen invoke login error handling", () => {
       act(() => {
         vi.advanceTimersByTime(CANCEL_DELAY_MS);
       });
-      const cancelAction = screen.getByRole("button", { name: "Hủy" });
+      const cancelAction = screen.getByRole("button", { name: "Cancel" });
       expect(cancelAction.tagName).toBe("BUTTON");
     } finally {
       vi.useRealTimers();
@@ -183,8 +195,8 @@ describe("LoginScreen invoke login error handling", () => {
       act(() => {
         vi.advanceTimersByTime(CANCEL_DELAY_MS);
       });
-      fireEvent.click(screen.getByRole("button", { name: "Hủy" }));
-      expect(toastRootText()).toContain("Đã hủy thao tác kết nối.");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(toastRootText()).toContain("Connection cancelled.");
     } finally {
       vi.useRealTimers();
     }

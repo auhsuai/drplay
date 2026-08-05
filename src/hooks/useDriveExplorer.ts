@@ -45,7 +45,6 @@ const SORT_COLLATOR = new Intl.Collator(undefined, {
 });
 const DEBOUNCE_DELAY_MS = 150;
 const SEARCH_RESULT_LABEL = "Search Result";
-const UPLOADING_BLOCKED_FALLBACK = "This item is being uploaded, please wait";
 
 // Monotonic upload-status version: bumped on every uploadManager notify so the
 // explorer re-runs the pin partition below with fresh getUploadState()
@@ -463,9 +462,7 @@ export function useDriveExplorer(
         source: "useDriveExplorer",
         message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(
-        t("drive.create_folder_error") || "Failed to create folder",
-      );
+      showErrorToast(t("drive.create_folder_error"));
     } finally {
       setIsCreatingFolder(false);
     }
@@ -476,9 +473,7 @@ export function useDriveExplorer(
 
     const itemsToDelete = filterUploading([...selectedIds]);
     if (itemsToDelete.length < selectedIds.size) {
-      showErrorToast(
-        t("upload.uploading_blocked") || UPLOADING_BLOCKED_FALLBACK,
-      );
+      showErrorToast(t("upload.uploading_blocked"));
     }
     if (itemsToDelete.length === 0) return;
 
@@ -510,9 +505,7 @@ export function useDriveExplorer(
           });
       }
       if (failedIds.length > 0) {
-        showErrorToast(
-          t("drive.delete_error") || "Failed to delete one or more items.",
-        );
+        showErrorToast(t("drive.delete_error"));
       }
     } catch (e: unknown) {
       void captureError({
@@ -520,9 +513,7 @@ export function useDriveExplorer(
         source: "useDriveExplorer",
         message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(
-        t("drive.delete_error") || "Failed to delete one or more items.",
-      );
+      showErrorToast(t("drive.delete_error"));
     } finally {
       setIsBulkOperating(false);
       onComplete();
@@ -537,9 +528,7 @@ export function useDriveExplorer(
 
     const itemsToMove = filterUploading([...selectedIds]);
     if (itemsToMove.length < selectedIds.size) {
-      showErrorToast(
-        t("upload.uploading_blocked") || UPLOADING_BLOCKED_FALLBACK,
-      );
+      showErrorToast(t("upload.uploading_blocked"));
     }
     if (itemsToMove.length === 0) return;
 
@@ -576,9 +565,7 @@ export function useDriveExplorer(
           onRemoveItem(id);
         });
       if (failedIds.length > 0) {
-        showErrorToast(
-          t("drive.move_error") || "Failed to move one or more items.",
-        );
+        showErrorToast(t("drive.move_error"));
       }
     } catch (e: unknown) {
       void captureError({
@@ -586,9 +573,7 @@ export function useDriveExplorer(
         source: "useDriveExplorer",
         message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(
-        t("drive.move_error") || "Failed to move one or more items.",
-      );
+      showErrorToast(t("drive.move_error"));
     } finally {
       setIsBulkOperating(false);
       onComplete();

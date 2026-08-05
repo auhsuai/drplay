@@ -64,4 +64,33 @@ describe("i18n module init (P0 crash guard)", () => {
     const { language } = await freshI18n();
     expect(language).toBe("en");
   });
+
+  it("pluralizes the song count via the built-in count option (song_one / song_other)", async () => {
+    const { default: i18nInstance } = await freshI18n();
+
+    expect(i18nInstance.t("song", { count: 1 })).toBe("1 song");
+    expect(i18nInstance.t("song", { count: 5 })).toBe("5 songs");
+  });
+
+  it("logs a warn via captureError when t() hits a missing key (dev gate)", async () => {
+    const { default: i18nInstance, captureError } = await freshI18n();
+
+    // Runtime-only probe: the compile-time resource types now reject unknown
+    // keys, so cast t to an untyped callable to simulate a stale/typo'd key
+    // slipping past the type system (that is exactly what this handler is for).
+    const tUntyped = i18nInstance.t.bind(i18nInstance) as (
+      key: string,
+    ) => string;
+    tUntyped("nonexistent.key.xyz");
+
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "i18n",
+        message: expect.stringContaining(
+          "i18n-missing-key",
+        ) as unknown as string,
+      }),
+    );
+  });
 });

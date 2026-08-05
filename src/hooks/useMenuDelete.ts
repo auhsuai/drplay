@@ -50,7 +50,7 @@ export function useMenuDelete(t: TFunction) {
         source: "useMenuDelete",
         message: `Failed to delete item: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(t("drive.delete_error", "Failed to delete item"));
+      showErrorToast(t("drive.delete_error"));
     } finally {
       setIsDeleting(false);
     }

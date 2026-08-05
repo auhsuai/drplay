@@ -6,6 +6,7 @@ import {
   Download,
   Eraser,
   Cloud,
+  CloudUpload,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
@@ -23,6 +24,8 @@ import {
 } from "../../utils/downloadPath";
 import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useEffect, useState } from "react";
+import { subscribe, getEntries, cancelUpload } from "../../utils/uploadManager";
+import type { UploadEntry } from "../../utils/uploadManager";
 
 interface SettingsTabProps {
   theme: ThemeType;
@@ -31,6 +34,25 @@ interface SettingsTabProps {
   setMinimizeToTray: (minimize: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
+}
+
+// Shown while a queued entry waits for its turn in the sequential upload queue.
+const QUEUED_UPLOAD_LABEL = "Queued...";
+// Upload progress is a 0..1 fraction; the UI renders it as a percentage.
+const PROGRESS_PERCENT_SCALE = 100;
+
+// The in-progress uploads section only lists live entries — terminal
+// (done/error) entries are pruned by the manager right after they notify.
+function isActiveUpload(entry: UploadEntry): boolean {
+  return entry.status === "queued" || entry.status === "uploading";
+}
+
+function uploadProgressLabel(entry: UploadEntry): string {
+  if (entry.status === "uploading") {
+    const percent = Math.round((entry.progress ?? 0) * PROGRESS_PERCENT_SCALE);
+    return `${String(percent)}%`;
+  }
+  return QUEUED_UPLOAD_LABEL;
 }
 
 export function SettingsTab({
@@ -44,26 +66,36 @@ export function SettingsTab({
   const { t } = useTranslation();
   const [downloadPath, setDownloadPath] = useState<string>("");
   const [showCacheManager, setShowCacheManager] = useState(false);
+  const [uploadEntries, setUploadEntries] = useState<UploadEntry[]>(getEntries);
 
   useEffect(() => {
     void getEffectiveDownloadPath().then(setDownloadPath);
   }, []);
+
+  // Live snapshot of the upload queue: subscribe returns an unsubscribe, so
+  // the effect's cleanup unsubscribes on unmount (no leaked subscriber).
+  useEffect(() => {
+    const unsubscribeFromUploads = subscribe(() => {
+      setUploadEntries(getEntries());
+    });
+    return unsubscribeFromUploads;
+  }, []);
+
+  const activeUploads = uploadEntries.filter(isActiveUpload);
 
   const handlePickDownloadPath = async () => {
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: t("settings.select_download_folder") || "Select Download Folder",
+        title: t("settings.select_download_folder"),
       });
       if (selected) {
         setCustomDownloadPath(selected);
         setDownloadPath(selected);
       }
     } catch {
-      showErrorToast(
-        t("settings.select_folder_error") || "Failed to select folder",
-      );
+      showErrorToast(t("settings.select_folder_error"));
     }
   };
 
@@ -74,7 +106,7 @@ export function SettingsTab({
 
       <div className="max-w-3xl mx-auto relative z-10">
         <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-10 tracking-tight">
-          {t("settings.title") || "Settings"}
+          {t("settings.title")}
         </h1>
 
         <div className="space-y-8">
@@ -104,6 +136,50 @@ export function SettingsTab({
               </button>
             </div>
           </div>
+
+          {/* In-progress uploads: hidden entirely while the queue is idle.
+              Entries disappear from this list the moment they turn terminal
+              (manager notifies + prunes), so cancel keeps working live. */}
+          {activeUploads.length > 0 && (
+            <div className="flex flex-col gap-2 mt-6">
+              <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
+                {t("settings.uploads_section")}
+              </h2>
+              <div className="flex flex-col">
+                {activeUploads.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-center justify-between py-4 pb-6"
+                  >
+                    <div className="flex items-center gap-4 min-w-0">
+                      <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                        <CloudUpload className="w-6 h-6 text-[#4285F4]" />
+                      </div>
+                      <div className="min-w-0">
+                        <p
+                          title={entry.name}
+                          className="text-base font-semibold text-gray-900 dark:text-gray-100 truncate"
+                        >
+                          {truncatePathMiddle(entry.name)}
+                        </p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          {uploadProgressLabel(entry)}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        cancelUpload(entry.id);
+                      }}
+                      className="px-4 py-2 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                    >
+                      {t("settings.uploads_cancel")}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-col gap-2 mt-6">
             <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
@@ -145,15 +221,13 @@ export function SettingsTab({
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.minimize_to_tray") ||
-                      "Minimize to System Tray"}
+                    {t("settings.minimize_to_tray")}
                   </p>
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
                 <span className="sr-only">
-                  {t("settings.minimize_to_tray") ||
-                    "Minimize to System Tray"}
+                  {t("settings.minimize_to_tray")}
                 </span>
                 <input
                   type="checkbox"
@@ -175,7 +249,7 @@ export function SettingsTab({
                 </div>
                 <div className="min-w-0">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.download_location") || "Download Location"}
+                    {t("settings.download_location")}
                   </p>
                   <p
                     title={downloadPath}
@@ -193,7 +267,7 @@ export function SettingsTab({
                   className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
                 >
                   <FolderOpen className="w-4 h-4" />
-                  {t("settings.change_path") || "Change Path"}
+                  {t("settings.change_path")}
                 </button>
               </div>
             </div>
@@ -202,7 +276,7 @@ export function SettingsTab({
           {/* Data Management */}
           <div className="flex flex-col gap-2 mt-6 mb-8">
             <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
-              {t("settings.data_management") || "Data Management"}
+              {t("settings.data_management")}
             </h2>
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
@@ -224,7 +298,7 @@ export function SettingsTab({
                 </div>
                 <div className="max-w-[320px]">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.trash") || "Trash"}
+                    {t("settings.trash")}
                   </p>
                 </div>
               </div>
@@ -235,7 +309,7 @@ export function SettingsTab({
                 }}
                 className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
-                {t("settings.open_trash") || "Open Trash"}
+                {t("settings.open_trash")}
               </button>
             </div>
 
@@ -246,7 +320,7 @@ export function SettingsTab({
                 </div>
                 <div className="max-w-[320px]">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.clear_cache", "Clear App Cache")}
+                    {t("settings.clear_cache")}
                   </p>
                 </div>
               </div>
@@ -257,7 +331,7 @@ export function SettingsTab({
                 }}
                 className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
-                {t("settings.clear_cache_btn", "Clear Cache")}
+                {t("settings.clear_cache_btn")}
               </button>
             </div>
           </div>

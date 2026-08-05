@@ -238,9 +238,7 @@ export function FolderSelectionScreen({
         source: FOLDER_MODULE,
         message: `failed-to-fetch-folders: ${classifyFolderError(e)}`,
       });
-      showErrorToast(
-        t("folder_selection.folders_error") || "Failed to load folders",
-      );
+      showErrorToast(t("folder_selection.folders_error"));
       setFolders([]);
     } finally {
       if (foldersAbortRef.current === controller) {
@@ -275,9 +273,7 @@ export function FolderSelectionScreen({
             source: FOLDER_MODULE,
             message: `api-search-failed: ${classifyFolderError(e)}`,
           });
-          showErrorToast(
-            t("folder_selection.search_error") || "Failed to search folders",
-          );
+          showErrorToast(t("folder_selection.search_error"));
         }
       } finally {
         setIsSearchingApi(false);
@@ -406,9 +402,7 @@ export function FolderSelectionScreen({
         source: FOLDER_MODULE,
         message: `fetch-parent-failed: ${classifyFolderError(e)}`,
       });
-      showErrorToast(
-        t("folder_selection.back_error") || "Failed to navigate back",
-      );
+      showErrorToast(t("folder_selection.back_error"));
       setCurrentFolderId(ROOT_FOLDER_ID);
       setCurrentFolderName(t("drive.my_drive"));
     }
@@ -519,7 +513,7 @@ export function FolderSelectionScreen({
             <input
               ref={searchInputRef}
               type="text"
-              placeholder={t("search_placeholder", "Search...")}
+              placeholder={t("search_placeholder")}
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);

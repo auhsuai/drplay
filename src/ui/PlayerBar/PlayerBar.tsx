@@ -220,7 +220,14 @@ function PlayerBarImpl({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onNextTrack, onPrevTrack, onTogglePlay, onTogglePlayMode, toggleMute, audio]);
+  }, [
+    onNextTrack,
+    onPrevTrack,
+    onTogglePlay,
+    onTogglePlayMode,
+    toggleMute,
+    audio,
+  ]);
 
   // Handle Play/Pause from Props (Syncing)
   useEffect(() => {
@@ -449,15 +456,9 @@ function PlayerBarImpl({
   // active locale, and falls back to the raw message for unmapped codes.
   const errorText = errorInfo
     ? errorInfo.code === "network_interrupted"
-      ? t(
-          "player.network_interrupted",
-          "Network unstable or connection lost, please check again",
-        )
+      ? t("player.network_interrupted")
       : errorInfo.code === "format_error"
-        ? t(
-            "player.format_error",
-            "Audio format not supported, skipping to next track...",
-          )
+        ? t("player.format_error")
         : errorInfo.message
     : null;
 
@@ -478,7 +479,7 @@ function PlayerBarImpl({
               onExpandNowPlaying();
             }
           }}
-          title={t("player.view_now_playing", "View Now Playing")}
+          title={t("player.view_now_playing")}
         >
           <div
             className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400`}
@@ -509,9 +510,7 @@ function PlayerBarImpl({
                 void handleToggleFavorite();
               }}
               aria-label={
-                isLiked
-                  ? t("player.remove_favorite", "Remove from favorites")
-                  : t("player.add_favorite", "Add to favorites")
+                isLiked ? t("player.remove_favorite") : t("player.add_favorite")
               }
               className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? "text-[#4285F4]" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
             >
@@ -543,7 +542,10 @@ function PlayerBarImpl({
               errorInfo
                 ? () => {
                     if (currentTrack) {
-                      void audio.playTrack(currentTrack, currentTrack.restoreTime);
+                      void audio.playTrack(
+                        currentTrack,
+                        currentTrack.restoreTime,
+                      );
                     }
                   }
                 : onTogglePlay

@@ -12,6 +12,7 @@ import type {
 import type {
   uploadFileResumable as uploadFileResumableImpl,
   uploadFileResumableChunked as uploadFileResumableChunkedImpl,
+  generateClientId as generateClientIdImpl,
 } from "../utils/driveUpload";
 import type { DiskEntry } from "./diskFs";
 import type {
@@ -22,6 +23,9 @@ import type {
 } from "./diskFs";
 import type { showErrorToast as showErrorToastImpl } from "./simpleToast";
 import type { captureError as captureErrorImpl } from "./errorLog";
+import { USER_EMAIL_KEY } from "./storageKeys";
+import enTranslations from "../locales/en/translation.json";
+import viTranslations from "../locales/vi/translation.json";
 
 // Mocks keep the manager isolated: driveApi/diskFs stand-ins for the network
 // and Tauri IPC, errorLog/simpleToast/i18next for side effects we assert on.
@@ -38,6 +42,7 @@ vi.mock("../utils/driveUpload", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/driveUpload")>();
   return {
     ...actual, // keep the REAL UploadError class â€” `instanceof` must work
+    generateClientId: vi.fn(),
     uploadFileResumable: vi.fn(),
     uploadFileResumableChunked: vi.fn(),
   };
@@ -77,6 +82,7 @@ const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 let um: typeof import("./uploadManager");
 let uploadFileResumable: Mock<typeof uploadFileResumableImpl>;
 let uploadFileResumableChunked: Mock<typeof uploadFileResumableChunkedImpl>;
+let generateClientId: Mock<typeof generateClientIdImpl>;
 let getDriveStorageQuota: Mock<typeof getDriveStorageQuotaImpl>;
 let createFolderMock: Mock<typeof createFolderImpl>;
 let openDiskReadStream: Mock<typeof openDiskReadStreamImpl>;
@@ -102,6 +108,7 @@ beforeEach(async () => {
   const el = await import("../utils/errorLog");
   uploadFileResumable = vi.mocked(du.uploadFileResumable);
   uploadFileResumableChunked = vi.mocked(du.uploadFileResumableChunked);
+  generateClientId = vi.mocked(du.generateClientId);
   getDriveStorageQuota = vi.mocked(da.getDriveStorageQuota);
   createFolderMock = vi.mocked(da.createFolder);
   openDiskReadStream = vi.mocked(df.openDiskReadStream);
@@ -145,8 +152,12 @@ beforeEach(async () => {
   uploadFileResumableChunked.mockResolvedValue(
     makeDriveFile("file-x", "x.mp3"),
   );
+  // Default: id generation unavailable (bare vi.fn() resolves undefined) →
+  // the manager degrades to the legacy non-idempotent upload, so existing
+  // tests keep exercising that fallback path.
 
   await db.files.clear();
+  await db.uploadSessions.clear();
   dispatchSpy.mockClear();
 });
 
@@ -201,9 +212,10 @@ function deferred<T>(): {
 // fake-indexeddb schedules every IDB operation via setImmediate (see
 // fake-indexeddb lib/scheduling.js â€” jsdom does not provide it, so Node's real
 // setImmediate is used). Under real timers a macrotask yield lets those ops
-// land, which a pure-microtask flush would miss.
+// land, which a pure-microtask flush would miss. 20 iterations covers the
+// schema-v9 uploadSessions writes (persist + clear) on top of the files rows.
 async function flush(): Promise<void> {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 20; i++) {
     await new Promise<void>((r) => setTimeout(r, 0));
   }
 }
@@ -216,8 +228,9 @@ const nodeImmediate = (globalThis as unknown as Record<string, unknown>)
 
 // Retry tests fake ONLY timers (never setImmediate) so db chains progress on
 // the real event loop while the backoff stays controllable; this helper
-// yields the event loop a few times.
-async function realTick(times = 5): Promise<void> {
+// yields the event loop a few times. 10 yields covers the uploadSessions
+// roundtrips (slice 5.1) between the pending-row write and the upload call.
+async function realTick(times = 10): Promise<void> {
   for (let i = 0; i < times; i++) {
     if (nodeImmediate) {
       await new Promise<void>((r) => {
@@ -256,7 +269,9 @@ async function waitIdle(timeoutMs = 5000): Promise<void> {
   // (markDone is symmetric: status flips AFTER the row writes). Without this
   // extra wait, assertions on those side effects (toast / captureError /
   // subscriber counts) race ahead of them and flake under CPU contention.
-  await realTick(3);
+  // 10 yields also covers the slice-5.1 session clear (uploadSessions.delete)
+  // that now sits between the status flip and finishEntry.
+  await realTick(10);
 }
 
 function firedEvents(type: string): CustomEvent[] {
@@ -357,6 +372,7 @@ describe("uploadManager", () => {
       "song.mp3",
       "root",
       expect.any(AbortSignal),
+      { clientGeneratedId: undefined },
     );
 
     d.resolve(makeDriveFile("file-1", "song.mp3"));
@@ -515,6 +531,80 @@ describe("uploadManager", () => {
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
   });
 
+  it("9b. retry idempotent: moi attempt dung CUNG pre-generated id (fix file trung)", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+    generateClientId.mockResolvedValue("gen-42");
+    uploadFileResumable
+      .mockRejectedValueOnce(new UploadErrorClass("network hiccup", "network"))
+      .mockResolvedValueOnce(makeDriveFile("file-42", "idem.mp3"));
+    const snapshots = captureSnapshots();
+
+    um.startUploads([fileSeed("idem.mp3")], TOKEN);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+    expect(generateClientId).toHaveBeenCalledTimes(1);
+
+    await advanceBackoff(1500); // backoffDelay(attempt-1=0) âˆˆ [1000, 1500)
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(2);
+
+    // Both attempts MUST bind the SAME id — a fresh id per attempt would let a
+    // retry after a response-lost success create a duplicate file on Drive.
+    const ids = uploadFileResumable.mock.calls.map(
+      (c) => c[5]?.clientGeneratedId,
+    );
+    expect(ids).toEqual(["gen-42", "gen-42"]);
+    expect(generateClientId).toHaveBeenCalledTimes(1);
+    await realTick();
+    expect(snapshots[snapshots.length - 1]).toEqual([
+      { status: "done", error: undefined },
+    ]);
+  });
+
+  it("9c. generateClientId fail (network) -> fallback upload KHONG id, khong block, warn log", async () => {
+    generateClientId.mockRejectedValue(new Error("network down"));
+    uploadFileResumable.mockResolvedValue(makeDriveFile("file-fb", "fb.mp3"));
+    const snapshots = captureSnapshots();
+
+    um.startUploads([fileSeed("fb.mp3")], TOKEN);
+    await waitIdle();
+
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+    expect(uploadFileResumable.mock.calls[0]?.[5]).toEqual({
+      clientGeneratedId: undefined,
+    });
+    expect(snapshots[snapshots.length - 1]?.map((s) => s.status)).toEqual([
+      "done",
+    ]);
+    expect(um.getEntries()).toEqual([]);
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "client-id-generation-failed",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("9d. disk path: 1 pre-generated id per entry truyen vao chunked uploader", async () => {
+    generateClientId.mockResolvedValue("gen-7");
+    const snapshots = captureSnapshots();
+
+    um.startUploads([diskFileSeed("d.flac", "C:/Music/d.flac")], TOKEN);
+    await waitIdle();
+
+    expect(generateClientId).toHaveBeenCalledTimes(1);
+    expect(uploadFileResumableChunked).toHaveBeenCalledWith(
+      TOKEN,
+      expect.objectContaining({ clientGeneratedId: "gen-7" }),
+    );
+    expect(uploadFileResumable).not.toHaveBeenCalled();
+    expect(snapshots[snapshots.length - 1]?.map((s) => s.status)).toEqual([
+      "done",
+    ]);
+  });
+
   it("10. folder upload: createFolder chuá»—i + memoize subfolder + basename/parent Ä‘Ãºng", async () => {
     walkDiskFolder.mockResolvedValue([
       {
@@ -555,7 +645,9 @@ describe("uploadManager", () => {
       }),
     );
     uploadFileResumableChunked.mockImplementation((_t, opts) =>
-      Promise.resolve(makeDriveFile(`file-${String(++fileCounter)}`, opts.name)),
+      Promise.resolve(
+        makeDriveFile(`file-${String(++fileCounter)}`, opts.name),
+      ),
     );
 
     um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
@@ -797,7 +889,8 @@ describe("uploadManager", () => {
     expect(openDiskReadStream).toHaveBeenCalledWith(path);
     expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
     const firstCall = uploadFileResumableChunked.mock.calls[0];
-    if (firstCall === undefined) throw new Error("expected chunked upload call");
+    if (firstCall === undefined)
+      throw new Error("expected chunked upload call");
     const opts = firstCall[1];
     expect(opts.name).toBe("Track One.mp3");
     expect(opts.parentId).toBe("root");
@@ -811,7 +904,8 @@ describe("uploadManager", () => {
     // The stream opened for the upload is closed on completion (finally).
     // (mock.results holds the raw Promise â€” await it to get the stream.)
     const firstResult = openDiskReadStream.mock.results[0];
-    if (firstResult === undefined) throw new Error("expected stream open result");
+    if (firstResult === undefined)
+      throw new Error("expected stream open result");
     const stream = (await firstResult.value) as {
       close: ReturnType<typeof vi.fn>;
     };
@@ -896,7 +990,7 @@ describe("uploadManager", () => {
     expect(cb).toHaveBeenCalledTimes(3); // one throttled progress notify
 
     d.resolve(makeDriveFile("f1", "x.mp3"));
-    await realTick(6);
+    await realTick(12);
     expect(cb).toHaveBeenCalledTimes(4); // done notify fires immediately
     // The 10s 'uploaded' tint timer is intentional (auto-clears) — the progress timer itself is gone.
     expect(vi.getTimerCount()).toBe(1);
@@ -915,7 +1009,8 @@ describe("uploadManager", () => {
       { status: "error", error: "network" },
     ]);
     const firstResult = openDiskReadStream.mock.results[0];
-    if (firstResult === undefined) throw new Error("expected stream open result");
+    if (firstResult === undefined)
+      throw new Error("expected stream open result");
     const stream = (await firstResult.value) as {
       close: ReturnType<typeof vi.fn>;
     };
@@ -1189,7 +1284,7 @@ describe("uploadManager", () => {
     um.startUploads([fileSeed("s.mp3")], TOKEN);
     await realTick();
     d.resolve(makeDriveFile("f9", "s.mp3"));
-    await realTick(6);
+    await realTick(12);
 
     expect(um.getUploadState("f9")).toBe("uploaded");
 
@@ -1278,9 +1373,7 @@ describe("uploadManager", () => {
     um.startUploads([fileSeed("x.mp3")], TOKEN);
     await waitIdle();
 
-    const message = captureError.mock.calls
-      .map((c) => c[0].message)
-      .join("\n");
+    const message = captureError.mock.calls.map((c) => c[0].message).join("\n");
     expect(message).toContain("name=x.mp3");
     expect(message).toContain("kind=invalid");
     expect(message).toContain("status=400");
@@ -1295,9 +1388,7 @@ describe("uploadManager", () => {
     um.startUploads([diskFileSeed("x", fullPath)], TOKEN);
     await waitIdle();
 
-    const message = captureError.mock.calls
-      .map((c) => c[0].message)
-      .join("\n");
+    const message = captureError.mock.calls.map((c) => c[0].message).join("\n");
     expect(message).toContain("name=track.flac");
     expect(message).toContain("kind=failed");
     expect(message).not.toContain("Secret Album");
@@ -1343,7 +1434,9 @@ describe("uploadManager", () => {
       }),
     );
     uploadFileResumableChunked.mockImplementation((_t, opts) =>
-      Promise.resolve(makeDriveFile(`file-${String(++fileCounter)}`, opts.name)),
+      Promise.resolve(
+        makeDriveFile(`file-${String(++fileCounter)}`, opts.name),
+      ),
     );
 
     um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
@@ -1782,7 +1875,7 @@ describe("uploadManager", () => {
       expect(cb).toHaveBeenCalledTimes(4); // notify thá»© 2
 
       d.resolve(makeDriveFile("f1", "x.mp3"));
-      await realTick(6);
+      await realTick(12);
       expect(cb).toHaveBeenCalledTimes(5); // done notify NGAY, khÃ´ng bá»‹ delay bá»Ÿi throttle
       expect(vi.getTimerCount()).toBe(1); // +1 tint timer (10s, auto-clears)
     });
@@ -1810,7 +1903,7 @@ describe("uploadManager", () => {
       expect(cb).toHaveBeenCalledTimes(3); // khÃ´ng notify thÃªm
 
       d.resolve(makeDriveFile("f1", "x.mp3"));
-      await realTick(6);
+      await realTick(12);
       expect(cb).toHaveBeenCalledTimes(4); // done notify
       expect(vi.getTimerCount()).toBe(1); // +1 tint timer (10s, auto-clears)
     });
@@ -1828,9 +1921,571 @@ describe("uploadManager", () => {
       expect(vi.getTimerCount()).toBe(1); // progress timer đang chờ
 
       d.resolve(makeDriveFile("f1", "x.mp3"));
-      await realTick(6);
+      await realTick(12);
       expect(vi.getTimerCount()).toBe(1); // progress cleared — only the 10s tint timer remains
       expect(um.getEntries()).toEqual([]);
+    });
+  });
+
+  describe("pre-check 5TB (Google Drive max file size)", () => {
+    // Just over Google's documented 5 TB per-file limit (binary TB, the same
+    // 1024^n family the quota logic already uses).
+    const OVER_5TB = 5 * 1024 ** 4 + 1;
+
+    it("(a) disk path: stat.size > 5TB → error too-large + toast rõ + KHÔNG stream/upload/quota-fetch", async () => {
+      statDiskPath.mockResolvedValue({
+        path: "C:/huge.flac",
+        name: "huge.flac",
+        relativePath: "huge.flac",
+        isDirectory: false,
+        size: OVER_5TB,
+      });
+      const snapshots = captureSnapshots();
+
+      um.startUploads([diskFileSeed("x", "C:/huge.flac")], TOKEN);
+      await waitIdle();
+
+      expect(snapshots[snapshots.length - 1]).toEqual([
+        { status: "error", error: "too-large" },
+      ]);
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(openDiskReadStream).not.toHaveBeenCalled();
+      expect(generateClientId).not.toHaveBeenCalled();
+      // Fail-early: bị chặn TRƯỚC cả quota fetch — không 1 network call nào.
+      expect(getDriveStorageQuota).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledWith("upload.too_large");
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      // Log warn kèm size, không lộ disk path.
+      const logs = captureError.mock.calls.map((c) => c[0]);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.level).toBe("warn");
+      expect(logs[0]?.message).toContain("name=huge.flac");
+      expect(logs[0]?.message).toContain("size=");
+      expect(logs[0]?.message).not.toContain("C:/");
+      expect(await db.files.toArray()).toHaveLength(0);
+    });
+
+    it("(b) bytes path: seed bytes > 5TB → error too-large + toast + KHÔNG uploadFileResumable", async () => {
+      // Blob.size là getter ở prototype — override ở subclass để mô phỏng kích
+      // thước 5TB mà không allocate 5.5e12 byte thật.
+      class HugeBlob extends Blob {
+        override get size(): number {
+          return OVER_5TB;
+        }
+      }
+      const snapshots = captureSnapshots();
+
+      um.startUploads(
+        [
+          {
+            name: "huge.bin",
+            isFolder: false,
+            parentId: "root",
+            bytes: new HugeBlob([new Uint8Array([1, 2, 3])]),
+          },
+        ],
+        TOKEN,
+      );
+      await waitIdle();
+
+      expect(snapshots[snapshots.length - 1]).toEqual([
+        { status: "error", error: "too-large" },
+      ]);
+      expect(uploadFileResumable).not.toHaveBeenCalled();
+      expect(generateClientId).not.toHaveBeenCalled();
+      expect(getDriveStorageQuota).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledWith("upload.too_large");
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(await db.files.toArray()).toHaveLength(0);
+    });
+
+    it("(c) file bình thường (100GB) → upload chạy bình thường, không đổi luồng", async () => {
+      const gb100 = 100 * 1024 ** 3;
+      statDiskPath.mockResolvedValue({
+        path: "C:/big.flac",
+        name: "big.flac",
+        relativePath: "big.flac",
+        isDirectory: false,
+        size: gb100,
+      });
+      const snapshots = captureSnapshots();
+
+      um.startUploads([diskFileSeed("x", "C:/big.flac")], TOKEN);
+      await waitIdle();
+
+      expect(snapshots[snapshots.length - 1]?.map((s) => s.status)).toEqual([
+        "done",
+      ]);
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      expect(uploadFileResumableChunked.mock.calls[0]?.[1]?.totalSize).toBe(
+        gb100,
+      );
+      expect(showErrorToast).not.toHaveBeenCalled();
+    });
+
+    it("(d) chặn >5TB kể cả khi quota unlimited (limit=null) — pre-check độc lập quota fetch", async () => {
+      // Default mock đã là unlimited; khẳng định lại tường minh cho (d).
+      getDriveStorageQuota.mockResolvedValue({
+        limit: null,
+        usage: 0,
+        usageInDrive: 0,
+        usageInDriveTrash: 0,
+      });
+      statDiskPath.mockResolvedValue({
+        path: "C:/huge.flac",
+        name: "huge.flac",
+        relativePath: "huge.flac",
+        isDirectory: false,
+        size: OVER_5TB,
+      });
+
+      um.startUploads([diskFileSeed("x", "C:/huge.flac")], TOKEN);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(getDriveStorageQuota).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledWith("upload.too_large");
+    });
+
+    it("(e) i18n: key upload.too_large tồn tại ở en + vi (kèm con số 5 TB)", () => {
+      expect(enTranslations.upload.too_large).toContain("5 TB");
+      expect(viTranslations.upload.too_large).toContain("5 TB");
+    });
+  });
+
+  describe("uploadSessions persist lifecycle (slice 5.1)", () => {
+    const USER = "user@test.com";
+
+    beforeEach(() => {
+      localStorage.setItem(USER_EMAIL_KEY, USER);
+    });
+
+    afterEach(() => {
+      localStorage.removeItem(USER_EMAIL_KEY);
+    });
+
+    it("(a) processEntry persists an active row with entry fields (kind/diskPath/status/userEmail)", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+
+      um.startUploads(
+        [diskFileSeed("Track One.mp3", "C:/Music/Track One.mp3")],
+        TOKEN,
+      );
+      await flush();
+
+      const entry = um.getEntries()[0];
+      if (!entry) throw new Error("expected upload entry");
+      const rows = await db.uploadSessions.toArray();
+      expect(rows).toHaveLength(1);
+      const row = rows[0];
+      expect(row?.id).toBe(entry.id);
+      expect(row?.userEmail).toBe(USER);
+      expect(row?.name).toBe("Track One.mp3");
+      expect(row?.isFolder).toBe(false);
+      expect(row?.kind).toBe("diskFile");
+      expect(row?.diskPath).toBe("C:/Music/Track One.mp3");
+      expect(row?.parentId).toBe("root");
+      expect(row?.status).toBe("active");
+      expect(typeof row?.createdAt).toBe("number");
+      expect(typeof row?.updatedAt).toBe("number");
+
+      d.resolve(makeDriveFile("f1", "Track One.mp3"));
+      await waitIdle();
+    });
+
+    it("(b) markDone clears the session row", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads([fileSeed("song.mp3")], TOKEN);
+      await flush();
+      expect(await db.uploadSessions.toArray()).toHaveLength(1);
+
+      d.resolve(makeDriveFile("f1", "song.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(c) markError clears the session row", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads([fileSeed("x.mp3")], TOKEN);
+      await flush();
+      expect(await db.uploadSessions.toArray()).toHaveLength(1);
+
+      d.reject(new UploadErrorClass("bad request (400)", "invalid"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(d1) cancel queued → no session row remains (delete of a never-persisted id is a safe no-op)", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
+      await flush();
+
+      const b = um.getEntries().find((e) => e.name === "b.mp3");
+      if (!b) throw new Error("expected queued entry");
+      expect(b.status).toBe("queued");
+      // The active upload owns a row; the queued entry never persisted one.
+      expect(await db.uploadSessions.toArray()).toHaveLength(1);
+
+      expect(() => {
+        um.cancelUpload(b.id);
+      }).not.toThrow();
+      expect(
+        await db.uploadSessions.where("id").equals(b.id).toArray(),
+      ).toHaveLength(0);
+
+      d.resolve(makeDriveFile("f1", "a.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(d2) cancel in-flight (aborted) clears the session row", async () => {
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        return new Promise<DriveFileItem>((_resolve, reject) => {
+          opts.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(
+                new UploadErrorClass("upload aborted by caller", "aborted"),
+              );
+            },
+            { once: true },
+          );
+        });
+      });
+
+      um.startUploads([diskFileSeed("x", "C:/x.mp3")], TOKEN);
+      await flush();
+      expect(await db.uploadSessions.toArray()).toHaveLength(1);
+
+      const firstEntry = um.getEntries()[0];
+      if (!firstEntry) throw new Error("expected upload entry");
+      um.cancelUpload(firstEntry.id);
+      await waitIdle();
+
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+      expect(showErrorToast).not.toHaveBeenCalled();
+    });
+
+    it("(e) db.uploadSessions.put reject → upload still done + warn session-persist-failed + no toast", async () => {
+      const freshDb = await import("../db/db");
+      const putSpy = vi
+        .spyOn(freshDb.db.uploadSessions, "put")
+        .mockRejectedValue(new Error("db closed"));
+      const snapshots = captureSnapshots();
+
+      um.startUploads([fileSeed("song.mp3")], TOKEN);
+      await waitIdle();
+
+      expect(snapshots[snapshots.length - 1]?.map((s) => s.status)).toEqual([
+        "done",
+      ]);
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).not.toHaveBeenCalled();
+      const warnCall = captureError.mock.calls.find((c) =>
+        c[0].message.includes("session-persist-failed"),
+      );
+      expect(warnCall).toBeTruthy();
+      expect(warnCall?.[0].level).toBe("warn");
+      expect(warnCall?.[0].message).toContain(
+        "session-persist-failed name=song.mp3",
+      );
+      putSpy.mockRestore();
+    });
+
+    it("(f) bytes seed persists kind='bytes' without diskPath/uploadUri", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads([fileSeed("blob.mp3")], TOKEN);
+      await flush();
+
+      const rows = await db.uploadSessions.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.kind).toBe("bytes");
+      expect(rows[0]?.diskPath).toBeUndefined();
+      expect(rows[0]?.uploadUri).toBeUndefined();
+
+      d.resolve(makeDriveFile("f1", "blob.mp3"));
+      await waitIdle();
+    });
+  });
+
+  describe("resumeInterruptedUploads (slice 5.2)", () => {
+    const USER = "user@test.com";
+    const OLD_URI =
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=old-session";
+
+    beforeEach(() => {
+      localStorage.setItem(USER_EMAIL_KEY, USER);
+    });
+
+    afterEach(() => {
+      localStorage.removeItem(USER_EMAIL_KEY);
+    });
+
+    async function insertSessionRow(row: {
+      id: string;
+      name: string;
+      kind:
+        "diskFile" | "folderChildFile" | "folderRoot" | "folderChild" | "bytes";
+      diskPath?: string;
+      parentId?: string;
+      totalSize?: number;
+      uploadUri?: string;
+      clientGeneratedId?: string;
+      userEmail?: string;
+    }): Promise<void> {
+      await db.uploadSessions.put({
+        id: row.id,
+        userEmail: row.userEmail ?? USER,
+        name: row.name,
+        isFolder: row.kind === "folderRoot" || row.kind === "folderChild",
+        kind: row.kind,
+        ...(row.diskPath !== undefined ? { diskPath: row.diskPath } : {}),
+        parentId: row.parentId ?? "root",
+        ...(row.totalSize !== undefined ? { totalSize: row.totalSize } : {}),
+        ...(row.uploadUri !== undefined ? { uploadUri: row.uploadUri } : {}),
+        ...(row.clientGeneratedId !== undefined
+          ? { clientGeneratedId: row.clientGeneratedId }
+          : {}),
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    }
+
+    it("(e) diskFile row with a session URI → entry resumes with initialUploadUri + persisted clientGeneratedId, old row deleted, pump uploads", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      await insertSessionRow({
+        id: "pending-old-1",
+        name: "a.mp3",
+        kind: "diskFile",
+        diskPath: "C:/a.mp3",
+        totalSize: 2, // matches the default statDiskPath mock
+        uploadUri: OLD_URI,
+        clientGeneratedId: "gen-old",
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      // The old row was deleted at resume time; processEntry persisted a NEW
+      // active row for the resumed entry (fresh id, no URI yet).
+      expect(await db.uploadSessions.toArray()).toHaveLength(1);
+      const opts = uploadFileResumableChunked.mock.calls[0]?.[1];
+      expect(opts?.initialUploadUri).toBe(OLD_URI);
+      expect(opts?.clientGeneratedId).toBe("gen-old");
+      expect(opts?.onSessionUpdate).toBeTypeOf("function");
+      // The persisted id is reused — no fresh generateClientId call.
+      expect(generateClientId).not.toHaveBeenCalled();
+
+      d.resolve(makeDriveFile("f1", "a.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(f) stat null on resume (file deleted/moved/renamed) → entry failed + toast upload.resume_not_found + old row deleted", async () => {
+      statDiskPath.mockResolvedValue(null);
+      const snapshots = captureSnapshots();
+      await insertSessionRow({
+        id: "pending-old-2",
+        name: "gone.mp3",
+        kind: "diskFile",
+        diskPath: "C:/gone.mp3",
+        uploadUri: OLD_URI,
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.resume_not_found");
+      expect(snapshots[snapshots.length - 1]?.map((s) => s.status)).toEqual([
+        "error",
+      ]);
+      expect(snapshots[snapshots.length - 1]?.[0]?.error).toBe("failed");
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+      const failedLog = captureError.mock.calls.find((c) =>
+        c[0].message.includes("reason=resume-file-missing"),
+      );
+      expect(failedLog).toBeTruthy();
+    });
+
+    it("(g) stat.size != persisted totalSize → session dropped: chunked called without initialUploadUri (silent fresh upload)", async () => {
+      await insertSessionRow({
+        id: "pending-old-3",
+        name: "changed.mp3",
+        kind: "diskFile",
+        diskPath: "C:/changed.mp3",
+        totalSize: 999, // stat (default mock) says 2 → mismatch
+        uploadUri: OLD_URI,
+        clientGeneratedId: "gen-old",
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      const opts = uploadFileResumableChunked.mock.calls[0]?.[1];
+      expect(opts?.initialUploadUri).toBeUndefined();
+      // The old pre-generated id is dropped too: a same-id retry could resolve
+      // DONE against a stale server-side file of the OLD size.
+      expect(generateClientId).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).not.toHaveBeenCalled();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(h) two bytes rows → ONE aggregated toast upload.interrupted, no entries, rows deleted", async () => {
+      await insertSessionRow({
+        id: "pending-old-b1",
+        name: "b1.mp3",
+        kind: "bytes",
+      });
+      await insertSessionRow({
+        id: "pending-old-b2",
+        name: "b2.mp3",
+        kind: "bytes",
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(i) concurrent resumeInterruptedUploads calls run once (module guard)", async () => {
+      uploadFileResumableChunked.mockImplementation(
+        () => new Promise<DriveFileItem>(() => {}),
+      );
+      await insertSessionRow({
+        id: "pending-old-4",
+        name: "a.mp3",
+        kind: "diskFile",
+        diskPath: "C:/a.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+      });
+
+      const p1 = um.resumeInterruptedUploads(TOKEN, USER);
+      const p2 = um.resumeInterruptedUploads(TOKEN, USER);
+      await Promise.all([p1, p2]);
+      await flush();
+
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+    });
+
+    it("(j) only the requested user's rows are resumed (per-user isolation)", async () => {
+      await insertSessionRow({
+        id: "pending-other",
+        name: "other.mp3",
+        kind: "diskFile",
+        diskPath: "C:/other.mp3",
+        userEmail: "other@test.com",
+        uploadUri: OLD_URI,
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, "b@test.com");
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).not.toHaveBeenCalled();
+      const rows = await db.uploadSessions.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.userEmail).toBe("other@test.com");
+    });
+
+    it("(d2) onSessionUpdate from the chunked uploader persists uploadUri + totalSize on the active row", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        opts.onSessionUpdate?.(OLD_URI);
+        return d.promise;
+      });
+
+      um.startUploads([diskFileSeed("a.mp3", "C:/a.mp3")], TOKEN);
+      await flush();
+
+      const rows = await db.uploadSessions.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.uploadUri).toBe(OLD_URI);
+      expect(rows[0]?.totalSize).toBe(2); // stat size from the default mock
+
+      d.resolve(makeDriveFile("f1", "a.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(k) folderChildFile row with a resolved parent + session URI resumes into the persisted Drive parent", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      await insertSessionRow({
+        id: "pending-old-cf",
+        name: "child.flac",
+        kind: "folderChildFile",
+        diskPath: "C:/fold/child.flac",
+        parentId: "drive-folder-9", // real Drive id — resolved before the original initiate
+        totalSize: 2,
+        uploadUri: OLD_URI,
+        clientGeneratedId: "gen-cf",
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      const opts = uploadFileResumableChunked.mock.calls[0]?.[1];
+      expect(opts?.initialUploadUri).toBe(OLD_URI);
+      expect(opts?.parentId).toBe("drive-folder-9");
+      expect(opts?.clientGeneratedId).toBe("gen-cf");
+
+      d.resolve(makeDriveFile("f1", "child.flac"));
+      await waitIdle();
+    });
+
+    it("(k2) folderChildFile row WITHOUT a session URI (parent never resolved) → interrupted, no entry", async () => {
+      await insertSessionRow({
+        id: "pending-old-cf2",
+        name: "child2.flac",
+        kind: "folderChildFile",
+        diskPath: "C:/fold/child2.flac",
+        parentId: "root", // placeholder — the batch root parent, not a Drive id
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(k3) folderRoot rows are NOT re-uploaded (re-walking would duplicate the Drive folder) → interrupted", async () => {
+      await insertSessionRow({
+        id: "pending-old-fr",
+        name: "myfolder",
+        kind: "folderRoot",
+        diskPath: "C:/myfolder",
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(walkDiskFolder).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });
   });
 });

@@ -10,6 +10,7 @@ import {
   act,
 } from "@testing-library/react";
 import { MoreMenu } from "./MoreMenu";
+import en from "../../locales/en/translation.json";
 import type { Track } from "../../App";
 import type { DriveItem } from "../../types";
 
@@ -34,24 +35,26 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    // Keys without a defaultValue fallback in MoreMenu.tsx resolve to the
-    // real key string via `t(key) || fallback`; map them to readable labels
-    // so the assertions read naturally, everything else falls back as usual.
-    t: (key: string, fallback?: string) =>
-      ({
-        "menu.select_multiple": "Select Multiple",
-        "drive.move_to": "Move to...",
-        "drive.delete": "Delete",
-        "menu.download": "Download",
-        "menu.add_to_playlist": "Add to Playlist",
-        "upload.uploading_blocked": "Blocked while uploading",
-      })[key] ??
-      fallback ??
-      key,
-  }),
-}));
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+    }),
+  };
+});
 
 vi.mock("../../utils/driveApi", () => mocks.driveApi);
 vi.mock("../../db/db", () => ({ db: mocks.db }));
@@ -144,7 +147,7 @@ describe("MoreMenu recent variant", () => {
       "Locate File",
     ]);
     expect(
-      within(menuEl()).queryByRole("button", { name: "Select Multiple" }),
+      within(menuEl()).queryByRole("button", { name: "Select multiple items" }),
     ).toBeNull();
     expect(
       within(menuEl()).queryByRole("button", { name: "Move to..." }),
@@ -197,11 +200,13 @@ describe("MoreMenu recent variant", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     const firstCall = spy.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected event dispatch");
-    const detail = (firstCall[0] as CustomEvent<{
-      fileId: string;
-      parentId: string;
-      parentName: string;
-    }>).detail;
+    const detail = (
+      firstCall[0] as CustomEvent<{
+        fileId: string;
+        parentId: string;
+        parentName: string;
+      }>
+    ).detail;
     expect(detail).toEqual({
       fileId: "track-1",
       parentId: "parent-1",
@@ -253,7 +258,7 @@ describe("MoreMenu recent variant", () => {
     fireEvent.click(
       within(menuEl()).getByRole("button", { name: "Download Song" }),
     );
-    expect(screen.getByText("Download File")).toBeTruthy();
+    expect(screen.getByText("File name")).toBeTruthy();
   });
 
   it("opens PlaylistsSubmenu on Add to Playlist", () => {
@@ -282,9 +287,9 @@ describe("MoreMenu default variant regression (file list)", () => {
     expect(menuButtonNames().sort()).toEqual([
       "Add to Playlist",
       "Delete",
-      "Download",
+      "Download Song",
       "Move to...",
-      "Select Multiple",
+      "Select multiple items",
     ]);
   });
 
@@ -301,9 +306,9 @@ describe("MoreMenu default variant regression (file list)", () => {
     expect(menuButtonNames().sort()).toEqual([
       "Add to Playlist",
       "Delete",
-      "Download",
+      "Download Song",
       "Move to...",
-      "Select Multiple",
+      "Select multiple items",
     ]);
   });
 });
@@ -321,7 +326,7 @@ describe("MoreMenu playerbar variant regression", () => {
       within(menuEl()).queryByRole("button", { name: "Delete" }),
     ).toBeNull();
     expect(
-      within(menuEl()).queryByRole("button", { name: "Select Multiple" }),
+      within(menuEl()).queryByRole("button", { name: "Select multiple items" }),
     ).toBeNull();
   });
 
@@ -335,11 +340,13 @@ describe("MoreMenu playerbar variant regression", () => {
     );
     const firstCall = spy.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected event dispatch");
-    const detail = (firstCall[0] as CustomEvent<{
-      fileId: string;
-      parentId: string;
-      parentName: string;
-    }>).detail;
+    const detail = (
+      firstCall[0] as CustomEvent<{
+        fileId: string;
+        parentId: string;
+        parentName: string;
+      }>
+    ).detail;
     expect(detail).toEqual({
       fileId: "track-1",
       parentId: "parent-1",
@@ -369,10 +376,10 @@ describe("MoreMenu upload race guards", () => {
     openTrigger();
     const buttons = within(menuEl()).getAllByRole("button");
     for (const name of [
-      "Select Multiple",
+      "Select multiple items",
       "Move to...",
       "Delete",
-      "Download",
+      "Download Song",
       "Add to Playlist",
     ]) {
       const btn = buttons.find((b) => b.textContent?.trim() === name);
@@ -382,7 +389,7 @@ describe("MoreMenu upload race guards", () => {
         `button ${name} disabled`,
       ).toBe(true);
       expect((btn as HTMLButtonElement).title, `button ${name} tooltip`).toBe(
-        "Blocked while uploading",
+        "This item is already uploading. Please wait.",
       );
     }
   });
@@ -394,10 +401,10 @@ describe("MoreMenu upload race guards", () => {
     openTrigger();
     const buttons = within(menuEl()).getAllByRole("button");
     for (const name of [
-      "Select Multiple",
+      "Select multiple items",
       "Move to...",
       "Delete",
-      "Download",
+      "Download Song",
       "Add to Playlist",
     ]) {
       const btn = buttons.find((b) => b.textContent?.trim() === name);
@@ -441,7 +448,9 @@ describe("MoreMenu upload race guards", () => {
     const byName = (name: string) =>
       buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
     expect(byName("Delete").disabled).toBe(true);
-    expect(byName("Delete").title).toBe("Blocked while uploading");
+    expect(byName("Delete").title).toBe(
+      "This item is already uploading. Please wait.",
+    );
     expect(byName("Locate File").disabled).toBe(false);
   });
 
@@ -465,7 +474,7 @@ describe("MoreMenu upload race guards", () => {
       name: "Delete",
     });
     expect(btn.disabled).toBe(true);
-    expect(btn.title).toBe("Blocked while uploading");
+    expect(btn.title).toBe("This item is already uploading. Please wait.");
   });
 
   it("blocks adding to playlist when the upload starts after the submenu is already open (handler guard)", async () => {
@@ -488,7 +497,7 @@ describe("MoreMenu upload race guards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
     expect(mocks.addTrackToPlaylist).not.toHaveBeenCalled();
     expect(mocks.showErrorToast).toHaveBeenCalledWith(
-      "Blocked while uploading",
+      "This item is already uploading. Please wait.",
     );
   });
 
@@ -512,7 +521,7 @@ describe("MoreMenu upload race guards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(mocks.driveApi.deleteFile).not.toHaveBeenCalled();
     expect(mocks.showErrorToast).toHaveBeenCalledWith(
-      "Blocked while uploading",
+      "This item is already uploading. Please wait.",
     );
   });
 });

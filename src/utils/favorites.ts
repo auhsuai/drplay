@@ -3,6 +3,7 @@ import { db } from "../db/db";
 import { showErrorToast } from "./simpleToast";
 import { captureError } from "./errorLog";
 import { getCurrentUserEmail } from "./storageKeys";
+import i18n from "../i18n";
 
 const FAV_MODULE = "favorites";
 
@@ -52,7 +53,7 @@ export async function addFavorite(track: Track): Promise<void> {
       source: FAV_MODULE,
       message: `add-failed: ${classifyFavoriteError(e)}`,
     });
-    showErrorToast("Không thể thêm vào yêu thích, vui lòng thử lại.");
+    showErrorToast(i18n.t("liked_songs.add_failed"));
   }
 }
 
@@ -69,7 +70,7 @@ export async function removeFavorite(trackId: string): Promise<void> {
       source: FAV_MODULE,
       message: `remove-failed: ${classifyFavoriteError(e)}`,
     });
-    showErrorToast("Không thể xóa khỏi yêu thích, vui lòng thử lại.");
+    showErrorToast(i18n.t("liked_songs.remove_failed"));
   }
 }
 

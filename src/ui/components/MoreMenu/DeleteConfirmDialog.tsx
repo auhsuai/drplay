@@ -29,12 +29,10 @@ export function DeleteConfirmDialog({
         if (e.target === e.currentTarget && !isDeleting) onClose();
       }}
     >
-      <div
-        className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
-      >
+      <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
         <div className="flex flex-col gap-2">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-            {t("drive.confirm_delete", "Move to Trash?")}
+            {t("drive.confirm_delete")}
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {driveItem?.title}
@@ -46,7 +44,7 @@ export function DeleteConfirmDialog({
             disabled={isDeleting}
             className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
           >
-            {t("menu.cancel", "Cancel")}
+            {t("menu.cancel")}
           </button>
           <button
             onClick={onConfirm}
@@ -58,7 +56,7 @@ export function DeleteConfirmDialog({
             ) : (
               <Trash2 className="w-4 h-4" />
             )}
-            <span>{t("drive.delete", "Delete")}</span>
+            <span>{t("drive.delete")}</span>
           </button>
         </div>
       </div>

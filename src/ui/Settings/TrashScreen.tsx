@@ -87,7 +87,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         source: TRASH_MODULE,
         message: `fetch-trashed-failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(t("settings.trash_load_error") || "Failed to load trash");
+      showErrorToast(t("settings.trash_load_error"));
     } finally {
       setIsLoading(false);
     }
@@ -116,19 +116,14 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         source: TRASH_MODULE,
         message: `restore-failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(t("settings.restore_error") || "Failed to restore file");
+      showErrorToast(t("settings.restore_error"));
     } finally {
       setRestoringId(null);
     }
   };
 
   const handleEmptyTrash = async () => {
-    if (
-      !window.confirm(
-        t("settings.confirm_empty_trash") ||
-          "Are you sure you want to permanently delete all trashed items? This cannot be undone.",
-      )
-    ) {
+    if (!window.confirm(t("settings.confirm_empty_trash"))) {
       return;
     }
     setIsEmptying(true);
@@ -138,9 +133,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       );
       await Promise.all(deletePromises);
       setItems([]);
-      showSuccessToast(
-        t("settings.empty_trash_success") || "Trash emptied successfully!",
-      );
+      showSuccessToast(t("settings.empty_trash_success"));
       onClose();
     } catch (e) {
       void captureError({
@@ -148,9 +141,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         source: TRASH_MODULE,
         message: `empty-trash-failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(
-        t("settings.empty_trash_error") || "Failed to empty trash",
-      );
+      showErrorToast(t("settings.empty_trash_error"));
     } finally {
       setIsEmptying(false);
     }
@@ -172,7 +163,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         source: TRASH_MODULE,
         message: `bulk-restore-failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(t("settings.restore_error") || "Failed to restore items");
+      showErrorToast(t("settings.restore_error"));
     } finally {
       setIsBulkActioning(false);
     }
@@ -193,9 +184,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         source: TRASH_MODULE,
         message: `bulk-delete-failed: ${e instanceof Error ? e.message : String(e)}`,
       });
-      showErrorToast(
-        t("settings.empty_trash_error") || "Failed to delete items",
-      );
+      showErrorToast(t("settings.empty_trash_error"));
     } finally {
       setIsBulkActioning(false);
     }
@@ -210,9 +199,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div
-        className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-      >
+      <div className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-6 py-5 flex items-center justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
           <div className="flex items-center gap-3">
@@ -286,7 +273,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                       }}
                       className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
                     >
-                      {t("common.cancel") || "Cancel"}
+                      {t("common.cancel")}
                     </button>
                   ) : (
                     <button
@@ -310,7 +297,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                       >
                         <CheckSquare className="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
                         <span className="text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
-                          {t("menu.select_multiple", "Chọn nhiều mục")}
+                          {t("menu.select_multiple")}
                         </span>
                       </button>
                     </div>
@@ -417,7 +404,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
           {isSelectionMode ? (
             <>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {selectedIds.size} {t("common.selected") || "selected"}
+                {selectedIds.size} {t("common.selected")}
               </p>
               <div className="flex items-center gap-3">
                 <button
@@ -433,7 +420,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                     <RefreshCw className="w-4 h-4" />
                   )}
                   <span className="hidden sm:inline">
-                    {t("settings.restore") || "Restore"}
+                    {t("settings.restore")}
                   </span>
                 </button>
                 <button
@@ -448,9 +435,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   ) : (
                     <Trash2 className="w-4 h-4" />
                   )}
-                  <span className="hidden sm:inline">
-                    {t("common.delete") || "Delete"}
-                  </span>
+                  <span className="hidden sm:inline">{t("common.delete")}</span>
                 </button>
               </div>
             </>

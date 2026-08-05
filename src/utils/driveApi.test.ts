@@ -15,7 +15,11 @@ import {
   listFolderChildren,
   getTrashedFiles,
 } from "./drivePagination";
-import { uploadFileResumable, uploadFileResumableChunked } from "./driveUpload";
+import {
+  uploadFileResumable,
+  uploadFileResumableChunked,
+  generateClientId,
+} from "./driveUpload";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
 // exercise driveFetch's retry/backoff path without real network calls.
@@ -31,11 +35,10 @@ import { fetchWithAuth } from "./apiClient";
 import { captureError } from "./errorLog";
 const mockedFetch = vi.mocked(fetchWithAuth);
 
-function fetchCallAt(
-  index: number,
-): (typeof mockedFetch.mock.calls)[number] {
+function fetchCallAt(index: number): (typeof mockedFetch.mock.calls)[number] {
   const call = mockedFetch.mock.calls[index];
-  if (call === undefined) throw new Error(`expected fetch call ${String(index)}`);
+  if (call === undefined)
+    throw new Error(`expected fetch call ${String(index)}`);
   return call;
 }
 
@@ -1229,14 +1232,8 @@ describe("uploadFileResumable", () => {
 
     const firstCall = fetchCallAt(0);
     const secondCall = fetchCallAt(1);
-    const postHeaders = firstCall[1]?.headers as Record<
-      string,
-      string
-    >;
-    const putHeaders = secondCall[1]?.headers as Record<
-      string,
-      string
-    >;
+    const postHeaders = firstCall[1]?.headers as Record<string, string>;
+    const putHeaders = secondCall[1]?.headers as Record<string, string>;
     expect(postHeaders["X-Upload-Content-Length"]).toBe("5");
     expect(putHeaders["Content-Range"]).toBe("bytes 0-4/5");
   });
@@ -1398,6 +1395,126 @@ describe("uploadFileResumable", () => {
       expect(lastLogMessages().length).toBeLessThanOrEqual(300);
     });
   });
+
+  // Idempotent upload (Slice 1): a pre-generated file id bound into the
+  // initiate metadata makes a retry after a response-lost success hit 409
+  // instead of creating a duplicate — the retry then resolves DONE with the
+  // real file (developers.google.com/workspace/drive/api/guides/manage-uploads,
+  // "Use a pre-generated ID to upload files").
+  describe("idempotent upload (clientGeneratedId)", () => {
+    const existingFile: DriveFileItem = {
+      id: "gen-1",
+      name: "song.mp3",
+      mimeType: "audio/mpeg",
+      size: "10",
+      modifiedTime: "2026-01-01T00:00:00Z",
+    };
+
+    it("initiate metadata body carries the pre-generated id", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      await uploadFileResumable(
+        "tok",
+        new Uint8Array(10),
+        "song.mp3",
+        "parent-1",
+        undefined,
+        { clientGeneratedId: "gen-1" },
+      );
+
+      const [postUrl, postOpts] = fetchCallAt(0);
+      expect(postUrl).toBe(INITIATE_URL);
+      expect(JSON.parse(postOpts?.body as string)).toEqual({
+        name: "song.mp3",
+        parents: ["parent-1"],
+        id: "gen-1",
+      });
+    });
+
+    it("PUT 409 + clientGeneratedId → resolves DONE with the real file (no duplicate, no error)", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        )
+        .mockResolvedValueOnce(makeJsonResponse(200, existingFile));
+
+      const result = await uploadFileResumable(
+        "tok",
+        new Uint8Array(10),
+        "song.mp3",
+        "parent-1",
+        undefined,
+        { clientGeneratedId: "gen-1" },
+      );
+
+      expect(result).toEqual(existingFile);
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
+      // The real file is fetched by its pre-generated id with the fields the
+      // manager needs for the db row (fetch defaults to GET).
+      const [getUrl, getOpts] = fetchCallAt(2);
+      expect(getUrl).toBe(
+        "https://www.googleapis.com/drive/v3/files/gen-1?fields=id,name,mimeType,size,modifiedTime",
+      );
+      expect(
+        (getOpts?.headers as Record<string, string>)["Authorization"],
+      ).toBe("Bearer tok");
+      // Not an error: info-level log only, uploadManager must not toast.
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "info",
+          message: "idempotent-conflict-resolved",
+        }),
+      );
+    });
+
+    it("initiate 409 + clientGeneratedId → resolves DONE with the real file, no PUT", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        )
+        .mockResolvedValueOnce(makeJsonResponse(200, existingFile));
+
+      const result = await uploadFileResumable(
+        "tok",
+        new Uint8Array(10),
+        "song.mp3",
+        "parent-1",
+        undefined,
+        { clientGeneratedId: "gen-1" },
+      );
+
+      expect(result).toEqual(existingFile);
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+      expect(fetchCallAt(1)[0]).toContain("/files/gen-1?fields=");
+    });
+
+    it("PUT 409 without clientGeneratedId → UploadError invalid (unchanged)", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        );
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({ kind: "invalid" });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("initiate 409 without clientGeneratedId → UploadError invalid (unchanged)", async () => {
+      mockedFetch.mockResolvedValueOnce(
+        makeErrorBodyResponse(409, "A file with this ID already exists."),
+      );
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({ kind: "invalid" });
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 // Chunked streaming resumable upload: POST initiate → loop { PUT chunk →
@@ -1421,6 +1538,9 @@ describe("uploadFileResumableChunked", () => {
   // Mirrors UPLOAD_TIMEOUT_MS in driveApi.ts: each chunk PUT overrides
   // fetchWithAuth's 15s default with the 120s upload bound.
   const PUT_TIMEOUT_MS = 120_000;
+  // Mirrors QUERY_STATUS_TIMEOUT_MS in driveApi.ts: the empty query-status PUT
+  // is cheap, so it gets a shorter bound than the 120s chunk upload.
+  const QUERY_STATUS_TIMEOUT_MS = 20_000;
   const uploadedFile: DriveFileItem = {
     id: "file-9",
     name: "big.flac",
@@ -1445,8 +1565,7 @@ describe("uploadFileResumableChunked", () => {
       status,
       ok: status >= 200 && status < 300,
       headers: {
-        get: (name: string) =>
-          name.toLowerCase() === "range" ? range : null,
+        get: (name: string) => (name.toLowerCase() === "range" ? range : null),
       },
       json: () => ({}),
     } as unknown as Response;
@@ -1680,8 +1799,13 @@ describe("uploadFileResumableChunked", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(3);
   });
 
-  it("chunk PUT 403 non-rate-limit reason (forbidden) → NOT retried → invalid", async () => {
+  it("chunk PUT 403 non-rate-limit reason (forbidden) → session restarted once; second 403 → invalid", async () => {
     mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "forbidden"))
+      // Query-status on the restart: the 403 (non-rate-limit) also marks the
+      // old session dead → the fresh initiate still happens.
+      .mockResolvedValueOnce(makeRateLimitResponse(403, "forbidden"))
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeRateLimitResponse(403, "forbidden"));
 
@@ -1694,12 +1818,22 @@ describe("uploadFileResumableChunked", () => {
         readChunk: reader.readChunk,
       }),
     ).rejects.toMatchObject({ kind: "invalid" });
-    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    // Attempt 1: query-status PUT to the old session (dead), then POST
+    // initiate + PUT per fresh session (Google: any 4xx → restart the upload).
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
+    expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
+    expect(fetchCallAt(2)[0]).toBe(LOCATION);
+    expect(fetchCallAt(3)[0]).toBe(INITIATE_URL);
+    // The restarted session re-uploads from offset 0.
+    expect(reader.offsets).toEqual([0, 0]);
   });
 
   it("404 on a chunk PUT → restarts a whole new session (POST + PUT again), succeeds", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(404, null))
+      // Query-status on the restart confirms the old session is dead → the
+      // fresh initiate uploads from 0.
       .mockResolvedValueOnce(makeRangeResponse(404, null))
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
@@ -1713,11 +1847,12 @@ describe("uploadFileResumableChunked", () => {
     });
 
     expect(result).toEqual(uploadedFile);
-    expect(mockedFetch).toHaveBeenCalledTimes(4);
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
     expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
     expect(fetchCallAt(1)[0]).toBe(LOCATION);
-    expect(fetchCallAt(2)[0]).toBe(INITIATE_URL);
-    expect(fetchCallAt(3)[0]).toBe(LOCATION);
+    expect(fetchCallAt(2)[0]).toBe(LOCATION);
+    expect(fetchCallAt(3)[0]).toBe(INITIATE_URL);
+    expect(fetchCallAt(4)[0]).toBe(LOCATION);
     // A fresh session re-uploads from offset 0.
     expect(reader.offsets).toEqual([0, 0]);
   });
@@ -1725,6 +1860,7 @@ describe("uploadFileResumableChunked", () => {
   it("404 twice → network UploadError after 2 session attempts", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeRangeResponse(404, null))
       .mockResolvedValueOnce(makeRangeResponse(404, null))
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeRangeResponse(404, null));
@@ -1738,7 +1874,83 @@ describe("uploadFileResumableChunked", () => {
         readChunk: reader.readChunk,
       }),
     ).rejects.toMatchObject({ kind: "network" });
-    expect(mockedFetch).toHaveBeenCalledTimes(4);
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
+  });
+
+  it("chunk PUT 400 → session restarted exactly once (fresh initiate); second 400 → UploadError invalid with status", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      )
+      // Query-status on the restart: the 400 also marks the old session dead.
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      )
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      );
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      }),
+    ).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "invalid",
+      message: "upload failed (status=400)",
+    });
+    // Session 1: POST initiate + PUT(400). Query: PUT(400) → dead.
+    // Session 2: POST initiate + PUT(400).
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
+    expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
+    expect(fetchCallAt(1)[0]).toBe(LOCATION);
+    expect(fetchCallAt(2)[0]).toBe(LOCATION);
+    expect(fetchCallAt(3)[0]).toBe(INITIATE_URL);
+    expect(fetchCallAt(4)[0]).toBe(LOCATION);
+    // The restarted session re-uploads from offset 0.
+    expect(reader.offsets).toEqual([0, 0]);
+  });
+
+  it("chunk PUT 400 → silent restart (warn with attempt, no error surface) and the fresh session succeeds", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      )
+      // Query-status on the restart: the 400 marks the old session dead.
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      )
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    const result = await uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+    });
+
+    expect(result).toEqual(uploadedFile);
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
+    expect(reader.offsets).toEqual([0, 0]);
+    // The restart is silent: warn-level log with the attempt counter — no
+    // error-level entry (uploadManager decides toasts, terminal failures only).
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "upload-session-expired (attempt=1/2)",
+        ) as unknown as string,
+      }),
+    );
   });
 
   it("caller abort mid-upload → aborted, no chunk retry, no session restart", async () => {
@@ -1955,7 +2167,9 @@ describe("uploadFileResumableChunked", () => {
     expect(captureError).not.toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        message: expect.stringContaining("upload-chunk-truncated") as unknown as string,
+        message: expect.stringContaining(
+          "upload-chunk-truncated",
+        ) as unknown as string,
       }),
     );
     // Truncation behavior itself is unchanged: the 64-byte chunk is cut to the
@@ -2004,8 +2218,16 @@ describe("uploadFileResumableChunked", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("logs warn captureError with status=400 when a chunk PUT hits a non-retryable 4xx", async () => {
+  it("logs warn captureError with status=400 when a chunk PUT hits a non-retryable 4xx (both session attempts)", async () => {
     mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      )
+      // Query-status on the restart also answers 400 → session dead.
+      .mockResolvedValueOnce(
+        makeErrorBodyResponse(400, "Invalid upload request"),
+      )
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(
         makeErrorBodyResponse(400, "Invalid upload request"),
@@ -2020,6 +2242,7 @@ describe("uploadFileResumableChunked", () => {
         readChunk: reader.readChunk,
       }),
     ).rejects.toMatchObject({ kind: "invalid" });
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
 
     const message = vi
       .mocked(captureError)
@@ -2098,6 +2321,569 @@ describe("uploadFileResumableChunked", () => {
       vi.restoreAllMocks();
       vi.useRealTimers();
     }
+  });
+
+  // Idempotent upload (Slice 1) on the chunked path: session restarts stay
+  // bound to the SAME pre-generated id, so a retry of a response-lost success
+  // answers 409 and resolves DONE with the real file (no duplicate).
+  describe("idempotent upload (clientGeneratedId)", () => {
+    const existingFile: DriveFileItem = {
+      id: "gen-1",
+      name: "big.flac",
+      mimeType: "audio/flac",
+      size: "8388608",
+    };
+
+    it("initiate metadata body carries the pre-generated id", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+        clientGeneratedId: "gen-1",
+      });
+
+      const [postUrl, postOpts] = fetchCallAt(0);
+      expect(postUrl).toBe(INITIATE_URL);
+      expect(JSON.parse(postOpts?.body as string)).toEqual({
+        name: "big.flac",
+        parents: ["p"],
+        id: "gen-1",
+      });
+    });
+
+    it("chunk PUT 409 + clientGeneratedId → resolves DONE with the real file (no duplicate)", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        )
+        .mockResolvedValueOnce(makeJsonResponse(200, existingFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+        clientGeneratedId: "gen-1",
+      });
+
+      expect(result).toEqual(existingFile);
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
+      expect(fetchCallAt(2)[0]).toBe(
+        "https://www.googleapis.com/drive/v3/files/gen-1?fields=id,name,mimeType,size,modifiedTime",
+      );
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "info",
+          message: "idempotent-conflict-resolved",
+        }),
+      );
+    });
+
+    it("initiate 409 + clientGeneratedId → resolves DONE with the real file, no PUT", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        )
+        .mockResolvedValueOnce(makeJsonResponse(200, existingFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+        clientGeneratedId: "gen-1",
+      });
+
+      expect(result).toEqual(existingFile);
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("chunk PUT 409 without clientGeneratedId → session restarted once; second 409 → UploadError invalid", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        )
+        // Query-status on the restart: 409 without a pre-generated id is a
+        // plain 4xx → old session dead → fresh initiate.
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        )
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(409, "A file with this ID already exists."),
+        );
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      await expect(
+        uploadFileResumableChunked("tok", {
+          name: "big.flac",
+          parentId: "p",
+          totalSize: CHUNK_SIZE,
+          readChunk: reader.readChunk,
+        }),
+      ).rejects.toMatchObject({ kind: "invalid" });
+      // A 409 without a pre-generated id is a plain 4xx → query-status marks
+      // the old session dead, one restart, then the concrete UploadError invalid.
+      expect(mockedFetch).toHaveBeenCalledTimes(5);
+    });
+  });
+
+  // Slice 3 (upload resilience): before paying for a fresh session on a
+  // restart, query the OLD session's status (empty PUT with Content-Range
+  // */<total>). A surviving session resumes at the server-confirmed byte — no
+  // re-upload of bytes Drive already holds; 200/201 → the upload is already
+  // done; 404/other-4xx → the session is dead → fresh initiate from 0.
+  describe("query-status before session restart (Slice 3)", () => {
+    // How many fresh session initiates happened across the whole upload.
+    function countInitiates(): number {
+      return mockedFetch.mock.calls.filter(([url]) => url === INITIATE_URL)
+        .length;
+    }
+
+    function networkLoss(): () => never {
+      return () => {
+        throw new TypeError("network connection lost");
+      };
+    }
+
+    it("transient chunk failure → query-status 308 + Range → resumes the SAME session at lastByte+1 (no new initiate)", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-524287"))
+        .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8912895"))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+      });
+
+      expect(result).toEqual(uploadedFile);
+      // The surviving session is resumed — NEVER re-initiated.
+      expect(countInitiates()).toBe(1);
+      // Chunks continue from the server-confirmed byte (524287 + 1), then the tail.
+      expect(reader.offsets).toEqual([0, 524288, 8912896]);
+
+      const [queryUrl, queryOpts] = fetchCallAt(2);
+      expect(queryUrl).toBe(LOCATION);
+      expect(queryOpts?.method).toBe("PUT");
+      const queryHeaders = queryOpts?.headers as Record<string, string>;
+      expect(queryHeaders["Content-Range"]).toBe("*/10000000");
+      expect(queryOpts?.body).toBeUndefined();
+      expect(queryOpts?.timeoutMs).toBe(QUERY_STATUS_TIMEOUT_MS);
+    });
+
+    it("query-status 200 → the upload already completed server-side → returns the file, no re-upload", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(makeJsonResponse(200, uploadedFile));
+
+      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+      });
+
+      expect(result).toEqual(uploadedFile);
+      // No bytes were re-sent — only the initiate + the failed chunk + the query.
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
+      expect(reader.offsets).toEqual([0]);
+      expect(countInitiates()).toBe(1);
+    });
+
+    it("query-status 404 → session dead → fresh initiate uploads from offset 0", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(makeRangeResponse(404, null))
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(countInitiates()).toBe(2);
+      // The fresh session re-uploads from offset 0 (the old session holds nothing usable).
+      expect(reader.offsets).toEqual([0, 0]);
+      expect(fetchCallAt(3)[0]).toBe(INITIATE_URL);
+    });
+
+    it("query-status 400 (non-retryable 4xx) → session dead → fresh initiate from 0", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(400, "Invalid upload request"),
+        )
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(countInitiates()).toBe(2);
+      expect(reader.offsets).toEqual([0, 0]);
+    });
+
+    it("query-status 500 → retried once → 200 on the retry → done, no re-upload", async () => {
+      vi.useFakeTimers();
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(makeRangeResponse(500, null))
+        .mockResolvedValueOnce(makeJsonResponse(200, uploadedFile));
+
+      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      const p = uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(await p).toEqual(uploadedFile);
+      expect(mockedFetch).toHaveBeenCalledTimes(4);
+      expect(reader.offsets).toEqual([0]);
+    });
+
+    it("query-status 5xx retries exhausted → treated as transient → fresh initiate from 0 (upload still succeeds)", async () => {
+      vi.useFakeTimers();
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(makeRangeResponse(500, null))
+        .mockResolvedValueOnce(makeRangeResponse(500, null))
+        .mockResolvedValueOnce(makeRangeResponse(500, null))
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const p = uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(await p).toEqual(uploadedFile);
+      expect(mockedFetch).toHaveBeenCalledTimes(7);
+      expect(reader.offsets).toEqual([0, 0]);
+    });
+
+    it("query-status 308 without Range → nothing received → continues the SAME session from 0", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(makeRangeResponse(308, null))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(countInitiates()).toBe(1);
+      // Same session, but no byte was ever received → chunk re-sent from 0.
+      expect(reader.offsets).toEqual([0, 0]);
+    });
+
+    it("query-status 403 quota → quota UploadError, no restart, no new initiate", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(
+            403,
+            "The user's Drive storage quota has been exceeded.",
+            "storageQuotaExceeded",
+          ),
+        );
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      await expect(
+        uploadFileResumableChunked("tok", {
+          name: "big.flac",
+          parentId: "p",
+          totalSize: CHUNK_SIZE,
+          readChunk: reader.readChunk,
+        }),
+      ).rejects.toMatchObject({ kind: "quota" });
+      expect(countInitiates()).toBe(1);
+    });
+
+    it("first attempt (no previous session) → NO query-status before initiate", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      });
+
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+      expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
+      // No empty PUT with a wildcard Content-Range was ever sent.
+      const wildcardRanges = mockedFetch.mock.calls.filter(([, opts]) =>
+        ((opts?.headers as Record<string, string> | undefined) ?? {})[
+          "Content-Range"
+        ]?.startsWith("*/"),
+      );
+      expect(wildcardRanges).toHaveLength(0);
+    });
+
+    it("caller abort during query-status → aborted, no session restart", async () => {
+      const controller = new AbortController();
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockImplementationOnce(networkLoss())
+        .mockImplementationOnce(() => {
+          controller.abort();
+          throw new DOMException("aborted", "AbortError");
+        });
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      await expect(
+        uploadFileResumableChunked("tok", {
+          name: "big.flac",
+          parentId: "p",
+          totalSize: CHUNK_SIZE,
+          readChunk: reader.readChunk,
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ kind: "aborted" });
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // Slice 5.2: an upload resumed from a session URI persisted by an earlier
+  // run — attempt 0 goes through query-status on the persisted URI instead of
+  // paying for a fresh initiate; onSessionUpdate hands every NEW session URI
+  // (post-initiate) to the caller so the manager can persist it.
+  describe("resume from persisted session (Slice 5.2)", () => {
+    const PERSISTED_URI =
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=persisted-1";
+
+    function countInitiates(): number {
+      return mockedFetch.mock.calls.filter(([url]) => url === INITIATE_URL)
+        .length;
+    }
+
+    it("(a) initialUploadUri + query 308 → resumes the SAME session at lastByte+1, zero initiates, no onSessionUpdate", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-524287"))
+        .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8912895"))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      const sessionUpdates: string[] = [];
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+        initialUploadUri: PERSISTED_URI,
+        onSessionUpdate: (uri) => sessionUpdates.push(uri),
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(countInitiates()).toBe(0);
+      expect(sessionUpdates).toHaveLength(0);
+      // The first chunk resumes at the server-confirmed byte (524287 + 1).
+      expect(reader.offsets).toEqual([524288, 8912896]);
+
+      const [queryUrl, queryOpts] = fetchCallAt(0);
+      expect(queryUrl).toBe(PERSISTED_URI);
+      expect(queryOpts?.method).toBe("PUT");
+      expect(
+        (queryOpts?.headers as Record<string, string>)["Content-Range"],
+      ).toBe("*/10000000");
+      expect(queryOpts?.timeoutMs).toBe(QUERY_STATUS_TIMEOUT_MS);
+    });
+
+    it("(b) initialUploadUri + query 200 → the upload already completed → returns the file, zero initiates, no chunks", async () => {
+      mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, uploadedFile));
+
+      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      const sessionUpdates: string[] = [];
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+        initialUploadUri: PERSISTED_URI,
+        onSessionUpdate: (uri) => sessionUpdates.push(uri),
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(countInitiates()).toBe(0);
+      expect(reader.offsets).toEqual([]);
+      expect(sessionUpdates).toHaveLength(0);
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("(c) initialUploadUri + query 404 → session dead → fresh initiate uploads from 0 + onSessionUpdate fires", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeRangeResponse(404, null))
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const sessionUpdates: string[] = [];
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+        initialUploadUri: PERSISTED_URI,
+        onSessionUpdate: (uri) => sessionUpdates.push(uri),
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(countInitiates()).toBe(1);
+      expect(reader.offsets).toEqual([0]);
+      expect(fetchCallAt(1)[0]).toBe(INITIATE_URL);
+      expect(sessionUpdates).toEqual([LOCATION]);
+    });
+
+    it("(d) no initialUploadUri → onSessionUpdate fires with the fresh session URI after initiate", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const sessionUpdates: string[] = [];
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE).readChunk,
+        onSessionUpdate: (uri) => sessionUpdates.push(uri),
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(sessionUpdates).toEqual([LOCATION]);
+    });
+
+    it("a throwing onSessionUpdate is caught + logged — the upload still completes", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE).readChunk,
+        onSessionUpdate: () => {
+          throw new Error("persist failed");
+        },
+      });
+
+      expect(result).toEqual(uploadedFile);
+      // The ONLY warn log in this flow is the caught onSessionUpdate failure —
+      // the throw must not break the upload.
+      expect(captureError).toHaveBeenCalledTimes(1);
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: "warn" }),
+      );
+    });
+  });
+});
+
+describe("generateClientId", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("POSTs generateIds?count=1 with Bearer and returns the generated id", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(200, { ids: ["gen-abc"], space: "drive" }),
+    );
+
+    const id = await generateClientId("tok");
+
+    expect(id).toBe("gen-abc");
+    const [url, opts] = fetchCallAt(0);
+    expect(url).toBe(
+      "https://www.googleapis.com/drive/v3/files/generateIds?count=1",
+    );
+    expect(opts?.method).toBe("POST");
+    expect((opts?.headers as Record<string, string>)["Authorization"]).toBe(
+      "Bearer tok",
+    );
+  });
+
+  it("non-2xx → UploadError invalid", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makeJsonResponse(400, {
+        error: { code: 400, message: "Bad Request" },
+      }),
+    );
+
+    await expect(generateClientId("tok")).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "invalid",
+    });
+  });
+
+  it("empty ids array → UploadError invalid", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, { ids: [] }));
+
+    await expect(generateClientId("tok")).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "invalid",
+    });
+  });
+
+  it("non-object body → UploadError invalid", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, "oops"));
+
+    await expect(generateClientId("tok")).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "invalid",
+    });
   });
 });
 

@@ -134,12 +134,12 @@ export function TopNavigationBar({
   // the Drive state; translate it for display so the breadcrumb matches the
   // sidebar's localized "My Drive" entry. Non-root folder names are untouched.
   const displayFolderName = (name: string): string =>
-    name === MY_DRIVE_TAB ? t("drive.my_drive", "My Drive") : name;
+    name === MY_DRIVE_TAB ? t("drive.my_drive") : name;
 
   const sortOptions = [
-    { id: "name", label: t("sort.name", "A-Z") },
-    { id: "modifiedTime", label: t("sort.date", "Ngày"), defaultDesc: true },
-    { id: "size", label: t("sort.size", "Kích thước") },
+    { id: "name", label: t("sort.name") },
+    { id: "modifiedTime", label: t("sort.date"), defaultDesc: true },
+    { id: "size", label: t("sort.size") },
   ];
 
   return (
@@ -153,9 +153,7 @@ export function TopNavigationBar({
             <X className="w-5 h-5 text-gray-700 dark:text-gray-300" />
           </button>
           <span className="text-gray-900 dark:text-white px-2 py-1 font-semibold text-lg truncate">
-            {t("drive.items_selected", "{{count}} mục đã chọn", {
-              count: selectedCount,
-            })}
+            {t("drive.items_selected", { count: selectedCount })}
           </span>
         </div>
       ) : (
@@ -209,7 +207,7 @@ export function TopNavigationBar({
             <input
               ref={searchInputRef}
               type="text"
-              placeholder={t("search_placeholder", "Tìm kiếm...")}
+              placeholder={t("search_placeholder")}
               value={searchQuery}
               onChange={(e) => {
                 onSearchChange(e.target.value);
@@ -234,7 +232,7 @@ export function TopNavigationBar({
               sortOption={sortOption}
               onSortChange={onSortChange}
               options={sortOptions}
-              fallbackLabel={t("drive.sort", "Sort")}
+              fallbackLabel={t("drive.sort")}
               isInitialMount={isInitialMount}
             />
           )}
@@ -245,9 +243,7 @@ export function TopNavigationBar({
               className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-lg transition-colors shadow-sm active:scale-95"
             >
               <FolderPlus className="w-4 h-4" />
-              <span className="hidden sm:inline">
-                {t("drive.new_folder") || "New Folder"}
-              </span>
+              <span className="hidden sm:inline">{t("drive.new_folder")}</span>
             </button>
           )}
         </div>

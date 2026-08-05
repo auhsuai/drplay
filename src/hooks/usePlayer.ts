@@ -379,12 +379,7 @@ export const usePlayer = (accessToken: string | null) => {
             source: "usePlayer",
             message: `stream-url-resume-fail: ${e instanceof Error ? e.message : String(e)}`,
           });
-          showErrorToast(
-            t(
-              "player.playback_failed",
-              "Could not start playback. Please try another track.",
-            ),
-          );
+          showErrorToast(t("player.playback_failed"));
         } finally {
           if (!signal.aborted) setIsDownloading(false);
         }

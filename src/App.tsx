@@ -1,4 +1,10 @@
-import React, { useState, useCallback, useRef, Suspense, useEffect } from "react";
+import React, {
+  useState,
+  useCallback,
+  useRef,
+  Suspense,
+  useEffect,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -51,6 +57,8 @@ import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
+import { resumeInterruptedUploads } from "./utils/uploadManager";
+import { getCurrentUserEmail } from "./utils/storageKeys";
 
 import { useServiceWorker } from "./hooks/useServiceWorker";
 import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
@@ -121,12 +129,13 @@ function App() {
         kind: "localstorage-cleanup-failed",
       });
     }
-    db.syncState.delete(DB_NAV_STATE_KEY).catch((e: unknown) =>
-      void captureError({
-        source: "App",
-        message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`,
-        kind: "logout-cleanup-failed",
-      }),
+    db.syncState.delete(DB_NAV_STATE_KEY).catch(
+      (e: unknown) =>
+        void captureError({
+          source: "App",
+          message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`,
+          kind: "logout-cleanup-failed",
+        }),
     );
     clearSessionState();
     setAppRootFolderRef.current(null);
@@ -278,6 +287,16 @@ function App() {
               refresh_token: tokens.refresh_token,
               expires_in: tokens.expires_in,
             });
+            // Fire-and-forget: resumeInterruptedUploads guards itself against
+            // double-runs and never rejects (every step is caught inside — a
+            // failure only surfaces as a warn log and/or the aggregated
+            // interrupted toast). getCurrentUserEmail is the SAME source the
+            // manager persists session rows under, so the scan always queries
+            // the exact key the interrupted rows were written with.
+            void resumeInterruptedUploads(
+              tokens.access_token,
+              getCurrentUserEmail(),
+            );
           }}
         />
       )}
@@ -450,7 +469,7 @@ function App() {
               ) : (
                 <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">
                   <h1 className="text-2xl text-gray-500">
-                    {t("common.coming_soon", "Coming Soon")}: {activeTab}
+                    {t("common.coming_soon")}: {activeTab}
                   </h1>
                 </main>
               ))}
