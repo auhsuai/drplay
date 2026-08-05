@@ -1,8 +1,11 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { ArrowLeft, X, Search, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortDropdown } from "../../components/SortDropdown";
 import { MY_DRIVE_TAB } from "../../../utils/driveConstants";
+import { captureError } from "../../../utils/errorLog";
+
+const TOP_NAVIGATION_BAR_MODULE = "TopNavigationBar";
 
 interface TopNavigationBarProps {
   isSelectionMode: boolean;
@@ -43,6 +46,66 @@ export function TopNavigationBar({
 }: TopNavigationBarProps) {
   const { t } = useTranslation();
 
+  const breadcrumbRef = useRef<HTMLDivElement | null>(null);
+  const dragStartRef = useRef<{
+    startX: number;
+    startScrollLeft: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (isSelectionMode) return;
+    const el = breadcrumbRef.current;
+    if (!el) return;
+
+    // Why: overflow-x-auto only scrolls from wheel deltaX (trackpad); a mouse
+    // wheel emits deltaY, so the breadcrumb never scrolls horizontally with a
+    // mouse. React 19 attaches wheel passively at the root where
+    // preventDefault would be ignored, hence a native non-passive listener.
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      el.scrollLeft += e.deltaY + e.deltaX;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      dragStartRef.current = {
+        startX: e.clientX,
+        startScrollLeft: el.scrollLeft,
+      };
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch (err) {
+        void captureError({
+          level: "warn",
+          source: TOP_NAVIGATION_BAR_MODULE,
+          message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const drag = dragStartRef.current;
+      if (!drag) return;
+      el.scrollLeft = drag.startScrollLeft - (e.clientX - drag.startX);
+    };
+
+    const endDrag = () => {
+      dragStartRef.current = null;
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", endDrag);
+    el.addEventListener("pointercancel", endDrag);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", endDrag);
+      el.removeEventListener("pointercancel", endDrag);
+    };
+  }, [isSelectionMode]);
+
   // Why: the breadcrumb stores the raw root-folder label (MY_DRIVE_TAB) from
   // the Drive state; translate it for display so the breadcrumb matches the
   // sidebar's localized "My Drive" entry. Non-root folder names are untouched.
@@ -81,7 +144,10 @@ export function TopNavigationBar({
             <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
           </button>
 
-          <div className="flex items-center overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0">
+          <div
+            ref={breadcrumbRef}
+            className="flex items-center overflow-x-auto whitespace-nowrap hide-scrollbar cursor-grab flex-1 min-w-0"
+          >
             {folderHistory.map((folder, index) => (
               <div key={folder.id} className="flex items-center shrink-0">
                 <span className="text-gray-400 mx-1">/</span>
