@@ -456,6 +456,50 @@ describe("PlayerBar seek redraws buffer bar immediately (no empty blink)", () =>
   });
 });
 
+describe("PlayerBar error banner recovery", () => {
+  const NETWORK_ERROR_TEXT = en.player.network_interrupted;
+
+  it("BUG regression: shows the error banner when AudioController emits error", () => {
+    renderPlayer();
+    expect(screen.queryByText(NETWORK_ERROR_TEXT)).toBeNull();
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "Mạng không ổn định, đang thử lại...",
+        code: "network_interrupted",
+      });
+    });
+
+    expect(screen.getByText(NETWORK_ERROR_TEXT)).toBeTruthy();
+  });
+
+  it("BUG regression: clears the error banner when playback recovers (play event)", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("error", {
+        message: "Mạng không ổn định, đang thử lại...",
+        code: "network_interrupted",
+      });
+    });
+    expect(screen.getByText(NETWORK_ERROR_TEXT)).toBeTruthy();
+
+    act(() => {
+      fakeController._emit("play");
+    });
+
+    expect(screen.queryByText(NETWORK_ERROR_TEXT)).toBeNull();
+  });
+
+  it("unsubscribes the play handler on unmount (no listener leak)", () => {
+    const { unmount } = renderPlayer();
+    expect(fakeController._handlers["play"] ?? []).toHaveLength(1);
+
+    unmount();
+
+    expect(fakeController._handlers["play"] ?? []).toHaveLength(0);
+  });
+});
+
 describe("PlayerBar favorite (heart) button", () => {
   it("checks favorite status for the current track and renders the heart button (not liked)", async () => {
     renderPlayer();
