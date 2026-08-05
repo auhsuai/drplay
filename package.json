@@ -12,7 +12,17 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,mjs}": [
+      "eslint --fix --rule \"@typescript-eslint/no-unnecessary-type-assertion: off\"",
+      "prettier --write"
+    ],
+    "*.{json,md,css,html}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.5",
@@ -24,29 +34,37 @@
     "dexie-react-hooks": "^4.4.0",
     "i18next": "^26.3.6",
     "lucide-react": "^1.22.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "19.2",
+    "react-dom": "19.2",
     "react-easy-crop": "^6.0.2",
     "react-i18next": "^17.0.10",
     "tauri-plugin-keepawake-api": "^0.1.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
     "@eslint/js": "^9.39.5",
     "@tailwindcss/postcss": "^4.3.1",
     "@tauri-apps/cli": "^2",
     "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
+    "@testing-library/user-event": "^14.6.3",
+    "@types/react": "19.2",
+    "@types/react-dom": "19.2",
     "@vitejs/plugin-react": "^4.6.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "autoprefixer": "^10.5.2",
+    "babel-plugin-react-compiler": "^1.0.0",
     "eslint": "^9.39.5",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react-hooks": "^7.1.1",
     "fake-indexeddb": "^6.2.5",
     "globals": "^17.9.0",
+    "husky": "^9.1.7",
     "jsdom": "^29.1.1",
+    "lint-staged": "^17.3.0",
     "postcss": "^8.5.16",
     "prettier": "^3.9.6",
     "tailwindcss": "^4.3.1",

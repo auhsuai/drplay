@@ -29,6 +29,27 @@ try {
   });
 }
 
+// Keep <html lang> in sync with the active language so screen readers and the
+// browser pick the right defaults. i18next emits 'languageChanged' on init and
+// on every changeLanguage() call (see LanguageDropdown), so one listener covers
+// both paths. index.html keeps the static default (en) for the pre-boot shell.
+const syncDocumentLang = (lng: string) => {
+  if (typeof document === "undefined") return;
+  // Bare-DOM test environments may stub document WITHOUT documentElement
+  // (errorCapture.test.ts sets globalThis.document = { getElementById: ... }),
+  // so treat it as optional despite the DOM lib types.
+  const docElement = (
+    document as Omit<Document, "documentElement"> & {
+      documentElement?: HTMLElement;
+    }
+  ).documentElement;
+  if (docElement) {
+    docElement.lang = lng;
+  }
+};
+
+i18n.on("languageChanged", syncDocumentLang);
+
 // Fire-and-forget: i18next init() returns a completion promise the app does
 // not await (resources are bundled, init is synchronous in practice).
 void i18n.use(initReactI18next).init({
@@ -41,5 +62,9 @@ void i18n.use(initReactI18next).init({
     escapeValue: false, // react already safes from xss
   },
 });
+
+// Belt-and-suspenders: init is synchronous here, but if a future backend makes
+// it async the initial document.lang must still match the resolved language.
+syncDocumentLang(i18n.language || "en");
 
 export default i18n;

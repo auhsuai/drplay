@@ -19,7 +19,7 @@ export function useDebouncedLiveQuery<T>(
 
   useEffect(() => {
     let cancelled = false;
-    const timer = setTimeout(async () => {
+    const handler = async () => {
       try {
         const data = await querierRef.current();
         if (!cancelled) setResult(data);
@@ -32,6 +32,9 @@ export function useDebouncedLiveQuery<T>(
           message: "debounced-query-failed",
         });
       }
+    };
+    const timer = setTimeout(() => {
+      void handler();
     }, delayMs);
 
     return () => {

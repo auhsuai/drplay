@@ -10,4 +10,23 @@ export default defineConfig({
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     testTimeout: 15_000,
   },
+  coverage: {
+    provider: "v8",
+    reporter: ["text", "html"],
+    include: ["src/**/*.{ts,tsx}"],
+    exclude: [
+      "src/**/*.test.*",
+      "src/test-setup.ts",
+      "src/vite-env.d.ts",
+      "src/main.tsx",
+      "src/locales/**",
+      "src/data/**",
+    ],
+    thresholds: {
+      lines: 65,
+      functions: 62,
+      statements: 63,
+      branches: 52,
+    },
+  },
 });

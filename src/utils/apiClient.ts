@@ -76,7 +76,9 @@ function classifyRequestError(err: unknown): "network" | "timeout" {
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`Token refresh timeout (no response within ${String(ms)}ms)`));
+      reject(
+        new Error(`Token refresh timeout (no response within ${String(ms)}ms)`),
+      );
     }, ms);
     promise.then(
       (value) => {
@@ -128,7 +130,7 @@ export const computeProactiveRefreshDelayMs = (
 
 export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
   stopProactiveRefresh();
-  refreshTimerId = setTimeout(async () => {
+  const handler = async () => {
     try {
       await getValidToken(true);
     } catch (e: unknown) {
@@ -138,9 +140,21 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
         message: `Proactive refresh failed: ${e instanceof Error ? e.message : String(e)}`,
       });
     }
+  };
+  refreshTimerId = setTimeout(() => {
+    void handler();
   }, computeProactiveRefreshDelayMs(expiresInSeconds));
 };
 
+/**
+ * Best-effort server-side revocation of a Google OAuth token at logout. The
+ * Google revoke endpoint accepts both access and refresh tokens, so a leaked
+ * credential cannot stay valid after a sign-out on a shared machine. Never
+ * throws: a network failure is logged (warn) and ignored — logout must not be
+ * blocked by a dead connection.
+ * @param token The access or refresh token to revoke (empty/absent → no-op).
+ * @returns Resolves when the revoke attempt finished (success or logged failure).
+ */
 export async function revokeGoogleToken(token: string): Promise<void> {
   if (!token) return;
   try {
@@ -194,11 +208,14 @@ function scheduleRetryRefresh() {
   }, RETRY_DELAY_MS);
 }
 
-// Read the long-lived refresh token from the OS credential vault (keyring).
-// The keyring is the source of truth; localStorage only holds a legacy copy
-// from before the keyring migration. Fallback order: keyring → localStorage →
-// null. A keyring failure is non-fatal (warn + fallback), so a vault hiccup
-// can never sign the user out.
+/**
+ * Read the long-lived refresh token from the OS credential vault (keyring).
+ * The keyring is the source of truth; localStorage only holds a legacy copy
+ * from before the keyring migration. Fallback order: keyring → localStorage →
+ * null. A keyring failure is non-fatal (warn + fallback), so a vault hiccup
+ * can never sign the user out.
+ * @returns The refresh token, or null when neither store has one.
+ */
 export const readRefreshToken = async (): Promise<string | null> => {
   try {
     const keyringToken = await withTimeout(
@@ -223,11 +240,14 @@ export const readRefreshToken = async (): Promise<string | null> => {
   return localStorage.getItem(REFRESH_TOKEN_KEY);
 };
 
-// Persist the long-lived refresh token in the OS credential vault. Fire-and-
-// forget from the caller's perspective: it must not block the refresh flow
-// (the access token is already valid). On failure the token is kept in
-// localStorage (degraded mode, always logged) so it is never lost silently —
-// the next rotation retries the keyring write. Never rejects.
+/**
+ * Persist the long-lived refresh token in the OS credential vault. Fire-and-
+ * forget from the caller's perspective: it must not block the refresh flow
+ * (the access token is already valid). On failure the token is kept in
+ * localStorage (degraded mode, always logged) so it is never lost silently —
+ * the next rotation retries the keyring write. Never rejects.
+ * @param token The refresh token to persist.
+ */
 export const writeRefreshToken = async (token: string): Promise<void> => {
   try {
     await withTimeout(
@@ -258,11 +278,13 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
   }
 };
 
-// Remove the long-lived refresh token from the OS credential vault. Called by
-// logout so a signed-out shared machine cannot leave the credential behind in
-// the keyring. Fire-and-forget and never rejects: the localStorage copy is
-// always cleared too, so the token cannot survive in either store silently
-// after a logout intent.
+/**
+ * Remove the long-lived refresh token from the OS credential vault. Called by
+ * logout so a signed-out shared machine cannot leave the credential behind in
+ * the keyring. Fire-and-forget and never rejects: the localStorage copy is
+ * always cleared too, so the token cannot survive in either store silently
+ * after a logout intent.
+ */
 export const deleteRefreshToken = async (): Promise<void> => {
   try {
     await withTimeout(invoke("delete_refresh_token"), KEYRING_TIMEOUT_MS);
@@ -290,6 +312,23 @@ export const deleteRefreshToken = async (): Promise<void> => {
   }
 };
 
+/**
+ * Return an access token that is guaranteed (as far as local bookkeeping
+ * can tell) not to be stale, refreshing via the refresh token when needed.
+ * This is the single entry point every authed request and the pro-sync worker
+ * use, so refresh happens once and concurrent callers share the same in-flight
+ * refresh instead of each firing their own. On refresh failure with a revoked
+ * grant it dispatches 'auth-logout' so the session ends; transient failures
+ * schedule a bounded retry. When no refresh token exists the user is treated
+ * as signed out (dispatch 'auth-logout' + return null).
+ * @param forceRefresh Skip the staleness check and refresh unconditionally
+ * (used on 401 retries and proactive/worker refreshes).
+ * @param signal Optional caller cancellation — aborting rejects with an
+ * AbortError and the refresh continues to completion for other callers.
+ * @returns The valid access token, or null when no token is available (signed
+ * out / refresh impossible). An empty string means the session changed while
+ * refreshing (logout raced the refresh).
+ */
 export const getValidToken = async (
   forceRefresh: boolean = false,
   signal?: AbortSignal,
@@ -417,6 +456,20 @@ export interface FetchWithAuthOptions extends RequestInit {
   timeoutMs?: number;
 }
 
+/**
+ * Fetch with the current access token attached. Every call is bounded by a
+ * timeout (default 15s, overridable via `timeoutMs`) so a stalled server can
+ * never hang the caller; a caller signal and the timeout are merged, neither
+ * wins. On a 401 the token is force-refreshed once and the request retried
+ * with the new token; when the refresh cannot produce a token the original
+ * 401 response is returned. Network/timeout failures reject (the caller
+ * decides retry vs. surface) — nothing is swallowed.
+ * @param url The request target (Drive API or any authed endpoint).
+ * @param options Fetch options, plus an optional `timeoutMs` override for
+ * long-running bodies (e.g. large upload PUTs) that outlast the 15s default.
+ * @returns The final Response (original or 401-retried); callers inspect
+ * `.ok`/`.status` themselves.
+ */
 export const fetchWithAuth = async (
   url: RequestInfo,
   options: FetchWithAuthOptions = {},

@@ -178,6 +178,15 @@ function requireDiskPath(entry: InternalEntry): string {
   return path;
 }
 
+/**
+ * Enqueue uploads and start pumping the queue. The manager runs uploads
+ * strictly sequentially (one at a time) and publishes a pending db.files row
+ * per entry so the UI can render dimmed cards immediately, long before Drive
+ * confirms anything. Invalid seeds (folder without a disk path, file without
+ * bytes/path) surface as error entries instead of throwing.
+ * @param seeds The items to upload (bytes payloads or disk paths).
+ * @param token Drive access token for this batch's requests.
+ */
 export function startUploads(seeds: UploadSeed[], token: string): void {
   for (const seed of seeds) {
     entries.push(createEntry(seed, token));
@@ -202,10 +211,14 @@ export function isUploading(id: string): boolean {
   return getUploadingIds().has(id);
 }
 
-// User-initiated cancel. 'uploading' → abort the wired controller (driveApi
-// rejects with UploadError('aborted') → markError cleans up silently);
-// 'queued' → flip straight to terminal inline (pump only picks 'queued').
-// Unknown or already-terminal ids are a no-op — cancel can be re-clicked.
+/**
+ * User-initiated cancel. An in-flight 'uploading' entry aborts its wired
+ * AbortController (the Drive request rejects and the entry turns into a
+ * silent 'aborted' state — no error toast); a still-queued entry is flipped
+ * to terminal inline so the pump skips it. Unknown or already-terminal ids
+ * are a no-op, so cancel can be re-clicked safely.
+ * @param id The entry id ('pending-…') or the Drive id once known.
+ */
 export function cancelUpload(id: string): void {
   const entry = entries.find((e) => e.id === id || e.driveId === id);
   if (!entry || entry.status === "done" || entry.status === "error") return;
@@ -241,13 +254,15 @@ export function getUploadProgress(id: string): number | undefined {
   return entry?.progress;
 }
 
-// Card-level upload presentation state (slice 6):
-// - 'uploading'        → the item itself is being uploaded (dim + spinner)
-// - 'parent-uploading' → a child of this folder is uploading (spinner only,
-//                        the folder already exists on Drive — no dim)
-// - 'uploaded'         → the item finished uploading recently (green check,
-//                        dismissed on play or after UPLOADED_TINT_MS)
-// - 'none'             → idle
+/**
+ * Card-level upload presentation state (slice 6):
+ * - 'uploading'        → the item itself is being uploaded (dim + spinner)
+ * - 'parent-uploading' → a child of this folder is uploading (spinner only,
+ *                        the folder already exists on Drive — no dim)
+ * - 'uploaded'         → the item finished uploading recently (green check,
+ *                        dismissed on play or after UPLOADED_TINT_MS)
+ * - 'none'             → idle
+ */
 export type UploadState =
   "none" | "uploading" | "parent-uploading" | "uploaded";
 
@@ -258,6 +273,13 @@ const UPLOADED_TINT_MS = 10_000;
 // only, cleared by timer or when the user plays the item.
 const recentlyDoneIds = new Set<string>();
 
+/**
+ * Resolve a single item id to its upload presentation state ('uploading' wins
+ * when an id matches both the entry and a child upload under it). Callers use
+ * this to decide a row's dim/spinner/green-check rendering.
+ * @param id The entry id, Drive id, or parent folder id to look up.
+ * @returns The state that row should render ('none' when not uploading).
+ */
 export function getUploadState(id: string): UploadState {
   // Mirrors getUploadingIds' coverage (entry id + driveId + parentId) but
   // resolves a SINGLE id to a presentation state instead of a flat set.
@@ -287,28 +309,50 @@ function markRecentlyDone(id: string): void {
   }, UPLOADED_TINT_MS);
 }
 
-// Hide the green check early (e.g. the user clicked the row to play it) and
-// return the row to its idle MoreMenu state.
+/**
+ * Hide the green check early (e.g. the user clicked the row to play it) and
+ * return the row to its idle MoreMenu state.
+ * @param id The entry or Drive id whose tint should clear.
+ */
 export function dismissUploaded(id: string): void {
   if (recentlyDoneIds.delete(id)) notify();
 }
 
-// Clear EVERY "just uploaded" check at once (e.g. the user left the My Drive
-// tab and MainContent unmounted) — the tint is presentation-only, so a fresh
-// visit must show no stale checks. No-op (and no notify) when already empty,
-// same silent pattern as dismissUploaded.
+/**
+ * Clear EVERY "just uploaded" check at once (e.g. the user left the My Drive
+ * tab and MainContent unmounted) — the tint is presentation-only, so a fresh
+ * visit must show no stale checks. No-op (and no notify) when already empty,
+ * same silent pattern as dismissUploaded.
+ */
 export function clearUploadedTint(): void {
   if (recentlyDoneIds.size === 0) return;
   recentlyDoneIds.clear();
   notify();
 }
 
+/**
+ * Subscribe to upload-state changes (status flips, progress ticks, cancels).
+ * Also re-dispatched as a window 'upload-status-changed' CustomEvent for
+ * non-React consumers. The callback must be resilient: a throwing subscriber
+ * is caught and logged, never allowed to break the notify loop.
+ * @param cb Called on every state change after the queue mutates.
+ * @returns An unsubscribe function; call it on unmount to stop receiving
+ * notifications (and to let the manager drop the reference).
+ */
 export function subscribe(cb: () => void): () => void {
   subscribers.add(cb);
   return () => {
     subscribers.delete(cb);
   };
 }
+/**
+ * Snapshot of every upload entry (queued, uploading, and terminal). Terminal
+ * entries are pruned right after they notify, so the snapshot is a point-in-
+ * time view: subscribers must consume the 'done'/'error' state from the
+ * notify that preceded the prune, not from a later getEntries call.
+ * @returns A shallow copy of the internal entries with internal fields
+ * (token, memo, drive id) stripped — safe for any consumer.
+ */
 export function getEntries(): UploadEntry[] {
   return entries.map((e) => ({
     id: e.id,

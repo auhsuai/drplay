@@ -1,11 +1,6 @@
 // @vitest-environment jsdom
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UploadButton } from "./UploadButton";
 import { useDriveStore } from "../../store/driveStore";
@@ -54,14 +49,16 @@ function openButton(): HTMLElement {
   return screen.getByTitle(BUTTON_TITLE);
 }
 
-function selectFileOption() {
-  fireEvent.click(openButton());
-  fireEvent.click(screen.getByText(MENU_FILE_LABEL));
+async function selectFileOption() {
+  const user = userEvent.setup();
+  await user.click(openButton());
+  await user.click(screen.getByText(MENU_FILE_LABEL));
 }
 
-function selectFolderOption() {
-  fireEvent.click(openButton());
-  fireEvent.click(screen.getByText(MENU_FOLDER_LABEL));
+async function selectFolderOption() {
+  const user = userEvent.setup();
+  await user.click(openButton());
+  await user.click(screen.getByText(MENU_FOLDER_LABEL));
 }
 
 describe("UploadButton", () => {
@@ -104,9 +101,10 @@ describe("UploadButton", () => {
     expect(screen.queryByTitle(BUTTON_TITLE)).toBeNull();
   });
 
-  it("opens a menu with the two upload options on click", () => {
+  it("opens a menu with the two upload options on click", async () => {
     render(<UploadButton token="tok-1" />);
-    fireEvent.click(openButton());
+    const user = userEvent.setup();
+    await user.click(openButton());
     expect(screen.getByText(MENU_FILE_LABEL)).toBeTruthy();
     expect(screen.getByText(MENU_FOLDER_LABEL)).toBeTruthy();
   });
@@ -116,7 +114,7 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue(["C:\\Music\\a.mp3", "C:\\Music\\b.flac"]);
     render(<UploadButton token="tok-1" />);
 
-    selectFileOption();
+    await selectFileOption();
 
     await waitFor(() => {
       expect(mocks.open).toHaveBeenCalledWith({
@@ -151,7 +149,7 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue("C:\\Music\\only.mp3");
     render(<UploadButton token="tok-1" />);
 
-    selectFileOption();
+    await selectFileOption();
 
     await waitFor(() => {
       expect(mocks.startUploads).toHaveBeenCalledTimes(1);
@@ -173,7 +171,7 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue("C:\\Music\\Album");
     render(<UploadButton token="tok-1" />);
 
-    selectFolderOption();
+    await selectFolderOption();
 
     await waitFor(() => {
       expect(mocks.open).toHaveBeenCalledWith({ directory: true });
@@ -198,7 +196,7 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue("C:\\Music\\Album\\");
     render(<UploadButton token="tok-1" />);
 
-    selectFolderOption();
+    await selectFolderOption();
 
     await waitFor(() => {
       expect(mocks.startUploads).toHaveBeenCalledTimes(1);
@@ -220,7 +218,7 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue(null);
     render(<UploadButton token="tok-1" />);
 
-    selectFileOption();
+    await selectFileOption();
 
     await waitFor(() => {
       expect(mocks.open).toHaveBeenCalled();
@@ -232,7 +230,7 @@ describe("UploadButton", () => {
     mocks.open.mockRejectedValue(new Error("dialog exploded"));
     render(<UploadButton token="tok-1" />);
 
-    selectFileOption();
+    await selectFileOption();
 
     await waitFor(() => {
       expect(mocks.showErrorToast).toHaveBeenCalledWith("upload.upload_error");
@@ -246,7 +244,7 @@ describe("UploadButton", () => {
     mocks.open.mockRejectedValue(new Error("dialog exploded"));
     render(<UploadButton token="tok-1" />);
 
-    selectFolderOption();
+    await selectFolderOption();
 
     await waitFor(() => {
       expect(mocks.showErrorToast).toHaveBeenCalledWith("upload.upload_error");
@@ -260,32 +258,34 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue(null);
     render(<UploadButton token="tok-1" />);
 
-    selectFileOption();
+    await selectFileOption();
 
     await waitFor(() => {
       expect(screen.queryByText(MENU_FILE_LABEL)).toBeNull();
     });
   });
 
-  it("closes the menu on an outside mousedown", () => {
+  it("closes the menu on an outside mousedown", async () => {
     render(<UploadButton token="tok-1" />);
-    fireEvent.click(openButton());
+    const user = userEvent.setup();
+    await user.click(openButton());
     expect(screen.getByText(MENU_FILE_LABEL)).toBeTruthy();
 
-    fireEvent.mouseDown(document.body);
+    await user.click(document.body);
     expect(screen.queryByText(MENU_FILE_LABEL)).toBeNull();
   });
 
-  it("closes the menu on Escape", () => {
+  it("closes the menu on Escape", async () => {
     render(<UploadButton token="tok-1" />);
-    fireEvent.click(openButton());
+    const user = userEvent.setup();
+    await user.click(openButton());
     expect(screen.getByText(MENU_FILE_LABEL)).toBeTruthy();
 
-    fireEvent.keyDown(document, { key: "Escape" });
+    await user.keyboard("{Escape}");
     expect(screen.queryByText(MENU_FILE_LABEL)).toBeNull();
   });
 
-  it("does not propagate the button click to the sidebar header", () => {
+  it("does not propagate the button click to the sidebar header", async () => {
     const onHeaderClick = vi.fn();
     render(
       <div
@@ -297,7 +297,8 @@ describe("UploadButton", () => {
         <UploadButton token="tok-1" />
       </div>,
     );
-    fireEvent.click(openButton());
+    const user = userEvent.setup();
+    await user.click(openButton());
     expect(onHeaderClick).not.toHaveBeenCalled();
   });
 });

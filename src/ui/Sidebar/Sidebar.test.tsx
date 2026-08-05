@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar, type SidebarProps } from "./Sidebar";
 import type { DriveStorageQuota } from "../../utils/driveApi";
@@ -509,12 +510,12 @@ describe("Sidebar storage quota", () => {
     const onTabChange = vi.fn();
     render(<Sidebar {...baseProps({ onTabChange })} />);
 
-    fireEvent.click(screen.getByTitle("sidebar.create_playlist"));
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("sidebar.create_playlist"));
     const input = screen.getByPlaceholderText(
       "sidebar.new_playlist_placeholder",
     );
-    fireEvent.change(input, { target: { value: "New" } });
-    fireEvent.submit(input);
+    await user.type(input, "New{Enter}");
 
     await waitFor(() => {
       expect(onTabChange).toHaveBeenCalledWith("playlist_pl-new");

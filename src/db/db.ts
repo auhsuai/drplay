@@ -65,6 +65,15 @@ export interface MetadataCacheRow {
   entry: unknown;
 }
 
+/**
+ * Local IndexedDB mirror of the signed-in user's Drive data (file list,
+ * favorites, play history, play counts, folder visits, error logs, app
+ * config). The UI reads from here so browsing is instant, while Drive stays
+ * the source of truth that gets fetched on demand. Every per-user table is
+ * keyed by [userEmail+id] (schema v7) so multiple Google accounts never
+ * overwrite each other's rows. Schema changes are forward-only: never alter a
+ * table's primary key in place — add a new version with new tables and copy.
+ */
 export class DriveDatabase extends Dexie {
   files!: Table<DriveFile, string>; // Primary key is 'id'
   syncState!: Table<SyncState, string>; // Primary key is 'key'
@@ -221,4 +230,9 @@ export class DriveDatabase extends Dexie {
   }
 }
 
+/**
+ * The app-wide singleton database. Always import this instead of constructing
+ * a second DriveDatabase — two instances would run schema upgrades twice and
+ * hold competing connections to the same IndexedDB store.
+ */
 export const db = new DriveDatabase();

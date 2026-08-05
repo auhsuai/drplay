@@ -174,9 +174,8 @@ export function FolderSelectionScreen({
   // search in an effect (react-hooks/set-state-in-effect), reset it right
   // here when the active folder changes — state is adjusted synchronously
   // during render, before the browser paints the new folder.
-  const [lastFetchedFolderId, setLastFetchedFolderId] = useState(
-    currentFolderId,
-  );
+  const [lastFetchedFolderId, setLastFetchedFolderId] =
+    useState(currentFolderId);
   if (lastFetchedFolderId !== currentFolderId) {
     setLastFetchedFolderId(currentFolderId);
     setSearchQuery("");
@@ -189,9 +188,8 @@ export function FolderSelectionScreen({
   // not inside the debounce effect.
   const apiSearchActive =
     Boolean(searchQuery.trim()) && filteredFolders.length === 0;
-  const [lastApiSearchActive, setLastApiSearchActive] = useState(
-    apiSearchActive,
-  );
+  const [lastApiSearchActive, setLastApiSearchActive] =
+    useState(apiSearchActive);
   if (lastApiSearchActive !== apiSearchActive) {
     setLastApiSearchActive(apiSearchActive);
     if (!apiSearchActive) {
@@ -290,10 +288,9 @@ export function FolderSelectionScreen({
 
   useEffect(() => {
     if (!searchQuery.trim() || filteredFolders.length > 0) return;
-    const timer = setTimeout(
-      () => searchSubfolders(searchQuery.trim()),
-      SEARCH_DEBOUNCE_MS,
-    );
+    const timer = setTimeout(() => {
+      void searchSubfolders(searchQuery.trim());
+    }, SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       apiSearchAbortRef.current?.abort();
@@ -440,9 +437,7 @@ export function FolderSelectionScreen({
         if (e.target === e.currentTarget && onCancel) onCancel();
       }}
     >
-      <div
-        className="bg-white dark:bg-[#121212] w-full max-w-3xl h-[75vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-      >
+      <div className="bg-white dark:bg-[#121212] w-full max-w-3xl h-[75vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-6 py-5 flex items-center justify-between shrink-0">
           <div>

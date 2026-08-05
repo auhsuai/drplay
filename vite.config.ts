@@ -7,7 +7,16 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
-  plugins: [react()],
+  // React Compiler: automatic memoization (react.dev/learn/react-compiler).
+  // @vitejs/plugin-react < 6.0.0 accepts the inline babel config; the compiler
+  // plugin runs first in the babel pipeline per the official install guide.
+  plugins: [
+    react({
+      babel: {
+        plugins: ["babel-plugin-react-compiler"],
+      },
+    }),
+  ],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

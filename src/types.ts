@@ -1,3 +1,8 @@
+/**
+ * A playable audio item (or the audio half of a Drive item). The minimal
+ * contract every consumer agrees on: identity, display title/artist, and
+ * where the stream comes from.
+ */
 export type Track = {
   id: string;
   title: string;
@@ -12,6 +17,7 @@ export type Track = {
   queueItemId?: string;
 };
 
+/** The signed-in Google account's display profile. */
 export type UserProfile = {
   name: string;
   email: string;
@@ -20,6 +26,10 @@ export type UserProfile = {
 
 export type PlayMode = "normal" | "shuffle" | "repeat-all" | "repeat-one";
 
+/**
+ * A row in the Drive explorer listing: a folder or a file, with optional
+ * audio metadata attached for files (trackInfo is undefined for folders).
+ */
 // moved from App.tsx
 export type DriveItem = {
   id: string;

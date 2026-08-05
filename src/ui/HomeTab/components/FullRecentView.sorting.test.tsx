@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { FullRecentView, sortRecentTracks } from "./FullRecentView";
 import type { Track } from "../../../types";
 
@@ -214,13 +215,15 @@ describe("FullRecentView sort UI", () => {
       .getAllByTestId("song-card")
       .map((el) => el.getAttribute("data-item-id"));
 
-  const openSortMenu = () => {
+  const openSortMenu = async () => {
+    const user = userEvent.setup();
     const arrow = screen.getByTitle("Toggle Order");
-    fireEvent.click(arrow.parentElement as HTMLElement);
+    await user.click(arrow.parentElement as HTMLElement);
   };
 
-  const clickSortOption = (label: string) => {
-    fireEvent.click(screen.getByRole("button", { name: label }));
+  const clickSortOption = async (label: string) => {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: label }));
   };
 
   it("renders cards in newest-first input order by default with Ngày label", () => {
@@ -233,9 +236,9 @@ describe("FullRecentView sort UI", () => {
     expect(screen.getAllByText("Ngày").length).toBeGreaterThan(0);
   });
 
-  it("shows exactly 3 sort options in the menu (A-Z / Ngày / Kích thước)", () => {
+  it("shows exactly 3 sort options in the menu (A-Z / Ngày / Kích thước)", async () => {
     renderRecent([makeTrack("a", "Alpha")]);
-    openSortMenu();
+    await openSortMenu();
     const menu = document.querySelector(".w-32") as HTMLElement;
     const labels = Array.from(menu.querySelectorAll("button")).map(
       (b) => b.textContent,
@@ -243,72 +246,72 @@ describe("FullRecentView sort UI", () => {
     expect(labels.sort()).toEqual(["A-Z", "Kích thước", "Ngày"]);
   });
 
-  it("sorts by size ascending (undefined last) when Kích thước is chosen", () => {
+  it("sorts by size ascending (undefined last) when Kích thước is chosen", async () => {
     renderRecent([
       makeTrack("a", "Alpha", 50),
       makeTrack("b", "Bravo"),
       makeTrack("c", "Charlie", 10),
     ]);
-    openSortMenu();
-    clickSortOption("Kích thước");
+    await openSortMenu();
+    await clickSortOption("Kích thước");
     expect(cardOrder()).toEqual(["c", "a", "b"]);
   });
 
-  it("sorts A-Z when A-Z is chosen", () => {
+  it("sorts A-Z when A-Z is chosen", async () => {
     renderRecent([
       makeTrack("b", "Bravo"),
       makeTrack("a", "Alpha"),
       makeTrack("c", "Charlie"),
     ]);
-    openSortMenu();
-    clickSortOption("A-Z");
+    await openSortMenu();
+    await clickSortOption("A-Z");
     expect(cardOrder()).toEqual(["a", "b", "c"]);
   });
 
-  it("keeps newest-first order when Ngày is chosen (default recency behavior)", () => {
+  it("keeps newest-first order when Ngày is chosen (default recency behavior)", async () => {
     renderRecent([
       makeTrack("new", "Newest"),
       makeTrack("mid", "Middle"),
       makeTrack("old", "Oldest"),
     ]);
-    openSortMenu();
-    clickSortOption("Ngày");
+    await openSortMenu();
+    await clickSortOption("Ngày");
     expect(cardOrder()).toEqual(["new", "mid", "old"]);
   });
 
-  it("arrow toggle flips asc/desc repeatedly without opening the menu", () => {
+  it("arrow toggle flips asc/desc repeatedly without opening the menu", async () => {
     renderRecent([
       makeTrack("new", "Newest"),
       makeTrack("mid", "Middle"),
       makeTrack("old", "Oldest"),
     ]);
+    const user = userEvent.setup();
     const arrow = screen.getByTitle("Toggle Order");
-    fireEvent.click(arrow);
+    await user.click(arrow);
     expect(cardOrder()).toEqual(["old", "mid", "new"]);
     expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
-    fireEvent.click(arrow);
+    await user.click(arrow);
     expect(cardOrder()).toEqual(["new", "mid", "old"]);
   });
 
-  it("applies search filter first, then sort", () => {
+  it("applies search filter first, then sort", async () => {
     renderRecent([
       makeTrack("x", "Zulu"),
       makeTrack("y", "Alpha"),
       makeTrack("z", "Zen"),
     ]);
-    fireEvent.change(screen.getByPlaceholderText("Tìm kiếm..."), {
-      target: { value: "z" },
-    });
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText("Tìm kiếm..."), "z");
     expect(cardOrder()).toEqual(["x", "z"]);
-    openSortMenu();
-    clickSortOption("A-Z");
+    await openSortMenu();
+    await clickSortOption("A-Z");
     expect(cardOrder()).toEqual(["z", "x"]);
   });
 
-  it("renders zero items on an empty list without crashing", () => {
+  it("renders zero items on an empty list without crashing", async () => {
     renderRecent([]);
     expect(screen.queryAllByTestId("song-card").length).toBe(0);
-    openSortMenu();
+    await openSortMenu();
     const menu = document.querySelector(".w-32") as HTMLElement;
     expect(menu.querySelectorAll("button").length).toBe(3);
   });

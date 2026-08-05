@@ -32,6 +32,14 @@ export interface FolderVisitEntry {
   lastVisited: number;
 }
 
+/**
+ * Record a play: upsert the track into the recently-played list (deduped by
+ * id, newest first) and bump its per-user play count, then prune both tables
+ * back to their caps so per-user history cannot grow unbounded on disk. Fires
+ * a 'recent-updated' window event so live history UI re-renders. Failures are
+ * logged, never thrown — a play must not crash the player.
+ * @param track The track that just started playing.
+ */
 export async function recordPlay(track: Track) {
   const email = getCurrentUserEmail();
   try {
@@ -138,6 +146,11 @@ async function pruneRecentTracks(email: string): Promise<void> {
   }
 }
 
+/**
+ * The user's play history, newest first, deduped by track id and capped at
+ * RECENT_CAP. Scoped to the current user's email. Returns [] (logged) when
+ * the read fails rather than throwing.
+ */
 export async function getRecentlyPlayed(): Promise<Track[]> {
   const email = getCurrentUserEmail();
   try {
@@ -164,6 +177,11 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
   }
 }
 
+/**
+ * The current user's top tracks by play count (top 10, straight from the
+ * [userEmail+count] index so it never materializes the whole table) — the
+ * "on repeat" / heavy rotation section. Returns [] (logged) on failure.
+ */
 export async function getHeavyRotation(): Promise<Track[]> {
   const email = getCurrentUserEmail();
   try {
@@ -187,6 +205,12 @@ export async function getHeavyRotation(): Promise<Track[]> {
   }
 }
 
+/**
+ * Random sample of tracks the user has real metadata for (picks keys from the
+ * metadata cache with real, non-placeholder entries and shuffles them) — the
+ * "discover something" row. Track titles are the generic placeholder until a
+ * fetch fills them in. Returns [] when nothing cached, or on failure.
+ */
 export async function getRandomDiscoveries(): Promise<Track[]> {
   try {
     const rows = await db.metadataCache.toArray();
@@ -232,6 +256,14 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
   }
 }
 
+/**
+ * Record that the user opened a folder: upsert its per-user visit count and
+ * last-visited time, pruning back to FOLDER_VISIT_CAP afterwards. The root
+ * folder is ignored (visiting root is the default state, not a signal).
+ * Failures are logged, never thrown.
+ * @param folderId Drive id of the visited folder.
+ * @param folderName Its display name at visit time (stored for later display).
+ */
 export async function recordFolderVisit(folderId: string, folderName: string) {
   if (folderId === ROOT_FOLDER_ID) return;
   const email = getCurrentUserEmail();
@@ -290,6 +322,10 @@ async function pruneFolderVisits(email: string): Promise<void> {
   }
 }
 
+/**
+ * The current user's most-visited folders (top 4, ties broken by recency) —
+ * the quick-navigation row. Returns [] (logged) on failure.
+ */
 export async function getMostVisitedFolders(): Promise<FolderVisitEntry[]> {
   const email = getCurrentUserEmail();
   try {

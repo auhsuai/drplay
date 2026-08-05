@@ -46,6 +46,24 @@ const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
+/**
+ * Auth lifecycle hook: hydrates the session from localStorage on mount,
+ * starts/stops the pro-sync worker and proactive token refresh while logged
+ * in, fetches the Google profile, and owns logout (invalidate session, stop
+ * workers, clear storage, revoke both tokens, wipe backend caches, then run
+ * the caller's `onLogoutExt`). Returns the current auth state plus the two
+ * handlers every login/logout UI needs:
+ * - `handleLoginSuccess(tokenData)` — persist tokens from the login flow,
+ *   flip the store to logged-in, and schedule the proactive refresh. Safe to
+ *   call multiple times: it ignores malformed payloads and races a logout in
+ *   progress.
+ * - `handleLogout()` — the full teardown above, guarded so concurrent logout
+ *   triggers (button + 'auth-logout' event) run exactly once. Async but
+ *   always resolves; never throws to its callers.
+ * @param onLogoutExt Optional callback invoked at the END of a successful
+ * logout (e.g. navigation) — wrapped in a ref, so a fresh identity each
+ * render is fine.
+ */
 export const useAuth = (onLogoutExt?: () => void) => {
   const {
     isLoggedIn,
@@ -254,12 +272,13 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // Listen for auth-logout event from apiClient
   useEffect(() => {
     const handleAuthLogout = () => {
-      handleLogoutRef.current().catch((err: unknown) =>
-        void captureError({
-          level: "error",
-          source: AUTH_MODULE,
-          message: `Logout failed: ${classifyError(err)}`,
-        }),
+      handleLogoutRef.current().catch(
+        (err: unknown) =>
+          void captureError({
+            level: "error",
+            source: AUTH_MODULE,
+            message: `Logout failed: ${classifyError(err)}`,
+          }),
       );
     };
     window.addEventListener("auth-logout", handleAuthLogout);
@@ -359,9 +378,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
             signal: controller.signal,
           });
           if (!res.ok)
-            throw new Error(
-              `userinfo request failed (${String(res.status)})`,
-            );
+            throw new Error(`userinfo request failed (${String(res.status)})`);
           const data = (await res.json()) as Record<string, unknown> | null;
           if (data && typeof data.email === "string") {
             setUserProfile({

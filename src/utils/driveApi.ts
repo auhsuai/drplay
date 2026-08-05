@@ -72,6 +72,11 @@ export interface DriveStorageQuota {
   usageInDriveTrash: number;
 }
 
+/**
+ * Delay helper (exported for tests). Exposes the retry backoff this module
+ * uses, honoring Retry-After when present, otherwise exponential backoff with
+ * jitter, capped at MAX_DELAY_MS.
+ */
 export const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -89,9 +94,11 @@ export function mergeWithTimeoutSignal(
     : timeoutSignal;
 }
 
-// Derive a short, safe classification tag from an error's message ONLY.
-// We never log the error object or its stack — those can leak file ids, user
-// data, or (in theory) auth material into logs. Callers use this for observability.
+/**
+ * Derive a short, safe classification tag from an error's message ONLY.
+ * We never log the error object or its stack — those can leak file ids, user
+ * data, or (in theory) auth material into logs. Callers use this for observability.
+ */
 export function classifyDriveError(err: unknown): string {
   const msg =
     err instanceof Error
@@ -132,6 +139,19 @@ export function backoffDelay(
   return Math.min(exp + jitter, MAX_DELAY_MS);
 }
 
+/**
+ * The Drive API resilience layer: fetch through fetchWithAuth with retry.
+ * 429/5xx are retried with exponential backoff + jitter; a 403 is retried
+ * only when the body reports a Drive rate-limit reason. A caller abort is
+ * NEVER retried (re-firing an aborted request only wastes network). Retries
+ * are bounded (MAX_RETRIES) — callers get a final response or rejection, not
+ * an infinite hang.
+ * @param url Full Drive endpoint URL.
+ * @param options Fetch options; `signal` is merged with a per-attempt timeout.
+ * @param timeoutMs Per-attempt timeout (default 20s).
+ * @returns The final Response — retried or non-retryable; a 4xx (except
+ * rate-limit 403) is returned as-is, never retried.
+ */
 export async function driveFetch(
   url: string,
   options: RequestInit = {},
@@ -286,6 +306,17 @@ function getErrorMessage(errData: unknown): string | null {
 // signal?: AbortSignal wires a caller cancel (uploadManager batch controller)
 // into the request; driveFetch already turns a caller abort into an immediate
 // non-retried rejection. Optional: callers like useDriveExplorer omit it.
+/**
+ * Create a folder on Drive. Shared by the explorer's "new folder" flow and
+ * the upload manager's folder batches (which pass a cancel signal so an
+ * aborted upload cannot leave half-created folders behind).
+ * @param token Drive access token.
+ * @param name Display name of the new folder.
+ * @param parentId Drive id of the parent folder.
+ * @param signal Optional cancel — driveFetch turns the abort into an
+ * immediate non-retried rejection.
+ * @returns The created folder's Drive metadata (id is the meaningful field).
+ */
 export async function createFolder(
   token: string,
   name: string,
@@ -316,6 +347,15 @@ export async function createFolder(
   return data as DriveFileItem;
 }
 
+/**
+ * Move a file/folder to the Drive trash (soft delete) and tag it with
+ * `deletedByDrPlay` so a later restore knows it was DrPlay-deleted. Permanent
+ * deletion is never used from the UI — trash keeps accidental deletes
+ * recoverable.
+ * @param token Drive access token.
+ * @param fileId The id to trash.
+ * @returns The trashed file's Drive metadata.
+ */
 export async function deleteFile(
   token: string,
   fileId: string,
@@ -345,6 +385,19 @@ export async function deleteFile(
   return data as DriveFileItem;
 }
 
+/**
+ * Move a file/folder to another parent. First reads the item's real parent
+ * list so it is removed from ALL of them (Drive allows multiple parents), and
+ * short-circuits with { success: true } when the target is already a parent
+ * (avoids a 400 from the add+remove combo). Non-ok responses log a sanitized
+ * status/detail (never the raw body — it can embed file ids) and throw.
+ * @param token Drive access token.
+ * @param fileId The id to move.
+ * @param currentParentId The parent DrPlay currently shows it under.
+ * @param newParentId The destination folder id.
+ * @returns The moved file's metadata, or { success: true } on the
+ * already-in-target no-op path.
+ */
 export async function moveFile(
   token: string,
   fileId: string,
@@ -403,6 +456,13 @@ export async function moveFile(
   return data as DriveFileItem;
 }
 
+/**
+ * Untrash a file DrPlay previously deleted (clears the `deletedByDrPlay`
+ * app-property marker too, so the item returns to a clean state).
+ * @param token Drive access token.
+ * @param fileId The id to restore.
+ * @returns The restored file's Drive metadata.
+ */
 export async function restoreFile(
   token: string,
   fileId: string,
@@ -431,6 +491,14 @@ export async function restoreFile(
   return data as DriveFileItem;
 }
 
+/**
+ * Hard-delete a file. Deliberately NOT exposed through the normal UI (the app
+ * trash-soft-deletes via deleteFile); kept for the few flows that genuinely
+ * need the item gone (e.g. emptying trash).
+ * @param token Drive access token.
+ * @param fileId The id to delete permanently.
+ * @returns true once Drive confirms the deletion; throws otherwise.
+ */
 export async function permanentlyDeleteFile(
   token: string,
   fileId: string,
@@ -449,6 +517,14 @@ export async function permanentlyDeleteFile(
   return true;
 }
 
+/**
+ * One page of the newest audio files in the user's whole Drive (sorted by
+ * createdTime desc) for the "Recently Added" section. Page size is fixed at
+ * 100 — larger than every grid count so the UI can tell "full list" from
+ * "list really is that short".
+ * @param token Drive access token.
+ * @returns The newest audio files (empty array on malformed payloads).
+ */
 export async function getRecentlyAddedAudioFiles(
   token: string,
 ): Promise<DriveFileItem[]> {
@@ -467,8 +543,14 @@ export async function getRecentlyAddedAudioFiles(
   return parseFilesList(data);
 }
 
-// Return the parent ids of a file/folder. Returns null when the Drive request
-// fails (or the file has no parents) so callers can fall back to root.
+/**
+ * Return the parent ids of a file/folder. Returns null when the Drive request
+ * fails (or the file has no parents) so callers can fall back to root.
+ * @param token Drive access token.
+ * @param fileId The id to look up.
+ * @param signal Optional cancel signal.
+ * @returns The parent id list, or null on failure/no parents.
+ */
 export async function getFileParents(
   token: string,
   fileId: string,
@@ -486,7 +568,14 @@ export async function getFileParents(
   return parseParentsList(data);
 }
 
-// Fetch a file/folder's display name. Returns null on failure.
+/**
+ * Fetch a file/folder's display name. Returns null on failure (callers show
+ * a fallback label instead of crashing).
+ * @param token Drive access token.
+ * @param fileId The id to look up.
+ * @param signal Optional cancel signal.
+ * @returns The display name, or null on failure.
+ */
 export async function getFileName(
   token: string,
   fileId: string,
@@ -512,6 +601,14 @@ function buildConfigSearchUrl(): string {
   return `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
 }
 
+/**
+ * Read the app config JSON from Drive's appDataFolder (invisible to the
+ * user's Drive UI). The config is the source of truth for app settings that
+ * must survive reinstalls; a missing/corrupt file or a failed request returns
+ * null so the app falls back to defaults (logged, never thrown).
+ * @param token Drive access token.
+ * @returns The parsed config object, or null when absent/unreadable.
+ */
 export async function getAppConfig(
   token: string,
 ): Promise<Record<string, unknown> | null> {
@@ -649,6 +746,17 @@ async function saveAppConfigInternal(
   }
 }
 
+/**
+ * Write the app config JSON to Drive's appDataFolder, creating the file on
+ * first save and PATCHing it afterwards. Serialized through a promise-chain
+ * mutex (withSaveConfigLock): two concurrent saves would both search, find
+ * nothing, and POST — creating duplicate config files (Drive has no
+ * conditional upsert). Failures log and return false; the caller keeps using
+ * its in-memory config.
+ * @param token Drive access token.
+ * @param config Any JSON-serializable config object.
+ * @returns true when Drive confirmed the write, false on any failure.
+ */
 export async function saveAppConfig(
   token: string,
   config: unknown,
@@ -668,10 +776,15 @@ function parseByteCount(value: unknown): number | null {
   return null;
 }
 
-// Fetch the signed-in user's Drive storage quota for the sidebar display.
-// Quota is non-critical chrome: any failure returns null (never throws) and
-// logs at 'warn' so the UI simply hides the section — a quota outage must
-// never crash or block the sidebar.
+/**
+ * Fetch the signed-in user's Drive storage quota for the sidebar display.
+ * Quota is non-critical chrome: any failure returns null (never throws) and
+ * logs at 'warn' so the UI simply hides the section — a quota outage must
+ * never crash or block the sidebar. A missing `limit` means unlimited storage
+ * (Workspace pooled quota).
+ * @param token Drive access token.
+ * @returns The quota breakdown, or null on failure/malformed payload.
+ */
 export async function getDriveStorageQuota(
   token: string,
 ): Promise<DriveStorageQuota | null> {

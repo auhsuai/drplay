@@ -280,6 +280,7 @@ pub fn directory_size(path: &std::path::Path) -> u64 {
 ///   point anywhere; clearing "through" it could wipe an unrelated tree).
 /// - An entry that vanishes mid-scan (NotFound) is skipped — concurrent
 ///   cleanup by another process is not an error worth aborting over.
+///
 /// Recursion depth is bounded in practice: the thumbnail dir holds 1-2 levels.
 pub fn remove_dir_contents(path: &std::path::Path) -> std::io::Result<()> {
     let meta = match std::fs::symlink_metadata(path) {
@@ -314,7 +315,7 @@ pub fn remove_dir_contents(path: &std::path::Path) -> std::io::Result<()> {
             std::fs::remove_file(&entry_path)?;
             #[cfg(windows)]
             {
-                if std::fs::metadata(&entry_path).map_or(false, |m| m.is_dir()) {
+                if std::fs::metadata(&entry_path).is_ok_and(|m| m.is_dir()) {
                     std::fs::remove_dir(&entry_path)?;
                 } else {
                     std::fs::remove_file(&entry_path)?;
