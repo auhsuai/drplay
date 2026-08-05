@@ -80,3 +80,7 @@ r2_config.json
 
 # codebase-memory tool artifacts (keep local, never commit)
 .codebase-memory/
+
+# Local plan files (kept locally, not tracked)
+kế hoạch tối ưu toàn diện.md
+skeleton_refactor_ui.md
