@@ -35,7 +35,9 @@ export function ThemeDropdown({
   ];
 
   const currentOption =
-    themes.find((tm) => tm.code === currentTheme) || themes[2];
+    themes.find((tm) => tm.code === currentTheme) ??
+    themes[2] ??
+    { code: "system", label: "System Default" };
 
   const handleSelect = (code: ThemeType) => {
     onChange(code);

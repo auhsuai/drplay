@@ -77,7 +77,9 @@ describe("nextTrackPrefetcher LRU", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(captureError).toHaveBeenCalled();
-    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const callArg = firstCall[0];
     expect(callArg.level).toBe("warn");
     expect(callArg.source).toBe("nextTrackPrefetcher");
     expect(callArg.message).not.toContain("secret-token-1234567890");
@@ -151,7 +153,9 @@ describe("nextTrackPrefetcher body release (#7)", () => {
 
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(captureError).toHaveBeenCalled();
-    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const callArg = firstCall[0];
     expect(callArg.level).toBe("warn");
     expect(callArg.source).toBe("nextTrackPrefetcher");
     expect(callArg.message).toContain("Prefetch body cancel failed");
@@ -195,7 +199,9 @@ describe("nextTrackPrefetcher AbortSignal composition", () => {
     prefetchNextTrackAudio("https://x/timing-out");
     await waitUntil(() => vi.mocked(captureError).mock.calls.length > 0);
 
-    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const callArg = firstCall[0];
     expect(callArg.message).toContain("(timeout)");
     expect(callArg.message).not.toContain("(aborted)");
   });
@@ -226,7 +232,9 @@ describe("nextTrackPrefetcher AbortSignal composition", () => {
     expect(aborted).toEqual([urls[0]]);
     expect(vi.getTimerCount()).toBe(0);
 
-    prefetchNextTrackAudio(urls[0]);
+    const first = urls[0];
+    if (first === undefined) throw new Error("expected url");
+    prefetchNextTrackAudio(first);
     expect(aborted).toEqual([urls[0], urls[1]]);
     expect(fetchSpy).toHaveBeenCalledTimes(5);
 
@@ -261,7 +269,9 @@ describe("nextTrackPrefetcher AbortSignal composition", () => {
     expect(aborted.sort()).toEqual([...urls].sort());
     expect(vi.getTimerCount()).toBe(0);
 
-    prefetchNextTrackAudio(urls[0]);
+    const first = urls[0];
+    if (first === undefined) throw new Error("expected url");
+    prefetchNextTrackAudio(first);
     expect(fetchSpy).toHaveBeenCalledTimes(3);
 
     fetchSpy.mockRestore();

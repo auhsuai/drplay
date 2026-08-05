@@ -136,7 +136,10 @@ describe("useAuth init effect token expiry model (B1)", () => {
     renderHook(() => useAuth());
 
     expect(mockedScheduleProactiveRefresh).toHaveBeenCalledTimes(1);
-    const remainingSec = mockedScheduleProactiveRefresh.mock.calls[0][0];
+    const firstCall = mockedScheduleProactiveRefresh.mock.calls[0];
+    if (firstCall === undefined)
+      throw new Error("expected scheduleProactiveRefresh call");
+    const remainingSec = firstCall[0];
     expect(remainingSec).toBeGreaterThanOrEqual(110);
     expect(remainingSec).toBeLessThanOrEqual(130);
   });

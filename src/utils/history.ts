@@ -204,7 +204,10 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
     const shuffled = [...keys];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      const a = shuffled[i];
+      const b = shuffled[j];
+      if (a === undefined || b === undefined) continue;
+      [shuffled[i], shuffled[j]] = [b, a];
     }
     const selectedKeys = shuffled.slice(0, RANDOM_DISCOVERIES_LIMIT);
 

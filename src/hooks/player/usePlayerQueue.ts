@@ -37,16 +37,19 @@ export function shuffleQueueWithCurrent(
   if (queue.length === 0) return [];
   const shuffled = [...queue];
   const trackIndex = shuffled.findIndex((t) => sameTrack(t, current));
-  let currentTrackInQueue = shuffled[0];
+  let currentTrackInQueue: Track;
   if (trackIndex !== -1) {
-    currentTrackInQueue = shuffled[trackIndex];
+    currentTrackInQueue = shuffled[trackIndex] ?? fallbackHead;
     shuffled.splice(trackIndex, 1);
   } else {
     currentTrackInQueue = fallbackHead;
   }
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    const a = shuffled[i];
+    const b = shuffled[j];
+    if (a === undefined || b === undefined) continue;
+    [shuffled[i], shuffled[j]] = [b, a];
   }
   shuffled.unshift(currentTrackInQueue);
   return shuffled;
@@ -84,10 +87,14 @@ export function usePlayerQueue(
     }
 
     if (currentIndex < playbackQueue.length - 1) {
-      handlePlayTrack(playbackQueue[currentIndex + 1], undefined, true);
+      const next = playbackQueue[currentIndex + 1];
+      if (next === undefined) return;
+      handlePlayTrack(next, undefined, true);
     } else {
       if (playMode === "repeat-all" || playMode === "shuffle") {
-        handlePlayTrack(playbackQueue[0], undefined, true);
+        const first = playbackQueue[0];
+        if (first === undefined) return;
+        handlePlayTrack(first, undefined, true);
       }
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
@@ -108,14 +115,14 @@ export function usePlayerQueue(
     }
 
     if (currentIndex > 0) {
-      handlePlayTrack(playbackQueue[currentIndex - 1], undefined, true);
+      const prev = playbackQueue[currentIndex - 1];
+      if (prev === undefined) return;
+      handlePlayTrack(prev, undefined, true);
     } else {
       if (playMode === "repeat-all" || playMode === "shuffle") {
-        handlePlayTrack(
-          playbackQueue[playbackQueue.length - 1],
-          undefined,
-          true,
-        );
+        const last = playbackQueue[playbackQueue.length - 1];
+        if (last === undefined) return;
+        handlePlayTrack(last, undefined, true);
       }
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
@@ -176,14 +183,14 @@ export function usePlayerQueue(
             ensureQueueItemId(track),
           );
           setPlaybackQueue(shuffled);
-          targetTrack = shuffled[0];
+          targetTrack = shuffled[0] ?? ensureQueueItemId(track);
         } else {
           setPlaybackQueue(newOriginalQueue);
           const trackIndex = newOriginalQueue.findIndex((t) =>
             sameTrack(t, track),
           );
           if (trackIndex !== -1) {
-            targetTrack = newOriginalQueue[trackIndex];
+            targetTrack = newOriginalQueue[trackIndex] ?? ensureQueueItemId(track);
           } else {
             targetTrack = ensureQueueItemId(track);
           }

@@ -20,8 +20,8 @@ function makeEntry(): CachedMetadata {
 
 test("cacheTrackMetadata does not persist pictureDataFull in RAM", () => {
   cacheTrackMetadata("fid1", makeEntry());
-  expect(metadataCache["fid1"].pictureDataFull).toBeNull();
-  expect(metadataCache["fid1"].pictureData).toBeDefined();
+  expect(metadataCache["fid1"]?.pictureDataFull).toBeNull();
+  expect(metadataCache["fid1"]?.pictureData).toBeDefined();
 });
 
 test("cacheTrackMetadata still returns full entry for immediate callers (cover repair)", () => {

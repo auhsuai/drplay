@@ -82,10 +82,14 @@ describe("CreditsSection", () => {
       name: "settings.open_link",
     });
     expect(openButtons).toHaveLength(2);
-    fireEvent.click(openButtons[0]);
+    const firstBtn = openButtons[0];
+    const secondBtn = openButtons[1];
+    if (firstBtn === undefined || secondBtn === undefined)
+      throw new Error("expected open buttons");
+    fireEvent.click(firstBtn);
     expect(openUrl).toHaveBeenCalledTimes(1);
     expect(openUrl).toHaveBeenCalledWith(TELEGRAM_URL);
-    fireEvent.click(openButtons[1]);
+    fireEvent.click(secondBtn);
     expect(openUrl).toHaveBeenCalledTimes(2);
     expect(openUrl).toHaveBeenCalledWith(GITHUB_URL);
   });
@@ -94,9 +98,12 @@ describe("CreditsSection", () => {
     openUrl.mockRejectedValueOnce(new Error("bridge down"));
     render(<CreditsSection />);
     await act(async () => {
-      fireEvent.click(
-        screen.getAllByRole("button", { name: "settings.open_link" })[0],
-      );
+      const openButton = screen.getAllByRole("button", {
+        name: "settings.open_link",
+      })[0];
+      if (openButton === undefined)
+        throw new Error("expected open link button");
+      fireEvent.click(openButton);
       await Promise.resolve();
     });
     expect(showErrorToast).toHaveBeenCalledWith("settings.open_link_error");
@@ -111,7 +118,9 @@ describe("CreditsSection", () => {
       render(<CreditsSection />);
       const copyButtons = screen.getAllByTitle("settings.copy");
       expect(copyButtons).toHaveLength(2);
-      fireEvent.click(copyButtons[0]);
+      const firstCopy = copyButtons[0];
+      if (firstCopy === undefined) throw new Error("expected copy button");
+      fireEvent.click(firstCopy);
       await act(async () => {});
       expect(copyToClipboard).toHaveBeenCalledWith("@nguyen_tan_an");
       expect(screen.getByText("settings.copied")).toBeTruthy();

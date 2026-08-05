@@ -98,6 +98,19 @@ function installSearchFoldersMock() {
 
 const BACK_BUTTON_INDEX = 0;
 
+function backButton(): HTMLElement {
+  const btn = screen.getAllByRole("button")[BACK_BUTTON_INDEX];
+  if (btn === undefined) throw new Error("expected back button");
+  return btn;
+}
+
+function deferredCallAt(index: number): DeferredCall {
+  const call = deferredCalls[index];
+  if (call === undefined)
+    throw new Error(`expected deferred folder call ${String(index)}`);
+  return call;
+}
+
 function renderScreen() {
   return render(
     <FolderSelectionScreen
@@ -130,19 +143,19 @@ describe("FolderSelectionScreen", () => {
       expect(deferredCalls).toHaveLength(1);
     });
 
-    fireEvent.click(screen.getAllByRole("button")[BACK_BUTTON_INDEX]);
+    fireEvent.click(backButton());
     await waitFor(() => {
       expect(deferredCalls).toHaveLength(2);
     });
 
-    const newFolderFetch = deferredCalls[1];
+    const newFolderFetch = deferredCallAt(1);
     await act(async () => {
       newFolderFetch.resolve([{ id: "f1", name: "Folder 1" }]);
       await Promise.resolve();
     });
     expect(screen.queryByText("Folder 1")).not.toBeNull();
 
-    const staleFolderFetch = deferredCalls[0];
+    const staleFolderFetch = deferredCallAt(0);
     expect(staleFolderFetch.signal?.aborted).toBe(true);
     await act(async () => {
       staleFolderFetch.resolve([{ id: "stale", name: "STALE" }]);
@@ -160,7 +173,7 @@ describe("FolderSelectionScreen", () => {
 
     unmount();
 
-    const inFlight = deferredCalls[0];
+    const inFlight = deferredCallAt(0);
     expect(inFlight.signal?.aborted).toBe(true);
 
     await act(async () => {
@@ -178,16 +191,16 @@ describe("FolderSelectionScreen", () => {
       expect(deferredCalls).toHaveLength(1);
     });
 
-    fireEvent.click(screen.getAllByRole("button")[BACK_BUTTON_INDEX]);
+    fireEvent.click(backButton());
     await waitFor(() => {
       expect(deferredCalls).toHaveLength(2);
     });
 
     await act(async () => {
-      deferredCalls[0].reject(
+      deferredCallAt(0).reject(
         new DOMException("The operation was aborted", "AbortError"),
       );
-      deferredCalls[1].resolve([{ id: "f1", name: "Folder 1" }]);
+      deferredCallAt(1).resolve([{ id: "f1", name: "Folder 1" }]);
       await Promise.resolve();
     });
 
@@ -291,7 +304,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
     });
 
     await act(async () => {
-      deferredCalls[0].resolve([{ id: "f1", name: "Folder 1" }]);
+      deferredCallAt(0).resolve([{ id: "f1", name: "Folder 1" }]);
       await Promise.resolve();
     });
 
@@ -306,7 +319,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
     });
 
     await act(async () => {
-      deferredCalls[0].resolve([]);
+      deferredCallAt(0).resolve([]);
       await Promise.resolve();
     });
 
@@ -363,7 +376,9 @@ describe("FolderSelectionScreen skeleton loading", () => {
     // The skeleton container mirrors the real list container
     // (FolderSelectionScreen.tsx:393 grid grid-cols-1 sm:grid-cols-2
     // lg:grid-cols-3 gap-3) so the shape does not jump when data loads.
-    const container = rows[0].parentElement;
+    const row = rows[0];
+    if (row === undefined) throw new Error("expected skeleton row");
+    const container = row.parentElement;
     expect(container).not.toBeNull();
     if (container) {
       expect(container.className).toContain(

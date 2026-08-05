@@ -104,8 +104,8 @@ function setBuffered(
     currentTime,
     buffered: {
       length: ranges.length,
-      start: (i: number) => ranges[i][0],
-      end: (i: number) => ranges[i][1],
+      start: (i: number) => ranges[i]?.[0] ?? 0,
+      end: (i: number) => ranges[i]?.[1] ?? 0,
     } as TimeRanges,
   });
 }

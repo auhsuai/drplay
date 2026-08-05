@@ -68,7 +68,9 @@ describe("logWorkerError", () => {
       "error",
     );
     expect(captureError).toHaveBeenCalledTimes(1);
-    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const callArg = firstCall[0];
     expect(callArg.level).toBe("error");
     expect(callArg.source).toBe("proSync/files");
     expect(callArg.message).toMatch(/\[proSync\/files\] unknown: server down/);
@@ -81,7 +83,9 @@ describe("logWorkerError", () => {
       "request failed with Bearer ya29.secret-token and ?id=1RoFd1kOvoIn",
     );
     logWorkerError("scanner/list", {}, err, "error");
-    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const callArg = firstCall[0];
     expect(callArg.message).not.toContain("ya29.secret-token");
     expect(callArg.message).toContain("[REDACTED_TOKEN]");
     expect(callArg.message).toContain("id=[REDACTED_ID]");
@@ -94,7 +98,9 @@ describe("logWorkerError", () => {
       new Error("oops"),
       "warn",
     );
-    const callArg = vi.mocked(captureError).mock.calls[0][0];
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const callArg = firstCall[0];
     expect(callArg.message).not.toContain("ya29.leaky");
   });
 
@@ -106,6 +112,8 @@ describe("logWorkerError", () => {
       "warn",
     );
     expect(captureError).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(captureError).mock.calls[0][0].level).toBe("warn");
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].level).toBe("warn");
   });
 });

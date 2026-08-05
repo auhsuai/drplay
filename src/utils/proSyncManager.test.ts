@@ -195,10 +195,16 @@ describe("startProSyncWorker", () => {
     vi.unstubAllGlobals();
   });
 
+  function lastWorker() {
+    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    if (worker === undefined) throw new Error("expected a FakeWorker instance");
+    return worker;
+  }
+
   it("attaches onmessage, onerror and onmessageerror handlers", () => {
     startProSyncWorker("token");
 
-    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    const worker = lastWorker();
     expect(worker).toBeDefined();
     expect(typeof worker.onmessage).toBe("function");
     expect(typeof worker.onerror).toBe("function");
@@ -207,7 +213,7 @@ describe("startProSyncWorker", () => {
 
   it("logs worker runtime errors via captureError and dispatches the error event", () => {
     startProSyncWorker("token");
-    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    const worker = lastWorker();
 
     worker.onerror?.({ message: "Script load failed" } as ErrorEvent);
 
@@ -227,7 +233,7 @@ describe("startProSyncWorker", () => {
 
   it("logs messageerror without dispatching a UI event", () => {
     startProSyncWorker("token");
-    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    const worker = lastWorker();
 
     worker.onmessageerror?.({} as MessageEvent);
 
@@ -245,7 +251,7 @@ describe("startProSyncWorker", () => {
   it("TOKEN_EXPIRED with registered handler posts the refreshed token to the worker", async () => {
     setTokenRefreshHandler(() => Promise.resolve("new-token"));
     startProSyncWorker("token");
-    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    const worker = lastWorker();
 
     worker.onmessage?.({ data: { type: "TOKEN_EXPIRED" } });
     await Promise.resolve();
@@ -264,7 +270,7 @@ describe("startProSyncWorker", () => {
     setTokenRefreshHandler(null);
     stopProSyncWorker();
     startProSyncWorker("token");
-    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    const worker = lastWorker();
 
     worker.onmessage?.({ data: { type: "TOKEN_EXPIRED" } });
     await Promise.resolve();

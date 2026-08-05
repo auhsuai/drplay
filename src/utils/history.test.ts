@@ -68,11 +68,11 @@ describe("history (Dexie-backed)", () => {
 
     const recents = await getRecentlyPlayed();
     expect(recents).toHaveLength(1);
-    expect(recents[0].id).toBe("t1");
+    expect(recents[0]?.id).toBe("t1");
 
     const heavy = await getHeavyRotation();
     expect(heavy).toHaveLength(1);
-    expect(heavy[0].id).toBe("t1");
+    expect(heavy[0]?.id).toBe("t1");
   });
 
   it("recordPlay dedupes recents (newest first)", async () => {
@@ -90,7 +90,7 @@ describe("history (Dexie-backed)", () => {
     await recordPlay(TRACK); // t1 count 2
 
     const heavy = await getHeavyRotation();
-    expect(heavy[0].id).toBe("t1");
+    expect(heavy[0]?.id).toBe("t1");
     expect(heavy.length).toBeLessThanOrEqual(10);
   });
 
@@ -114,9 +114,9 @@ describe("history (Dexie-backed)", () => {
 
     const visits = await getMostVisitedFolders();
     expect(visits).toHaveLength(2);
-    expect(visits[0].id).toBe("f1");
-    expect(visits[0].count).toBe(2);
-    expect(visits[0].name).toBe("Folder One");
+    expect(visits[0]?.id).toBe("f1");
+    expect(visits[0]?.count).toBe(2);
+    expect(visits[0]?.name).toBe("Folder One");
   });
 
   it("getMostVisitedFolders ignores root and caps at 4", async () => {
@@ -149,7 +149,7 @@ describe("history (Dexie-backed)", () => {
     const counts: PlayCountEntry[] = await db.playCounts
       .toArray()
       .then((rows) => rows.map((r) => ({ track: r.track, count: r.count })));
-    expect(counts[0].count).toBe(1);
+    expect(counts[0]?.count).toBe(1);
 
     await recordFolderVisit("f1", "X");
     const visits: FolderVisitEntry[] = await db.folderVisits
@@ -162,7 +162,7 @@ describe("history (Dexie-backed)", () => {
           lastVisited: r.lastVisited,
         })),
       );
-    expect(visits[0].id).toBe("f1");
+    expect(visits[0]?.id).toBe("f1");
   });
 
   it("#9 regression: recordPlay prunes recentTracks to RECENT_CAP (1000) on write", async () => {
@@ -235,7 +235,7 @@ describe("history (Dexie-backed)", () => {
     await recordPlay(TRACK);
 
     const recents = await getRecentlyPlayed();
-    expect(recents[0].id).toBe("t1");
+    expect(recents[0]?.id).toBe("t1");
     const ids = new Set((await db.recentTracks.toArray()).map((r) => r.id));
     expect(ids.size).toBe(1000);
     expect(ids.has("t1")).toBe(true);
@@ -467,7 +467,7 @@ describe("history (Dexie-backed)", () => {
         await db.folderVisits.get(["default", `fseed_${String(i)}`]),
       ).toBeDefined();
     const top = await getMostVisitedFolders();
-    expect(top[0].id).toBe("f_new");
+    expect(top[0]?.id).toBe("f_new");
   });
 
   it("recordPlay runs inside a single rw transaction over recentTracks+playCounts", async () => {
@@ -505,7 +505,9 @@ describe("history (Dexie-backed)", () => {
     await recordPlay(TRACK);
     expect(txSpy).toHaveBeenCalled();
     expect(captureSpy).toHaveBeenCalledTimes(1);
-    const call = captureSpy.mock.calls[0][0] as { message: string };
+    const firstCall = captureSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const call = firstCall[0] as { message: string };
     expect(call.message).toContain("recordPlay-failed");
     expect(call.message).toContain("Error: boom");
   });

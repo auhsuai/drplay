@@ -217,12 +217,12 @@ describe("getCacheSizes", () => {
       "Covers & thumbnails",
       "Prefetched data",
     ]);
-    expect(sizes[0].bytes).toBe(
+    expect(sizes[0]?.bytes).toBe(
       JSON.stringify(entryA).length + JSON.stringify(entryB).length,
     );
-    expect(sizes[1].bytes).toBe(100 * FILES_ROW_ESTIMATED_BYTES);
-    expect(sizes[2].bytes).toBe(60);
-    expect(sizes[3].bytes).toBe(8 * PREFETCH_ENTRY_ESTIMATED_BYTES);
+    expect(sizes[1]?.bytes).toBe(100 * FILES_ROW_ESTIMATED_BYTES);
+    expect(sizes[2]?.bytes).toBe(60);
+    expect(sizes[3]?.bytes).toBe(8 * PREFETCH_ENTRY_ESTIMATED_BYTES);
   });
 
   it("returns 0 bytes for covers when get_cache_info rejects without breaking the list", async () => {

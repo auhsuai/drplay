@@ -92,7 +92,9 @@ export function HomeTab({
       ? greetingsData[timeKey]
       : greetingsData.general;
     const randomObj =
-      possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)];
+      possibleSubtitles[Math.floor(Math.random() * possibleSubtitles.length)] ??
+      possibleSubtitles[0] ??
+      { en: "", vi: "" };
     return { randomObj };
   });
 
@@ -269,7 +271,9 @@ export function HomeTab({
           <header className="mb-10 mt-4 flex flex-col gap-1">
             <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
               {greeting}
-              {userProfile?.name ? `, ${userProfile.name.split(" ")[0]}` : ""}
+              {userProfile?.name
+                ? `, ${userProfile.name.split(" ")[0] ?? ""}`
+                : ""}
             </h2>
             <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
               {subtitle}

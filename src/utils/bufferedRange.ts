@@ -85,7 +85,9 @@ export function updateBufferBar(
   }
 
   for (let i = 0; i < visible.length; i++) {
-    const [start, end] = visible[i];
+    const range = visible[i];
+    if (range === undefined) continue;
+    const [start, end] = range;
     const seg = container.children[i] as HTMLElement;
     const left = (start / dur) * 100;
     const width = ((end - start) / dur) * 100;

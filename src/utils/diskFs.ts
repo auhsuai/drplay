@@ -151,7 +151,7 @@ function fromBigEndian(bytes: Uint8Array): number {
   let x = 0;
   for (let i = 0; i < bytes.length; i++) {
     x *= 0x100;
-    x += bytes[i];
+    x += bytes[i] ?? 0;
   }
   return x;
 }

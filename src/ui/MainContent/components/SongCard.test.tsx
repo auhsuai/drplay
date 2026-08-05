@@ -198,8 +198,10 @@ describe("SongCard metadata fetch", () => {
     expect(card).not.toBeNull();
     fireEvent.click(card as Element);
     expect(onPlay).toHaveBeenCalledTimes(1);
+    const firstCall = onPlay.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected onPlay call");
     expect(
-      (onPlay.mock.calls[0][0] as { queueItemId: string }).queueItemId,
+      (firstCall[0] as { queueItemId: string }).queueItemId,
     ).toBe("q-2");
   });
 });
@@ -491,7 +493,9 @@ describe("SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG bu
     const card = container.querySelector(".cursor-pointer") as Element;
     fireEvent.keyDown(card, { key: "Enter" });
     expect(onPlay).toHaveBeenCalledTimes(1);
-    expect((onPlay.mock.calls[0][0] as { id: string }).id).toBe("track-1");
+    const firstCall = onPlay.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected onPlay call");
+    expect((firstCall[0] as { id: string }).id).toBe("track-1");
   });
 
   it("Enter on a folder card opens the folder (onOpenFolder)", () => {

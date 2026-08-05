@@ -93,10 +93,16 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
             const x = p % size;
             const y = (p / size) | 0;
             const q = (y < half ? 0 : 2) + (x < half ? 0 : 1);
-            sum[q].r += imgData[i];
-            sum[q].g += imgData[i + 1];
-            sum[q].b += imgData[i + 2];
-            sum[q].n++;
+            const r = imgData[i];
+            const g = imgData[i + 1];
+            const b = imgData[i + 2];
+            if (r === undefined || g === undefined || b === undefined) continue;
+            const bucket = sum[q];
+            if (bucket === undefined) continue;
+            bucket.r += r;
+            bucket.g += g;
+            bucket.b += b;
+            bucket.n++;
           }
 
           const darken = DARKEN_FACTOR;

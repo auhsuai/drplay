@@ -268,7 +268,9 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
       expect(row.className).toContain("flex-1");
     }
     // The SkeletonRowList container itself stretches to fill the wrapper.
-    const container = rows[0].parentElement;
+    const row = rows[0];
+    if (row === undefined) throw new Error("expected skeleton row");
+    const container = row.parentElement;
     expect(container).not.toBeNull();
     if (container) {
       expect(container.className).toContain("h-full");

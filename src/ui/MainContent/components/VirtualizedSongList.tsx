@@ -71,7 +71,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
     getScrollElement: () => scrollElementRef.current,
     estimateSize: () => ROW_ESTIMATED_SIZE_PX,
     overscan: 15,
-    getItemKey: (index: number) => items[index].id,
+    getItemKey: (index: number) => items[index]?.id ?? index,
     useFlushSync: false,
     directDomUpdates: true,
   });
@@ -141,7 +141,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
         // The virtualizer can briefly report a stale index while the items
         // list is being filtered/replaced (count changes async), so the
         // runtime guard stays even though the array type says non-null.
-        const item = items[virtualRow.index] as DriveItem | undefined;
+        const item = items[virtualRow.index];
         if (!item) return null;
         return (
           <div

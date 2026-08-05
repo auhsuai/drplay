@@ -9,8 +9,8 @@ function makeAudio(opts: {
 }): HTMLMediaElement {
   const buffered: TimeRanges = {
     length: opts.ranges.length,
-    start: (i: number) => opts.ranges[i][0],
-    end: (i: number) => opts.ranges[i][1],
+    start: (i: number) => opts.ranges[i]?.[0] ?? 0,
+    end: (i: number) => opts.ranges[i]?.[1] ?? 0,
   };
 
   return {

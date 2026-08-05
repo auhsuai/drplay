@@ -203,6 +203,7 @@ export function FullRecentView({
         >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const track = filteredItems[virtualRow.index];
+            if (track === undefined) return null;
             const driveItem: DriveItem = {
               id: track.id,
               title: track.title,

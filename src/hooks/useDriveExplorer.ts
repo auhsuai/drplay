@@ -28,7 +28,6 @@ import { captureError } from "../utils/errorLog";
 
 import { useLiveQuery } from "dexie-react-hooks";
 import { metadataCache } from "../utils/metadata";
-import type { CachedMetadata } from "../utils/metadata";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import type { DriveFilesListResponse } from "../utils/driveApi";
@@ -343,7 +342,7 @@ export function useDriveExplorer(
     // metadataCache is typed Record<string, CachedMetadata> but is a sparse
     // module-level cache — index access can still be undefined at runtime.
     const cachedTitle = (id: string): string | undefined => {
-      const meta = metadataCache[id] as CachedMetadata | undefined;
+      const meta = metadataCache[id];
       return meta?.title;
     };
     restItems.sort((a, b) => {

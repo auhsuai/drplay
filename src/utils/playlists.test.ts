@@ -127,7 +127,7 @@ describe("playlists (Dexie-backed)", () => {
 
     const all = await getPlaylists();
     expect(all).toHaveLength(1);
-    expect(all[0].userEmail).toBe(EMAIL_A);
+    expect(all[0]?.userEmail).toBe(EMAIL_A);
   });
 
   it("getPlaylists returns empty for a user with no data", async () => {
@@ -192,7 +192,7 @@ describe("playlists (Dexie-backed)", () => {
     setUser(EMAIL_B);
     const b = await getPlaylists();
     expect(b).toHaveLength(1);
-    expect(b[0].name).toBe("B1");
+    expect(b[0]?.name).toBe("B1");
   });
 
   it("dispatches a playlists-updated event on mutations", async () => {
@@ -201,7 +201,10 @@ describe("playlists (Dexie-backed)", () => {
     window.addEventListener("playlists-updated", handler);
 
     await createPlaylist("Evt");
-    await deletePlaylist((await getPlaylists())[0].id);
+    const lists = await getPlaylists();
+    const first = lists[0];
+    if (first === undefined) throw new Error("expected playlist");
+    await deletePlaylist(first.id);
     expect(handler).toHaveBeenCalledTimes(2);
     window.removeEventListener("playlists-updated", handler);
   });
@@ -223,8 +226,10 @@ describe("playlists (Dexie-backed)", () => {
     const spy = vi.spyOn(store, "transaction");
     await addTrackToPlaylist(p.id, track("1"));
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0][0]).toBe("rw");
-    expect(spy.mock.calls[0][1]).toBe(db.playlists);
+    const firstCall = spy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected txn call");
+    expect(firstCall[0]).toBe("rw");
+    expect(firstCall[1]).toBe(db.playlists);
     spy.mockRestore();
   });
 });

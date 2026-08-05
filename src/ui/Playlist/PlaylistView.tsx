@@ -263,7 +263,9 @@ export function PlaylistView({
         {tracks.length > 0 && (
           <button
             onClick={() => {
-              onPlay(tracks[0]);
+              const first = tracks[0];
+              if (first === undefined) return;
+              onPlay(first);
             }}
             className="w-14 h-14 bg-[#4285F4] rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg mb-8 flex-shrink-0"
           >
@@ -289,6 +291,7 @@ export function PlaylistView({
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const track = tracks[virtualRow.index];
+              if (track === undefined) return null;
               return (
                 <div
                   key={virtualRow.key}

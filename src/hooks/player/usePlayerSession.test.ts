@@ -217,7 +217,7 @@ describe("usePlayerSession restore (lock-behavior)", () => {
 
     const playback = setPlaybackQueue.mock.calls[0]?.[0] as Track[];
     expect(playback).toHaveLength(1);
-    expect(playback[0].id).toBe("t1");
+    expect(playback[0]?.id).toBe("t1");
 
     expect(setOriginalQueue).not.toHaveBeenCalled();
     expect(setPlayMode).not.toHaveBeenCalled();

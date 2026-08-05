@@ -54,6 +54,7 @@ export function truncatePathMiddle(
       : parts.slice(0, 2).join(sep);
 
   const suffix = parts[lastIdx];
+  if (suffix === undefined) return path;
 
   // The destination folder is the most important part: give it the whole
   // budget first, and only clip the prefix when the budget forces it. The

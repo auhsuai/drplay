@@ -359,7 +359,7 @@ export class AudioController {
     audio.load();
 
     // Strip old query params and add new retry param
-    const baseUrl = src.split("?")[0];
+    const baseUrl = src.split("?")[0] ?? "";
     audio.src = baseUrl + "?retry=" + String(Date.now());
     audio.load();
 

@@ -108,7 +108,7 @@ export function classifyDriveError(err: unknown): string {
   )
     return "network";
   const statusMatch = m.match(/\((\d{3})\)/);
-  if (statusMatch) return `http-${statusMatch[1]}`;
+  if (statusMatch) return `http-${statusMatch[1] ?? "000"}`;
   return "unknown";
 }
 
@@ -527,7 +527,9 @@ export async function getAppConfig(
     const files = parseFilesList(searchData);
 
     if (files.length > 0) {
-      const fileId = files[0].id;
+      const first = files[0];
+      if (first === undefined) return null;
+      const fileId = first.id;
       const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
       const downloadRes = await driveFetch(downloadUrl, {
         headers: { Authorization: `Bearer ${token}` },
@@ -591,7 +593,8 @@ async function saveAppConfigInternal(
       const searchData: unknown = await searchRes.json();
       const files = parseFilesList(searchData);
       if (files.length > 0) {
-        fileId = files[0].id;
+        const first = files[0];
+        if (first !== undefined) fileId = first.id;
       }
     }
 

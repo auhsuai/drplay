@@ -29,7 +29,9 @@ export function LanguageDropdown() {
   ];
 
   const currentLang =
-    languages.find((l) => l.code === i18n.language) || languages[0];
+    languages.find((l) => l.code === i18n.language) ??
+    languages[0] ??
+    { code: "en", label: "English" };
 
   const handleSelect = (code: string) => {
     void i18n.changeLanguage(code);

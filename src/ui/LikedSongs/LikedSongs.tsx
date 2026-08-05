@@ -121,7 +121,11 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       <div className="px-8 py-6 flex-shrink-0">
         <button
           onClick={() => {
-            if (favorites.length > 0) onPlay(favorites[0], favorites, 0);
+            if (favorites.length > 0) {
+              const first = favorites[0];
+              if (first === undefined) return;
+              onPlay(first, favorites, 0);
+            }
           }}
           className="w-14 h-14 bg-[#4285F4] hover:bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
           disabled={favorites.length === 0}
@@ -157,6 +161,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
             >
               {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                 const track = favorites[virtualRow.index];
+                if (track === undefined) return null;
                 return (
                   <div
                     key={virtualRow.key}

@@ -76,10 +76,10 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
 
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "new-token" } });
 
-    const response = (await ev.respondWith.mock.calls[0][0]) as Response;
+    const response = (await ev.respondWith.mock.calls[0]?.[0]) as Response;
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const retryRequest = fetchMock.mock.calls[1][0] as Request;
+    const retryRequest = fetchMock.mock.calls[1]?.[0] as Request;
     expect(retryRequest.headers.get("Authorization")).toBe("Bearer new-token");
     // Original headers (Range) must survive the retry rebuild.
     expect(retryRequest.headers.get("Range")).toBe("bytes=0-");
@@ -102,7 +102,7 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "old-token" } });
 
     const responsePromise = ev.respondWith.mock
-      .calls[0][0] as Promise<Response>;
+      .calls[0]?.[0] as Promise<Response>;
     await vi.advanceTimersByTimeAsync(SW_TOKEN_WAIT_TIMEOUT_MS);
     const response = await responsePromise;
     expect(response.status).toBe(401);
@@ -132,8 +132,8 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "new-token" } });
 
     const responses = await Promise.all([
-      ev1.respondWith.mock.calls[0][0],
-      ev2.respondWith.mock.calls[0][0],
+      ev1.respondWith.mock.calls[0]?.[0],
+      ev2.respondWith.mock.calls[0]?.[0],
     ]);
     expect(responses.map((r) => (r as Response).status)).toEqual([200, 200]);
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -157,7 +157,7 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     });
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "new-token" } });
 
-    const response = (await ev.respondWith.mock.calls[0][0]) as Response;
+    const response = (await ev.respondWith.mock.calls[0]?.[0]) as Response;
     expect(response.status).toBe(401);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -173,7 +173,7 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     const ev = sw.makeFetchEvent("abc");
     sw.emit("fetch", ev);
 
-    const response = (await ev.respondWith.mock.calls[0][0]) as Response;
+    const response = (await ev.respondWith.mock.calls[0]?.[0]) as Response;
     expect(response.status).toBe(206);
     expect(sw.postMessage).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -187,7 +187,7 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     const ev = sw.makeFetchEvent("abc");
     sw.emit("fetch", ev);
 
-    const response = (await ev.respondWith.mock.calls[0][0]) as Response;
+    const response = (await ev.respondWith.mock.calls[0]?.[0]) as Response;
     expect(response.status).toBe(401);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sw.postMessage).not.toHaveBeenCalled();

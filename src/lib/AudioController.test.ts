@@ -90,6 +90,13 @@ function fireNative(audio: FakeAudio, type: string) {
   for (const fn of audio._listeners[type] ?? []) fn(new Event(type));
 }
 
+function audioEl(index: number): FakeAudio {
+  const el = audioElements[index];
+  if (el === undefined)
+    throw new Error(`expected audio element at index ${String(index)}`);
+  return el;
+}
+
 describe("AudioController retry lifecycle", () => {
   let AudioControllerClass: typeof import("../lib/AudioController").AudioController;
 
@@ -135,11 +142,11 @@ describe("AudioController retry lifecycle", () => {
     ctrl.on("error", errorHandler);
 
     await ctrl.playTrack(trackA);
-    const audioA = audioElements[1]; // playTrack flips activeIndex 0 -> 1
+    const audioA = audioEl(1); // playTrack flips activeIndex 0 -> 1
     fireError(audioA);
 
     await ctrl.playTrack(trackB);
-    const audioB = audioElements[0]; // now active
+    const audioB = audioEl(0); // now active
 
     await vi.advanceTimersByTimeAsync(2000);
 
@@ -156,7 +163,7 @@ describe("AudioController retry lifecycle", () => {
   it("B1 variant: retry still fires for the still-active track and restores position", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
-    const audio = audioElements[1];
+    const audio = audioEl(1);
     audio.currentTime = 5;
 
     fireError(audio);
@@ -179,7 +186,7 @@ describe("AudioController retry lifecycle", () => {
     ctrl.on("ended", endedHandler);
 
     await ctrl.playTrack(trackA);
-    const audio = audioElements[1];
+    const audio = audioEl(1);
 
     for (let i = 0; i < 4; i++) fireError(audio);
     await vi.advanceTimersByTimeAsync(10_000);
@@ -202,7 +209,7 @@ describe("AudioController retry lifecycle", () => {
   it("safePlay: calls audio.play() when resuming a paused track (same-track path)", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
-    const audio = audioElements[1];
+    const audio = audioEl(1);
 
     audio.paused = true;
     audio.play.mockClear();
@@ -214,7 +221,7 @@ describe("AudioController retry lifecycle", () => {
   it("safePlay: calls audio.play() when toggling play on a paused track", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
-    const audio = audioElements[1];
+    const audio = audioEl(1);
 
     audio.paused = true;
     audio.play.mockClear();
@@ -226,11 +233,11 @@ describe("AudioController retry lifecycle", () => {
   it("safePlay: playTrack for a new track calls audio.play() on the new element", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
-    const audio1 = audioElements[1]; // active after first playTrack
+    const audio1 = audioEl(1); // active after first playTrack
     audio1.play.mockClear();
 
     await ctrl.playTrack(trackB);
-    const audio2 = audioElements[0]; // active after flip
+    const audio2 = audioEl(0); // active after flip
 
     expect(audio2.play).toHaveBeenCalledTimes(1);
     expect(audio1.play).not.toHaveBeenCalled(); // old element not played again
@@ -270,14 +277,14 @@ describe("AudioController retry lifecycle", () => {
     // full setup path (which activates the other element), not the
     // early-return resume path.
     await ctrl.playTrack(trackA);
-    expect(audioElements[0].play).toHaveBeenCalledTimes(1);
+    expect(audioEl(0).play).toHaveBeenCalledTimes(1);
   });
 
   it("B3 variant: release() cancels a pending retry timer", async () => {
     const clearSpy = vi.spyOn(globalThis, "clearTimeout");
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
-    const audio = audioElements[1];
+    const audio = audioEl(1);
 
     fireError(audio);
     ctrl.release();
@@ -367,7 +374,7 @@ describe("AudioController retry lifecycle", () => {
       ctrl.on("progress", progressHandler);
 
       await ctrl.playTrack(trackA);
-      const active = audioElements[1]; // playTrack flips activeIndex 0 -> 1
+      const active = audioEl(1); // playTrack flips activeIndex 0 -> 1
       fireProgress(active);
       expect(progressHandler).toHaveBeenCalledTimes(1);
     });
@@ -378,7 +385,7 @@ describe("AudioController retry lifecycle", () => {
       ctrl.on("progress", progressHandler);
 
       await ctrl.playTrack(trackA);
-      const inactive = audioElements[0];
+      const inactive = audioEl(0);
       fireProgress(inactive);
       expect(progressHandler).not.toHaveBeenCalled();
     });
@@ -389,7 +396,7 @@ describe("AudioController retry lifecycle", () => {
       ctrl.on("progress", progressHandler);
 
       await ctrl.playTrack(trackA);
-      const active = audioElements[1];
+      const active = audioEl(1);
 
       fireProgress(active); // first event -> always emitted (even at t=0)
       fireProgress(active); // inside throttle window -> suppressed
@@ -406,7 +413,7 @@ describe("AudioController retry lifecycle", () => {
       ctrl.on("progress", progressHandler);
 
       await ctrl.playTrack(trackA);
-      const active = audioElements[1];
+      const active = audioEl(1);
 
       fireNative(active, "seeked");
       fireNative(active, "loadeddata");
@@ -422,7 +429,7 @@ describe("AudioController retry lifecycle", () => {
       ctrl.on("progress", progressHandler);
 
       await ctrl.playTrack(trackA);
-      const inactive = audioElements[0];
+      const inactive = audioEl(0);
 
       fireNative(inactive, "seeked");
       fireNative(inactive, "loadeddata");

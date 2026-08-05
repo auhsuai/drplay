@@ -79,7 +79,10 @@ export function toDriveFileRow(
     id: f.id,
     name: f.name as string,
     mimeType: f.mimeType as string,
-    parentId: f.parents && f.parents.length > 0 ? f.parents[0] : ROOT_FOLDER_ID,
+    parentId:
+      f.parents && f.parents.length > 0
+        ? (f.parents[0] ?? ROOT_FOLDER_ID)
+        : ROOT_FOLDER_ID,
     size: toSize(f.size),
     modifiedTime: f.modifiedTime,
     trashed: false,

@@ -174,7 +174,8 @@ export function useLocateFile(
             const data = (await response.json()) as { parents?: string[] };
             if (!stillMounted()) return;
             if (data.parents && data.parents.length > 0) {
-              parentId = data.parents[0];
+              const first = data.parents[0];
+              if (first !== undefined) parentId = first;
             }
           }
         } catch (e: unknown) {

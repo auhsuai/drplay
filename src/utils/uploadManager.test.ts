@@ -311,12 +311,12 @@ describe("uploadManager", () => {
     );
     await flush();
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
-    expect(uploadFileResumable.mock.calls[0][2]).toBe("a.mp3");
+    expect(uploadFileResumable.mock.calls[0]?.[2]).toBe("a.mp3");
 
     d1.resolve(makeDriveFile("f1", "a.mp3"));
     await flush();
     expect(uploadFileResumable).toHaveBeenCalledTimes(2);
-    expect(uploadFileResumable.mock.calls[1][2]).toBe("b.mp3");
+    expect(uploadFileResumable.mock.calls[1]?.[2]).toBe("b.mp3");
 
     d2.resolve(makeDriveFile("f2", "b.mp3"));
     await flush();
@@ -342,13 +342,13 @@ describe("uploadManager", () => {
 
     let rows = await db.files.toArray();
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toMatch(/^pending-/);
-    expect(rows[0].name).toBe("song.mp3");
-    expect(rows[0].mimeType).toBe(AUDIO_MIME);
-    expect(rows[0].parentId).toBe("root");
-    expect(rows[0].trashed).toBe(false);
-    expect(rows[0].isFolder).toBe(false);
-    expect(typeof rows[0].modifiedTime).toBe("string");
+    expect(rows[0]?.id).toMatch(/^pending-/);
+    expect(rows[0]?.name).toBe("song.mp3");
+    expect(rows[0]?.mimeType).toBe(AUDIO_MIME);
+    expect(rows[0]?.parentId).toBe("root");
+    expect(rows[0]?.trashed).toBe(false);
+    expect(rows[0]?.isFolder).toBe(false);
+    expect(typeof rows[0]?.modifiedTime).toBe("string");
 
     // The entry AbortController's signal must be wired into the upload call.
     expect(uploadFileResumable).toHaveBeenCalledWith(
@@ -368,13 +368,13 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
     rows = await db.files.toArray();
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe("file-1");
-    expect(rows[0].name).toBe("song.mp3");
-    expect(rows[0].mimeType).toBe(AUDIO_MIME);
-    expect(rows[0].parentId).toBe("root");
-    expect(rows[0].size).toBe(3);
-    expect(rows[0].trashed).toBe(false);
-    expect(rows[0].isFolder).toBe(false);
+    expect(rows[0]?.id).toBe("file-1");
+    expect(rows[0]?.name).toBe("song.mp3");
+    expect(rows[0]?.mimeType).toBe(AUDIO_MIME);
+    expect(rows[0]?.parentId).toBe("root");
+    expect(rows[0]?.size).toBe(3);
+    expect(rows[0]?.trashed).toBe(false);
+    expect(rows[0]?.isFolder).toBe(false);
   });
 
   it("3. UploadError invalid â†’ entry error + pending row deleted + captureError + khÃ´ng retry", async () => {
@@ -630,19 +630,19 @@ describe("uploadManager", () => {
 
     let rows = await db.files.toArray();
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toMatch(/^pending-/);
-    expect(rows[0].isFolder).toBe(true);
-    expect(rows[0].mimeType).toBe(FOLDER_MIME);
-    expect(rows[0].parentId).toBe("root");
+    expect(rows[0]?.id).toMatch(/^pending-/);
+    expect(rows[0]?.isFolder).toBe(true);
+    expect(rows[0]?.mimeType).toBe(FOLDER_MIME);
+    expect(rows[0]?.parentId).toBe("root");
 
     d.resolve({ id: "folder-1", name: "Album", mimeType: FOLDER_MIME });
     await waitIdle();
 
     rows = await db.files.toArray();
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe("folder-1");
-    expect(rows[0].isFolder).toBe(true);
-    expect(rows[0].mimeType).toBe(FOLDER_MIME);
+    expect(rows[0]?.id).toBe("folder-1");
+    expect(rows[0]?.isFolder).toBe(true);
+    expect(rows[0]?.mimeType).toBe(FOLDER_MIME);
     // quota check chá»‰ cháº¡y trÆ°á»›c file upload, khÃ´ng pháº£i folder-create
     expect(getDriveStorageQuota).not.toHaveBeenCalled();
   });
@@ -654,7 +654,9 @@ describe("uploadManager", () => {
     um.startUploads([fileSeed("s.mp3", "folder-9")], TOKEN);
     await flush();
 
-    const entryId = um.getEntries()[0].id;
+    const firstEntry = um.getEntries()[0];
+    if (!firstEntry) throw new Error("expected upload entry");
+    const entryId = firstEntry.id;
     const ids = um.getUploadingIds();
     expect(ids.has(entryId)).toBe(true);
     expect(ids.has("folder-9")).toBe(true);
@@ -719,7 +721,7 @@ describe("uploadManager", () => {
 
     const fired = firedEvents("drive-files-changed");
     expect(fired).toHaveLength(1);
-    expect(fired[0].detail).toEqual({ count: 1 });
+    expect(fired[0]?.detail).toEqual({ count: 1 });
   });
 
   it("15. seed khÃ´ng há»£p lá»‡ â†’ error invalid-seed ngay, khÃ´ng gá»i API", async () => {
@@ -754,7 +756,7 @@ describe("uploadManager", () => {
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
     um.startUploads([fileSeed("b.mp3")], TOKEN);
-    expect(um.getEntries()[1].status).toBe("queued");
+    expect(um.getEntries()[1]?.status).toBe("queued");
 
     d1.resolve(makeDriveFile("f1", "a.mp3"));
     await waitIdle();
@@ -773,7 +775,9 @@ describe("uploadManager", () => {
     um.startUploads([fileSeed("x.mp3")], TOKEN);
     await flush();
 
-    const id = um.getEntries()[0].id;
+    const firstEntry = um.getEntries()[0];
+    if (!firstEntry) throw new Error("expected upload entry");
+    const id = firstEntry.id;
     expect(um.isUploading(id)).toBe(true);
     expect(um.isUploading("root")).toBe(false);
     expect(um.isUploading("unknown-id")).toBe(false);
@@ -792,7 +796,9 @@ describe("uploadManager", () => {
     expect(statDiskPath).toHaveBeenCalledWith(path);
     expect(openDiskReadStream).toHaveBeenCalledWith(path);
     expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
-    const opts = uploadFileResumableChunked.mock.calls[0][1];
+    const firstCall = uploadFileResumableChunked.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected chunked upload call");
+    const opts = firstCall[1];
     expect(opts.name).toBe("Track One.mp3");
     expect(opts.parentId).toBe("root");
     expect(opts.totalSize).toBe(2);
@@ -804,7 +810,9 @@ describe("uploadManager", () => {
 
     // The stream opened for the upload is closed on completion (finally).
     // (mock.results holds the raw Promise â€” await it to get the stream.)
-    const stream = (await openDiskReadStream.mock.results[0].value) as {
+    const firstResult = openDiskReadStream.mock.results[0];
+    if (firstResult === undefined) throw new Error("expected stream open result");
+    const stream = (await firstResult.value) as {
       close: ReturnType<typeof vi.fn>;
     };
     expect(stream.close).toHaveBeenCalledTimes(1);
@@ -879,7 +887,7 @@ describe("uploadManager", () => {
     um.startUploads([diskFileSeed("x", "C:/x.mp3")], TOKEN);
     await realTick();
 
-    expect(um.getEntries()[0].progress).toBe(0.42);
+    expect(um.getEntries()[0]?.progress).toBe(0.42);
     // queued-push + uploading only â€” the progress update sits in the throttled
     // timer, subscribers are NOT spammed per chunk.
     expect(cb).toHaveBeenCalledTimes(2);
@@ -906,7 +914,9 @@ describe("uploadManager", () => {
     expect(snapshots[snapshots.length - 1]).toEqual([
       { status: "error", error: "network" },
     ]);
-    const stream = (await openDiskReadStream.mock.results[0].value) as {
+    const firstResult = openDiskReadStream.mock.results[0];
+    if (firstResult === undefined) throw new Error("expected stream open result");
+    const stream = (await firstResult.value) as {
       close: ReturnType<typeof vi.fn>;
     };
     expect(stream.close).toHaveBeenCalledTimes(1);
@@ -946,6 +956,8 @@ describe("uploadManager", () => {
     expect(openDiskReadStream).toHaveBeenCalledTimes(2);
     expect(s1.close).toHaveBeenCalledTimes(1);
     expect(s2.close).toHaveBeenCalledTimes(1); // via the outer finally
+    if (chunks[0] === undefined || chunks[1] === undefined)
+      throw new Error("expected chunks");
     expect(Array.from(chunks[0])).toEqual([1, 2]);
     expect(Array.from(chunks[1])).toEqual([3, 4]);
   });
@@ -1035,7 +1047,7 @@ describe("uploadManager", () => {
     await waitIdle();
 
     expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
-    expect(uploadFileResumableChunked.mock.calls[0][1].totalSize).toBe(100);
+    expect(uploadFileResumableChunked.mock.calls[0]?.[1]?.totalSize).toBe(100);
     // readChunk stays a pure reader â€” overshoot handling lives in driveApi.
     expect(reads[0]).toEqual(seq(0, 64));
     expect(reads[1]).toEqual(seq(64, 64));
@@ -1051,7 +1063,11 @@ describe("uploadManager", () => {
     um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
     await flush();
 
-    const [a, b] = um.getEntries();
+    const entries = um.getEntries();
+    const a = entries[0];
+    const b = entries[1];
+    if (a === undefined || b === undefined)
+      throw new Error("expected 2 upload entries");
     expect(um.getUploadState(a.id)).toBe("uploading");
     expect(um.getUploadState(b.id)).toBe("uploading");
     expect(um.getUploadState("unknown-id")).toBe("none");
@@ -1109,7 +1125,9 @@ describe("uploadManager", () => {
 
     um.startUploads([fileSeed("s.mp3")], TOKEN);
     await flush();
-    const id = um.getEntries()[0].id;
+    const firstEntry = um.getEntries()[0];
+    if (!firstEntry) throw new Error("expected upload entry");
+    const id = firstEntry.id;
     expect(um.getUploadState(id)).toBe("uploading");
 
     d.resolve(makeDriveFile("f9", "s.mp3"));
@@ -1123,7 +1141,9 @@ describe("uploadManager", () => {
 
     um.startUploads([fileSeed("s.mp3")], TOKEN);
     await flush();
-    const entryId = um.getEntries()[0].id;
+    const firstEntry = um.getEntries()[0];
+    if (!firstEntry) throw new Error("expected upload entry");
+    const entryId = firstEntry.id;
 
     d.resolve(makeDriveFile("f9", "s.mp3"));
     await waitIdle();
@@ -1352,7 +1372,9 @@ describe("uploadManager", () => {
 
     um.startUploads([fileSeed("s.mp3", "folder-9")], TOKEN);
     await flush();
-    const entryId = um.getEntries()[0].id;
+    const firstEntry = um.getEntries()[0];
+    if (!firstEntry) throw new Error("expected upload entry");
+    const entryId = firstEntry.id;
 
     d.resolve(makeDriveFile("f9", "s.mp3"));
     await waitIdle();
@@ -1384,12 +1406,14 @@ describe("uploadManager", () => {
       um.startUploads([diskFileSeed("x", "C:/x.mp3")], TOKEN);
       await flush();
 
-      const entryId = um.getEntries()[0].id;
+      const firstEntry = um.getEntries()[0];
+      if (!firstEntry) throw new Error("expected upload entry");
+      const entryId = firstEntry.id;
       expect(um.getUploadState(entryId)).toBe("uploading");
       // The entry controller's signal must actually be wired into the uploader.
-      expect(uploadFileResumableChunked.mock.calls[0][1].signal).toBeInstanceOf(
-        AbortSignal,
-      );
+      expect(
+        uploadFileResumableChunked.mock.calls[0]?.[1]?.signal,
+      ).toBeInstanceOf(AbortSignal);
       expect(await db.files.toArray()).toHaveLength(1); // pending row exists
 
       um.cancelUpload(entryId);
@@ -1415,7 +1439,11 @@ describe("uploadManager", () => {
       await flush();
 
       expect(uploadFileResumable).toHaveBeenCalledTimes(1);
-      const [a, b] = um.getEntries();
+      const entries = um.getEntries();
+      const a = entries[0];
+      const b = entries[1];
+      if (a === undefined || b === undefined)
+        throw new Error("expected 2 upload entries");
       expect(b.status).toBe("queued");
 
       um.cancelUpload(b.id);
@@ -1466,7 +1494,9 @@ describe("uploadManager", () => {
 
       um.startUploads([diskFileSeed("x", "C:/x.mp3")], TOKEN);
       await flush();
-      const id = um.getEntries()[0].id;
+      const firstEntry = um.getEntries()[0];
+      if (!firstEntry) throw new Error("expected upload entry");
+      const id = firstEntry.id;
 
       um.cancelUpload(id);
       um.cancelUpload(id); // signal Ä‘Ã£ aborted â†’ abort() lÃ  no-op
@@ -1512,8 +1542,10 @@ describe("uploadManager", () => {
       um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
       await flush();
 
-      const entryId = um.getEntries()[0].id;
-      expect(walkDiskFolder.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+      const firstEntry = um.getEntries()[0];
+      if (!firstEntry) throw new Error("expected upload entry");
+      const entryId = firstEntry.id;
+      expect(walkDiskFolder.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
       expect(um.getUploadState(entryId)).toBe("uploading");
 
       um.cancelUpload(entryId);
@@ -1570,8 +1602,10 @@ describe("uploadManager", () => {
       um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
       await flush();
 
-      const entryId = um.getEntries()[0].id;
-      expect(createFolderMock.mock.calls[0][3]).toBeInstanceOf(AbortSignal);
+      const firstEntry = um.getEntries()[0];
+      if (!firstEntry) throw new Error("expected upload entry");
+      const entryId = firstEntry.id;
+      expect(createFolderMock.mock.calls[0]?.[3]).toBeInstanceOf(AbortSignal);
 
       um.cancelUpload(entryId);
       await waitIdle();
@@ -1625,7 +1659,7 @@ describe("uploadManager", () => {
 
       const child = um.getEntries().find((e) => e.name === "sub");
       expect(child).toBeTruthy();
-      expect(createFolderMock.mock.calls[1][3]).toBeInstanceOf(AbortSignal);
+      expect(createFolderMock.mock.calls[1]?.[3]).toBeInstanceOf(AbortSignal);
       if (!child) throw new Error("expected sub entry");
 
       um.cancelUpload(child.id);
@@ -1652,9 +1686,13 @@ describe("uploadManager", () => {
       um.startUploads([fileSeed("r.mp3")], TOKEN);
       await realTick();
       expect(uploadFileResumable).toHaveBeenCalledTimes(1);
-      expect(uploadFileResumable.mock.calls[0][4]).toBeInstanceOf(AbortSignal); // signal wired
+      expect(uploadFileResumable.mock.calls[0]?.[4]).toBeInstanceOf(
+        AbortSignal,
+      ); // signal wired
 
-      const id = um.getEntries()[0].id;
+      const firstEntry = um.getEntries()[0];
+      if (!firstEntry) throw new Error("expected upload entry");
+      const id = firstEntry.id;
       um.cancelUpload(id); // abort trong lÃºc backoff
       await advanceBackoff(1500); // backoffDelay(attempt-1=0) âˆˆ [1000, 1500)
       await realTick();
@@ -1684,7 +1722,9 @@ describe("uploadManager", () => {
       um.startUploads([diskFileSeed("x", "C:/x.mp3")], TOKEN);
       await flush();
 
-      const entryId = um.getEntries()[0].id;
+      const firstEntry = um.getEntries()[0];
+      if (!firstEntry) throw new Error("expected upload entry");
+      const entryId = firstEntry.id;
       expect(um.getUploadProgress(entryId)).toBe(0.42);
       expect(um.getUploadProgress("unknown-id")).toBeUndefined();
 
@@ -1700,7 +1740,11 @@ describe("uploadManager", () => {
       um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
       await flush();
 
-      const [a, b] = um.getEntries();
+      const entries = um.getEntries();
+      const a = entries[0];
+      const b = entries[1];
+      if (a === undefined || b === undefined)
+        throw new Error("expected 2 upload entries");
       expect(um.getUploadProgress(a.id)).toBeUndefined(); // uploading nhÆ°ng chÆ°a cÃ³ progress
       expect(um.getUploadProgress(b.id)).toBeUndefined(); // queued
 
@@ -1727,7 +1771,7 @@ describe("uploadManager", () => {
       um.startUploads([diskFileSeed("x", "C:/x.mp3")], TOKEN);
       await realTick();
 
-      expect(um.getEntries()[0].progress).toBe(0.9);
+      expect(um.getEntries()[0]?.progress).toBe(0.9);
       expect(cb).toHaveBeenCalledTimes(2); // queued + uploading â€” burst Ä‘ang chá» timer
       await advanceBackoff(500);
       expect(cb).toHaveBeenCalledTimes(3); // 3 onProgress nhanh â†’ Ä‘Ãºng 1 notify

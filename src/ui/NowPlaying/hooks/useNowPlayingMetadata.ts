@@ -87,7 +87,8 @@ export function useNowPlayingMetadata(
           try {
             const colors = await getPalette(coverObjectUrl);
             if (isCancelled()) return;
-            setBgColor(colors[0]);
+            const firstColor = colors[0];
+            if (firstColor !== undefined) setBgColor(firstColor);
             setBgPalette(colors);
           } catch (err) {
             resetPalette();

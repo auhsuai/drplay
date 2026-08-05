@@ -206,8 +206,12 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
     expect(metaResolvers).toHaveLength(2);
 
     act(() => {
-      metaResolvers[0](metadataWithPicture());
-      metaResolvers[1](metadataWithPicture());
+      const r0 = metaResolvers[0];
+      const r1 = metaResolvers[1];
+      if (r0 === undefined || r1 === undefined)
+        throw new Error("expected metadata resolvers");
+      r0(metadataWithPicture());
+      r1(metadataWithPicture());
     });
     await flushMicrotasks();
 
@@ -216,7 +220,9 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
     act(() => {
-      paletteResolvers[0](["rgba(1,1,1,0.8)", "rgba(2,2,2,0.8)"]);
+      const p0 = paletteResolvers[0];
+      if (p0 === undefined) throw new Error("expected palette resolver");
+      p0(["rgba(1,1,1,0.8)", "rgba(2,2,2,0.8)"]);
     });
     await flushMicrotasks();
 

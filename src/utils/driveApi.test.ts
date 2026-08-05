@@ -31,6 +31,14 @@ import { fetchWithAuth } from "./apiClient";
 import { captureError } from "./errorLog";
 const mockedFetch = vi.mocked(fetchWithAuth);
 
+function fetchCallAt(
+  index: number,
+): (typeof mockedFetch.mock.calls)[number] {
+  const call = mockedFetch.mock.calls[index];
+  if (call === undefined) throw new Error(`expected fetch call ${String(index)}`);
+  return call;
+}
+
 function makeResponse(status: number): Response {
   const ok = status >= 200 && status < 300;
   return {
@@ -114,7 +122,8 @@ describe("getRecentlyAddedAudioFiles", () => {
     mockedFetch.mockResolvedValue(makeJsonResponse(200, { files: [] }));
     await getRecentlyAddedAudioFiles("tok-test");
 
-    const url = mockedFetch.mock.calls[0][0] as string;
+    const firstCall = fetchCallAt(0);
+    const url = firstCall[0] as string;
     expect(url).toContain("pageSize=100");
     expect(url).toContain("orderBy=createdTime desc");
     expect(url).toContain("fields=files(id,name,mimeType,size,modifiedTime)");
@@ -129,7 +138,7 @@ describe("getRecentlyAddedAudioFiles", () => {
     );
     const items = await getRecentlyAddedAudioFiles("tok-test");
     expect(items).toHaveLength(1);
-    expect(items[0].id).toBe("x");
+    expect(items[0]?.id).toBe("x");
   });
 });
 
@@ -308,7 +317,8 @@ describe("driveFetch forwards timeoutMs to fetchWithAuth", () => {
 
     expect(res.status).toBe(200);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    const opts = mockedFetch.mock.calls[0][1] as RequestInit & {
+    const firstCall = fetchCallAt(0);
+    const opts = firstCall[1] as RequestInit & {
       timeoutMs?: number;
     };
     expect(opts.timeoutMs).toBe(20000);
@@ -325,7 +335,8 @@ describe("driveFetch forwards timeoutMs to fetchWithAuth", () => {
 
     expect(res.status).toBe(200);
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    const opts = mockedFetch.mock.calls[0][1] as RequestInit & {
+    const firstCall = fetchCallAt(0);
+    const opts = firstCall[1] as RequestInit & {
       timeoutMs?: number;
     };
     expect(opts.timeoutMs).toBe(5000);
@@ -491,7 +502,8 @@ describe("createFolder abort propagation (Bug 1d)", () => {
 
     expect(result.id).toBe("folder-1");
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = mockedFetch.mock.calls[0];
+    const firstCall = fetchCallAt(0);
+    const [url, opts] = firstCall;
     expect(url).toBe("https://www.googleapis.com/drive/v3/files");
     expect((opts as RequestInit | undefined)?.signal).toBeInstanceOf(
       AbortSignal,
@@ -872,7 +884,8 @@ describe("getDriveStorageQuota", () => {
     const quota = await getDriveStorageQuota("tok-1");
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = mockedFetch.mock.calls[0];
+    const firstCall = fetchCallAt(0);
+    const [url, opts] = firstCall;
     expect(url).toBe(
       "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
     );
@@ -1034,7 +1047,8 @@ describe("uploadFileResumable", () => {
     expect(result).toEqual(uploadedFile);
     expect(mockedFetch).toHaveBeenCalledTimes(2);
 
-    const [postUrl, postOpts] = mockedFetch.mock.calls[0];
+    const postCall = fetchCallAt(0);
+    const [postUrl, postOpts] = postCall;
     expect(postUrl).toBe(INITIATE_URL);
     expect(postOpts?.method).toBe("POST");
     const postHeaders = postOpts?.headers as Record<string, string>;
@@ -1049,7 +1063,8 @@ describe("uploadFileResumable", () => {
       parents: ["parent-1"],
     });
 
-    const [putUrl, putOpts] = mockedFetch.mock.calls[1];
+    const putCall = fetchCallAt(1);
+    const [putUrl, putOpts] = putCall;
     expect(putUrl).toBe(LOCATION);
     expect(putOpts?.method).toBe("PUT");
     const putHeaders = putOpts?.headers as Record<string, string>;
@@ -1108,9 +1123,9 @@ describe("uploadFileResumable", () => {
     // Exactly one session: the leftover success mocks would have been consumed
     // by an internal retry — their non-use proves the retry loop is gone.
     expect(mockedFetch).toHaveBeenCalledTimes(2);
-    expect(mockedFetch.mock.calls[0][0]).toBe(INITIATE_URL);
-    expect(mockedFetch.mock.calls[1][0]).toBe(LOCATION);
-    expect(mockedFetch.mock.calls[1][1]?.timeoutMs).toBe(PUT_TIMEOUT_MS);
+    expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
+    expect(fetchCallAt(1)[0]).toBe(LOCATION);
+    expect(fetchCallAt(1)[1]?.timeoutMs).toBe(PUT_TIMEOUT_MS);
   });
 
   it("PUT timeout (merged 120s bound) → UploadError kind network, single attempt", async () => {
@@ -1212,11 +1227,13 @@ describe("uploadFileResumable", () => {
       "p",
     );
 
-    const postHeaders = mockedFetch.mock.calls[0][1]?.headers as Record<
+    const firstCall = fetchCallAt(0);
+    const secondCall = fetchCallAt(1);
+    const postHeaders = firstCall[1]?.headers as Record<
       string,
       string
     >;
-    const putHeaders = mockedFetch.mock.calls[1][1]?.headers as Record<
+    const putHeaders = secondCall[1]?.headers as Record<
       string,
       string
     >;
@@ -1491,21 +1508,21 @@ describe("uploadFileResumableChunked", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(3);
     expect(reader.offsets).toEqual([0, CHUNK_SIZE]);
 
-    const [postUrl, postOpts] = mockedFetch.mock.calls[0];
+    const [postUrl, postOpts] = fetchCallAt(0);
     expect(postUrl).toBe(INITIATE_URL);
     expect(postOpts?.method).toBe("POST");
     expect(
       (postOpts?.headers as Record<string, string>)["X-Upload-Content-Length"],
     ).toBe(String(TOTAL_SIZE));
 
-    const [put1Url, put1Opts] = mockedFetch.mock.calls[1];
+    const [put1Url, put1Opts] = fetchCallAt(1);
     expect(put1Url).toBe(LOCATION);
     expect(put1Opts?.method).toBe("PUT");
     const put1Headers = put1Opts?.headers as Record<string, string>;
     expect(put1Headers["Content-Range"]).toBe("bytes 0-8388607/10000000");
     expect(put1Opts?.timeoutMs).toBe(PUT_TIMEOUT_MS);
 
-    const [, put2Opts] = mockedFetch.mock.calls[2];
+    const [, put2Opts] = fetchCallAt(2);
     const put2Headers = put2Opts?.headers as Record<string, string>;
     expect(put2Headers["Content-Range"]).toBe("bytes 8388608-9999999/10000000");
 
@@ -1530,15 +1547,15 @@ describe("uploadFileResumableChunked", () => {
     });
 
     expect(reader.offsets).toEqual([0, 4194304, 8388608, 16777216]);
-    const [, put2Opts] = mockedFetch.mock.calls[2];
+    const [, put2Opts] = fetchCallAt(2);
     expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
       "bytes 4194304-12582911/20000000",
     );
-    const [, put3Opts] = mockedFetch.mock.calls[3];
+    const [, put3Opts] = fetchCallAt(3);
     expect((put3Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
       "bytes 8388608-16777215/20000000",
     );
-    const [, put4Opts] = mockedFetch.mock.calls[4];
+    const [, put4Opts] = fetchCallAt(4);
     expect((put4Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
       "bytes 16777216-19999999/20000000",
     );
@@ -1560,8 +1577,8 @@ describe("uploadFileResumableChunked", () => {
     });
 
     expect(reader.offsets).toEqual([0, 0]);
-    const [, put1Opts] = mockedFetch.mock.calls[1];
-    const [, put2Opts] = mockedFetch.mock.calls[2];
+    const [, put1Opts] = fetchCallAt(1);
+    const [, put2Opts] = fetchCallAt(2);
     expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
       "bytes 0-8388607/8388608",
     );
@@ -1697,10 +1714,10 @@ describe("uploadFileResumableChunked", () => {
 
     expect(result).toEqual(uploadedFile);
     expect(mockedFetch).toHaveBeenCalledTimes(4);
-    expect(mockedFetch.mock.calls[0][0]).toBe(INITIATE_URL);
-    expect(mockedFetch.mock.calls[1][0]).toBe(LOCATION);
-    expect(mockedFetch.mock.calls[2][0]).toBe(INITIATE_URL);
-    expect(mockedFetch.mock.calls[3][0]).toBe(LOCATION);
+    expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
+    expect(fetchCallAt(1)[0]).toBe(LOCATION);
+    expect(fetchCallAt(2)[0]).toBe(INITIATE_URL);
+    expect(fetchCallAt(3)[0]).toBe(LOCATION);
     // A fresh session re-uploads from offset 0.
     expect(reader.offsets).toEqual([0, 0]);
   });
@@ -1876,11 +1893,11 @@ describe("uploadFileResumableChunked", () => {
     expect(fractions).toEqual([64 / 100, 1]);
 
     expect(mockedFetch).toHaveBeenCalledTimes(3);
-    const [, put1Opts] = mockedFetch.mock.calls[1];
+    const [, put1Opts] = fetchCallAt(1);
     expect((put1Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
       "bytes 0-63/100",
     );
-    const [, put2Opts] = mockedFetch.mock.calls[2];
+    const [, put2Opts] = fetchCallAt(2);
     expect((put2Opts?.headers as Record<string, string>)["Content-Range"]).toBe(
       "bytes 64-99/100",
     );
@@ -1943,7 +1960,7 @@ describe("uploadFileResumableChunked", () => {
     );
     // Truncation behavior itself is unchanged: the 64-byte chunk is cut to the
     // remaining 50 bytes and sent with the exact Content-Range.
-    const [, putOpts] = mockedFetch.mock.calls[1];
+    const [, putOpts] = fetchCallAt(1);
     expect((putOpts?.headers as Record<string, string>)["Content-Range"]).toBe(
       "bytes 0-49/50",
     );

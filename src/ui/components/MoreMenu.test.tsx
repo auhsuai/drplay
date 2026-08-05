@@ -195,7 +195,9 @@ describe("MoreMenu recent variant", () => {
       within(menuEl()).getByRole("button", { name: "Locate File" }),
     );
     expect(spy).toHaveBeenCalledTimes(1);
-    const detail = (spy.mock.calls[0][0] as CustomEvent<{
+    const firstCall = spy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected event dispatch");
+    const detail = (firstCall[0] as CustomEvent<{
       fileId: string;
       parentId: string;
       parentName: string;
@@ -331,7 +333,9 @@ describe("MoreMenu playerbar variant regression", () => {
     fireEvent.click(
       within(menuEl()).getByRole("button", { name: "Locate File" }),
     );
-    const detail = (spy.mock.calls[0][0] as CustomEvent<{
+    const firstCall = spy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected event dispatch");
+    const detail = (firstCall[0] as CustomEvent<{
       fileId: string;
       parentId: string;
       parentName: string;

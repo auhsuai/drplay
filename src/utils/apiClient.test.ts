@@ -63,7 +63,7 @@ function mockInvoke(handlers: CommandHandlers): void {
 function makeStorage(): Storage {
   let s: Record<string, string> = {};
   return {
-    getItem: (k: string) => (k in s ? s[k] : null),
+    getItem: (k: string) => (k in s ? (s[k] ?? null) : null),
     setItem: (k: string, v: string) => {
       s[k] = v;
     },
@@ -115,7 +115,9 @@ describe("fetchWithAuth", () => {
     await fetchWithAuth("/api/songs");
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const opts = fetchSpy.mock.calls[0][1] as RequestInit;
+    const firstCall = fetchSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected fetch call");
+    const opts = firstCall[1] as RequestInit;
     const h = new Headers(opts.headers);
     expect(h.get("Authorization")).toBe("Bearer tok-123");
   });
@@ -143,7 +145,9 @@ describe("fetchWithAuth", () => {
     expect(res.status).toBe(200);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(timeoutSpy).toHaveBeenCalled(); // timeout applied on main + reused on retry
-    const retryOpts = fetchSpy.mock.calls[1][1] as RequestInit;
+    const retryCall = fetchSpy.mock.calls[1];
+    if (retryCall === undefined) throw new Error("expected fetch retry call");
+    const retryOpts = retryCall[1] as RequestInit;
     const retryHeaders = new Headers(retryOpts.headers);
     expect(retryHeaders.get("Authorization")).toBe("Bearer new");
     expect(storage.getItem(ACCESS_TOKEN_KEY)).toBe("new");
@@ -177,7 +181,9 @@ describe("fetchWithAuth", () => {
 
     expect(timeoutSpy).toHaveBeenCalled();
     expect(timeoutSpy).toHaveBeenCalledWith(15_000);
-    const opts = fetchSpy.mock.calls[0][1] as RequestInit;
+    const firstCall = fetchSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected fetch call");
+    const opts = firstCall[1] as RequestInit;
     expect(opts.signal).toBeDefined();
   });
 
@@ -237,8 +243,12 @@ describe("fetchWithAuth", () => {
     expect(res.status).toBe(200);
     expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    const firstSignal = (fetchSpy.mock.calls[0][1] as RequestInit).signal;
-    const retrySignal = (fetchSpy.mock.calls[1][1] as RequestInit).signal;
+    const firstCall = fetchSpy.mock.calls[0];
+    const secondCall = fetchSpy.mock.calls[1];
+    if (firstCall === undefined || secondCall === undefined)
+      throw new Error("expected fetch calls");
+    const firstSignal = (firstCall[1] as RequestInit).signal;
+    const retrySignal = (secondCall[1] as RequestInit).signal;
     expect(retrySignal).toBe(firstSignal);
   });
 
@@ -258,12 +268,18 @@ describe("fetchWithAuth", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(45_000);
+    const timeoutResult = timeoutSpy.mock.results[0];
+    if (timeoutResult === undefined) throw new Error("expected timeout result");
     expect(anySpy).toHaveBeenCalledWith([
       controller.signal,
-      timeoutSpy.mock.results[0].value,
+      timeoutResult.value,
     ]);
-    const opts = fetchSpy.mock.calls[0][1] as RequestInit;
-    expect(opts.signal).toBe(anySpy.mock.results[0].value);
+    const anyResult = anySpy.mock.results[0];
+    if (anyResult === undefined) throw new Error("expected any result");
+    const firstCall = fetchSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected fetch call");
+    const opts = firstCall[1] as RequestInit;
+    expect(opts.signal).toBe(anyResult.value);
   });
 
   it("throws a typed TokenRefreshError (not a raw error) when the 401 retry fails", async () => {
@@ -325,6 +341,7 @@ describe("scheduleProactiveRefresh expiry model (B1)", () => {
       scheduleProactiveRefresh(3600);
       const calls = setTimeoutSpy.mock.calls;
       const lastCall = calls[calls.length - 1];
+      if (lastCall === undefined) throw new Error("expected setTimeout call");
       const delayMs = lastCall[1] as number;
       // TOKEN_EXPIRY_MS = 50 * 60 * 1000 (3000s); PROACTIVE_REFRESH_MARGIN_SEC = 300.
       // 3600s server expires_in must be clamped down to the 3000s stale threshold

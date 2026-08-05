@@ -87,7 +87,10 @@ describe("UploadButton", () => {
   it("renders the CloudUpload icon (cloud-arrow-up) at w-5 h-5", () => {
     render(<UploadButton token="tok-1" />);
     expect(mocks.lucideCloudUpload).toHaveBeenCalledTimes(1);
-    const props = mocks.lucideCloudUpload.mock.calls[0][0];
+    const firstCall = mocks.lucideCloudUpload.mock.calls[0];
+    if (firstCall === undefined)
+      throw new Error("expected lucideCloudUpload call");
+    const props = firstCall[0];
     expect(props.className).toBe("w-5 h-5");
   });
 

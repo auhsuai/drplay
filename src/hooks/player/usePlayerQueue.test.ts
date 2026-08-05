@@ -133,10 +133,12 @@ describe("handleTogglePlayMode", () => {
 
   it("vào shuffle với queue > 0 → queue bị shuffle: đủ phần tử, track hiện tại ở đầu, thứ tự đổi", () => {
     const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const third = queue[2];
+    if (third === undefined) throw new Error("expected track at index 2");
     const { toggle, setPlaybackQueue, setPlayMode, lastCall } = setup(
       "normal",
       queue,
-      queue[2],
+      third,
     );
 
     expect(toggle()).toBe("shuffle");
@@ -146,17 +148,19 @@ describe("handleTogglePlayMode", () => {
     expect(new Set(shuffled.map((t) => t.id))).toEqual(
       new Set(["t1", "t2", "t3"]),
     );
-    expect(shuffled[0].id).toBe("t3");
+    expect(shuffled[0]?.id).toBe("t3");
     expect(shuffled.map((t) => t.id)).not.toEqual(["t1", "t2", "t3"]);
     expect(lastCall(setPlayMode)).toBe("shuffle");
   });
 
   it("rời shuffle → queue restore về thứ tự gốc", () => {
     const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const first = queue[0];
+    if (first === undefined) throw new Error("expected track at index 0");
     const { toggle, setPlaybackQueue, setPlayMode, lastCall } = setup(
       "shuffle",
       queue,
-      queue[0],
+      first,
     );
 
     expect(toggle()).toBe("repeat-all");
@@ -178,8 +182,8 @@ describe("handleTogglePlayMode", () => {
     expect(toggle()).toBe("shuffle");
 
     const shuffled = lastCall(setPlaybackQueue) as Track[];
-    expect(shuffled[0].id).toBe("t9");
-    expect(shuffled[0].queueItemId).toBeTypeOf("string");
+    expect(shuffled[0]?.id).toBe("t9");
+    expect(shuffled[0]?.queueItemId).toBeTypeOf("string");
     expect(new Set(shuffled)).toHaveLength(3);
   });
 });
@@ -192,7 +196,11 @@ describe("shuffleQueueWithCurrent", () => {
       makeTrack("t3"),
       makeTrack("t4"),
     ];
-    const result = shuffleQueueWithCurrent(queue, queue[1], queue[0]);
+    const second = queue[1];
+    const first = queue[0];
+    if (second === undefined || first === undefined)
+      throw new Error("expected tracks at indices 0,1");
+    const result = shuffleQueueWithCurrent(queue, second, first);
     expect(result[0]).toBe(queue[1]);
   });
 
@@ -204,7 +212,11 @@ describe("shuffleQueueWithCurrent", () => {
       makeTrack("t4"),
       makeTrack("t5"),
     ];
-    const result = shuffleQueueWithCurrent(queue, queue[3], queue[0]);
+    const fourth = queue[3];
+    const first = queue[0];
+    if (fourth === undefined || first === undefined)
+      throw new Error("expected tracks at indices 0,3");
+    const result = shuffleQueueWithCurrent(queue, fourth, first);
     expect(result).toHaveLength(5);
     expect(new Set(result)).toHaveLength(5);
     queue.forEach((t) => {
@@ -216,7 +228,11 @@ describe("shuffleQueueWithCurrent", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     try {
       const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
-      const result = shuffleQueueWithCurrent(queue, queue[2], queue[0]);
+      const third = queue[2];
+      const first = queue[0];
+      if (third === undefined || first === undefined)
+        throw new Error("expected tracks at indices 0,2");
+      const result = shuffleQueueWithCurrent(queue, third, first);
       expect(result.map((t) => t.id)).toEqual(["t3", "t2", "t1"]);
     } finally {
       vi.restoreAllMocks();

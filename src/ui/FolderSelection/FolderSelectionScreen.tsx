@@ -384,6 +384,7 @@ export function FolderSelectionScreen({
         setCurrentFolderName(t("drive.my_drive"));
       } else if (parents.length > 0) {
         const fetchedParentId = parents[0];
+        if (fetchedParentId === undefined) return;
         setCurrentFolderId(fetchedParentId);
         if (fetchedParentId === ROOT_FOLDER_ID) {
           setCurrentFolderName(t("drive.my_drive"));
@@ -424,6 +425,7 @@ export function FolderSelectionScreen({
       return;
     }
     const target = folderHistory[index];
+    if (target === undefined) return;
     setFolderHistory((prev) => prev.slice(0, index));
     setCurrentFolderId(target.id);
     setCurrentFolderName(target.name);

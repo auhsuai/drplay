@@ -72,7 +72,10 @@ describe("useServiceWorker controllerchange listener lifecycle", () => {
       "controllerchange",
       expect.any(Function),
     );
-    const handler = sw.addEventListener.mock.calls[0][1] as Listener;
+    const firstCall = sw.addEventListener.mock.calls[0];
+    if (firstCall === undefined)
+      throw new Error("expected addEventListener call");
+    const handler = firstCall[1] as Listener;
     // Two SW-container listeners are now expected: controllerchange + the
     // message listener used for SW_TOKEN_EXPIRED recovery (B3).
     expect(sw.listeners.size).toBe(2);

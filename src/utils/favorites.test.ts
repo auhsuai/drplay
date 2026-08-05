@@ -132,11 +132,15 @@ describe("favorites (Dexie-backed)", () => {
     await addFavorite(track("1"));
 
     expect(txnSpy).toHaveBeenCalledTimes(1);
-    expect(txnSpy.mock.calls[0][0]).toBe("rw");
-    expect(txnSpy.mock.calls[0][1]).toBe(db.favorites);
+    const firstCall = txnSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected txn call");
+    expect(firstCall[0]).toBe("rw");
+    expect(firstCall[1]).toBe(db.favorites);
 
     expect(putSpy).toHaveBeenCalledTimes(1);
-    const putArg = putSpy.mock.calls[0][0];
+    const putCall = putSpy.mock.calls[0];
+    if (putCall === undefined) throw new Error("expected put call");
+    const putArg = putCall[0];
     expect(putArg.id).toBe("1");
     expect(putArg.userEmail).toBe(EMAIL_A);
     expect(putArg.createdAt).toEqual(expect.any(Number));
@@ -165,11 +169,11 @@ describe("favorites (Dexie-backed)", () => {
 
     expect(result).toBe(false);
     expect(captureError).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(captureError).mock.calls[0][0].level).toBe("warn");
-    expect(vi.mocked(captureError).mock.calls[0][0].source).toBe("favorites");
-    expect(vi.mocked(captureError).mock.calls[0][0].message).toContain(
-      "is-fav-failed",
-    );
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].level).toBe("warn");
+    expect(firstCall[0].source).toBe("favorites");
+    expect(firstCall[0].message).toContain("is-fav-failed");
     getSpy.mockRestore();
   });
 

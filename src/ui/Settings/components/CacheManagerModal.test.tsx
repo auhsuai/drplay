@@ -174,7 +174,9 @@ describe("CacheManagerModal", () => {
     renderOpen();
     await screen.findByText("Metadata cache");
     const checkboxes = screen.getAllByRole("checkbox");
-    fireEvent.click(checkboxes[1]);
+    const coversCheckbox = checkboxes[1];
+    if (coversCheckbox === undefined) throw new Error("expected checkbox");
+    fireEvent.click(coversCheckbox);
     fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
     await waitFor(() => {
       expect(clearAppCache).toHaveBeenCalledWith([

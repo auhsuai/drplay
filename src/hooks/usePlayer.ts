@@ -224,6 +224,7 @@ export const usePlayer = (accessToken: string | null) => {
         );
         if (idx === -1 || idx >= queue.length - 1) return;
         const next = queue[idx + 1];
+        if (next === undefined) return;
         const url = getPrefetchedStreamUrl(next.id);
         if (url) prefetchNextTrackAudio(url);
         else prefetchNextTrackAudio(`${DRIVE_STREAM_PREFIX}${next.id}`);

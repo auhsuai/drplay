@@ -218,18 +218,24 @@ describe("HomeTab Recently Added delta sync", () => {
 
     // Newest request resolves FIRST with fresh data.
     await act(async () => {
-      deferred[2].resolve([driveFile({ id: "c", name: "Newest.mp3" })]);
+      const d2 = deferred[2];
+      if (d2 === undefined) throw new Error("expected deferred[2]");
+      d2.resolve([driveFile({ id: "c", name: "Newest.mp3" })]);
       await Promise.resolve();
     });
     expect(await screen.findByText("Newest.mp3")).toBeTruthy();
 
     // Older responses arrive later — they must be dropped, not applied.
     await act(async () => {
-      deferred[1].resolve([driveFile({ id: "b", name: "Middle.mp3" })]);
+      const d1 = deferred[1];
+      if (d1 === undefined) throw new Error("expected deferred[1]");
+      d1.resolve([driveFile({ id: "b", name: "Middle.mp3" })]);
       await Promise.resolve();
     });
     await act(async () => {
-      deferred[0].resolve([driveFile({ id: "a", name: "Oldest.mp3" })]);
+      const d0 = deferred[0];
+      if (d0 === undefined) throw new Error("expected deferred[0]");
+      d0.resolve([driveFile({ id: "a", name: "Oldest.mp3" })]);
       await Promise.resolve();
     });
 
@@ -271,7 +277,9 @@ describe("HomeTab Recently Added delta sync", () => {
       expect(mocks.captureError).toHaveBeenCalledTimes(1);
     });
 
-    const errArg = mocks.captureError.mock.calls[0][0] as {
+    const firstCall = mocks.captureError.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const errArg = firstCall[0] as {
       source: string;
       level: string;
       message: string;
@@ -434,7 +442,9 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     fireEvent.click(overlayCard);
 
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
-    const props = mocks.FullRecentViewSpy.mock.calls[0][0];
+    const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected FullRecentView call");
+    const props = firstCall[0];
     expect(props.recent.map((t: Track) => t.id)).toEqual([
       "ra-0",
       "ra-1",
@@ -462,10 +472,14 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     expect(screen.queryByTestId("premium-card-overlay")).toBeNull();
     expect(screen.getAllByTestId("premium-card").length).toBe(3);
 
-    fireEvent.click(screen.getAllByTestId("premium-card")[0]);
+    const firstCard = screen.getAllByTestId("premium-card")[0];
+    if (firstCard === undefined) throw new Error("expected premium card");
+    fireEvent.click(firstCard);
 
     expect(onPlay).toHaveBeenCalledTimes(1);
-    const [track, context] = onPlay.mock.calls[0] as [Track, Track[]];
+    const firstCall = onPlay.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected onPlay call");
+    const [track, context] = firstCall as [Track, Track[]];
     expect(track.id).toBe("ra-0");
     expect(context.map((t: Track) => t.id)).toEqual(["ra-0", "ra-1", "ra-2"]);
     // Playback path must NOT open the full view.
@@ -481,7 +495,10 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
 
     act(() => {
-      mocks.FullRecentViewSpy.mock.calls[0][0].onBack();
+      const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
+      if (firstCall === undefined)
+        throw new Error("expected FullRecentView call");
+      firstCall[0].onBack();
     });
 
     // Full view was rendered once; going back re-renders the grid, not the view.
@@ -510,7 +527,9 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     fireEvent.click(overlayCard);
 
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
-    const props = mocks.FullRecentViewSpy.mock.calls[0][0];
+    const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected FullRecentView call");
+    const props = firstCall[0];
     expect(props.recent.map((t: Track) => t.id)).toEqual([
       "ra-0",
       "ra-1",
@@ -539,9 +558,11 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     fireEvent.click(overlayCard);
 
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
-    const props = mocks.FullRecentViewSpy.mock.calls[0][0];
+    const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected FullRecentView call");
+    const props = firstCall[0];
     expect(props.recent).toHaveLength(100);
-    expect(props.recent[99].id).toBe("ra-99");
+    expect(props.recent[99]?.id).toBe("ra-99");
   });
 
   it("f. 4 items (< visibleCount): no overlay, clicking a card plays with the 4-item context (unchanged contract)", async () => {
@@ -559,10 +580,14 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     expect(screen.queryByTestId("premium-card-overlay")).toBeNull();
     expect(screen.getAllByTestId("premium-card").length).toBe(4);
 
-    fireEvent.click(screen.getAllByTestId("premium-card")[0]);
+    const firstCard = screen.getAllByTestId("premium-card")[0];
+    if (firstCard === undefined) throw new Error("expected premium card");
+    fireEvent.click(firstCard);
 
     expect(onPlay).toHaveBeenCalledTimes(1);
-    const [track, context] = onPlay.mock.calls[0] as [Track, Track[]];
+    const firstCall = onPlay.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected onPlay call");
+    const [track, context] = firstCall as [Track, Track[]];
     expect(track.id).toBe("ra-0");
     expect(context.map((t: Track) => t.id)).toEqual([
       "ra-0",

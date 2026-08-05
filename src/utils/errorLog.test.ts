@@ -29,7 +29,9 @@ describe("captureError", () => {
 
     const logs = await getErrorLogs();
     expect(logs).toHaveLength(1);
-    const msg = logs[0].message;
+    const first = logs[0];
+    if (first === undefined) throw new Error("expected log entry");
+    const msg = first.message;
     expect(msg).toContain("[REDACTED_ID]");
     expect(msg).toContain("[REDACTED_TOKEN]");
     expect(msg).toContain("[REDACTED_LINK]");
@@ -71,7 +73,7 @@ describe("captureError", () => {
     const oldIdx = logs.findIndex((e) => e.message === "old");
     const newIdx = logs.findIndex((e) => e.message === "new");
     expect(newIdx).toBeLessThan(oldIdx);
-    expect(logs[0].message).toBe("new");
+    expect(logs[0]?.message).toBe("new");
   });
 
   it("does NOT throw when Dexie errors (never throw)", async () => {
@@ -165,16 +167,16 @@ describe("groupLogsByDate", () => {
     // Newest day (dayB) appears first.
     const keyA = new Date(dayA).toLocaleDateString();
     const keyB = new Date(dayB).toLocaleDateString();
-    expect(groups[0].dateKey).toBe(keyB);
-    expect(groups[1].dateKey).toBe(keyA);
+    expect(groups[0]?.dateKey).toBe(keyB);
+    expect(groups[1]?.dateKey).toBe(keyA);
 
     // Counts correct.
-    expect(groups[0].entries).toHaveLength(2);
-    expect(groups[1].entries).toHaveLength(3);
+    expect(groups[0]?.entries).toHaveLength(2);
+    expect(groups[1]?.entries).toHaveLength(3);
 
     // Entries within a group sorted newest-first by ts.
-    expect(groups[0].entries.map((e) => e.id)).toEqual(["b2", "b1"]);
-    expect(groups[1].entries.map((e) => e.id)).toEqual(["a3", "a2", "a1"]);
+    expect(groups[0]?.entries.map((e) => e.id)).toEqual(["b2", "b1"]);
+    expect(groups[1]?.entries.map((e) => e.id)).toEqual(["a3", "a2", "a1"]);
   });
 
   it("returns [] for empty input (pure, never throws)", () => {
@@ -196,8 +198,8 @@ describe("groupLogsByDate", () => {
     ];
     const groups = groupLogsByDate(logs);
     expect(groups).toHaveLength(1);
-    expect(groups[0].entries).toHaveLength(1);
-    expect(groups[0].entries[0].id).toBe("ok");
+    expect(groups[0]?.entries).toHaveLength(1);
+    expect(groups[0]?.entries[0]?.id).toBe("ok");
   });
 });
 

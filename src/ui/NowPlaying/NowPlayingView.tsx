@@ -77,10 +77,10 @@ export const NowPlayingView = memo(function NowPlayingView({
           ? {
               background: `
           linear-gradient(to bottom, transparent 65%, var(--player-bg-fade) 100%),
-          radial-gradient(circle at 0% 0%, ${bgPalette[0]} 0%, transparent 75%),
-          radial-gradient(circle at 100% 0%, ${bgPalette[1]} 0%, transparent 75%),
-          radial-gradient(circle at 0% 100%, ${bgPalette[2]} 0%, transparent 75%),
-          radial-gradient(circle at 100% 100%, ${bgPalette[3]} 0%, transparent 75%),
+          radial-gradient(circle at 0% 0%, ${bgPalette[0] ?? ""} 0%, transparent 75%),
+          radial-gradient(circle at 100% 0%, ${bgPalette[1] ?? ""} 0%, transparent 75%),
+          radial-gradient(circle at 0% 100%, ${bgPalette[2] ?? ""} 0%, transparent 75%),
+          radial-gradient(circle at 100% 100%, ${bgPalette[3] ?? ""} 0%, transparent 75%),
           var(--player-bg-solid)
         `,
             }

@@ -65,7 +65,10 @@ describe("global error capture", () => {
     await import("../main");
 
     const errEvent = { message: "boom", error: { stack: "stacktrace" } };
-    listeners.error.forEach((cb) => {
+    const errorListeners = listeners.error;
+    if (errorListeners === undefined)
+      throw new Error("expected window.onerror listeners");
+    errorListeners.forEach((cb) => {
       cb(errEvent);
     });
 
@@ -83,7 +86,10 @@ describe("global error capture", () => {
     await import("../main");
 
     const rejEvent = { reason: new Error("promise failed") };
-    listeners.unhandledrejection.forEach((cb) => {
+    const rejectionListeners = listeners.unhandledrejection;
+    if (rejectionListeners === undefined)
+      throw new Error("expected unhandledrejection listeners");
+    rejectionListeners.forEach((cb) => {
       cb(rejEvent);
     });
 
@@ -108,7 +114,9 @@ describe("global error capture", () => {
       boundary.componentDidCatch(error, errorInfo);
     }).not.toThrow();
     expect(captureSpy).toHaveBeenCalledTimes(1);
-    const arg = captureSpy.mock.calls[0][0] as {
+    const firstCall = captureSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const arg = firstCall[0] as {
       source: string;
       message: string;
     };
@@ -137,7 +145,10 @@ describe("global error capture", () => {
     const rejEvent = {
       reason: new DOMException("The user aborted a request", "AbortError"),
     };
-    listeners.unhandledrejection.forEach((cb) => {
+    const rejectionListeners = listeners.unhandledrejection;
+    if (rejectionListeners === undefined)
+      throw new Error("expected unhandledrejection listeners");
+    rejectionListeners.forEach((cb) => {
       cb(rejEvent);
     });
 
@@ -156,7 +167,10 @@ describe("global error capture", () => {
         "AbortError",
       ),
     };
-    listeners.unhandledrejection.forEach((cb) => {
+    const rejectionListeners = listeners.unhandledrejection;
+    if (rejectionListeners === undefined)
+      throw new Error("expected unhandledrejection listeners");
+    rejectionListeners.forEach((cb) => {
       cb(rejEvent);
     });
 
@@ -175,7 +189,10 @@ describe("global error capture", () => {
       message: "The user aborted a request",
       error: new DOMException("The user aborted a request", "AbortError"),
     };
-    listeners.error.forEach((cb) => {
+    const errorListeners = listeners.error;
+    if (errorListeners === undefined)
+      throw new Error("expected window.onerror listeners");
+    errorListeners.forEach((cb) => {
       cb(errEvent);
     });
 

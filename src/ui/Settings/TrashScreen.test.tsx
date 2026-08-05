@@ -106,7 +106,9 @@ describe("TrashScreen skeleton loading", () => {
     });
 
     await act(async () => {
-      deferredCalls[0].resolve([
+      const call = deferredCalls[0];
+      if (call === undefined) throw new Error("expected deferred call");
+      call.resolve([
         { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
       ]);
       await Promise.resolve();
@@ -124,7 +126,9 @@ describe("TrashScreen skeleton loading", () => {
     });
 
     await act(async () => {
-      deferredCalls[0].resolve([]);
+      const call = deferredCalls[0];
+      if (call === undefined) throw new Error("expected deferred call");
+      call.resolve([]);
       await Promise.resolve();
     });
 
@@ -176,7 +180,9 @@ describe("TrashScreen skeleton loading", () => {
     for (const row of rows) {
       expect(row.className).toContain("flex-1");
     }
-    const wrapper = rows[0].parentElement;
+    const row = rows[0];
+    if (row === undefined) throw new Error("expected skeleton row");
+    const wrapper = row.parentElement;
     expect(wrapper).not.toBeNull();
     if (wrapper) {
       expect(wrapper.className).toContain("h-full");

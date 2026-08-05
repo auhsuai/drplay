@@ -15,5 +15,5 @@ export function formatBytes(bytes: number, fractionDigits = 1): string {
   }
   // Trim a trailing ".0" so whole units read naturally ("15 GB" not "15.0 GB").
   const digits = value.toFixed(fractionDigits).replace(/\.0+$/, "");
-  return `${digits} ${BYTE_UNITS[unitIndex]}`;
+  return `${digits} ${BYTE_UNITS[unitIndex] ?? "B"}`;
 }
