@@ -1,11 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// @ts-expect-error process is a nodejs global
+declare const process: { env: { TAURI_DEV_HOST?: string } };
+
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(async ({ command }) => ({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -42,7 +43,7 @@ export default defineConfig(async ({ command }) => ({
   // Vite 8 (rolldown/oxc) đổi sang build.rolldownOptions...drop* nhưng hành vi drop giữ nguyên.
   // => KHÔNG tự thêm lại 'console' vào drop; muốn tắt log prod hãy sửa logger.ts.
   esbuild: {
-    drop: command === "build" ? (["debugger"] as any) : undefined,
+    drop: command === "build" ? ["debugger"] : undefined,
   },
   build: {
     rollupOptions: {

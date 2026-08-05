@@ -12,7 +12,7 @@
    - Kéo thả vào cửa sổ app, HOẶC
    - Nút dấu cộng `+` đặt BÊN PHẢI chữ "DrPlay" (header trên cùng sidebar).
 2. **UI khi đang upload**:
-   - File được upload: card **mờ đi** + **spinner xoay** (giống spinner PlayerBar — `Loader2 animate-spin`).
+   - File được upload: card **mờ đi** + **spinner xoay** (giống spinner PlayerBar — `LoaderCircle animate-spin`).
    - **Folder cha chứa file đang upload**: có spinner xoay nhưng **KHÔNG mờ** (folder này đã tồn tại trên Drive).
    - Folder được upload (folder mới tạo): cũng **mờ + spinner**.
    - Xong → hết mờ, trở lại UI bình thường.
@@ -31,7 +31,7 @@
 | File | Vai trò | Ghi chú |
 |---|---|---|
 | `src/ui/Sidebar/Sidebar.tsx` | Header DrPlay (line ~60-67): `h1` chứa icon HardDrive + chữ DrPlay — **nơi đặt nút `+`** | Thêm button bên phải, style giống nút `+` tạo playlist (line 78-87) |
-| `src/ui/MainContent/components/SongCard.tsx` | Card file — **nơi hiện mờ + spinner upload** | Cần prop mới `isUploading` → overlay `opacity` + `<Loader2 className="w-5 h-5 animate-spin" />` (pattern PlayerBar.tsx:381) |
+| `src/ui/MainContent/components/SongCard.tsx` | Card file — **nơi hiện mờ + spinner upload** | Cần prop mới `isUploading` → overlay `opacity` + `<LoaderCircle className="w-5 h-5 animate-spin" />` (pattern PlayerBar.tsx:381) |
 | `src/ui/components/MoreMenu.tsx` | Menu 3 chấm — **cần chặn action khi đang upload** | Delete/Move/Playlist/Download... guard |
 | `src/ui/MainContent/MainContent.tsx` | VirtualizedSongList (278) — truyền props xuống SongCard | Cần truyền `uploadingIds` |
 | `src/hooks/useDriveExplorer.ts` | `handleBulkDelete` (317), bulk-move (370) — **cần guard upload** | + `filteredItems`/`currentItems` |
@@ -39,8 +39,8 @@
 | `src/utils/history.ts` | Fire `recent-updated` (line 52) | Chỉ khi play — thiếu event sau upload |
 
 ### 1.3 Spinner chuẩn app
-- PlayerBar.tsx:381: `<Loader2 className="w-5 h-5 animate-spin" />` (lucide-react `Loader2`).
-- MoreMenu khi downloading cũng dùng `Loader2 animate-spin text-[#4285F4]`.
+- PlayerBar.tsx:381: `<LoaderCircle className="w-5 h-5 animate-spin" />` (lucide-react `LoaderCircle`).
+- MoreMenu khi downloading cũng dùng `LoaderCircle animate-spin text-[#4285F4]`.
 
 ### 1.4 Drag & Drop trong Tauri v2 (CHƯA verify runtime — cần tra trước khi code)
 - Chưa có `tauri-plugin-drag-drop` trong `src-tauri/Cargo.toml` (đã grep, không thấy).
@@ -141,7 +141,7 @@ export async function uploadFolder(
 
 ### 2.5 SongCard — mờ + spinner
 - Prop mới `isUploading?: boolean`.
-- Card: khi true → `opacity-50 pointer-events-none` + overlay spinner giữa card: `<Loader2 className="w-5 h-5 animate-spin text-[#4285F4]" />` (center absolute).
+- Card: khi true → `opacity-50 pointer-events-none` + overlay spinner giữa card: `<LoaderCircle className="w-5 h-5 animate-spin text-[#4285F4]" />` (center absolute).
 - **Folder cha**: nhận `isUploading` true nhưng KHÔNG mờ — cần phân biệt: prop `isUploading` (mờ) vs `isUploadingParent` (chỉ spinner)? **Đơn giản hơn**: truyền `uploadState: 'none' | 'uploading' | 'parent-uploading'` — card mờ khi 'uploading', chỉ spinner khi 'parent-uploading'. Ghi rõ trong plan slice.
 
 ### 2.6 Guard race — MoreMenu + useDriveExplorer
