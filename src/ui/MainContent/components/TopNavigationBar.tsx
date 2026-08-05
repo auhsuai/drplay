@@ -146,7 +146,7 @@ export function TopNavigationBar({
 
           <div
             ref={breadcrumbRef}
-            className="flex items-center overflow-x-auto whitespace-nowrap hide-scrollbar cursor-grab flex-1 min-w-0"
+            className="flex items-center overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0"
           >
             {folderHistory.map((folder, index) => (
               <div key={folder.id} className="flex items-center shrink-0">
