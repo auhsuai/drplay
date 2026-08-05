@@ -28,7 +28,7 @@ interface TopNavProps {
   onSortChange: (option: string) => void;
   token: string | null;
   onNewFolderClick: () => void;
-  isInitialMount: React.MutableRefObject<boolean>;
+  isInitialMount: React.RefObject<boolean>;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
 

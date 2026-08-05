@@ -128,7 +128,9 @@ function activeEvents(dispatchSpy: MockInstance): Array<{ active: boolean }> {
 function emit(event: { payload: DropPayload }): void {
   const handler = capturedHandler;
   if (!handler) throw new Error("drag-drop handler not registered");
-  act(() => handler(event));
+  act(() => {
+    handler(event);
+  });
 }
 
 describe("DropZone", () => {
@@ -157,8 +159,8 @@ describe("DropZone", () => {
       onDragDropEvent: mocks.onDragDropEvent,
     });
     mocks.onDragDropEvent.mockImplementation(
-      async (handler: (event: unknown) => void) => {
-        capturedHandler = handler as (event: { payload: DropPayload }) => void;
+      (handler: (event: unknown) => void) => {
+        capturedHandler = handler;
         return mocks.unlisten;
       },
     );
@@ -173,11 +175,15 @@ describe("DropZone", () => {
 
   it("registers the drag-drop listener when a token is present and unlistens on unmount", async () => {
     const { unmount } = render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(mocks.onDragDropEvent).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.onDragDropEvent).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.getCurrentWebview).toHaveBeenCalledTimes(1);
     await act(async () => {});
     unmount();
-    await waitFor(() => expect(mocks.unlisten).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.unlisten).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not register the listener when there is no token", () => {
@@ -191,37 +197,43 @@ describe("DropZone", () => {
       throw new Error("__TAURI_INTERNALS__ is undefined");
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() =>
+    await waitFor(() => {
       expect(mocks.captureError).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "DropZone",
           level: "warn",
-          message: expect.stringContaining("drag-drop-listener-failed"),
+          message: expect.stringContaining(
+            "drag-drop-listener-failed",
+          ) as unknown as string,
         }),
-      ),
-    );
+      );
+    });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
   it("does not crash when onDragDropEvent rejects, and logs a warn", async () => {
     mocks.onDragDropEvent.mockRejectedValue(new Error("listen failed"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() =>
+    await waitFor(() => {
       expect(mocks.captureError).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "DropZone",
           level: "warn",
-          message: expect.stringContaining("drag-drop-listener-failed"),
+          message: expect.stringContaining(
+            "drag-drop-listener-failed",
+          ) as unknown as string,
         }),
-      ),
-    );
+      );
+    });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
   it("guard: the dim drag overlay is gone (removed on user feedback) — drop listeners still register", async () => {
     installDropRegion();
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 100, y: 200 } } });
     // No mask may come back, with or without a drag in flight.
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
@@ -232,7 +244,9 @@ describe("DropZone", () => {
   it("guard: no dim overlay on enter either (Tauri emits enter before over)", async () => {
     installDropRegion();
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "enter",
@@ -246,7 +260,9 @@ describe("DropZone", () => {
   it("guard: no overlay across repeated over events either (mask is gone entirely)", async () => {
     installDropRegion();
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 100, y: 200 } } });
     emit({ payload: { type: "over", position: { x: 110, y: 210 } } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
@@ -256,7 +272,9 @@ describe("DropZone", () => {
     installDropRegion();
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     // Above the region rect (y < 100) — the header band.
     emit({ payload: { type: "over", position: { x: 10, y: 10 } } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
@@ -273,7 +291,9 @@ describe("DropZone", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 10, y: 200 } } });
     expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: "folder-1" }]);
     expect(activeEvents(dispatchSpy)).toEqual([{ active: true }]);
@@ -292,7 +312,9 @@ describe("DropZone", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: { type: "enter", paths: [], position: { x: 10, y: 200 } },
     });
@@ -315,7 +337,9 @@ describe("DropZone", () => {
       size: 10,
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 10, y: 200 } } });
     emit({
       payload: {
@@ -324,7 +348,9 @@ describe("DropZone", () => {
         position: { x: 10, y: 200 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(activeEvents(dispatchSpy)).toEqual([
       { active: true },
       { active: false },
@@ -340,7 +366,9 @@ describe("DropZone", () => {
       return null;
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 100, y: 200 } } });
     expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: "folder-gap" }]);
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
@@ -350,7 +378,9 @@ describe("DropZone", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 10, y: 20 } } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
     expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: "folder-1" }]);
@@ -360,7 +390,9 @@ describe("DropZone", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1", true));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 10, y: 20 } } });
     expect(hoverEvents(dispatchSpy)).toEqual([{ folderId: "folder-1" }]);
   });
@@ -371,7 +403,9 @@ describe("DropZone", () => {
       value: 2,
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 200, y: 400 } } });
     expect(elementFromPointMock).toHaveBeenCalledWith(100, 200);
     // ±8px offsets are applied in CSS px AFTER the dpr conversion.
@@ -383,7 +417,9 @@ describe("DropZone", () => {
     installDropRegion();
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 100, y: 200 } } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
     elementFromPointMock.mockReturnValue(null);
@@ -398,7 +434,9 @@ describe("DropZone", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 1, y: 1 } } });
     emit({ payload: { type: "over", position: { x: 2, y: 2 } } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
@@ -412,7 +450,9 @@ describe("DropZone", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 1, y: 1 } } });
     emit({ payload: { type: "leave" } });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
@@ -433,7 +473,9 @@ describe("DropZone", () => {
     });
     elementFromPointMock.mockReturnValue(folderCardElement("folder-1"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "over", position: { x: 1, y: 1 } } });
     elementFromPointMock.mockReturnValue(null);
     emit({
@@ -443,7 +485,9 @@ describe("DropZone", () => {
         position: { x: 50, y: 60 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(hoverEvents(dispatchSpy)).toEqual([
       { folderId: "folder-1" },
       { folderId: null },
@@ -460,7 +504,9 @@ describe("DropZone", () => {
       size: 10,
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "drop",
@@ -468,7 +514,9 @@ describe("DropZone", () => {
         position: { x: 1, y: 1 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -494,7 +542,9 @@ describe("DropZone", () => {
     });
     elementFromPointMock.mockReturnValue(folderCardElement("folder-9"));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "drop",
@@ -502,7 +552,9 @@ describe("DropZone", () => {
         position: { x: 1, y: 1 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -526,9 +578,13 @@ describe("DropZone", () => {
       size: 10,
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "drop", paths: ["C:\\Music\\a.mp3"] } });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -551,7 +607,9 @@ describe("DropZone", () => {
       size: 0,
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "drop",
@@ -559,7 +617,9 @@ describe("DropZone", () => {
         position: { x: 1, y: 1 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -574,7 +634,7 @@ describe("DropZone", () => {
   });
 
   it("groups a mixed drop (file + folder) into a single startUploads call", async () => {
-    mocks.statDiskPath.mockImplementation(async (path: string) => ({
+    mocks.statDiskPath.mockImplementation((path: string) => ({
       path,
       name: path.endsWith("Album") ? "Album" : "a.mp3",
       relativePath: path.endsWith("Album") ? "Album" : "a.mp3",
@@ -582,7 +642,9 @@ describe("DropZone", () => {
       size: path.endsWith("Album") ? 0 : 1,
     }));
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "drop",
@@ -590,7 +652,9 @@ describe("DropZone", () => {
         position: { x: 1, y: 1 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -613,7 +677,9 @@ describe("DropZone", () => {
   it("skips not-found paths and toasts when every dropped path is invalid", async () => {
     mocks.statDiskPath.mockResolvedValue(null);
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "drop",
@@ -621,21 +687,23 @@ describe("DropZone", () => {
         position: { x: 1, y: 1 },
       },
     });
-    await waitFor(() =>
-      expect(mocks.showErrorToast).toHaveBeenCalledWith(DROP_FAILED_TOAST),
-    );
+    await waitFor(() => {
+      expect(mocks.showErrorToast).toHaveBeenCalledWith(DROP_FAILED_TOAST);
+    });
     expect(mocks.startUploads).not.toHaveBeenCalled();
     expect(mocks.captureError).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "DropZone",
         level: "warn",
-        message: expect.stringContaining("drop-path-missing"),
+        message: expect.stringContaining(
+          "drop-path-missing",
+        ) as unknown as string,
       }),
     );
   });
 
   it("skips a stat-failing path but still uploads the valid ones (no throw)", async () => {
-    mocks.statDiskPath.mockImplementation(async (path: string) => {
+    mocks.statDiskPath.mockImplementation((path: string) => {
       if (path.includes("bad")) throw new Error("permission denied");
       return {
         path,
@@ -646,7 +714,9 @@ describe("DropZone", () => {
       };
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "drop",
@@ -654,7 +724,9 @@ describe("DropZone", () => {
         position: { x: 1, y: 1 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -670,14 +742,18 @@ describe("DropZone", () => {
       expect.objectContaining({
         source: "DropZone",
         level: "warn",
-        message: expect.stringContaining("drop-stat-failed"),
+        message: expect.stringContaining(
+          "drop-stat-failed",
+        ) as unknown as string,
       }),
     );
   });
 
   it("does nothing when the drop payload has no paths", async () => {
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({ payload: { type: "drop", paths: [], position: { x: 1, y: 1 } } });
     expect(mocks.statDiskPath).not.toHaveBeenCalled();
     expect(mocks.startUploads).not.toHaveBeenCalled();
@@ -693,7 +769,9 @@ describe("DropZone", () => {
       size: 2,
     });
     render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     emit({
       payload: {
         type: "drop",
@@ -701,7 +779,9 @@ describe("DropZone", () => {
         position: { x: 1, y: 1 },
       },
     });
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(screen.queryByTestId(OVERLAY_TESTID)).toBeNull();
   });
 
@@ -714,7 +794,9 @@ describe("DropZone", () => {
       size: 3,
     });
     const { rerender } = render(<DropZone token="tok-1" />);
-    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull();
+    });
     rerender(<DropZone token={null} />);
     emit({
       payload: {

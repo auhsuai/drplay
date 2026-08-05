@@ -2,7 +2,13 @@
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { db } from "../db/db";
+import type {
+  RecentTrackRow,
+  PlayCountRow,
+  FolderVisitRow,
+} from "../db/db";
 import type { PlayCountEntry, FolderVisitEntry } from "./history";
+import type { Track } from "../types";
 import {
   recordPlay,
   getRecentlyPlayed,
@@ -19,13 +25,13 @@ import {
   removeFavorite,
 } from "./favorites";
 
-const TRACK: any = {
+const TRACK: Track = {
   id: "t1",
   title: "Song One",
   artist: "Artist A",
   streamUrl: "x",
 };
-const TRACK2: any = {
+const TRACK2: Track = {
   id: "t2",
   title: "Song Two",
   artist: "Artist B",
@@ -66,7 +72,7 @@ describe("history (Dexie-backed)", () => {
 
     const heavy = await getHeavyRotation();
     expect(heavy).toHaveLength(1);
-    expect((heavy[0] as any).id).toBe("t1");
+    expect(heavy[0].id).toBe("t1");
   });
 
   it("recordPlay dedupes recents (newest first)", async () => {
@@ -75,7 +81,7 @@ describe("history (Dexie-backed)", () => {
     await recordPlay(TRACK);
 
     const recents = await getRecentlyPlayed();
-    expect(recents.map((t: any) => t.id)).toEqual(["t1", "t2"]);
+    expect(recents.map((t) => t.id)).toEqual(["t1", "t2"]);
   });
 
   it("getHeavyRotation sorts by count desc and caps at 10", async () => {
@@ -84,7 +90,7 @@ describe("history (Dexie-backed)", () => {
     await recordPlay(TRACK); // t1 count 2
 
     const heavy = await getHeavyRotation();
-    expect((heavy[0] as any).id).toBe("t1");
+    expect(heavy[0].id).toBe("t1");
     expect(heavy.length).toBeLessThanOrEqual(10);
   });
 
@@ -97,7 +103,7 @@ describe("history (Dexie-backed)", () => {
 
     const discoveries = await getRandomDiscoveries();
     expect(discoveries.length).toBeGreaterThan(0);
-    const ids = discoveries.map((t: any) => t.id).sort();
+    const ids = discoveries.map((t) => t.id).sort();
     expect(ids).toEqual(["a", "b", "c"]);
   });
 
@@ -116,7 +122,7 @@ describe("history (Dexie-backed)", () => {
   it("getMostVisitedFolders ignores root and caps at 4", async () => {
     await recordFolderVisit("root", "Root");
     for (let i = 0; i < 6; i++) {
-      await recordFolderVisit(`f${i}`, `Folder ${i}`);
+      await recordFolderVisit(`f${String(i)}`, `Folder ${String(i)}`);
     }
     const visits = await getMostVisitedFolders();
     expect(
@@ -133,9 +139,9 @@ describe("history (Dexie-backed)", () => {
 
     setUser("a@x.com");
     const aRecents = await getRecentlyPlayed();
-    expect(aRecents.map((t: any) => t.id)).toEqual(["t1"]);
+    expect(aRecents.map((t) => t.id)).toEqual(["t1"]);
     const aHeavy = await getHeavyRotation();
-    expect(aHeavy.map((t: any) => t.id)).toEqual(["t1"]);
+    expect(aHeavy.map((t) => t.id)).toEqual(["t1"]);
   });
 
   it("respects PlayCountEntry/FolderVisitEntry shapes", async () => {
@@ -160,13 +166,13 @@ describe("history (Dexie-backed)", () => {
   });
 
   it("#9 regression: recordPlay prunes recentTracks to RECENT_CAP (1000) on write", async () => {
-    const seeds: any[] = [];
+    const seeds: RecentTrackRow[] = [];
     for (let i = 0; i < 1004; i++) {
       seeds.push({
-        id: `seed_${i}`,
+        id: `seed_${String(i)}`,
         track: {
-          id: `seed_${i}`,
-          title: `Seed ${i}`,
+          id: `seed_${String(i)}`,
+          title: `Seed ${String(i)}`,
           artist: "A",
           streamUrl: "x",
         },
@@ -191,11 +197,11 @@ describe("history (Dexie-backed)", () => {
   it("#9 variant: small number of plays never loses data", async () => {
     for (let i = 0; i < 10; i++) {
       await recordPlay({
-        id: `t_${i}`,
-        title: `Track ${i}`,
+        id: `t_${String(i)}`,
+        title: `Track ${String(i)}`,
         artist: "A",
         streamUrl: "x",
-      } as any);
+      });
     }
     const count = await db.recentTracks.count();
     expect(count).toBe(10);
@@ -207,17 +213,17 @@ describe("history (Dexie-backed)", () => {
     await recordPlay(TRACK);
     expect(await db.recentTracks.count()).toBe(1);
     const recents = await getRecentlyPlayed();
-    expect(recents.map((t: any) => t.id)).toEqual(["t1"]);
+    expect(recents.map((t) => t.id)).toEqual(["t1"]);
   });
 
   it("#9 variant: prune keeps the newest entry and evicts only the oldest past cap", async () => {
-    const seeds: any[] = [];
+    const seeds: RecentTrackRow[] = [];
     for (let i = 0; i < 1004; i++) {
       seeds.push({
-        id: `seed_${i}`,
+        id: `seed_${String(i)}`,
         track: {
-          id: `seed_${i}`,
-          title: `Seed ${i}`,
+          id: `seed_${String(i)}`,
+          title: `Seed ${String(i)}`,
           artist: "A",
           streamUrl: "x",
         },
@@ -233,19 +239,20 @@ describe("history (Dexie-backed)", () => {
     const ids = new Set((await db.recentTracks.toArray()).map((r) => r.id));
     expect(ids.size).toBe(1000);
     expect(ids.has("t1")).toBe(true);
-    for (let i = 5; i < 1004; i++) expect(ids.has(`seed_${i}`)).toBe(true);
-    for (let i = 0; i < 5; i++) expect(ids.has(`seed_${i}`)).toBe(false);
+    for (let i = 5; i < 1004; i++)
+      expect(ids.has(`seed_${String(i)}`)).toBe(true);
+    for (let i = 0; i < 5; i++) expect(ids.has(`seed_${String(i)}`)).toBe(false);
   });
 
   it("#9 variant: prune is scoped per userEmail (no cross-user eviction)", async () => {
     setUser("a@x.com");
-    const seeds: any[] = [];
+    const seeds: RecentTrackRow[] = [];
     for (let i = 0; i < 1004; i++) {
       seeds.push({
-        id: `a_seed_${i}`,
+        id: `a_seed_${String(i)}`,
         track: {
-          id: `a_seed_${i}`,
-          title: `Seed ${i}`,
+          id: `a_seed_${String(i)}`,
+          title: `Seed ${String(i)}`,
           artist: "A",
           streamUrl: "x",
         },
@@ -259,16 +266,16 @@ describe("history (Dexie-backed)", () => {
       title: "A New",
       artist: "A",
       streamUrl: "x",
-    } as any);
+    });
 
     setUser("b@x.com");
     for (let i = 0; i < 3; i++) {
       await recordPlay({
-        id: `b_${i}`,
-        title: `B ${i}`,
+        id: `b_${String(i)}`,
+        title: `B ${String(i)}`,
         artist: "B",
         streamUrl: "x",
-      } as any);
+      });
     }
 
     const aCount = await db.recentTracks
@@ -287,13 +294,13 @@ describe("history (Dexie-backed)", () => {
   });
 
   it("#playCounts cap: recordPlay prunes playCounts to PLAY_COUNT_CAP (1000) on write", async () => {
-    const seeds: any[] = [];
+    const seeds: PlayCountRow[] = [];
     for (let i = 0; i < 1004; i++) {
       seeds.push({
-        id: `pseed_${i}`,
+        id: `pseed_${String(i)}`,
         track: {
-          id: `pseed_${i}`,
-          title: `Seed ${i}`,
+          id: `pseed_${String(i)}`,
+          title: `Seed ${String(i)}`,
           artist: "A",
           streamUrl: "x",
         },
@@ -317,18 +324,25 @@ describe("history (Dexie-backed)", () => {
     expect(updated?.count).toBe(51);
     for (let i = 0; i < 5; i++)
       expect(
-        await db.playCounts.get(["default", `pseed_${i}`]),
+        await db.playCounts.get(["default", `pseed_${String(i)}`]),
       ).toBeUndefined();
     for (let i = 5; i < 1004; i++)
-      expect(await db.playCounts.get(["default", `pseed_${i}`])).toBeDefined();
+      expect(
+        await db.playCounts.get(["default", `pseed_${String(i)}`]),
+      ).toBeDefined();
   });
 
   it("#playCounts cap variant: getHeavyRotation returns top 10 by count from the index", async () => {
-    const seeds: any[] = [];
+    const seeds: PlayCountRow[] = [];
     for (let i = 0; i < 20; i++) {
       seeds.push({
-        id: `p_${i}`,
-        track: { id: `p_${i}`, title: `P ${i}`, artist: "A", streamUrl: "x" },
+        id: `p_${String(i)}`,
+        track: {
+          id: `p_${String(i)}`,
+          title: `P ${String(i)}`,
+          artist: "A",
+          streamUrl: "x",
+        },
         count: i + 1,
         userEmail: "default",
       });
@@ -336,7 +350,7 @@ describe("history (Dexie-backed)", () => {
     await db.playCounts.bulkPut(seeds);
 
     const heavy = await getHeavyRotation();
-    expect(heavy.map((t: any) => t.id)).toEqual([
+    expect(heavy.map((t) => t.id)).toEqual([
       "p_19",
       "p_18",
       "p_17",
@@ -352,13 +366,13 @@ describe("history (Dexie-backed)", () => {
 
   it("#playCounts cap variant: prune is scoped per userEmail (no cross-user eviction)", async () => {
     setUser("a@x.com");
-    const seeds: any[] = [];
+    const seeds: PlayCountRow[] = [];
     for (let i = 0; i < 1004; i++) {
       seeds.push({
-        id: `a_p_${i}`,
+        id: `a_p_${String(i)}`,
         track: {
-          id: `a_p_${i}`,
-          title: `Seed ${i}`,
+          id: `a_p_${String(i)}`,
+          title: `Seed ${String(i)}`,
           artist: "A",
           streamUrl: "x",
         },
@@ -378,7 +392,7 @@ describe("history (Dexie-backed)", () => {
       title: "A T",
       artist: "A",
       streamUrl: "x",
-    } as any);
+    });
 
     setUser("b@x.com");
     await recordPlay({
@@ -386,7 +400,7 @@ describe("history (Dexie-backed)", () => {
       title: "B 1",
       artist: "B",
       streamUrl: "x",
-    } as any);
+    });
 
     const aCount = await db.playCounts
       .where("userEmail")
@@ -407,11 +421,11 @@ describe("history (Dexie-backed)", () => {
   it("#playCounts cap variant: small number of plays never loses data", async () => {
     for (let i = 0; i < 10; i++) {
       await recordPlay({
-        id: `t_${i}`,
-        title: `Track ${i}`,
+        id: `t_${String(i)}`,
+        title: `Track ${String(i)}`,
         artist: "A",
         streamUrl: "x",
-      } as any);
+      });
     }
     expect(await db.playCounts.count()).toBe(10);
     const heavy = await getHeavyRotation();
@@ -419,11 +433,11 @@ describe("history (Dexie-backed)", () => {
   });
 
   it("#folderVisits cap: recordFolderVisit prunes folderVisits to FOLDER_VISIT_CAP (1000) on write", async () => {
-    const seeds: any[] = [];
+    const seeds: FolderVisitRow[] = [];
     for (let i = 0; i < 1004; i++) {
       seeds.push({
-        id: `fseed_${i}`,
-        name: `Seed ${i}`,
+        id: `fseed_${String(i)}`,
+        name: `Seed ${String(i)}`,
         count: i + 1,
         lastVisited: 1_000_000 + i,
         userEmail: "default",
@@ -446,11 +460,11 @@ describe("history (Dexie-backed)", () => {
     expect(updated?.count).toBe(2001);
     for (let i = 0; i < 5; i++)
       expect(
-        await db.folderVisits.get(["default", `fseed_${i}`]),
+        await db.folderVisits.get(["default", `fseed_${String(i)}`]),
       ).toBeUndefined();
     for (let i = 5; i < 1004; i++)
       expect(
-        await db.folderVisits.get(["default", `fseed_${i}`]),
+        await db.folderVisits.get(["default", `fseed_${String(i)}`]),
       ).toBeDefined();
     const top = await getMostVisitedFolders();
     expect(top[0].id).toBe("f_new");
@@ -518,7 +532,7 @@ describe("PK collision cross-user (regression)", () => {
 
     setUser("a@x.com");
     const aRecents = await getRecentlyPlayed();
-    expect(aRecents.map((t: any) => t.id)).toEqual(["t1"]);
+    expect(aRecents.map((t) => t.id)).toEqual(["t1"]);
 
     const aRows = await db.recentTracks
       .where("userEmail")
@@ -555,10 +569,10 @@ describe("PK collision cross-user (regression)", () => {
 
     setUser("a@x.com");
     const aHeavy = await getHeavyRotation();
-    expect(aHeavy.map((t: any) => t.id)).toEqual(["t1"]);
+    expect(aHeavy.map((t) => t.id)).toEqual(["t1"]);
     setUser("b@x.com");
     const bHeavy = await getHeavyRotation();
-    expect(bHeavy.map((t: any) => t.id)).toEqual(["t1"]);
+    expect(bHeavy.map((t) => t.id)).toEqual(["t1"]);
   });
 
   it("favorites: two users can favorite the same track independently (2 rows)", async () => {
@@ -581,10 +595,10 @@ describe("PK collision cross-user (regression)", () => {
 
     setUser("a@x.com");
     expect(await isFavorite("t1")).toBe(true);
-    expect((await getFavorites()).map((t: any) => t.id)).toEqual(["t1"]);
+    expect((await getFavorites()).map((t) => t.id)).toEqual(["t1"]);
     setUser("b@x.com");
     expect(await isFavorite("t1")).toBe(true);
-    expect((await getFavorites()).map((t: any) => t.id)).toEqual(["t1"]);
+    expect((await getFavorites()).map((t) => t.id)).toEqual(["t1"]);
   });
 
   it("favorites: user B removing their favorite must not delete user A favorite", async () => {
@@ -599,7 +613,7 @@ describe("PK collision cross-user (regression)", () => {
     expect(await db.favorites.count()).toBe(1);
     setUser("a@x.com");
     expect(await isFavorite("t1")).toBe(true);
-    expect((await getFavorites()).map((t: any) => t.id)).toEqual(["t1"]);
+    expect((await getFavorites()).map((t) => t.id)).toEqual(["t1"]);
     setUser("b@x.com");
     expect(await isFavorite("t1")).toBe(false);
   });
@@ -673,7 +687,7 @@ describe("PK collision cross-user (regression)", () => {
       .toArray();
     expect(rows.map((r) => r.id).sort()).toEqual(["t1", "t2"]);
     expect(await db.recentTracks.count()).toBe(2);
-    expect((await getRecentlyPlayed()).map((t: any) => t.id)).toEqual([
+    expect((await getRecentlyPlayed()).map((t) => t.id)).toEqual([
       "t2",
       "t1",
     ]);

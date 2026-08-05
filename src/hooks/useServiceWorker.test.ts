@@ -64,18 +64,22 @@ describe("useServiceWorker controllerchange listener lifecycle", () => {
   it("removes the controllerchange listener when the component unmounts", async () => {
     const sw = installServiceWorkerMock();
 
-    const { unmount } = renderHook(() => useServiceWorker());
+    const { unmount } = renderHook(() => {
+      useServiceWorker();
+    });
 
     expect(sw.addEventListener).toHaveBeenCalledWith(
       "controllerchange",
       expect.any(Function),
     );
-    const handler = sw.addEventListener.mock.calls[0]![1];
+    const handler = sw.addEventListener.mock.calls[0][1] as Listener;
     // Two SW-container listeners are now expected: controllerchange + the
     // message listener used for SW_TOKEN_EXPIRED recovery (B3).
     expect(sw.listeners.size).toBe(2);
 
-    await act(async () => {});
+    await act(async () => {
+      await Promise.resolve();
+    });
     unmount();
 
     // The SAME handler reference must be passed to removeEventListener;
@@ -91,13 +95,21 @@ describe("useServiceWorker controllerchange listener lifecycle", () => {
   it("does not accumulate listeners across mount/unmount cycles (remount regression)", async () => {
     const sw = installServiceWorkerMock();
 
-    const first = renderHook(() => useServiceWorker());
-    await act(async () => {});
+    const first = renderHook(() => {
+      useServiceWorker();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
     first.unmount();
     expect(sw.listeners.size).toBe(0);
 
-    const second = renderHook(() => useServiceWorker());
-    await act(async () => {});
+    const second = renderHook(() => {
+      useServiceWorker();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
     // controllerchange + message (B3) = 2 listeners per mounted hook.
     expect(sw.listeners.size).toBe(2);
 
@@ -123,8 +135,12 @@ describe("useServiceWorker token watcher (login/refresh/logout push)", () => {
     const sw = installServiceWorkerMock();
     gateRegister(sw);
 
-    renderHook(() => useServiceWorker("tok-A"));
-    await act(async () => {});
+    renderHook(() => {
+      useServiceWorker("tok-A");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(sw.worker.postMessage).toHaveBeenCalledWith({
       type: "UPDATE_TOKEN",
@@ -136,13 +152,20 @@ describe("useServiceWorker token watcher (login/refresh/logout push)", () => {
     const sw = installServiceWorkerMock();
     gateRegister(sw);
 
+    const initialProps: { token: string | null } = { token: "tok-A" };
     const { rerender } = renderHook(
-      (props: { token: string | null }) => useServiceWorker(props.token),
-      { initialProps: { token: "tok-A" } as { token: string | null } },
+      (props: { token: string | null }) => {
+        useServiceWorker(props.token);
+      },
+      { initialProps },
     );
-    await act(async () => {});
+    await act(async () => {
+      await Promise.resolve();
+    });
     rerender({ token: "tok-B" });
-    await act(async () => {});
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(sw.worker.postMessage).toHaveBeenCalledWith({
       type: "UPDATE_TOKEN",
@@ -154,13 +177,20 @@ describe("useServiceWorker token watcher (login/refresh/logout push)", () => {
     const sw = installServiceWorkerMock();
     gateRegister(sw);
 
+    const initialProps: { token: string | null } = { token: "tok-A" };
     const { rerender } = renderHook(
-      (props: { token: string | null }) => useServiceWorker(props.token),
-      { initialProps: { token: "tok-A" } as { token: string | null } },
+      (props: { token: string | null }) => {
+        useServiceWorker(props.token);
+      },
+      { initialProps },
     );
-    await act(async () => {});
+    await act(async () => {
+      await Promise.resolve();
+    });
     rerender({ token: null });
-    await act(async () => {});
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(sw.worker.postMessage).toHaveBeenCalledWith({
       type: "UPDATE_TOKEN",
@@ -173,8 +203,12 @@ describe("useServiceWorker token watcher (login/refresh/logout push)", () => {
     gateRegister(sw);
     sw.ready = Promise.reject(new Error("ready rejected"));
 
-    renderHook(() => useServiceWorker("tok-A"));
-    await act(async () => {});
+    renderHook(() => {
+      useServiceWorker("tok-A");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({

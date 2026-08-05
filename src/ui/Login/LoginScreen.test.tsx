@@ -56,9 +56,9 @@ describe("LoginScreen invoke login error handling", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
-    await waitFor(() =>
-      expect(toastRootText()).toContain("Đăng nhập đã bị hủy"),
-    );
+    await waitFor(() => {
+      expect(toastRootText()).toContain("Đăng nhập đã bị hủy");
+    });
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
@@ -76,11 +76,11 @@ describe("LoginScreen invoke login error handling", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(toastRootText()).toContain(
         "Đăng nhập quá thời gian chờ, vui lòng thử lại.",
-      ),
-    );
+      );
+    });
   });
 
   it("shows failed toast and logs login-failed on unexpected error", async () => {
@@ -89,11 +89,11 @@ describe("LoginScreen invoke login error handling", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(toastRootText()).toContain(
         "Đăng nhập thất bại, vui lòng thử lại.",
-      ),
-    );
+      );
+    });
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "error",
@@ -112,12 +112,12 @@ describe("LoginScreen invoke login error handling", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(onLogin).toHaveBeenCalledWith({
         access_token: "token-123",
         refresh_token: "refresh-456",
-      }),
-    );
+      });
+    });
     expect(toastRootText()).toBe("");
     expect(captureErrorMock).not.toHaveBeenCalled();
   });
@@ -128,9 +128,9 @@ describe("LoginScreen invoke login error handling", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
-    await waitFor(() =>
-      expect(onLogin).toHaveBeenCalledWith({ access_token: "token-123" }),
-    );
+    await waitFor(() => {
+      expect(onLogin).toHaveBeenCalledWith({ access_token: "token-123" });
+    });
     expect(toastRootText()).toBe("");
     expect(captureErrorMock).not.toHaveBeenCalled();
   });
@@ -145,18 +145,18 @@ describe("LoginScreen invoke login error handling", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(onLogin).toHaveBeenCalledWith({
         access_token: "token-123",
         refresh_token: "refresh-456",
         expires_in: 3599,
-      }),
-    );
+      });
+    });
     expect(toastRootText()).toBe("");
     expect(captureErrorMock).not.toHaveBeenCalled();
   });
 
-  it("renders the cancel action as a real <button> (keyboard accessible)", async () => {
+  it("renders the cancel action as a real <button> (keyboard accessible)", () => {
     const CANCEL_DELAY_MS = 5000;
     vi.useFakeTimers();
     try {
@@ -173,7 +173,7 @@ describe("LoginScreen invoke login error handling", () => {
     }
   });
 
-  it("cancel button still triggers the cancel flow (toast shown)", async () => {
+  it("cancel button still triggers the cancel flow (toast shown)", () => {
     const CANCEL_DELAY_MS = 5000;
     vi.useFakeTimers();
     try {

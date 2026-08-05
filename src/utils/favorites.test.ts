@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { Track } from "../types";
 
 // In-memory stub for the Dexie `db` module, isolated per test.
 // Mirrors the subset of the real `db.favorites` API used by favorites.ts:
@@ -22,15 +23,15 @@ const keyOf = (userEmail: string, id: string) => `${userEmail}\u0000${id}`;
 class InMemoryFavorites {
   private rows = new Map<string, FavoriteRow>();
 
-  async get(id: FavoriteKey): Promise<FavoriteRow | undefined> {
+  get(id: FavoriteKey): FavoriteRow | undefined {
     return this.rows.get(keyOf(id[0], id[1]));
   }
 
-  async put(row: FavoriteRow): Promise<void> {
+  put(row: FavoriteRow): void {
     this.rows.set(keyOf(row.userEmail, row.id), row);
   }
 
-  async delete(id: FavoriteKey): Promise<void> {
+  delete(id: FavoriteKey): void {
     this.rows.delete(keyOf(id[0], id[1]));
   }
 
@@ -49,7 +50,7 @@ class InMemoryFavorites {
     const rows = this.rows;
     return {
       equals: (value: string) => ({
-        async toArray(): Promise<FavoriteRow[]> {
+        toArray(): FavoriteRow[] {
           return [...rows.values()].filter(
             (r: FavoriteRow) => r[field] === value,
           );
@@ -68,8 +69,12 @@ const store = new InMemoryFavorites();
 vi.mock("../db/db", () => {
   const favoritesTable = {
     get: (id: FavoriteKey) => store.get(id),
-    put: (row: FavoriteRow) => store.put(row),
-    delete: (id: FavoriteKey) => store.delete(id),
+    put: (row: FavoriteRow) => {
+      store.put(row);
+    },
+    delete: (id: FavoriteKey) => {
+      store.delete(id);
+    },
     where: (field: "userEmail") => store.where(field),
   };
   return {
@@ -105,13 +110,11 @@ function setUser(email: string | null) {
   else localStorage.removeItem("drplay_current_user_email");
 }
 
-const track = (id: string) => ({
+const track = (id: string): Track => ({
   id,
   title: `Track ${id}`,
   artist: "Artist",
-  album: "Album",
-  duration: 100,
-  fileId: `file-${id}`,
+  streamUrl: `https://stream/${id}`,
 });
 
 beforeEach(() => {
@@ -126,14 +129,14 @@ describe("favorites (Dexie-backed)", () => {
     const txnSpy = vi.spyOn(store, "transaction");
     const putSpy = vi.spyOn(store, "put");
 
-    await addFavorite(track("1") as any);
+    await addFavorite(track("1"));
 
     expect(txnSpy).toHaveBeenCalledTimes(1);
     expect(txnSpy.mock.calls[0][0]).toBe("rw");
-    expect(txnSpy.mock.calls[0][1]).toBe((db as any).favorites);
+    expect(txnSpy.mock.calls[0][1]).toBe(db.favorites);
 
     expect(putSpy).toHaveBeenCalledTimes(1);
-    const putArg = putSpy.mock.calls[0][0] as any;
+    const putArg = putSpy.mock.calls[0][0];
     expect(putArg.id).toBe("1");
     expect(putArg.userEmail).toBe(EMAIL_A);
     expect(putArg.createdAt).toEqual(expect.any(Number));
@@ -144,10 +147,10 @@ describe("favorites (Dexie-backed)", () => {
 
   it("addFavorite does not put when the track already exists (guard preserved)", async () => {
     setUser(EMAIL_A);
-    await addFavorite(track("1") as any);
+    await addFavorite(track("1"));
 
     const putSpy = vi.spyOn(store, "put");
-    await addFavorite(track("1") as any);
+    await addFavorite(track("1"));
 
     expect(putSpy).not.toHaveBeenCalled();
     putSpy.mockRestore();
@@ -175,7 +178,7 @@ describe("favorites (Dexie-backed)", () => {
     const handler = vi.fn();
     window.addEventListener("favorites-updated", handler);
 
-    await addFavorite(track("1") as any);
+    await addFavorite(track("1"));
     await removeFavorite("1");
 
     expect(handler).toHaveBeenCalledTimes(2);

@@ -27,7 +27,10 @@ const mocks = vi.hoisted(() => ({
   addTrackToPlaylist: vi.fn(),
   uploadManager: {
     isUploading: vi.fn(),
-    subscribe: vi.fn((_cb: () => void) => () => {}),
+    subscribe: vi.fn((cb: () => void) => {
+      void cb;
+      return () => {};
+    }),
   },
 }));
 
@@ -192,7 +195,11 @@ describe("MoreMenu recent variant", () => {
       within(menuEl()).getByRole("button", { name: "Locate File" }),
     );
     expect(spy).toHaveBeenCalledTimes(1);
-    const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
+    const detail = (spy.mock.calls[0][0] as CustomEvent<{
+      fileId: string;
+      parentId: string;
+      parentName: string;
+    }>).detail;
     expect(detail).toEqual({
       fileId: "track-1",
       parentId: "parent-1",
@@ -219,13 +226,15 @@ describe("MoreMenu recent variant", () => {
     expect(screen.getByText("Move to Trash?")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await waitFor(() =>
-      expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith("tok", "track-1"),
-    );
-    await waitFor(() =>
-      expect(mocks.db.files.delete).toHaveBeenCalledWith("track-1"),
-    );
-    await waitFor(() => expect(onRemoveItem).toHaveBeenCalledWith("track-1"));
+    await waitFor(() => {
+      expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith("tok", "track-1");
+    });
+    await waitFor(() => {
+      expect(mocks.db.files.delete).toHaveBeenCalledWith("track-1");
+    });
+    await waitFor(() => {
+      expect(onRemoveItem).toHaveBeenCalledWith("track-1");
+    });
     expect(screen.queryByText("Move to Trash?")).toBeNull();
   });
 
@@ -322,7 +331,11 @@ describe("MoreMenu playerbar variant regression", () => {
     fireEvent.click(
       within(menuEl()).getByRole("button", { name: "Locate File" }),
     );
-    const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
+    const detail = (spy.mock.calls[0][0] as CustomEvent<{
+      fileId: string;
+      parentId: string;
+      parentName: string;
+    }>).detail;
     expect(detail).toEqual({
       fileId: "track-1",
       parentId: "parent-1",
@@ -434,19 +447,19 @@ describe("MoreMenu upload race guards", () => {
     );
     openTrigger();
     expect(
-      (
-        within(menuEl()).getByRole("button", {
-          name: "Delete",
-        }) as HTMLButtonElement
-      ).disabled,
+      within(menuEl()).getByRole<HTMLButtonElement>("button", {
+        name: "Delete",
+      }).disabled,
     ).toBe(false);
 
     mocks.uploadManager.isUploading.mockReturnValue(true);
-    act(() => notify?.());
+    act(() => {
+      notify?.();
+    });
 
-    const btn = within(menuEl()).getByRole("button", {
+    const btn = within(menuEl()).getByRole<HTMLButtonElement>("button", {
       name: "Delete",
-    }) as HTMLButtonElement;
+    });
     expect(btn.disabled).toBe(true);
     expect(btn.title).toBe("Blocked while uploading");
   });
@@ -461,9 +474,9 @@ describe("MoreMenu upload race guards", () => {
       within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
     );
     expect(screen.getByText("Playlists")).toBeTruthy();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Playlist One" })).toBeTruthy(),
-    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Playlist One" })).toBeTruthy();
+    });
 
     mocks.uploadManager.isUploading.mockReturnValue(true);
     act(() => notify?.());

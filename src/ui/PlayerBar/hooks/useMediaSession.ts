@@ -4,9 +4,9 @@ import type { Track } from "../../../App";
 
 export function useMediaSession(
   currentTrack: Track | null,
-  onTogglePlayRef: React.MutableRefObject<() => void>,
-  onPrevTrackRef: React.MutableRefObject<() => void>,
-  onNextTrackRef: React.MutableRefObject<() => void>,
+  onTogglePlayRef: React.RefObject<() => void>,
+  onPrevTrackRef: React.RefObject<() => void>,
+  onNextTrackRef: React.RefObject<() => void>,
 ) {
   const { t } = useTranslation();
   useEffect(() => {

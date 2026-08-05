@@ -11,7 +11,7 @@ function makeAudio(opts: {
     length: opts.ranges.length,
     start: (i: number) => opts.ranges[i][0],
     end: (i: number) => opts.ranges[i][1],
-  } as unknown as TimeRanges;
+  };
 
   return {
     duration: opts.duration,
@@ -33,8 +33,8 @@ describe("updateBufferBar", () => {
     updateBufferBar(container, audio);
     expect(container.childElementCount).toBe(1);
     const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe(`${(10 / DUR) * 100}%`);
-    expect(seg.style.width).toBe(`${(20 / DUR) * 100}%`);
+    expect(seg.style.left).toBe(`${String((10 / DUR) * 100)}%`);
+    expect(seg.style.width).toBe(`${String((20 / DUR) * 100)}%`);
   });
 
   it("BUG regression: backward seek drops the already-played part of the buffered range", () => {
@@ -49,8 +49,8 @@ describe("updateBufferBar", () => {
     // must only show the future part [420,900] — otherwise it looks stuck.
     expect(container.childElementCount).toBe(1);
     const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe(`${(420 / 900) * 100}%`);
-    expect(seg.style.width).toBe(`${((900 - 420) / 900) * 100}%`);
+    expect(seg.style.left).toBe(`${String((420 / 900) * 100)}%`);
+    expect(seg.style.width).toBe(`${String(((900 - 420) / 900) * 100)}%`);
   });
 
   it("BUG regression: fully-past ranges are dropped, crossing ranges are clipped to currentTime", () => {
@@ -67,8 +67,8 @@ describe("updateBufferBar", () => {
     // [0,30] ends before currentTime -> dropped; [50,200] -> clipped to [60,200].
     expect(container.childElementCount).toBe(1);
     const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe(`${(60 / DUR) * 100}%`);
-    expect(seg.style.width).toBe(`${(140 / DUR) * 100}%`);
+    expect(seg.style.left).toBe(`${String((60 / DUR) * 100)}%`);
+    expect(seg.style.width).toBe(`${String((140 / DUR) * 100)}%`);
   });
 
   it("BUG regression: no visible segments remain when every buffered range is in the past", () => {
@@ -100,8 +100,8 @@ describe("updateBufferBar", () => {
     // clipped to currentTime=505, so only [505,510] shows.
     expect(container.childElementCount).toBe(1);
     const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe(`${(505 / DUR) * 100}%`);
-    expect(seg.style.width).toBe(`${(5 / DUR) * 100}%`);
+    expect(seg.style.left).toBe(`${String((505 / DUR) * 100)}%`);
+    expect(seg.style.width).toBe(`${String((5 / DUR) * 100)}%`);
   });
 
   it("shrinking visible segment count removes extra segments", () => {
@@ -171,7 +171,9 @@ describe("updateBufferBar", () => {
       currentTime: 10,
       ranges: [[0, 30]],
     });
-    expect(() => updateBufferBar(null, audio)).not.toThrow();
+    expect(() => {
+      updateBufferBar(null, audio);
+    }).not.toThrow();
   });
 
   it("BUG regression (round 2): stale pre-seek range fully ahead of the playhead is dropped", () => {
@@ -198,8 +200,8 @@ describe("updateBufferBar", () => {
     updateBufferBar(container, audio);
     expect(container.childElementCount).toBe(1);
     const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe(`${(420 / 900) * 100}%`);
-    expect(seg.style.width).toBe(`${((450 - 420) / 900) * 100}%`);
+    expect(seg.style.left).toBe(`${String((420 / 900) * 100)}%`);
+    expect(seg.style.width).toBe(`${String(((450 - 420) / 900) * 100)}%`);
   });
 
   it("BUG regression (round 2): contiguous range spanning the playhead still renders the future part", () => {
@@ -212,7 +214,7 @@ describe("updateBufferBar", () => {
     updateBufferBar(container, audio);
     expect(container.childElementCount).toBe(1);
     const seg = container.children[0] as HTMLElement;
-    expect(seg.style.left).toBe(`${(420 / 900) * 100}%`);
-    expect(seg.style.width).toBe(`${((900 - 420) / 900) * 100}%`);
+    expect(seg.style.left).toBe(`${String((420 / 900) * 100)}%`);
+    expect(seg.style.width).toBe(`${String(((900 - 420) / 900) * 100)}%`);
   });
 });

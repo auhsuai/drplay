@@ -9,10 +9,12 @@ async function runOp<T>(
   try {
     return await fn();
   } catch (e: unknown) {
-    captureError({
+    // Fire-and-forget: captureError never rejects (it logs capture failures
+    // internally), so the kv error can still be rethrown to the caller.
+    void captureError({
       level: "warn",
       source: "kv",
-      message: `kv-${op}-failed (key=${String(key)}): ${e instanceof Error ? e.name + ": " + e.message : String(e)}`,
+      message: `kv-${op}-failed (key=${key}): ${e instanceof Error ? e.name + ": " + e.message : String(e)}`,
     });
     throw e;
   }

@@ -1,10 +1,27 @@
 ﻿// @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
 import { db } from "../db/db";
 import type { UploadSeed } from "./uploadManager";
 import type { DriveFileItem } from "../utils/driveApi";
+import type {
+  createFolder as createFolderImpl,
+  getDriveStorageQuota as getDriveStorageQuotaImpl,
+} from "../utils/driveApi";
+import type {
+  uploadFileResumable as uploadFileResumableImpl,
+  uploadFileResumableChunked as uploadFileResumableChunkedImpl,
+} from "../utils/driveUpload";
 import type { DiskEntry } from "./diskFs";
+import type {
+  openDiskReadStream as openDiskReadStreamImpl,
+  statDiskPath as statDiskPathImpl,
+  walkDiskFolder as walkDiskFolderImpl,
+  registerUploadPath as registerUploadPathImpl,
+} from "./diskFs";
+import type { showErrorToast as showErrorToastImpl } from "./simpleToast";
+import type { captureError as captureErrorImpl } from "./errorLog";
 
 // Mocks keep the manager isolated: driveApi/diskFs stand-ins for the network
 // and Tauri IPC, errorLog/simpleToast/i18next for side effects we assert on.
@@ -58,16 +75,16 @@ const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 // Re-imported per test after vi.resetModules() so the manager's module-level
 // queue/subscriber state starts clean (fresh vi.fn instances included).
 let um: typeof import("./uploadManager");
-let uploadFileResumable: ReturnType<typeof vi.fn>;
-let uploadFileResumableChunked: ReturnType<typeof vi.fn>;
-let getDriveStorageQuota: ReturnType<typeof vi.fn>;
-let createFolderMock: ReturnType<typeof vi.fn>;
-let openDiskReadStream: ReturnType<typeof vi.fn>;
-let statDiskPath: ReturnType<typeof vi.fn>;
-let walkDiskFolder: ReturnType<typeof vi.fn>;
-let registerUploadPath: ReturnType<typeof vi.fn>;
-let showErrorToast: ReturnType<typeof vi.fn>;
-let captureError: ReturnType<typeof vi.fn>;
+let uploadFileResumable: Mock<typeof uploadFileResumableImpl>;
+let uploadFileResumableChunked: Mock<typeof uploadFileResumableChunkedImpl>;
+let getDriveStorageQuota: Mock<typeof getDriveStorageQuotaImpl>;
+let createFolderMock: Mock<typeof createFolderImpl>;
+let openDiskReadStream: Mock<typeof openDiskReadStreamImpl>;
+let statDiskPath: Mock<typeof statDiskPathImpl>;
+let walkDiskFolder: Mock<typeof walkDiskFolderImpl>;
+let registerUploadPath: Mock<typeof registerUploadPathImpl>;
+let showErrorToast: Mock<typeof showErrorToastImpl>;
+let captureError: Mock<typeof captureErrorImpl>;
 let UploadErrorClass: typeof import("../utils/driveUpload").UploadError;
 
 beforeEach(async () => {
@@ -203,7 +220,11 @@ const nodeImmediate = (globalThis as unknown as Record<string, unknown>)
 async function realTick(times = 5): Promise<void> {
   for (let i = 0; i < times; i++) {
     if (nodeImmediate) {
-      await new Promise<void>((r) => nodeImmediate(() => r()));
+      await new Promise<void>((r) => {
+        nodeImmediate(() => {
+          r();
+        });
+      });
     } else {
       await new Promise<void>((r) => setTimeout(r, 0));
     }
@@ -240,7 +261,7 @@ async function waitIdle(timeoutMs = 5000): Promise<void> {
 
 function firedEvents(type: string): CustomEvent[] {
   return dispatchSpy.mock.calls
-    .map((c) => c[0] as Event)
+    .map((c) => c[0])
     .filter((e): e is CustomEvent => e.type === type && "detail" in e);
 }
 
@@ -274,7 +295,9 @@ describe("uploadManager", () => {
       active++;
       maxActive = Math.max(maxActive, active);
       try {
-        return await pending.shift()!;
+        const next = pending.shift();
+        if (next === undefined) throw new Error("upload queue exhausted");
+        return await next;
       } finally {
         active--;
       }
@@ -524,13 +547,15 @@ describe("uploadManager", () => {
       },
     ]);
     let fileCounter = 0;
-    createFolderMock.mockImplementation(async (_t, name) => ({
-      id: name === "Album" ? "folder-1" : "sub-1",
-      name,
-      mimeType: FOLDER_MIME,
-    }));
-    uploadFileResumableChunked.mockImplementation(async (_t, opts) =>
-      makeDriveFile(`file-${++fileCounter}`, opts.name),
+    createFolderMock.mockImplementation((_t, name) =>
+      Promise.resolve({
+        id: name === "Album" ? "folder-1" : "sub-1",
+        name,
+        mimeType: FOLDER_MIME,
+      }),
+    );
+    uploadFileResumableChunked.mockImplementation((_t, opts) =>
+      Promise.resolve(makeDriveFile(`file-${String(++fileCounter)}`, opts.name)),
     );
 
     um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
@@ -779,7 +804,9 @@ describe("uploadManager", () => {
 
     // The stream opened for the upload is closed on completion (finally).
     // (mock.results holds the raw Promise â€” await it to get the stream.)
-    const stream = await openDiskReadStream.mock.results[0].value;
+    const stream = (await openDiskReadStream.mock.results[0].value) as {
+      close: ReturnType<typeof vi.fn>;
+    };
     expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
@@ -879,7 +906,9 @@ describe("uploadManager", () => {
     expect(snapshots[snapshots.length - 1]).toEqual([
       { status: "error", error: "network" },
     ]);
-    const stream = await openDiskReadStream.mock.results[0].value;
+    const stream = (await openDiskReadStream.mock.results[0].value) as {
+      close: ReturnType<typeof vi.fn>;
+    };
     expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
@@ -903,8 +932,11 @@ describe("uploadManager", () => {
     uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
       // Simulates a 308-without-Range resume: the session asks for offset 0
       // again after the stream already consumed 2 bytes.
-      chunks.push((await opts.readChunk(0))!);
-      chunks.push((await opts.readChunk(0))!);
+      const first = await opts.readChunk(0);
+      const second = await opts.readChunk(0);
+      if (first === null || second === null) throw new Error("expected chunk");
+      chunks.push(first);
+      chunks.push(second);
       return makeDriveFile("f1", "x.mp3");
     });
 
@@ -1147,7 +1179,9 @@ describe("uploadManager", () => {
     expect(um.getUploadState("f9")).toBe("none");
     expect(vi.getTimerCount()).toBe(0);
 
-    expect(() => um.dismissUploaded("f9")).not.toThrow();
+    expect(() => {
+      um.dismissUploaded("f9");
+    }).not.toThrow();
     expect(um.getUploadState("f9")).toBe("none");
   });
 
@@ -1168,10 +1202,10 @@ describe("uploadManager", () => {
         size: 5,
       },
     ]);
-    createFolderMock.mockImplementation(async (_t, name) => {
+    createFolderMock.mockImplementation((_t, name) => {
       if (name === "Album")
-        return { id: "folder-1", name, mimeType: FOLDER_MIME };
-      throw new Error("create failed (400)");
+        return Promise.resolve({ id: "folder-1", name, mimeType: FOLDER_MIME });
+      return Promise.reject(new Error("create failed (400)"));
     });
     const snapshots = captureSnapshots();
 
@@ -1180,7 +1214,7 @@ describe("uploadManager", () => {
 
     // Terminal entries are pruned, so per-entry error kinds come from the
     // captureError logs markError emits (name + kind, no path/token).
-    const messages = captureError.mock.calls.map((c) => c[0].message as string);
+    const messages = captureError.mock.calls.map((c) => c[0].message);
     expect(messages).toEqual([
       expect.stringContaining("name=sub kind=failed"),
       expect.stringContaining("name=x.mp3 kind=parent-folder-missing"),
@@ -1225,7 +1259,7 @@ describe("uploadManager", () => {
     await waitIdle();
 
     const message = captureError.mock.calls
-      .map((c) => c[0].message as string)
+      .map((c) => c[0].message)
       .join("\n");
     expect(message).toContain("name=x.mp3");
     expect(message).toContain("kind=invalid");
@@ -1242,7 +1276,7 @@ describe("uploadManager", () => {
     await waitIdle();
 
     const message = captureError.mock.calls
-      .map((c) => c[0].message as string)
+      .map((c) => c[0].message)
       .join("\n");
     expect(message).toContain("name=track.flac");
     expect(message).toContain("kind=failed");
@@ -1281,13 +1315,15 @@ describe("uploadManager", () => {
       },
     ]);
     let fileCounter = 0;
-    createFolderMock.mockImplementation(async (_t, name) => ({
-      id: name === "Album" ? "folder-1" : "sub-1",
-      name,
-      mimeType: FOLDER_MIME,
-    }));
-    uploadFileResumableChunked.mockImplementation(async (_t, opts) =>
-      makeDriveFile(`file-${++fileCounter}`, opts.name),
+    createFolderMock.mockImplementation((_t, name) =>
+      Promise.resolve({
+        id: name === "Album" ? "folder-1" : "sub-1",
+        name,
+        mimeType: FOLDER_MIME,
+      }),
+    );
+    uploadFileResumableChunked.mockImplementation((_t, opts) =>
+      Promise.resolve(makeDriveFile(`file-${String(++fileCounter)}`, opts.name)),
     );
 
     um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
@@ -1362,9 +1398,7 @@ describe("uploadManager", () => {
       expect(um.getEntries()).toEqual([]); // pruned
       expect(showErrorToast).not.toHaveBeenCalled(); // user cancel is not an error
       expect(await db.files.toArray()).toHaveLength(0); // pending row deleted
-      const messages = captureError.mock.calls.map(
-        (c) => c[0].message as string,
-      );
+      const messages = captureError.mock.calls.map((c) => c[0].message);
       expect(messages).toContain("upload-cancelled name=x.mp3");
       const warnLog = captureError.mock.calls.find((c) =>
         c[0].message.includes("upload-cancelled"),
@@ -1404,7 +1438,9 @@ describe("uploadManager", () => {
       await flush();
       const before = um.getEntries();
 
-      expect(() => um.cancelUpload("unknown-id")).not.toThrow();
+      expect(() => {
+        um.cancelUpload("unknown-id");
+      }).not.toThrow();
       expect(um.getEntries()).toEqual(before);
 
       d.resolve(makeDriveFile("f1", "a.mp3"));
@@ -1433,13 +1469,13 @@ describe("uploadManager", () => {
       const id = um.getEntries()[0].id;
 
       um.cancelUpload(id);
-      um.cancelUpload(id); // signal Ä‘Ã£ aborted â†’ abort() lÃ  no-op
+      um.cancelUpload(id); // signal Ä‘Ã£ aborted â†’ abort() lÃ  no-op
       await waitIdle();
 
       expect(abortEvents).toBe(1);
       expect(um.getEntries()).toEqual([]);
       const cancelled = captureError.mock.calls.filter((c) =>
-        (c[0].message as string).includes("upload-cancelled"),
+        c[0].message.includes("upload-cancelled"),
       );
       expect(cancelled).toHaveLength(1);
       expect(showErrorToast).not.toHaveBeenCalled();
@@ -1450,7 +1486,9 @@ describe("uploadManager", () => {
       await waitIdle();
       expect(um.getEntries()).toEqual([]);
 
-      expect(() => um.cancelUpload("pending-whatever")).not.toThrow();
+      expect(() => {
+        um.cancelUpload("pending-whatever");
+      }).not.toThrow();
     });
 
     it("6. cancel folder root khi Ä‘ang walk â†’ aborted + khÃ´ng toast + khÃ´ng createFolder + khÃ´ng enqueue children", async () => {
@@ -1488,9 +1526,7 @@ describe("uploadManager", () => {
       expect(createFolderMock).not.toHaveBeenCalled();
       expect(uploadFileResumableChunked).not.toHaveBeenCalled();
       expect(showErrorToast).not.toHaveBeenCalled();
-      const messages = captureError.mock.calls.map(
-        (c) => c[0].message as string,
-      );
+      const messages = captureError.mock.calls.map((c) => c[0].message);
       expect(messages).toContain("upload-cancelled name=Album");
       expect(await db.files.toArray()).toHaveLength(0);
     });
@@ -1587,16 +1623,15 @@ describe("uploadManager", () => {
       um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
       await flush();
 
-      const childId = um.getEntries().find((e) => e.name === "sub")?.id;
-      expect(childId).toBeTruthy();
+      const child = um.getEntries().find((e) => e.name === "sub");
+      expect(child).toBeTruthy();
       expect(createFolderMock.mock.calls[1][3]).toBeInstanceOf(AbortSignal);
+      if (!child) throw new Error("expected sub entry");
 
-      um.cancelUpload(childId!);
+      um.cancelUpload(child.id);
       await waitIdle();
 
-      const messages = captureError.mock.calls.map(
-        (c) => c[0].message as string,
-      );
+      const messages = captureError.mock.calls.map((c) => c[0].message);
       expect(messages).toContain("upload-cancelled name=sub");
       expect(showErrorToast).not.toHaveBeenCalled();
       // x.mp3's parent subfolder never materialized â†’ it must not upload.
@@ -1628,7 +1663,7 @@ describe("uploadManager", () => {
       expect(um.getEntries()).toEqual([]);
       expect(
         captureError.mock.calls.some((c) =>
-          (c[0].message as string).includes("upload-cancelled"),
+          c[0].message.includes("upload-cancelled"),
         ),
       ).toBe(true);
       expect(showErrorToast).not.toHaveBeenCalled();

@@ -194,7 +194,9 @@ describe("sortRecentTracks", () => {
 });
 
 describe("FullRecentView sort UI", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+  });
 
   function renderRecent(tracks: Track[]) {
     render(

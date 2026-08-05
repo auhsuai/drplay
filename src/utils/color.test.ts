@@ -19,17 +19,43 @@ vi.mock("./errorLog", () => ({
 
 const mockedCaptureError = vi.mocked(captureError);
 
+interface ImageStub {
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  crossOrigin: string | null;
+  src: string;
+}
+
+interface ImageStubConstructor {
+  new (): ImageStub;
+  instances: ImageStub[];
+  mockClear: () => void;
+}
+
+interface CanvasStub {
+  width: number;
+  height: number;
+  getContext: () => {
+    drawImage: () => void;
+    getImageData: () => { data: Uint8ClampedArray };
+  };
+}
+
 // Minimal canvas/Image stubs so the decode path executes without a real DOM.
 // NOTE: under Vitest 4 a `vi.fn().mockImplementation(() => ({}))` is no longer
 // constructable via `new`, so we use a real class and track instances on the
 // constructor to preserve the call-count assertions below.
-function installImageStubs() {
-  const ctor = class {
+function installImageStubs(): ImageStubConstructor {
+  const instances: ImageStub[] = [];
+  const mockClear = (): void => {
+    instances.length = 0;
+  };
+  const ctor = class implements ImageStub {
     onload: (() => void) | null = null;
     onerror: (() => void) | null = null;
     crossOrigin: string | null = null;
     constructor() {
-      (ctor as any).instances.push(this);
+      instances.push(this);
       // Resolve asynchronously like a real network image load.
       queueMicrotask(() => {
         if (typeof this.onload === "function") this.onload();
@@ -42,13 +68,12 @@ function installImageStubs() {
       return "";
     }
   };
-  (ctor as any).instances = [] as any[];
-  (ctor as any).mockClear = () => {
-    (ctor as any).instances = [] as any[];
-  };
-  (globalThis as any).Image = ctor;
+  const ImageCtor = Object.assign(ctor, { instances, mockClear });
+  (globalThis as unknown as { Image: ImageStubConstructor }).Image = ImageCtor;
 
-  (globalThis as any).document = {
+  (
+    globalThis as unknown as { document: { createElement: () => CanvasStub } }
+  ).document = {
     createElement: () => ({
       width: 0,
       height: 0,
@@ -58,7 +83,7 @@ function installImageStubs() {
       }),
     }),
   };
-  return ctor;
+  return ImageCtor;
 }
 
 describe("getPalette — memoization (P0-2 regression)", () => {
@@ -67,7 +92,7 @@ describe("getPalette — memoization (P0-2 regression)", () => {
   });
 
   it("returns the same array reference and does not re-decode on repeat calls", async () => {
-    const ImageCtor = installImageStubs() as any;
+    const ImageCtor = installImageStubs();
 
     const url = "http://drplay.localhost/cover?id=abc&thumb=true&v=2";
     const first = await getPalette(url);
@@ -82,7 +107,7 @@ describe("getPalette — memoization (P0-2 regression)", () => {
   });
 
   it("distinct URLs are decoded independently", async () => {
-    const ImageCtor = installImageStubs() as any;
+    const ImageCtor = installImageStubs();
 
     const a = await getPalette("http://x/cover?id=1&thumb=true");
     const b = await getPalette("http://x/cover?id=2&thumb=true");
@@ -109,7 +134,7 @@ describe("getPalette — memoization (P0-2 regression)", () => {
         return "";
       }
     };
-    (globalThis as any).Image = ctor;
+    (globalThis as unknown as { Image: new () => ImageStub }).Image = ctor;
 
     await expect(getPalette("http://x/broken-cover")).rejects.toThrow(
       "Image load error",

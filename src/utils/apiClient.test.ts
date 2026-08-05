@@ -41,10 +41,8 @@ const captureErrorMock = vi.mocked(captureError);
 // Command-aware invoke mock: maps each Tauri command name to a value or
 // handler. Always returns a promise (like the real invoke) so withTimeout
 // receives a thenable; unknown commands reject loudly to surface typos.
-type InvokeHandler = (
-  args?: Record<string, unknown>,
-) => unknown | Promise<unknown>;
-type CommandHandlers = Record<string, unknown | InvokeHandler>;
+type InvokeHandler = (args?: Record<string, unknown>) => unknown;
+type CommandHandlers = Record<string, unknown>;
 
 function mockInvoke(handlers: CommandHandlers): void {
   invokeMock.mockImplementation((cmd: string, args?: unknown) => {
@@ -67,10 +65,12 @@ function makeStorage(): Storage {
   return {
     getItem: (k: string) => (k in s ? s[k] : null),
     setItem: (k: string, v: string) => {
-      s[k] = String(v);
+      s[k] = v;
     },
     removeItem: (k: string) => {
-      delete s[k];
+      s = Object.fromEntries(
+        Object.entries(s).filter(([key]) => key !== k),
+      );
     },
     clear: () => {
       s = {};
@@ -79,7 +79,7 @@ function makeStorage(): Storage {
     get length() {
       return Object.keys(s).length;
     },
-  } as Storage;
+  };
 }
 
 let storage: Storage;
@@ -129,7 +129,12 @@ describe("fetchWithAuth", () => {
       new Response("", { status: 401 }),
       new Response("data", { status: 200 }),
     ];
-    const fetchSpy = vi.fn().mockImplementation(async () => queue.shift()!);
+    let shiftIndex = 0;
+    const fetchSpy = vi.fn().mockImplementation(() => {
+      const response = queue[shiftIndex];
+      shiftIndex += 1;
+      return Promise.resolve(response);
+    });
     vi.stubGlobal("fetch", fetchSpy);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
 
@@ -218,7 +223,12 @@ describe("fetchWithAuth", () => {
       new Response("", { status: 401 }),
       new Response("data", { status: 200 }),
     ];
-    const fetchSpy = vi.fn().mockImplementation(async () => queue.shift()!);
+    let shiftIndex = 0;
+    const fetchSpy = vi.fn().mockImplementation(() => {
+      const response = queue[shiftIndex];
+      shiftIndex += 1;
+      return Promise.resolve(response);
+    });
     vi.stubGlobal("fetch", fetchSpy);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
 
@@ -262,7 +272,7 @@ describe("fetchWithAuth", () => {
     invokeMock.mockResolvedValue({ access_token: "new", expires_in: 3600 });
 
     const queue = [new Response("", { status: 401 }), null];
-    const fetchSpy = vi.fn().mockImplementation(async () => {
+    const fetchSpy = vi.fn().mockImplementation(() => {
       const next = queue.shift();
       if (next === null) throw new Error("network down");
       return next;
@@ -394,7 +404,7 @@ describe("M1b keyring-backed refresh token storage", () => {
       expect.objectContaining({
         level: "warn",
         source: "apiClient",
-        message: expect.stringContaining("keyring"),
+        message: expect.stringContaining("keyring") as unknown as string,
       }),
     );
   });
@@ -414,14 +424,14 @@ describe("M1b keyring-backed refresh token storage", () => {
     const result = await getValidToken(true);
 
     expect(result).toBe("new");
-    await vi.waitFor(() =>
+    await vi.waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_refresh_token", {
         token: "rt-new",
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(storage.getItem(REFRESH_TOKEN_KEY)).toBeNull(),
-    );
+      });
+    });
+    await vi.waitFor(() => {
+      expect(storage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    });
   });
 
   it("(e) keeps the refresh token in localStorage and logs when the keyring write fails", async () => {
@@ -440,13 +450,13 @@ describe("M1b keyring-backed refresh token storage", () => {
     const result = await getValidToken(true);
 
     expect(result).toBe("new");
-    await vi.waitFor(() =>
+    await vi.waitFor(() => {
       expect(captureErrorMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("keyring"),
+          message: expect.stringContaining("keyring") as unknown as string,
         }),
-      ),
-    );
+      );
+    });
     expect(storage.getItem(REFRESH_TOKEN_KEY)).toBe("rt-new");
   });
 
@@ -470,7 +480,7 @@ describe("M1b keyring-backed refresh token storage", () => {
       });
       expect(captureErrorMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("keyring"),
+          message: expect.stringContaining("keyring") as unknown as string,
         }),
       );
     } finally {

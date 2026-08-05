@@ -8,22 +8,23 @@ import { ImageCropperModal } from "./ImageCropperModal";
 
 vi.mock("react-easy-crop", async () => {
   const React = await import("react");
-  return {
-    default: (props: Record<string, unknown>) => {
-      React.useEffect(() => {
-        const onCropComplete = props.onCropComplete as
-          ((area: unknown, pixels: unknown) => void) | undefined;
-        onCropComplete?.(
-          { x: 0, y: 0, width: 100, height: 100 },
-          { x: 0, y: 0, width: 100, height: 100 },
-        );
-      }, []);
-      return React.createElement("div", { "data-testid": "mock-cropper" });
-    },
-  };
+  function MockCropper(props: Record<string, unknown>) {
+    const onCropComplete = props.onCropComplete as
+      | ((area: unknown, pixels: unknown) => void)
+      | undefined;
+    React.useEffect(() => {
+      onCropComplete?.(
+        { x: 0, y: 0, width: 100, height: 100 },
+        { x: 0, y: 0, width: 100, height: 100 },
+      );
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- mock fires once on mount, mirroring the first crop of the real Cropper
+    }, []);
+    return React.createElement("div", { "data-testid": "mock-cropper" });
+  }
+  return { default: MockCropper };
 });
 
-i18n.use(initReactI18next).init({
+void i18n.use(initReactI18next).init({
   lng: "en",
   fallbackLng: "en",
   resources: { en: { translation: enTranslation } },

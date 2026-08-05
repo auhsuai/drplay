@@ -19,6 +19,7 @@ import {
 import { SongCard } from "./SongCard";
 import { DRAG_FOLDER_HOVER_EVENT } from "../../components/DropZone";
 import { getTrackMetadata } from "../../../utils/metadata";
+import type { MockInstance } from "vitest";
 import type { DriveItem } from "../../../types";
 
 vi.mock("../../../utils/metadata", () => ({
@@ -87,7 +88,9 @@ describe("SongCard metadata fetch", () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     // SongCard debounces the metadata fetch by 150ms (visible-card guard in
     // SongCard.tsx), so the fetch assertion must wait for the timer.
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
     expect(mockedFetch).toHaveBeenCalledWith(
       "track-1",
       "tok",
@@ -171,7 +174,10 @@ describe("SongCard metadata fetch", () => {
       <SongCard
         {...baseProps}
         item={makeItem({
-          trackInfo: { ...makeItem().trackInfo!, queueItemId: "q-1" },
+          trackInfo: {
+            ...makeItem().trackInfo,
+            queueItemId: "q-1",
+          } as NonNullable<DriveItem["trackInfo"]>,
         })}
         onPlay={onPlay}
       />,
@@ -180,7 +186,10 @@ describe("SongCard metadata fetch", () => {
       <SongCard
         {...baseProps}
         item={makeItem({
-          trackInfo: { ...makeItem().trackInfo!, queueItemId: "q-2" },
+          trackInfo: {
+            ...makeItem().trackInfo,
+            queueItemId: "q-2",
+          } as NonNullable<DriveItem["trackInfo"]>,
         })}
         onPlay={onPlay}
       />,
@@ -189,7 +198,9 @@ describe("SongCard metadata fetch", () => {
     expect(card).not.toBeNull();
     fireEvent.click(card as Element);
     expect(onPlay).toHaveBeenCalledTimes(1);
-    expect(onPlay.mock.calls[0][0].queueItemId).toBe("q-2");
+    expect(
+      (onPlay.mock.calls[0][0] as { queueItemId: string }).queueItemId,
+    ).toBe("q-2");
   });
 });
 
@@ -214,8 +225,8 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
     }
   });
 
-  let createObjectURLSpy: ReturnType<typeof vi.spyOn>;
-  let revokeObjectURLSpy: ReturnType<typeof vi.spyOn>;
+  let createObjectURLSpy: MockInstance<(obj: Blob | MediaSource) => string>;
+  let revokeObjectURLSpy: MockInstance<(url: string) => void>;
 
   function metadataWithPicture(): never {
     return {
@@ -277,9 +288,12 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
 
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
 
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
     await act(async () => {
       d1.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
@@ -291,15 +305,20 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
       window.dispatchEvent(
         new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
       );
+      await Promise.resolve();
     });
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(3));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
+    });
 
     await act(async () => {
       d2.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
     await act(async () => {
       d3.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(3);
 
@@ -322,9 +341,12 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
 
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
 
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
     await act(async () => {
       d1.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
@@ -333,13 +355,17 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
       window.dispatchEvent(
         new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
       );
+      await Promise.resolve();
     });
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
 
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
     await act(async () => {
       d2.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
 
@@ -358,13 +384,16 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
     mockedFetch.mockImplementationOnce(() => d.promise);
 
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
 
     unmount();
     cleanup();
 
     await act(async () => {
       d.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     await flushMicrotasks();
 
@@ -385,9 +414,12 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
       <SongCard {...baseProps} item={makeItem()} />,
     );
 
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
     await act(async () => {
       d1.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
 
@@ -408,9 +440,12 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
         })}
       />,
     );
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
     await act(async () => {
       d2.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
 
@@ -456,7 +491,7 @@ describe("SongCard keyboard accessibility (WCAG 2.1.1 Keyboard / WAI-ARIA APG bu
     const card = container.querySelector(".cursor-pointer") as Element;
     fireEvent.keyDown(card, { key: "Enter" });
     expect(onPlay).toHaveBeenCalledTimes(1);
-    expect(onPlay.mock.calls[0][0].id).toBe("track-1");
+    expect((onPlay.mock.calls[0][0] as { id: string }).id).toBe("track-1");
   });
 
   it("Enter on a folder card opens the folder (onOpenFolder)", () => {
@@ -555,7 +590,15 @@ describe("SongCard MoreMenu WAI-ARIA APG menu button pattern", () => {
 });
 
 describe("SongCard navigate/locate highlight flash (single on→off cycle)", () => {
-  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  const originalScrollIntoView = (
+    Element.prototype.scrollIntoView as
+      | ((options?: ScrollIntoViewOptions) => void)
+      | undefined
+  )?.bind(Element.prototype);
+  // jsdom WebIDL brand-checks `this` on getBoundingClientRect — binding it
+  // (the lint-recommended fix) breaks every restore/instance call, so the
+  // raw prototype reference is kept on purpose.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 
   beforeEach(() => {
@@ -616,6 +659,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     // (b) back to normal once the single flash duration elapses
     await act(async () => {
       vi.advanceTimersByTime(400);
+      await Promise.resolve();
     });
     expect(card?.className).not.toContain(FLASH_ON_CLASS);
     expect(card?.className).toContain(FLASH_OFF_CLASS);
@@ -623,6 +667,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     // (c) stays off — no further toggle (the old 7×@300ms loop blinked again here)
     await act(async () => {
       vi.advanceTimersByTime(1000);
+      await Promise.resolve();
     });
     expect(card?.className).not.toContain(FLASH_ON_CLASS);
     expect(card?.className).toContain(FLASH_OFF_CLASS);
@@ -641,6 +686,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     expect(card.className).toContain(FLASH_ON_CLASS);
     await act(async () => {
       vi.advanceTimersByTime(400);
+      await Promise.resolve();
     });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
 
@@ -655,6 +701,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     expect(card.className).toContain(FLASH_ON_CLASS);
     await act(async () => {
       vi.advanceTimersByTime(400);
+      await Promise.resolve();
     });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
   });
@@ -671,6 +718,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     const card = flashCard(container) as HTMLDivElement;
     await act(async () => {
       vi.advanceTimersByTime(400);
+      await Promise.resolve();
     });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
 
@@ -686,10 +734,12 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
   });
 
   it("scrolls into view only when the card is off-screen", async () => {
+    // Binding would strip the MockInstance API (.mock/.mockClear) — the
+    // prototype reference is kept raw on purpose (the beforeEach stub owns it).
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<
       typeof vi.fn
     >;
-
     // off-screen (jsdom default rect is 0,0 — above the header band) → scroll
     render(
       <SongCard
@@ -705,6 +755,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     });
     await act(async () => {
       vi.advanceTimersByTime(400);
+      await Promise.resolve();
     });
     cleanup();
 
@@ -738,6 +789,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     expect(card.className).toContain(FLASH_ON_CLASS);
     await act(async () => {
       vi.advanceTimersByTime(400);
+      await Promise.resolve();
     });
     expect(card.className).not.toContain(FLASH_ON_CLASS);
   });
@@ -755,6 +807,7 @@ describe("SongCard navigate/locate highlight flash (single on→off cycle)", () 
     cleanup();
     await act(async () => {
       vi.advanceTimersByTime(2000);
+      await Promise.resolve();
     });
     expect(true).toBe(true);
   });

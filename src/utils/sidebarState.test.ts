@@ -71,7 +71,9 @@ describe("sidebarState", () => {
       throw new DOMException("blocked", "SecurityError");
     });
 
-    expect(() => saveSidebarOpenState(false)).not.toThrow();
+    expect(() => {
+      saveSidebarOpenState(false);
+    }).not.toThrow();
     expect(mockedCaptureError).toHaveBeenCalledWith({
       level: "warn",
       source: "sidebarState",

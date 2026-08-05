@@ -1,35 +1,25 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-
-// In-memory stub for the Dexie `db` module, isolated per test.
-// Mirrors the subset of the real `db.playlists` API used by playlists.ts:
-//   get(id), put(row), bulkPut(rows), where('userEmail').equals(email).toArray(), delete(id), transaction()
-type PlaylistRow = {
-  id: string;
-  name: string;
-  createdAt: number;
-  tracks: any[];
-  coverImage?: string;
-  userEmail: string;
-};
+import type { PlaylistRow } from "../db/db";
+import type { Track } from "../types";
 
 class InMemoryPlaylists {
   private rows = new Map<string, PlaylistRow>();
 
-  async get(id: string): Promise<PlaylistRow | undefined> {
+  get(id: string): PlaylistRow | undefined {
     return this.rows.get(id);
   }
 
-  async put(row: PlaylistRow): Promise<void> {
+  put(row: PlaylistRow): void {
     this.rows.set(row.id, row);
   }
 
-  async bulkPut(rows: PlaylistRow[]): Promise<void> {
+  bulkPut(rows: PlaylistRow[]): void {
     for (const r of rows) this.rows.set(r.id, r);
   }
 
-  async delete(id: string): Promise<void> {
+  delete(id: string): void {
     this.rows.delete(id);
   }
 
@@ -48,8 +38,8 @@ class InMemoryPlaylists {
     const rows = this.rows;
     return {
       equals: (value: string) => ({
-        async toArray(): Promise<PlaylistRow[]> {
-          return [...rows.values()].filter((r: any) => r[field] === value);
+        toArray(): PlaylistRow[] {
+          return [...rows.values()].filter((r) => r[field] === value);
         },
       }),
     };
@@ -65,9 +55,15 @@ const store = new InMemoryPlaylists();
 vi.mock("../db/db", () => {
   const playlistsTable = {
     get: (id: string) => store.get(id),
-    put: (row: PlaylistRow) => store.put(row),
-    bulkPut: (rows: PlaylistRow[]) => store.bulkPut(rows),
-    delete: (id: string) => store.delete(id),
+    put: (row: PlaylistRow) => {
+      store.put(row);
+    },
+    bulkPut: (rows: PlaylistRow[]) => {
+      store.bulkPut(rows);
+    },
+    delete: (id: string) => {
+      store.delete(id);
+    },
     where: (field: "userEmail") => store.where(field),
   };
   return {
@@ -102,13 +98,11 @@ function setUser(email: string | null) {
   else localStorage.removeItem("drplay_current_user_email");
 }
 
-const track = (id: string) => ({
+const track = (id: string): Track => ({
   id,
   title: `Track ${id}`,
   artist: "Artist",
-  album: "Album",
-  duration: 100,
-  fileId: `file-${id}`,
+  streamUrl: `https://stream/${id}`,
 });
 
 beforeEach(() => {
@@ -116,13 +110,20 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+// Assert the optional value is present and return it narrowed — replaces the
+// banned `!` after `expect(x).not.toBeNull()`.
+function nonNull<T>(value: T | null, what: string): T {
+  expect(value).not.toBeNull();
+  if (value === null) throw new Error(`expected ${what}`);
+  return value;
+}
+
 describe("playlists (Dexie-backed)", () => {
   it("createPlaylist persists a row scoped to the user", async () => {
     setUser(EMAIL_A);
-    const created = await createPlaylist("My Mix");
-    expect(created).not.toBeNull();
-    expect(created!.name).toBe("My Mix");
-    expect(created!.tracks).toEqual([]);
+    const created = nonNull(await createPlaylist("My Mix"), "playlist");
+    expect(created.name).toBe("My Mix");
+    expect(created.tracks).toEqual([]);
 
     const all = await getPlaylists();
     expect(all).toHaveLength(1);
@@ -136,38 +137,41 @@ describe("playlists (Dexie-backed)", () => {
 
   it("addTrackToPlaylist appends a track and dedupes", async () => {
     setUser(EMAIL_A);
-    const p = (await createPlaylist("Liked")) as any;
-    await addTrackToPlaylist(p.id, track("1") as any);
-    await addTrackToPlaylist(p.id, track("1") as any);
-    await addTrackToPlaylist(p.id, track("2") as any);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    await addTrackToPlaylist(p.id, track("1"));
+    await addTrackToPlaylist(p.id, track("1"));
+    await addTrackToPlaylist(p.id, track("2"));
 
-    const fetched = await getPlaylistById(p.id);
-    expect(fetched!.tracks).toHaveLength(2);
-    expect(fetched!.tracks.map((t: any) => t.id)).toEqual(["1", "2"]);
+    const fetched = nonNull(await getPlaylistById(p.id), "playlist");
+    expect(fetched.tracks).toHaveLength(2);
+    expect(fetched.tracks.map((t) => t.id)).toEqual(["1", "2"]);
   });
 
   it("removeTrackFromPlaylist removes by track id", async () => {
     setUser(EMAIL_A);
-    const p = (await createPlaylist("Liked")) as any;
-    await addTrackToPlaylist(p.id, track("1") as any);
-    await addTrackToPlaylist(p.id, track("2") as any);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    await addTrackToPlaylist(p.id, track("1"));
+    await addTrackToPlaylist(p.id, track("2"));
     await removeTrackFromPlaylist(p.id, "1");
 
-    const fetched = await getPlaylistById(p.id);
-    expect(fetched!.tracks.map((t: any) => t.id)).toEqual(["2"]);
+    const fetched = nonNull(await getPlaylistById(p.id), "playlist");
+    expect(fetched.tracks.map((t) => t.id)).toEqual(["2"]);
   });
 
   it("updatePlaylist merges updates", async () => {
     setUser(EMAIL_A);
-    const p = (await createPlaylist("Liked")) as any;
-    const updated = await updatePlaylist(p.id, { coverImage: "data:img" });
-    expect(updated!.coverImage).toBe("data:img");
-    expect(updated!.name).toBe("Liked");
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    const updated = nonNull(
+      await updatePlaylist(p.id, { coverImage: "data:img" }),
+      "playlist",
+    );
+    expect(updated.coverImage).toBe("data:img");
+    expect(updated.name).toBe("Liked");
   });
 
   it("deletePlaylist removes the row", async () => {
     setUser(EMAIL_A);
-    const p = (await createPlaylist("Temp")) as any;
+    const p = nonNull(await createPlaylist("Temp"), "playlist");
     await deletePlaylist(p.id);
     expect(await getPlaylistById(p.id)).toBeNull();
     expect(await getPlaylists()).toHaveLength(0);
@@ -204,23 +208,23 @@ describe("playlists (Dexie-backed)", () => {
 
   it("addTrackToPlaylist concurrently preserves both tracks (lost-update guard)", async () => {
     setUser(EMAIL_A);
-    const p = (await createPlaylist("Race")) as any;
+    const p = nonNull(await createPlaylist("Race"), "playlist");
     await Promise.all([
-      addTrackToPlaylist(p.id, track("1") as any),
-      addTrackToPlaylist(p.id, track("2") as any),
+      addTrackToPlaylist(p.id, track("1")),
+      addTrackToPlaylist(p.id, track("2")),
     ]);
-    const fetched = await getPlaylistById(p.id);
-    expect(fetched!.tracks.map((t: any) => t.id).sort()).toEqual(["1", "2"]);
+    const fetched = nonNull(await getPlaylistById(p.id), "playlist");
+    expect(fetched.tracks.map((t) => t.id).sort()).toEqual(["1", "2"]);
   });
 
   it("addTrackToPlaylist wraps the read-modify-write in a readwrite transaction", async () => {
     setUser(EMAIL_A);
-    const p = (await createPlaylist("Txn")) as any;
+    const p = nonNull(await createPlaylist("Txn"), "playlist");
     const spy = vi.spyOn(store, "transaction");
-    await addTrackToPlaylist(p.id, track("1") as any);
+    await addTrackToPlaylist(p.id, track("1"));
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0]).toBe("rw");
-    expect(spy.mock.calls[0][1]).toBe((db as any).playlists);
+    expect(spy.mock.calls[0][1]).toBe(db.playlists);
     spy.mockRestore();
   });
 });

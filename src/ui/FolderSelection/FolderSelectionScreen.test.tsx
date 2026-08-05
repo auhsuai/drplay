@@ -126,14 +126,19 @@ describe("FolderSelectionScreen", () => {
 
   it("keeps the latest folder listing when an older slower fetch resolves after navigation (race)", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     fireEvent.click(screen.getAllByRole("button")[BACK_BUTTON_INDEX]);
-    await waitFor(() => expect(deferredCalls).toHaveLength(2));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
 
     const newFolderFetch = deferredCalls[1];
     await act(async () => {
       newFolderFetch.resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
     });
     expect(screen.queryByText("Folder 1")).not.toBeNull();
 
@@ -141,6 +146,7 @@ describe("FolderSelectionScreen", () => {
     expect(staleFolderFetch.signal?.aborted).toBe(true);
     await act(async () => {
       staleFolderFetch.resolve([{ id: "stale", name: "STALE" }]);
+      await Promise.resolve();
     });
     expect(screen.queryByText("STALE")).toBeNull();
     expect(screen.queryByText("Folder 1")).not.toBeNull();
@@ -148,7 +154,9 @@ describe("FolderSelectionScreen", () => {
 
   it("aborts the in-flight fetch on unmount and never updates state afterward", async () => {
     const { unmount } = renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     unmount();
 
@@ -157,6 +165,7 @@ describe("FolderSelectionScreen", () => {
 
     await act(async () => {
       inFlight.resolve([{ id: "late", name: "LATE" }]);
+      await Promise.resolve();
     });
 
     expect(mocks.showErrorToast).not.toHaveBeenCalled();
@@ -165,22 +174,29 @@ describe("FolderSelectionScreen", () => {
 
   it("does not toast when the in-flight folder fetch is aborted by navigation", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     fireEvent.click(screen.getAllByRole("button")[BACK_BUTTON_INDEX]);
-    await waitFor(() => expect(deferredCalls).toHaveLength(2));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
 
     await act(async () => {
       deferredCalls[0].reject(
         new DOMException("The operation was aborted", "AbortError"),
       );
       deferredCalls[1].resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
     });
 
     expect(mocks.showErrorToast).not.toHaveBeenCalled();
     expect(mocks.captureError).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("failed-to-fetch-folders"),
+        message: expect.stringContaining(
+          "failed-to-fetch-folders",
+        ) as unknown as string,
       }),
     );
     expect(screen.queryByText("Folder 1")).not.toBeNull();
@@ -202,12 +218,16 @@ describe("FolderSelectionScreen", () => {
         />,
       );
       // Component still mounts and starts the normal folder fetch.
-      await waitFor(() => expect(deferredCalls).toHaveLength(1));
+      await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
       expect(mocks.captureError).toHaveBeenCalledWith(
         expect.objectContaining({
           level: "warn",
           source: "FolderSelectionScreen",
-          message: expect.stringContaining("root-folder-read-failed"),
+          message: expect.stringContaining(
+            "root-folder-read-failed",
+          ) as unknown as string,
         }),
       );
     } finally {
@@ -234,7 +254,9 @@ describe("FolderSelectionScreen skeleton loading", () => {
 
   it("shows 6 skeleton rows inside a status region instead of the spinner while loading folders", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     const rows = await screen.findAllByTestId("skeleton-row");
     expect(rows).toHaveLength(6);
@@ -244,12 +266,16 @@ describe("FolderSelectionScreen skeleton loading", () => {
 
   it('keeps the "Searching deeper..." branch while an API search is in flight (no skeleton)', async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     fireEvent.change(screen.getByPlaceholderText("Search..."), {
       target: { value: "abc" },
     });
-    await waitFor(() => expect(searchDeferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(searchDeferredCalls).toHaveLength(1);
+    });
 
     expect(
       screen.getByText("folder_selection.searching_deeper"),
@@ -260,10 +286,13 @@ describe("FolderSelectionScreen skeleton loading", () => {
 
   it("renders the real folder list once loading finishes", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     await act(async () => {
       deferredCalls[0].resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
     });
 
     expect(await screen.findByText("Folder 1")).not.toBeNull();
@@ -272,10 +301,13 @@ describe("FolderSelectionScreen skeleton loading", () => {
 
   it("keeps the empty state when no folders are returned", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     await act(async () => {
       deferredCalls[0].resolve([]);
+      await Promise.resolve();
     });
 
     expect(await screen.findByText("drive.no_folders")).not.toBeNull();
@@ -318,7 +350,9 @@ describe("FolderSelectionScreen skeleton loading", () => {
 
   it("grid: the loading skeleton mirrors the real folder grid (3-col, h-full, auto-rows-fr)", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     const status = screen.getByRole("status", { name: "loading" });
     // The folder list is a definite-height flex child (overlay root is
@@ -329,17 +363,22 @@ describe("FolderSelectionScreen skeleton loading", () => {
     // The skeleton container mirrors the real list container
     // (FolderSelectionScreen.tsx:393 grid grid-cols-1 sm:grid-cols-2
     // lg:grid-cols-3 gap-3) so the shape does not jump when data loads.
-    const container = rows[0].parentElement!;
-    expect(container.className).toContain(
-      "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3",
-    );
-    expect(container.className).toContain("auto-rows-fr");
-    expect(container.className).toContain("h-full");
+    const container = rows[0].parentElement;
+    expect(container).not.toBeNull();
+    if (container) {
+      expect(container.className).toContain(
+        "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3",
+      );
+      expect(container.className).toContain("auto-rows-fr");
+      expect(container.className).toContain("h-full");
+    }
   });
 
   it('never shows the empty "no folders" state while loading with a search query typed (API-search branch wins)', async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     // While the folder fetch is still pending, typing a query must not swap
     // into the empty state: the loading/API-search branches take precedence
@@ -347,7 +386,9 @@ describe("FolderSelectionScreen skeleton loading", () => {
     fireEvent.change(screen.getByPlaceholderText("Search..."), {
       target: { value: "abc" },
     });
-    await waitFor(() => expect(searchDeferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(searchDeferredCalls).toHaveLength(1);
+    });
 
     expect(screen.queryByText("drive.no_folders")).toBeNull();
     expect(screen.queryAllByTestId("skeleton-row").length).toBe(0);

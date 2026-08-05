@@ -1,4 +1,4 @@
-import React, { useState, useCallback, Suspense, useEffect } from "react";
+import React, { useState, useCallback, useRef, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -94,6 +94,13 @@ function App() {
   // Listen to Tauri events (Quota Exceeded, Repair Thumbnail)
   useTauriEvents(setShowRateLimitModal);
 
+  // setAppRootFolder is produced by useDrive() BELOW, while the logout cleanup
+  // callback above runs at logout time. A ref bridges the TDZ (the callback
+  // must not touch a `const` declared later in the component body).
+  const setAppRootFolderRef = useRef<(folderId: string | null) => void>(
+    () => {},
+  );
+
   const {
     isLoggedIn,
     accessToken,
@@ -107,30 +114,35 @@ function App() {
       localStorage.removeItem(LS_CURRENT_FOLDER_NAME);
       localStorage.removeItem(LS_FOLDER_HISTORY);
     } catch (err) {
-      captureError({
+      void captureError({
         level: "warn",
         source: "App",
         message: `logout-cleanup-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
         kind: "localstorage-cleanup-failed",
       });
     }
-    db.syncState.delete(DB_NAV_STATE_KEY).catch((e) =>
-      captureError({
+    db.syncState.delete(DB_NAV_STATE_KEY).catch((e: unknown) =>
+      void captureError({
         source: "App",
         message: `logout-cleanup-failed: ${e instanceof Error ? e.message : String(e)}`,
         kind: "logout-cleanup-failed",
       }),
     );
     clearSessionState();
-    setAppRootFolder(null);
+    setAppRootFolderRef.current(null);
   });
 
   // Initialize service worker; pass the access token so the SW learns it on
   // login/refresh/logout (it keeps its own in-memory copy, see useServiceWorker).
   useServiceWorker(accessToken);
 
-  // Global window events (Focus, blur, contextmenu, auth-logout)
-  useAppGlobalEvents(handleLogout);
+  // Global window events (Focus, blur, contextmenu, auth-logout). handleLogout
+  // is async; errors are handled internally by useAuth (each step is wrapped),
+  // so this stays fire-and-forget via the stable wrapper below.
+  const onGlobalLogout = useCallback(() => {
+    void handleLogout();
+  }, [handleLogout]);
+  useAppGlobalEvents(onGlobalLogout);
 
   const {
     appRootFolder,
@@ -179,26 +191,6 @@ function App() {
     loadNonce,
   } = usePlayer(accessToken);
 
-  const stableHandleTogglePlay = useCallback(handleTogglePlay, [
-    handleTogglePlay,
-  ]);
-  const stableHandleNextTrack = useCallback(handleNextTrack, [handleNextTrack]);
-  const stableHandlePrevTrack = useCallback(handlePrevTrack, [handlePrevTrack]);
-  const stableHandleTogglePlayMode = useCallback(handleTogglePlayMode, [
-    handleTogglePlayMode,
-  ]);
-  const onExpandNowPlaying = useCallback(() => {
-    setIsNowPlayingOpen((prev) => !prev);
-  }, []);
-
-  const handlePlayTrack = (
-    track: Track,
-    contextQueue?: Track[],
-    isNavigation: boolean = false,
-  ) => {
-    playerPlayTrack(track, contextQueue, isNavigation, [], activeTab);
-  };
-
   const [showFolderSelection, setShowFolderSelection] = useState(false);
   // Lazy initializer (read once on mount, no default-flash): stored state is
   // kept across launches; first launch (no key) defaults to OPEN, the opposite
@@ -208,22 +200,52 @@ function App() {
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
 
+  const stableHandleTogglePlay = useCallback(() => {
+    void handleTogglePlay();
+  }, [handleTogglePlay]);
+  const stableHandleNextTrack = useCallback(() => {
+    handleNextTrack();
+  }, [handleNextTrack]);
+  const stableHandlePrevTrack = useCallback(() => {
+    handlePrevTrack();
+  }, [handlePrevTrack]);
+  const stableHandleTogglePlayMode = useCallback(() => {
+    handleTogglePlayMode();
+  }, [handleTogglePlayMode]);
+  const onExpandNowPlaying = useCallback(() => {
+    setIsNowPlayingOpen((prev) => !prev);
+  }, []);
+
+  const handlePlayTrack = (
+    track: Track,
+    contextQueue?: Track[],
+    isNavigation: boolean = false,
+  ) => {
+    // Fire-and-forget: usePlayer's handlePlayTrack handles its own errors.
+    void playerPlayTrack(track, contextQueue, isNavigation, [], activeTab);
+  };
+
+  useEffect(() => {
+    setAppRootFolderRef.current = setAppRootFolder;
+  }, [setAppRootFolder]);
+
   useEffect(() => {
     try {
       localStorage.setItem(LS_MINIMIZE_TO_TRAY, String(minimizeToTray));
     } catch (err) {
-      captureError({
+      void captureError({
         level: "warn",
         source: "App",
         message: `tray-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
       });
     }
-    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch((e) =>
-      captureError({
-        source: "App",
-        message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`,
-        kind: "minimize-to-tray-failed",
-      }),
+    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch(
+      (e: unknown) =>
+        void captureError({
+          source: "App",
+          message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`,
+          kind: "minimize-to-tray-failed",
+        }),
     );
   }, [minimizeToTray]);
 
@@ -250,13 +272,13 @@ function App() {
       {/* Login Overlay */}
       {!isLoggedIn && (
         <LoginScreen
-          onLogin={(tokens) =>
+          onLogin={(tokens) => {
             handleLoginSuccess({
               access_token: tokens.access_token,
               refresh_token: tokens.refresh_token,
               expires_in: tokens.expires_in,
-            })
-          }
+            });
+          }}
         />
       )}
 
@@ -265,11 +287,17 @@ function App() {
         <FolderSelectionScreen
           token={accessToken ?? ""}
           onSelectFolder={(folderId) => {
-            handleSelectRootFolder(folderId);
+            // Fire-and-forget: useDrive's handleSelectRootFolder handles its
+            // own errors (each step is try/caught inside).
+            void handleSelectRootFolder(folderId);
             setShowFolderSelection(false);
           }}
           onCancel={
-            appRootFolder ? () => setShowFolderSelection(false) : undefined
+            appRootFolder
+              ? () => {
+                  setShowFolderSelection(false);
+                }
+              : undefined
           }
           initialFolderId={ROOT_FOLDER_ID}
           initialFolderHistory={[]}
@@ -280,7 +308,9 @@ function App() {
       {showTrashScreen && accessToken && (
         <TrashScreen
           token={accessToken}
-          onClose={() => setShowTrashScreen(false)}
+          onClose={() => {
+            setShowTrashScreen(false);
+          }}
         />
       )}
 
@@ -291,7 +321,10 @@ function App() {
           activeTab={activeTab}
           onTabChange={handleTabChange}
           userProfile={userProfile}
-          onLogout={handleLogout}
+          onLogout={() => {
+            // Fire-and-forget: useAuth's handleLogout handles its own errors.
+            void handleLogout();
+          }}
           isSidebarOpen={isSidebarOpen}
           onToggleSidebar={() => {
             const nextOpen = !isSidebarOpen;
@@ -338,7 +371,9 @@ function App() {
             >
               <HomeTab
                 key={isLoggedIn ? "session-in" : "session-out"}
-                onPlay={(t: Track, c?: Track[]) => handlePlayTrack(t, c)}
+                onPlay={(t: Track, c?: Track[]) => {
+                  handlePlayTrack(t, c);
+                }}
                 onOpenFolder={(id, name) => {
                   handleOpenFolder(id, name);
                   handleTabChange(TABS.myDrive);
@@ -376,7 +411,7 @@ function App() {
                     try {
                       localStorage.setItem(LS_SORT_OPTION, val);
                     } catch (err) {
-                      captureError({
+                      void captureError({
                         level: "warn",
                         source: "App",
                         message: `sort-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
@@ -398,7 +433,9 @@ function App() {
                   onPlay={(t: Track, c?: Track[]) => {
                     handlePlayTrack(t, c);
                   }}
-                  onDelete={() => handleTabChange(TABS.home)}
+                  onDelete={() => {
+                    handleTabChange(TABS.home);
+                  }}
                   currentTrack={currentTrack}
                 />
               ) : activeTab === TABS.settings ? (
@@ -454,7 +491,9 @@ function App() {
           onPrevTrack={stableHandlePrevTrack}
           playMode={playMode}
           onTogglePlayMode={stableHandleTogglePlayMode}
-          onBack={() => setIsNowPlayingOpen(false)}
+          onBack={() => {
+            setIsNowPlayingOpen(false);
+          }}
           isOpen={isNowPlayingOpen}
           token={accessToken}
         />
@@ -462,7 +501,9 @@ function App() {
 
       <RateLimitModal
         isOpen={showRateLimitModal}
-        onClose={() => setShowRateLimitModal(false)}
+        onClose={() => {
+          setShowRateLimitModal(false);
+        }}
         onOk={() => {
           setShowRateLimitModal(false);
           handleTabChange("Home");

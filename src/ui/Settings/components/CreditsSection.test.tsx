@@ -21,24 +21,28 @@ vi.mock("react-i18next", () => ({
 }));
 
 // Never touch the real Tauri bridge in a unit test.
-const openUrl = vi.fn().mockResolvedValue(undefined);
+const openUrl = vi.fn<(url: string) => Promise<void>>().mockResolvedValue(undefined);
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: (url: string) => openUrl(url),
 }));
 
-const copyToClipboard = vi.fn().mockResolvedValue(true);
+const copyToClipboard = vi.fn<(text: string) => Promise<boolean>>().mockResolvedValue(true);
 vi.mock("../../../utils/copyToClipboard", () => ({
   copyToClipboard: (text: string) => copyToClipboard(text),
 }));
 
 const showErrorToast = vi.fn();
 vi.mock("../../../utils/simpleToast", () => ({
-  showErrorToast: (msg: string) => showErrorToast(msg),
+  showErrorToast: (msg: string) => {
+    showErrorToast(msg);
+  },
 }));
 
 const captureError = vi.fn();
 vi.mock("../../../utils/errorLog", () => ({
-  captureError: (entry: unknown) => captureError(entry),
+  captureError: (entry: unknown) => {
+    captureError(entry);
+  },
 }));
 
 describe("CreditsSection", () => {
@@ -49,7 +53,9 @@ describe("CreditsSection", () => {
     captureError.mockClear();
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+  });
 
   it("exposes the correct Telegram and Github URLs as constants", () => {
     expect(TELEGRAM_URL).toBe("https://t.me/nguyen_tan_an");
@@ -91,6 +97,7 @@ describe("CreditsSection", () => {
       fireEvent.click(
         screen.getAllByRole("button", { name: "settings.open_link" })[0],
       );
+      await Promise.resolve();
     });
     expect(showErrorToast).toHaveBeenCalledWith("settings.open_link_error");
     expect(captureError).toHaveBeenCalledWith(
@@ -110,6 +117,7 @@ describe("CreditsSection", () => {
       expect(screen.getByText("settings.copied")).toBeTruthy();
       await act(async () => {
         vi.advanceTimersByTime(2000);
+        await Promise.resolve();
       });
       expect(screen.queryByText("settings.copied")).toBeNull();
       expect(screen.getByText("@nguyen_tan_an")).toBeTruthy();

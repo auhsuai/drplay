@@ -26,8 +26,12 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 const showErrorToast = vi.fn();
 const showSuccessToast = vi.fn();
 vi.mock("../../utils/simpleToast", () => ({
-  showErrorToast: (msg: string) => showErrorToast(msg),
-  showSuccessToast: (msg: string) => showSuccessToast(msg),
+  showErrorToast: (msg: string) => {
+    showErrorToast(msg);
+  },
+  showSuccessToast: (msg: string) => {
+    showSuccessToast(msg);
+  },
 }));
 
 vi.mock("../../utils/cache", () => ({
@@ -41,7 +45,7 @@ vi.mock("../../utils/cache", () => ({
   },
 }));
 
-const getEffectiveDownloadPath = vi.fn();
+const getEffectiveDownloadPath = vi.fn<() => Promise<string>>();
 vi.mock("../../utils/downloadPath", () => ({
   getEffectiveDownloadPath: () => getEffectiveDownloadPath(),
   setCustomDownloadPath: vi.fn(),
@@ -71,7 +75,9 @@ const baseProps = {
 };
 
 describe("SettingsTab download path display", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+  });
 
   beforeEach(() => {
     getEffectiveDownloadPath.mockReset();
@@ -106,7 +112,9 @@ describe("SettingsTab download path display", () => {
 });
 
 describe("SettingsTab clear cache button", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+  });
 
   beforeEach(() => {
     showErrorToast.mockReset();

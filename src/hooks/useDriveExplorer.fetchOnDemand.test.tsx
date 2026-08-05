@@ -17,8 +17,8 @@ const FOLDER_ID = "folder-under-test";
 
 function makeDriveFile(page: number, idx: number) {
   return {
-    id: `p${page}-f${idx}`,
-    name: `track-p${page}-${idx}.mp3`,
+    id: `p${String(page)}-f${String(idx)}`,
+    name: `track-p${String(page)}-${String(idx)}.mp3`,
     mimeType: "audio/mpeg",
     parents: [FOLDER_ID],
     size: "1000",
@@ -26,10 +26,10 @@ function makeDriveFile(page: number, idx: number) {
   };
 }
 
-function makePage(files: any[], nextPageToken?: string) {
+function makePage(files: Array<Record<string, unknown>>, nextPageToken?: string) {
   return {
     ok: true,
-    json: async () => ({ files, nextPageToken }),
+    json: () => ({ files, nextPageToken }),
   } as unknown as Response;
 }
 

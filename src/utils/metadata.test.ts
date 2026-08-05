@@ -1,11 +1,12 @@
 import { expect, test, describe, it, vi, beforeEach } from "vitest";
+import type { CachedMetadata } from "./metadata";
 import {
   metadataCache,
   cacheTrackMetadata,
   clearAllMetadataCache,
 } from "./metadata";
 
-function makeEntry(): any {
+function makeEntry(): CachedMetadata {
   return {
     title: "t",
     artist: "a",

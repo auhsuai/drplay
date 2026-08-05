@@ -78,7 +78,9 @@ describe("clearSessionState", () => {
   it("captures the failure via captureError when a kvDel rejects, without throwing", async () => {
     kvDelMock.mockRejectedValueOnce(new Error("kv-store-unavailable"));
 
-    expect(() => clearSessionState()).not.toThrow();
+    expect(() => {
+      clearSessionState();
+    }).not.toThrow();
 
     await vi.waitFor(() => {
       expect(captureErrorMock).toHaveBeenCalledTimes(1);
@@ -88,13 +90,17 @@ describe("clearSessionState", () => {
       expect.objectContaining({
         source: "sessionCleanup",
         kind: "logout-cleanup-failed",
-        message: expect.stringContaining("kv-store-unavailable"),
+        message: expect.stringContaining(
+          "kv-store-unavailable",
+        ) as unknown as string,
       }),
     );
   });
 
   it("is a safe no-op when no session keys exist yet", async () => {
-    expect(() => clearSessionState()).not.toThrow();
+    expect(() => {
+      clearSessionState();
+    }).not.toThrow();
 
     await vi.waitFor(() => {
       expect(captureErrorMock).not.toHaveBeenCalled();
@@ -111,7 +117,9 @@ describe("clearSessionState", () => {
       });
 
     try {
-      expect(() => clearSessionState()).not.toThrow();
+      expect(() => {
+        clearSessionState();
+      }).not.toThrow();
 
       await vi.waitFor(() => {
         expect(captureErrorMock).toHaveBeenCalled();
@@ -121,7 +129,9 @@ describe("clearSessionState", () => {
         expect.objectContaining({
           level: "warn",
           source: "sessionCleanup",
-          message: expect.stringContaining("localStorage cleanup failed"),
+          message: expect.stringContaining(
+            "localStorage cleanup failed",
+          ) as unknown as string,
         }),
       );
     } finally {

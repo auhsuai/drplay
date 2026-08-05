@@ -67,12 +67,18 @@ function toSize(raw: string | undefined | null): number | undefined {
 
 // Shared mapping of a Google Drive file resource to the DB row shape used by
 // both full-sync and delta-sync. isFolder is a parameter so callers that
-// already computed it (delta-sync) don't recompute it.
-export function toDriveFileRow(f: DriveFile, isFolder: boolean): DriveFileRow {
+// already computed it (delta-sync) don't recompute it. The parameter type is
+// the post-guard shape (id guaranteed by isValidDriveFile); name/mimeType are
+// guaranteed by the Drive fields= query, hence the explicit `as string`
+// (mirrors the previous non-null assertions with identical runtime semantics).
+export function toDriveFileRow(
+  f: DriveFile & { id: string },
+  isFolder: boolean,
+): DriveFileRow {
   return {
-    id: f.id!,
-    name: f.name!,
-    mimeType: f.mimeType!,
+    id: f.id,
+    name: f.name as string,
+    mimeType: f.mimeType as string,
     parentId: f.parents && f.parents.length > 0 ? f.parents[0] : ROOT_FOLDER_ID,
     size: toSize(f.size),
     modifiedTime: f.modifiedTime,
@@ -84,8 +90,11 @@ export function toDriveFileRow(f: DriveFile, isFolder: boolean): DriveFileRow {
 // Guard for files missing a usable `id`. Drive can theoretically omit `id`
 // on a file resource; filtering before map/bulkPut keeps one malformed file
 // from failing an entire full-sync page, since Dexie bulkPut aborts its
-// whole transaction on an invalid primary key.
-export function isValidDriveFile(f: DriveFile): boolean {
+// whole transaction on an invalid primary key. Doubles as a type guard so
+// callers get a narrowed `DriveFile & { id: string }` after the check.
+export function isValidDriveFile(
+  f: DriveFile,
+): f is DriveFile & { id: string } {
   return typeof f.id === "string" && f.id.length > 0;
 }
 
@@ -94,11 +103,11 @@ export function isValidDriveFile(f: DriveFile): boolean {
 // single summary line when skippedCount > 0 so missing-id files are never
 // dropped without a trace (AGENTS.md Luật 4 — no silent error swallowing).
 export function partitionValidFiles(files: DriveFile[]): {
-  valid: DriveFile[];
+  valid: Array<DriveFile & { id: string }>;
   skippedCount: number;
 } {
   let skippedCount = 0;
-  const valid: DriveFile[] = [];
+  const valid: Array<DriveFile & { id: string }> = [];
   for (const f of files) {
     if (isValidDriveFile(f)) valid.push(f);
     else skippedCount += 1;
@@ -168,7 +177,9 @@ export async function refreshTokenAndRetry(
 // Production bindings: post to the worker's parent scope and wait on the
 // module-level refresh resolver. Tests inject their own deps instead.
 const syncRetryDeps: RefreshTokenRetryDeps = {
-  postMessage: (msg) => self.postMessage(msg),
+  postMessage: (msg) => {
+    self.postMessage(msg);
+  },
   waitForTokenRefresh: () => waitForTokenRefresh(),
 };
 
@@ -192,37 +203,40 @@ export function isWorkerRequestMessage(
 // `self` does not exist. In a real worker `self` is always defined, so the
 // listener registration is unchanged.
 if (typeof self !== "undefined") {
-  self.addEventListener("message", async (e: MessageEvent) => {
-    if (!isWorkerRequestMessage(e.data)) return;
-    const { type, token } = e.data;
-
-    if (type === "token") {
-      currentToken = token;
-      if (tokenRefreshResolver) {
-        tokenRefreshResolver(true);
-        tokenRefreshResolver = null;
-      }
-      return;
-    }
-
-    if (type !== "sync") return;
-    if (isBusy) {
-      self.postMessage({ type: "SYNC_BUSY" });
-      return;
-    }
-    if (!token) {
-      self.postMessage({ type: "SYNC_NO_TOKEN" });
-      return;
-    }
-
-    currentToken = token;
-    isBusy = true;
-    try {
-      await startProSync();
-    } finally {
-      isBusy = false;
-    }
+  self.addEventListener("message", (e: MessageEvent) => {
+    void handleWorkerMessage(e);
   });
+}
+
+async function handleWorkerMessage(e: MessageEvent): Promise<void> {
+  if (!isWorkerRequestMessage(e.data)) return;
+  const { type, token } = e.data;
+
+  if (type === "token") {
+    currentToken = token;
+    if (tokenRefreshResolver) {
+      tokenRefreshResolver(true);
+      tokenRefreshResolver = null;
+    }
+    return;
+  }
+
+  if (isBusy) {
+    self.postMessage({ type: "SYNC_BUSY" });
+    return;
+  }
+  if (!token) {
+    self.postMessage({ type: "SYNC_NO_TOKEN" });
+    return;
+  }
+
+  currentToken = token;
+  isBusy = true;
+  try {
+    await startProSync();
+  } finally {
+    isBusy = false;
+  }
 }
 
 // Resolves after `ms`, used as the exponential backoff between transient
@@ -244,10 +258,14 @@ export function isTransientStatus(status: number): boolean {
 // the response as non-transient (fail as before) instead of guessing.
 function isDriveRateLimitBody(bodyText: string): boolean {
   try {
+    // Drive's error body is untrusted JSON, so the array members are typed
+    // with null/undefined explicitly — the defensive checks below are real.
     const parsed = JSON.parse(bodyText) as {
-      error?: { errors?: Array<{ reason?: unknown }> };
+      error?: {
+        errors?: Array<{ reason?: unknown } | null | undefined>;
+      };
     };
-    const errors = parsed?.error?.errors;
+    const errors = parsed.error?.errors;
     return (
       Array.isArray(errors) &&
       errors.some((e) => {
@@ -308,7 +326,7 @@ export async function fetchDrive(
   url: URL,
 ): Promise<Response> {
   let attempt = 0;
-  while (true) {
+  for (;;) {
     let res: Response;
     try {
       res = await fetch(url.toString(), {
@@ -369,7 +387,9 @@ export async function fetchDrive(
           : {}),
         jitterMs,
       },
-      new Error(`transient HTTP ${res.status}, retrying in ${delayMs}ms`),
+      new Error(
+        `transient HTTP ${String(res.status)}, retrying in ${String(delayMs)}ms`,
+      ),
       "warn",
     );
     await delay(delayMs);
@@ -384,7 +404,8 @@ async function parseDriveJson<T = Record<string, unknown>>(
   res: Response,
 ): Promise<T> {
   try {
-    return await res.json();
+    const data: unknown = await res.json();
+    return data as T;
   } catch (err) {
     logWorkerError(
       "proSync/" + ctx,
@@ -507,12 +528,14 @@ async function performFullSync() {
           logWorkerError(
             "proSync/full-sync/files",
             { kind: "skip", skippedCount, total: rawFiles.length },
-            new Error(`${skippedCount} file(s) skipped: missing id`),
+            new Error(
+              `${String(skippedCount)} file(s) skipped: missing id`,
+            ),
             "warn",
           );
         }
 
-        const filesToInsert = validFiles.map((f: DriveFile) =>
+        const filesToInsert = validFiles.map((f) =>
           toDriveFileRow(f, f.mimeType === FOLDER_MIME),
         );
 
@@ -611,7 +634,11 @@ async function performDeltaSync(startPageToken: string) {
       for (const change of changes) {
         try {
           if (change.removed || (change.file && change.file.trashed)) {
-            await db.files.delete(change.fileId!);
+            // The Drive changes API always reports fileId for removed entries;
+            // the explicit assertion mirrors the previous `!` with identical
+            // runtime semantics (a missing fileId still throws inside the
+            // per-change try/catch below).
+            await db.files.delete(change.fileId as string);
             hasValidChanges = true;
           } else if (change.file) {
             const file = change.file;
@@ -625,7 +652,7 @@ async function performDeltaSync(startPageToken: string) {
             }
             const isFolder = file.mimeType === FOLDER_MIME;
 
-            if (isFolder || isAudioFile(file.mimeType!, file.name!)) {
+            if (isFolder || isAudioFile(file.mimeType, file.name as string)) {
               await db.files.put(toDriveFileRow(file, isFolder));
               hasValidChanges = true;
             }
@@ -657,7 +684,9 @@ async function performDeltaSync(startPageToken: string) {
       logWorkerError(
         "proSync/delta-sync/changes",
         { kind: "skip", skippedCount: skippedDeltaFiles },
-        new Error(`${skippedDeltaFiles} file(s) skipped: missing id`),
+        new Error(
+          `${String(skippedDeltaFiles)} file(s) skipped: missing id`,
+        ),
         "warn",
       );
     }

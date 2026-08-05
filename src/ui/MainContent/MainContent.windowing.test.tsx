@@ -73,16 +73,16 @@ vi.mock("./components/SongCard", () => ({
 
 function makeItems(n: number): DriveItem[] {
   return Array.from({ length: n }, (_, i) => ({
-    id: `id${i}`,
-    title: `Song ${i}`,
+    id: `id${String(i)}`,
+    title: `Song ${String(i)}`,
     isFolder: false,
     trackInfo: {
-      id: `id${i}`,
-      title: `Song ${i}`,
+      id: `id${String(i)}`,
+      title: `Song ${String(i)}`,
       artist: "",
       streamUrl: "",
       size: 1000,
-      originalName: `song${i}.mp3`,
+      originalName: `song${String(i)}.mp3`,
     },
   }));
 }
@@ -268,7 +268,11 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
       expect(row.className).toContain("flex-1");
     }
     // The SkeletonRowList container itself stretches to fill the wrapper.
-    expect(rows[0].parentElement!.className).toContain("h-full");
+    const container = rows[0].parentElement;
+    expect(container).not.toBeNull();
+    if (container) {
+      expect(container.className).toContain("h-full");
+    }
     // While loading, the empty-state branch must never be reachable.
     expect(screen.queryByText("drive.no_audio")).toBeNull();
   });

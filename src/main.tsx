@@ -21,6 +21,16 @@ function isIntentionalAbort(reason: unknown): boolean {
   return true;
 }
 
+// window.onerror's `error` property can be any throwable: an Error, a
+// DOMException, or a plain carrier object like `{ stack: string }`. Read
+// .stack safely, preserving the old `e.error?.stack` passthrough for string
+// stacks (non-string stacks are dropped instead of forwarded).
+function errorStack(err: unknown): string | undefined {
+  if (err === null || typeof err !== "object") return undefined;
+  const stack = (err as { stack?: unknown }).stack;
+  return typeof stack === "string" ? stack : undefined;
+}
+
 // Global runtime error capture (Slice 2). Every handler is wrapped so a
 // failure in captureError can NEVER break bootstrap or the app tree.
 export function registerGlobalErrorHandlers(): void {
@@ -29,11 +39,11 @@ export function registerGlobalErrorHandlers(): void {
       try {
         if (!e.message) return; // skip resource-load noise (no message)
         if (isIntentionalAbort(e.error)) return; // benign cancel, ignore
-        captureError({
+        void captureError({
           level: "error",
           source: "window.onerror",
-          message: e.message ?? String(e),
-          stack: e.error?.stack,
+          message: e.message,
+          stack: errorStack(e.error),
         });
       } catch {
         // swallow — capture must not affect anything
@@ -44,10 +54,10 @@ export function registerGlobalErrorHandlers(): void {
       "unhandledrejection",
       (e: PromiseRejectionEvent) => {
         try {
-          const r = e.reason;
+          const r: unknown = e.reason;
           if (isIntentionalAbort(r)) return; // benign cancel, ignore
           const isTimeout = r instanceof Error && /timeout/i.test(r.message);
-          captureError({
+          void captureError({
             level: isTimeout ? "warn" : "error",
             source: "unhandledrejection",
             kind: isTimeout ? "timeout" : undefined,

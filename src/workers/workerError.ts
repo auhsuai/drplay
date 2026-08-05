@@ -40,12 +40,32 @@ function safeSanitize(value: string): string {
 const SENSITIVE_KEYS =
   /token|secret|password|passwd|authorization|access[_-]?token|api[_-]?key|cookie|bearer/i;
 
+// Stringify a context value for the log line. null/undefined are filtered out
+// by the caller; objects are JSON-serialized; functions never carry data in a
+// context object, so a marker replaces their source (String(fn)).
+function stringifyContextValue(v: unknown): string {
+  switch (typeof v) {
+    case "object":
+      // Template interpolation below turns an exotic-toJSON `undefined`
+      // return into "undefined" — identical to the old inline behavior.
+      return JSON.stringify(v);
+    case "string":
+      return v;
+    case "symbol":
+      return v.toString();
+    case "function":
+      return "[function]";
+    default:
+      return String(v);
+  }
+}
+
 function formatContext(context: Record<string, unknown>): string {
   const parts = Object.entries(context)
     .filter(([, v]) => v !== undefined && v !== null)
     .map(([k, v]) => {
       if (SENSITIVE_KEYS.test(k)) return `${k}=[REDACTED]`;
-      return `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`;
+      return `${k}=${stringifyContextValue(v)}`;
     });
   return parts.join(" ");
 }
@@ -96,7 +116,8 @@ export function logWorkerError(
   // sanitizer itself fails.
   const safeLine = safeSanitize(line);
   try {
-    captureError({ level, source: module, message: safeLine });
+    // Fire-and-forget: captureError never rejects; logging must never throw.
+    void captureError({ level, source: module, message: safeLine });
   } catch {
     /* logging must never throw */
   }

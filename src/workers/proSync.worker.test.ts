@@ -228,9 +228,9 @@ describe("refreshTokenAndRetry", () => {
       postMessage: (msg: { type: string }) => {
         sent.push(msg);
       },
-      waitForTokenRefresh: async () => {
+      waitForTokenRefresh: () => {
         waitCalls++;
-        return waitResult;
+        return Promise.resolve(waitResult);
       },
     };
     return { deps, sent, waitCalls: () => waitCalls };

@@ -44,7 +44,7 @@ vi.mock("./hooks/useNowPlayingMetadata", () => ({
 }));
 
 const { fakeController } = vi.hoisted(() => {
-  type Handler = (payload: any) => void;
+  type Handler = (payload: unknown) => void;
   const fakeController = {
     on: vi.fn(),
     getDuration: vi.fn(() => 0),
@@ -52,7 +52,7 @@ const { fakeController } = vi.hoisted(() => {
     getBuffered: vi.fn(),
     seek: vi.fn(),
     _handlers: {} as Record<string, Handler[]>,
-    _emit(event: string, payload?: any) {
+    _emit(event: string, payload?: unknown) {
       for (const h of fakeController._handlers[event] ?? []) h(payload);
     },
   };
@@ -61,7 +61,7 @@ const { fakeController } = vi.hoisted(() => {
 
 function installFakeOn() {
   fakeController.on.mockImplementation(
-    (event: string, handler: (payload: any) => void) => {
+    (event: string, handler: (payload: unknown) => void) => {
       (fakeController._handlers[event] ??= []).push(handler);
       return () => {
         fakeController._handlers[event] = (
@@ -168,8 +168,8 @@ describe("NowPlayingView buffer bar", () => {
     // The segment — not the container — carries the visible buffer background.
     expect(seg.className).toMatch(/\bbg-gray-400\b/);
     // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
-    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
-    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
+    expect(seg.style.left).toBe(`${String((10 / 1000) * 100)}%`);
+    expect(seg.style.width).toBe(`${String((290 / 1000) * 100)}%`);
   });
 
   it("BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)", () => {
@@ -185,8 +185,8 @@ describe("NowPlayingView buffer bar", () => {
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
     // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
-    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
-    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
+    expect(seg.style.left).toBe(`${String((10 / 1000) * 100)}%`);
+    expect(seg.style.width).toBe(`${String((290 / 1000) * 100)}%`);
   });
 
   it("unsubscribes the progress handler on unmount (no listener leak)", () => {

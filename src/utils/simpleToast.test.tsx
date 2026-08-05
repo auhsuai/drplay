@@ -19,9 +19,7 @@ describe("simpleToast", () => {
   it("showErrorToast appends a .app-toast--error element with the message", () => {
     showErrorToast("boom");
 
-    const el = document.querySelector(
-      ".app-toast--error",
-    ) as HTMLElement | null;
+    const el = document.querySelector(".app-toast--error");
     expect(el).not.toBeNull();
     expect(el?.className).toBe("app-toast app-toast--error");
     expect(el?.textContent).toBe("boom");
@@ -31,9 +29,7 @@ describe("simpleToast", () => {
   it("showSuccessToast appends a .app-toast--success element with the message", () => {
     showSuccessToast("ok");
 
-    const el = document.querySelector(
-      ".app-toast--success",
-    ) as HTMLElement | null;
+    const el = document.querySelector(".app-toast--success");
     expect(el).not.toBeNull();
     expect(el?.className).toBe("app-toast app-toast--success");
     expect(el?.textContent).toBe("ok");
@@ -59,14 +55,18 @@ describe("simpleToast", () => {
   });
 
   it("duration 0 removes the toast quickly without crash", () => {
-    expect(() => showErrorToast("boom", { duration: 0 })).not.toThrow();
+    expect(() => {
+      showErrorToast("boom", { duration: 0 });
+    }).not.toThrow();
 
     vi.advanceTimersByTime(200);
     expect(document.querySelector(".app-toast")).toBeNull();
   });
 
   it("negative duration does not crash and the toast disappears", () => {
-    expect(() => showErrorToast("boom", { duration: -500 })).not.toThrow();
+    expect(() => {
+      showErrorToast("boom", { duration: -500 });
+    }).not.toThrow();
 
     vi.advanceTimersByTime(200);
     expect(document.querySelector(".app-toast")).toBeNull();

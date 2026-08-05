@@ -49,16 +49,16 @@ vi.mock("../../utils/normalizeText", () => ({
 
 function makeItems(n: number): DriveItem[] {
   return Array.from({ length: n }, (_, i) => ({
-    id: `id${i}`,
-    title: `Song ${i}`,
+    id: `id${String(i)}`,
+    title: `Song ${String(i)}`,
     isFolder: false,
     trackInfo: {
-      id: `id${i}`,
-      title: `Song ${i}`,
+      id: `id${String(i)}`,
+      title: `Song ${String(i)}`,
       artist: "",
       streamUrl: "",
       size: 1000,
-      originalName: `song${i}.mp3`,
+      originalName: `song${String(i)}.mp3`,
     },
   }));
 }

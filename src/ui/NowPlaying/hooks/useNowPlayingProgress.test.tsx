@@ -12,14 +12,14 @@ import { formatTime } from "../../../utils/formatTime";
 import { useNowPlayingProgress } from "./useNowPlayingProgress";
 
 const { fakeController } = vi.hoisted(() => {
-  type Handler = (payload: any) => void;
+  type Handler = (payload: unknown) => void;
   const fakeController = {
     on: vi.fn(),
     getDuration: vi.fn(() => 0),
     getBuffered: vi.fn(),
     seek: vi.fn(),
     _handlers: {} as Record<string, Handler[]>,
-    _emit(event: string, payload?: any) {
+    _emit(event: string, payload?: unknown) {
       for (const h of fakeController._handlers[event] ?? []) h(payload);
     },
   };
@@ -44,7 +44,7 @@ function setBuffered(
 
 function installFakeOn() {
   fakeController.on.mockImplementation(
-    (event: string, handler: (payload: any) => void) => {
+    (event: string, handler: (payload: unknown) => void) => {
       (fakeController._handlers[event] ??= []).push(handler);
       return () => {
         fakeController._handlers[event] = (
@@ -230,8 +230,8 @@ describe("useNowPlayingProgress — progress sync driven by AudioController even
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
     // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
-    expect(seg.style.left).toBe(`${(10 / 1000) * 100}%`);
-    expect(seg.style.width).toBe(`${(290 / 1000) * 100}%`);
+    expect(seg.style.left).toBe(`${String((10 / 1000) * 100)}%`);
+    expect(seg.style.width).toBe(`${String((290 / 1000) * 100)}%`);
   });
 
   it("BUG regression: forward seek shows only the future buffered segment (pre-seek past range dropped)", () => {

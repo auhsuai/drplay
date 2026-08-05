@@ -43,11 +43,13 @@ beforeEach(() => {
 });
 
 describe("useServiceWorker SW_TOKEN_EXPIRED listener", () => {
-  it("forces a token refresh when the SW reports SW_TOKEN_EXPIRED", async () => {
+  it("forces a token refresh when the SW reports SW_TOKEN_EXPIRED", () => {
     mockedGetValidToken.mockResolvedValue("fresh-token");
-    renderHook(() => useServiceWorker());
+    renderHook(() => {
+      useServiceWorker();
+    });
 
-    await act(async () => {
+    act(() => {
       swListeners.get("message")?.({
         data: { type: "SW_TOKEN_EXPIRED" },
       } as MessageEvent);
@@ -56,10 +58,12 @@ describe("useServiceWorker SW_TOKEN_EXPIRED listener", () => {
     expect(mockedGetValidToken).toHaveBeenCalledWith(true);
   });
 
-  it("ignores messages that are not SW_TOKEN_EXPIRED", async () => {
-    renderHook(() => useServiceWorker());
+  it("ignores messages that are not SW_TOKEN_EXPIRED", () => {
+    renderHook(() => {
+      useServiceWorker();
+    });
 
-    await act(async () => {
+    act(() => {
       swListeners.get("message")?.({
         data: { type: "UPDATE_TOKEN", token: "x" },
       } as MessageEvent);
@@ -72,12 +76,17 @@ describe("useServiceWorker SW_TOKEN_EXPIRED listener", () => {
     mockedGetValidToken.mockRejectedValue(
       new Error("refresh backend unreachable"),
     );
-    renderHook(() => useServiceWorker());
+    renderHook(() => {
+      useServiceWorker();
+    });
 
-    await act(async () => {
+    act(() => {
       swListeners.get("message")?.({
         data: { type: "SW_TOKEN_EXPIRED" },
       } as MessageEvent);
+    });
+    await act(async () => {
+      await Promise.resolve();
     });
 
     expect(mockedCaptureError).toHaveBeenCalledWith(
@@ -91,8 +100,10 @@ describe("useServiceWorker SW_TOKEN_EXPIRED listener", () => {
     );
   });
 
-  it("removes the message listener on unmount", async () => {
-    const { unmount } = renderHook(() => useServiceWorker());
+  it("removes the message listener on unmount", () => {
+    const { unmount } = renderHook(() => {
+      useServiceWorker();
+    });
     expect(swListeners.has("message")).toBe(true);
     unmount();
     expect(swListeners.has("message")).toBe(false);

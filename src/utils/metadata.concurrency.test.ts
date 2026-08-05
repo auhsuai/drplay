@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { CachedMetadata } from "./metadata";
 import {
   getTrackMetadata,
   clearAllMetadataCache,
@@ -8,6 +9,7 @@ import {
   V_PLACEHOLDER,
 } from "./metadata";
 import { db } from "../db/db";
+import type { MetadataCacheRow } from "../db/db";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -15,12 +17,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 // Retarget persistence to an in-memory fake of db.metadataCache.
 // The real db import is replaced so no IndexedDB/fake-indexeddb is needed.
-const memoryStore = new Map<string, any>();
+const memoryStore = new Map<string, MetadataCacheRow>();
 vi.mock("../db/db", () => ({
   db: {
     metadataCache: {
       get: (key: string) => Promise.resolve(memoryStore.get(key)),
-      put: (row: any) => {
+      put: (row: MetadataCacheRow) => {
         memoryStore.set(row.key, row);
         return Promise.resolve();
       },
@@ -48,12 +50,13 @@ class ConcurrencyQueue {
         if (signal?.aborted) {
           this.activeCount--;
           this.dequeue();
-          return reject(new DOMException("Aborted", "AbortError"));
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
         }
         try {
           resolve(await task());
-        } catch (e) {
-          reject(e);
+        } catch (e: unknown) {
+          reject(e instanceof Error ? e : new Error(String(e)));
         } finally {
           this.activeCount--;
           this.dequeue();
@@ -61,9 +64,11 @@ class ConcurrencyQueue {
       };
       if (this.activeCount < this.concurrency) {
         this.activeCount++;
-        run();
+        void run();
       } else {
-        this.queue.push(run);
+        this.queue.push(() => {
+          void run();
+        });
       }
     });
   }
@@ -143,7 +148,7 @@ describe("getTrackMetadata caching", () => {
   });
 });
 
-function makeEntry(): any {
+function makeEntry(): CachedMetadata {
   return {
     title: "t",
     artist: "a",
@@ -178,7 +183,9 @@ describe("lruKeys + cache invalidation hardening", () => {
     cacheTrackMetadata("fresh-b", makeEntry());
     await flushPromises();
 
-    const after = JSON.parse(localStorage.getItem(METADATA_LRU_KEY) || "[]");
+    const after = JSON.parse(
+      localStorage.getItem(METADATA_LRU_KEY) || "[]",
+    ) as string[];
     expect(after).not.toContain("metadata_stale-a");
     expect(after).toContain("metadata_fresh-b");
   });
@@ -187,14 +194,19 @@ describe("lruKeys + cache invalidation hardening", () => {
     localStorage.removeItem(METADATA_LRU_KEY);
     clearAllMetadataCache();
 
-    const originalGet = db.metadataCache.get;
-    const originalPut = db.metadataCache.put;
-    let resolveGet!: (v: any) => void;
-    const pendingGet = new Promise<any>((resolve) => {
+    const metadataCacheTable = db.metadataCache as unknown as {
+      get: (key: string) => Promise<unknown>;
+      put: (row: unknown) => Promise<unknown>;
+    };
+    const originalGet = metadataCacheTable.get;
+    const originalPut = metadataCacheTable.put;
+    let resolveGet!: (v: unknown) => void;
+    const pendingGet = new Promise<unknown>((resolve) => {
       resolveGet = resolve;
     });
-    (db.metadataCache as any).get = () => pendingGet;
-    (db.metadataCache as any).put = vi.fn(() => Promise.resolve());
+    const putMock = vi.fn(() => Promise.resolve());
+    metadataCacheTable.get = () => pendingGet;
+    metadataCacheTable.put = putMock;
 
     try {
       cacheTrackMetadata("gen-guard", makeEntry());
@@ -202,16 +214,16 @@ describe("lruKeys + cache invalidation hardening", () => {
       expect(memoryStore.has("metadata_gen-guard")).toBe(false);
 
       clearAllMetadataCache();
-      (db.metadataCache as any).get = originalGet;
+      metadataCacheTable.get = originalGet;
       resolveGet(undefined);
       await flushPromises();
 
       expect(memoryStore.has("metadata_gen-guard")).toBe(false);
-      expect((db.metadataCache as any).put).not.toHaveBeenCalled();
+      expect(putMock).not.toHaveBeenCalled();
       expect(localStorage.getItem(METADATA_LRU_KEY)).toBeNull();
     } finally {
-      (db.metadataCache as any).get = originalGet;
-      (db.metadataCache as any).put = originalPut;
+      metadataCacheTable.get = originalGet;
+      metadataCacheTable.put = originalPut;
     }
   });
 
@@ -240,7 +252,7 @@ describe("lruKeys + cache invalidation hardening", () => {
 
     const stored = localStorage.getItem(METADATA_LRU_KEY);
     expect(stored).not.toBeNull();
-    const parsed = JSON.parse(stored || "");
+    const parsed = JSON.parse(stored || "") as unknown[];
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed).toContain("metadata_corrupt-1");
   });

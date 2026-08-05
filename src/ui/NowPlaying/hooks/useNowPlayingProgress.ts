@@ -32,29 +32,44 @@ export function useNowPlayingProgress(
   const pointerUpRef = useRef<(e: PointerEvent) => void>(() => {});
   const pointerCancelRef = useRef<(e: PointerEvent) => void>(() => {});
 
-  // Initialize UI on track change
-  useEffect(() => {
-    if (currentTrack) {
-      if (currentTrack.restoreTime !== undefined) {
-        const restoredDuration = currentTrack.restoreDuration || 0;
-        durationRef.current = restoredDuration;
-        setDuration(restoredDuration);
-        if (currentTimeTextRef.current)
-          currentTimeTextRef.current.textContent = formatTime(
-            currentTrack.restoreTime,
-          );
-        if (progressFillRef.current)
-          progressFillRef.current.style.width = `${(currentTrack.restoreTime / (currentTrack.restoreDuration || 1)) * 100}%`;
-      } else {
-        durationRef.current = 0;
-        setDuration(0);
-        if (currentTimeTextRef.current)
-          currentTimeTextRef.current.textContent = "0:00";
-        if (progressFillRef.current) progressFillRef.current.style.width = "0%";
-      }
-      if (bufferFillRef.current) clearBufferBar(bufferFillRef.current);
+  const trackId = currentTrack?.id;
+  const restoreTime = currentTrack?.restoreTime;
+  const restoreDuration = currentTrack?.restoreDuration;
+
+  // Initialize the duration state on track change. Done during render (React
+  // 19 "adjusting state when props change" pattern) instead of synchronously
+  // inside the effect (react-hooks/set-state-in-effect); the durationRef
+  // mirror and DOM ref writes stay in the effect below because refs must not
+  // be written during render. A null track keeps the previous duration (same
+  // as the old effect guard).
+  const prevTrackIdRef = useRef<string | undefined>(undefined);
+  if (trackId !== prevTrackIdRef.current) {
+    prevTrackIdRef.current = trackId;
+    if (restoreTime !== undefined) {
+      setDuration(restoreDuration || 0);
+    } else if (currentTrack) {
+      setDuration(0);
     }
-  }, [currentTrack?.id, currentTrack?.streamUrl]);
+  }
+
+  // Initialize the progress DOM + durationRef mirror on track change (refs
+  // are attached only after render, so these writes live in the effect).
+  useEffect(() => {
+    if (!trackId) return;
+    if (restoreTime !== undefined) {
+      durationRef.current = restoreDuration || 0;
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = formatTime(restoreTime);
+      if (progressFillRef.current)
+        progressFillRef.current.style.width = `${String((restoreTime / (restoreDuration || 1)) * 100)}%`;
+    } else {
+      durationRef.current = 0;
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = "0:00";
+      if (progressFillRef.current) progressFillRef.current.style.width = "0%";
+    }
+    if (bufferFillRef.current) clearBufferBar(bufferFillRef.current);
+  }, [trackId, restoreTime, restoreDuration]);
 
   // Sync duration with AudioController. The audio element is NOT in the DOM —
   // it lives inside the AudioController singleton, so its event system (and
@@ -86,7 +101,7 @@ export function useNowPlayingProgress(
   // (paused or playing). AudioController re-emits it (throttled), so we render
   // the buffer bar from `audio.buffered` — the industry-standard source.
   useEffect(() => {
-    if (!currentTrack) return;
+    if (!trackId) return;
     const audio = AudioController.getInstance();
 
     const unsubProgress = audio.on("progress", () => {
@@ -96,7 +111,7 @@ export function useNowPlayingProgress(
     return () => {
       unsubProgress();
     };
-  }, [currentTrack?.id]);
+  }, [trackId]);
 
   // Realtime progress sync with AudioController events
   useEffect(() => {
@@ -133,7 +148,7 @@ export function useNowPlayingProgress(
       const dur = duration || durationRef.current;
       if (dur > 0) {
         const progressPercent = (time / dur) * 100;
-        const newWidth = `${progressPercent}%`;
+        const newWidth = `${String(progressPercent)}%`;
 
         if (
           Math.abs(parseFloat(lastProgressWidth) - progressPercent) >
@@ -185,7 +200,7 @@ export function useNowPlayingProgress(
     try {
       progressBarRef.current.setPointerCapture(e.pointerId);
     } catch (err) {
-      captureError({
+      void captureError({
         level: "warn",
         source: NOW_PLAYING_PROGRESS_MODULE,
         message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -200,7 +215,7 @@ export function useNowPlayingProgress(
       );
       const newTime = percent * (durationRef.current || duration);
       if (progressFillRef.current)
-        progressFillRef.current.style.width = `${percent * 100}%`;
+        progressFillRef.current.style.width = `${String(percent * 100)}%`;
       if (currentTimeTextRef.current)
         currentTimeTextRef.current.textContent = formatTime(newTime);
       return newTime;

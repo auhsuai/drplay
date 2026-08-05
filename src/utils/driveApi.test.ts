@@ -46,7 +46,7 @@ function makeJsonResponse(status: number, body: unknown): Response {
     status,
     ok,
     headers: { get: () => null },
-    json: async () => body,
+    json: () => body,
   } as unknown as Response;
 }
 
@@ -71,7 +71,7 @@ function makeRateLimitResponse(status: number, reason: string): Response {
     status,
     ok,
     headers: { get: () => null },
-    json: async () => body,
+    json: () => body,
     clone: () => response,
   } as unknown as Response;
   return response;
@@ -88,10 +88,18 @@ function makeLegacyRateLimitResponse(status: number, reason: string): Response {
     status,
     ok,
     headers: { get: () => null },
-    json: async () => body,
+    json: () => body,
     clone: () => response,
   } as unknown as Response;
   return response;
+}
+
+// AbortSignal.reason is `any`; normalize it to a real Error so the mock's
+// Promise rejection reasons stay Error-typed (like the real abort flow).
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("aborted", "AbortError");
 }
 
 describe("getRecentlyAddedAudioFiles", () => {
@@ -106,7 +114,7 @@ describe("getRecentlyAddedAudioFiles", () => {
     mockedFetch.mockResolvedValue(makeJsonResponse(200, { files: [] }));
     await getRecentlyAddedAudioFiles("tok-test");
 
-    const url = String(mockedFetch.mock.calls[0][0]);
+    const url = mockedFetch.mock.calls[0][0] as string;
     expect(url).toContain("pageSize=100");
     expect(url).toContain("orderBy=createdTime desc");
     expect(url).toContain("fields=files(id,name,mimeType,size,modifiedTime)");
@@ -332,16 +340,14 @@ describe("driveFetch timeout with caller signal (Bug 1a)", () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
       const controller = new AbortController();
-      setTimeout(
-        () =>
-          controller.abort(
-            new DOMException(
-              "The operation was aborted due to timeout",
-              "TimeoutError",
-            ),
+      setTimeout(() => {
+        controller.abort(
+          new DOMException(
+            "The operation was aborted due to timeout",
+            "TimeoutError",
           ),
-        ms,
-      );
+        );
+      }, ms);
       return controller.signal;
     });
   });
@@ -362,12 +368,12 @@ describe("driveFetch timeout with caller signal (Bug 1a)", () => {
             return; // no bound: leave promise pending
           }
           if (signal.aborted) {
-            reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+            reject(abortReason(signal));
             return;
           }
-          signal.addEventListener("abort", () =>
-            reject(signal.reason ?? new DOMException("aborted", "AbortError")),
-          );
+          signal.addEventListener("abort", () => {
+            reject(abortReason(signal));
+          });
         }),
     );
   };
@@ -505,15 +511,14 @@ describe("createFolder abort propagation (Bug 1d)", () => {
             return;
           }
           if (signal.aborted) {
-            reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+            reject(abortReason(signal));
             return;
           }
           signal.addEventListener(
             "abort",
-            () =>
-              reject(
-                signal.reason ?? new DOMException("aborted", "AbortError"),
-              ),
+            () => {
+              reject(abortReason(signal));
+            },
             { once: true },
           );
         }),
@@ -546,17 +551,23 @@ describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
   });
   const makeFiles = (count: number, prefix: string): DriveFolderItem[] =>
     Array.from({ length: count }, (_, i) =>
-      folder(`${prefix}${i}`, `${prefix}${i}`),
+      folder(`${prefix}${String(i)}`, `${prefix}${String(i)}`),
     );
 
   const captureUrls = (
     pages: Array<{ files: DriveFolderItem[]; nextPageToken?: string }>,
   ): string[] => {
     const urls: string[] = [];
-    mockedFetch.mockImplementation(async (input: RequestInfo | URL) => {
-      urls.push(String(input));
+    mockedFetch.mockImplementation((input: RequestInfo | URL) => {
+      urls.push(
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url,
+      );
       const page = pages[urls.length - 1];
-      return makeJsonResponse(200, page);
+      return Promise.resolve(makeJsonResponse(200, page));
     });
     return urls;
   };
@@ -641,12 +652,14 @@ describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
   // no thrown rejection, accumulated pages returned.
   it("searchFolders breaks cleanly when the caller aborts between pages", async () => {
     const controller = new AbortController();
-    mockedFetch.mockImplementation(async () => {
+    mockedFetch.mockImplementation(() => {
       if (!controller.signal.aborted) controller.abort();
-      return makeJsonResponse(200, {
-        files: makeFiles(30, "brk"),
-        nextPageToken: "tok2",
-      });
+      return Promise.resolve(
+        makeJsonResponse(200, {
+          files: makeFiles(30, "brk"),
+          nextPageToken: "tok2",
+        }),
+      );
     });
 
     const result = await searchFolders(
@@ -678,17 +691,23 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
   });
   const makeTrashed = (count: number, prefix: string): DriveFileItem[] =>
     Array.from({ length: count }, (_, i) =>
-      trashed(`${prefix}${i}`, `${prefix}${i}`),
+      trashed(`${prefix}${String(i)}`, `${prefix}${String(i)}`),
     );
 
   const captureTrashedUrls = (
     pages: Array<{ files: DriveFileItem[]; nextPageToken?: string }>,
   ): string[] => {
     const urls: string[] = [];
-    mockedFetch.mockImplementation(async (input: RequestInfo | URL) => {
-      urls.push(String(input));
+    mockedFetch.mockImplementation((input: RequestInfo | URL) => {
+      urls.push(
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url,
+      );
       const page = pages[urls.length - 1];
-      return makeJsonResponse(200, page);
+      return Promise.resolve(makeJsonResponse(200, page));
     });
     return urls;
   };
@@ -773,12 +792,14 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
   // no thrown rejection, accumulated pages returned.
   it("breaks cleanly when the caller aborts between pages", async () => {
     const controller = new AbortController();
-    mockedFetch.mockImplementation(async () => {
+    mockedFetch.mockImplementation(() => {
       if (!controller.signal.aborted) controller.abort();
-      return makeJsonResponse(200, {
-        files: makeTrashed(30, "brk"),
-        nextPageToken: "tok2",
-      });
+      return Promise.resolve(
+        makeJsonResponse(200, {
+          files: makeTrashed(30, "brk"),
+          nextPageToken: "tok2",
+        }),
+      );
     });
 
     const result = await getTrashedFiles(
@@ -810,7 +831,7 @@ describe("drivePagination malformed JSON body", () => {
       status: 200,
       ok: true,
       headers: { get: () => null },
-      json: async () => {
+      json: () => {
         throw new SyntaxError(
           "Unexpected token '<', \"<html>...\" is not valid JSON",
         );
@@ -981,9 +1002,9 @@ describe("uploadFileResumable", () => {
       ok,
       headers: {
         get: (name: string) =>
-          String(name).toLowerCase() === "location" ? location : null,
+          name.toLowerCase() === "location" ? location : null,
       },
-      json: async () => ({}),
+      json: () => ({}),
     } as unknown as Response;
   }
 
@@ -1023,7 +1044,7 @@ describe("uploadFileResumable", () => {
       "application/octet-stream",
     );
     expect(postHeaders["X-Upload-Content-Length"]).toBe("10");
-    expect(JSON.parse(String(postOpts?.body))).toEqual({
+    expect(JSON.parse(postOpts?.body as string)).toEqual({
       name: "song.mp3",
       parents: ["parent-1"],
     });
@@ -1096,16 +1117,14 @@ describe("uploadFileResumable", () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
       const controller = new AbortController();
-      setTimeout(
-        () =>
-          controller.abort(
-            new DOMException(
-              "The operation was aborted due to timeout",
-              "TimeoutError",
-            ),
+      setTimeout(() => {
+        controller.abort(
+          new DOMException(
+            "The operation was aborted due to timeout",
+            "TimeoutError",
           ),
-        ms,
-      );
+        );
+      }, ms);
       return controller.signal;
     });
     mockedFetch
@@ -1118,11 +1137,9 @@ describe("uploadFileResumable", () => {
               reject(new Error("no signal passed to PUT"));
               return;
             }
-            signal.addEventListener("abort", () =>
-              reject(
-                signal.reason ?? new DOMException("aborted", "AbortError"),
-              ),
-            );
+            signal.addEventListener("abort", () => {
+              reject(abortReason(signal));
+            });
           }),
       );
 
@@ -1157,7 +1174,7 @@ describe("uploadFileResumable", () => {
     const controller = new AbortController();
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(() => {
         controller.abort();
         throw new DOMException("aborted", "AbortError");
       });
@@ -1275,7 +1292,7 @@ describe("uploadFileResumable", () => {
         expect.objectContaining({
           level: "warn",
           source: "driveApi",
-          message: expect.stringContaining("status=404"),
+          message: expect.stringContaining("status=404") as unknown as string,
         }),
       );
       expect(lastLogMessages()).toContain("File not found");
@@ -1400,9 +1417,9 @@ describe("uploadFileResumableChunked", () => {
       ok,
       headers: {
         get: (name: string) =>
-          String(name).toLowerCase() === "location" ? location : null,
+          name.toLowerCase() === "location" ? location : null,
       },
-      json: async () => ({}),
+      json: () => ({}),
     } as unknown as Response;
   }
 
@@ -1412,9 +1429,9 @@ describe("uploadFileResumableChunked", () => {
       ok: status >= 200 && status < 300,
       headers: {
         get: (name: string) =>
-          String(name).toLowerCase() === "range" ? range : null,
+          name.toLowerCase() === "range" ? range : null,
       },
-      json: async () => ({}),
+      json: () => ({}),
     } as unknown as Response;
   }
 
@@ -1440,10 +1457,10 @@ describe("uploadFileResumableChunked", () => {
     const offsets: number[] = [];
     return {
       offsets,
-      readChunk: async (offset) => {
+      readChunk: (offset) => {
         offsets.push(offset);
-        if (offset >= bytes.length) return null;
-        return bytes.slice(offset, offset + chunkSize);
+        if (offset >= bytes.length) return Promise.resolve(null);
+        return Promise.resolve(bytes.slice(offset, offset + chunkSize));
       },
     };
   }
@@ -1711,7 +1728,7 @@ describe("uploadFileResumableChunked", () => {
     const controller = new AbortController();
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(() => {
         controller.abort();
         throw new DOMException("aborted", "AbortError");
       });
@@ -1738,7 +1755,7 @@ describe("uploadFileResumableChunked", () => {
         name: "big.flac",
         parentId: "p",
         totalSize: CHUNK_SIZE,
-        readChunk: async () => makePayload(10),
+        readChunk: () => Promise.resolve(makePayload(10)),
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ kind: "aborted" });
@@ -1751,7 +1768,7 @@ describe("uploadFileResumableChunked", () => {
         name: "empty.flac",
         parentId: "p",
         totalSize: 0,
-        readChunk: async () => null,
+        readChunk: () => Promise.resolve(null),
       }),
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(mockedFetch).not.toHaveBeenCalled();
@@ -1823,7 +1840,7 @@ describe("uploadFileResumableChunked", () => {
         name: "big.flac",
         parentId: "p",
         totalSize: CHUNK_SIZE,
-        readChunk: async () => {
+        readChunk: () => {
           throw new Error("disk io error");
         },
       }),
@@ -1845,11 +1862,11 @@ describe("uploadFileResumableChunked", () => {
       name: "big.flac",
       parentId: "p",
       totalSize: 100,
-      readChunk: async (offset) => {
+      readChunk: (offset) => {
         offsets.push(offset);
         // Still growing: every read returns a full 64-byte chunk, including
         // the one at offset 64 that overshoots totalSize=100.
-        return offset >= 100 ? null : makePayload(64);
+        return Promise.resolve(offset >= 100 ? null : makePayload(64));
       },
       onProgress: (f) => fractions.push(f),
     });
@@ -1883,7 +1900,8 @@ describe("uploadFileResumableChunked", () => {
       name: "big.flac",
       parentId: "p",
       totalSize: 50,
-      readChunk: async (offset) => (offset >= 100 ? null : makePayload(64)),
+      readChunk: (offset) =>
+        Promise.resolve(offset >= 100 ? null : makePayload(64)),
     });
 
     const bodies: number[] = mockedFetch.mock.calls
@@ -1913,13 +1931,14 @@ describe("uploadFileResumableChunked", () => {
       name: "big.flac",
       parentId: "p",
       totalSize: 50,
-      readChunk: async (offset) => (offset >= 50 ? null : makePayload(64)),
+      readChunk: (offset) =>
+        Promise.resolve(offset >= 50 ? null : makePayload(64)),
     });
 
     expect(captureError).not.toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        message: expect.stringContaining("upload-chunk-truncated"),
+        message: expect.stringContaining("upload-chunk-truncated") as unknown as string,
       }),
     );
     // Truncation behavior itself is unchanged: the 64-byte chunk is cut to the
@@ -1941,8 +1960,8 @@ describe("uploadFileResumableChunked", () => {
         name: "big.flac",
         parentId: "p",
         totalSize: 10,
-        readChunk: async (offset) =>
-          offset >= 10 ? null : makePayload(CHUNK_SIZE),
+        readChunk: (offset) =>
+          Promise.resolve(offset >= 10 ? null : makePayload(CHUNK_SIZE)),
       }),
     ).rejects.toMatchObject({ kind: "invalid" });
     // initiate + the single truncated PUT — never a resend past the announced size.
@@ -1953,7 +1972,7 @@ describe("uploadFileResumableChunked", () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(
-        makeRangeResponse(308, `bytes=0-${TOTAL_SIZE - 1}`),
+        makeRangeResponse(308, `bytes=0-${String(TOTAL_SIZE - 1)}`),
       );
 
     const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
@@ -2004,9 +2023,9 @@ describe("uploadFileResumableChunked", () => {
       ok: false,
       headers: {
         get: (name: string) =>
-          String(name).toLowerCase() === "retry-after" ? "5" : null,
+          name.toLowerCase() === "retry-after" ? "5" : null,
       },
-      json: async () => ({}),
+      json: () => ({}),
     } as unknown as Response;
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
@@ -2077,8 +2096,9 @@ describe("saveAppConfig serialization lock (promise-chain mutex)", () => {
   it("serializes concurrent saves: task 2's fetch only starts after task 1 fully finishes", async () => {
     let releaseFirstSearch!: () => void;
     const firstSearchGate = new Promise<Response>((resolve) => {
-      releaseFirstSearch = () =>
+      releaseFirstSearch = () => {
         resolve(makeJsonResponse(200, { files: [{ id: "file-1" }] }));
+      };
     });
 
     mockedFetch
@@ -2101,15 +2121,15 @@ describe("saveAppConfig serialization lock (promise-chain mutex)", () => {
 
   it("a rejected task does not block the next task (lock is always released)", async () => {
     const order: string[] = [];
-    const task1 = withSaveConfigLock(async () => {
+    const task1 = withSaveConfigLock(() => {
       order.push("t1");
       throw new Error("save failed");
     });
     await expect(task1).rejects.toThrow("save failed");
 
-    const result = await withSaveConfigLock(async () => {
+    const result = await withSaveConfigLock(() => {
       order.push("t2");
-      return 42;
+      return Promise.resolve(42);
     });
     expect(result).toBe(42);
     expect(order).toEqual(["t1", "t2"]);

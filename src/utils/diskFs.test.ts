@@ -19,6 +19,14 @@ vi.mock("./errorLog", () => ({
 const invokeMock = vi.mocked(invoke);
 const captureErrorMock = vi.mocked(captureError);
 
+// Assert the optional value is present and return it narrowed — replaces the
+// banned `!` after `expect(x).not.toBeNull()`.
+function nonNull<T>(value: T | null, what: string): T {
+  expect(value).not.toBeNull();
+  if (value === null) throw new Error(`expected ${what}`);
+  return value;
+}
+
 // Shape mirrors the real plugin:fs|read_dir response (DirEntry, camelCase).
 function dirEntry(name: string, isDirectory: boolean) {
   return { name, isDirectory, isFile: !isDirectory, isSymlink: false };
@@ -103,9 +111,9 @@ describe("statDiskPath", () => {
 
     const entry = await statDiskPath("C:\\Music\\sub");
 
-    expect(entry).not.toBeNull();
-    expect(entry!.isDirectory).toBe(true);
-    expect(entry!.size).toBe(0);
+    const e = nonNull(entry, "disk entry");
+    expect(e.isDirectory).toBe(true);
+    expect(e.size).toBe(0);
   });
 
   it("extracts the basename for paths with a trailing separator", async () => {
@@ -118,9 +126,9 @@ describe("statDiskPath", () => {
 
     const entry = await statDiskPath("C:\\Music\\");
 
-    expect(entry).not.toBeNull();
-    expect(entry!.name).toBe("Music");
-    expect(entry!.relativePath).toBe("Music");
+    const e = nonNull(entry, "disk entry");
+    expect(e.name).toBe("Music");
+    expect(e.relativePath).toBe("Music");
   });
 
   it("returns null (no throw) when the path does not exist (Windows ENOENT)", async () => {
@@ -178,7 +186,7 @@ describe("statDiskPath", () => {
 });
 
 describe("walkDiskFolder", () => {
-  const TREE: Record<string, ReturnType<typeof dirEntry>[]> = {
+  const TREE: Record<string, ReturnType<typeof dirEntry>[] | undefined> = {
     "C:\\Music": [
       dirEntry("sub", true),
       dirEntry("song1.mp3", false),
@@ -189,14 +197,14 @@ describe("walkDiskFolder", () => {
   };
 
   function mockTree(): void {
-    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "plugin:fs|read_dir") {
         const path = pathOf(args);
         const entries = TREE[path];
-        if (!entries) throw new Error(`unknown dir: ${path}`);
-        return entries;
+        if (!entries) return Promise.reject(new Error(`unknown dir: ${path}`));
+        return Promise.resolve(entries);
       }
-      throw new Error(`unexpected command: ${cmd}`);
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
     });
   }
 
@@ -267,12 +275,13 @@ describe("walkDiskFolder", () => {
   });
 
   it("handles a root path with a trailing separator (no leading / in relativePath)", async () => {
-    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "plugin:fs|read_dir") {
-        if (pathOf(args) === "C:\\Music\\") return [dirEntry("a.mp3", false)];
-        return [];
+        if (pathOf(args) === "C:\\Music\\")
+          return Promise.resolve([dirEntry("a.mp3", false)]);
+        return Promise.resolve([]);
       }
-      throw new Error(`unexpected command: ${cmd}`);
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
     });
 
     const entries = await walkDiskFolder("C:\\Music\\");
@@ -308,12 +317,13 @@ describe("walkDiskFolder", () => {
   });
 
   it("stops descending when a nested read_dir fails, surfacing the wrapped error", async () => {
-    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "plugin:fs|read_dir") {
-        if (pathOf(args) === "C:\\Music") return [dirEntry("broken", true)];
-        throw "permission denied for subdirectory";
+        if (pathOf(args) === "C:\\Music")
+          return Promise.resolve([dirEntry("broken", true)]);
+        return Promise.reject(new Error("permission denied for subdirectory"));
       }
-      throw new Error(`unexpected command: ${cmd}`);
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
     });
 
     await expect(walkDiskFolder("C:\\Music")).rejects.toThrow(
@@ -424,8 +434,7 @@ describe("openDiskReadStream", () => {
       rid: RID,
       len: 1024,
     });
-    expect(chunk).not.toBeNull();
-    expect(Array.from(chunk!)).toEqual([1, 2, 3, 4]);
+    expect(Array.from(nonNull(chunk, "read chunk"))).toEqual([1, 2, 3, 4]);
   });
 
   it("read() resolves null at EOF (nread = 0)", async () => {
@@ -443,8 +452,7 @@ describe("openDiskReadStream", () => {
     const stream = await openDiskReadStream(PATH);
     const chunk = await stream.read();
 
-    expect(chunk).not.toBeNull();
-    expect(Array.from(chunk!)).toEqual([9, 8, 7]);
+    expect(Array.from(nonNull(chunk, "read chunk"))).toEqual([9, 8, 7]);
   });
 
   it("close() invokes the core resources close command with the rid", async () => {

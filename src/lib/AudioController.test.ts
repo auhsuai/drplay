@@ -43,18 +43,18 @@ function makeFakeAudio(): FakeAudio {
     duration: 0,
     readyState: 0,
     volume: 1,
-    play: vi.fn(async function (this: any) {
+    play: vi.fn(function (this: FakeAudio) {
       this.paused = false;
       seq.push("play");
     }),
-    pause: vi.fn(function (this: any) {
+    pause: vi.fn(function (this: FakeAudio) {
       this.paused = true;
       seq.push("pause");
     }),
     load: vi.fn(() => {
       seq.push("load");
     }),
-    removeAttribute: vi.fn(function (this: any, name: string) {
+    removeAttribute: vi.fn(function (this: FakeAudio, name: string) {
       if (name === "src") {
         this.src = "";
         seq.push("removeAttribute:src");
@@ -185,10 +185,10 @@ describe("AudioController retry lifecycle", () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     const networkMsgs = errorHandler.mock.calls.filter(
-      (c) => c[0].code === "network_interrupted",
+      (c) => (c[0] as { code: string } | undefined)?.code === "network_interrupted",
     );
     const formatMsgs = errorHandler.mock.calls.filter(
-      (c) => c[0].code === "format_error",
+      (c) => (c[0] as { code: string } | undefined)?.code === "format_error",
     );
     expect(networkMsgs).toHaveLength(2); // retryCount 1 and 2 are < 3
     expect(formatMsgs).toHaveLength(2); // retryCount 3 and 4 give up
@@ -289,7 +289,7 @@ describe("AudioController retry lifecycle", () => {
   });
 
   describe("AudioController event-listener lifecycle", () => {
-    it("registers exactly 11 native listeners, one per event type, on each element", async () => {
+    it("registers exactly 11 native listeners, one per event type, on each element", () => {
       AudioControllerClass.getInstance();
       const expected = [
         "timeupdate",
@@ -327,16 +327,18 @@ describe("AudioController retry lifecycle", () => {
       await ctrl.playTrack(trackA);
       const active = audioElements.find((el) =>
         el.src.includes("drive-stream"),
-      )!;
-
-      // The error listener must still be attached on the active element
-      // after release(). If someone later "fixes" release() by detaching the
-      // native listeners, this emit never fires and the test fails.
-      fireError(active);
-      expect(errorHandler).toHaveBeenCalledTimes(1);
-      expect(errorHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ code: "network_interrupted" }),
       );
+      expect(active).toBeDefined();
+      if (active) {
+        // The error listener must still be attached on the active element
+        // after release(). If someone later "fixes" release() by detaching the
+        // native listeners, this emit never fires and the test fails.
+        fireError(active);
+        expect(errorHandler).toHaveBeenCalledTimes(1);
+        expect(errorHandler).toHaveBeenCalledWith(
+          expect.objectContaining({ code: "network_interrupted" }),
+        );
+      }
     });
 
     it("repeated playTrack cycles never accumulate duplicate native listeners on an element", async () => {

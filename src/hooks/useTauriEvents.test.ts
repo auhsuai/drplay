@@ -31,13 +31,14 @@ function resetListenMock() {
   });
 }
 
-async function fireQuota() {
+function fireQuota() {
   if (!quotaHandler)
     throw new Error(
       "drive-quota-exceeded handler not registered — mount the hook first",
     );
-  await act(async () => {
-    quotaHandler!();
+  const handler = quotaHandler;
+  act(() => {
+    handler();
   });
 }
 
@@ -51,16 +52,18 @@ afterEach(() => {
 });
 
 describe("useTauriEvents drive-quota-exceeded listener", () => {
-  it("registers the quota listener and opens the rate-limit modal when the backend event fires", async () => {
+  it("registers the quota listener and opens the rate-limit modal when the backend event fires", () => {
     const setShowRateLimitModal = vi.fn();
 
-    renderHook(() => useTauriEvents(setShowRateLimitModal));
+    renderHook(() => {
+      useTauriEvents(setShowRateLimitModal);
+    });
     expect(listenMock).toHaveBeenCalledWith(
       "drive-quota-exceeded",
       expect.any(Function),
     );
 
-    await fireQuota();
+    fireQuota();
 
     expect(setShowRateLimitModal).toHaveBeenCalledTimes(1);
     expect(setShowRateLimitModal).toHaveBeenCalledWith(true);
@@ -69,14 +72,16 @@ describe("useTauriEvents drive-quota-exceeded listener", () => {
   it("unregisters the listener and does not fire after unmount", async () => {
     const setShowRateLimitModal = vi.fn();
 
-    const { unmount } = renderHook(() => useTauriEvents(setShowRateLimitModal));
+    const { unmount } = renderHook(() => {
+      useTauriEvents(setShowRateLimitModal);
+    });
     await act(async () => {
       await Promise.resolve();
     });
 
     unmount();
 
-    await fireQuota();
+    fireQuota();
     expect(setShowRateLimitModal).not.toHaveBeenCalled();
   });
 });

@@ -89,7 +89,9 @@ describe("TrashScreen skeleton loading", () => {
 
   it("shows 6 skeleton rows inside a status region instead of the spinner while loading", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     const rows = await screen.findAllByTestId("skeleton-row");
     expect(rows).toHaveLength(6);
@@ -99,12 +101,15 @@ describe("TrashScreen skeleton loading", () => {
 
   it("renders the real item list after loading finishes", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     await act(async () => {
       deferredCalls[0].resolve([
         { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
       ]);
+      await Promise.resolve();
     });
 
     expect(await screen.findByText("Track 1")).not.toBeNull();
@@ -114,10 +119,13 @@ describe("TrashScreen skeleton loading", () => {
 
   it("keeps the empty state when no items are returned", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     await act(async () => {
       deferredCalls[0].resolve([]);
+      await Promise.resolve();
     });
 
     expect(await screen.findByText("settings.trash_empty")).not.toBeNull();
@@ -155,7 +163,9 @@ describe("TrashScreen skeleton loading", () => {
 
   it("stretch: the loading skeleton fills the whole list area (h-full wrapper, flex-1 rows)", async () => {
     renderScreen();
-    await waitFor(() => expect(deferredCalls).toHaveLength(1));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
 
     const status = screen.getByRole("status", { name: "loading" });
     // The list area is a definite-height flex child (overlay root is
@@ -166,6 +176,10 @@ describe("TrashScreen skeleton loading", () => {
     for (const row of rows) {
       expect(row.className).toContain("flex-1");
     }
-    expect(rows[0].parentElement!.className).toContain("h-full");
+    const wrapper = rows[0].parentElement;
+    expect(wrapper).not.toBeNull();
+    if (wrapper) {
+      expect(wrapper.className).toContain("h-full");
+    }
   });
 });

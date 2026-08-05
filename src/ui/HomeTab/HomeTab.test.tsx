@@ -42,7 +42,10 @@ const mocks = vi.hoisted(() => ({
   getRecentlyAddedAudioFiles: vi.fn(),
   captureError: vi.fn(),
   prefetchVisibleTracks: vi.fn(),
-  FullRecentViewSpy: vi.fn((_props: FullRecentViewProps) => null),
+  FullRecentViewSpy: vi.fn((props: FullRecentViewProps) => {
+    void props;
+    return null;
+  }),
 }));
 
 vi.mock("../../utils/history", () => ({
@@ -80,7 +83,10 @@ vi.mock("./components/PremiumCard", () => ({
     <div
       data-testid={isOverlayBtn ? "premium-card-overlay" : "premium-card"}
       data-overlay={isOverlayBtn ? "true" : undefined}
+      role="button"
+      tabIndex={0}
       onClick={onPlay}
+      onKeyDown={onPlay}
     >
       {track.title}
     </div>
@@ -193,35 +199,38 @@ describe("HomeTab Recently Added delta sync", () => {
         }),
       );
     render(<HomeTab {...baseProps()} />);
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
+    });
 
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+    });
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(3),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(3);
+    });
 
     // Newest request resolves FIRST with fresh data.
     await act(async () => {
       deferred[2].resolve([driveFile({ id: "c", name: "Newest.mp3" })]);
+      await Promise.resolve();
     });
     expect(await screen.findByText("Newest.mp3")).toBeTruthy();
 
     // Older responses arrive later — they must be dropped, not applied.
     await act(async () => {
       deferred[1].resolve([driveFile({ id: "b", name: "Middle.mp3" })]);
+      await Promise.resolve();
     });
     await act(async () => {
       deferred[0].resolve([driveFile({ id: "a", name: "Oldest.mp3" })]);
+      await Promise.resolve();
     });
 
     expect(screen.queryByText("Middle.mp3")).toBeNull();
@@ -231,16 +240,16 @@ describe("HomeTab Recently Added delta sync", () => {
 
   it("4. does not fetch when token is null, even after drive-files-changed", async () => {
     render(<HomeTab {...baseProps({ token: null })} />);
-    await waitFor(() =>
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    });
 
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(0),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(0);
+    });
     expect(mocks.getRecentlyAddedAudioFiles).not.toHaveBeenCalled();
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
   });
@@ -258,13 +267,18 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() => expect(mocks.captureError).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.captureError).toHaveBeenCalledTimes(1);
+    });
 
-    expect(mocks.captureError.mock.calls[0][0].source).toBe("HomeTab");
-    expect(mocks.captureError.mock.calls[0][0].level).toBe("warn");
-    expect(mocks.captureError.mock.calls[0][0].message).toContain(
-      "failed-to-load-recently-added",
-    );
+    const errArg = mocks.captureError.mock.calls[0][0] as {
+      source: string;
+      level: string;
+      message: string;
+    };
+    expect(errArg.source).toBe("HomeTab");
+    expect(errArg.level).toBe("warn");
+    expect(errArg.message).toContain("failed-to-load-recently-added");
     // Old data must survive a failed refetch.
     expect(screen.getByText("First.mp3")).toBeTruthy();
   });
@@ -272,9 +286,9 @@ describe("HomeTab Recently Added delta sync", () => {
   it("6. unmount removes the listener: firing drive-files-changed afterwards does nothing", async () => {
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
     const { unmount } = render(<HomeTab {...baseProps()} />);
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
+    });
 
     unmount();
     const callsBefore = mocks.getRecentlyAddedAudioFiles.mock.calls.length;
@@ -289,24 +303,24 @@ describe("HomeTab Recently Added delta sync", () => {
   it("7. recent-updated still runs the full loadData (getRecentlyPlayed re-fetches)", async () => {
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
     render(<HomeTab {...baseProps()} />);
-    await waitFor(() =>
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    });
 
     act(() => {
       window.dispatchEvent(new Event("recent-updated"));
     });
-    await waitFor(() =>
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("8. rerender does not register duplicate drive-files-changed listeners", async () => {
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
     const { rerender } = render(<HomeTab {...baseProps()} />);
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
+    });
 
     rerender(
       <HomeTab
@@ -320,9 +334,9 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+    });
     // A duplicate listener would have pushed this to 3.
     expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
   });
@@ -339,9 +353,9 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+    });
 
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
   });
@@ -370,9 +384,9 @@ describe("HomeTab Recently Added delta sync", () => {
 
   it("11. pro-sync-complete with null token does not fetch", async () => {
     render(<HomeTab {...baseProps({ token: null })} />);
-    await waitFor(() =>
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    });
 
     act(() => {
       window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.complete));
@@ -399,7 +413,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
 
   const sixRecentlyAdded = () =>
     Array.from({ length: 6 }, (_, i) =>
-      driveFile({ id: `ra-${i}`, name: `Track ${i}.mp3` }),
+      driveFile({ id: `ra-${String(i)}`, name: `Track ${String(i)}.mp3` }),
     );
 
   it("a. last visible card is an overlay (6 > 5) and click opens full view with all 6 tracks + title", async () => {
@@ -451,7 +465,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     fireEvent.click(screen.getAllByTestId("premium-card")[0]);
 
     expect(onPlay).toHaveBeenCalledTimes(1);
-    const [track, context] = onPlay.mock.calls[0];
+    const [track, context] = onPlay.mock.calls[0] as [Track, Track[]];
     expect(track.id).toBe("ra-0");
     expect(context.map((t: Track) => t.id)).toEqual(["ra-0", "ra-1", "ra-2"]);
     // Playback path must NOT open the full view.
@@ -483,7 +497,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     // the overlay NEVER appeared with a full page on desktop.
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue(
       Array.from({ length: 5 }, (_, i) =>
-        driveFile({ id: `ra-${i}`, name: `Track ${i}.mp3` }),
+        driveFile({ id: `ra-${String(i)}`, name: `Track ${String(i)}.mp3` }),
       ),
     );
     render(<HomeTab {...baseProps()} />);
@@ -511,7 +525,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     // still slice to visibleCount and the full view must get the whole list.
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue(
       Array.from({ length: 100 }, (_, i) =>
-        driveFile({ id: `ra-${i}`, name: `Track ${i}.mp3` }),
+        driveFile({ id: `ra-${String(i)}`, name: `Track ${String(i)}.mp3` }),
       ),
     );
     render(<HomeTab {...baseProps()} />);
@@ -535,7 +549,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     // and playback must keep working with the visible slice as context.
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue(
       Array.from({ length: 4 }, (_, i) =>
-        driveFile({ id: `ra-${i}`, name: `Track ${i}.mp3` }),
+        driveFile({ id: `ra-${String(i)}`, name: `Track ${String(i)}.mp3` }),
       ),
     );
     const onPlay = vi.fn();
@@ -548,7 +562,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
     fireEvent.click(screen.getAllByTestId("premium-card")[0]);
 
     expect(onPlay).toHaveBeenCalledTimes(1);
-    const [track, context] = onPlay.mock.calls[0];
+    const [track, context] = onPlay.mock.calls[0] as [Track, Track[]];
     expect(track.id).toBe("ra-0");
     expect(context.map((t: Track) => t.id)).toEqual([
       "ra-0",
@@ -691,6 +705,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
         driveFile({ id: "a2", name: "New 2.mp3" }),
         driveFile({ id: "a3", name: "New 3.mp3" }),
       ]);
+      await Promise.resolve();
     });
 
     expect(screen.queryByTestId("home-skeleton-section")).toBeNull();
@@ -720,6 +735,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
         track({ id: "r2" }),
         track({ id: "r3" }),
       ]);
+      await Promise.resolve();
     });
 
     expect(screen.getByText("Recent Files")).toBeTruthy();
@@ -752,6 +768,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
       d.discover.resolve([]);
       d.folders.resolve([]);
       d.added.resolve([driveFile({ id: "a1", name: "New.mp3" })]);
+      await Promise.resolve();
     });
     expect(screen.queryByTestId("home-skeleton-section")).toBeNull();
 
@@ -759,9 +776,9 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() =>
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => {
+      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+    });
 
     expect(screen.queryByTestId("home-skeleton-section")).toBeNull();
     expect(screen.queryByTestId("home-greeting-skeleton")).toBeNull();
@@ -786,6 +803,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
       d.discover.resolve([]);
       d.folders.resolve([]);
       d.added.resolve([]);
+      await Promise.resolve();
     });
 
     expect(screen.queryByTestId("home-skeleton-section")).toBeNull();
@@ -813,6 +831,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
     await act(async () => {
       d.recent.resolve([track({ id: "r1" }), track({ id: "r2" })]);
+      await Promise.resolve();
     });
 
     expect(mocks.prefetchVisibleTracks).toHaveBeenCalledTimes(1);
@@ -839,6 +858,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
       d.discover.resolve([]);
       d.folders.resolve([]);
       d.added.resolve([]);
+      await Promise.resolve();
     });
 
     expect(screen.queryByTestId("home-greeting-skeleton")).toBeNull();

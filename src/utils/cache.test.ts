@@ -236,12 +236,16 @@ describe("getCacheSizes", () => {
 
     const sizes = await getCacheSizes();
 
+    const findSize = (id: string) => {
+      const size = sizes.find((s) => s.id === id);
+      if (!size) throw new Error(`missing cache size for "${id}"`);
+      return size;
+    };
+
     expect(sizes).toHaveLength(4);
-    expect(sizes.find((s) => s.id === "covers")!.bytes).toBe(0);
-    expect(sizes.find((s) => s.id === "files")!.bytes).toBe(
-      50 * FILES_ROW_ESTIMATED_BYTES,
-    );
-    expect(sizes.find((s) => s.id === "metadata")!.bytes).toBeGreaterThan(0);
+    expect(findSize("covers").bytes).toBe(0);
+    expect(findSize("files").bytes).toBe(50 * FILES_ROW_ESTIMATED_BYTES);
+    expect(findSize("metadata").bytes).toBeGreaterThan(0);
     expect(
       captureErrorMock.mock.calls.some(([c]) =>
         c.message.includes("get-cache-size-covers"),

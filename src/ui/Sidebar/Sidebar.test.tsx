@@ -223,9 +223,9 @@ describe("Sidebar storage quota", () => {
     mocks.getDriveStorageQuota.mockResolvedValue(makeQuota({ limit: null }));
     render(<Sidebar {...baseProps({ isSidebarOpen: false })} />);
 
-    await waitFor(() =>
-      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(1);
+    });
     expect(screen.queryByTestId("storage-quota")).toBeNull();
     expect(screen.queryByTestId("storage-quota-bar")).toBeNull();
   });
@@ -234,9 +234,9 @@ describe("Sidebar storage quota", () => {
     mocks.getDriveStorageQuota.mockResolvedValue(null);
     render(<Sidebar {...baseProps()} />);
 
-    await waitFor(() =>
-      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(1);
+    });
     expect(screen.queryByTestId("storage-quota")).toBeNull();
   });
 
@@ -244,9 +244,9 @@ describe("Sidebar storage quota", () => {
     mocks.getDriveStorageQuota.mockRejectedValue(new Error("network down"));
     render(<Sidebar {...baseProps()} />);
 
-    await waitFor(() =>
-      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(1);
+    });
     expect(screen.queryByTestId("storage-quota")).toBeNull();
   });
 
@@ -469,9 +469,9 @@ describe("Sidebar storage quota", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent("user-changed"));
     });
-    await waitFor(() =>
-      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => {
+      expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("hides the section when the token prop changes to null (logout)", async () => {
@@ -481,9 +481,9 @@ describe("Sidebar storage quota", () => {
     await findQuotaText("2 GB / 15 GB");
     rerender(<Sidebar {...baseProps({ token: null })} />);
 
-    await waitFor(() =>
-      expect(screen.queryByTestId("storage-quota")).toBeNull(),
-    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("storage-quota")).toBeNull();
+    });
   });
 
   it("still renders playlists normally when logged in with quota", async () => {
@@ -516,9 +516,9 @@ describe("Sidebar storage quota", () => {
     fireEvent.change(input, { target: { value: "New" } });
     fireEvent.submit(input);
 
-    await waitFor(() =>
-      expect(onTabChange).toHaveBeenCalledWith("playlist_pl-new"),
-    );
+    await waitFor(() => {
+      expect(onTabChange).toHaveBeenCalledWith("playlist_pl-new");
+    });
   });
 });
 
@@ -565,7 +565,9 @@ describe('Sidebar UploadButton (header "+")', () => {
     expect(wrapper).not.toBeNull();
     // Same convention as the storage bar test: assert the exact class that
     // carries the 12px offset that closes the header/nav 12px gap.
-    expect(wrapper!.className).toContain("-mr-3");
+    if (wrapper) {
+      expect(wrapper.className).toContain("-mr-3");
+    }
   });
 
   it("renders no UploadButton when not logged in (no token), even expanded", () => {
@@ -628,7 +630,11 @@ describe("Sidebar avatar fallback", () => {
     expect(screen.queryByAltText("Profile")).toBeNull();
     const letter = screen.getByText("A");
     expect(letter.className).toContain("text-[#4285F4]");
-    expect(letter.parentElement!.className).toContain("flex");
+    const letterParent = letter.parentElement;
+    expect(letterParent).not.toBeNull();
+    if (letterParent) {
+      expect(letterParent.className).toContain("flex");
+    }
   });
 
   it("keeps the question-mark guest avatar when not logged in", () => {
@@ -650,7 +656,9 @@ describe("Sidebar playlist row + button alignment", () => {
     // The button's parent is the playlist row container.
     const row = btn.parentElement;
     expect(row).not.toBeNull();
-    expect(row!.className).toContain("justify-between");
+    if (row) {
+      expect(row.className).toContain("justify-between");
+    }
     // Expanded: no ml-3 spacer (justify-between distributes the space instead).
     expect(btn.className).not.toContain("ml-3");
   });
@@ -662,7 +670,9 @@ describe("Sidebar playlist row + button alignment", () => {
     const btn = screen.getByTitle("sidebar.create_playlist");
     const row = btn.parentElement;
     expect(row).not.toBeNull();
-    expect(row!.className).not.toContain("justify-between");
+    if (row) {
+      expect(row.className).not.toContain("justify-between");
+    }
     expect(btn.className).toContain("ml-3");
   });
 });

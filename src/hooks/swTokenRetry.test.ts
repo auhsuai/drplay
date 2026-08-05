@@ -26,13 +26,14 @@ function createFakeSelf(): FakeSelf {
     },
     skipWaiting: vi.fn(),
     clients: {
-      matchAll: vi.fn(async () => [client]),
+      matchAll: vi.fn(() => [client]),
       claim: vi.fn(),
     },
   };
 
   // Execute the real SW source in a fresh scope per test (the ?raw import
   // returns the file text; `new Function` gives it a fake `self`).
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval, @typescript-eslint/no-unsafe-call -- deliberate: runs the raw sw.js text in a sandboxed scope with a fake `self`
   new Function("self", swSource)(fakeSelf);
 
   return {
@@ -69,9 +70,9 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     const ev = sw.makeFetchEvent("abc");
     sw.emit("fetch", ev);
 
-    await vi.waitFor(() =>
-      expect(sw.postMessage).toHaveBeenCalledWith(SW_TOKEN_EXPIRED_MSG),
-    );
+    await vi.waitFor(() => {
+      expect(sw.postMessage).toHaveBeenCalledWith(SW_TOKEN_EXPIRED_MSG);
+    });
 
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "new-token" } });
 
@@ -124,7 +125,9 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     sw.emit("fetch", ev1);
     sw.emit("fetch", ev2);
 
-    await vi.waitFor(() => expect(sw.postMessage).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(sw.postMessage).toHaveBeenCalledTimes(2);
+    });
 
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "new-token" } });
 
@@ -149,7 +152,9 @@ describe("sw.js /drive-stream/ 401 recovery", () => {
     const ev = sw.makeFetchEvent("abc");
     sw.emit("fetch", ev);
 
-    await vi.waitFor(() => expect(sw.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(sw.postMessage).toHaveBeenCalled();
+    });
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "new-token" } });
 
     const response = (await ev.respondWith.mock.calls[0][0]) as Response;

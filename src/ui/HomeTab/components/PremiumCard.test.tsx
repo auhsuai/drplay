@@ -9,6 +9,7 @@ import {
   beforeAll,
 } from "vitest";
 import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import type { MockInstance } from "vitest";
 import { PremiumCard } from "./PremiumCard";
 import { getTrackMetadata } from "../../../utils/metadata";
 import type { Track } from "../../../App";
@@ -109,8 +110,8 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
     }
   });
 
-  let createObjectURLSpy: ReturnType<typeof vi.spyOn>;
-  let revokeObjectURLSpy: ReturnType<typeof vi.spyOn>;
+  let createObjectURLSpy: MockInstance<(obj: Blob | MediaSource) => string>;
+  let revokeObjectURLSpy: MockInstance<(url: string) => void>;
 
   function metadataWithPicture(): never {
     return {
@@ -168,6 +169,7 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
     const { unmount } = render(<PremiumCard {...baseProps()} />);
     await act(async () => {
       d.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
@@ -187,13 +189,16 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
     mockedFetch.mockImplementationOnce(() => d.promise);
 
     const { unmount } = render(<PremiumCard {...baseProps()} />);
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
 
     unmount();
     cleanup();
 
     await act(async () => {
       d.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     await flushMicrotasks();
 
@@ -214,6 +219,7 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
 
     await act(async () => {
       d1.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
 
@@ -231,6 +237,7 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
     );
     await act(async () => {
       d2.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
 
@@ -252,19 +259,25 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
       .mockImplementationOnce(() => d2.promise);
 
     const { rerender, unmount } = render(<PremiumCard {...baseProps()} />);
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
 
     rerender(<PremiumCard {...baseProps({ token: "tok2" })} />);
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
 
     // stale (first) fetch resolves AFTER the newer one — it must not create a URL
     await act(async () => {
       d2.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       d1.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     await flushMicrotasks();
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
@@ -289,7 +302,9 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
       .mockImplementationOnce(() => d3.promise);
 
     const { rerender, unmount } = render(<PremiumCard {...baseProps()} />);
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
 
     rerender(
       <PremiumCard
@@ -301,16 +316,21 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
         {...baseProps({ track: makeTrack({ id: "track-3" }), token: "tok3" })}
       />,
     );
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(3));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
+    });
 
     await act(async () => {
       d3.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     await act(async () => {
       d1.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     await act(async () => {
       d2.resolve(metadataWithPicture());
+      await Promise.resolve();
     });
     await flushMicrotasks();
 
@@ -350,12 +370,16 @@ describe("PremiumCard metadata rejection handling (abort-skip + captureError)", 
 
     render(<PremiumCard {...baseProps()} />);
 
-    await waitFor(() => expect(mockedCaptureError).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    });
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
         source: "PremiumCard",
-        message: expect.stringContaining("metadata-load-failed"),
+        message: expect.stringContaining(
+          "metadata-load-failed",
+        ) as unknown as string,
       }),
     );
   });
@@ -365,13 +389,16 @@ describe("PremiumCard metadata rejection handling (abort-skip + captureError)", 
     mockedFetch.mockImplementationOnce(() => d.promise);
 
     const { unmount } = render(<PremiumCard {...baseProps()} />);
-    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
 
     unmount();
     cleanup();
 
     await act(async () => {
       d.reject(new Error("aborted"));
+      await Promise.resolve();
     });
     await act(async () => {
       await Promise.resolve();

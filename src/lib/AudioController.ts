@@ -15,11 +15,11 @@ type AudioEventMap = {
    *  seeked/loadeddata/suspend/durationchange because for a small/fast file the
    *  LAST native `progress` can fire with buffered empty — those discrete
    *  events are the only proof the final buffer state settled. */
-  progress: void;
+  progress: undefined;
   error: { message: string; code: string };
-  ended: void;
-  play: void;
-  pause: void;
+  ended: undefined;
+  play: undefined;
+  pause: undefined;
 };
 
 type AudioEventHandler<K extends keyof AudioEventMap> = (
@@ -32,7 +32,7 @@ export class AudioController {
   private static readonly MAX_RETRIES = 3;
   private static readonly ENDED_THRESHOLD_SECONDS = 1;
 
-  private static instance: AudioController;
+  private static instance: AudioController | undefined;
   private audio1: HTMLAudioElement;
   private audio2: HTMLAudioElement;
   private activeIndex: 0 | 1 = 0;
@@ -97,7 +97,7 @@ export class AudioController {
         !isAbortError(e) &&
         !(e instanceof DOMException && e.name === "NotAllowedError")
       ) {
-        captureError({
+        void captureError({
           level: "warn",
           source: "AudioController",
           message: `safe-play-failed: ${e instanceof Error ? e.name : String(e)}`,
@@ -224,10 +224,10 @@ export class AudioController {
     handlers.error = () => {
       if (audio !== this.activeAudio) return;
       this.retryCount++;
-      captureError({
+      void captureError({
         level: "error",
         source: "AudioController",
-        message: `Audio error (attempt ${this.retryCount})`,
+        message: `Audio error (attempt ${String(this.retryCount)})`,
       });
 
       if (
@@ -246,7 +246,9 @@ export class AudioController {
         this.clearRetryTimer();
         this.retryTimer = setTimeout(() => {
           this.retryTimer = null;
-          this.retry(pos, trackId, token);
+          // Fire-and-forget: timer-scheduled retry; errors are handled (and
+          // logged) inside retry() itself.
+          void this.retry(pos, trackId, token);
         }, AudioController.RETRY_DELAY_MS);
       } else {
         // B1: giving up — no zombie retry may fire later.
@@ -268,10 +270,7 @@ export class AudioController {
   private getHandlers<K extends keyof AudioEventMap>(
     event: K,
   ): AudioEventHandler<K>[] {
-    const list = this.listeners[event];
-    return list
-      ? (list as AudioEventHandler<K>[])
-      : ((this.listeners[event] = []) as AudioEventHandler<K>[]);
+    return this.listeners[event] ?? (this.listeners[event] = []);
   }
 
   public on<K extends keyof AudioEventMap>(
@@ -290,10 +289,11 @@ export class AudioController {
     event: K,
     payload: AudioEventMap[K],
   ) {
-    const handlers = this.listeners[event] as
-      AudioEventHandler<K>[] | undefined;
+    const handlers = this.listeners[event];
     if (handlers) {
-      handlers.forEach((h) => h(payload));
+      handlers.forEach((h) => {
+        h(payload);
+      });
     }
   }
 
@@ -304,7 +304,8 @@ export class AudioController {
 
     if (this.currentTrackId === track.id) {
       if (this.activeAudio.paused) {
-        this.safePlay(this.activeAudio);
+        // Fire-and-forget: safePlay never rejects (errors are logged inside).
+        void this.safePlay(this.activeAudio);
       }
       return;
     }
@@ -335,7 +336,7 @@ export class AudioController {
       await newAudio.play();
     } catch (e: unknown) {
       if (!isAbortError(e) && this.currentTrackId === track.id) {
-        captureError({
+        void captureError({
           level: "warn",
           source: "AudioController",
           message: `play-failed: ${e instanceof Error ? e.name : String(e)}`,
@@ -359,7 +360,7 @@ export class AudioController {
 
     // Strip old query params and add new retry param
     const baseUrl = src.split("?")[0];
-    audio.src = baseUrl + "?retry=" + Date.now();
+    audio.src = baseUrl + "?retry=" + String(Date.now());
     audio.load();
 
     this.seekOnLoadedMetadata(audio, position);
@@ -368,7 +369,7 @@ export class AudioController {
       await audio.play();
     } catch (e: unknown) {
       if (!isAbortError(e))
-        captureError({
+        void captureError({
           level: "warn",
           source: "AudioController",
           message: `Retry autoplay failed (${e instanceof Error ? e.name : String(e)})`,
@@ -379,7 +380,8 @@ export class AudioController {
   public togglePlay() {
     if (!this.currentTrackId) return;
     if (this.activeAudio.paused) {
-      this.safePlay(this.activeAudio);
+      // Fire-and-forget: safePlay never rejects (errors are logged inside).
+      void this.safePlay(this.activeAudio);
     } else {
       this.activeAudio.pause();
     }
@@ -460,7 +462,7 @@ export class AudioController {
         el.removeAttribute("src");
         el.load();
       } catch (err) {
-        captureError({
+        void captureError({
           level: "warn",
           source: "AudioController",
           message: `release-element-failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -164,6 +164,8 @@ class FakeWorker {
   terminate = vi.fn();
 
   constructor(_url: string | URL, _options?: WorkerOptions) {
+    void _url;
+    void _options;
     FakeWorker.instances.push(this);
   }
 }
@@ -241,7 +243,7 @@ describe("startProSyncWorker", () => {
   });
 
   it("TOKEN_EXPIRED with registered handler posts the refreshed token to the worker", async () => {
-    setTokenRefreshHandler(async () => "new-token");
+    setTokenRefreshHandler(() => Promise.resolve("new-token"));
     startProSyncWorker("token");
     const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
 
@@ -257,7 +259,7 @@ describe("startProSyncWorker", () => {
   });
 
   it("setTokenRefreshHandler(null) prevents a restarted worker from reusing the stale handler", async () => {
-    setTokenRefreshHandler(async () => "stale-token");
+    setTokenRefreshHandler(() => Promise.resolve("stale-token"));
     startProSyncWorker("token");
     setTokenRefreshHandler(null);
     stopProSyncWorker();

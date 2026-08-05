@@ -27,14 +27,16 @@ describe("nextTrackPrefetcher LRU", () => {
     clearNextTrackPrefetches();
   });
 
-  it("evicts the least-recently-used track when over capacity", async () => {
+  it("evicts the least-recently-used track when over capacity", () => {
     const abortSpy = vi.spyOn(AbortController.prototype, "abort");
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response("", { status: 200 }));
 
     const urls = ["a", "b", "c", "d"].map((u) => `https://x/${u}`);
-    urls.forEach((u) => prefetchNextTrackAudio(u));
+    urls.forEach((u) => {
+      prefetchNextTrackAudio(u);
+    });
 
     // 4 fetches attempted; capacity 3 -> oldest 'a' aborted exactly once
     expect(fetchSpy).toHaveBeenCalledTimes(4);
@@ -178,9 +180,15 @@ describe("nextTrackPrefetcher AbortSignal composition", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(
       (_url, init) =>
         new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(init.signal!.reason),
-          );
+          const signal = init?.signal;
+          if (!signal) return;
+          signal.addEventListener("abort", () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new DOMException("aborted", "AbortError"),
+            );
+          });
         }),
     );
 
@@ -198,14 +206,22 @@ describe("nextTrackPrefetcher AbortSignal composition", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation((url, init) => {
-        init?.signal?.addEventListener("abort", () =>
-          aborted.push(String(url)),
-        );
+        init?.signal?.addEventListener("abort", () => {
+          aborted.push(
+            typeof url === "string"
+              ? url
+              : url instanceof URL
+                ? url.href
+                : url.url,
+          );
+        });
         return Promise.resolve(new Response("", { status: 200 }));
       });
 
     const urls = ["a", "b", "c", "d"].map((u) => `https://x/${u}`);
-    urls.forEach((u) => prefetchNextTrackAudio(u));
+    urls.forEach((u) => {
+      prefetchNextTrackAudio(u);
+    });
 
     expect(aborted).toEqual([urls[0]]);
     expect(vi.getTimerCount()).toBe(0);
@@ -223,14 +239,22 @@ describe("nextTrackPrefetcher AbortSignal composition", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation((url, init) => {
-        init?.signal?.addEventListener("abort", () =>
-          aborted.push(String(url)),
-        );
+        init?.signal?.addEventListener("abort", () => {
+          aborted.push(
+            typeof url === "string"
+              ? url
+              : url instanceof URL
+                ? url.href
+                : url.url,
+          );
+        });
         return Promise.resolve(new Response("", { status: 200 }));
       });
 
     const urls = ["a", "b"].map((u) => `https://x/${u}`);
-    urls.forEach((u) => prefetchNextTrackAudio(u));
+    urls.forEach((u) => {
+      prefetchNextTrackAudio(u);
+    });
     expect(aborted).toEqual([]);
 
     clearNextTrackPrefetches();

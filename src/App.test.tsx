@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => {
     sidebarProps: {
       value: null as null | { onTabChange: (tab: unknown) => void },
     },
-    invoke: vi.fn(async () => undefined),
+    invoke: vi.fn(() => Promise.resolve(undefined)),
     useAuth: vi.fn(() => ({
       isLoggedIn: authState.isLoggedIn,
       // Mirrors real useAuth: logout clears the access token, login restores it.
@@ -135,6 +135,7 @@ vi.mock("./ui/HomeTab/HomeTab", async () => {
     HomeTab: ({ token }: { token?: string | null }) => {
       useEffect(() => {
         if (token) mocks.homeMounts.value += 1;
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- mount counter: must run exactly once per mount, token changes must NOT recount
       }, []);
       return <div data-testid="home-tab">HOME</div>;
     },
@@ -202,11 +203,13 @@ describe("HomeTab keep-alive across tab switches", () => {
     });
 
     await act(async () => {
-      mocks.sidebarProps.value!.onTabChange(TABS.myDrive);
+      mocks.sidebarProps.value?.onTabChange(TABS.myDrive);
+      await Promise.resolve();
     });
     await screen.findByTestId("main-content");
     await act(async () => {
-      mocks.sidebarProps.value!.onTabChange(TABS.home);
+      mocks.sidebarProps.value?.onTabChange(TABS.home);
+      await Promise.resolve();
     });
     await screen.findByTestId("home-tab");
 
@@ -222,10 +225,12 @@ describe("HomeTab keep-alive across tab switches", () => {
     });
 
     await act(async () => {
-      mocks.sidebarProps.value!.onTabChange(TABS.likedSongs);
+      mocks.sidebarProps.value?.onTabChange(TABS.likedSongs);
+      await Promise.resolve();
     });
     await act(async () => {
-      mocks.sidebarProps.value!.onTabChange(TABS.home);
+      mocks.sidebarProps.value?.onTabChange(TABS.home);
+      await Promise.resolve();
     });
     await screen.findByTestId("home-tab");
 
@@ -243,10 +248,12 @@ describe("HomeTab keep-alive across tab switches", () => {
     mocks.authState.isLoggedIn = false;
     await act(async () => {
       rerender(<App />);
+      await Promise.resolve();
     });
     mocks.authState.isLoggedIn = true;
     await act(async () => {
       rerender(<App />);
+      await Promise.resolve();
     });
 
     await waitFor(() => {
@@ -259,19 +266,27 @@ describe("HomeTab keep-alive across tab switches", () => {
     await screen.findByTestId("home-tab");
 
     await act(async () => {
-      mocks.sidebarProps.value!.onTabChange(TABS.myDrive);
+      mocks.sidebarProps.value?.onTabChange(TABS.myDrive);
+      await Promise.resolve();
     });
     await screen.findByTestId("main-content");
 
     const homeTab = screen.getByTestId("home-tab");
     expect(homeTab).toBeTruthy();
-    expect(homeTab.parentElement!.className).toContain("hidden");
+    const homeParent = homeTab.parentElement;
+    expect(homeParent).not.toBeNull();
+    if (homeParent) {
+      expect(homeParent.className).toContain("hidden");
+    }
 
     await act(async () => {
-      mocks.sidebarProps.value!.onTabChange(TABS.home);
+      mocks.sidebarProps.value?.onTabChange(TABS.home);
+      await Promise.resolve();
     });
-    expect(
-      screen.getByTestId("home-tab").parentElement!.className,
-    ).not.toContain("hidden");
+    const homeParent2 = screen.getByTestId("home-tab").parentElement;
+    expect(homeParent2).not.toBeNull();
+    if (homeParent2) {
+      expect(homeParent2.className).not.toContain("hidden");
+    }
   });
 });

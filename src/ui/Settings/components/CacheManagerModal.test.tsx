@@ -43,14 +43,20 @@ vi.mock("../../../utils/cache", () => ({
 
 const captureError = vi.fn();
 vi.mock("../../../utils/errorLog", () => ({
-  captureError: (input: unknown) => captureError(input),
+  captureError: (input: unknown) => {
+    captureError(input);
+  },
 }));
 
 const showErrorToast = vi.fn();
 const showSuccessToast = vi.fn();
 vi.mock("../../../utils/simpleToast", () => ({
-  showErrorToast: (msg: string) => showErrorToast(msg),
-  showSuccessToast: (msg: string) => showSuccessToast(msg),
+  showErrorToast: (msg: string) => {
+    showErrorToast(msg);
+  },
+  showSuccessToast: (msg: string) => {
+    showSuccessToast(msg);
+  },
 }));
 
 const SIZES: CacheCategoryInfo[] = [
@@ -66,7 +72,9 @@ function renderOpen(onClose = vi.fn()) {
 }
 
 describe("CacheManagerModal", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+  });
 
   beforeEach(() => {
     vi.mocked(getCacheSizes).mockReset();
@@ -155,8 +163,9 @@ describe("CacheManagerModal", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     checkboxes.forEach((cb) => fireEvent.click(cb));
     expect(
-      (screen.getByRole("button", { name: "Clear Cache" }) as HTMLButtonElement)
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Clear Cache",
+      }).disabled,
     ).toBe(true);
   });
 

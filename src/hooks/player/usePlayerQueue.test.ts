@@ -207,7 +207,9 @@ describe("shuffleQueueWithCurrent", () => {
     const result = shuffleQueueWithCurrent(queue, queue[3], queue[0]);
     expect(result).toHaveLength(5);
     expect(new Set(result)).toHaveLength(5);
-    queue.forEach((t) => expect(result).toContain(t));
+    queue.forEach((t) => {
+      expect(result).toContain(t);
+    });
   });
 
   it("deterministic khi Math.random mock giá trị cố định", () => {
@@ -292,7 +294,9 @@ describe("updateQueueContext", () => {
     const saved = setOriginalQueue.mock.calls[0]?.[0] as Track[];
     expect(saved).toHaveLength(2);
     expect(saved.map((t) => t.id)).toEqual(["t1", "t2"]);
-    saved.forEach((t) => expect(t.queueItemId).toBeTypeOf("string"));
+    saved.forEach((t) => {
+      expect(t.queueItemId).toBeTypeOf("string");
+    });
     expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
       SESSION_CLEANUP_KEYS.queueKv,
       saved,

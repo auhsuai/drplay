@@ -21,14 +21,17 @@ try {
 } catch (err) {
   // Storage blocked (SecurityError — see MDN Window.localStorage): the app
   // must boot even when persistence is unavailable, so fall back to English.
-  captureError({
+  // Fire-and-forget: captureError never rejects.
+  void captureError({
     level: "warn",
     source: "i18n",
     message: `i18n-language-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
   });
 }
 
-i18n.use(initReactI18next).init({
+// Fire-and-forget: i18next init() returns a completion promise the app does
+// not await (resources are bundled, init is synchronous in practice).
+void i18n.use(initReactI18next).init({
   resources,
   lng: savedLanguage,
   fallbackLng: "en",

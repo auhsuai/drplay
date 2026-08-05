@@ -35,7 +35,7 @@ describe("streamPrefetcher", () => {
   });
 
   it("evicts the oldest entry beyond MAX_CACHE (200)", () => {
-    const ids = Array.from({ length: 201 }, (_, i) => `id_${i}`);
+    const ids = Array.from({ length: 201 }, (_, i) => `id_${String(i)}`);
     prefetchVisibleTracks(ids);
     expect(getPrefetchedStreamUrl("id_0")).toBeUndefined();
     expect(getPrefetchedStreamUrl("id_200")).toBe("/drive-stream/id_200");

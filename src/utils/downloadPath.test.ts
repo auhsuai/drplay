@@ -48,7 +48,9 @@ describe("downloadPath", () => {
       throw new DOMException("quota", "QuotaExceededError");
     });
 
-    expect(() => setCustomDownloadPath("C:\\Music")).not.toThrow();
+    expect(() => {
+      setCustomDownloadPath("C:\\Music");
+    }).not.toThrow();
     expect(mockedCaptureError).toHaveBeenCalledWith({
       level: "warn",
       source: "downloadPath",

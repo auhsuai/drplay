@@ -11,7 +11,7 @@ import { initReactI18next, useTranslation } from "react-i18next";
 import i18n from "i18next";
 import { ErrorLogSection } from "./ErrorLogSection";
 
-i18n.use(initReactI18next).init({
+void i18n.use(initReactI18next).init({
   lng: "en",
   fallbackLng: "en",
   resources: {

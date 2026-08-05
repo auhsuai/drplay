@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
+import type { MockInstance } from "vitest";
 import type { Track } from "../../../App";
 import type { CachedMetadata } from "../../../utils/metadata";
 import { getTrackMetadata } from "../../../utils/metadata";
@@ -54,8 +55,8 @@ beforeAll(() => {
   }
 });
 
-let createObjectURLSpy: ReturnType<typeof vi.spyOn>;
-let revokeObjectURLSpy: ReturnType<typeof vi.spyOn>;
+let createObjectURLSpy: MockInstance<(obj: Blob | MediaSource) => string>;
+let revokeObjectURLSpy: MockInstance<(url: string) => void>;
 
 function makeTrack(overrides: Partial<Track> = {}): Track {
   return {
@@ -118,7 +119,7 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
 
     unmount();
 
-    await act(async () => {
+    act(() => {
       resolveMeta(metadataWithPicture());
     });
     await flushMicrotasks();
@@ -165,7 +166,7 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
 
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
-    await act(async () => {
+    act(() => {
       resolvePalette(["rgba(10,20,30,0.8)", "rgba(1,2,3,0.8)"]);
     });
     await flushMicrotasks();
@@ -204,7 +205,7 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
 
     expect(metaResolvers).toHaveLength(2);
 
-    await act(async () => {
+    act(() => {
       metaResolvers[0](metadataWithPicture());
       metaResolvers[1](metadataWithPicture());
     });
@@ -214,7 +215,7 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
     expect(createObjectURLSpy).toHaveBeenCalledWith(expect.any(Blob));
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
-    await act(async () => {
+    act(() => {
       paletteResolvers[0](["rgba(1,1,1,0.8)", "rgba(2,2,2,0.8)"]);
     });
     await flushMicrotasks();
@@ -239,7 +240,9 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
       expect.objectContaining({
         level: "warn",
         source: "useNowPlayingMetadata",
-        message: expect.stringContaining("palette-failed"),
+        message: expect.stringContaining(
+          "palette-failed",
+        ) as unknown as string,
       }),
     );
   });

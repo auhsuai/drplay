@@ -41,7 +41,11 @@ describe("captureError", () => {
 
   it("caps at ERROR_LOG_MAX and removes oldest", async () => {
     for (let i = 0; i < ERROR_LOG_MAX + 1; i++) {
-      await captureError({ source: "cap", message: `entry-${i}`, kind: "seq" });
+      await captureError({
+        source: "cap",
+        message: `entry-${String(i)}`,
+        kind: "seq",
+      });
     }
 
     const logs = await getErrorLogs();
@@ -91,7 +95,7 @@ describe("captureError — atomic prune (upgrade)", () => {
       for (let i = 0; i < ERROR_LOG_MAX + 1; i++) {
         await captureError({
           source: "atomic-cap",
-          message: `atomic-${i}`,
+          message: `atomic-${String(i)}`,
           kind: "seq",
         });
       }

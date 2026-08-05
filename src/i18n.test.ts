@@ -44,7 +44,9 @@ describe("i18n module init (P0 crash guard)", () => {
       expect.objectContaining({
         level: "warn",
         source: "i18n",
-        message: expect.stringContaining("i18n-language-read-failed"),
+        message: expect.stringContaining(
+          "i18n-language-read-failed",
+        ) as unknown as string,
       }),
     );
   });

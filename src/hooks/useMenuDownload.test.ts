@@ -59,7 +59,7 @@ const AUDIO_BYTES = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
 function fetchResolved(bytes: Uint8Array = AUDIO_BYTES): void {
   vi.spyOn(globalThis, "fetch").mockResolvedValue({
     ok: true,
-    arrayBuffer: async () => {
+    arrayBuffer: () => {
       const buf = new ArrayBuffer(bytes.byteLength);
       new Uint8Array(buf).set(bytes);
       return buf;
@@ -87,8 +87,9 @@ function writeFileCall(): { bytes: Uint8Array; pathHeader: string } {
     (c) => c[0] === "plugin:fs|write_file",
   );
   expect(call).toBeDefined();
-  const headers = call![2] as { headers: { path: string } };
-  return { bytes: call![1] as Uint8Array, pathHeader: headers.headers.path };
+  if (!call) throw new Error("expected a write_file invoke call");
+  const headers = call[2] as { headers: { path: string } };
+  return { bytes: call[1] as Uint8Array, pathHeader: headers.headers.path };
 }
 
 function expectNoWriteFile(): void {
@@ -106,9 +107,9 @@ beforeEach(() => {
   // Windows-style separator, matching the pre-upgrade behavior the existing
   // assertions were written against.
   mockedJoin.mockImplementation(
-    async (dir: string, file: string) => `${dir}\\${file}`,
+    (dir: string, file: string) => Promise.resolve(`${dir}\\${file}`),
   );
-  mockedInvoke.mockImplementation(async () => undefined);
+  mockedInvoke.mockImplementation(() => Promise.resolve(undefined));
 });
 
 afterEach(() => {
@@ -183,9 +184,11 @@ describe("useMenuDownload custom download path (RC2)", () => {
   it("still writes the file when register_download_path fails (scope extend must not block the flow)", async () => {
     mockedGetCustomDownloadPath.mockReturnValue("C:\\Music");
     mockedGetEffectiveDownloadPath.mockResolvedValue("C:\\Music");
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "register_download_path") throw new Error("scope denied");
-      return undefined;
+    mockedInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "register_download_path") {
+        return Promise.reject(new Error("scope denied"));
+      }
+      return Promise.resolve(undefined);
     });
     fetchResolved();
 
@@ -233,9 +236,11 @@ describe("useMenuDownload error handling", () => {
 
   it('shows "Tải xuống thất bại" when the write itself is rejected by the fs plugin', async () => {
     fetchResolved();
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "plugin:fs|write_file") throw new Error("file exists");
-      return undefined;
+    mockedInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "plugin:fs|write_file") {
+        return Promise.reject(new Error("file exists"));
+      }
+      return Promise.resolve(undefined);
     });
 
     const result = await runDownload();
@@ -273,7 +278,7 @@ describe("useMenuDownload abortable download", () => {
     await runDownload();
 
     const fetchMock = vi.mocked(fetch);
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const init = fetchMock.mock.calls[0]?.[1];
     expect(init?.signal).toBeDefined();
   });
 
@@ -301,7 +306,7 @@ describe("useMenuDownload abortable download", () => {
       await Promise.resolve();
     });
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const init = fetchMock.mock.calls[0]?.[1];
     expect(init?.signal).toBeDefined();
     expect(init?.signal?.aborted).toBe(false);
 
@@ -324,7 +329,7 @@ describe("useMenuDownload abortable download", () => {
 describe("useMenuDownload save path building (RC3)", () => {
   it("builds the save path via join() with the platform separator (POSIX regression: no literal backslash)", async () => {
     mockedJoin.mockImplementation(
-      async (dir: string, file: string) => `${dir}/${file}`,
+      (dir: string, file: string) => Promise.resolve(`${dir}/${file}`),
     );
     mockedGetEffectiveDownloadPath.mockResolvedValue("/home/user/Music");
     fetchResolved();

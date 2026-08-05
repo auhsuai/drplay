@@ -41,7 +41,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
+  listen: vi.fn(() => () => {}),
 }));
 
 vi.mock("../store/authStore", () => ({
@@ -109,12 +109,12 @@ const mockedReadRefreshToken = vi.mocked(readRefreshToken);
 const mockedDeleteRefreshToken = vi.mocked(deleteRefreshToken);
 
 const invokedCommands = (): string[] =>
-  mockedInvoke.mock.calls.map((call) => call[0] as string);
+  mockedInvoke.mock.calls.map((call) => call[0]);
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  mockedInvoke.mockImplementation(async () => undefined);
+  mockedInvoke.mockImplementation(() => Promise.resolve(undefined));
   mockedListen.mockResolvedValue(() => {});
 });
 
@@ -136,8 +136,7 @@ describe("useAuth init effect token expiry model (B1)", () => {
     renderHook(() => useAuth());
 
     expect(mockedScheduleProactiveRefresh).toHaveBeenCalledTimes(1);
-    const remainingSec = mockedScheduleProactiveRefresh.mock
-      .calls[0][0] as number;
+    const remainingSec = mockedScheduleProactiveRefresh.mock.calls[0][0];
     expect(remainingSec).toBeGreaterThanOrEqual(110);
     expect(remainingSec).toBeLessThanOrEqual(130);
   });
@@ -266,9 +265,11 @@ describe("useAuth handleLogout backend cleanup", () => {
   });
 
   it("logs a warn and continues logout when clear_local_cache fails (contract preserved)", async () => {
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "clear_local_cache") throw new Error("backend down");
-      return undefined;
+    mockedInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "clear_local_cache") {
+        return Promise.reject(new Error("backend down"));
+      }
+      return Promise.resolve(undefined);
     });
     const onLogoutExt = vi.fn();
     const { result } = renderHook(() => useAuth(onLogoutExt));

@@ -27,7 +27,10 @@ const mocks = vi.hoisted(() => ({
   startUploads: vi.fn(),
   showErrorToast: vi.fn(),
   captureError: vi.fn(),
-  lucideCloudUpload: vi.fn((_props: { className?: string }) => null),
+  lucideCloudUpload: vi.fn((props: { className?: string }) => {
+    void props;
+    return null;
+  }),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
@@ -51,12 +54,12 @@ function openButton(): HTMLElement {
   return screen.getByTitle(BUTTON_TITLE);
 }
 
-async function selectFileOption() {
+function selectFileOption() {
   fireEvent.click(openButton());
   fireEvent.click(screen.getByText(MENU_FILE_LABEL));
 }
 
-async function selectFolderOption() {
+function selectFolderOption() {
   fireEvent.click(openButton());
   fireEvent.click(screen.getByText(MENU_FOLDER_LABEL));
 }
@@ -84,9 +87,7 @@ describe("UploadButton", () => {
   it("renders the CloudUpload icon (cloud-arrow-up) at w-5 h-5", () => {
     render(<UploadButton token="tok-1" />);
     expect(mocks.lucideCloudUpload).toHaveBeenCalledTimes(1);
-    const props = mocks.lucideCloudUpload.mock.calls[0][0] as {
-      className?: string;
-    };
+    const props = mocks.lucideCloudUpload.mock.calls[0][0];
     expect(props.className).toBe("w-5 h-5");
   });
 
@@ -112,16 +113,18 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue(["C:\\Music\\a.mp3", "C:\\Music\\b.flac"]);
     render(<UploadButton token="tok-1" />);
 
-    await selectFileOption();
+    selectFileOption();
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(mocks.open).toHaveBeenCalledWith({
         directory: false,
         multiple: true,
         filters: [AUDIO_FILTER],
-      }),
-    );
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+      });
+    });
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -145,9 +148,11 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue("C:\\Music\\only.mp3");
     render(<UploadButton token="tok-1" />);
 
-    await selectFileOption();
+    selectFileOption();
 
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -165,12 +170,14 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue("C:\\Music\\Album");
     render(<UploadButton token="tok-1" />);
 
-    await selectFolderOption();
+    selectFolderOption();
 
-    await waitFor(() =>
-      expect(mocks.open).toHaveBeenCalledWith({ directory: true }),
-    );
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.open).toHaveBeenCalledWith({ directory: true });
+    });
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -188,9 +195,11 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue("C:\\Music\\Album\\");
     render(<UploadButton token="tok-1" />);
 
-    await selectFolderOption();
+    selectFolderOption();
 
-    await waitFor(() => expect(mocks.startUploads).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(mocks.startUploads).toHaveBeenCalledTimes(1);
+    });
     expect(mocks.startUploads).toHaveBeenCalledWith(
       [
         {
@@ -208,9 +217,11 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue(null);
     render(<UploadButton token="tok-1" />);
 
-    await selectFileOption();
+    selectFileOption();
 
-    await waitFor(() => expect(mocks.open).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(mocks.open).toHaveBeenCalled();
+    });
     expect(mocks.startUploads).not.toHaveBeenCalled();
   });
 
@@ -218,11 +229,11 @@ describe("UploadButton", () => {
     mocks.open.mockRejectedValue(new Error("dialog exploded"));
     render(<UploadButton token="tok-1" />);
 
-    await selectFileOption();
+    selectFileOption();
 
-    await waitFor(() =>
-      expect(mocks.showErrorToast).toHaveBeenCalledWith("upload.upload_error"),
-    );
+    await waitFor(() => {
+      expect(mocks.showErrorToast).toHaveBeenCalledWith("upload.upload_error");
+    });
     expect(mocks.captureError).toHaveBeenCalledWith(
       expect.objectContaining({ source: "UploadButton", level: "error" }),
     );
@@ -232,11 +243,11 @@ describe("UploadButton", () => {
     mocks.open.mockRejectedValue(new Error("dialog exploded"));
     render(<UploadButton token="tok-1" />);
 
-    await selectFolderOption();
+    selectFolderOption();
 
-    await waitFor(() =>
-      expect(mocks.showErrorToast).toHaveBeenCalledWith("upload.upload_error"),
-    );
+    await waitFor(() => {
+      expect(mocks.showErrorToast).toHaveBeenCalledWith("upload.upload_error");
+    });
     expect(mocks.captureError).toHaveBeenCalledWith(
       expect.objectContaining({ source: "UploadButton" }),
     );
@@ -246,9 +257,11 @@ describe("UploadButton", () => {
     mocks.open.mockResolvedValue(null);
     render(<UploadButton token="tok-1" />);
 
-    await selectFileOption();
+    selectFileOption();
 
-    await waitFor(() => expect(screen.queryByText(MENU_FILE_LABEL)).toBeNull());
+    await waitFor(() => {
+      expect(screen.queryByText(MENU_FILE_LABEL)).toBeNull();
+    });
   });
 
   it("closes the menu on an outside mousedown", () => {
@@ -272,7 +285,12 @@ describe("UploadButton", () => {
   it("does not propagate the button click to the sidebar header", () => {
     const onHeaderClick = vi.fn();
     render(
-      <div onClick={onHeaderClick}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onHeaderClick}
+        onKeyDown={onHeaderClick}
+      >
         <UploadButton token="tok-1" />
       </div>,
     );

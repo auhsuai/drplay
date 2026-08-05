@@ -191,13 +191,15 @@ describe("FullRecentView menu delete flow", () => {
     expect(screen.getByText("Move to Trash?")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await waitFor(() =>
-      expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith("tok", "t1"),
-    );
-    await waitFor(() =>
-      expect(mocks.db.files.delete).toHaveBeenCalledWith("t1"),
-    );
-    await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
+    await waitFor(() => {
+      expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith("tok", "t1");
+    });
+    await waitFor(() => {
+      expect(mocks.db.files.delete).toHaveBeenCalledWith("t1");
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Alpha")).toBeNull();
+    });
     expect(screen.getByText("Beta")).toBeTruthy();
   });
 });

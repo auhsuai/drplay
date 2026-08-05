@@ -29,7 +29,7 @@ vi.mock("../../utils/errorLog", () => ({
 const audioMock = vi.hoisted(() => ({
   getCurrentTime: vi.fn(() => 0),
   getDuration: vi.fn(() => 0),
-  on: vi.fn((_event: string, _handler: () => void) => () => {}),
+  on: vi.fn<(event: string, handler: () => void) => () => void>(() => () => {}),
 }));
 
 vi.mock("../../lib/AudioController", () => ({
@@ -65,15 +65,15 @@ function makeHook() {
   const setPlaybackQueue = vi.fn();
   const setPlayMode = vi.fn();
   const triggerReload = vi.fn();
-  renderHook(() =>
+  renderHook(() => {
     usePlayerSession(
       setCurrentTrack,
       setOriginalQueue,
       setPlaybackQueue,
       setPlayMode,
       triggerReload,
-    ),
-  );
+    );
+  });
   return {
     setCurrentTrack,
     setOriginalQueue,
@@ -204,7 +204,9 @@ describe("usePlayerSession restore (lock-behavior)", () => {
       expect.objectContaining({
         level: "warn",
         source: "usePlayerSession",
-        message: expect.stringContaining("session-corrupt"),
+        message: expect.stringContaining(
+          "session-corrupt",
+        ) as unknown as string,
       }),
     );
 
@@ -248,7 +250,9 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
       expect.objectContaining({
         level: "warn",
         source: "usePlayerSession",
-        message: expect.stringContaining("session-playmode-corrupt"),
+        message: expect.stringContaining(
+          "session-playmode-corrupt",
+        ) as unknown as string,
       }),
     );
     expect(setCurrentTrack).toHaveBeenCalledTimes(1);
@@ -261,9 +265,9 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
     const addSpy = vi.spyOn(window, "addEventListener");
     const removeSpy = vi.spyOn(window, "removeEventListener");
 
-    const { unmount } = renderHook(() =>
-      usePlayerSession(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()),
-    );
+    const { unmount } = renderHook(() => {
+      usePlayerSession(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    });
 
     expect(addSpy.mock.calls.some((c) => c[0] === "beforeunload")).toBe(true);
     expect(addSpy.mock.calls.some((c) => c[0] === "pagehide")).toBe(true);
@@ -298,7 +302,9 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
       expect.objectContaining({
         level: "warn",
         source: "usePlayerSession",
-        message: expect.stringContaining("session-save-fail"),
+        message: expect.stringContaining(
+          "session-save-fail",
+        ) as unknown as string,
       }),
     );
   });
@@ -332,7 +338,9 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
       expect.objectContaining({
         level: "error",
         source: "usePlayerSession",
-        message: expect.stringContaining("session-load-failed"),
+        message: expect.stringContaining(
+          "session-load-failed",
+        ) as unknown as string,
       }),
     );
   });

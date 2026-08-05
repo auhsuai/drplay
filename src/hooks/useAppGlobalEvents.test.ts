@@ -28,7 +28,9 @@ afterEach(() => {
 describe("useAppGlobalEvents focus refresh guard (M1c)", () => {
   it("refreshes on focus when only an access token exists (keyring user has no refresh token in localStorage)", () => {
     localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
-    renderHook(() => useAppGlobalEvents(() => {}));
+    renderHook(() => {
+      useAppGlobalEvents(() => {});
+    });
 
     window.dispatchEvent(new Event("focus"));
 
@@ -36,7 +38,9 @@ describe("useAppGlobalEvents focus refresh guard (M1c)", () => {
   });
 
   it("skips the refresh on focus when signed out (no access token)", () => {
-    renderHook(() => useAppGlobalEvents(() => {}));
+    renderHook(() => {
+      useAppGlobalEvents(() => {});
+    });
 
     window.dispatchEvent(new Event("focus"));
 

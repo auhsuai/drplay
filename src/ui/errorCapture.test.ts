@@ -21,17 +21,27 @@ const { captureSpy } = vi.hoisted(() => ({
 
 // Intercept the errorLog module so captureError routes to our spy.
 vi.mock("../utils/errorLog", () => ({
-  captureError: (...args: any[]) => captureSpy(...args),
+  captureError: (...args: unknown[]) => {
+    captureSpy(...args);
+  },
 }));
 
 // Fake window + localStorage so importing main.tsx (which imports i18n->localStorage)
 // and registering global handlers works in node.
-const listeners: Record<string, Array<(e: any) => void>> = {};
+const listeners: Record<string, Array<(e: unknown) => void>> = {};
 const fakeWindow = {
-  addEventListener: (type: string, cb: (e: any) => void) => {
+  addEventListener: (type: string, cb: (e: unknown) => void) => {
     (listeners[type] ??= []).push(cb);
   },
-} as any;
+};
+
+function setGlobal(name: string, value: unknown): void {
+  (globalThis as unknown as Record<string, unknown>)[name] = value;
+}
+
+function deleteGlobal(name: string): void {
+  Reflect.deleteProperty(globalThis, name);
+}
 
 beforeEach(() => {
   captureSpy.mockReset();
@@ -39,14 +49,14 @@ beforeEach(() => {
   // Note: listeners persist across tests by design — main.tsx registers its
   // global handlers once (module is cached). We only reset the spy, not the
   // captured listener callbacks, so each test can fire its own event type.
-  (globalThis as any).window = fakeWindow;
-  (globalThis as any).localStorage = { getItem: () => null, setItem: () => {} };
-  (globalThis as any).document = { getElementById: () => null };
+  setGlobal("window", fakeWindow);
+  setGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+  setGlobal("document", { getElementById: () => null });
 });
 
 afterEach(() => {
-  delete (globalThis as any).window;
-  delete (globalThis as any).localStorage;
+  deleteGlobal("window");
+  deleteGlobal("localStorage");
 });
 
 describe("global error capture", () => {
@@ -54,13 +64,15 @@ describe("global error capture", () => {
     // Importing main.tsx already calls registerGlobalErrorHandlers() at load.
     await import("../main");
 
-    const errEvent = { message: "boom", error: { stack: "stacktrace" } } as any;
-    listeners.error.forEach((cb) => cb(errEvent));
+    const errEvent = { message: "boom", error: { stack: "stacktrace" } };
+    listeners.error.forEach((cb) => {
+      cb(errEvent);
+    });
 
     expect(captureSpy).toHaveBeenCalled();
     const arg = captureSpy.mock.calls.find(
-      (c) => c[0].source === "window.onerror",
-    )?.[0];
+      (c) => (c[0] as { source?: string }).source === "window.onerror",
+    )?.[0] as { source: string; message: string; stack?: string };
     expect(arg).toBeDefined();
     expect(arg.source).toBe("window.onerror");
     expect(arg.message).toBe("boom");
@@ -70,13 +82,15 @@ describe("global error capture", () => {
   it("unhandledrejection handler calls captureError with source 'unhandledrejection' and message from reason", async () => {
     await import("../main");
 
-    const rejEvent = { reason: new Error("promise failed") } as any;
-    listeners.unhandledrejection.forEach((cb) => cb(rejEvent));
+    const rejEvent = { reason: new Error("promise failed") };
+    listeners.unhandledrejection.forEach((cb) => {
+      cb(rejEvent);
+    });
 
     expect(captureSpy).toHaveBeenCalled();
     const arg = captureSpy.mock.calls.find(
-      (c) => c[0].source === "unhandledrejection",
-    )?.[0];
+      (c) => (c[0] as { source?: string }).source === "unhandledrejection",
+    )?.[0] as { source: string; message: string; stack?: string };
     expect(arg).toBeDefined();
     expect(arg.source).toBe("unhandledrejection");
     expect(arg.message).toBe("promise failed");
@@ -88,11 +102,16 @@ describe("global error capture", () => {
     const boundary = new ErrorBoundary({ children: null });
 
     const error = new Error("render boom");
-    const errorInfo = { componentStack: "at Foo" } as any;
+    const errorInfo = { componentStack: "at Foo" };
 
-    expect(() => boundary.componentDidCatch(error, errorInfo)).not.toThrow();
+    expect(() => {
+      boundary.componentDidCatch(error, errorInfo);
+    }).not.toThrow();
     expect(captureSpy).toHaveBeenCalledTimes(1);
-    const arg = captureSpy.mock.calls[0][0];
+    const arg = captureSpy.mock.calls[0][0] as {
+      source: string;
+      message: string;
+    };
     expect(arg.source).toBe("ErrorBoundary");
     expect(arg.message).toBe("render boom");
   });
@@ -104,9 +123,11 @@ describe("global error capture", () => {
     const boundary = new ErrorBoundary({ children: null });
 
     const error = new Error("render boom");
-    const errorInfo = { componentStack: "at Foo" } as any;
+    const errorInfo = { componentStack: "at Foo" };
 
-    expect(() => boundary.componentDidCatch(error, errorInfo)).not.toThrow();
+    expect(() => {
+      boundary.componentDidCatch(error, errorInfo);
+    }).not.toThrow();
     expect(captureSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -115,11 +136,13 @@ describe("global error capture", () => {
 
     const rejEvent = {
       reason: new DOMException("The user aborted a request", "AbortError"),
-    } as any;
-    listeners.unhandledrejection.forEach((cb) => cb(rejEvent));
+    };
+    listeners.unhandledrejection.forEach((cb) => {
+      cb(rejEvent);
+    });
 
     const aborted = captureSpy.mock.calls.find(
-      (c) => c[0].source === "unhandledrejection",
+      (c) => (c[0] as { source?: string }).source === "unhandledrejection",
     );
     expect(aborted).toBeUndefined();
   });
@@ -132,12 +155,14 @@ describe("global error capture", () => {
         "The operation was aborted due to timeout",
         "AbortError",
       ),
-    } as any;
-    listeners.unhandledrejection.forEach((cb) => cb(rejEvent));
+    };
+    listeners.unhandledrejection.forEach((cb) => {
+      cb(rejEvent);
+    });
 
     const arg = captureSpy.mock.calls.find(
-      (c) => c[0].source === "unhandledrejection",
-    )?.[0];
+      (c) => (c[0] as { source?: string }).source === "unhandledrejection",
+    )?.[0] as { kind: string; level: string };
     expect(arg).toBeDefined();
     expect(arg.kind).toBe("timeout");
     expect(arg.level).toBe("warn");
@@ -149,11 +174,13 @@ describe("global error capture", () => {
     const errEvent = {
       message: "The user aborted a request",
       error: new DOMException("The user aborted a request", "AbortError"),
-    } as any;
-    listeners.error.forEach((cb) => cb(errEvent));
+    };
+    listeners.error.forEach((cb) => {
+      cb(errEvent);
+    });
 
     const aborted = captureSpy.mock.calls.find(
-      (c) => c[0].source === "window.onerror",
+      (c) => (c[0] as { source?: string }).source === "window.onerror",
     );
     expect(aborted).toBeUndefined();
   });
