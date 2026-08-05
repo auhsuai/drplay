@@ -122,6 +122,41 @@ describe("TopNavigationBar breadcrumb horizontal scroll (wheel + drag)", () => {
     expect(el.scrollLeft).toBe(100);
   });
 
+  it("click thuần (pointerdown không di chuyển) KHÔNG gọi setPointerCapture", () => {
+    render(
+      <TopNavigationBar
+        {...makeProps({
+          folderHistory: LONG_HISTORY,
+          currentFolderName: "current",
+        })}
+      />,
+    );
+    const el = getBreadcrumb();
+    const captureSpy = vi.fn();
+    el.setPointerCapture = captureSpy;
+    fireEvent.pointerDown(el, { clientX: 100, pointerId: 7 });
+    expect(captureSpy).not.toHaveBeenCalled();
+    expect(el.scrollLeft).toBe(0);
+  });
+
+  it("di chuyển dưới ngưỡng drag (5px) không bắt đầu drag", () => {
+    render(
+      <TopNavigationBar
+        {...makeProps({
+          folderHistory: LONG_HISTORY,
+          currentFolderName: "current",
+        })}
+      />,
+    );
+    const el = getBreadcrumb();
+    const captureSpy = vi.fn();
+    el.setPointerCapture = captureSpy;
+    fireEvent.pointerDown(el, { clientX: 100, pointerId: 8 });
+    fireEvent.pointerMove(el, { clientX: 97, pointerId: 8 });
+    expect(captureSpy).not.toHaveBeenCalled();
+    expect(el.scrollLeft).toBe(0);
+  });
+
   it("drag chuột cuộn ngang theo clientX, kết thúc khi pointerup", () => {
     render(
       <TopNavigationBar
@@ -132,8 +167,11 @@ describe("TopNavigationBar breadcrumb horizontal scroll (wheel + drag)", () => {
       />,
     );
     const el = getBreadcrumb();
+    const captureSpy = vi.fn();
+    el.setPointerCapture = captureSpy;
     fireEvent.pointerDown(el, { clientX: 100, pointerId: 1 });
     fireEvent.pointerMove(el, { clientX: 50, pointerId: 1 });
+    expect(captureSpy).toHaveBeenCalled();
     expect(el.scrollLeft).toBe(50);
     fireEvent.pointerMove(el, { clientX: 0, pointerId: 1 });
     expect(el.scrollLeft).toBe(100);

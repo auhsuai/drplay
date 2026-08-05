@@ -6,6 +6,7 @@ import { MY_DRIVE_TAB } from "../../../utils/driveConstants";
 import { captureError } from "../../../utils/errorLog";
 
 const TOP_NAVIGATION_BAR_MODULE = "TopNavigationBar";
+const DRAG_THRESHOLD_PX = 5;
 
 interface TopNavigationBarProps {
   isSelectionMode: boolean;
@@ -51,6 +52,7 @@ export function TopNavigationBar({
     startX: number;
     startScrollLeft: number;
   } | null>(null);
+  const isDraggingRef = useRef(false);
 
   useEffect(() => {
     if (isSelectionMode) return;
@@ -66,29 +68,51 @@ export function TopNavigationBar({
       el.scrollLeft += e.deltaY + e.deltaX;
     };
 
+    // Why: capture only starts once the pointer actually moves beyond
+    // DRAG_THRESHOLD_PX. Capturing on pointerdown would retarget pointerup
+    // (and the subsequent click) to this container, so a plain click on a
+    // breadcrumb button would never fire onBreadcrumbClick.
     const onPointerDown = (e: PointerEvent) => {
       dragStartRef.current = {
         startX: e.clientX,
         startScrollLeft: el.scrollLeft,
       };
-      try {
-        el.setPointerCapture(e.pointerId);
-      } catch (err) {
-        void captureError({
-          level: "warn",
-          source: TOP_NAVIGATION_BAR_MODULE,
-          message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      }
     };
 
     const onPointerMove = (e: PointerEvent) => {
       const drag = dragStartRef.current;
       if (!drag) return;
+      if (!isDraggingRef.current) {
+        if (Math.abs(e.clientX - drag.startX) <= DRAG_THRESHOLD_PX) return;
+        isDraggingRef.current = true;
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch (err) {
+          void captureError({
+            level: "warn",
+            source: TOP_NAVIGATION_BAR_MODULE,
+            message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
       el.scrollLeft = drag.startScrollLeft - (e.clientX - drag.startX);
     };
 
-    const endDrag = () => {
+    const endDrag = (e: PointerEvent) => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        try {
+          if (el.hasPointerCapture(e.pointerId)) {
+            el.releasePointerCapture(e.pointerId);
+          }
+        } catch (err) {
+          void captureError({
+            level: "warn",
+            source: TOP_NAVIGATION_BAR_MODULE,
+            message: `release-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
       dragStartRef.current = null;
     };
 
