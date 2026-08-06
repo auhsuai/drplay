@@ -31,6 +31,17 @@ export class AudioController {
   private static readonly RETRY_DELAY_MS = 2000;
   private static readonly MAX_RETRIES = 3;
   private static readonly ENDED_THRESHOLD_SECONDS = 1;
+  // Task B: mediaError.code values, per MDN MediaError constants (same
+  // values lib.dom declares on the global `MediaError` constructor). The
+  // global is NOT implemented by jsdom (the test environment), so referencing
+  // `MediaError.MEDIA_ERR_*` at runtime would throw ReferenceError in tests —
+  // the named values below carry the same semantics without that dependency.
+  // MEDIA_ERR_NETWORK (2) is intentionally NOT declared: the retry path below
+  // covers "every remaining code" (NETWORK or a null mediaError), so a
+  // constant for it would be an unused private member (TS6133).
+  private static readonly MEDIA_ERR_ABORTED = 1;
+  private static readonly MEDIA_ERR_DECODE = 3;
+  private static readonly MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
   private static instance: AudioController | undefined;
   private audio1: HTMLAudioElement;
@@ -223,6 +234,43 @@ export class AudioController {
 
     handlers.error = () => {
       if (audio !== this.activeAudio) return;
+
+      // Task B: classify by mediaError.code (MDN) — the code decides whether a
+      // retry can ever help. ABORTED means the user/browser cancelled the
+      // fetch (not a failure — stay silent, a retry could restart playback
+      // the user just cancelled); DECODE / SRC_NOT_SUPPORTED mean the resource
+      // itself is unusable, so retrying would only burn ~6s before hitting the
+      // same give-up — skip the track right away. Everything remaining is
+      // transient (NETWORK or a null mediaError) → existing retry path.
+      const mediaErrorCode = audio.error?.code ?? null;
+
+      if (mediaErrorCode === AudioController.MEDIA_ERR_ABORTED) {
+        void captureError({
+          level: "warn",
+          source: "AudioController",
+          message: `Audio error aborted by user (mediaError.code=${String(AudioController.MEDIA_ERR_ABORTED)})`,
+        });
+        return;
+      }
+
+      if (
+        mediaErrorCode === AudioController.MEDIA_ERR_DECODE ||
+        mediaErrorCode === AudioController.MEDIA_ERR_SRC_NOT_SUPPORTED
+      ) {
+        this.clearRetryTimer();
+        void captureError({
+          level: "error",
+          source: "AudioController",
+          message: `Audio error (unrecoverable — mediaError.code=${String(mediaErrorCode)})`,
+        });
+        this.emit("error", {
+          message: "File lỗi định dạng, đang bỏ qua...",
+          code: "format_error",
+        });
+        this.emit("ended", undefined);
+        return;
+      }
+
       this.retryCount++;
       void captureError({
         level: "error",
@@ -314,13 +362,23 @@ export class AudioController {
     this.retryCount = 0;
 
     const oldAudio = this.activeAudio;
+    // Task C: flip the active element BEFORE pausing the old one. pause() can
+    // deliver its native pause event synchronously (MDN: "sent once the
+    // pause() method returns") or as a queued task, and the store already
+    // points at the NEW track by this point (usePlayer sets currentTrack
+    // before PlayerBar's effect calls playTrack). With the old element still
+    // "active", its pause handler would pass the `audio === this.activeAudio`
+    // guard and the session hook would persist "new track @ old position".
+    // Flipping first makes every stale event from the released element
+    // (pause/ended/error) hit the guard and get dropped — the same pattern
+    // the ended/error handlers already rely on.
+    this.activeIndex = this.activeIndex === 0 ? 1 : 0;
     oldAudio.pause();
     oldAudio.removeAttribute("src");
     // B2: MDN 3-step release — load() after removeAttribute('src') so the
     // old element's buffers/decoder are actually freed.
     oldAudio.load();
 
-    this.activeIndex = this.activeIndex === 0 ? 1 : 0;
     const newAudio = this.activeAudio;
 
     const url = track.streamUrl || `${DRIVE_STREAM_PREFIX}${track.id}`;

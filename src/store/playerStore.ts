@@ -18,6 +18,14 @@ interface PlayerState {
   playbackQueue: Track[];
 
   /**
+   * Track ids that failed to play in this session (AudioController emitted
+   * `error` with code "format_error" — unrecoverable decode/format or network
+   * give-up). The auto-advance guard in usePlayerQueue skips them so
+   * repeat-all cannot loop a broken track forever.
+   */
+  brokenTrackIds: string[];
+
+  /**
    * Set the current track, or update it from its previous value. Used on
    * track selection and when the next/previous button advances the queue.
    */
@@ -40,6 +48,12 @@ interface PlayerState {
    * the whole queue.
    */
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void;
+  /** Remember a track failed to play (unrecoverable) so auto-advance skips it. */
+  markTrackBroken: (trackId: string) => void;
+  /** Forget a track's failure — a user-initiated play is a fresh chance. */
+  clearTrackBroken: (trackId: string) => void;
+  /** Forget every failure — session cleanup on logout. */
+  resetBrokenTracks: () => void;
 }
 
 /**
@@ -56,6 +70,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   playMode: "normal",
   originalQueue: [],
   playbackQueue: [],
+  brokenTrackIds: [],
 
   setCurrentTrack: (track) => {
     set((state) => ({
@@ -91,5 +106,22 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       playbackQueue:
         typeof queue === "function" ? queue(state.playbackQueue) : queue,
     }));
+  },
+  markTrackBroken: (trackId) => {
+    set((state) => {
+      if (state.brokenTrackIds.includes(trackId)) return state;
+      return { brokenTrackIds: [...state.brokenTrackIds, trackId] };
+    });
+  },
+  clearTrackBroken: (trackId) => {
+    set((state) => {
+      if (!state.brokenTrackIds.includes(trackId)) return state;
+      return {
+        brokenTrackIds: state.brokenTrackIds.filter((id) => id !== trackId),
+      };
+    });
+  },
+  resetBrokenTracks: () => {
+    set({ brokenTrackIds: [] });
   },
 }));

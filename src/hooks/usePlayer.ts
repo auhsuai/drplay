@@ -26,6 +26,7 @@ import type { TabKey } from "../utils/driveConstants";
 
 import { usePlayerStore } from "../store/playerStore";
 import { AudioController } from "../lib/AudioController";
+import { useMediaSession } from "./useMediaSession";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
@@ -46,6 +47,7 @@ export const usePlayer = (accessToken: string | null) => {
     setOriginalQueue,
     playbackQueue,
     setPlaybackQueue,
+    resetBrokenTracks,
   } = usePlayerStore(
     useShallow((state) => ({
       currentTrack: state.currentTrack,
@@ -62,6 +64,7 @@ export const usePlayer = (accessToken: string | null) => {
       setOriginalQueue: state.setOriginalQueue,
       playbackQueue: state.playbackQueue,
       setPlaybackQueue: state.setPlaybackQueue,
+      resetBrokenTracks: state.resetBrokenTracks,
     })),
   );
 
@@ -157,12 +160,22 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(false);
       setOriginalQueue([]);
       setPlaybackQueue([]);
+      // Task D residual: forget broken-track marks so they don't leak
+      // into the next session (auto-advance guard would skip a track that
+      // may play fine after a fresh login).
+      resetBrokenTracks();
     };
     window.addEventListener(PLAYER_STOP_EVENT, handleStop);
     return () => {
       window.removeEventListener(PLAYER_STOP_EVENT, handleStop);
     };
-  }, [setCurrentTrack, setIsPlaying, setOriginalQueue, setPlaybackQueue]);
+  }, [
+    setCurrentTrack,
+    setIsPlaying,
+    setOriginalQueue,
+    setPlaybackQueue,
+    resetBrokenTracks,
+  ]);
 
   const createAbortSignal = (): AbortSignal => {
     abortControllerRef.current?.abort();
@@ -397,6 +410,17 @@ export const usePlayer = (accessToken: string | null) => {
     isPlaying,
     t,
   ]);
+
+  // Bridge OS media keys / Windows flyout (Media Session API) to the existing
+  // player handlers. Called unconditionally: with no track the session shows
+  // "none" and the hook no-ops when navigator.mediaSession is unavailable.
+  useMediaSession({
+    onTogglePlay: () => {
+      void handleTogglePlay();
+    },
+    onNext: handleNextTrack,
+    onPrev: handlePrevTrack,
+  });
 
   return {
     currentTrack,

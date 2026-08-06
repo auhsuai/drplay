@@ -1,6 +1,7 @@
 import { memo, useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
+import { usePlayerStore } from "../../store/playerStore";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
@@ -50,6 +51,18 @@ function PlayerBarImpl({
     });
     const unsubErr = audio.on("error", (err) => {
       setErrorInfo(err);
+      // Task D: an unrecoverable playback failure (format_error — broken
+      // format/decode or retry give-up) marks the current track broken so the
+      // auto-advance guard in usePlayerQueue skips it instead of looping it
+      // forever under repeat-all. AudioController emits `error` BEFORE
+      // `ended`, so the mark lands while the store still points at the failed
+      // track. Read the store rather than the prop: this subscription is
+      // memoized and must not close over a stale track.
+      if (err.code === "format_error") {
+        const { currentTrack: current, markTrackBroken } =
+          usePlayerStore.getState();
+        if (current) markTrackBroken(current.id);
+      }
     });
     // A `play` event is the native "playback actually resumed" signal — it
     // fires after a successful auto-retry, so the stale error banner (and its

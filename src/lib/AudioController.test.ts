@@ -1,16 +1,26 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Track } from "../types";
+import { usePlayerStore } from "../store/playerStore";
 
 vi.mock("../store/playerStore", () => ({
   usePlayerStore: {
-    getState: () => ({ setIsPlaying: vi.fn() }),
+    getState: vi.fn(() => ({ setIsPlaying: vi.fn() })),
   },
 }));
 
 vi.mock("../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
+
+// MediaError.code values per MDN MediaError constants (lib.dom declares them
+// on the global `MediaError` constructor, but jsdom does not implement that
+// global — `typeof MediaError === "undefined"` — so the tests carry the
+// numeric values instead of referencing it).
+const MEDIA_ERR_ABORTED = 1;
+const MEDIA_ERR_NETWORK = 2;
+const MEDIA_ERR_DECODE = 3;
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
 type FakeAudio = {
   seq: string[];
@@ -20,6 +30,7 @@ type FakeAudio = {
   duration: number;
   readyState: number;
   volume: number;
+  error: { code: number; message: string } | null;
   play: ReturnType<typeof vi.fn>;
   pause: ReturnType<typeof vi.fn>;
   load: ReturnType<typeof vi.fn>;
@@ -43,6 +54,7 @@ function makeFakeAudio(): FakeAudio {
     duration: 0,
     readyState: 0,
     volume: 1,
+    error: null,
     play: vi.fn(function (this: FakeAudio) {
       this.paused = false;
       seq.push("play");
@@ -192,7 +204,8 @@ describe("AudioController retry lifecycle", () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     const networkMsgs = errorHandler.mock.calls.filter(
-      (c) => (c[0] as { code: string } | undefined)?.code === "network_interrupted",
+      (c) =>
+        (c[0] as { code: string } | undefined)?.code === "network_interrupted",
     );
     const formatMsgs = errorHandler.mock.calls.filter(
       (c) => (c[0] as { code: string } | undefined)?.code === "format_error",
@@ -204,6 +217,110 @@ describe("AudioController retry lifecycle", () => {
     // the original playTrack.
     expect(audio.play).toHaveBeenCalledTimes(1);
     expect(audio.src).not.toContain("retry=");
+  });
+
+  it("Task B regression: MEDIA_ERR_DECODE (3) gives up immediately — format_error + ended, no retry (previously retried 3x wasting ~6s)", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const errorHandler = vi.fn();
+    const endedHandler = vi.fn();
+    ctrl.on("error", errorHandler);
+    ctrl.on("ended", endedHandler);
+
+    await ctrl.playTrack(trackA);
+    const audio = audioEl(1);
+    audio.error = { code: MEDIA_ERR_DECODE, message: "decode" };
+
+    fireError(audio);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const codes = errorHandler.mock.calls.map(
+      (c) => (c[0] as { code: string }).code,
+    );
+    expect(codes).toEqual(["format_error"]); // exactly one error emit, no network retries
+    expect(endedHandler).toHaveBeenCalledTimes(1); // skip the track right away
+    expect(audio.play).toHaveBeenCalledTimes(1); // no retry play() happened
+    expect(audio.src).not.toContain("retry=");
+  });
+
+  it("Task B variant: MEDIA_ERR_SRC_NOT_SUPPORTED (4) skips immediately like DECODE", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const errorHandler = vi.fn();
+    const endedHandler = vi.fn();
+    ctrl.on("error", errorHandler);
+    ctrl.on("ended", endedHandler);
+
+    await ctrl.playTrack(trackA);
+    const audio = audioEl(1);
+    audio.error = { code: MEDIA_ERR_SRC_NOT_SUPPORTED, message: "unsupported" };
+
+    fireError(audio);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const codes = errorHandler.mock.calls.map(
+      (c) => (c[0] as { code: string }).code,
+    );
+    expect(codes).toEqual(["format_error"]);
+    expect(endedHandler).toHaveBeenCalledTimes(1);
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    expect(audio.src).not.toContain("retry=");
+  });
+
+  it("Task B variant: MEDIA_ERR_ABORTED (1) is silent — no error toast, no ended, no retry (user/seek cancelled the fetch)", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const errorHandler = vi.fn();
+    const endedHandler = vi.fn();
+    ctrl.on("error", errorHandler);
+    ctrl.on("ended", endedHandler);
+
+    await ctrl.playTrack(trackA);
+    const audio = audioEl(1);
+    audio.error = { code: MEDIA_ERR_ABORTED, message: "aborted" };
+
+    fireError(audio);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(errorHandler).not.toHaveBeenCalled();
+    expect(endedHandler).not.toHaveBeenCalled();
+    expect(audio.play).toHaveBeenCalledTimes(1); // no retry play()
+    expect(audio.src).not.toContain("retry=");
+  });
+
+  it("Task B variant: MEDIA_ERR_NETWORK (2) keeps the existing retry path", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const errorHandler = vi.fn();
+    ctrl.on("error", errorHandler);
+
+    await ctrl.playTrack(trackA);
+    const audio = audioEl(1);
+    audio.currentTime = 5;
+    audio.error = { code: MEDIA_ERR_NETWORK, message: "network" };
+
+    fireError(audio);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(errorHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "network_interrupted" }),
+    );
+    expect(audio.src).toContain("retry=");
+    fireLoadedMetadata(audio);
+    expect(audio.currentTime).toBe(5); // position restored after retry
+  });
+
+  it("Task B variant: null mediaError (error event without MediaError set) keeps the current retry behavior", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const errorHandler = vi.fn();
+    ctrl.on("error", errorHandler);
+
+    await ctrl.playTrack(trackA);
+    const audio = audioEl(1);
+
+    fireError(audio);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(errorHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "network_interrupted" }),
+    );
+    expect(audio.src).toContain("retry=");
   });
 
   it("safePlay: calls audio.play() when resuming a paused track (same-track path)", async () => {
@@ -241,6 +358,70 @@ describe("AudioController retry lifecycle", () => {
 
     expect(audio2.play).toHaveBeenCalledTimes(1);
     expect(audio1.play).not.toHaveBeenCalled(); // old element not played again
+  });
+
+  it("Task C regression: pause event from the old element during a track switch never emits 'pause' (session must not save 'new track @ old position')", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const pauseHandler = vi.fn();
+    ctrl.on("pause", pauseHandler);
+
+    await ctrl.playTrack(trackA);
+    const oldAudio = audioEl(1);
+    oldAudio.currentTime = 42; // old element's playhead
+
+    // usePlayer has ALREADY set store.currentTrack to the NEW track before
+    // PlayerBar's effect calls playTrack — this mirrors the real call order.
+    const setIsPlaying = vi.fn();
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      setIsPlaying,
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+
+    // Worst-case delivery: pause() dispatches its native pause event
+    // synchronously ("sent once the pause() method returns" — MDN), i.e.
+    // while the old element is still considered active. If the guard lets
+    // this through, saveSession would persist store.currentTrack (track B)
+    // with getCurrentTime() (old element, 42s) = "B @ 42".
+    oldAudio.pause.mockImplementation(function (this: FakeAudio) {
+      this.paused = true;
+      this.seq.push("pause");
+      fireNative(this, "pause");
+    });
+
+    await ctrl.playTrack(trackB);
+
+    expect(pauseHandler).not.toHaveBeenCalled();
+    // No isPlaying false-flash either: the old element's pause must not
+    // reach the store while switching.
+    expect(setIsPlaying).not.toHaveBeenCalled();
+  });
+
+  it("Task C variant: a queued pause event from the released element (delivered after playTrack returns) is dropped by the active-element guard", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const pauseHandler = vi.fn();
+    ctrl.on("pause", pauseHandler);
+
+    await ctrl.playTrack(trackA);
+    const oldAudio = audioEl(1);
+    oldAudio.currentTime = 42;
+
+    await ctrl.playTrack(trackB);
+    fireNative(oldAudio, "pause"); // queued task delivered late
+
+    expect(pauseHandler).not.toHaveBeenCalled();
+  });
+
+  it("Task C variant: manual pause on the ACTIVE element still emits 'pause' (user pause → session save path intact)", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const pauseHandler = vi.fn();
+    ctrl.on("pause", pauseHandler);
+
+    await ctrl.playTrack(trackA);
+    const active = audioEl(1);
+    active.currentTime = 12;
+
+    fireNative(active, "pause");
+
+    expect(pauseHandler).toHaveBeenCalledTimes(1);
   });
 
   it('B2 regression: old audio gets load() immediately after removeAttribute("src") when switching tracks', async () => {

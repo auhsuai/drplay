@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
   ensureQueueItemId,
@@ -10,6 +10,7 @@ import {
 import type { PlayMode, Track } from "../../types";
 import { set as idbSet } from "../../db/kv";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
+import { usePlayerStore } from "../../store/playerStore";
 
 vi.mock("../../db/kv", () => ({
   set: vi.fn(() => Promise.resolve()),
@@ -338,5 +339,207 @@ describe("updateQueueContext", () => {
       [],
     );
     expect(setPlaybackQueue.mock.calls[0]?.[0] as Track[]).toHaveLength(1);
+  });
+});
+
+describe("handleNextTrack broken-track guard (Task D — repeat-all loop)", () => {
+  const setup = (
+    currentTrack: Track | null,
+    playbackQueue: Track[],
+    playMode: PlayMode,
+  ) => {
+    const setPlaybackQueue = vi.fn();
+    const setOriginalQueue = vi.fn();
+    const setPlayMode = vi.fn();
+    const handlePlayTrack = vi.fn();
+
+    const { result } = renderHook(() =>
+      usePlayerQueue(
+        currentTrack,
+        playbackQueue,
+        playbackQueue,
+        playMode,
+        setPlaybackQueue,
+        setOriginalQueue,
+        setPlayMode,
+        handlePlayTrack,
+      ),
+    );
+    return { result, handlePlayTrack };
+  };
+
+  beforeEach(() => {
+    usePlayerStore.setState({ brokenTrackIds: [], isPlaying: false });
+  });
+
+  it("Task D regression: repeat-all + TOÀN BỘ queue hỏng → dừng, KHÔNG gọi handlePlayTrack dù gọi lặp lại nhiều vòng (hết loop vô hạn)", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[2];
+    if (current === undefined) throw new Error("expected track at index 2");
+    usePlayerStore.setState({ brokenTrackIds: ["t1", "t2", "t3"] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    // Mô phỏng các vòng ended → handleNextTrack liên tiếp (trước fix: mỗi
+    // vòng phát lại t1 → error → ended → vòng mới = loop vô hạn).
+    for (let i = 0; i < 5; i++) {
+      act(() => {
+        result.current.handleNextTrack();
+      });
+    }
+
+    expect(handlePlayTrack).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("Task D: toàn bộ queue hỏng + current ở giữa queue → dừng, không phát tiếp", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[1];
+    if (current === undefined) throw new Error("expected track at index 1");
+    usePlayerStore.setState({ brokenTrackIds: ["t1", "t2", "t3"] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("Task D: 1 bài hỏng giữa queue → auto-skip sang bài không hỏng tiếp theo (isNavigation=true)", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    usePlayerStore.setState({ brokenTrackIds: ["t2"] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t3" });
+    expect(handlePlayTrack.mock.calls[0]?.[2]).toBe(true);
+  });
+
+  it("Task D: bài tiếp theo không hỏng → phát bình thường (parity, không skip)", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    usePlayerStore.setState({ brokenTrackIds: [] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t2" });
+  });
+
+  it("Task D: repeat-all cuối queue quay đầu, bài đầu không hỏng → phát bài đầu (parity)", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[2];
+    if (current === undefined) throw new Error("expected track at index 2");
+    usePlayerStore.setState({ brokenTrackIds: [] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t1" });
+  });
+
+  it("Task D: repeat-all cuối queue, bài đầu hỏng nhưng bài 2 không → quay đầu skip bài hỏng", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[2];
+    if (current === undefined) throw new Error("expected track at index 2");
+    usePlayerStore.setState({ brokenTrackIds: ["t1"] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t2" });
+  });
+
+  it("Task D: normal mode cuối queue → không wrap, không phát thêm (parity)", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2")];
+    const current = queue[1];
+    if (current === undefined) throw new Error("expected track at index 1");
+    usePlayerStore.setState({ brokenTrackIds: [] });
+    const { result, handlePlayTrack } = setup(current, queue, "normal");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).not.toHaveBeenCalled();
+  });
+
+  it("Task D: repeat-one + bài duy nhất hỏng → không lặp vô hạn trên chính nó (dừng)", () => {
+    const queue = [makeTrack("t1")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    usePlayerStore.setState({ brokenTrackIds: ["t1"] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-one");
+
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        result.current.handleNextTrack();
+      });
+    }
+
+    expect(handlePlayTrack).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("Task D: ended tự nhiên (không có mark) + repeat-all 1 bài → lặp lại bình thường (parity)", () => {
+    const queue = [makeTrack("t1")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    usePlayerStore.setState({ brokenTrackIds: [] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t1" });
+  });
+
+  it("Task D: user bấm play lại bài từng hỏng (updateQueueContext) → xóa khỏi broken set (cơ hội mới)", () => {
+    usePlayerStore.setState({ brokenTrackIds: ["t1", "t2"] });
+    const setPlaybackQueue = vi.fn();
+    const setOriginalQueue = vi.fn();
+    const setPlayMode = vi.fn();
+    const handlePlayTrack = vi.fn();
+    const { result } = renderHook(() =>
+      usePlayerQueue(
+        null,
+        [],
+        [],
+        "normal",
+        setPlaybackQueue,
+        setOriginalQueue,
+        setPlayMode,
+        handlePlayTrack,
+      ),
+    );
+
+    act(() => {
+      result.current.updateQueueContext(makeTrack("t1"), [
+        makeTrack("t1"),
+        makeTrack("t2"),
+      ]);
+    });
+
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("t1");
+    expect(usePlayerStore.getState().brokenTrackIds).toContain("t2");
   });
 });

@@ -11,6 +11,7 @@ import type { Track } from "../../App";
 import { PlayerBar } from "./PlayerBar";
 import en from "../../locales/en/translation.json";
 import type { PlayerBarProps } from "./types";
+import { usePlayerStore } from "../../store/playerStore";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -571,6 +572,67 @@ describe("PlayerBar error banner recovery", () => {
     unmount();
 
     expect(fakeController._handlers["play"] ?? []).toHaveLength(0);
+  });
+});
+
+describe("PlayerBar broken-track marking (Task D — repeat-all loop guard)", () => {
+  beforeEach(() => {
+    usePlayerStore.setState({ currentTrack: makeTrack(), brokenTrackIds: [] });
+  });
+
+  afterEach(() => {
+    usePlayerStore.setState({ currentTrack: null, brokenTrackIds: [] });
+  });
+
+  it("Task D regression: error format_error → đánh dấu track hiện tại broken (auto-advance sẽ skip)", () => {
+    renderPlayer();
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "File lỗi định dạng, đang bỏ qua...",
+        code: "format_error",
+      });
+    });
+
+    expect(usePlayerStore.getState().brokenTrackIds).toContain("track-1");
+  });
+
+  it("Task D: error network_interrupted (retryable) → KHÔNG đánh dấu broken", () => {
+    renderPlayer();
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "Mạng không ổn định, đang thử lại...",
+        code: "network_interrupted",
+      });
+    });
+
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
+  });
+
+  it("Task D: ended tự nhiên (không kèm error) → KHÔNG đánh dấu broken (auto-advance như cũ)", () => {
+    renderPlayer();
+
+    act(() => {
+      fakeController._emit("ended");
+    });
+
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
+  });
+
+  it("Task D: không có currentTrack → error format_error không crash, không đánh dấu", () => {
+    usePlayerStore.setState({ currentTrack: null });
+    renderPlayer({ currentTrack: null });
+
+    expect(() => {
+      act(() => {
+        fakeController._emit("error", {
+          message: "File lỗi định dạng, đang bỏ qua...",
+          code: "format_error",
+        });
+      });
+    }).not.toThrow();
   });
 });
 

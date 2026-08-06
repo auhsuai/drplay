@@ -5,6 +5,7 @@ import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { MY_DRIVE_TAB, type TabKey } from "../../utils/driveConstants";
 import { classifyPlayerError } from "./utils";
+import { usePlayerStore } from "../../store/playerStore";
 
 export interface QueueDriveItem {
   isFolder?: boolean;
@@ -86,16 +87,39 @@ export function usePlayerQueue(
       return;
     }
 
-    if (currentIndex < playbackQueue.length - 1) {
-      const next = playbackQueue[currentIndex + 1];
-      if (next === undefined) return;
-      handlePlayTrack(next, undefined, true);
-    } else {
-      if (playMode === "repeat-all" || playMode === "shuffle") {
-        const first = playbackQueue[0];
-        if (first === undefined) return;
-        handlePlayTrack(first, undefined, true);
+    // Task D (repeat-all loop guard): a track marked broken (format_error —
+    // unrecoverable decode/format or retry give-up) must not be re-selected
+    // by auto-advance: error → ended → next → error would loop it forever.
+    // Scan forward for the first track NOT marked broken. The scan is bounded
+    // by the queue length (wrapping once for repeat-all/shuffle), so a
+    // fully-broken queue resolves to null instead of looping. Tracks are
+    // un-marked by updateQueueContext when the user explicitly plays one.
+    const wraps = playMode === "repeat-all" || playMode === "shuffle";
+    const { brokenTrackIds, setIsPlaying } = usePlayerStore.getState();
+    const isBroken = (track: Track): boolean =>
+      brokenTrackIds.includes(track.id);
+
+    let target: Track | null = null;
+    for (let step = 1; step <= playbackQueue.length; step++) {
+      let index = currentIndex + step;
+      if (index >= playbackQueue.length) {
+        if (!wraps) break;
+        index -= playbackQueue.length;
       }
+      const candidate = playbackQueue[index];
+      if (candidate !== undefined && !isBroken(candidate)) {
+        target = candidate;
+        break;
+      }
+    }
+
+    if (target) {
+      handlePlayTrack(target, undefined, true);
+    } else if (wraps || currentIndex < playbackQueue.length - 1) {
+      // Nothing playable left in the queue — stop instead of replaying the
+      // same broken track forever. (Normal mode at the last index keeps its
+      // no-op parity: playback simply ends there.)
+      setIsPlaying(false);
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
 
@@ -152,6 +176,10 @@ export function usePlayerQueue(
       driveItems?: ReadonlyArray<QueueDriveItem>,
       activeTab?: TabKey,
     ): Track => {
+      // Task D: an explicit user play of a previously-broken track is a fresh
+      // attempt — drop its failure mark so the auto-advance guard lets it
+      // through (a broken file re-fails and gets re-marked).
+      usePlayerStore.getState().clearTrackBroken(track.id);
       let targetTrack = { ...track };
       let newOriginalQueue: Track[] = [];
 
@@ -190,7 +218,8 @@ export function usePlayerQueue(
             sameTrack(t, track),
           );
           if (trackIndex !== -1) {
-            targetTrack = newOriginalQueue[trackIndex] ?? ensureQueueItemId(track);
+            targetTrack =
+              newOriginalQueue[trackIndex] ?? ensureQueueItemId(track);
           } else {
             targetTrack = ensureQueueItemId(track);
           }
