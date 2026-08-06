@@ -8,6 +8,7 @@ import {
   setTokenRefreshHandler,
   updateWorkerToken,
 } from "../utils/proSyncManager";
+import { useProSyncPoller } from "./useProSyncPoller";
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import {
   revokeGoogleToken,
@@ -38,8 +39,6 @@ interface TokenData {
 }
 
 const AUTH_MODULE = "useAuth";
-
-const SYNC_INTERVAL_MS = 2 * 60 * 1000;
 
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
 
@@ -316,10 +315,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // running — restarting it would terminate a sync in flight and lose
   // isBusy/syncRetry/full-sync progress (race R9). New tokens reach the
   // running worker via updateWorkerToken (B2 token-updated listener) and the
-  // periodic interval below re-reads localStorage, so the worker self-heals
-  // even if a token event is missed. accessToken is deliberately captured at
-  // login time (login always commits accessToken and isLoggedIn in one
-  // render); do not add it to deps.
+  // worker's own 401-refresh path, so the worker self-heals even if a token
+  // event is missed. accessToken is deliberately captured at login time
+  // (login always commits accessToken and isLoggedIn in one render); do not
+  // add it to deps.
   useEffect(() => {
     if (isLoggedIn && accessToken) {
       setTokenRefreshHandler(async () => {
@@ -337,31 +336,25 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
       startProSyncWorker(accessToken);
 
-      // Run periodic sync every 2 minutes
-      const syncInterval = setInterval(() => {
-        try {
-          const latestToken = localStorage.getItem(ACCESS_TOKEN_KEY);
-          if (latestToken) startProSyncWorker(latestToken);
-        } catch {
-          void captureError({
-            level: "warn",
-            source: AUTH_MODULE,
-            message: "auth-storage-read-failed",
-          });
-        }
-      }, SYNC_INTERVAL_MS);
-
       return () => {
-        clearInterval(syncInterval);
         stopProSyncWorker();
         setTokenRefreshHandler(null);
       };
     }
     // accessToken is deliberately captured at login time (see comment above):
     // the worker must keep running across token refreshes, and new tokens
-    // reach it via updateWorkerToken / the interval's localStorage re-read.
+    // reach it via updateWorkerToken / the worker's 401-refresh path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn]);
+
+  // Periodic delta-sync poller: while logged in (token valid) it triggers a
+  // sync immediately on mount, every PRO_SYNC_POLL_MS, and on window
+  // focus/visibility — so files uploaded from other devices appear in
+  // Recently Added without a reload. Boolean arg keeps the hook from
+  // re-mounting when the accessToken refreshes (token rotations change the
+  // string but not the boolean). Replaces the former 2-minute interval here
+  // (same purpose, single source of truth for periodic sync).
+  useProSyncPoller(isLoggedIn && !!accessToken);
 
   // Fetch User Profile (best-effort, fire-and-forget). Keyed on
   // [isLoggedIn, accessToken] on purpose: profile should refetch whenever the

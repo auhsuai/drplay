@@ -20,7 +20,9 @@ import {
   stopProSyncWorker,
   setTokenRefreshHandler,
   updateWorkerToken,
+  triggerProSync,
 } from "../utils/proSyncManager";
+import { PRO_SYNC_POLL_MS } from "./useProSyncPoller";
 import {
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
@@ -53,6 +55,7 @@ vi.mock("../utils/proSyncManager", () => ({
   stopProSyncWorker: vi.fn(),
   setTokenRefreshHandler: vi.fn(),
   updateWorkerToken: vi.fn(),
+  triggerProSync: vi.fn(),
 }));
 
 vi.mock("../utils/sessionGuard", () => ({
@@ -104,12 +107,23 @@ const mockedStopProSyncWorker = vi.mocked(stopProSyncWorker);
 const mockedSetTokenRefreshHandler = vi.mocked(setTokenRefreshHandler);
 const mockedScheduleProactiveRefresh = vi.mocked(scheduleProactiveRefresh);
 const mockedUpdateWorkerToken = vi.mocked(updateWorkerToken);
+const mockedTriggerProSync = vi.mocked(triggerProSync);
 const mockedWriteRefreshToken = vi.mocked(writeRefreshToken);
 const mockedReadRefreshToken = vi.mocked(readRefreshToken);
 const mockedDeleteRefreshToken = vi.mocked(deleteRefreshToken);
 
 const invokedCommands = (): string[] =>
   mockedInvoke.mock.calls.map((call) => call[0]);
+
+// Fake only timers (never setImmediate) so React's scheduler keeps flushing
+// on the real event loop while the poll/debounce timers stay controllable.
+const FAKE_TIMERS_TOFAKE = [
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "Date",
+] as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -185,6 +199,7 @@ describe("useAuth token-expired listener removed (B5)", () => {
 
 describe("useAuth worker lifecycle (B4)", () => {
   afterEach(() => {
+    vi.useRealTimers();
     // The hoisted authState mock persists across tests; restore the default
     // logged-out shape so later suites keep their assumed initial state.
     authState.isLoggedIn = false;
@@ -227,6 +242,39 @@ describe("useAuth worker lifecycle (B4)", () => {
     expect(mockedSetTokenRefreshHandler).toHaveBeenLastCalledWith(
       expect.any(Function),
     );
+  });
+
+  it("mounts the poller at login (immediate trigger) and unmounts it at logout", () => {
+    try {
+      vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+      authState.isLoggedIn = true;
+      authState.accessToken = "tok-A";
+      localStorage.setItem(ACCESS_TOKEN_KEY, "tok-A");
+
+      const { rerender } = renderHook(() => useAuth());
+
+      // Poller mounted with a valid token: one immediate trigger.
+      expect(mockedTriggerProSync).toHaveBeenCalledTimes(1);
+
+      mockedTriggerProSync.mockClear();
+      authState.isLoggedIn = false;
+      authState.accessToken = null;
+      act(() => {
+        rerender();
+      });
+
+      // Poller unmounted: advancing past the poll interval must not trigger
+      // a sync after logout. (Focus-listener removal is covered thoroughly in
+      // useProSyncPoller.test.tsx — dispatching focus here would also hit the
+      // listener of a still-mounted hook from a previous test, since RTL
+      // auto-cleanup is disabled in this repo.)
+      act(() => {
+        vi.advanceTimersByTime(PRO_SYNC_POLL_MS * 3);
+      });
+      expect(mockedTriggerProSync).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

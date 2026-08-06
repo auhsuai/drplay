@@ -4,6 +4,8 @@ import {
   setTokenRefreshHandler,
   startProSyncWorker,
   stopProSyncWorker,
+  triggerProSync,
+  updateWorkerToken,
   SYNC_EVENT_NAMES as EVENT,
 } from "./proSyncManager";
 import type { ProSyncHandlerDeps, WorkerMsgType } from "./proSyncManager";
@@ -280,6 +282,87 @@ describe("startProSyncWorker", () => {
     expect(worker.postMessage).toHaveBeenCalledWith({
       type: "sync",
       token: "token",
+    });
+  });
+});
+
+describe("triggerProSync", () => {
+  let dispatchEvent: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    dispatchEvent = vi.fn();
+    vi.stubGlobal("Worker", FakeWorker);
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal(
+      "CustomEvent",
+      class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+    );
+    vi.mocked(captureError).mockReset();
+  });
+
+  afterEach(() => {
+    stopProSyncWorker();
+    vi.unstubAllGlobals();
+  });
+
+  function lastWorker() {
+    const worker = FakeWorker.instances[FakeWorker.instances.length - 1];
+    if (worker === undefined) throw new Error("expected a FakeWorker instance");
+    return worker;
+  }
+
+  it("is a no-op (no throw, no message, no worker created) when the worker was never started", () => {
+    stopProSyncWorker();
+
+    expect(() => {
+      triggerProSync();
+    }).not.toThrow();
+    expect(FakeWorker.instances).toHaveLength(0);
+  });
+
+  it("is a no-op (no throw) when no token was ever provided (fresh module state)", async () => {
+    // Module-level state (lastToken/globalWorker) is shared across tests, so
+    // a fresh import guarantees both are unset — the `!lastToken` guard.
+    vi.resetModules();
+    const fresh = await import("./proSyncManager");
+
+    expect(() => {
+      fresh.triggerProSync();
+    }).not.toThrow();
+  });
+
+  it("posts a sync message with the last known token after startProSyncWorker", () => {
+    startProSyncWorker("tok-1");
+    const worker = lastWorker();
+    worker.postMessage.mockClear();
+
+    triggerProSync();
+
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
+    expect(worker.postMessage).toHaveBeenCalledWith({
+      type: "sync",
+      token: "tok-1",
+    });
+  });
+
+  it("uses the most recent token after updateWorkerToken", () => {
+    startProSyncWorker("tok-1");
+    updateWorkerToken("tok-2");
+    const worker = lastWorker();
+    worker.postMessage.mockClear();
+
+    triggerProSync();
+
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
+    expect(worker.postMessage).toHaveBeenCalledWith({
+      type: "sync",
+      token: "tok-2",
     });
   });
 });

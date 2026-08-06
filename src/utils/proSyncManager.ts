@@ -21,6 +21,14 @@ const WORKER_MSG_TYPES = {
   error: "SYNC_ERROR",
 } as const;
 
+// Main->worker request types (the worker's isWorkerRequestMessage matches
+// these literals): "sync" triggers a delta/full sync pass, "token" pushes a
+// refreshed token into the running worker.
+const WORKER_REQUEST_TYPES = {
+  sync: "sync",
+  token: "token",
+} as const;
+
 // Value union of the wire-level strings the worker can post (the switch
 // matches against these values, so the union is derived from the values).
 export type WorkerMsgType =
@@ -30,6 +38,10 @@ type SyncEventName = (typeof SYNC_EVENT_NAMES)[keyof typeof SYNC_EVENT_NAMES];
 
 let globalWorker: Worker | null = null;
 let onTokenRefreshRequest: (() => Promise<string | null>) | null = null;
+// Most recent token handed to the worker (login or refresh). The periodic
+// poller (useProSyncPoller) re-triggers syncs with this token via
+// triggerProSync, so a re-sync never needs the caller to pass the token again.
+let lastToken: string | null = null;
 
 export function setTokenRefreshHandler(
   handler: (() => Promise<string | null>) | null,
@@ -38,9 +50,22 @@ export function setTokenRefreshHandler(
 }
 
 export function updateWorkerToken(token: string) {
+  lastToken = token;
   if (globalWorker) {
-    globalWorker.postMessage({ type: "token", token });
+    globalWorker.postMessage({ type: WORKER_REQUEST_TYPES.token, token });
   }
+}
+
+// Re-triggers a delta sync with the last known token. No-op (never throws)
+// while the worker has not been started or no token is known yet — the
+// poller only runs while logged in, so both cases are transient. The worker's
+// own isBusy guard turns an overlapping sync into a harmless SYNC_BUSY.
+export function triggerProSync(): void {
+  if (!globalWorker || !lastToken) return;
+  globalWorker.postMessage({
+    type: WORKER_REQUEST_TYPES.sync,
+    token: lastToken,
+  });
 }
 
 // Injectable deps so the handler is unit-testable without a real Worker or
@@ -99,6 +124,7 @@ export async function handleWorkerMessage(
 }
 
 export function startProSyncWorker(token: string) {
+  lastToken = token;
   if (!globalWorker) {
     globalWorker = new Worker(
       new URL("../workers/proSync.worker.ts", import.meta.url),
@@ -145,7 +171,7 @@ export function startProSyncWorker(token: string) {
     };
   }
 
-  globalWorker.postMessage({ type: "sync", token });
+  globalWorker.postMessage({ type: WORKER_REQUEST_TYPES.sync, token });
 }
 
 export function stopProSyncWorker() {
