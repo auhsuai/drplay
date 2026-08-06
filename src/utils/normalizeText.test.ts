@@ -12,6 +12,12 @@ describe("normalizeText", () => {
     expect(normalizeText("đêm")).toBe("dem");
   });
 
+  it("normalizes real Vietnamese words with đ and horned vowels", () => {
+    expect(normalizeText("Đổi thay")).toBe("doi thay");
+    expect(normalizeText("đường")).toBe("duong");
+    expect(normalizeText("Ước mơ")).toBe("uoc mo");
+  });
+
   it("lowercases ascii", () => {
     expect(normalizeText("HELLO World")).toBe("hello world");
   });

@@ -34,7 +34,7 @@ import type { DriveFilesListResponse } from "../utils/driveApi";
 
 const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 export const ITEMS_PER_PAGE = 50;
-const GLOBAL_SEARCH_LIMIT = 100;
+const GLOBAL_SEARCH_LIMIT = 500;
 const DRIVE_PAGE_SIZE = 1000;
 // Module-level so the items useMemo sort (re-run on every dbFiles change or
 // uploadStatusVersion bump) never re-initializes the collator — locale data
@@ -145,9 +145,22 @@ export function useDriveExplorer(
   const globalSearchItemsRaw = useDebouncedLiveQuery(
     async () => {
       if (!searchQuery) return undefined;
-      const query = normalizeText(searchQuery);
+      // Multi-word AND matching: every space-separated token must appear in
+      // the file's searchable text. ID3 metadata (title/artist) is included
+      // because file names like "01 - abc.mp3" carry no user-facing title.
+      const tokens = searchQuery
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(normalizeText);
       const matches = await db.files
-        .filter((f) => normalizeText(f.name).includes(query))
+        .filter((f) => {
+          let haystack = normalizeText(f.name);
+          const meta = metadataCache[f.id];
+          if (meta) {
+            haystack += ` ${normalizeText(meta.title)} ${normalizeText(meta.artist)}`;
+          }
+          return tokens.every((token) => haystack.includes(token));
+        })
         .limit(GLOBAL_SEARCH_LIMIT)
         .toArray();
       return matches;
