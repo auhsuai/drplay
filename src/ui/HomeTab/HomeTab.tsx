@@ -34,6 +34,16 @@ const HOME_TAB_MODULE = "HomeTab";
 // Fired by uploadManager after each completed upload (slice 1) — the delta
 // sync trigger that keeps "Recently Added to Drive" fresh without a reload.
 const DRIVE_FILES_CHANGED_EVENT = "drive-files-changed";
+// Trailing-edge debounce window for the delta refresh (lodash
+// `_.debounce(func, wait)` default semantics — fire once, `wait` ms after
+// the LAST call of a burst; lodash/debounce.js 4.17.21: leading=false,
+// trailing=true). uploadManager dispatches drive-files-changed once per
+// completed file, so an N-file batch is N events in quick succession; 1000ms
+// collapses the burst into ONE refetch fired 1s after the batch ends, while
+// a single upload's result still appears promptly. A batch can never starve
+// the trailing fire (no maxWait needed): an upload session terminates, so
+// the last completion always starts the final timer.
+const DELTA_REFRESH_DEBOUNCE_MS = 1000;
 
 export function HomeTab({
   onPlay,
@@ -69,6 +79,11 @@ export function HomeTab({
   // response must never clobber the fresh result. The same bump in the effect
   // cleanup also invalidates in-flight fetches after unmount.
   const recentlyAddedLoadGenRef = useRef(0);
+  // Pending trailing-debounce timer for the delta refresh; cancelled on
+  // unmount so a queued refetch can never run after the component is gone.
+  const deltaRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Read visit count + pick the random greeting object exactly ONCE per mount.
   // Reading sessionStorage and calling Math.random() inside useMemo caused the
@@ -121,6 +136,7 @@ export function HomeTab({
     // cleanup; capture the (stable) ref object once so the cleanup does not
     // touch the outer-scope ref directly (react-hooks/exhaustive-deps).
     const loadGenRef = recentlyAddedLoadGenRef;
+    const deltaTimerRef = deltaRefreshTimerRef;
     const visitCount = parseInt(
       sessionStorage.getItem("drplay_home_visit") || "0",
       10,
@@ -185,9 +201,22 @@ export function HomeTab({
     // the heavy local loads). Fired by uploads completing in-app
     // (drive-files-changed) and by the proSync worker completing a background
     // poll (pro-sync-complete — the only way files added from OTHER devices/web
-    // reach the UI without a reload).
+    // reach the UI without a reload). Both paths funnel through a trailing
+    // debounce (see DELTA_REFRESH_DEBOUNCE_MS) so a burst of per-file events
+    // collapses into a single refetch instead of jumping the list N times.
+    // The initial load and 'recent-updated' (a user-driven full reload of all
+    // sections) stay undebounced on purpose.
+    const scheduleDeltaRefresh = () => {
+      if (deltaTimerRef.current !== null) {
+        clearTimeout(deltaTimerRef.current);
+      }
+      deltaTimerRef.current = setTimeout(() => {
+        deltaTimerRef.current = null;
+        loadRecentlyAdded(token);
+      }, DELTA_REFRESH_DEBOUNCE_MS);
+    };
     const handleDeltaRefresh = () => {
-      loadRecentlyAdded(token);
+      scheduleDeltaRefresh();
     };
     window.addEventListener("recent-updated", handleUpdate);
     window.addEventListener(DRIVE_FILES_CHANGED_EVENT, handleDeltaRefresh);
@@ -196,6 +225,12 @@ export function HomeTab({
       window.removeEventListener("recent-updated", handleUpdate);
       window.removeEventListener(DRIVE_FILES_CHANGED_EVENT, handleDeltaRefresh);
       window.removeEventListener(SYNC_EVENT_NAMES.complete, handleDeltaRefresh);
+      // Cancel a pending debounced delta refresh: no fetch may run after
+      // unmount (a stale list write or a captureError with no UI left).
+      if (deltaTimerRef.current !== null) {
+        clearTimeout(deltaTimerRef.current);
+        deltaTimerRef.current = null;
+      }
       loadGenRef.current++;
     };
     // loadData/loadRecentlyAdded are effect-local closures; only `token`

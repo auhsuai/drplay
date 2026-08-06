@@ -188,22 +188,26 @@ describe("HomeTab Recently Added delta sync", () => {
         new CustomEvent(DRIVE_FILES_CHANGED, { detail: { count: 1 } }),
       );
     });
+    // Trailing-edge debounce: the refetch is scheduled, not fired, while
+    // still inside the window (RED without the debounce — the call happened
+    // synchronously on dispatch).
+    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
 
+    await waitFor(
+      () => {
+        expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
     expect(await screen.findByText("Second.mp3")).toBeTruthy();
     expect(screen.queryByText("First.mp3")).toBeNull();
-    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
     // Delta sync must not re-run the heavy local loads.
     expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
   });
 
-  it("3. generation guard: stale response never overwrites the newest one (3 overlapping fetches)", async () => {
+  it("3. generation guard: stale response never overwrites the newest one (burst collapsed + overlapping fetches)", async () => {
     const deferred: Array<{ resolve: (v: DriveFileItem[]) => void }> = [];
     mocks.getRecentlyAddedAudioFiles
-      .mockReturnValueOnce(
-        new Promise((resolve) => {
-          deferred.push({ resolve });
-        }),
-      )
       .mockReturnValueOnce(
         new Promise((resolve) => {
           deferred.push({ resolve });
@@ -219,35 +223,29 @@ describe("HomeTab Recently Added delta sync", () => {
       expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
     });
 
+    // Two delta events inside the debounce window collapse into ONE call
+    // (previously each event fired its own fetch → 3 calls total).
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
-    });
-    await waitFor(() => {
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
-    });
-    act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() => {
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(3);
-    });
+    await waitFor(
+      () => {
+        expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
 
-    // Newest request resolves FIRST with fresh data.
+    // Newest request (the debounced burst call) resolves FIRST with fresh data.
     await act(async () => {
-      const d2 = deferred[2];
-      if (d2 === undefined) throw new Error("expected deferred[2]");
-      d2.resolve([driveFile({ id: "c", name: "Newest.mp3" })]);
+      const d1 = deferred[1];
+      if (d1 === undefined) throw new Error("expected deferred[1]");
+      d1.resolve([driveFile({ id: "c", name: "Newest.mp3" })]);
       await Promise.resolve();
     });
     expect(await screen.findByText("Newest.mp3")).toBeTruthy();
 
-    // Older responses arrive later — they must be dropped, not applied.
-    await act(async () => {
-      const d1 = deferred[1];
-      if (d1 === undefined) throw new Error("expected deferred[1]");
-      d1.resolve([driveFile({ id: "b", name: "Middle.mp3" })]);
-      await Promise.resolve();
-    });
+    // The older (mount) response arrives later — it must be dropped, not applied.
     await act(async () => {
       const d0 = deferred[0];
       if (d0 === undefined) throw new Error("expected deferred[0]");
@@ -255,7 +253,6 @@ describe("HomeTab Recently Added delta sync", () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByText("Middle.mp3")).toBeNull();
     expect(screen.queryByText("Oldest.mp3")).toBeNull();
     expect(screen.getByText("Newest.mp3")).toBeTruthy();
   });
@@ -269,9 +266,9 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() => {
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(0);
-    });
+    // Wait past the debounce window: the scheduled callback must still bail
+    // on the null token — no fetch may ever run.
+    await new Promise((r) => setTimeout(r, 1100));
     expect(mocks.getRecentlyAddedAudioFiles).not.toHaveBeenCalled();
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
   });
@@ -289,9 +286,12 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() => {
-      expect(mocks.captureError).toHaveBeenCalledTimes(1);
-    });
+    await waitFor(
+      () => {
+        expect(mocks.captureError).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2000 },
+    );
 
     const firstCall = mocks.captureError.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected captureError call");
@@ -307,21 +307,29 @@ describe("HomeTab Recently Added delta sync", () => {
     expect(screen.getByText("First.mp3")).toBeTruthy();
   });
 
-  it("6. unmount removes the listener: firing drive-files-changed afterwards does nothing", async () => {
+  it("6. unmount removes the listener AND cancels a pending debounced refresh", async () => {
     mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
     const { unmount } = render(<HomeTab {...baseProps()} />);
     await waitFor(() => {
       expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
     });
 
-    unmount();
-    const callsBefore = mocks.getRecentlyAddedAudioFiles.mock.calls.length;
+    // A delta event while mounted schedules a debounced refetch...
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    expect(mocks.getRecentlyAddedAudioFiles.mock.calls.length).toBe(
-      callsBefore,
-    );
+    // ...but unmounting before the window elapses must cancel the pending
+    // timer: no fetch may run after unmount (RED without the debounce — the
+    // call fired synchronously on dispatch and could not be cancelled).
+    unmount();
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
+
+    // Firing the event after unmount does nothing either (listener removed).
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
+    });
+    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
   });
 
   it("7. recent-updated still runs the full loadData (getRecentlyPlayed re-fetches)", async () => {
@@ -358,9 +366,12 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() => {
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
-    });
+    await waitFor(
+      () => {
+        expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
     // A duplicate listener would have pushed this to 3.
     expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
   });
@@ -377,9 +388,12 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() => {
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
-    });
+    await waitFor(
+      () => {
+        expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
 
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
   });
@@ -399,9 +413,15 @@ describe("HomeTab Recently Added delta sync", () => {
       window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.complete));
     });
 
+    // pro-sync-complete funnels through the same trailing debounce.
+    await waitFor(
+      () => {
+        expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
     expect(await screen.findByText("Second.mp3")).toBeTruthy();
     expect(screen.queryByText("First.mp3")).toBeNull();
-    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
     // Delta sync must not re-run the heavy local loads.
     expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
   });
@@ -415,8 +435,43 @@ describe("HomeTab Recently Added delta sync", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.complete));
     });
+    // Wait past the debounce window: the scheduled callback must still bail
+    // on the null token — no fetch may ever run.
+    await new Promise((r) => setTimeout(r, 1100));
     expect(mocks.getRecentlyAddedAudioFiles).not.toHaveBeenCalled();
     expect(screen.queryByText("Recently Added to Drive")).toBeNull();
+  });
+
+  it("12. burst of N drive-files-changed events collapses to exactly ONE refetch (trailing debounce)", async () => {
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([
+      driveFile({ id: "a", name: "First.mp3" }),
+    ]);
+    render(<HomeTab {...baseProps()} />);
+    await screen.findByText("First.mp3");
+    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
+
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([
+      driveFile({ id: "b", name: "Second.mp3" }),
+    ]);
+    act(() => {
+      for (let i = 0; i < 8; i += 1) {
+        window.dispatchEvent(
+          new CustomEvent(DRIVE_FILES_CHANGED, { detail: { count: 1 } }),
+        );
+      }
+    });
+    // Trailing-edge debounce: nothing may fire while the burst is inside the
+    // window. Without the debounce each event fired its own fetch (RED).
+    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(1);
+    await waitFor(
+      () => {
+        expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
+    // Exactly one refetch for the whole burst, then the fresh data renders.
+    expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("Second.mp3")).toBeTruthy();
   });
 });
 
@@ -820,9 +875,12 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DRIVE_FILES_CHANGED));
     });
-    await waitFor(() => {
-      expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
-    });
+    await waitFor(
+      () => {
+        expect(mocks.getRecentlyAddedAudioFiles).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
 
     expect(screen.queryByTestId("home-skeleton-section")).toBeNull();
     expect(screen.queryByTestId("home-greeting-skeleton")).toBeNull();

@@ -1,8 +1,10 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { db } from "../db/db";
 import {
   delay,
   fetchDrive,
+  handleWorkerMessage,
   isTransientStatus,
   isWorkerRequestMessage,
   isValidDriveFile,
@@ -370,6 +372,91 @@ describe("delay", () => {
     await vi.advanceTimersByTimeAsync(1000);
     await pending;
     expect(resolved).toBe(true);
+  });
+});
+
+// Task 1 (hide-unplayable-formats): the full-sync pass ends with a one-time
+// cleanup that deletes already-synced rows whose extension is NOT in the
+// playable set (wma/aiff/alac/ape/dsf/dff/wv/tak), because Chromium/WebView2
+// cannot decode them. Folders are never touched (folder rows have no playable
+// extension but isFolder=true).
+describe("full-sync cleanup of non-playable rows", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("deletes stale non-playable rows at full-sync completion, keeps folders and playable files", async () => {
+    await db.files.bulkPut([
+      {
+        id: "wma1",
+        name: "old-song.wma",
+        mimeType: "audio/x-ms-wma",
+        parentId: "root",
+        size: 1,
+        trashed: false,
+        isFolder: false,
+      },
+      {
+        id: "flac1",
+        name: "song.flac",
+        mimeType: "audio/flac",
+        parentId: "root",
+        size: 2,
+        trashed: false,
+        isFolder: false,
+      },
+      {
+        id: "folder1",
+        name: "Album Folder",
+        mimeType: "application/vnd.google-apps.folder",
+        parentId: "root",
+        trashed: false,
+        isFolder: true,
+      },
+    ]);
+
+    const posted: Array<{ type: string }> = [];
+    vi.stubGlobal("self", {
+      postMessage: (msg: { type: string }) => {
+        posted.push(msg);
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-1" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: "flac2",
+                name: "new.flac",
+                mimeType: "audio/flac",
+                parents: ["root"],
+                size: "3",
+                modifiedTime: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "test-token" },
+    } as MessageEvent);
+
+    expect(await db.files.get("wma1")).toBeUndefined();
+    expect(await db.files.get("flac1")).toBeDefined();
+    expect(await db.files.get("flac2")).toBeDefined();
+    expect(await db.files.get("folder1")).toBeDefined();
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
   });
 });
 

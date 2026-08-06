@@ -1,6 +1,10 @@
 import { db } from "../db/db";
 import type { DriveFile as DriveFileRow } from "../db/db";
-import { getAudioQuery, isAudioFile } from "../utils/audioQuery";
+import {
+  getAudioQuery,
+  hasAudioExtension,
+  isAudioFile,
+} from "../utils/audioQuery";
 import { FOLDER_MIME } from "../utils/driveApi";
 import { ROOT_FOLDER_ID } from "../utils/driveConstants";
 import {
@@ -211,7 +215,7 @@ if (typeof self !== "undefined") {
   });
 }
 
-async function handleWorkerMessage(e: MessageEvent): Promise<void> {
+export async function handleWorkerMessage(e: MessageEvent): Promise<void> {
   if (!isWorkerRequestMessage(e.data)) return;
   const { type, token } = e.data;
 
@@ -531,9 +535,7 @@ async function performFullSync() {
           logWorkerError(
             "proSync/full-sync/files",
             { kind: "skip", skippedCount, total: rawFiles.length },
-            new Error(
-              `${String(skippedCount)} file(s) skipped: missing id`,
-            ),
+            new Error(`${String(skippedCount)} file(s) skipped: missing id`),
             "warn",
           );
         }
@@ -576,6 +578,26 @@ async function performFullSync() {
         "error",
       );
     }
+  }
+
+  // One-time cleanup (Task 1 — hide-unplayable-formats): rows synced before
+  // this change may hold formats Chromium/WebView2 cannot decode
+  // (wma/aiff/alac/ape/dsf/dff/wv/tak). Delete every non-folder row whose
+  // name has no playable extension (folders keep their rows — isFolder
+  // exempts them even though their names have no audio extension). Runs only
+  // at full-sync completion (delta sync never mass-deletes) and is
+  // best-effort: a cleanup failure must not fail the whole sync.
+  try {
+    await db.files
+      .filter((f) => !f.isFolder && !hasAudioExtension(f.name))
+      .delete();
+  } catch (err) {
+    logWorkerError(
+      "proSync/full-sync",
+      { phase: "cleanupNonPlayable" },
+      err,
+      "warn",
+    );
   }
 
   self.postMessage({ type: "SYNC_COMPLETE" });
@@ -687,9 +709,7 @@ async function performDeltaSync(startPageToken: string) {
       logWorkerError(
         "proSync/delta-sync/changes",
         { kind: "skip", skippedCount: skippedDeltaFiles },
-        new Error(
-          `${String(skippedDeltaFiles)} file(s) skipped: missing id`,
-        ),
+        new Error(`${String(skippedDeltaFiles)} file(s) skipped: missing id`),
         "warn",
       );
     }
