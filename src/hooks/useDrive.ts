@@ -111,9 +111,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                 // typeof guard keeps String() off a truthy-narrowed value.
                 const rootIdRaw: unknown = remoteConfig.rootFolderId;
                 const rootId =
-                  typeof rootIdRaw === "string"
-                    ? rootIdRaw
-                    : String(rootIdRaw);
+                  typeof rootIdRaw === "string" ? rootIdRaw : String(rootIdRaw);
                 if (rootId !== localRoot) {
                   localRoot = rootId;
                 }
@@ -180,16 +178,20 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
                         message: `root-folder-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
                       });
                     }
-                  }
-                  try {
-                    await db.files.clear();
-                    await invoke(CLEAR_LOCAL_CACHE_CMD);
-                  } catch (e: unknown) {
-                    void captureError({
-                      level: "warn",
-                      source: "useDrive",
-                      message: `clear-cache-failed: ${classifyError(e)}`,
-                    });
+                    // Invalidate the local listing only when the configured
+                    // root actually changed. initApp also re-runs on a plain
+                    // proactive token refresh; wiping db.files then would
+                    // blank the My Drive UI until the next folder fetch.
+                    try {
+                      await db.files.clear();
+                      await invoke(CLEAR_LOCAL_CACHE_CMD);
+                    } catch (e: unknown) {
+                      void captureError({
+                        level: "warn",
+                        source: "useDrive",
+                        message: `clear-cache-failed: ${classifyError(e)}`,
+                      });
+                    }
                   }
                 }
               } else if (!localRoot) {
@@ -354,12 +356,13 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
     // Defensive net: initApp's own try/finally already guarantees hydration, but
     // this catch logs any rejection that escapes initApp instead of swallowing it.
-    initApp().catch((e: unknown) =>
-      void captureError({
-        level: "error",
-        source: "useDrive",
-        message: `init-app-failed: ${classifyError(e)}`,
-      }),
+    initApp().catch(
+      (e: unknown) =>
+        void captureError({
+          level: "error",
+          source: "useDrive",
+          message: `init-app-failed: ${classifyError(e)}`,
+        }),
     );
 
     return () => {
@@ -389,12 +392,13 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
             history: folderHistory,
           },
         })
-        .catch((e: unknown) =>
-          void captureError({
-            level: "error",
-            source: "useDrive",
-            message: `nav-state-save-failed: ${classifyError(e)}`,
-          }),
+        .catch(
+          (e: unknown) =>
+            void captureError({
+              level: "error",
+              source: "useDrive",
+              message: `nav-state-save-failed: ${classifyError(e)}`,
+            }),
         );
     }
   }, [
