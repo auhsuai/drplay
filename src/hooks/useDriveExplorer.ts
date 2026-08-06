@@ -6,10 +6,10 @@ import {
   useCallback,
 } from "react";
 import type { DriveItem } from "../types";
-import { useDebouncedLiveQuery } from "./useDebouncedLiveQuery";
 import type { DriveFile } from "../db/db";
 import { db } from "../db/db";
-import { normalizeText } from "../utils/normalizeText";
+import { useSearchWorker } from "./useSearchWorker";
+import type { SearchHit } from "../search/searchEngine";
 import {
   deleteFile,
   moveFile,
@@ -43,8 +43,35 @@ const SORT_COLLATOR = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
 });
-const DEBOUNCE_DELAY_MS = 150;
 const SEARCH_RESULT_LABEL = "Search Result";
+
+// Maps a worker SearchHit to the DriveItem shape the listing uses. The engine
+// already resolved the display title (real metadata title when present, else
+// filename minus extension; folders keep their full name) and artist (null
+// when no real metadata exists) — this layer only adapts those into the Track
+// contract. Module-level because the mapping is pure; keeps the hook body
+// small.
+function mapSearchHitToDriveItem(hit: SearchHit): DriveItem {
+  return {
+    id: hit.id,
+    title: hit.title,
+    isFolder: hit.isFolder,
+    size: hit.size,
+    modifiedTime: hit.modifiedTime,
+    trackInfo: hit.isFolder
+      ? undefined
+      : {
+          id: hit.id,
+          title: hit.title,
+          artist: hit.artist ?? "",
+          streamUrl: "",
+          size: hit.size,
+          originalName: hit.name,
+          parentId: hit.parentId,
+          parentName: SEARCH_RESULT_LABEL,
+        },
+  };
+}
 
 // Monotonic upload-status version: bumped on every uploadManager notify so the
 // explorer re-runs the pin partition below with fresh getUploadState()
@@ -141,66 +168,23 @@ export function useDriveExplorer(
 
   useSyncExternalStore(subscribe, () => uploadStatusVersion);
 
-  // Global search data loading
-  const globalSearchItemsRaw = useDebouncedLiveQuery(
-    async () => {
-      if (!searchQuery) return undefined;
-      // Multi-word AND matching: every space-separated token must appear in
-      // the file's searchable text. ID3 metadata (title/artist) is included
-      // because file names like "01 - abc.mp3" carry no user-facing title.
-      const tokens = searchQuery
-        .split(/\s+/)
-        .filter(Boolean)
-        .map(normalizeText);
-      const matches = await db.files
-        .filter((f) => {
-          let haystack = normalizeText(f.name);
-          const meta = metadataCache[f.id];
-          if (meta) {
-            haystack += ` ${normalizeText(meta.title)} ${normalizeText(meta.artist)}`;
-          }
-          return tokens.every((token) => haystack.includes(token));
-        })
-        .limit(GLOBAL_SEARCH_LIMIT)
-        .toArray();
-      return matches;
-    },
-    [searchQuery],
-    DEBOUNCE_DELAY_MS,
-  );
+  // Global search: worker-backed relevance engine (Task 3 of the search
+  // rebuild). The hook debounces the query and keeps last-good hits while one
+  // is in flight; empty queries never reach the worker (return []), so the
+  // normal listing below wins.
+  const { hits } = useSearchWorker(searchQuery, GLOBAL_SEARCH_LIMIT);
 
   const globalSearchItems = useMemo(() => {
-    if (!globalSearchItemsRaw) return [];
-
-    const mapped = globalSearchItemsRaw.map((file) => {
-      const title = stripExt(file.name, file.isFolder);
-      return {
-        id: file.id,
-        title,
-        isFolder: file.isFolder,
-        size: file.size,
-        modifiedTime: file.modifiedTime,
-        trackInfo: file.isFolder
-          ? undefined
-          : {
-              id: file.id,
-              title,
-              artist: "",
-              streamUrl: "",
-              size: file.size,
-              originalName: file.name,
-              parentId: file.parentId,
-              parentName: SEARCH_RESULT_LABEL,
-            },
-      };
+    if (searchQuery.trim() === "") return [];
+    // Folders first (stable), then relevance (score) descending within each
+    // group — deliberate replacement of the old alphabetical sort (plan Task
+    // 3). A copy is sorted because MiniSearch returns a fresh array per query.
+    const sortedHits = [...hits].sort((a, b) => {
+      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+      return b.score - a.score;
     });
-
-    return mapped.sort((a, b) => {
-      if (a.isFolder && !b.isFolder) return -1;
-      if (!a.isFolder && b.isFolder) return 1;
-      return a.title.localeCompare(b.title, undefined, { numeric: true });
-    });
-  }, [globalSearchItemsRaw]);
+    return sortedHits.map(mapSearchHitToDriveItem);
+  }, [hits, searchQuery]);
 
   const dbFiles = useLiveQuery(() => {
     if (!currentFolderId) return Promise.resolve<DriveFile[]>([]);
@@ -436,7 +420,10 @@ export function useDriveExplorer(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dbFiles, sortOption, currentFolderName, uploadStatusVersion]);
 
-  const filteredItems = searchQuery ? globalSearchItems : items;
+  // Whitespace-only queries count as empty: the worker answers [] for them,
+  // and the listing must stay visible (matches the old full-list behavior for
+  // a " " query, whose token list was empty and matched everything).
+  const filteredItems = searchQuery.trim() !== "" ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);
 
   const currentItems = useMemo(

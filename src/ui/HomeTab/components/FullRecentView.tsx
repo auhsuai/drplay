@@ -7,6 +7,7 @@ import { ArrowLeft, Search, X } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { SongCard } from "../../MainContent/components/SongCard";
 import { SortDropdown } from "../../components/SortDropdown";
+import { matchesNormalized } from "../../../search/searchEngine";
 
 const DEFAULT_SORT_OPTION = "modifiedTime";
 
@@ -111,10 +112,14 @@ export function FullRecentView({
     // Why: search filters first, then sort runs over the filtered subset so
     // the two never interfere (e.g. "size" cannot re-introduce filtered-out
     // tracks, and "modifiedTime" still sees a monotonic recency order).
+    // matchesNormalized is diacritics-insensitive ("noi" finds "Nỗi buồn")
+    // but returns false for an empty query by contract, so guard the old
+    // "empty query → unfiltered recent" behavior explicitly.
+    const searchActive = searchQuery.trim() !== "";
     const filtered = recent
       .filter((item) => !removedIds.includes(item.id))
-      .filter((item) =>
-        item.title.toLowerCase().includes(searchQuery.toLowerCase()),
+      .filter(
+        (item) => !searchActive || matchesNormalized(item.title, searchQuery),
       );
     return sortRecentTracks(filtered, sortOption);
   }, [recent, searchQuery, sortOption, removedIds]);

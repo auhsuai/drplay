@@ -424,3 +424,97 @@ describe("FolderSelectionScreen skeleton loading", () => {
     expect(screen.getByText("Searching deeper...")).not.toBeNull();
   });
 });
+
+describe("FolderSelectionScreen API search gating", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    searchDeferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    installSearchFoldersMock();
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("fires the deeper Drive search even when local folders match (gating regression) and renders both sections", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "local", name: "ABC Local" }]);
+      await Promise.resolve();
+    });
+    expect(screen.getByText("ABC Local")).not.toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "abc" },
+    });
+    // Regression: the old effect gate (filteredFolders.length > 0) skipped
+    // the API search whenever a local folder matched, so folders outside the
+    // current directory were unreachable.
+    await waitFor(() => {
+      expect(searchDeferredCalls).toHaveLength(1);
+    });
+
+    expect(screen.getByText("ABC Local")).not.toBeNull();
+    expect(screen.getByText("From subfolders")).not.toBeNull();
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+
+    const apiCall = searchDeferredCalls[0];
+    if (apiCall === undefined)
+      throw new Error("expected deferred api search call");
+    await act(async () => {
+      apiCall.resolve([{ id: "deep", name: "Deep Folder" }]);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("ABC Local")).not.toBeNull();
+    expect(screen.getByText("Deep Folder")).not.toBeNull();
+    expect(screen.queryByText("Searching deeper...")).toBeNull();
+  });
+
+  it("matches local folders diacritics-insensitively ('doi' finds 'Đổi mới')", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "doi-moi", name: "Đổi mới" }]);
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "doi" },
+    });
+
+    expect(screen.getByText("Đổi mới")).not.toBeNull();
+  });
+
+  it("never calls the Drive API search for a 1-character query (min-length 2)", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([]);
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "a" },
+    });
+    // Longer than SEARCH_DEBOUNCE_MS (300) so the debounced callback ran.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    expect(mocks.driveApi.searchFolders).not.toHaveBeenCalled();
+    expect(screen.getByText("No folders here.")).not.toBeNull();
+  });
+});

@@ -1,6 +1,7 @@
 import React from "react";
 import { Search, Music, ChevronLeft, ChevronRight } from "lucide-react";
 import type { Playlist } from "../../../utils/playlists";
+import { matchesNormalized } from "../../../search/searchEngine";
 
 interface PlaylistsSubmenuProps {
   showPlaylistsSubmenu: boolean;
@@ -27,8 +28,13 @@ export function PlaylistsSubmenu({
 }: PlaylistsSubmenuProps) {
   if (!showPlaylistsSubmenu) return null;
 
-  const filteredPlaylists = playlists.filter((p) =>
-    p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase()),
+  // Why: matchesNormalized (normalizeText-based) makes search
+  // diacritics-insensitive ("doi" finds "Đổi mới") and requires every token
+  // (AND). It returns false for an empty query by contract, so keep the old
+  // "empty query → show everything" behavior with an explicit guard.
+  const queryActive = playlistSearchQuery.trim() !== "";
+  const filteredPlaylists = playlists.filter(
+    (p) => !queryActive || matchesNormalized(p.name, playlistSearchQuery),
   );
   const playlistsPerPage = 5;
   const playlistTotalPages = Math.max(

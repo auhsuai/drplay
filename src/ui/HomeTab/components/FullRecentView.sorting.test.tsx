@@ -325,6 +325,13 @@ describe("FullRecentView sort UI", () => {
     expect(cardOrder()).toEqual(["z", "x"]);
   });
 
+  it("matches Vietnamese titles diacritics-insensitively in search", async () => {
+    renderRecent([makeTrack("noi", "Nỗi buồn"), makeTrack("zen", "Zen")]);
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText("Search..."), "noi");
+    expect(cardOrder()).toEqual(["noi"]);
+  });
+
   it("renders zero items on an empty list without crashing", async () => {
     renderRecent([]);
     expect(screen.queryAllByTestId("song-card").length).toBe(0);

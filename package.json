@@ -35,6 +35,7 @@
     "dexie-react-hooks": "^4.4.0",
     "i18next": "^26.3.6",
     "lucide-react": "^1.22.0",
+    "minisearch": "^7.2.0",
     "react": "19.2",
     "react-dom": "19.2",
     "react-easy-crop": "^6.0.2",

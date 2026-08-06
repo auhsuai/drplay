@@ -16,6 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { SkeletonRowList } from "../components/Skeleton";
 import { db } from "../../db/db";
+import { matchesNormalized } from "../../search/searchEngine";
 import { getValidToken } from "../../utils/apiClient";
 import { getFileParents, getFileName } from "../../utils/driveApi";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
@@ -166,8 +167,9 @@ export function FolderSelectionScreen({
 
   const filteredFolders = useMemo(() => {
     if (!searchQuery.trim()) return folders;
-    const q = searchQuery.toLowerCase().trim();
-    return folders.filter((f) => f.name.toLowerCase().includes(q));
+    // matchesNormalized = same diacritics-insensitive, multi-token AND
+    // semantics as global search (query "doi" finds folder "Đổi mới").
+    return folders.filter((f) => matchesNormalized(f.name, searchQuery));
   }, [folders, searchQuery]);
 
   // React "adjusting state during render" pattern: instead of resetting the
@@ -182,12 +184,11 @@ export function FolderSelectionScreen({
     setApiSearchResults([]);
   }
 
-  // API search results are only rendered while the query is non-empty AND
-  // the local filter matched nothing. When that precondition turns false the
-  // stale results/in-flight flag must be cleared — done here during render,
-  // not inside the debounce effect.
-  const apiSearchActive =
-    Boolean(searchQuery.trim()) && filteredFolders.length === 0;
+  // API search results render whenever the query is non-empty (local and
+  // deeper results coexist). When the query empties, stale results and the
+  // in-flight flag must be cleared — done here during render, not inside the
+  // debounce effect (the effect never sees an empty query).
+  const apiSearchActive = Boolean(searchQuery.trim());
   const [lastApiSearchActive, setLastApiSearchActive] =
     useState(apiSearchActive);
   if (lastApiSearchActive !== apiSearchActive) {
@@ -196,6 +197,15 @@ export function FolderSelectionScreen({
       setApiSearchResults([]);
       setIsSearchingApi(false);
     }
+  }
+
+  // Stale-guard: a query change must drop the previous query's API results
+  // synchronously during render — otherwise the debounce window keeps
+  // painting folders that matched the old query under the new one.
+  const [lastSearchQuery, setLastSearchQuery] = useState(searchQuery);
+  if (lastSearchQuery !== searchQuery) {
+    setLastSearchQuery(searchQuery);
+    setApiSearchResults([]);
   }
 
   const cancelFolderFetch = useCallback(() => {
@@ -283,7 +293,13 @@ export function FolderSelectionScreen({
   );
 
   useEffect(() => {
-    if (!searchQuery.trim() || filteredFolders.length > 0) return;
+    // Deeper search fires for EVERY non-empty query regardless of local
+    // matches — the old filteredFolders.length gate silently skipped the
+    // Drive API search whenever a local folder matched, so folders outside
+    // the current directory were unreachable ("can't search folder" bug).
+    // Min-length 2 lives inside searchSubfolders; abort/unmount cleanup
+    // below is unchanged.
+    if (!searchQuery.trim()) return;
     const timer = setTimeout(() => {
       void searchSubfolders(searchQuery.trim());
     }, SEARCH_DEBOUNCE_MS);
@@ -291,7 +307,7 @@ export function FolderSelectionScreen({
       clearTimeout(timer);
       apiSearchAbortRef.current?.abort();
     };
-  }, [searchQuery, filteredFolders.length, searchSubfolders]);
+  }, [searchQuery, searchSubfolders]);
 
   useEffect(() => {
     // fetchFolders sets isLoading/folders synchronously — that is the
