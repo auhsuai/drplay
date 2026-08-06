@@ -170,8 +170,14 @@ export function useNowPlayingProgress(
       // buffered still empty before a small/fast file finishes loading (no
       // further progress event ever fires). timeupdate (~4/s) re-reads the
       // real buffered state so the bar cannot stay empty once it's full.
-      // DOM-only — no React re-render.
-      updateBufferBar(bufferFillRef.current, audio.getBuffered());
+      // DOM-only — no React re-render. Segments span their full ranges; the
+      // fill (drawn above the buffer layer) covers the pre-playhead part, so
+      // the raw media clock (~200ms ahead while playing) cannot open a gap
+      // between fill and segment. THIS event's playhead (the value the fill
+      // was just set to) drives the stale-range drop filters. The separate
+      // `progress` handler below keeps the raw-clock fallback (no timeupdate
+      // context) — its ≤200ms offset is overwritten by the next timeupdate.
+      updateBufferBar(bufferFillRef.current, audio.getBuffered(), time);
     };
 
     const unsubTime = audio.on("timeupdate", updateProgressUI);

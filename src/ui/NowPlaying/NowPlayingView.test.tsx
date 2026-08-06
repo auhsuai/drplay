@@ -183,9 +183,20 @@ describe("NowPlayingView buffer bar", () => {
     const seg = buffer.children[0] as HTMLElement;
     // The segment — not the container — carries the visible buffer background.
     expect(seg.className).toMatch(/\bbg-gray-400\b/);
-    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
-    expect(seg.style.left).toBe(`${String((10 / 1000) * 100)}%`);
-    expect(seg.style.width).toBe(`${String((290 / 1000) * 100)}%`);
+    // Segment carries a NEGATIVE head: the left edge is flat (no rounded-l
+    // cap) so it cannot butt a second convex cap against the fill's round cap
+    // at the playhead (two semicircles touching at a point open a lens gap of
+    // bare rail); the right end keeps only a small 2px corner (rounded-r-sm).
+    // When the range starts at 0 the container's overflow-hidden rounded-full
+    // clip rounds the flat left edge to match the rail.
+    expect(seg.className).toContain("rounded-r-sm");
+    expect(seg.className).not.toContain("rounded-l-full");
+    expect(seg.className).not.toContain("rounded-full");
+    // Full-range segment: [0,300] of duration 1000 spans the playhead — the
+    // blue fill drawn above covers the played part (no left clip at the
+    // playhead, which would open a lens gap between the two round caps).
+    expect(seg.style.left).toBe("0%");
+    expect(seg.style.width).toBe("30%");
   });
 
   it("BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)", () => {
@@ -200,9 +211,31 @@ describe("NowPlayingView buffer bar", () => {
 
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
-    expect(seg.style.left).toBe(`${String((10 / 1000) * 100)}%`);
-    expect(seg.style.width).toBe(`${String((290 / 1000) * 100)}%`);
+    // Full-range segment: [0,300] spans the playhead (10) — the blue fill
+    // covers [0,10] above it, so the visible buffer starts right at the fill.
+    expect(seg.style.left).toBe("0%");
+    expect(seg.style.width).toBe("30%");
+  });
+
+  it("BUG regression: range starting at the timeupdate playhead renders fully (drop filters use the playhead, not the raw clock)", () => {
+    renderView();
+    const buffer = screen.getByTestId("buffer-fill");
+
+    // Raw media clock reads 60s (getBuffered is unthrottled) while the timeupdate
+    // playhead the fill is drawn from shows 50s. The range [50,100] starts
+    // exactly at the playhead, so it must NOT be dropped as "ahead of the
+    // playhead" and renders with its head pulled back 2% (to 48%) — the flat
+    // left edge hides under the fill's round cap, a single convex cap at the
+    // seam.
+    setBuffered([[50, 100]], 100, 60);
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
+    });
+
+    expect(buffer.childElementCount).toBe(1);
+    const seg = buffer.children[0] as HTMLElement;
+    expect(seg.style.left).toBe("48%");
+    expect(seg.style.width).toBe("52%");
   });
 
   it("unsubscribes the progress handler on unmount (no listener leak)", () => {
@@ -259,5 +292,96 @@ describe("NowPlayingView a11y progressbar", () => {
     });
 
     expect(bar.getAttribute("aria-valuenow")).toBe("25");
+  });
+});
+
+describe("NowPlayingView fill rounding at the buffer seam", () => {
+  const BAR_WIDTH = 200;
+
+  function mockBarRect() {
+    const bar = screen.getByRole("progressbar");
+    const rect = {
+      left: 0,
+      right: BAR_WIDTH,
+      top: 0,
+      bottom: 10,
+      width: BAR_WIDTH,
+      height: 10,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(bar, "getBoundingClientRect").mockReturnValue(rect);
+    return bar;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("BUG regression: fill is fully rounded (rounded-full) at mid-track widths", () => {
+    renderView();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 100 });
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
+    });
+    // Force the render that reads the fill width into the className.
+    act(() => {
+      fakeController._emit("durationchange", { duration: 101 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("50%");
+    // Original behavior restored: the fill keeps a full round cap on BOTH
+    // ends at every width — no small 2px right corner and no conditional
+    // toggle when the fill reaches the rail end.
+    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-r-xs");
+    expect(fill.className).not.toContain("rounded-r-full");
+  });
+
+  it("BUG regression: fill stays fully rounded (rounded-full) at the rail end (100%)", () => {
+    renderView();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 100 });
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 100, duration: 100 });
+    });
+    // Force the render that reads the fill width into the className.
+    act(() => {
+      fakeController._emit("durationchange", { duration: 101 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("100%");
+    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-r-xs");
+    expect(fill.className).not.toContain("rounded-r-full");
+  });
+
+  it("BUG regression: dragging the fill keeps it fully rounded (rounded-full) (drag path)", () => {
+    renderView();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: BAR_WIDTH, pointerId: 1 });
+    });
+    expect(screen.getByTestId("progress-fill").className).toContain(
+      "rounded-full",
+    );
+    expect(screen.getByTestId("progress-fill").className).not.toContain(
+      "rounded-r-xs",
+    );
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: BAR_WIDTH, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
   });
 });

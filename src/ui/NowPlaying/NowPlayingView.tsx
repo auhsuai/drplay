@@ -46,9 +46,14 @@ export const NowPlayingView = memo(function NowPlayingView({
     handlePointerDown,
   } = useNowPlayingProgress(currentTrack, isOpen);
 
-  const progressPercent = progressFillRef.current
-    ? Math.round(parseFloat(progressFillRef.current.style.width) || 0)
+  // Render-time mirror of the fill width (the hook writes it DOM-direct). The
+  // percentage feeds aria-valuenow on the progressbar. The fill className
+  // carries rounded-full statically: both ends stay round at every width
+  // (original look — no small 2px right corner, no rail-end toggle).
+  const fillPercent = progressFillRef.current
+    ? parseFloat(progressFillRef.current.style.width) || 0
     : 0;
+  const progressPercent = Math.round(fillPercent);
 
   if (!currentTrack) {
     return (
@@ -170,6 +175,7 @@ export const NowPlayingView = memo(function NowPlayingView({
 
                   <div
                     ref={progressFillRef}
+                    data-testid="progress-fill"
                     className={`absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width] ${isDragging ? "" : "transition-all duration-150"}`}
                   >
                     <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0"></div>

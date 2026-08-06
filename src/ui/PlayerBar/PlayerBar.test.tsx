@@ -184,9 +184,24 @@ describe("PlayerBar buffer bar", () => {
 
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
-    expect(seg.style.left).toBe(`${String((10 / 1000) * 100)}%`);
-    expect(seg.style.width).toBe(`${String((290 / 1000) * 100)}%`);
+    // The segment spans the WHOLE range [0,300] (no left clip at the playhead):
+    // the blue fill drawn above it covers the played part. Clipping at the
+    // playhead instead would put a second round cap flush against the fill's
+    // round cap — the two semicircles touch only at a point and open a
+    // lens-shaped gap (rail showing through) above and below the seam.
+    expect(seg.style.left).toBe("0%");
+    expect(seg.style.width).toBe("30%");
+    // Segment carries a NEGATIVE head: the left edge is flat (no rounded-l
+    // cap) so it cannot butt a second convex cap against the fill's round cap
+    // at the playhead (two semicircles touching at a point open a lens gap of
+    // bare rail); the right end keeps only a small 2px corner (rounded-r-sm)
+    // — a big round "dot" on a mid-track buffer end would float on the rail
+    // instead of reading as a continuous buffer run. When the range starts at
+    // 0 the container's overflow-hidden rounded-full clip rounds the flat
+    // left edge to match the rail.
+    expect(seg.className).toContain("rounded-r-sm");
+    expect(seg.className).not.toContain("rounded-l-full");
+    expect(seg.className).not.toContain("rounded-full");
   });
 
   it("BUG regression: timeupdate re-renders the buffer bar from audio.buffered (progress race)", () => {
@@ -201,9 +216,53 @@ describe("PlayerBar buffer bar", () => {
 
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    // Future-only buffer: [10,300] of duration 1000 -> 1% / 29%.
-    expect(seg.style.left).toBe(`${String((10 / 1000) * 100)}%`);
-    expect(seg.style.width).toBe(`${String((290 / 1000) * 100)}%`);
+    // Full-range segment: [0,300] spans the playhead (10) — the blue fill
+    // covers [0,10] above it, so the visible buffer starts right at the fill.
+    expect(seg.style.left).toBe("0%");
+    expect(seg.style.width).toBe("30%");
+  });
+
+  it("BUG regression: buffer segment spans its full range under the fill — no lens gap at the playhead seam", () => {
+    renderPlayer();
+    const buffer = screen.getByTestId("buffer-fill");
+
+    // Raw media clock reads 60s (getBuffered is unthrottled) while the UI
+    // playhead — the throttled timeupdate the blue fill is drawn from — shows
+    // 50s. The buffered range [0,100] must render from its OWN start (0%), NOT
+    // clipped at the playhead (50%): clipping would put the segment's round
+    // head flush against the fill's round cap (two semicircles touching at a
+    // point -> lens gap above/below the seam). The fill, drawn above the
+    // buffer layer, covers [0,50].
+    setBuffered([[0, 100]], 100, 60);
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
+    });
+
+    expect(buffer.childElementCount).toBe(1);
+    const seg = buffer.children[0] as HTMLElement;
+    expect(seg.style.left).toBe("0%");
+    expect(seg.style.width).toBe("100%");
+  });
+
+  it("BUG regression: range starting at the UI playhead renders fully (drop filters use the playhead, not the raw clock)", () => {
+    renderPlayer();
+    const buffer = screen.getByTestId("buffer-fill");
+
+    // Raw media clock reads 60s (getBuffered is unthrottled) while the UI
+    // playhead — the throttled timeupdate the blue fill is drawn from — shows
+    // 50s. The range [50,100] starts exactly at the playhead, so it must NOT
+    // be dropped as "ahead of the playhead" (start > currentTime). Its head is
+    // NEGATIVE: pulled back 2% (to 48%) so the flat left edge hides under the
+    // fill's round right cap — a single convex cap at the seam, no lens gap.
+    setBuffered([[50, 100]], 100, 60);
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
+    });
+
+    expect(buffer.childElementCount).toBe(1);
+    const seg = buffer.children[0] as HTMLElement;
+    expect(seg.style.left).toBe("48%");
+    expect(seg.style.width).toBe("52%");
   });
 
   it("BUG regression: buffer container is pinned full-width and transparent (segment children own the background)", () => {
@@ -231,18 +290,26 @@ describe("PlayerBar buffer bar", () => {
       1000,
       505,
     );
+    // Move the UI playhead to the seek target (the seek's timeupdate precedes
+    // the buffer redraw in the real flow) so the drop filters use the position
+    // the fill shows, not the raw clock.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 505, duration: 1000 });
+    });
     act(() => {
       fakeController._emit("progress");
     });
 
     // Pre-seek [0,30] ends before currentTime=505 -> dropped entirely; [500,510]
-    // is clipped to the future part [505,510]: 50.5% / 0.5% of duration 1000.
+    // spans the playhead -> rendered with its head pulled back 2% (to 48.5%)
+    // under the fill's round cap; the fill covers [0,505] above it, so only
+    // [505,510] is visible.
     expect(buffer.childElementCount).toBe(1);
-    expect((buffer.children[0] as HTMLElement).style.left).toBe("50.5%");
-    expect((buffer.children[0] as HTMLElement).style.width).toBe("0.5%");
+    expect((buffer.children[0] as HTMLElement).style.left).toBe("48.5%");
+    expect((buffer.children[0] as HTMLElement).style.width).toBe("2.5%");
   });
 
-  it("BUG regression: a fully-past buffered range is dropped while a range straddling the playhead is clipped", () => {
+  it("BUG regression: a fully-past buffered range is dropped while a range straddling the playhead renders from its range start", () => {
     renderPlayer();
     const buffer = screen.getByTestId("buffer-fill");
 
@@ -254,16 +321,23 @@ describe("PlayerBar buffer bar", () => {
       1000,
       250,
     );
+    // Move the UI playhead to the seek target (the seek's timeupdate precedes
+    // the buffer redraw in the real flow) so the drop filters use the position
+    // the fill shows, not the raw clock.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 250, duration: 1000 });
+    });
     act(() => {
       fakeController._emit("progress");
     });
 
     // [0,100] ends before currentTime=250 -> dropped; [200,300] straddles the
-    // playhead -> only the future part [250,300] renders: 25% / 5% of 1000.
+    // playhead -> rendered from its own start (20% of duration 1000); the fill
+    // covers [0,250] above it, so only [250,300] is visible.
     expect(buffer.childElementCount).toBe(1);
     const seg = buffer.children[0] as HTMLElement;
-    expect(seg.style.left).toBe("25%");
-    expect(seg.style.width).toBe("5%");
+    expect(seg.style.left).toBe("20%");
+    expect(seg.style.width).toBe("10%");
   });
 
   it("clears the buffer bar when switching to a new track", () => {
@@ -638,5 +712,355 @@ describe("PlayerBar favorite (heart) button", () => {
     await screen.findByRole("button", { name: "Add to favorites" });
     expect(removeFavorite).toHaveBeenCalledTimes(1);
     expect(removeFavorite).toHaveBeenCalledWith("track-1");
+  });
+});
+
+describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle)", () => {
+  const BAR_WIDTH = 200;
+
+  function mockBarRect() {
+    const bar = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const rect = {
+      left: 0,
+      right: BAR_WIDTH,
+      top: 0,
+      bottom: 10,
+      width: BAR_WIDTH,
+      height: 10,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(bar, "getBoundingClientRect").mockReturnValue(rect);
+    return bar;
+  }
+
+  function hoverAt(bar: HTMLElement, clientX: number) {
+    // Separate acts: React commits the pointerenter state (tooltip mounts)
+    // before the first pointermove reads it — same ordering as real events.
+    act(() => {
+      fireEvent.pointerEnter(bar, { pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerMove(bar, { clientX, pointerId: 1 });
+    });
+  }
+
+  beforeEach(() => {
+    fakeController.seek.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("shows a tooltip with the duration at the hovered position and follows pointer moves", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    expect(screen.queryByTestId("seek-tooltip")).toBeNull();
+    hoverAt(bar, 50); // 25% of 240s = 1:00
+    expect(screen.getByTestId("seek-tooltip").textContent).toBe("1:00");
+
+    act(() => {
+      fireEvent.pointerMove(bar, { clientX: 100, pointerId: 1 });
+    });
+    expect(screen.getByTestId("seek-tooltip").textContent).toBe("2:00");
+  });
+
+  it("does not show the tooltip while the duration is 0 (metadata not loaded)", () => {
+    renderPlayer();
+    const bar = mockBarRect();
+    hoverAt(bar, 100);
+    expect(screen.queryByTestId("seek-tooltip")).toBeNull();
+  });
+
+  it("clamps the tooltip inward so it never overflows the bar edges", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 0); // raw anchor at the far-left edge -> clamped inward
+    const tooltip = screen.getByTestId("seek-tooltip");
+    expect(Number.parseFloat(tooltip.style.left)).toBeGreaterThan(0);
+    expect(tooltip.textContent).toBe("0:00");
+
+    act(() => {
+      fireEvent.pointerMove(bar, { clientX: BAR_WIDTH, pointerId: 1 });
+    });
+    expect(Number.parseFloat(tooltip.style.left)).toBeLessThan(BAR_WIDTH);
+    expect(tooltip.textContent).toBe("4:00");
+  });
+
+  it("hides tooltip and buffer preview and returns the thumb to idle on pointerleave", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
+    const bar = mockBarRect();
+    hoverAt(bar, 150);
+
+    expect(screen.getByTestId("seek-tooltip")).toBeTruthy();
+    expect(screen.getByTestId("seek-thumb").className).toContain("opacity-100");
+
+    act(() => {
+      fireEvent.pointerLeave(bar, { pointerId: 1 });
+    });
+
+    expect(screen.queryByTestId("seek-tooltip")).toBeNull();
+    expect(screen.queryByTestId("buffer-preview")).toBeNull();
+    expect(screen.getByTestId("seek-thumb").className).toContain("opacity-0");
+  });
+
+  it("keeps the thumb hidden while idle and shows it on hover", () => {
+    renderPlayer();
+    expect(screen.getByTestId("seek-thumb").className).toContain("opacity-0");
+
+    const bar = mockBarRect();
+    act(() => {
+      fireEvent.pointerEnter(bar, { pointerId: 1 });
+    });
+
+    expect(screen.getByTestId("seek-thumb").className).toContain("opacity-100");
+  });
+
+  it("shows the thumb immediately on pointerdown even without hover", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+
+    expect(screen.getByTestId("seek-thumb").className).toContain("opacity-100");
+
+    // Complete the drag so the window listeners are removed (no leak into
+    // later tests in this file).
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 50, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the thumb visible while dragging and the tooltip does not break the drag", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerEnter(bar, { pointerId: 1 });
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    expect(screen.getByTestId("seek-thumb").className).toContain("opacity-100");
+
+    act(() => {
+      fireEvent.pointerMove(bar, { clientX: 100, pointerId: 1 });
+    });
+    expect(screen.getByTestId("seek-tooltip").className).toContain(
+      "pointer-events-none",
+    );
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+  });
+
+  it("shows the buffer preview from the UI playhead to the hovered position when hovering ahead", () => {
+    renderPlayer();
+    // The playhead the preview must start at is the LAST timeupdate value —
+    // the same one the blue fill is showing. The raw media clock
+    // (getCurrentTime) may be up to ~200ms ahead of it while playing, so the
+    // test feeds the playhead through the same channel as the fill.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 10, duration: 100 });
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    expect(preview.style.left).toBe("10%");
+    expect(preview.style.width).toBe("65%");
+  });
+
+  it("does not show the buffer preview when hovering before the playhead", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 50); // 25% < playhead 50%
+
+    expect(screen.getByTestId("buffer-preview").style.width).toBe("0%");
+  });
+
+  it("starts the preview at the last UI playhead when paused (no timeupdate drift)", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 30, duration: 100 });
+    });
+    // No further timeupdate (paused) — the preview must keep using the last
+    // emitted playhead instead of drifting to the raw media clock.
+    const bar = mockBarRect();
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    expect(preview.style.left).toBe("30%");
+    expect(preview.style.width).toBe("45%");
+  });
+
+  it("starts the preview at the drag position after a seek drag", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 200 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 100, pointerId: 1 }); // 50%
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    expect(preview.style.left).toBe("50%");
+    expect(preview.style.width).toBe("25%");
+  });
+
+  it("starts the preview at the restored playhead when no timeupdate has fired", () => {
+    renderPlayer({
+      currentTrack: makeTrack({ restoreTime: 40, restoreDuration: 100 }),
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    expect(preview.style.left).toBe("40%");
+    expect(preview.style.width).toBe("35%");
+  });
+
+  it("BUG regression: buffer preview keeps only a small right corner (rounded-r-sm) so it reads as a continuous buffer run, not a round dot", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 10, duration: 100 });
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    // The preview tail matches the buffered segment's small right corner
+    // (rounded-r-sm); the flat left edge joins the fill's convex cap at the
+    // playhead — no round cap on the preview side of the seam.
+    expect(preview.className).toContain("rounded-r-sm");
+    expect(preview.className).not.toContain("rounded-l-full");
+    expect(preview.className).not.toContain("rounded-full");
+  });
+});
+
+describe("PlayerBar fill rounding at the buffer seam", () => {
+  const BAR_WIDTH = 200;
+
+  function mockBarRect() {
+    const bar = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const rect = {
+      left: 0,
+      right: BAR_WIDTH,
+      top: 0,
+      bottom: 10,
+      width: BAR_WIDTH,
+      height: 10,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(bar, "getBoundingClientRect").mockReturnValue(rect);
+    return bar;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("BUG regression: fill is fully rounded (rounded-full) at mid-track widths", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("50%");
+    // Original behavior restored: the fill keeps a full round cap on BOTH
+    // ends at every width — no small 2px right corner and no conditional
+    // toggle when the fill reaches the rail end.
+    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-r-xs");
+    expect(fill.className).not.toContain("rounded-r-full");
+  });
+
+  it("BUG regression: fill stays fully rounded (rounded-full) at the rail end (100%)", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 100, duration: 100 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("100%");
+    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-r-xs");
+    expect(fill.className).not.toContain("rounded-r-full");
+  });
+
+  it("BUG regression: dragging the fill keeps it fully rounded (rounded-full) (drag path)", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: BAR_WIDTH, pointerId: 1 });
+    });
+    expect(screen.getByTestId("progress-fill").className).toContain(
+      "rounded-full",
+    );
+    expect(screen.getByTestId("progress-fill").className).not.toContain(
+      "rounded-r-xs",
+    );
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: BAR_WIDTH, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+  });
+
+  it("BUG regression: restored session near 100% keeps the fill fully rounded (restore path)", () => {
+    renderPlayer({
+      currentTrack: makeTrack({ restoreTime: 99.95, restoreDuration: 100 }),
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-r-xs");
+    expect(fill.className).not.toContain("rounded-r-full");
   });
 });
