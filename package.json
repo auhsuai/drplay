@@ -39,7 +39,7 @@
     "music-metadata": "^11.14.0",
     "react": "19.2",
     "react-dom": "19.2",
-    "react-easy-crop": "^6.0.2",
+    "react-easy-crop": "^6.2.3",
     "react-i18next": "^17.0.10",
     "tauri-plugin-keepawake-api": "^0.1.0",
     "zustand": "^5.0.14"
