@@ -323,6 +323,46 @@ describe("AudioController retry lifecycle", () => {
     expect(audio.src).toContain("retry=");
   });
 
+  it("Task A: retry keeps the ext query param on the retried URL", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack({ ...trackA, streamUrl: "/drive-stream/A?ext=flac" });
+    const audio = audioEl(1);
+    audio.error = { code: MEDIA_ERR_NETWORK, message: "network" };
+
+    fireError(audio);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(audio.src).toContain("ext=flac");
+    expect(audio.src).toContain("retry=");
+    expect(audio.src).toMatch(/^\/drive-stream\/A\?ext=flac&retry=\d+$/);
+  });
+
+  it("Task A: playTrack without streamUrl builds the URL with the playable extension", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack({
+      id: "no-url",
+      title: "No Url",
+      artist: "Artist",
+      streamUrl: "",
+      originalName: "song.flac",
+    });
+
+    expect(audioEl(1).src).toBe("/drive-stream/no-url?ext=flac");
+  });
+
+  it("Task A: playTrack without streamUrl and without a playable name keeps the plain URL", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack({
+      id: "no-url-2",
+      title: "No Url 2",
+      artist: "Artist",
+      streamUrl: "",
+      originalName: "song.wma",
+    });
+
+    expect(audioEl(1).src).toBe("/drive-stream/no-url-2");
+  });
+
   it("safePlay: calls audio.play() when resuming a paused track (same-track path)", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);

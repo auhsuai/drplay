@@ -8,7 +8,14 @@ import {
   afterEach,
   beforeAll,
 } from "vitest";
-import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  cleanup,
+  waitFor,
+  act,
+  fireEvent,
+} from "@testing-library/react";
 import type { MockInstance } from "vitest";
 import { PremiumCard } from "./PremiumCard";
 import { getTrackMetadata } from "../../../utils/metadata";
@@ -89,10 +96,10 @@ describe("PremiumCard metadata render", () => {
   });
 });
 
-describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-once)", () => {
+describe("PremiumCard drplay:// cover URL (S4 disk-cache path)", () => {
   // jsdom does NOT implement URL.createObjectURL / revokeObjectURL (both are
-  // undefined at runtime) — install observable spies once so the card's blob
-  // URL lifecycle can be asserted (same pattern as SongCard.test.tsx).
+  // undefined at runtime) — install observable spies once so the S4 contract
+  // "the blob path is gone, no blob URL is ever created" can be asserted.
   beforeAll(() => {
     if (typeof URL.createObjectURL !== "function") {
       Object.defineProperty(URL, "createObjectURL", {
@@ -115,8 +122,8 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
 
   function metadataWithPicture(): never {
     return {
-      title: "Blob Track",
-      artist: "Blob Artist",
+      title: "Fetched Title",
+      artist: "Fetched Artist",
       duration: 0,
       size: 0,
       pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
@@ -124,24 +131,9 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
     } as never;
   }
 
-  function deferred() {
-    let resolve!: (value: never) => void;
-    const promise = new Promise<never>((res) => {
-      resolve = res;
-    });
-    return { promise, resolve };
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedFetch.mockResolvedValue({
-      title: "Fetched Title",
-      artist: null,
-      duration: 0,
-      size: 0,
-      pictureData: null,
-      pictureFormat: undefined,
-    } as never);
+    mockedFetch.mockResolvedValue(metadataWithPicture());
     createObjectURLSpy = vi
       .spyOn(URL, "createObjectURL")
       .mockReturnValue("blob:mock-premium-cover");
@@ -162,186 +154,40 @@ describe("PremiumCard blob URL lifecycle (create in async .then, revoke exactly-
     });
   }
 
-  it("revokes exactly once per created URL on normal mount -> unmount", async () => {
-    const d = deferred();
-    mockedFetch.mockImplementationOnce(() => d.promise);
+  it("renders the thumb via drplay:// with lazy + async decoding", async () => {
+    const { container } = render(<PremiumCard {...baseProps()} />);
+    const img = await screen.findByAltText("Fetched Title");
 
-    const { unmount } = render(<PremiumCard {...baseProps()} />);
-    await act(async () => {
-      d.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-
-    unmount();
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
+    expect(img.getAttribute("src")).toBe(
+      "drplay://cover?id=track-1&thumb=true",
     );
+    expect(img.getAttribute("loading")).toBe("lazy");
+    expect(img.getAttribute("decoding")).toBe("async");
+    expect(container.querySelector(".lucide-music")).toBeNull();
   });
 
-  it("creates no blob URL when metadata resolves after unmount and keeps create === revoke", async () => {
-    const d = deferred();
-    mockedFetch.mockImplementationOnce(() => d.promise);
+  it("falls back to the Music icon when the drplay:// image errors (no throw)", async () => {
+    const { container } = render(<PremiumCard {...baseProps()} />);
+    const img = await screen.findByAltText("Fetched Title");
 
+    expect(() => fireEvent.error(img)).not.toThrow();
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
+  });
+
+  it("never creates or revokes blob URLs (blob path removed, RAM goal)", async () => {
     const { unmount } = render(<PremiumCard {...baseProps()} />);
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-
-    unmount();
-    cleanup();
-
-    await act(async () => {
-      d.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
+    await screen.findByAltText("Fetched Title");
     await flushMicrotasks();
 
     expect(createObjectURLSpy).not.toHaveBeenCalled();
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
-  });
-
-  it("revokes every blob URL exactly once when track.id changes while a cover is displayed", async () => {
-    const d1 = deferred();
-    const d2 = deferred();
-    mockedFetch
-      .mockImplementationOnce(() => d1.promise)
-      .mockImplementationOnce(() => d2.promise);
-
-    const { rerender, unmount } = render(<PremiumCard {...baseProps()} />);
-
-    await act(async () => {
-      d1.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-
-    rerender(
-      <PremiumCard
-        {...baseProps({
-          track: makeTrack({
-            id: "track-2",
-            title: "Other Song",
-            size: 2000,
-            originalName: "other.mp3",
-          }),
-        })}
-      />,
-    );
-    await act(async () => {
-      d2.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
 
     unmount();
     await flushMicrotasks();
 
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
-  });
-
-  it("stale fetch resolving after a token change never creates a URL; new fetch balances create === revoke", async () => {
-    const d1 = deferred();
-    const d2 = deferred();
-    mockedFetch
-      .mockImplementationOnce(() => d1.promise)
-      .mockImplementationOnce(() => d2.promise);
-
-    const { rerender, unmount } = render(<PremiumCard {...baseProps()} />);
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-
-    rerender(<PremiumCard {...baseProps({ token: "tok2" })} />);
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(2);
-    });
-
-    // stale (first) fetch resolves AFTER the newer one — it must not create a URL
-    await act(async () => {
-      d2.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      d1.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    await flushMicrotasks();
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-
-    unmount();
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
-  });
-
-  it("rapid track.id + token changes with interleaved resolution still keep create === revoke", async () => {
-    const d1 = deferred();
-    const d2 = deferred();
-    const d3 = deferred();
-    mockedFetch
-      .mockImplementationOnce(() => d1.promise)
-      .mockImplementationOnce(() => d2.promise)
-      .mockImplementationOnce(() => d3.promise);
-
-    const { rerender, unmount } = render(<PremiumCard {...baseProps()} />);
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-
-    rerender(
-      <PremiumCard
-        {...baseProps({ track: makeTrack({ id: "track-2" }), token: "tok2" })}
-      />,
-    );
-    rerender(
-      <PremiumCard
-        {...baseProps({ track: makeTrack({ id: "track-3" }), token: "tok3" })}
-      />,
-    );
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(3);
-    });
-
-    await act(async () => {
-      d3.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    await act(async () => {
-      d1.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    await act(async () => {
-      d2.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    await flushMicrotasks();
-
-    unmount();
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
+    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -12,7 +12,7 @@ import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import {
   getPrefetchedStreamUrl,
-  DRIVE_STREAM_PREFIX,
+  buildStreamUrl,
 } from "../utils/streamPrefetcher";
 import { prefetchNextTrackAudio } from "../utils/nextTrackPrefetcher";
 import { showErrorToast } from "../utils/simpleToast";
@@ -238,9 +238,10 @@ export const usePlayer = (accessToken: string | null) => {
         if (idx === -1 || idx >= queue.length - 1) return;
         const next = queue[idx + 1];
         if (next === undefined) return;
-        const url = getPrefetchedStreamUrl(next.id);
+        const url =
+          getPrefetchedStreamUrl(next.id) ??
+          buildStreamUrl(next.id, next.originalName);
         if (url) prefetchNextTrackAudio(url);
-        else prefetchNextTrackAudio(`${DRIVE_STREAM_PREFIX}${next.id}`);
       };
 
       const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
@@ -264,7 +265,8 @@ export const usePlayer = (accessToken: string | null) => {
         }
 
         const streamUrl =
-          prefetchedUrl || `${DRIVE_STREAM_PREFIX}${targetTrack.id}`;
+          prefetchedUrl ||
+          buildStreamUrl(targetTrack.id, targetTrack.originalName);
         setCurrentTrack({ ...targetTrack, streamUrl });
         triggerReload();
         setIsPlaying(true);
@@ -378,7 +380,10 @@ export const usePlayer = (accessToken: string | null) => {
             }
           }
 
-          const url = `${DRIVE_STREAM_PREFIX}${currentTrack.id}`;
+          const url = buildStreamUrl(
+            currentTrack.id,
+            currentTrack.originalName,
+          );
 
           setCurrentTrack((prev) =>
             prev ? { ...prev, streamUrl: url } : prev,

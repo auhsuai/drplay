@@ -103,34 +103,73 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup)", () => {
-  it("does not create a blob URL after unmount and keeps create === revoke even when metadata resolves afterwards", async () => {
-    let resolveMeta!: (m: CachedMetadata) => void;
-    mockedGetTrackMetadata.mockReturnValue(
-      new Promise<CachedMetadata>((r) => {
-        resolveMeta = r;
-      }),
-    );
+describe("useNowPlayingMetadata drplay:// cover URL (S4 disk-cache path)", () => {
+  function metadataWithFullPicture(): CachedMetadata {
+    return {
+      ...metadataWithPicture(),
+      pictureDataFull: new Uint8Array([9, 9, 9, 9]),
+    };
+  }
 
-    const { unmount } = renderHook(() =>
+  it("prefers the full variant URL (thumb=false) and passes it to getPalette", async () => {
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithFullPicture());
+
+    const { result } = renderHook(() =>
       useNowPlayingMetadata(makeTrack(), "token"),
     );
     await flushMicrotasks();
 
-    unmount();
-
-    act(() => {
-      resolveMeta(metadataWithPicture());
-    });
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
+    expect(result.current.coverUrl).toBe(
+      "drplay://cover?id=file-123&thumb=false",
+    );
+    expect(mockedGetPalette).toHaveBeenCalledWith(
+      "drplay://cover?id=file-123&thumb=false",
     );
   });
 
-  it("revokes the blob URL exactly once even when the palette decode fails while the component stays mounted (leak: revoke only ever ran in cleanup)", async () => {
+  it("falls back to the thumb variant URL (thumb=true) when no full picture exists", async () => {
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+
+    const { result } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+
+    expect(result.current.coverUrl).toBe(
+      "drplay://cover?id=file-123&thumb=true",
+    );
+    expect(mockedGetPalette).toHaveBeenCalledWith(
+      "drplay://cover?id=file-123&thumb=true",
+    );
+  });
+
+  it("keeps coverUrl null and skips the palette when there is no picture at all", async () => {
+    mockedGetTrackMetadata.mockResolvedValue({
+      ...metadataWithPicture(),
+      pictureData: null,
+      pictureDataFull: null,
+    });
+
+    const { result } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+
+    expect(result.current.coverUrl).toBeNull();
+    expect(mockedGetPalette).not.toHaveBeenCalled();
+  });
+
+  it("never creates or revokes blob URLs (blob path removed, RAM goal)", async () => {
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+
+    renderHook(() => useNowPlayingMetadata(makeTrack(), "token"));
+    await flushMicrotasks();
+
+    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs a warn via captureError with the module source when palette decoding fails", async () => {
     mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
     mockedGetPalette.mockRejectedValue(new Error("decode failed"));
 
@@ -139,118 +178,17 @@ describe("useNowPlayingMetadata blob URL lifecycle (race: async .then vs cleanup
     );
     await flushMicrotasks();
 
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledWith(BLOB_URL);
-    expect(result.current.coverUrl).toBe(BLOB_URL);
-  });
-
-  it("defers revocation until the palette decode settles (never revokes a URL the palette is still decoding)", async () => {
-    let resolvePalette!: (colors: string[]) => void;
-    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
-    mockedGetPalette.mockReturnValue(
-      new Promise<string[]>((r) => {
-        resolvePalette = r;
-      }),
-    );
-
-    const { unmount } = renderHook(() =>
-      useNowPlayingMetadata(makeTrack(), "token"),
-    );
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-
-    unmount();
-
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-
-    act(() => {
-      resolvePalette(["rgba(10,20,30,0.8)", "rgba(1,2,3,0.8)"]);
-    });
-    await flushMicrotasks();
-
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledWith(BLOB_URL);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
-  });
-
-  it("rapid track switch: stale run creates no blob after cleanup, active run revokes exactly its own URL once after its palette settles", async () => {
-    const metaResolvers: Array<(m: CachedMetadata) => void> = [];
-    mockedGetTrackMetadata.mockImplementation(
-      () =>
-        new Promise<CachedMetadata>((r) => {
-          metaResolvers.push(r);
-        }),
-    );
-    const paletteResolvers: Array<(colors: string[]) => void> = [];
-    mockedGetPalette.mockImplementation(
-      () =>
-        new Promise<string[]>((r) => {
-          paletteResolvers.push(r);
-        }),
-    );
-
-    const { result, rerender } = renderHook(
-      ({ track }: { track: Track }) => useNowPlayingMetadata(track, "token"),
-      { initialProps: { track: makeTrack({ id: "file-a" }) } },
-    );
-    await flushMicrotasks();
-
-    rerender({ track: makeTrack({ id: "file-b" }) });
-    await flushMicrotasks();
-
-    expect(metaResolvers).toHaveLength(2);
-
-    act(() => {
-      const r0 = metaResolvers[0];
-      const r1 = metaResolvers[1];
-      if (r0 === undefined || r1 === undefined)
-        throw new Error("expected metadata resolvers");
-      r0(metadataWithPicture());
-      r1(metadataWithPicture());
-    });
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(createObjectURLSpy).toHaveBeenCalledWith(expect.any(Blob));
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-
-    act(() => {
-      const p0 = paletteResolvers[0];
-      if (p0 === undefined) throw new Error("expected palette resolver");
-      p0(["rgba(1,1,1,0.8)", "rgba(2,2,2,0.8)"]);
-    });
-    await flushMicrotasks();
-
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).toHaveBeenCalledWith(BLOB_URL);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
-    expect(result.current.coverUrl).toBe(BLOB_URL);
-  });
-
-  it("logs a warn via captureError with the module source when palette decoding fails", async () => {
-    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
-    mockedGetPalette.mockRejectedValue(new Error("decode failed"));
-
-    renderHook(() => useNowPlayingMetadata(makeTrack(), "token"));
-    await flushMicrotasks();
-
     expect(mockedCaptureError).toHaveBeenCalledTimes(1);
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
         source: "useNowPlayingMetadata",
-        message: expect.stringContaining(
-          "palette-failed",
-        ) as unknown as string,
+        message: expect.stringContaining("palette-failed") as unknown as string,
       }),
     );
+    // A failed palette must not leave the previous track's colors behind.
+    expect(result.current.bgColor).toBe("");
+    expect(result.current.bgPalette).toEqual([]);
   });
 
   it("does not log via captureError when metadata rejects with AbortError (cleanup abort is not an error)", async () => {

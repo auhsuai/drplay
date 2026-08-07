@@ -116,16 +116,13 @@ async function estimateFilesBytes(): Promise<number> {
 
 interface RustCacheInfo {
   cover_cache_bytes: number;
-  etag_cache_bytes: number;
   thumbnail_dir_bytes: number;
 }
 
 async function estimateCoversBytes(): Promise<number> {
   try {
     const info = await invoke<RustCacheInfo>(GET_CACHE_INFO_CMD);
-    return (
-      info.cover_cache_bytes + info.etag_cache_bytes + info.thumbnail_dir_bytes
-    );
+    return info.cover_cache_bytes + info.thumbnail_dir_bytes;
   } catch (e: unknown) {
     await captureError({
       level: "warn",
@@ -246,15 +243,10 @@ export async function clearAppCache(
     });
   }
   if (selected.includes("prefetch")) {
-    await clearCategory(
-      "prefetch",
-      "clear-prefetch-cache",
-      failures,
-      () => {
-        clearPrefetchedStreams();
-        clearNextTrackPrefetches();
-      },
-    );
+    await clearCategory("prefetch", "clear-prefetch-cache", failures, () => {
+      clearPrefetchedStreams();
+      clearNextTrackPrefetches();
+    });
   }
 
   // Aggregate failure: SettingsTab surfaces the message in its error toast,

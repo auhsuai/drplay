@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import type { Track } from "../../../App";
 import type { DriveItem } from "../../../types";
 import { getTrackMetadata } from "../../../utils/metadata";
+import { buildCoverUrl } from "../../../utils/coverStore";
 import { formatBytes } from "../../../utils/formatBytes";
 import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
@@ -171,13 +172,6 @@ export const SongCard = React.memo(
     });
     const cardRef = React.useRef<HTMLDivElement>(null);
     const imgRef = React.useRef<HTMLImageElement>(null);
-    const blobUrlRef = React.useRef<string | null>(null);
-    const releaseBlobUrl = React.useCallback(() => {
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
-      }
-    }, []);
     const [isFlashOn, setIsFlashOn] = useState(false);
     const [isDragHovered, setIsDragHovered] = useState(false);
     const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
@@ -271,14 +265,13 @@ export const SongCard = React.memo(
             return newMeta;
           });
 
-          if (metadata.pictureData && metadata.pictureFormat) {
-            const blob = new Blob([new Uint8Array(metadata.pictureData)], {
-              type: metadata.pictureFormat,
-            });
-            releaseBlobUrl();
-            blobUrlRef.current = URL.createObjectURL(blob);
-            setCoverUrl(blobUrlRef.current);
-          }
+          // S4: covers render straight from the Rust disk cache via the
+          // drplay:// custom scheme (thumb variant) — no blob URL is kept in
+          // RAM anymore. A missing/erroring cover falls back to the icon via
+          // the img onError below (GET returns 204 NoCover then).
+          setCoverUrl(
+            metadata.pictureData ? buildCoverUrl(item.id, true) : null,
+          );
         } catch (e) {
           if (controller.signal.aborted) return; // deliberate cleanup abort — not an error (MDN AbortController)
           void captureError({
@@ -308,7 +301,6 @@ export const SongCard = React.memo(
         isMounted = false;
         clearTimeout(timerId);
         controller.abort();
-        releaseBlobUrl();
         if (imgElement) {
           imgElement.src = "";
         }
@@ -321,7 +313,6 @@ export const SongCard = React.memo(
       item.title,
       item.trackInfo?.originalName,
       item.trackInfo?.size,
-      releaseBlobUrl,
     ]);
 
     // DropZone's native drag-drop never triggers DOM hover, so folder cards
@@ -331,9 +322,8 @@ export const SongCard = React.memo(
     React.useEffect(() => {
       if (!item.isFolder) return;
       const handleDragHover = (e: Event) => {
-        const detail = (
-          e as CustomEvent<{ folderId: string | null } | null>
-        ).detail;
+        const detail = (e as CustomEvent<{ folderId: string | null } | null>)
+          .detail;
         setIsDragHovered(detail?.folderId === item.id);
       };
       window.addEventListener(DRAG_FOLDER_HOVER_EVENT, handleDragHover);
@@ -419,7 +409,10 @@ export const SongCard = React.memo(
                   ref={imgRef}
                   src={coverUrl}
                   alt={meta.title}
+                  loading="lazy"
                   decoding="async"
+                  width={48}
+                  height={48}
                   onError={() => {
                     setCoverUrl(null);
                   }}

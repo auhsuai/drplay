@@ -35,6 +35,7 @@ vi.mock("../utils/apiClient", () => ({
 vi.mock("../utils/streamPrefetcher", () => ({
   getPrefetchedStreamUrl: vi.fn(() => undefined),
   DRIVE_STREAM_PREFIX: "/drive-stream/",
+  buildStreamUrl: vi.fn((id: string) => `/drive-stream/${id}`),
 }));
 
 vi.mock("../utils/nextTrackPrefetcher", () => ({

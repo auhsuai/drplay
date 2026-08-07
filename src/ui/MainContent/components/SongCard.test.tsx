@@ -217,10 +217,10 @@ describe("SongCard metadata fetch", () => {
   });
 });
 
-describe("SongCard blob URL lifecycle (create in async .then, revoke must follow consumer)", () => {
+describe("SongCard drplay:// cover URL (S4 disk-cache path)", () => {
   // jsdom does NOT implement URL.createObjectURL / revokeObjectURL (both are
-  // undefined at runtime) — install observable spies once so the card's blob
-  // URL lifecycle can be asserted (same pattern as useNowPlayingMetadata.test.ts).
+  // undefined at runtime) — install observable spies so the S4 contract "the
+  // blob path is gone, no blob URL is ever created" can be asserted.
   beforeAll(() => {
     if (typeof URL.createObjectURL !== "function") {
       Object.defineProperty(URL, "createObjectURL", {
@@ -243,8 +243,8 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
 
   function metadataWithPicture(): never {
     return {
-      title: "Blob Track",
-      artist: "Blob Artist",
+      title: "Fetched Title",
+      artist: "Fetched Artist",
       duration: 0,
       size: 0,
       pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
@@ -262,14 +262,7 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedFetch.mockResolvedValue({
-      title: "Fetched Title",
-      artist: null,
-      duration: 0,
-      size: 0,
-      pictureData: null,
-      pictureFormat: undefined,
-    } as never);
+    mockedFetch.mockResolvedValue(metadataWithPicture());
     createObjectURLSpy = vi
       .spyOn(URL, "createObjectURL")
       .mockReturnValue("blob:mock-songcard-cover");
@@ -290,109 +283,33 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
     });
   }
 
-  it("revokes every blob URL exactly once when metadata-updated triggers concurrent re-fetches", async () => {
-    const d1 = deferred();
-    const d2 = deferred();
-    const d3 = deferred();
-    mockedFetch
-      .mockImplementationOnce(() => d1.promise)
-      .mockImplementationOnce(() => d2.promise)
-      .mockImplementationOnce(() => d3.promise);
+  it("renders the thumb via drplay:// with lazy + async decoding inside the fixed 48px slot", async () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const img = await screen.findByAltText("Fetched Title");
 
-    const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
-
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-    await act(async () => {
-      d1.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-
-    await act(async () => {
-      window.dispatchEvent(
-        new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
-      );
-      window.dispatchEvent(
-        new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
-      );
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(3);
-    });
-
-    await act(async () => {
-      d2.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
-    await act(async () => {
-      d3.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(3);
-
-    unmount();
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(3);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(3);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
+    expect(img.getAttribute("src")).toBe(
+      "drplay://cover?id=track-1&thumb=true",
     );
+    expect(img.getAttribute("loading")).toBe("lazy");
+    expect(img.getAttribute("decoding")).toBe("async");
+    // Fixed slot (w-12 h-12 = 48px): explicit width/height reserve the box,
+    // preventing CLS while the drplay:// bytes load (web.dev CLS guidance).
+    expect(img.getAttribute("width")).toBe("48");
+    expect(img.getAttribute("height")).toBe("48");
+    expect(container.querySelector(".lucide-music")).toBeNull();
   });
 
-  it("never revokes a blob URL while it is still the displayed cover", async () => {
-    const d1 = deferred();
-    const d2 = deferred();
-    mockedFetch
-      .mockImplementationOnce(() => d1.promise)
-      .mockImplementationOnce(() => d2.promise);
+  it("falls back to the Music icon when the drplay:// image errors (no throw)", async () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const img = await screen.findByAltText("Fetched Title");
 
-    const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(() => fireEvent.error(img)).not.toThrow();
 
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-    await act(async () => {
-      d1.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-
-    await act(async () => {
-      window.dispatchEvent(
-        new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
-      );
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(2);
-    });
-
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-
-    await act(async () => {
-      d2.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
-
-    unmount();
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
   });
 
-  it("creates no blob URL when metadata resolves after unmount and keeps create === revoke", async () => {
+  it("never creates or revokes blob URLs (blob path removed, RAM goal)", async () => {
     const d = deferred();
     mockedFetch.mockImplementationOnce(() => d.promise);
 
@@ -401,75 +318,17 @@ describe("SongCard blob URL lifecycle (create in async .then, revoke must follow
       expect(mockedFetch).toHaveBeenCalledTimes(1);
     });
 
-    unmount();
-    cleanup();
-
     await act(async () => {
       d.resolve(metadataWithPicture());
       await Promise.resolve();
     });
-    await flushMicrotasks();
-
     expect(createObjectURLSpy).not.toHaveBeenCalled();
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
-  });
-
-  it("revokes exactly once per created URL when the item id changes quickly", async () => {
-    const d1 = deferred();
-    const d2 = deferred();
-    mockedFetch
-      .mockImplementationOnce(() => d1.promise)
-      .mockImplementationOnce(() => d2.promise);
-
-    const { rerender, unmount } = render(
-      <SongCard {...baseProps} item={makeItem()} />,
-    );
-
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-    await act(async () => {
-      d1.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-
-    rerender(
-      <SongCard
-        {...baseProps}
-        item={makeItem({
-          id: "track-2",
-          title: "Other Song",
-          trackInfo: {
-            id: "track-2",
-            title: "Other Song",
-            artist: "",
-            streamUrl: "",
-            size: 1000,
-            originalName: "other.mp3",
-          },
-        })}
-      />,
-    );
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(2);
-    });
-    await act(async () => {
-      d2.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
 
     unmount();
     await flushMicrotasks();
 
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(2);
-    expect(createObjectURLSpy.mock.calls.length).toBe(
-      revokeObjectURLSpy.mock.calls.length,
-    );
+    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
   });
 });
 

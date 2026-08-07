@@ -937,7 +937,10 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     });
 
     expect(mocks.prefetchVisibleTracks).toHaveBeenCalledTimes(1);
-    expect(mocks.prefetchVisibleTracks).toHaveBeenCalledWith(["r1", "r2"]);
+    expect(mocks.prefetchVisibleTracks).toHaveBeenCalledWith([
+      track({ id: "r1" }),
+      track({ id: "r2" }),
+    ]);
   });
 
   it("g. greeting skeleton shows only while recent is null, then the real greeting replaces it", async () => {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
+import { buildCoverUrl } from "../../../utils/coverStore";
 import { getPalette } from "../../../utils/color";
 import { captureError } from "../../../utils/errorLog";
 
@@ -38,7 +39,6 @@ export function useNowPlayingMetadata(
   useEffect(() => {
     if (!trackId) return;
     let cancelled = false;
-    let objectUrl: string | null = null;
     const controller = new AbortController();
 
     // Closure guard helper: the abort flag is only ever written by the effect
@@ -47,13 +47,6 @@ export function useNowPlayingMetadata(
     // false positive. Reading through a closure function defeats the
     // narrowing while staying semantically identical.
     const isCancelled = () => cancelled;
-
-    const revokeCoverUrl = () => {
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-        objectUrl = null;
-      }
-    };
 
     const resetPalette = () => {
       if (!isCancelled()) {
@@ -75,17 +68,22 @@ export function useNowPlayingMetadata(
         if (metadata.title) setRealTitle(metadata.title);
         if (metadata.artist) setRealArtist(metadata.artist);
 
-        const picture = metadata.pictureDataFull ?? metadata.pictureData;
-        if (picture && metadata.pictureFormat) {
-          const blob = new Blob([new Uint8Array(picture)], {
-            type: metadata.pictureFormat,
-          });
-          const coverObjectUrl = URL.createObjectURL(blob);
-          objectUrl = coverObjectUrl;
-          setCoverUrl(coverObjectUrl);
+        // S4: covers render from the Rust disk cache via drplay:// — no blob
+        // URL is kept in RAM. Full variant preferred (thumb=false); thumb
+        // fallback; null when the track has no picture (icon stays).
+        // getPalette decodes via new Image() + canvas: the drplay:// GET
+        // carries Access-Control-Allow-Origin: * (protocol/mod.rs), so the
+        // canvas read is not tainted and no color.ts change is needed.
+        const coverUrl = metadata.pictureDataFull
+          ? buildCoverUrl(trackId, false)
+          : metadata.pictureData
+            ? buildCoverUrl(trackId, true)
+            : null;
+        if (coverUrl) {
+          setCoverUrl(coverUrl);
 
           try {
-            const colors = await getPalette(coverObjectUrl);
+            const colors = await getPalette(coverUrl);
             if (isCancelled()) return;
             const firstColor = colors[0];
             if (firstColor !== undefined) setBgColor(firstColor);
@@ -97,8 +95,6 @@ export function useNowPlayingMetadata(
               source: NOW_PLAYING_MODULE,
               message: `palette-failed: ${err instanceof Error ? err.message : String(err)}`,
             });
-          } finally {
-            revokeCoverUrl();
           }
         } else {
           setBgColor("");

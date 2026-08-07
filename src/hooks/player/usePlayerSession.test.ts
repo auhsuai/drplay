@@ -3,7 +3,10 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { get } from "../../db/kv";
 import { getValidToken } from "../../utils/apiClient";
-import { getPrefetchedStreamUrl } from "../../utils/streamPrefetcher";
+import {
+  getPrefetchedStreamUrl,
+  buildStreamUrl,
+} from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
 import { usePlayerSession } from "./usePlayerSession";
 import { usePlayerStore } from "../../store/playerStore";
@@ -20,6 +23,10 @@ vi.mock("../../utils/apiClient", () => ({
 vi.mock("../../utils/streamPrefetcher", () => ({
   getPrefetchedStreamUrl: vi.fn(),
   DRIVE_STREAM_PREFIX: "/drive-stream/",
+  buildStreamUrl: vi.fn(
+    (fileId: string, name?: string) =>
+      `/drive-stream/${fileId}${name ? "?ext=flac" : ""}`,
+  ),
 }));
 
 vi.mock("../../utils/errorLog", () => ({
@@ -43,6 +50,7 @@ vi.mock("../../store/playerStore", () => ({
 const mockedGet = vi.mocked(get);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedGetPrefetchedStreamUrl = vi.mocked(getPrefetchedStreamUrl);
+const mockedBuildStreamUrl = vi.mocked(buildStreamUrl);
 const mockedCaptureError = vi.mocked(captureError);
 
 const SESSION_STORAGE_KEY = "drplay_last_session";
@@ -221,6 +229,44 @@ describe("usePlayerSession restore (lock-behavior)", () => {
 
     expect(setOriginalQueue).not.toHaveBeenCalled();
     expect(setPlayMode).not.toHaveBeenCalled();
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("usePlayerSession restore URL (buildStreamUrl delegation)", () => {
+  it("I: originalName playable (flac) → streamUrl qua buildStreamUrl(id, originalName) mang ?ext=", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        track: { ...makeTrack("t1", "q1"), originalName: "song.flac" },
+        time: 12,
+        duration: 240,
+      }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+
+    const { setCurrentTrack, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(mockedBuildStreamUrl).toHaveBeenCalledWith("t1", "song.flac");
+    const restored = setCurrentTrack.mock.calls[0]?.[0] as Track;
+    expect(restored.streamUrl).toBe("/drive-stream/t1?ext=flac");
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("J: originalName không có → streamUrl qua buildStreamUrl không mang ?ext=", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 12, duration: 240 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+
+    const { setCurrentTrack, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(mockedBuildStreamUrl).toHaveBeenCalledWith("t1", undefined);
+    const restored = setCurrentTrack.mock.calls[0]?.[0] as Track;
+    expect(restored.streamUrl).toBe("/drive-stream/t1");
     expect(triggerReload).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,30 @@
+import { PLAYABLE_AUDIO_EXTENSIONS } from "./audioQuery";
+
 const prefetchedStreams = new Map<string, string>();
 export const DRIVE_STREAM_PREFIX = "/drive-stream/";
 const MAX_CACHE = 200; // cache URL string ngắn (~20 byte/URL), KHÔNG prefetch data — việc prefetch thật do nextTrackPrefetcher đảm nhiệm
+
+// Playable extension of a file name (no leading dot), or undefined. Uses
+// PLAYABLE_AUDIO_EXTENSIONS as the single source of truth for the extension
+// list (audioQuery.ts).
+function playableExtensionOf(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  const lower = name.toLowerCase();
+  for (const ext of PLAYABLE_AUDIO_EXTENSIONS) {
+    if (lower.endsWith(ext)) return ext.slice(1);
+  }
+  return undefined;
+}
+
+// Single source of truth for every stream URL the app builds. The SW proxy
+// (public/sw.js) overrides Drive's application/octet-stream Content-Type for
+// playable files based on the ?ext= query param — the SW never sees the file
+// name, so the extension MUST travel through the URL query.
+export function buildStreamUrl(fileId: string, name?: string): string {
+  const base = `${DRIVE_STREAM_PREFIX}${encodeURIComponent(fileId)}`;
+  const ext = playableExtensionOf(name);
+  return ext ? `${base}?ext=${ext}` : base;
+}
 
 export function getPrefetchedStreamUrl(fileId: string): string | undefined {
   return prefetchedStreams.get(fileId);
@@ -16,10 +40,12 @@ function cacheSet(fileId: string, url: string) {
   }
 }
 
-export function prefetchVisibleTracks(fileIds: string[]): void {
-  for (const id of fileIds) {
-    if (id && !prefetchedStreams.has(id))
-      cacheSet(id, `${DRIVE_STREAM_PREFIX}${id}`);
+export function prefetchVisibleTracks(
+  items: ReadonlyArray<{ id: string; originalName?: string }>,
+): void {
+  for (const item of items) {
+    if (item.id && !prefetchedStreams.has(item.id))
+      cacheSet(item.id, buildStreamUrl(item.id, item.originalName));
   }
 }
 

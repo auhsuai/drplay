@@ -217,7 +217,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
     const keys = rows
       .filter((r) => {
         const entry = r.entry as { data?: { v: number } } | undefined;
-        return entry && entry.data && entry.data.v >= V_PLACEHOLDER;
+        return entry && entry.data && entry.data.v < V_PLACEHOLDER;
       })
       .map((r) => r.key)
       .filter(

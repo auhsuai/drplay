@@ -251,8 +251,7 @@ export function HomeTab({
       ...(discover ?? []),
       ...(recentlyAdded ?? []),
     ];
-    const ids = tracks.map((t) => t.id).filter(Boolean);
-    if (ids.length > 0) prefetchVisibleTracks(ids);
+    if (tracks.length > 0) prefetchVisibleTracks(tracks);
   }, [recent, heavy, discover, recentlyAdded]);
 
   const visibleCount = useResponsiveItems();

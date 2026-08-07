@@ -196,7 +196,6 @@ describe("getCacheSizes", () => {
     mocks.filesCountMock.mockResolvedValue(100);
     invokeMock.mockResolvedValue({
       cover_cache_bytes: 10,
-      etag_cache_bytes: 20,
       thumbnail_dir_bytes: 30,
     });
     mocks.streamCountMock.mockReturnValue(3);
@@ -221,7 +220,7 @@ describe("getCacheSizes", () => {
       JSON.stringify(entryA).length + JSON.stringify(entryB).length,
     );
     expect(sizes[1]?.bytes).toBe(100 * FILES_ROW_ESTIMATED_BYTES);
-    expect(sizes[2]?.bytes).toBe(60);
+    expect(sizes[2]?.bytes).toBe(40);
     expect(sizes[3]?.bytes).toBe(8 * PREFETCH_ENTRY_ESTIMATED_BYTES);
   });
 

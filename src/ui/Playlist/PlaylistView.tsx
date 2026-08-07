@@ -76,8 +76,7 @@ export function PlaylistView({
 
   useEffect(() => {
     if (!playlist) return;
-    const ids = playlist.tracks.map((t) => t.id).filter(Boolean);
-    if (ids.length > 0) prefetchVisibleTracks(ids);
+    if (playlist.tracks.length > 0) prefetchVisibleTracks(playlist.tracks);
   }, [playlist]);
 
   const tracks = playlist?.tracks ?? [];

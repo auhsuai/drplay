@@ -4,7 +4,7 @@ import type { Track, PlayMode } from "../../types";
 import { getValidToken } from "../../utils/apiClient";
 import {
   getPrefetchedStreamUrl,
-  DRIVE_STREAM_PREFIX,
+  buildStreamUrl,
 } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
@@ -75,7 +75,10 @@ export function usePlayerSession(
             try {
               streamUrl = getPrefetchedStreamUrl(lastSession.track.id) || "";
               if (!streamUrl) {
-                streamUrl = `${DRIVE_STREAM_PREFIX}${lastSession.track.id}`;
+                streamUrl = buildStreamUrl(
+                  lastSession.track.id,
+                  lastSession.track.originalName,
+                );
               }
             } catch (e: unknown) {
               void captureError({

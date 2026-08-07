@@ -104,8 +104,7 @@ export function FullRecentView({
   }, []);
 
   useEffect(() => {
-    const ids = recent.map((t) => t.id).filter(Boolean);
-    if (ids.length > 0) prefetchVisibleTracks(ids);
+    if (recent.length > 0) prefetchVisibleTracks(recent);
   }, [recent]);
 
   const filteredItems = useMemo(() => {

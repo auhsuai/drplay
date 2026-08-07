@@ -54,15 +54,25 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     .any(|(k, v)| k == "thumb" && v == "true");
                 let body = request.body();
 
-                match handle_cover_post(raw_id, thumb, body) {
+                match handle_cover_post(raw_id, thumb, body).await {
                     Ok(_) => responder.respond(Response::builder().status(StatusCode::OK).body(Vec::new()).unwrap_or_else(|e| {
                         eprintln!("[protocol] failed to build 200 (cover POST) response: {e}");
                         Response::new(Vec::new())
                     })),
-                    Err(e) => responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(e.into_bytes()).unwrap_or_else(|e| {
+                    // Bad id / bad payload → 400 with a short reason (never the
+                    // raw error internals); disk failures → 500 with the error
+                    // logged here and a bare body.
+                    Err(CoverError::BadId(e)) => responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(e.into_bytes()).unwrap_or_else(|e| {
                         eprintln!("[protocol] failed to build 400 (cover POST) response: {e}");
                         Response::new(Vec::new())
                     })),
+                    Err(e) => {
+                        eprintln!("[protocol] cover POST failed (id={raw_id}): {e:?}");
+                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Vec::new()).unwrap_or_else(|e| {
+                            eprintln!("[protocol] failed to build 500 (cover POST) response: {e}");
+                            Response::new(Vec::new())
+                        }))
+                    }
                 }
                 return;
             }
@@ -141,6 +151,21 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                                 .body(e.into_bytes())
                                 .unwrap_or_else(|e| {
                                     eprintln!("[protocol] failed to build 400 (bad id) response: {e}");
+                                    Response::new(Vec::new())
+                                })
+                        );
+                    }
+                    // Disk-level failure (permission, corrupt state, uninit
+                    // root): log the detail server-side, reply bare 500 — the
+                    // frontend must not see filesystem details.
+                    Err(CoverError::DiskRead(e)) | Err(CoverError::DiskWrite(e)) => {
+                        eprintln!("[protocol] cover GET disk error (id={file_id}): {e}");
+                        responder.respond(
+                            Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Vec::new())
+                                .unwrap_or_else(|e| {
+                                    eprintln!("[protocol] failed to build 500 (cover disk) response: {e}");
                                     Response::new(Vec::new())
                                 })
                         );

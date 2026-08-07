@@ -34,7 +34,7 @@ export const NowPlayingView = memo(function NowPlayingView({
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
 
-  const { coverUrl, realTitle, realArtist, bgColor, bgPalette } =
+  const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
   const {
     duration,
@@ -118,6 +118,13 @@ export const NowPlayingView = memo(function NowPlayingView({
                 <img
                   src={coverUrl}
                   alt={t("common.cover_alt")}
+                  decoding="async"
+                  // Single always-visible image: no lazy loading needed (it is
+                  // the LCP candidate). A drplay:// miss (204 NoCover) or a
+                  // decode error falls back to the Music icon — no broken img.
+                  onError={() => {
+                    setCoverUrl(null);
+                  }}
                   className="w-full h-full object-cover"
                 />
               ) : (

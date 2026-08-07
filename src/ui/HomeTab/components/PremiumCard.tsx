@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
+import { buildCoverUrl } from "../../../utils/coverStore";
 import { Play, Music, MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { captureError } from "../../../utils/errorLog";
@@ -27,13 +28,6 @@ export function PremiumCard({
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
-  const blobUrlRef = useRef<string | null>(null);
-  const releaseBlobUrl = useCallback(() => {
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current);
-      blobUrlRef.current = null;
-    }
-  }, []);
   const fillColor = getFillColor(track.id);
   const [title, setTitle] = useState(track.title);
   const [artist, setArtist] = useState(track.artist);
@@ -57,14 +51,10 @@ export function PremiumCard({
         if (!isMounted) return;
         if (meta.title) setTitle(meta.title);
         if (meta.artist) setArtist(meta.artist);
-        if (meta.pictureData && meta.pictureFormat) {
-          const blob = new Blob([new Uint8Array(meta.pictureData)], {
-            type: meta.pictureFormat,
-          });
-          releaseBlobUrl();
-          blobUrlRef.current = URL.createObjectURL(blob);
-          setCoverUrl(blobUrlRef.current);
-        }
+        // S4: covers render from the Rust disk cache via drplay:// (thumb
+        // variant) — no blob URL is kept in RAM. A 204/error falls back to
+        // the icon through the img onError below.
+        setCoverUrl(meta.pictureData ? buildCoverUrl(track.id, true) : null);
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
@@ -77,10 +67,9 @@ export function PremiumCard({
     return () => {
       isMounted = false;
       controller.abort();
-      releaseBlobUrl();
       if (imgElement) imgElement.src = "";
     };
-  }, [track.id, token, track.size, track.originalName, releaseBlobUrl]);
+  }, [track.id, token, track.size, track.originalName]);
 
   return (
     <div

@@ -64,8 +64,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   };
 
   useEffect(() => {
-    const ids = favorites.map((t) => t.id).filter(Boolean);
-    if (ids.length > 0) prefetchVisibleTracks(ids);
+    if (favorites.length > 0) prefetchVisibleTracks(favorites);
   }, [favorites]);
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.

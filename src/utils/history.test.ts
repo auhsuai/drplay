@@ -2,11 +2,7 @@
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { db } from "../db/db";
-import type {
-  RecentTrackRow,
-  PlayCountRow,
-  FolderVisitRow,
-} from "../db/db";
+import type { RecentTrackRow, PlayCountRow, FolderVisitRow } from "../db/db";
 import type { PlayCountEntry, FolderVisitEntry } from "./history";
 import type { Track } from "../types";
 import {
@@ -96,15 +92,49 @@ describe("history (Dexie-backed)", () => {
 
   it("getRandomDiscoveries reads metadataCache entries", async () => {
     await db.metadataCache.bulkPut([
-      { key: "metadata_a", entry: { version: 9, data: { v: 9 }, ts: 1 } },
-      { key: "metadata_b", entry: { version: 9, data: { v: 9 }, ts: 2 } },
-      { key: "metadata_c", entry: { version: 9, data: { v: 9 }, ts: 3 } },
+      { key: "metadata_a", entry: { version: 2, data: { v: 8 }, ts: 1 } },
+      { key: "metadata_b", entry: { version: 2, data: { v: 8 }, ts: 2 } },
+      { key: "metadata_c", entry: { version: 2, data: { v: 8 }, ts: 3 } },
     ]);
 
     const discoveries = await getRandomDiscoveries();
     expect(discoveries.length).toBeGreaterThan(0);
     const ids = discoveries.map((t) => t.id).sort();
     expect(ids).toEqual(["a", "b", "c"]);
+  });
+
+  it("getRandomDiscoveries returns [] when only v:9 placeholders exist", async () => {
+    await db.metadataCache.bulkPut([
+      { key: "metadata_a", entry: { version: 2, data: { v: 9 }, ts: 1 } },
+      { key: "metadata_b", entry: { version: 2, data: { v: 9 }, ts: 2 } },
+    ]);
+
+    const discoveries = await getRandomDiscoveries();
+    expect(discoveries).toEqual([]);
+  });
+
+  it("getRandomDiscoveries keeps only v:8 real entries when mixed with v:9 placeholders", async () => {
+    await db.metadataCache.bulkPut([
+      { key: "metadata_a", entry: { version: 2, data: { v: 8 }, ts: 1 } },
+      { key: "metadata_ph", entry: { version: 2, data: { v: 9 }, ts: 2 } },
+      { key: "metadata_b", entry: { version: 2, data: { v: 8 }, ts: 3 } },
+    ]);
+
+    const discoveries = await getRandomDiscoveries();
+    const ids = discoveries.map((t) => t.id).sort();
+    expect(ids).toEqual(["a", "b"]);
+  });
+
+  it("getRandomDiscoveries skips entries without data.v without crashing", async () => {
+    await db.metadataCache.bulkPut([
+      { key: "metadata_old", entry: { version: 2, data: {}, ts: 1 } },
+      { key: "metadata_undef", entry: { version: 2, ts: 2 } },
+      { key: "metadata_a", entry: { version: 2, data: { v: 8 }, ts: 3 } },
+    ]);
+
+    const discoveries = await getRandomDiscoveries();
+    const ids = discoveries.map((t) => t.id).sort();
+    expect(ids).toEqual(["a"]);
   });
 
   it("recordFolderVisit tracks counts and name", async () => {
@@ -241,7 +271,8 @@ describe("history (Dexie-backed)", () => {
     expect(ids.has("t1")).toBe(true);
     for (let i = 5; i < 1004; i++)
       expect(ids.has(`seed_${String(i)}`)).toBe(true);
-    for (let i = 0; i < 5; i++) expect(ids.has(`seed_${String(i)}`)).toBe(false);
+    for (let i = 0; i < 5; i++)
+      expect(ids.has(`seed_${String(i)}`)).toBe(false);
   });
 
   it("#9 variant: prune is scoped per userEmail (no cross-user eviction)", async () => {
@@ -689,9 +720,6 @@ describe("PK collision cross-user (regression)", () => {
       .toArray();
     expect(rows.map((r) => r.id).sort()).toEqual(["t1", "t2"]);
     expect(await db.recentTracks.count()).toBe(2);
-    expect((await getRecentlyPlayed()).map((t) => t.id)).toEqual([
-      "t2",
-      "t1",
-    ]);
+    expect((await getRecentlyPlayed()).map((t) => t.id)).toEqual(["t2", "t1"]);
   });
 });

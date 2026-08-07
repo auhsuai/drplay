@@ -63,6 +63,46 @@ function waitForTokenChange(staleToken) {
   });
 }
 
+// MIME override for playable extensions. The SW cannot import TS modules, so
+// this is an independent copy of src/utils/audioFormat.ts
+// AUDIO_EXTENSION_TO_MIME — src/utils/swMime.test.ts guards the two in sync.
+const EXTENSION_TO_MIME = {
+  mp3: 'audio/mpeg',
+  flac: 'audio/flac',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  opus: 'audio/opus'
+};
+const EXT_QUERY_PARAM = 'ext';
+// Lowercase alphanumeric, 2-5 chars — rejects "..", "MP3", oversized junk.
+const EXT_PATTERN = /^[a-z0-9]{2,5}$/;
+
+// Drive serves app-uploaded files as application/octet-stream, which <audio>
+// refuses to decode (SRC_NOT_SUPPORTED). When the URL carries ?ext=<playable>,
+// rebuild the response with the correct Content-Type around the SAME body
+// stream — Range/seek/streaming behaviour is untouched (status, Content-Range,
+// Content-Length and every other header are copied). Any missing/invalid ext
+// or non-2xx response passes through unchanged (backward compatible).
+function overrideContentType(response, ext) {
+  if (!EXT_PATTERN.test(ext)) return response;
+  const mime = EXTENSION_TO_MIME[ext];
+  if (!mime || !response.ok || !response.body) return response;
+  try {
+    const headers = new Headers(response.headers);
+    headers.set('Content-Type', mime);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+  } catch (err) {
+    console.warn('SW content-type override failed', err);
+    return response;
+  }
+}
+
 self.addEventListener('install', (event) => {
   // Bỏ qua trạng thái waiting, active ngay lập tức
   self.skipWaiting();
@@ -128,9 +168,14 @@ self.addEventListener('fetch', (event) => {
       return event.respondWith(new Response('Unauthorized - Missing Token in SW', { status: 401 }));
     }
 
+    const ext = url.searchParams.get(EXT_QUERY_PARAM);
     const driveUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
 
     // Thực thi fetch trực tiếp lên Google Drive và trả về cho thẻ audio
-    event.respondWith(fetchDriveStream(event, driveUrl));
+    event.respondWith(
+      fetchDriveStream(event, driveUrl).then((response) =>
+        overrideContentType(response, ext ?? '')
+      )
+    );
   }
 });

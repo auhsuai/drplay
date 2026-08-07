@@ -1,7 +1,7 @@
 import type { Track } from "../types";
 import { usePlayerStore } from "../store/playerStore";
 import { captureError } from "../utils/errorLog";
-import { DRIVE_STREAM_PREFIX } from "../utils/streamPrefetcher";
+import { buildStreamUrl } from "../utils/streamPrefetcher";
 import { isAbortError } from "../hooks/player/utils";
 import type { BufferedSource } from "../utils/bufferedRange";
 
@@ -381,7 +381,7 @@ export class AudioController {
 
     const newAudio = this.activeAudio;
 
-    const url = track.streamUrl || `${DRIVE_STREAM_PREFIX}${track.id}`;
+    const url = track.streamUrl || buildStreamUrl(track.id, track.originalName);
     newAudio.src = url;
     newAudio.volume = this.muted ? 0 : this.volume;
     newAudio.load();
@@ -416,9 +416,15 @@ export class AudioController {
     // B2: MDN 3-step release before pointing the element at a new source.
     audio.load();
 
-    // Strip old query params and add new retry param
-    const baseUrl = src.split("?")[0] ?? "";
-    audio.src = baseUrl + "?retry=" + String(Date.now());
+    // Rebuild the URL keeping every existing query param (the ?ext= MIME hint
+    // must survive the retry — dropping it would undo the SW Content-Type
+    // override for octet-stream FLAC/OGG/Opus) and replacing the retry marker.
+    const qIdx = src.indexOf("?");
+    const pathPart = qIdx === -1 ? src : src.slice(0, qIdx);
+    const queryPart = qIdx === -1 ? "" : src.slice(qIdx + 1);
+    const params = new URLSearchParams(queryPart);
+    params.set("retry", String(Date.now()));
+    audio.src = `${pathPart}?${params.toString()}`;
     audio.load();
 
     this.seekOnLoadedMetadata(audio, position);
