@@ -54,12 +54,13 @@ export function PremiumCard({
         // Fix G: Chromium/WebView2 rejects the drplay:// custom scheme at the
         // network stack (ERR_UNKNOWN_URL_SCHEME) before the Rust handler can
         // respond, so the cover renders straight from a blob URL built with
-        // the thumb bytes metadata already parsed. A 204/error drops to the
+        // the picture bytes metadata already parsed. A 204/error drops to the
         // icon through the img onError below.
+        // Full (≤1000px) bytes win over the 256px thumb — HomeTab cards must
+        // show the sharp cover, not the blurry placeholder-sized one.
+        const coverBytes = meta.pictureDataFull ?? meta.pictureData;
         setCoverUrl(
-          meta.pictureData
-            ? buildCoverBlobUrl(meta.pictureData, meta.pictureFormat)
-            : null,
+          coverBytes ? buildCoverBlobUrl(coverBytes, meta.pictureFormat) : null,
         );
       })
       .catch((e: unknown) => {

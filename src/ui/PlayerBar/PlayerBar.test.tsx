@@ -5,13 +5,17 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import type { Track } from "../../App";
 import { PlayerBar } from "./PlayerBar";
 import en from "../../locales/en/translation.json";
 import type { PlayerBarProps } from "./types";
 import { usePlayerStore } from "../../store/playerStore";
+import { getTrackMetadata } from "../../utils/metadata";
+import { useAuthStore } from "../../store/authStore";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -73,6 +77,14 @@ vi.mock("../../utils/favorites", () => ({
 }));
 
 vi.mock("../components/MoreMenu", () => ({ MoreMenu: () => null }));
+
+// TrackInfo fetches cover metadata per track; the real module pulls heavy
+// deps (music-metadata, IndexedDB) not needed here.
+vi.mock("../../utils/metadata", () => ({
+  getTrackMetadata: vi.fn(),
+}));
+
+const mockedGetTrackMetadata = vi.mocked(getTrackMetadata);
 
 const { fakeController } = vi.hoisted(() => {
   type Handler = (payload: unknown) => void;
@@ -1420,5 +1432,128 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
     expect(fill.className).toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
+  });
+});
+
+describe("PlayerBar track cover in TrackInfo (full picture, no drplay://)", () => {
+  let createObjectURLSpy: MockInstance<(obj: Blob | MediaSource) => string>;
+
+  beforeEach(() => {
+    mockedGetTrackMetadata.mockReset();
+    useAuthStore.setState({ accessToken: "tok" });
+    // jsdom does NOT implement URL.createObjectURL / revokeObjectURL (both
+    // are undefined at runtime) — install observable spies so the blob URL
+    // contract can be asserted.
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: vi.fn(),
+      });
+    }
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: vi.fn(),
+      });
+    }
+    createObjectURLSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:mock-playerbar-cover");
+    mockedGetTrackMetadata.mockResolvedValue({
+      title: "Song",
+      artist: "Artist",
+      duration: 0,
+      size: 0,
+      pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      pictureDataFull: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+      pictureFormat: "image/jpeg",
+    } as never);
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ accessToken: null });
+    vi.restoreAllMocks();
+  });
+
+  it("renders the cover from the FULL picture bytes in the 48px track box (blob src, object-cover)", async () => {
+    const { container } = renderPlayer();
+    const img = await screen.findByAltText("Song");
+
+    expect(img.getAttribute("src")).toBe("blob:mock-playerbar-cover");
+    expect(img.className).toContain("object-cover");
+    // The blob must be built from the FULL bytes (8), not the thumb (4).
+    const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(blobArg.size).toBe(8);
+    expect(blobArg.type).toBe("image/jpeg");
+    expect(mockedGetTrackMetadata).toHaveBeenCalledWith(
+      "track-1",
+      "tok",
+      undefined,
+      undefined,
+      expect.any(Object),
+    );
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("keeps the Music icon (no img) when metadata has no picture bytes", async () => {
+    mockedGetTrackMetadata.mockResolvedValue({
+      title: "Song",
+      artist: "Artist",
+      duration: 0,
+      size: 0,
+      pictureData: null,
+      pictureDataFull: null,
+      pictureFormat: undefined,
+    } as never);
+    const { container } = renderPlayer();
+    await waitFor(() => {
+      expect(mockedGetTrackMetadata).toHaveBeenCalledTimes(1);
+    });
+    expect(container.querySelector("img")).toBeNull();
+    expect(createObjectURLSpy).not.toHaveBeenCalled();
+  });
+
+  it("drops to the icon when the cover blob image errors (corrupt bytes)", async () => {
+    const { container } = renderPlayer();
+    const img = await screen.findByAltText("Song");
+    expect(img.getAttribute("src")).toBe("blob:mock-playerbar-cover");
+
+    expect(() => fireEvent.error(img)).not.toThrow();
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-fetches metadata when the current track changes (cover follows the new track)", async () => {
+    const { rerender } = renderPlayer();
+    await screen.findByAltText("Song");
+    mockedGetTrackMetadata.mockClear();
+
+    rerender(
+      <PlayerBar
+        currentTrack={makeTrack({ id: "track-2", title: "Song 2" })}
+        isPlaying={false}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onExpandNowPlaying={vi.fn()}
+      />,
+    );
+
+    await screen.findByAltText("Song 2");
+    expect(mockedGetTrackMetadata).toHaveBeenCalledWith(
+      "track-2",
+      "tok",
+      undefined,
+      undefined,
+      expect.any(Object),
+    );
+    expect(screen.queryByAltText("Song")).toBeNull();
   });
 });

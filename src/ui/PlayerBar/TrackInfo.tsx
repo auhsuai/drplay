@@ -3,6 +3,9 @@ import { Heart, Maximize2, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from "../components/MoreMenu";
 import { isFavorite, addFavorite, removeFavorite } from "../../utils/favorites";
+import { getTrackMetadata } from "../../utils/metadata";
+import { buildCoverBlobUrl } from "../../utils/coverStore";
+import { useAuthStore } from "../../store/authStore";
 import { captureError } from "../../utils/errorLog";
 import type { Track } from "../../types";
 
@@ -19,6 +22,8 @@ export function TrackInfo({
 }: TrackInfoProps) {
   const { t } = useTranslation();
   const [isLiked, setIsLiked] = useState(false);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const coverImgRef = useRef<HTMLImageElement>(null);
 
   // Reset the liked flag when the track goes away (the heart only renders
   // while a track exists, so this is a defensive reset on the null track).
@@ -28,6 +33,9 @@ export function TrackInfo({
   if (currentTrack?.id !== prevTrackIdRef.current) {
     prevTrackIdRef.current = currentTrack?.id;
     if (!currentTrack && isLiked) setIsLiked(false);
+    // A new track must never show the previous one's cover even for a frame:
+    // the cover effect below re-fetches it asynchronously.
+    setCoverUrl(null);
   }
 
   // Shared favorite-status check: re-reads the stored status for a track id
@@ -75,6 +83,60 @@ export function TrackInfo({
     };
   }, [currentTrack, checkFavorite]);
 
+  // Cover: fetch metadata once per track (no debounce — only one track plays)
+  // and render the FULL (≤1000px) picture when present, thumb as fallback
+  // (parity with useNowPlayingMetadata and the cards). No picture keeps the
+  // Music icon. The track box carries no token prop, so it reads the store.
+  useEffect(() => {
+    if (!currentTrack) return;
+    const controller = new AbortController();
+    let isMounted = true;
+    // The metadata effect cleanup touches the img element; capture it at
+    // setup so the cleanup never reads the (possibly stale) ref
+    // (react-hooks/exhaustive-deps ref-cleanup rule).
+    const imgElement = coverImgRef.current;
+    const token = useAuthStore.getState().accessToken;
+    if (!token) return;
+    // Closure guard helper: the abort flag is only ever written by the effect
+    // cleanup, so TypeScript's CFA narrows the captured `let` to `false`
+    // inside the async IIFE — a plain `if (isMounted)` would be a lint false
+    // positive. Reading through a closure function defeats the narrowing
+    // while staying semantically identical.
+    const isMountedCheck = () => isMounted;
+    void (async () => {
+      try {
+        const metadata = await getTrackMetadata(
+          currentTrack.id,
+          token,
+          currentTrack.size,
+          currentTrack.originalName,
+          controller.signal,
+        );
+        if (!isMountedCheck()) return;
+        const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
+        setCoverUrl(
+          coverBytes
+            ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
+            : null,
+        );
+      } catch (e: unknown) {
+        if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
+        void captureError({
+          level: "warn",
+          source: PLAYER_BAR_MODULE,
+          message: `cover-metadata-failed (trackId=${currentTrack.id}): ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+    })();
+    return () => {
+      isMounted = false;
+      controller.abort();
+      if (imgElement) {
+        imgElement.src = "";
+      }
+    };
+  }, [currentTrack]);
+
   const isFavoriteTogglingRef = useRef(false);
   const handleToggleFavorite = async () => {
     if (!currentTrack || isFavoriteTogglingRef.current) return;
@@ -120,7 +182,20 @@ export function TrackInfo({
         <div
           className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400`}
         >
-          {currentTrack ? (
+          {currentTrack && coverUrl ? (
+            <img
+              ref={coverImgRef}
+              src={coverUrl}
+              alt={realTitle}
+              onError={() => {
+                // The src is already a blob URL built from the picture
+                // bytes — an error here means those bytes are corrupt, so
+                // drop to the Music icon (no retry chain exists anymore).
+                setCoverUrl(null);
+              }}
+              className="w-full h-full object-cover"
+            />
+          ) : currentTrack ? (
             <Music className="w-6 h-6 opacity-80 transition-transform duration-300 group-hover:scale-110" />
           ) : null}
           {currentTrack && (

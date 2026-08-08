@@ -178,6 +178,51 @@ describe("PremiumCard blob cover URL (picture bytes, no drplay://)", () => {
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("prefers the full-resolution picture (pictureDataFull) over the thumb for the blob", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: "Fetched Artist",
+      duration: 0,
+      size: 0,
+      pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      pictureDataFull: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+      pictureFormat: "image/jpeg",
+    } as never);
+    const { container } = render(<PremiumCard {...baseProps()} />);
+    const img = await screen.findByAltText("Fetched Title");
+
+    expect(img.getAttribute("src")).toMatch(/^blob:/);
+    // The blob must be built from the FULL bytes (8), not the thumb (4) —
+    // the HomeTab card cover quality fix is about WHICH byte set feeds it.
+    const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(blobArg.size).toBe(8);
+    expect(blobArg.type).toBe("image/jpeg");
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".lucide-music")).toBeNull();
+  });
+
+  it("falls back to the thumb bytes when pictureDataFull is null", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: "Fetched Artist",
+      duration: 0,
+      size: 0,
+      pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      pictureDataFull: null,
+      pictureFormat: "image/png",
+    } as never);
+    const { container } = render(<PremiumCard {...baseProps()} />);
+    const img = await screen.findByAltText("Fetched Title");
+
+    expect(img.getAttribute("src")).toMatch(/^blob:/);
+    const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(blobArg.size).toBe(4);
+    expect(blobArg.type).toBe("image/png");
+    expect(container.querySelector(".lucide-music")).toBeNull();
+  });
+
   it("creates exactly one blob URL from the picture bytes and never revokes it", async () => {
     const { unmount } = render(<PremiumCard {...baseProps()} />);
     await screen.findByAltText("Fetched Title");

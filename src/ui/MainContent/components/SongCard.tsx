@@ -272,11 +272,14 @@ export const SongCard = React.memo(
           // Fix G: Chromium/WebView2 rejects the drplay:// custom scheme at the
           // network stack (ERR_UNKNOWN_URL_SCHEME) before the Rust handler can
           // respond, so the cover renders straight from a blob URL built with
-          // the thumb bytes metadata already parsed — no failed <img> cycle
+          // the picture bytes metadata already parsed — no failed <img> cycle
           // and no scheme round-trip. A missing picture keeps the icon.
+          // Full (≤1000px) bytes win over the 256px thumb — the grid cards
+          // must show the sharp cover, not the blurry placeholder-sized one.
+          const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
           setCoverUrl(
-            metadata.pictureData
-              ? buildCoverBlobUrl(metadata.pictureData, metadata.pictureFormat)
+            coverBytes
+              ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
               : null,
           );
         } catch (e) {
