@@ -138,6 +138,13 @@ describe("getTrackMetadata caching", () => {
   });
 
   it("returns the same entry from memory cache on second call (no IPC)", async () => {
+    // Seed a REAL cached entry (not a placeholder): the same-reference
+    // guarantee holds for real entries. A placeholder produced by a transient
+    // NETWORK failure is intentionally NOT cached anymore (range-fetch fix:
+    // it would pin 00:00:00 until app reload) — that case is asserted in
+    // metadata.test.ts "does not lock the placeholder after a transient
+    // network failure".
+    cacheTrackMetadata("file-1", makeEntry());
     const r1 = await getTrackMetadata("file-1", "tok", 1000, "song.mp3");
 
     vi.mocked(invoke).mockClear();

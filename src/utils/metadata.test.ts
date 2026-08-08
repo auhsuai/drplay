@@ -534,12 +534,22 @@ function makeFetchMock(
   return { mock, calls };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   memoryStore.clear();
   filesUpdate.mockClear();
   tokenizerConstructions.length = 0;
   vi.mocked(captureError).mockClear();
   clearAllMetadataCache();
+  // Fix H: the Drive throttle breaker is module-level, and these tests share
+  // ONE tokenizer module instance across describe blocks (fresh() is a cached
+  // dynamic import) — failures from unrelated scenarios would otherwise
+  // accumulate and trip the circuit mid-file (every later test would fail
+  // fast into a v:9 placeholder). Importing here (not statically) resolves
+  // the same registry instance the tests' fresh() imports use, even after
+  // vi.resetModules() in the dedup describe.
+  const { resetDriveCircuitBreakerForTests } =
+    await import("./driveRangeTokenizer");
+  resetDriveCircuitBreakerForTests();
 });
 
 afterEach(() => {
@@ -763,6 +773,104 @@ describe("getTrackMetadata real metadata fetch", () => {
     expect(r.title).toBe("My Song");
     expect(r.artist).toBe("Unknown Artist");
     expect(r.v).toBe(8);
+  });
+});
+
+describe("getTrackMetadata head fetch + transient network failures", () => {
+  const fresh = () => import("./metadata");
+
+  beforeEach(() => {
+    vi.mocked(compressCoverImage).mockReset();
+    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
+      Promise.resolve({
+        data:
+          maxSize >= FULL_MAX_SIZE
+            ? new Uint8Array([9, 8, 7])
+            : new Uint8Array([1, 2, 3]),
+        format: "image/jpeg",
+        keptOriginal: false,
+      }),
+    );
+  });
+
+  it("fetches the 128KB head in a single range request (large file)", async () => {
+    // 140KB ID3v2 tag body -> file > HEAD_BYTES: the head read must NOT be
+    // split into two 64KB chunk fetches (one request for bytes=0-131071).
+    const fixture = buildHugeTagMp3(140 * 1024, {
+      title: "Head Song",
+      artist: "Head Artist",
+      album: "Head Album",
+      image: makeJpeg(),
+    });
+    const { calls } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "head-1",
+      "tok",
+      fixture.length,
+      "head.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(calls[0]?.range).toBe("bytes=0-131071");
+    // prefetch head (1) + the chunk past the head the tag-body parse needs (1)
+    expect(calls).toHaveLength(2);
+  });
+
+  it("recovers from a transient timeout on the head request and parses", async () => {
+    const fixture = buildMp3Fixture(
+      "Retry Title",
+      "Retry Artist",
+      "Retry Album",
+    );
+    const mock = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new DOMException("The operation timed out", "TimeoutError"),
+      )
+      .mockImplementation((_url: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        const range = headers.get("Range");
+        const m = /bytes=(\d+)-(\d+)/.exec(range ?? "");
+        if (!m) throw new Error(`missing Range header: ${String(range)}`);
+        const start = Number(m[1]);
+        const end = Math.min(Number(m[2]), fixture.length - 1);
+        const slice = fixture.subarray(start, end + 1);
+        return {
+          status: 206,
+          ok: true,
+          arrayBuffer: () => Promise.resolve(slice.slice(0).buffer),
+        };
+      });
+    vi.stubGlobal("fetch", mock);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata("retry-1", "tok", 2048, "retry.mp3");
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Retry Title");
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not lock the placeholder after a transient network failure (next call refetches)", async () => {
+    const { getTrackMetadata } = await fresh();
+    // First call: network failure -> placeholder is returned (v:9) but must
+    // NOT be pinned into the memory cache.
+    makeFetchMock(new Uint8Array(0), { reject: true });
+    const r1 = await getTrackMetadata("net-fail", "tok", 2048, "nf.mp3");
+    expect(r1.v).toBe(V_PLACEHOLDER);
+
+    // Second call (refresh / re-render): mock now serves a real file -> the
+    // fetch MUST run again and return real metadata, not the stuck placeholder.
+    const fixture = buildMp3Fixture(
+      "Recovered",
+      "Recovered Artist",
+      "Recovered Album",
+    );
+    const { mock } = makeFetchMock(fixture);
+    const r2 = await getTrackMetadata("net-fail", "tok", 2048, "nf.mp3");
+    expect(r2.v).toBe(8);
+    expect(r2.title).toBe("Recovered");
+    expect(mock).toHaveBeenCalled();
   });
 });
 
@@ -1228,5 +1336,184 @@ describe("cover POST to the Rust disk cache (S4)", () => {
     expect(r.pictureData).toEqual(new Uint8Array([1, 2, 3]));
     expect(r.pictureDataFull).toEqual(new Uint8Array([9, 8, 7]));
     expect(postCoverToCacheMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
+  const fresh = () => import("./metadata");
+
+  // Virtual size of the Drive-side file. The fixture only materializes the
+  // head region (tag + 4 frames + zero padding) — reads past it come back
+  // empty from the mock, which mirrors a tail read that cannot be served.
+  const LARGE_VIRTUAL_SIZE = 150 * 1024 * 1024;
+  const HEAD_BYTES = 131_072;
+  // MPEG1 Layer III, 128kbps, 44.1kHz, stereo → 417-byte frames.
+  const FRAME_BYTES = 417;
+
+  function rangeStart(range: string | null): number {
+    const m = /bytes=(\d+)-/.exec(range ?? "");
+    return m ? Number(m[1]) : -1;
+  }
+
+  // First MPEG frame with an optional Xing tag. Xing layout (music-metadata
+  // readXingHeader): frame header(4) + side info(32, stereo MPEG1) + "Xing" +
+  // flags + numFrames + streamSize. Flags 0x03 = numFrames + streamSize
+  // present — both are required for music-metadata to set a Xing duration.
+  function buildMpegFrame(withXing: boolean, numFrames: number): number[] {
+    const header = [0xff, 0xfb, 0x90, 0x00];
+    const sideInfo = new Array<number>(32).fill(0);
+    if (!withXing) {
+      return [
+        ...header,
+        ...sideInfo,
+        ...new Array<number>(FRAME_BYTES - 4 - 32).fill(0),
+      ];
+    }
+    const xing = [
+      ...Array.from("Xing", (c) => c.charCodeAt(0)),
+      0x00,
+      0x00,
+      0x00,
+      0x03, // flags: numFrames + streamSize present
+      ...u32be(numFrames),
+      // streamSize must be NONZERO: music-metadata only trusts a Xing
+      // duration when `infoTag.streamSize` is truthy (MpegParser.js).
+      ...u32be(numFrames * FRAME_BYTES),
+    ];
+    return [
+      ...header,
+      ...sideInfo,
+      ...xing,
+      ...new Array<number>(FRAME_BYTES - 4 - 32 - xing.length).fill(0),
+    ];
+  }
+
+  // tag + 4 identical MPEG frames (the parser reaches the frameCount===4 CBR /
+  // quit path that derives duration from the tokenizer size) + zeros to 200KB.
+  function buildLargeMp3(opts: {
+    title: string;
+    artist: string;
+    album: string;
+    image: Uint8Array;
+    withXing: boolean;
+    numFrames: number;
+  }): Uint8Array {
+    const { title, artist, album, image, withXing, numFrames } = opts;
+    const frames = [
+      ...id3Frame("TIT2", title),
+      ...id3Frame("TPE1", artist),
+      ...id3Frame("TALB", album),
+      ...apicFrame(image),
+    ];
+    const tag = [
+      0x49,
+      0x44,
+      0x33,
+      0x03,
+      0x00,
+      0x00,
+      ...syncsafe32(frames.length),
+      ...frames,
+    ];
+    const frame = buildMpegFrame(withXing, numFrames);
+    const body = [...tag, ...frame, ...frame, ...frame, ...frame];
+    const out = new Uint8Array(200 * 1024);
+    out.set(body, 0);
+    return out;
+  }
+
+  function mockCompress(thumbBytes: Uint8Array, fullBytes: Uint8Array) {
+    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
+      Promise.resolve({
+        data: maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
+        format: "image/jpeg",
+        keptOriginal: false,
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(compressCoverImage).mockReset();
+    mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
+  });
+
+  it("150MB MP3 with Xing+cover at the head: v:8 entry, cover, real duration, zero tail requests", async () => {
+    const fixture = buildLargeMp3({
+      title: "Big Xing Song",
+      artist: "Big Xing Artist",
+      album: "Big Xing Album",
+      image: makeJpeg(),
+      withXing: true,
+      numFrames: 200_000,
+    });
+    const { calls } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "large-xing",
+      "tok",
+      LARGE_VIRTUAL_SIZE,
+      "large.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Big Xing Song");
+    expect(r.artist).toBe("Big Xing Artist");
+    expect(r.pictureData).toEqual(new Uint8Array([1, 2, 3]));
+    expect(r.durationEstimated).toBe(false);
+    expect(r.duration).toBeCloseTo((200_000 * 1152) / 44100, 6);
+    for (const call of calls) {
+      expect(rangeStart(call.range)).toBeLessThan(HEAD_BYTES);
+    }
+  });
+
+  it("150MB MP3 WITHOUT Xing: v:8 entry with duration 0 + estimated (no bogus size-derived seconds, no tail requests)", async () => {
+    const fixture = buildLargeMp3({
+      title: "No Xing Song",
+      artist: "No Xing Artist",
+      album: "No Xing Album",
+      image: makeJpeg(),
+      withXing: false,
+      numFrames: 0,
+    });
+    const { calls } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "large-noxing",
+      "tok",
+      LARGE_VIRTUAL_SIZE,
+      "large.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("No Xing Song");
+    expect(r.duration).toBe(0);
+    expect(r.durationEstimated).toBe(true);
+    for (const call of calls) {
+      expect(rangeStart(call.range)).toBeLessThan(HEAD_BYTES);
+    }
+  });
+
+  it("90MB file (below threshold) keeps the full parse path — tail ID3v1 read still attempted", async () => {
+    const fixture = buildLargeMp3({
+      title: "Mid Song",
+      artist: "Mid Artist",
+      album: "Mid Album",
+      image: makeJpeg(),
+      withXing: true,
+      numFrames: 1_000,
+    });
+    const { calls } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "below-threshold",
+      "tok",
+      90 * 1024 * 1024,
+      "mid.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.duration).toBeCloseTo((1_000 * 1152) / 44100, 6);
+    // NOT clamped: the ID3v1 tail read still fires beyond HEAD_BYTES.
+    expect(calls.some((c) => rangeStart(c.range) >= HEAD_BYTES)).toBe(true);
   });
 });

@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BudgetExceededError,
+  DRIVE_COOLDOWN_MS,
+  DRIVE_FAILURE_WINDOW_MS,
   DriveRangeTokenizer,
   RangeFetchNetworkError,
   RangeNotSupportedError,
   SizeUnknownError,
+  resetDriveCircuitBreakerForTests,
 } from "./driveRangeTokenizer";
+import * as errorLogModule from "./errorLog";
 
 type FetchCall = { url: string; range: string | null };
 
@@ -66,8 +70,30 @@ function installVirtualFile(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  // The breaker state is module-level (shared like rangeFetchSemaphore) —
+  // tests must never leak an open circuit into the next test.
+  resetDriveCircuitBreakerForTests();
 });
+
+// Runs the fake-clock retry-backoff timers to completion and returns the
+// settled outcome of `promise` (the resolved value or the caught rejection).
+async function settleWithTimers(promise: Promise<unknown>): Promise<unknown> {
+  const guarded = promise.then(
+    (v) => v,
+    (e: unknown) => e,
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  return guarded;
+}
+
+function timeoutMock(): ReturnType<typeof vi.fn> {
+  return vi.fn(() =>
+    Promise.reject(new DOMException("The operation timed out", "TimeoutError")),
+  );
+}
 
 describe("DriveRangeTokenizer", () => {
   it("read within a loaded range performs no additional fetch", async () => {
@@ -201,6 +227,45 @@ describe("DriveRangeTokenizer", () => {
     });
   });
 
+  it("retries a timeout rejection once before succeeding (transient stall)", async () => {
+    const mock = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new DOMException("The operation timed out", "TimeoutError"),
+      )
+      .mockImplementation(() => ({
+        status: 206,
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new Uint8Array(8).buffer),
+      }));
+    vi.stubGlobal("fetch", mock);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    const data = await tz.readRange(0, 8);
+    expect(data).toHaveLength(8);
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers from a timeout on a later chunk via retry", async () => {
+    let callCount = 0;
+    const mock = vi.fn(() => {
+      callCount += 1;
+      if (callCount === 3) {
+        throw new DOMException("The operation timed out", "TimeoutError");
+      }
+      return {
+        status: 206,
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new Uint8Array(65_536).buffer),
+      };
+    });
+    vi.stubGlobal("fetch", mock);
+    const tz = new DriveRangeTokenizer("f1", 200_000);
+    // 3 chunks (0, 65536, 131072); the 3rd request times out once, then retries.
+    const data = await tz.readRange(0, 150_000);
+    expect(data).toHaveLength(150_000);
+    expect(mock).toHaveBeenCalledTimes(4);
+  });
+
   it("retries 5xx responses up to 2 times before succeeding", async () => {
     const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 206]);
     const tz = new DriveRangeTokenizer("f1", 1000);
@@ -281,5 +346,103 @@ describe("DriveRangeTokenizer", () => {
     );
     expect(vf.maxActive()).toBeLessThanOrEqual(3);
     expect(vf.calls).toHaveLength(6);
+  });
+
+  describe("Drive throttle circuit breaker (Fix H)", () => {
+    it("opens the circuit after 3 consecutive failures and fails fast without fetching", async () => {
+      vi.useFakeTimers();
+      const captureSpy = vi
+        .spyOn(errorLogModule, "captureError")
+        .mockResolvedValue();
+      const mock = timeoutMock();
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      await settleWithTimers(tz.readRange(0, 8)); // 2 failures (timeout + retry)
+      await settleWithTimers(tz.readRange(0, 8)); // 1 more failure -> circuit opens
+      const fastFail = await settleWithTimers(tz.readRange(0, 8));
+
+      expect(mock).toHaveBeenCalledTimes(3); // NO 4th fetch while open
+      expect(fastFail).toBeInstanceOf(RangeFetchNetworkError);
+      if (fastFail instanceof RangeFetchNetworkError) {
+        expect(fastFail.kind).toBe("timeout");
+        expect(fastFail.message).toContain("drive-throttle-circuit-open");
+      }
+      expect(captureSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "driveRangeTokenizer",
+          message: expect.stringContaining(
+            "range-fetch-circuit-open",
+          ) as unknown as string,
+        }),
+      );
+    });
+
+    it("resumes fetching after the cooldown window elapses", async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const mock = vi.fn(() => {
+        calls += 1;
+        if (calls <= 3) {
+          return Promise.reject(
+            new DOMException("The operation timed out", "TimeoutError"),
+          );
+        }
+        return Promise.resolve({
+          status: 206,
+          ok: true,
+          arrayBuffer: () => Promise.resolve(new Uint8Array(8).buffer),
+        });
+      });
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      await settleWithTimers(tz.readRange(0, 8)); // 2 failures
+      await settleWithTimers(tz.readRange(0, 8)); // 1 failure -> open
+      await settleWithTimers(tz.readRange(0, 8)); // fail fast (no fetch)
+      expect(mock).toHaveBeenCalledTimes(3);
+
+      await vi.advanceTimersByTimeAsync(DRIVE_COOLDOWN_MS + 1_000);
+      const data = await tz.readRange(0, 8);
+      expect(data).toHaveLength(8);
+      expect(mock).toHaveBeenCalledTimes(4);
+    });
+
+    it("keeps fetching when failures stay below the threshold (normal path guard)", async () => {
+      vi.useFakeTimers();
+      const mock = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new DOMException("The operation timed out", "TimeoutError"),
+        )
+        .mockRejectedValueOnce(
+          new DOMException("The operation timed out", "TimeoutError"),
+        )
+        .mockImplementation(() => ({
+          status: 206,
+          ok: true,
+          arrayBuffer: () => Promise.resolve(new Uint8Array(8).buffer),
+        }));
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      await settleWithTimers(tz.readRange(0, 8)); // 2 failures -> throws
+      const data = await tz.readRange(0, 8); // below threshold -> fetches fine
+      expect(data).toHaveLength(8);
+      expect(mock).toHaveBeenCalledTimes(3);
+    });
+
+    it("ignores failures older than the failure window (sliding window)", async () => {
+      vi.useFakeTimers();
+      const mock = timeoutMock();
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      await settleWithTimers(tz.readRange(0, 8)); // 2 failures
+      await vi.advanceTimersByTimeAsync(DRIVE_FAILURE_WINDOW_MS + 1_000);
+      await settleWithTimers(tz.readRange(0, 8)); // 2 fresh failures again
+
+      expect(mock).toHaveBeenCalledTimes(4); // never opened: window expired
+    });
   });
 });
