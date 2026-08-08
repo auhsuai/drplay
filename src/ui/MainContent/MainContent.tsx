@@ -425,11 +425,11 @@ export const MainContent = React.memo(function MainContent({
         onClose={() => {
           setShowNewFolderModal(false);
         }}
-        onCreate={(name) =>
-          explorer.handleCreateFolder(name, () => {
+        onCreate={(name) => {
+          void explorer.handleCreateFolder(name, () => {
             setShowNewFolderModal(false);
-          })
-        }
+          });
+        }}
         isCreating={explorer.isCreatingFolder}
       />
     </main>

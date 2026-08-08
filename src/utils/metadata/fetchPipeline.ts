@@ -1,0 +1,415 @@
+import { parseFromTokenizer } from "music-metadata";
+import type { IAudioMetadata } from "music-metadata";
+import { db } from "../../db/db";
+import { captureError } from "../errorLog";
+import {
+  BudgetExceededError,
+  BUDGET_CAP,
+  DriveRangeTokenizer,
+  HEAD_BYTES,
+  RangeFetchNetworkError,
+  TAIL_BYTES,
+} from "../driveRangeTokenizer";
+import {
+  detectFormat,
+  scanTailForMoov,
+  walkMp4TopBoxes,
+  mpegCbrDurationFromSize,
+  readId3v2TagSize,
+  findMpegFrameSync,
+  ID3V2_HEADER_LEN,
+  type AudioFormat,
+} from "../audioFormat";
+import {
+  cacheTrackMetadata,
+  classifyMetaError,
+  getCacheEntry,
+  getMemCacheEntry,
+  mergeFullPicture,
+  setFullPictureCache,
+  setMetadataCache,
+} from "./cache";
+import {
+  COVER_SLACK_BYTES,
+  DURATION_TAG_SCAN_BYTES,
+  FALLBACK_AUDIO_FILENAME,
+  LARGE_FILE_THRESHOLD,
+  METADATA_KEY_PREFIX,
+  META_MODULE,
+  REAL_METADATA_VERSION,
+  TAG_BUDGET_MAX,
+  UNKNOWN_ARTIST,
+  V_PLACEHOLDER,
+} from "./constants";
+import { processCovers } from "./cover";
+import type { CachedMetadata } from "./types";
+
+function stripExtension(name: string): string {
+  return name.replace(/\.[^.]+$/, "");
+}
+
+/**
+ * True when the head carries an embedded duration tag music-metadata actually
+ * parses (Xing / Info). Used to gate the duration of a HEAD-CLAMPED parse:
+ * without such a tag the parser derives the duration from the clamped file
+ * size (CBR) or the EOF frame count (VBR) — both bogus seconds for a
+ * truncated view of a large file. Known non-MP3 formats (e.g. a faststart
+ * moov at the head) carry real durations in the head and are trusted;
+ * "unknown" is NOT — an untagged MP3 also parses as "unknown", and its
+ * duration is exactly the size-derived CBR value this gate exists to reject.
+ */
+function hasEmbeddedDurationTag(
+  head: Uint8Array,
+  format: AudioFormat,
+): boolean {
+  if (format !== "mp3" && format !== "unknown") return true;
+  const tagSize = readId3v2TagSize(head);
+  const tagEnd =
+    tagSize > 0 ? Math.min(head.length, tagSize + ID3V2_HEADER_LEN) : 0;
+  const frameStart = findMpegFrameSync(head, tagEnd);
+  if (frameStart < 0) return false;
+  const searchEnd = Math.min(head.length, frameStart + DURATION_TAG_SCAN_BYTES);
+  for (let i = frameStart + 4; i + 3 < searchEnd; i += 1) {
+    const b0 = head[i] ?? 0;
+    const b1 = head[i + 1] ?? 0;
+    const b2 = head[i + 2] ?? 0;
+    const b3 = head[i + 3] ?? 0;
+    if (
+      (b0 === 0x58 && b1 === 0x69 && b2 === 0x6e && b3 === 0x67) || // Xing
+      (b0 === 0x49 && b1 === 0x6e && b2 === 0x66 && b3 === 0x6f) // Info (CBR)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function getTrackMetadataImpl(
+  fileId: string,
+  _token?: string,
+  _size?: number,
+  name?: string,
+  signal?: AbortSignal,
+  forceNetwork: boolean = false,
+): Promise<CachedMetadata> {
+  // fileId with no cached entry is undefined at runtime — guard it.
+  const memEntry = getMemCacheEntry(fileId);
+  if (!forceNetwork && memEntry) {
+    return mergeFullPicture(fileId, memEntry);
+  }
+
+  const safeName = name ?? FALLBACK_AUDIO_FILENAME;
+
+  // 1. IDB Check
+  if (!forceNetwork) {
+    try {
+      const cached = await getCacheEntry(`${METADATA_KEY_PREFIX}${fileId}`);
+      if (cached) {
+        let cachedData = cached.data;
+        if (cachedData.pictureDataFull) {
+          // Restart path: seed the memory LRU from the persisted full JPEG so
+          // cards render sharp immediately. The mem entry still stays
+          // full-free — the LRU is the single owner of full bytes (the seeded
+          // value is re-attached by mergeFullPicture below).
+          setFullPictureCache(fileId, cachedData.pictureDataFull);
+          cachedData = { ...cachedData, pictureDataFull: null };
+        }
+        setMetadataCache(fileId, cachedData);
+        return mergeFullPicture(fileId, cachedData);
+      }
+    } catch (e: unknown) {
+      await captureError({
+        level: "warn",
+        source: META_MODULE,
+        message: `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+      });
+    }
+  }
+
+  const size = _size ?? 0;
+  if (size <= 0) {
+    // Size unknown: a range fetch is impossible — placeholder without touching
+    // the network (Drive does not report a size for this file).
+    const placeholder = makePlaceholder(safeName);
+    setMetadataCache(fileId, placeholder);
+    return placeholder;
+  }
+
+  const isLargeFile = size > LARGE_FILE_THRESHOLD;
+  // Fix E: for LARGE files the tokenizer's declared size is clamped to the
+  // head region so music-metadata cannot seek the tail (ID3v1 / last-frame
+  // Xing / moov-at-end) — a tail seek on a >100MB Drive file is exactly the
+  // range fetch that timed out (metadata-fetch-failed storm on 152-297MB
+  // files). Everything the app needs from a large file lives in the head:
+  // ID3v2 tags + embedded cover + a Xing duration tag (when present).
+  // Accepted consequence: no-Xing large files parse to duration 0 /
+  // durationEstimated (the UI shows "–" via Fix F instead of a fake time);
+  // a moov-at-tail m4a fails its parse (placeholder, no tail fetch).
+  // Fix G: large CBR MP3s get their EXACT duration substituted from the real
+  // size without opening a real-size tokenizer — see the duration block.
+  const parseSize = isLargeFile ? Math.min(size, HEAD_BYTES) : size;
+
+  let format: AudioFormat = "unknown";
+  try {
+    let tokenizer = new DriveRangeTokenizer(
+      fileId,
+      parseSize,
+      signal ? { abortSignal: signal } : {},
+    );
+
+    // 2. Head fetch (128KB in ONE range request — a readRange would split it
+    //    into two 64KB chunks, doubling the requests a large-file metadata
+    //    load must survive) — format detection + m4a box walk
+    const head = await tokenizer.prefetchHead(Math.min(HEAD_BYTES, parseSize));
+    format = detectFormat(head, name);
+
+    if (format === "mp3") {
+      // ID3v2 tags are read WHOLE by music-metadata (one readToken of the tag
+      // body) — an unusually large tag (e.g. a 25MB cover) blows the default
+      // 20MB fetch budget and nukes the whole entry. Raise the budget for the
+      // tag region (capped at TAG_BUDGET_MAX); rare files only. The new
+      // tokenizer re-fetches the head region — one extra request, accepted.
+      // Large files keep the CLAMPED size here: a tag bigger than HEAD_BYTES
+      // fails its parse (placeholder) instead of ever opening a full-size
+      // tokenizer (too rare to spend a tail-capable fetch on).
+      const tagSize = readId3v2TagSize(head);
+      const tagBudgetNeeded = tagSize + ID3V2_HEADER_LEN + COVER_SLACK_BYTES;
+      if (tagSize > 0 && tagBudgetNeeded > BUDGET_CAP) {
+        tokenizer = new DriveRangeTokenizer(fileId, parseSize, {
+          budgetBytes: Math.min(tagBudgetNeeded, TAG_BUDGET_MAX),
+          ...(signal ? { abortSignal: signal } : {}),
+        });
+      }
+      // Metadata-load latency: a tag extending past the prefetched head was
+      // read chunk-by-chunk (64KB per request) — a 600KB tag alone cost ~9
+      // range requests, a 25MB tag ~400, all queued behind the app-wide
+      // CONCURRENCY-3 semaphore. Prefetch the tag region in ONE request so
+      // the parse reads it from the seeded cache. Best-effort: on budget or
+      // network failure the prefetch is skipped and the parse re-reads the
+      // region chunked exactly as before (the raised-budget retry /
+      // skipCovers fallbacks are untouched). For LARGE files the region is
+      // clamped to the head (prefetchEnd == headRegion → never re-fetches the
+      // head; a tag that cannot fit the clamped head keeps failing its parse
+      // into the placeholder — behavior unchanged).
+      if (tagSize > 0) {
+        const headRegion = Math.min(HEAD_BYTES, parseSize);
+        const prefetchEnd = Math.min(tagBudgetNeeded, parseSize);
+        if (prefetchEnd > headRegion) {
+          try {
+            await tokenizer.prefetchRange(0, prefetchEnd);
+          } catch (e: unknown) {
+            void captureError({
+              level: "warn",
+              source: META_MODULE,
+              message: `tag-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+            });
+          }
+        }
+      }
+    }
+
+    if (format === "aac") {
+      // ADTS has no embedded tags and music-metadata would scan the whole
+      // stream for duration — skip parsing entirely, no further fetch.
+      const placeholder = makePlaceholder(safeName, size);
+      setMetadataCache(fileId, placeholder);
+      return placeholder;
+    }
+
+    // 3. Parse tags/duration from the file via range fetches (moov at the end
+    //    of an m4a is reached by ignore()-advancing past mdat — no download).
+    //    fileInfo.size rides on the tokenizer; options carry parser behavior.
+    //    skipCovers: false lets the parser read embedded cover art through the
+    //    tokenizer; if that read blows the fetch budget the text is salvaged
+    //    by re-parsing with covers skipped (works for formats whose cover is
+    //    read after the tags, e.g. FLAC; ID3v2 reads the whole tag up-front so
+    //    a cover that large falls back to the placeholder below).
+    let metadata: IAudioMetadata;
+    try {
+      metadata = await parseFromTokenizer(tokenizer, {
+        skipCovers: false,
+        duration: true,
+      });
+    } catch (e: unknown) {
+      if (e instanceof BudgetExceededError) {
+        await captureError({
+          level: "warn",
+          source: META_MODULE,
+          message: `cover-budget-exceeded (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+          kind: "BudgetExceededError",
+        });
+        // Re-parse with covers skipped on a FRESH tokenizer: the old one has
+        // exhausted its fetch budget (even its tail-scan would throw again).
+        // A fresh budget plus ignore()-advancing past the cover reads only the
+        // tag region — no full-file download.
+        const retryTokenizer = new DriveRangeTokenizer(
+          fileId,
+          parseSize,
+          signal ? { abortSignal: signal } : {},
+        );
+        metadata = await parseFromTokenizer(retryTokenizer, {
+          skipCovers: true,
+          duration: true,
+        });
+      } else {
+        throw e;
+      }
+    }
+
+    const parsedDuration = metadata.format.duration;
+    const hasEmbeddedTag = hasEmbeddedDurationTag(head, format);
+    // Fix G: for a large CBR MP3 the parser derives the duration from the
+    // CLAMPED size (bogus seconds) — unless the head carries a Xing/Info tag.
+    // Substitute the exact duration computed from the REAL size instead. The
+    // math mirrors music-metadata's finalize() CBR path (same frame-size and
+    // samples-per-frame tables, same rounding, same 4 frames the parser
+    // walks), so the value equals what a real-size parse would produce — but
+    // the tokenizer stays clamped, so music-metadata never range-fetches the
+    // tail (ParserFactory scans for ID3v1/APEv2 before parsing even starts).
+    // Known limitation: a real ID3v1 tag at the very end of the file is not
+    // visible in the clamped view; its 128 bytes are never subtracted, which
+    // can shift the frame count by one (≈26ms) on some files.
+    const cbrDuration = isLargeFile
+      ? mpegCbrDurationFromSize(head, format, size)
+      : null;
+    const hasRealDuration =
+      typeof parsedDuration === "number" &&
+      Number.isFinite(parsedDuration) &&
+      parsedDuration > 0 &&
+      // Fix E: on a clamped parse only an embedded Xing/Info tag yields a
+      // trustworthy duration — anything else was derived from the clamped
+      // file size (CBR) or the EOF frame count (VBR) and is bogus seconds.
+      // Fix G: the size-derived CBR duration above is trusted too.
+      (!isLargeFile || hasEmbeddedTag || cbrDuration !== null);
+    const trustedDuration = hasEmbeddedTag ? parsedDuration : cbrDuration;
+
+    const entry: CachedMetadata = {
+      title: metadata.common.title ?? stripExtension(safeName),
+      artist: metadata.common.artist ?? UNKNOWN_ARTIST,
+      album: metadata.common.album ?? "",
+      duration: hasRealDuration ? (trustedDuration ?? parsedDuration) : 0,
+      durationEstimated: !hasRealDuration,
+      pictureData: null,
+      pictureDataFull: null,
+      v: REAL_METADATA_VERSION,
+      size,
+    };
+    if (
+      typeof metadata.format.bitrate === "number" &&
+      Number.isFinite(metadata.format.bitrate)
+    ) {
+      entry.bitrate = metadata.format.bitrate;
+    }
+
+    // 3b. Cover: compress the embedded picture into a persisted thumb (≤256px)
+    //    and a full variant (≤2000px; memory LRU + IDB-persisted when JPEG).
+    //    A failing picture NEVER drops the text entry — processCovers warns
+    //    and skips, leaving entry v:8 fully populated.
+    await processCovers(fileId, entry, metadata.common.picture);
+
+    // 4. m4a faststart check: moov must precede mdat or the file cannot be
+    //    streamed progressively (non-faststart). A moov found in the tail
+    //    confirms the layout; its absence means no moov anywhere — both are
+    //    marked streamUnplayable. SKIPPED for large files (Fix E): their
+    //    parse is head-clamped, so a moov-at-tail never exists in this view —
+    //    scanning the real tail would re-open the exact timeout the clamp
+    //    exists to avoid (streamUnplayable is not marked for them).
+    let streamUnplayable = false;
+    if (format === "m4a" && !isLargeFile) {
+      const walk = walkMp4TopBoxes(head, size);
+      if (walk.mdatBeforeMoov && !walk.moovBeforeMdat) {
+        streamUnplayable = true;
+        try {
+          const tailStart = Math.max(0, size - TAIL_BYTES);
+          try {
+            // Metadata-load latency: scanning a 1MB tail chunk-by-chunk cost
+            // 16 range requests (64KB each) behind the CONCURRENCY-3
+            // semaphore. Prefetch the tail in ONE request; the scan below
+            // then reads it from the seeded cache.
+            await tokenizer.prefetchRange(tailStart, size);
+          } catch (e: unknown) {
+            // Best-effort optimization only: a failed prefetch must not
+            // change the tail scan — readRange below re-reads the region
+            // chunked, exactly as before (same scan outcome, more requests).
+            void captureError({
+              level: "warn",
+              source: META_MODULE,
+              message: `m4a-tail-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+            });
+          }
+          const tail = await tokenizer.readRange(tailStart, size);
+          if (scanTailForMoov(tail, size) === null) {
+            await captureError({
+              level: "warn",
+              source: META_MODULE,
+              message: `m4a-tail-scan: no moov box found at the end of file (fileId=${fileId}, size=${String(size)})`,
+            });
+          }
+        } catch (e: unknown) {
+          await captureError({
+            level: "warn",
+            source: META_MODULE,
+            message: `m4a-tail-scan-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+          });
+        }
+      }
+    }
+
+    // 5. Non-faststart m4a: persist the flag on the files row so the player
+    //    can avoid streaming it (schema field is pre-existing, untouched).
+    if (streamUnplayable) {
+      try {
+        await db.files.update(fileId, {
+          metadata: { format, streamUnplayable: true },
+        });
+      } catch (e: unknown) {
+        await captureError({
+          level: "warn",
+          source: META_MODULE,
+          message: `files-metadata-write-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+        });
+      }
+    }
+
+    // 6. IDB + memory cache (setCache keeps the generation guard + score rules)
+    cacheTrackMetadata(fileId, entry);
+    return entry;
+  } catch (e: unknown) {
+    await captureError({
+      level: "warn",
+      source: META_MODULE,
+      message: `metadata-fetch-failed (fileId=${fileId}, size=${String(size)}, format=${format}): ${classifyMetaError(e).message}`,
+      kind: classifyMetaError(e).name,
+    });
+    const placeholder = makePlaceholder(safeName, size);
+    // A transient network/timeout failure must NOT pin the v:9 placeholder
+    // into the memory cache — that made every card show 00:00:00 until app
+    // reload (the mem entry shadows any later fetch). Deterministic failures
+    // (parse errors, RangeNotSupported, budget, unknown size) still cache:
+    // re-fetching those can only fail again. A network failure returns the
+    // placeholder to THIS caller but the next getTrackMetadata re-fetches.
+    if (!(e instanceof RangeFetchNetworkError)) {
+      setMetadataCache(fileId, placeholder);
+    }
+    return placeholder;
+  }
+}
+
+function makePlaceholder(safeName: string, size?: number): CachedMetadata {
+  return {
+    title: stripExtension(safeName),
+    artist: UNKNOWN_ARTIST,
+    duration: 0,
+    durationEstimated: true,
+    pictureData: null,
+    pictureDataFull: null,
+    v: V_PLACEHOLDER,
+    // The size is set only when the caller knows it: a placeholder for a
+    // known-size file must still show its real size (dropping it made every
+    // failed metadata fetch render "0 B"), while an unknown-size file keeps
+    // the field absent so callers fall back to "0 B".
+    ...(size !== undefined ? { size } : {}),
+  };
+}
+
+export { getTrackMetadataImpl };

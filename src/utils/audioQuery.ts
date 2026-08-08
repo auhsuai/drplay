@@ -1,4 +1,4 @@
-import { FOLDER_MIME } from "./driveApi";
+import { FOLDER_MIME } from "./driveTypes";
 
 // Only formats Chromium/WebView2 can decode are playable in this app.
 // Source of truth: chromium.org/audio-video ("Codec and Container Support" —

@@ -1,52 +1,19 @@
-import React, {
-  useState,
-  useCallback,
-  useRef,
-  Suspense,
-  useEffect,
-} from "react";
-import { useTranslation } from "react-i18next";
-import { LoaderCircle } from "lucide-react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Sidebar } from "./ui/Sidebar/Sidebar";
-import { NowPlayingView } from "./ui/NowPlaying/NowPlayingView";
-import { PlayerBar } from "./ui/PlayerBar/PlayerBar";
-import { FolderSelectionScreen } from "./ui/FolderSelection/FolderSelectionScreen";
-import { TrashScreen } from "./ui/Settings/TrashScreen";
-import { RateLimitModal } from "./ui/components/RateLimitModal";
+import { LoginGate } from "./ui/LoginGate";
+import { FolderSelectionGate } from "./ui/FolderSelectionGate";
+import { TrashGate } from "./ui/TrashGate";
+import { NowPlayingOverlay } from "./ui/NowPlayingOverlay";
+import { RateLimitGate } from "./ui/RateLimitGate";
 import { captureError } from "./utils/errorLog";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
 import { useShallow } from "zustand/react/shallow";
+import { TabContentRouter } from "./ui/layouts/TabContentRouter";
+import { AppShell } from "./ui/layouts/AppShell";
 
-const MainContent = React.lazy(() =>
-  import("./ui/MainContent/MainContent").then((module) => ({
-    default: module.MainContent,
-  })),
-);
-const HomeTab = React.lazy(() =>
-  import("./ui/HomeTab/HomeTab").then((module) => ({
-    default: module.HomeTab,
-  })),
-);
-const LikedSongs = React.lazy(() =>
-  import("./ui/LikedSongs/LikedSongs").then((module) => ({
-    default: module.LikedSongs,
-  })),
-);
-const PlaylistView = React.lazy(() =>
-  import("./ui/Playlist/PlaylistView").then((module) => ({
-    default: module.PlaylistView,
-  })),
-);
-const SettingsTab = React.lazy(() =>
-  import("./ui/Settings/SettingsTab").then((module) => ({
-    default: module.SettingsTab,
-  })),
-);
 import "./App.css";
 
 import { db } from "./db/db";
-import { LoginScreen } from "./ui/Login/LoginScreen";
 import { clearSessionState } from "./utils/sessionCleanup";
 import {
   loadSidebarOpenState,
@@ -69,31 +36,19 @@ import { useLocateFile } from "./hooks/useLocateFile";
 import type { Track, UserProfile, TabKey } from "./types";
 export type { Track, UserProfile };
 
-const LS_ROOT_FOLDER = "drplay_root_folder";
-const LS_CURRENT_FOLDER_ID = "drplay_current_folder_id";
-const LS_CURRENT_FOLDER_NAME = "drplay_current_folder_name";
-const LS_FOLDER_HISTORY = "drplay_folder_history";
-const LS_SORT_OPTION = "drplay_sort_option";
-const LS_MINIMIZE_TO_TRAY = "drplay_minimize_to_tray";
-const DB_NAV_STATE_KEY = "drplay_nav_state";
+import {
+  DB_NAV_STATE_KEY,
+  LS_CURRENT_FOLDER_ID,
+  LS_CURRENT_FOLDER_NAME,
+  LS_FOLDER_HISTORY,
+  LS_MINIMIZE_TO_TRAY,
+  LS_ROOT_FOLDER,
+  loadMinimizeToTrayState,
+} from "./appUiState";
 
-// Lazy-useState-compatible reader for the tray-minimize preference: missing
-// key (first launch) defaults to minimized; only the literal 'true' means
-// minimized, any other stored value ('false'/corrupt) means not-minimized.
-// localStorage access can throw SecurityError (storage blocked by policy —
-// see MDN Window.localStorage), so the read is guarded and falls back to the
-// default like a missing key.
-export function loadMinimizeToTrayState(): boolean {
-  try {
-    const saved = localStorage.getItem(LS_MINIMIZE_TO_TRAY);
-    return saved !== null ? saved === "true" : true;
-  } catch {
-    return true; // storage blocked — default behavior (same as missing key)
-  }
-}
+export { loadMinimizeToTrayState };
 
 function App() {
-  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabKey>(TABS.home);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
@@ -279,246 +234,132 @@ function App() {
   return (
     <div className="relative flex flex-col h-screen overflow-hidden bg-white dark:bg-[#121212] transition-colors duration-300">
       {/* Login Overlay */}
-      {!isLoggedIn && (
-        <LoginScreen
-          onLogin={(tokens) => {
-            handleLoginSuccess({
-              access_token: tokens.access_token,
-              refresh_token: tokens.refresh_token,
-              expires_in: tokens.expires_in,
-            });
-            // Fire-and-forget: resumeInterruptedUploads guards itself against
-            // double-runs and never rejects (every step is caught inside — a
-            // failure only surfaces as a warn log and/or the aggregated
-            // interrupted toast). getCurrentUserEmail is the SAME source the
-            // manager persists session rows under, so the scan always queries
-            // the exact key the interrupted rows were written with.
-            void resumeInterruptedUploads(
-              tokens.access_token,
-              getCurrentUserEmail(),
-            );
-          }}
-        />
-      )}
+      <LoginGate
+        isLoggedIn={isLoggedIn}
+        onLogin={(tokens) => {
+          handleLoginSuccess({
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            expires_in: tokens.expires_in,
+          });
+          // Fire-and-forget: resumeInterruptedUploads guards itself against
+          // double-runs and never rejects (every step is caught inside — a
+          // failure only surfaces as a warn log and/or the aggregated
+          // interrupted toast). getCurrentUserEmail is the SAME source the
+          // manager persists session rows under, so the scan always queries
+          // the exact key the interrupted rows were written with.
+          void resumeInterruptedUploads(
+            tokens.access_token,
+            getCurrentUserEmail(),
+          );
+        }}
+      />
 
       {/* Folder Selection Overlay */}
-      {isLoggedIn && (!appRootFolder || showFolderSelection) && (
-        <FolderSelectionScreen
-          token={accessToken ?? ""}
-          onSelectFolder={(folderId) => {
-            // Fire-and-forget: useDrive's handleSelectRootFolder handles its
-            // own errors (each step is try/caught inside).
-            void handleSelectRootFolder(folderId);
-            setShowFolderSelection(false);
-          }}
-          onCancel={
-            appRootFolder
-              ? () => {
-                  setShowFolderSelection(false);
-                }
-              : undefined
-          }
-          initialFolderId={ROOT_FOLDER_ID}
-          initialFolderHistory={[]}
-          allowEscapeRoot={true}
-        />
-      )}
-
-      {showTrashScreen && accessToken && (
-        <TrashScreen
-          token={accessToken}
-          onClose={() => {
-            setShowTrashScreen(false);
-          }}
-        />
-      )}
-
-      <div
-        className={`flex flex-1 overflow-hidden transition-all duration-700 ease-in-out ${!isLoggedIn || (!appRootFolder && !showFolderSelection) ? "blur-xl scale-[0.97] opacity-40 pointer-events-none" : "blur-0 scale-100 opacity-100"}`}
-      >
-        <Sidebar
-          activeTab={activeTab}
-          onTabChange={handleTabChange}
-          userProfile={userProfile}
-          onLogout={() => {
-            // Fire-and-forget: useAuth's handleLogout handles its own errors.
-            void handleLogout();
-          }}
-          isSidebarOpen={isSidebarOpen}
-          onToggleSidebar={() => {
-            const nextOpen = !isSidebarOpen;
-            setIsSidebarOpen(nextOpen);
-            saveSidebarOpenState(nextOpen);
-          }}
-          token={accessToken}
-        />
-
-        <div
-          id="content-area"
-          className="flex-1 relative overflow-hidden flex flex-col"
-        >
-          {/* Lazy tab chunks load on first visit — a compact blue spinner
-              (the familiar pre-skeleton loading) instead of a heavy skeleton
-              list: settings and other non-list tabs have no file rows to
-              mirror, so a skeleton would just sit there unrelated. */}
-          <Suspense
-            fallback={
-              <div
-                role="status"
-                aria-label={t("loading")}
-                className="flex-1 flex items-center justify-center"
-              >
-                <LoaderCircle className="animate-spin h-10 w-10 text-[#4285F4] stroke-[1.5]" />
-              </div>
-            }
-          >
-            {/* HomeTab stays mounted across tab switches (keep-alive): hiding
-                it with display:none instead of unmounting prevents the
-                refetch-on-remount churn of every home data load
-                (getRecentlyPlayed / getHeavyRotation / getRandomDiscoveries /
-                getMostVisitedFolders / getRecentlyAddedAudioFiles) and keeps
-                scroll/greeting state. The key forces a clean remount per login
-                session: logout -> login must not reuse the previous account's
-                HomeTab state. accessToken is deliberately NOT the key — it
-                rotates on every refresh and would remount constantly. */}
-            <div
-              className={
-                activeTab === TABS.home
-                  ? "flex-1 min-h-0 flex flex-col"
-                  : "hidden"
+      <FolderSelectionGate
+        isLoggedIn={isLoggedIn}
+        appRootFolder={appRootFolder}
+        showFolderSelection={showFolderSelection}
+        token={accessToken}
+        onSelectFolder={(folderId) => {
+          // Fire-and-forget: useDrive's handleSelectRootFolder handles its
+          // own errors (each step is try/caught inside).
+          void handleSelectRootFolder(folderId);
+          setShowFolderSelection(false);
+        }}
+        onCancel={
+          appRootFolder
+            ? () => {
+                setShowFolderSelection(false);
               }
-            >
-              <HomeTab
-                key={isLoggedIn ? "session-in" : "session-out"}
-                onPlay={(t: Track, c?: Track[]) => {
-                  handlePlayTrack(t, c);
-                }}
-                onOpenFolder={(id, name) => {
-                  handleOpenFolder(id, name);
-                  handleTabChange(TABS.myDrive);
-                }}
-                token={accessToken}
-                userProfile={userProfile}
-                currentTrack={currentTrack}
-              />
-            </div>
-            {activeTab !== TABS.home &&
-              (activeTab === TABS.myDrive ? (
-                <MainContent
-                  activeTab={activeTab}
-                  onPlay={handlePlayTrack}
-                  isLoading={isLoadingTracks}
-                  onOpenFolder={handleOpenFolder}
-                  onBack={handleBack}
-                  hasHistory={folderHistory.length > 0}
-                  folderHistory={folderHistory}
-                  currentFolderName={currentFolderName}
-                  currentFolderId={currentFolderId}
-                  onBreadcrumbClick={handleBreadcrumbClick}
-                  token={accessToken}
-                  currentTrack={currentTrack}
-                  highlightedFileId={highlightedFileId}
-                  onRefresh={() => {
-                    /* No-op, sync runs in background */
-                  }}
-                  onRemoveItem={() => {
-                    /* useLiveQuery handles UI updates automatically now */
-                  }}
-                  sortOption={sortOption}
-                  onSortChange={(val) => {
-                    setSortOption(val);
-                    try {
-                      localStorage.setItem(LS_SORT_OPTION, val);
-                    } catch (err) {
-                      void captureError({
-                        level: "warn",
-                        source: "App",
-                        message: `sort-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-                      });
-                    }
-                  }}
-                />
-              ) : activeTab === TABS.likedSongs ? (
-                <LikedSongs
-                  onPlay={(t: Track, c: Track[]) => {
-                    handlePlayTrack(t, c);
-                  }}
-                  token={accessToken}
-                  currentTrack={currentTrack}
-                />
-              ) : activeTab.startsWith("playlist_") ? (
-                <PlaylistView
-                  playlistId={activeTab.replace("playlist_", "")}
-                  onPlay={(t: Track, c?: Track[]) => {
-                    handlePlayTrack(t, c);
-                  }}
-                  onDelete={() => {
-                    handleTabChange(TABS.home);
-                  }}
-                  currentTrack={currentTrack}
-                />
-              ) : activeTab === TABS.settings ? (
-                <SettingsTab
-                  theme={theme}
-                  setTheme={setTheme}
-                  minimizeToTray={minimizeToTray}
-                  setMinimizeToTray={setMinimizeToTray}
-                  setShowFolderSelection={setShowFolderSelection}
-                  setShowTrashScreen={setShowTrashScreen}
-                />
-              ) : (
-                <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">
-                  <h1 className="text-2xl text-gray-500">
-                    {t("common.coming_soon")}: {activeTab}
-                  </h1>
-                </main>
-              ))}
-          </Suspense>
+            : undefined
+        }
+      />
 
-          <div
-            className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? "h-0 overflow-hidden pointer-events-none opacity-0" : ""}`}
-          >
-            <PlayerBar
-              currentTrack={currentTrack}
-              loadNonce={loadNonce}
-              isPlaying={isPlaying}
-              onTogglePlay={stableHandleTogglePlay}
-              onNextTrack={stableHandleNextTrack}
-              onPrevTrack={stableHandlePrevTrack}
-              isDownloading={isDownloading}
-              playMode={playMode}
-              onTogglePlayMode={stableHandleTogglePlayMode}
-              onExpandNowPlaying={onExpandNowPlaying}
-            />
-          </div>
-        </div>
-      </div>
+      <TrashGate
+        showTrashScreen={showTrashScreen}
+        token={accessToken}
+        onClose={() => {
+          setShowTrashScreen(false);
+        }}
+      />
+
+      <AppShell
+        isLoggedIn={isLoggedIn}
+        appRootFolder={appRootFolder}
+        showFolderSelection={showFolderSelection}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        userProfile={userProfile}
+        onLogout={() => {
+          // Fire-and-forget: useAuth's handleLogout handles its own errors.
+          void handleLogout();
+        }}
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={() => {
+          const nextOpen = !isSidebarOpen;
+          setIsSidebarOpen(nextOpen);
+          saveSidebarOpenState(nextOpen);
+        }}
+        token={accessToken}
+        isNowPlayingOpen={isNowPlayingOpen}
+        currentTrack={currentTrack}
+        loadNonce={loadNonce}
+        isPlaying={isPlaying}
+        onTogglePlay={stableHandleTogglePlay}
+        onNextTrack={stableHandleNextTrack}
+        onPrevTrack={stableHandlePrevTrack}
+        isDownloading={isDownloading}
+        playMode={playMode}
+        onTogglePlayMode={stableHandleTogglePlayMode}
+        onExpandNowPlaying={onExpandNowPlaying}
+        tabContent={
+          <TabContentRouter
+            activeTab={activeTab}
+            isLoggedIn={isLoggedIn}
+            userProfile={userProfile}
+            token={accessToken}
+            currentTrack={currentTrack}
+            onPlayTrack={handlePlayTrack}
+            onOpenFolder={handleOpenFolder}
+            onSwitchTab={handleTabChange}
+            isLoading={isLoadingTracks}
+            onBack={handleBack}
+            hasHistory={folderHistory.length > 0}
+            folderHistory={folderHistory}
+            currentFolderName={currentFolderName}
+            currentFolderId={currentFolderId}
+            onBreadcrumbClick={handleBreadcrumbClick}
+            highlightedFileId={highlightedFileId}
+            sortOption={sortOption}
+            setSortOption={setSortOption}
+            theme={theme}
+            setTheme={setTheme}
+            minimizeToTray={minimizeToTray}
+            setMinimizeToTray={setMinimizeToTray}
+            setShowFolderSelection={setShowFolderSelection}
+            setShowTrashScreen={setShowTrashScreen}
+          />
+        }
+      />
 
       {/* Now Playing Full Screen Overlay */}
-      <div
-        className={`fixed inset-0 z-[9999] bg-white dark:bg-[#121212] flex flex-col transition-transform duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${
-          isNowPlayingOpen
-            ? "translate-y-0"
-            : "translate-y-full pointer-events-none"
-        }`}
-      >
-        <NowPlayingView
-          currentTrack={currentTrack}
-          isPlaying={isPlaying}
-          onTogglePlay={stableHandleTogglePlay}
-          onNextTrack={stableHandleNextTrack}
-          onPrevTrack={stableHandlePrevTrack}
-          playMode={playMode}
-          onTogglePlayMode={stableHandleTogglePlayMode}
-          onBack={() => {
-            setIsNowPlayingOpen(false);
-          }}
-          isOpen={isNowPlayingOpen}
-          token={accessToken}
-        />
-      </div>
+      <NowPlayingOverlay
+        isOpen={isNowPlayingOpen}
+        currentTrack={currentTrack}
+        isPlaying={isPlaying}
+        onTogglePlay={stableHandleTogglePlay}
+        onNextTrack={stableHandleNextTrack}
+        onPrevTrack={stableHandlePrevTrack}
+        playMode={playMode}
+        onTogglePlayMode={stableHandleTogglePlayMode}
+        onBack={() => {
+          setIsNowPlayingOpen(false);
+        }}
+        token={accessToken}
+      />
 
-      <RateLimitModal
+      <RateLimitGate
         isOpen={showRateLimitModal}
         onClose={() => {
           setShowRateLimitModal(false);
