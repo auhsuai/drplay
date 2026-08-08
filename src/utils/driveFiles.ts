@@ -10,6 +10,19 @@ import type { DriveFileItem } from "./driveTypes";
 // more files may exist" apart from "list really is that short".
 const RECENTLY_ADDED_PAGE_SIZE = 100;
 
+// Drive Files API base URL — every request in this module targets it.
+const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
+
+// Headers shared by every Drive request in this module. GET/DELETE calls only
+// need the bearer token; JSON-body calls add the JSON content type.
+function authHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}` };
+}
+
+function authJsonHeaders(token: string): Record<string, string> {
+  return { ...authHeaders(token), "Content-Type": "application/json" };
+}
+
 // Shared guard for the simple `Failed to <action> (status)` throw pattern.
 // NOT used where a non-ok response has its own handling (null returns,
 // captureError + detail parsing in moveFile, quota, etc.).
@@ -75,18 +88,12 @@ export async function createFolder(
     parents: [parentId],
   };
 
-  const response = await driveFetch(
-    "https://www.googleapis.com/drive/v3/files",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(metadata),
-      ...(signal ? { signal } : {}),
-    },
-  );
+  const response = await driveFetch(DRIVE_FILES_URL, {
+    method: "POST",
+    headers: authJsonHeaders(token),
+    body: JSON.stringify(metadata),
+    ...(signal ? { signal } : {}),
+  });
 
   assertDriveOk(response, "create folder");
   const data: unknown = await response.json();
@@ -114,17 +121,11 @@ export async function deleteFile(
     },
   };
 
-  const response = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(metadata),
-    },
-  );
+  const response = await driveFetch(`${DRIVE_FILES_URL}/${fileId}`, {
+    method: "PATCH",
+    headers: authJsonHeaders(token),
+    body: JSON.stringify(metadata),
+  });
 
   assertDriveOk(response, "delete file");
   const data: unknown = await response.json();
@@ -152,11 +153,9 @@ export async function moveFile(
 ): Promise<DriveFileItem | { success: boolean }> {
   // First, get the actual parents of the file to ensure we remove it from all of them
   const getResponse = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`,
+    `${DRIVE_FILES_URL}/${fileId}?fields=parents`,
     {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: authHeaders(token),
     },
   );
 
@@ -175,13 +174,10 @@ export async function moveFile(
   }
 
   const response = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}?addParents=${newParentId}&removeParents=${removeParents}`,
+    `${DRIVE_FILES_URL}/${fileId}?addParents=${newParentId}&removeParents=${removeParents}`,
     {
       method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
+      headers: authJsonHeaders(token),
       body: JSON.stringify({}),
     },
   );
@@ -220,17 +216,11 @@ export async function restoreFile(
     },
   };
 
-  const response = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(metadata),
-    },
-  );
+  const response = await driveFetch(`${DRIVE_FILES_URL}/${fileId}`, {
+    method: "PATCH",
+    headers: authJsonHeaders(token),
+    body: JSON.stringify(metadata),
+  });
 
   assertDriveOk(response, "restore file");
   const data: unknown = await response.json();
@@ -249,15 +239,10 @@ export async function permanentlyDeleteFile(
   token: string,
   fileId: string,
 ): Promise<boolean> {
-  const response = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}`,
-    {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
-  );
+  const response = await driveFetch(`${DRIVE_FILES_URL}/${fileId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 
   assertDriveOk(response, "permanently delete file");
   return true;
@@ -275,12 +260,10 @@ export async function getRecentlyAddedAudioFiles(
   token: string,
 ): Promise<DriveFileItem[]> {
   const q = getAudioFilesQuery();
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${String(RECENTLY_ADDED_PAGE_SIZE)}`;
+  const url = `${DRIVE_FILES_URL}?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${String(RECENTLY_ADDED_PAGE_SIZE)}`;
 
   const response = await driveFetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers: authHeaders(token),
   });
 
   assertDriveOk(response, "fetch recently added audio files");
@@ -302,9 +285,9 @@ export async function getFileParents(
   fileId: string,
   signal?: AbortSignal,
 ): Promise<string[] | null> {
-  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`;
+  const url = `${DRIVE_FILES_URL}/${fileId}?fields=parents`;
   const response = await driveFetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders(token),
     ...(signal ? { signal } : {}),
   });
   if (!response.ok) {
@@ -327,9 +310,9 @@ export async function getFileName(
   fileId: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name`;
+  const url = `${DRIVE_FILES_URL}/${fileId}?fields=name`;
   const response = await driveFetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders(token),
     ...(signal ? { signal } : {}),
   });
   if (!response.ok) {

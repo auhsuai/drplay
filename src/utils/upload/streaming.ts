@@ -4,6 +4,7 @@ import {
   registerUploadPath,
   statDiskPath,
 } from "../diskFs";
+import type { DiskReadStream } from "../diskFs";
 import { UploadError, uploadFileResumableChunked } from "../driveUpload";
 import { basename } from "../pathUtils";
 import { controllerFor } from "./controllers";
@@ -81,6 +82,60 @@ async function uploadDiskFileStreaming(
   return uploadDiskPathChunked(entry, path, stat.size);
 }
 
+// Mutable state of the sequential chunk reader over one DiskReadStream
+// (bounded ~8 MiB in memory). Passed BY REFERENCE across readChunk calls
+// because the uploader may re-read at arbitrary offsets after a 308 resume —
+// the reopened stream / consumed counter / straddle remainder all mutate.
+interface ChunkReaderState {
+  stream: DiskReadStream;
+  consumed: number;
+  // Tail of a chunk that straddled the requested skip offset, served before
+  // the stream is read again so every returned chunk starts exactly at the
+  // offset the resumable session asked for.
+  remainder: Uint8Array | null;
+}
+
+// Read the chunk starting exactly at `offset`. A 308 resume can ask for bytes
+// we already consumed (server received fewer than sent); the rid-backed handle
+// only reads forward, so the stream is reopened and skipped to the requested
+// offset. When a skipped chunk straddles the offset, its tail (starting
+// exactly at `offset`) is kept instead of discarded — the old
+// discard-then-read desynced the stream and uploaded data shifted by
+// `next - offset` bytes, silently corrupting the file.
+async function readChunkFromState(
+  state: ChunkReaderState,
+  path: string,
+  offset: number,
+): Promise<Uint8Array | null> {
+  if (offset < state.consumed) {
+    await state.stream.close();
+    state.stream = await openDiskReadStream(path);
+    state.consumed = 0;
+    state.remainder = null;
+  }
+  while (state.consumed < offset) {
+    const skipped = await state.stream.read();
+    if (skipped === null) break;
+    const next = state.consumed + skipped.byteLength;
+    if (next > offset) {
+      state.remainder = skipped.slice(offset - state.consumed);
+      state.consumed = offset;
+      break;
+    }
+    state.consumed = next;
+  }
+  if (state.remainder !== null) {
+    const r = state.remainder;
+    state.remainder = null;
+    state.consumed += r.byteLength;
+    return r;
+  }
+  const chunk = await state.stream.read();
+  if (chunk === null) return null;
+  state.consumed += chunk.byteLength;
+  return chunk;
+}
+
 async function uploadDiskPathChunked(
   entry: InternalEntry,
   path: string,
@@ -94,54 +149,17 @@ async function uploadDiskPathChunked(
   // with the real file instead of creating a duplicate.
   const clientGeneratedId =
     entry.resumeClientGeneratedId ?? (await tryGenerateClientId(entry));
-  let stream = await openDiskReadStream(path);
-  let consumed = 0;
-  // Tail of a chunk that straddled the requested skip offset, served before
-  // the stream is read again so every returned chunk starts exactly at the
-  // offset the resumable session asked for.
-  let remainder: Uint8Array | null = null;
-  const readChunk = async (offset: number): Promise<Uint8Array | null> => {
-    if (offset < consumed) {
-      // A 308 resume can ask for bytes we already consumed (server received
-      // fewer than sent). The rid-backed handle only reads forward, so reopen
-      // the stream and skip to the requested offset.
-      await stream.close();
-      stream = await openDiskReadStream(path);
-      consumed = 0;
-      remainder = null;
-    }
-    while (consumed < offset) {
-      const skipped = await stream.read();
-      if (skipped === null) break;
-      const next = consumed + skipped.byteLength;
-      if (next > offset) {
-        // The chunk straddles the requested offset: keep its tail (starting
-        // exactly at `offset`) instead of discarding it — the old
-        // discard-then-read desynced the stream and uploaded data shifted by
-        // `next - offset` bytes, silently corrupting the file.
-        remainder = skipped.slice(offset - consumed);
-        consumed = offset;
-        break;
-      }
-      consumed = next;
-    }
-    if (remainder !== null) {
-      const r = remainder;
-      remainder = null;
-      consumed += r.byteLength;
-      return r;
-    }
-    const chunk = await stream.read();
-    if (chunk === null) return null;
-    consumed += chunk.byteLength;
-    return chunk;
+  const reader: ChunkReaderState = {
+    stream: await openDiskReadStream(path),
+    consumed: 0,
+    remainder: null,
   };
   try {
     return await uploadFileResumableChunked(entry.token, {
       name: entry.name,
       parentId: entry.parentId,
       totalSize,
-      readChunk,
+      readChunk: (offset) => readChunkFromState(reader, path, offset),
       // The entry's cancel controller is wired into the real uploader so a
       // cancelUpload aborts the in-flight Drive request (driveApi rejects
       // with UploadError('aborted')).
@@ -172,6 +190,6 @@ async function uploadDiskPathChunked(
       },
     });
   } finally {
-    await stream.close();
+    await reader.stream.close();
   }
 }

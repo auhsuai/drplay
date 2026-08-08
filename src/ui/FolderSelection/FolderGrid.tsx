@@ -1,8 +1,25 @@
-import { Search, LoaderCircle, Folder } from "lucide-react";
+import { Search, LoaderCircle, Folder, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SkeletonRowList } from "../components/Skeleton";
 import { FolderCard } from "./FolderCard";
 import type { FolderItem } from "./folderSelectionHelpers";
+
+function EmptyState({
+  icon: Icon,
+  label,
+}: {
+  icon: LucideIcon;
+  label: string;
+}) {
+  return (
+    <div className="text-center py-20 text-gray-500">
+      <Icon className="w-12 h-12 mx-auto mb-3 opacity-30" />
+      <h3 className="text-lg font-medium mb-1 text-gray-900 dark:text-gray-200">
+        {label}
+      </h3>
+    </div>
+  );
+}
 
 export function FolderGrid({
   isLoading,
@@ -38,12 +55,7 @@ export function FolderGrid({
         filteredFolders.length === 0 &&
         apiSearchResults.length === 0 &&
         !isSearchingApi ? (
-        <div className="text-center py-20 text-gray-500">
-          <Search className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <h3 className="text-lg font-medium mb-1 text-gray-900 dark:text-gray-200">
-            {t("drive.no_folders")}
-          </h3>
-        </div>
+        <EmptyState icon={Search} label={t("drive.no_folders")} />
       ) : searchQuery.trim() &&
         (apiSearchResults.length > 0 || isSearchingApi) ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -78,12 +90,7 @@ export function FolderGrid({
           )}
         </div>
       ) : !searchQuery.trim() && filteredFolders.length === 0 && !isLoading ? (
-        <div className="text-center py-20 text-gray-500">
-          <Folder className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <h3 className="text-lg font-medium mb-1 text-gray-900 dark:text-gray-200">
-            {t("drive.no_folders")}
-          </h3>
-        </div>
+        <EmptyState icon={Folder} label={t("drive.no_folders")} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {filteredFolders.map((folder) => (

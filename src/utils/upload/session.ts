@@ -56,6 +56,27 @@ interface SessionPersistExtra {
   clientGeneratedId?: string;
 }
 
+// Shared best-effort DB capture used by persistActiveSession / clearSession /
+// queue.dbRowOp: run the op, swallow failures and log a warn with the exact
+// per-call-site message (behavior identical to the three former inline
+// try/catch blocks). The message builder receives the op name so call sites
+// that embed it in their message string keep their exact wording.
+export async function withDbCapture(
+  opName: string,
+  fn: () => Promise<unknown>,
+  message: (opName: string, err: unknown) => string,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    await captureError({
+      level: "warn",
+      source: MODULE,
+      message: message(opName, err),
+    });
+  }
+}
+
 // Best-effort IndexedDB snapshot of an ACTIVE upload (schema v9 uploadSessions)
 // so a crashed/interrupted upload can be resumed on the next launch (slice
 // 5.2). NEVER throws and never blocks the upload: the row is resume metadata
@@ -68,33 +89,35 @@ export async function persistActiveSession(
   extra?: SessionPersistExtra,
 ): Promise<void> {
   const now = Date.now();
-  try {
-    await db.uploadSessions.put({
-      id: entry.id,
-      userEmail: getCurrentUserEmail(),
-      name: entry.name,
-      isFolder: entry.isFolder,
-      kind: entry.kind,
-      // exactOptionalPropertyTypes: omit diskPath (bytes/folderChild have none)
-      // instead of writing undefined.
-      ...(entry.diskPath !== undefined ? { diskPath: entry.diskPath } : {}),
-      parentId: entry.parentId,
-      ...(extra?.totalSize !== undefined ? { totalSize: extra.totalSize } : {}),
-      ...(extra?.uploadUri !== undefined ? { uploadUri: extra.uploadUri } : {}),
-      ...(extra?.clientGeneratedId !== undefined
-        ? { clientGeneratedId: extra.clientGeneratedId }
-        : {}),
-      status: "active",
-      createdAt: now,
-      updatedAt: now,
-    });
-  } catch (err) {
-    await captureError({
-      level: "warn",
-      source: MODULE,
-      message: `session-persist-failed name=${entry.name}: ${describeError(err)}`,
-    });
-  }
+  await withDbCapture(
+    "session-persist",
+    () =>
+      db.uploadSessions.put({
+        id: entry.id,
+        userEmail: getCurrentUserEmail(),
+        name: entry.name,
+        isFolder: entry.isFolder,
+        kind: entry.kind,
+        // exactOptionalPropertyTypes: omit diskPath (bytes/folderChild have none)
+        // instead of writing undefined.
+        ...(entry.diskPath !== undefined ? { diskPath: entry.diskPath } : {}),
+        parentId: entry.parentId,
+        ...(extra?.totalSize !== undefined
+          ? { totalSize: extra.totalSize }
+          : {}),
+        ...(extra?.uploadUri !== undefined
+          ? { uploadUri: extra.uploadUri }
+          : {}),
+        ...(extra?.clientGeneratedId !== undefined
+          ? { clientGeneratedId: extra.clientGeneratedId }
+          : {}),
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      }),
+    (_opName, err) =>
+      `session-persist-failed name=${entry.name}: ${describeError(err)}`,
+  );
 }
 
 // Best-effort removal of the session row for a terminal entry (done / error /
@@ -103,13 +126,10 @@ export async function persistActiveSession(
 // completes. delete() of a never-persisted id resolves without error, making
 // this safe for queued cancels too.
 export async function clearSession(entry: InternalEntry): Promise<void> {
-  try {
-    await db.uploadSessions.delete(entry.id);
-  } catch (err) {
-    await captureError({
-      level: "warn",
-      source: MODULE,
-      message: `session-clear-failed name=${entry.name}: ${describeError(err)}`,
-    });
-  }
+  await withDbCapture(
+    "session-clear",
+    () => db.uploadSessions.delete(entry.id),
+    (_opName, err) =>
+      `session-clear-failed name=${entry.name}: ${describeError(err)}`,
+  );
 }

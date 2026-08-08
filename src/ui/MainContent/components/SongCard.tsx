@@ -43,6 +43,27 @@ interface SongCardProps {
   uploadProgress?: number | undefined;
 }
 
+// Card state precedence mirrors the old nested ternary: flash overrides
+// everything (transient 400ms cue), then bulk-selection accent, then
+// now-playing, then the idle hover palette.
+const CARD_STATE_CLASSES = {
+  flash: "bg-white dark:bg-[#383a40] shadow-lg shadow-black/5",
+  selected: `${ACCENT_CARD_TINT} ${ACCENT_CARD_TINT_HOVER}`,
+  playing: "bg-gray-100 dark:bg-[#2a2b2f] shadow-sm",
+  idle: "bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f]",
+} as const;
+
+function cardStateClass(
+  isFlashOn: boolean,
+  isSelected: boolean | undefined,
+  isPlaying: boolean | undefined,
+): string {
+  if (isFlashOn) return CARD_STATE_CLASSES.flash;
+  if (isSelected) return CARD_STATE_CLASSES.selected;
+  if (isPlaying) return CARD_STATE_CLASSES.playing;
+  return CARD_STATE_CLASSES.idle;
+}
+
 export const SongCard = React.memo(
   function SongCard({
     item,
@@ -159,15 +180,7 @@ export const SongCard = React.memo(
           className={`group group/upload w-full rounded-xl cursor-pointer ${uploadState === "uploading" ? "opacity-50 pointer-events-none" : ""}`}
         >
           <div
-            className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${
-              isFlashOn
-                ? "bg-white dark:bg-[#383a40] shadow-lg shadow-black/5"
-                : isSelected
-                  ? `${ACCENT_CARD_TINT} ${ACCENT_CARD_TINT_HOVER}`
-                  : isPlaying
-                    ? "bg-gray-100 dark:bg-[#2a2b2f] shadow-sm"
-                    : "bg-[#F8F9FA] dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"
-            } ${dragHoverClasses}`}
+            className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${cardStateClass(isFlashOn, isSelected, isPlaying)} ${dragHoverClasses}`}
           >
             {isSelectionMode && (
               <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">

@@ -22,7 +22,7 @@ vi.mock("../lib/AudioController", () => ({
 }));
 
 // jsdom does not implement the Media Session API (no navigator.mediaSession,
-// no MediaMetadata constructor) â€” tests install their own minimal stand-ins.
+// no MediaMetadata constructor) — tests install their own minimal stand-ins.
 class MediaMetadataMock implements MediaMetadata {
   title = "";
   artist = "";
@@ -134,7 +134,7 @@ afterEach(() => {
 });
 
 describe("useMediaSession guard", () => {
-  it("khÃ´ng cÃ³ navigator.mediaSession â†’ no-op, khÃ´ng throw (mount + unmount ká»ƒ cáº£ khi cÃ³ track)", () => {
+  it("không có navigator.mediaSession → no-op, không throw (mount + unmount kể cả khi có track)", () => {
     removeSessionMock();
     usePlayerStore.setState({
       currentTrack: makeTrack("t1"),
@@ -148,7 +148,7 @@ describe("useMediaSession guard", () => {
 });
 
 describe("useMediaSession metadata", () => {
-  it("currentTrack â†’ metadata title/artist tháº­t; album/artwork KHÃ”NG bá»‹a (bá» trá»‘ng)", () => {
+  it("currentTrack → metadata title/artist thật; album/artwork KHÔNG bịa (bỏ trống)", () => {
     const { session } = installSessionMock();
     usePlayerStore.setState({ currentTrack: makeTrack("t1") });
 
@@ -160,7 +160,7 @@ describe("useMediaSession metadata", () => {
     expect(session.metadata?.artwork).toEqual([]);
   });
 
-  it("currentTrack Ä‘á»•i â†’ metadata cáº­p nháº­t; currentTrack null â†’ metadata null", () => {
+  it("currentTrack đổi → metadata cập nhật; currentTrack null → metadata null", () => {
     const { session } = installSessionMock();
     makeHook();
 
@@ -182,7 +182,7 @@ describe("useMediaSession metadata", () => {
 });
 
 describe("useMediaSession playbackState", () => {
-  it("khÃ´ng track â†’ none; track + !isPlaying â†’ paused; isPlaying â†’ playing", () => {
+  it("không track → none; track + !isPlaying → paused; isPlaying → playing", () => {
     const { session } = installSessionMock();
     makeHook();
     expect(session.playbackState).toBe("none");
@@ -205,7 +205,7 @@ describe("useMediaSession playbackState", () => {
 });
 
 describe("useMediaSession action handlers", () => {
-  it("play: Ä‘ang paused â†’ gá»i onTogglePlay; Ä‘ang playing â†’ khÃ´ng gá»i", () => {
+  it("play: đang paused → gọi onTogglePlay; đang playing → không gọi", () => {
     const { invoke } = installSessionMock();
     usePlayerStore.setState({ currentTrack: makeTrack("t1") });
     const { onTogglePlay } = makeHook();
@@ -224,7 +224,7 @@ describe("useMediaSession action handlers", () => {
     expect(onTogglePlay).toHaveBeenCalledTimes(1);
   });
 
-  it("pause: Ä‘ang playing â†’ audio.pause(); Ä‘ang paused â†’ khÃ´ng gá»i", () => {
+  it("pause: đang playing → audio.pause(); đang paused → không gọi", () => {
     const { invoke } = installSessionMock();
     usePlayerStore.setState({ currentTrack: makeTrack("t1"), isPlaying: true });
     makeHook();
@@ -243,7 +243,7 @@ describe("useMediaSession action handlers", () => {
     expect(audioMock.pause).toHaveBeenCalledTimes(1);
   });
 
-  it("nexttrack â†’ onNext; previoustrack â†’ onPrev", () => {
+  it("nexttrack → onNext; previoustrack → onPrev", () => {
     const { invoke } = installSessionMock();
     const { onNext, onPrev } = makeHook();
 
@@ -259,7 +259,7 @@ describe("useMediaSession action handlers", () => {
     expect(onPrev).toHaveBeenCalledTimes(1);
   });
 
-  it("seekto â†’ audio.seek(seekTime) + setPositionState(duration, position, playbackRate 1)", () => {
+  it("seekto → audio.seek(seekTime) + setPositionState(duration, position, playbackRate 1)", () => {
     const { session, invoke } = installSessionMock();
     audioMock.getCurrentTime.mockReturnValue(42);
     audioMock.getDuration.mockReturnValue(240);
@@ -276,7 +276,7 @@ describe("useMediaSession action handlers", () => {
     });
   });
 
-  it("seekto thiáº¿u seekTime â†’ khÃ´ng gá»i audio.seek (no-op an toÃ n)", () => {
+  it("seekto thiếu seekTime → không gọi audio.seek (no-op an toàn)", () => {
     const { invoke } = installSessionMock();
     makeHook();
 
@@ -286,7 +286,7 @@ describe("useMediaSession action handlers", () => {
     expect(audioMock.seek).not.toHaveBeenCalled();
   });
 
-  it("seekbackward/seekforward: dÃ¹ng seekOffset náº¿u cÃ³; fallback SEEK_STEP 5s; clamp [0, duration]", () => {
+  it("seekbackward/seekforward: dùng seekOffset nếu có; fallback SEEK_STEP 5s; clamp [0, duration]", () => {
     const { session, invoke } = installSessionMock();
     audioMock.getCurrentTime.mockReturnValue(30);
     audioMock.getDuration.mockReturnValue(120);
@@ -325,7 +325,7 @@ describe("useMediaSession action handlers", () => {
     expect(session.setPositionState).toHaveBeenCalledTimes(6);
   });
 
-  it("handlers Ä‘Äƒng kÃ½ ÄÃšNG 1 láº§n khi mount (track/isPlaying Ä‘á»•i khÃ´ng re-register)", () => {
+  it("handlers đăng ký ĐÚNG 1 lần khi mount (track/isPlaying đổi không re-register)", () => {
     const { session } = installSessionMock();
     makeHook();
 
@@ -349,7 +349,7 @@ describe("useMediaSession action handlers", () => {
     ).toEqual(perAction);
   });
 
-  it("handler dÃ¹ng callback má»›i nháº¥t sau rerender (ref sync)", () => {
+  it("handler dùng callback mới nhất sau rerender (ref sync)", () => {
     const { invoke } = installSessionMock();
     const { rerender, onNext } = makeHook();
     const onNextV2 = vi.fn();

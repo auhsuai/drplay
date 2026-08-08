@@ -41,6 +41,7 @@ import {
   clearSession,
   persistActiveSession,
   resumeEntryFromRow,
+  withDbCapture,
 } from "./session";
 import { handleChildFile, handleDiskFile } from "./streaming";
 import type { InternalEntry, UploadSeed } from "./types";
@@ -359,19 +360,23 @@ async function markDone(
   );
 }
 
+// Map a thrown error to its terminal entry kind (same input → same output as
+// the former four-tier ternary). An aborted UploadError carries kind
+// 'aborted' === ERROR_ABORTED, so the aborted branch needs no special case.
+function errorKindFor(err: unknown): string {
+  if (err instanceof FileTooLargeError) return ERROR_TOO_LARGE;
+  if (err instanceof ParentFolderMissingError) {
+    return ERROR_PARENT_FOLDER_MISSING;
+  }
+  if (err instanceof UploadError) return err.kind;
+  return ERROR_FAILED;
+}
+
 async function markError(entry: InternalEntry, err: unknown): Promise<void> {
   clearProgressNotifyTimer();
   const isAborted = err instanceof UploadError && err.kind === ERROR_ABORTED;
   const isResumeMissing = err instanceof ResumeFileMissingError;
-  entry.error = isAborted
-    ? ERROR_ABORTED
-    : err instanceof FileTooLargeError
-      ? ERROR_TOO_LARGE
-      : err instanceof ParentFolderMissingError
-        ? ERROR_PARENT_FOLDER_MISSING
-        : err instanceof UploadError
-          ? err.kind
-          : ERROR_FAILED;
+  entry.error = errorKindFor(err);
   entry.status = "error";
   if (isAborted) {
     // A user-initiated cancel is not a failure: no error toast, warn-level log
@@ -442,17 +447,16 @@ function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
     modifiedTime: driveItem.modifiedTime ?? new Date().toISOString(),
   };
 }
+// Shared best-effort DB capture (see session.withDbCapture): swallow failures
+// and log `${label}-db-failed` — the same message the old inline try/catch
+// produced.
 async function dbRowOp(
   op: () => Promise<unknown>,
   label: string,
 ): Promise<void> {
-  try {
-    await op();
-  } catch (err) {
-    await captureError({
-      level: "warn",
-      source: MODULE,
-      message: `${label}-db-failed: ${describeError(err)}`,
-    });
-  }
+  return withDbCapture(
+    label,
+    op,
+    (opName, err) => `${opName}-db-failed: ${describeError(err)}`,
+  );
 }

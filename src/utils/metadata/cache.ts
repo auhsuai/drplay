@@ -48,13 +48,36 @@ try {
   });
 }
 
-function updateLRU(key: string) {
-  lruKeys = lruKeys.filter((k) => k !== key);
-  lruKeys.push(key);
+// Shared LRU helpers: `touchLruKeys` moves `id` to the back (most-recently
+// used goes last), `evictLruKeys` shifts the oldest entry while `shouldEvict`
+// holds. All three caches (IDB lruKeys, mem metadataCache, fullPictureCache)
+// use the same order/guard semantics — the per-cache differences live in the
+// onEvict callback.
+function touchLruKeys(keys: string[], id: string): void {
+  keys.splice(0, keys.length, ...keys.filter((k) => k !== id), id);
+}
 
-  while (lruKeys.length > MAX_LRU_CACHE) {
-    const oldest = lruKeys.shift();
-    if (oldest) {
+function evictLruKeys(
+  keys: string[],
+  shouldEvict: () => boolean,
+  onEvict: (id: string) => void,
+): void {
+  while (shouldEvict()) {
+    const oldest = keys.shift();
+    // shouldEvict may stay true with an empty array (e.g. a byte budget the
+    // remaining entries can never satisfy) — break instead of spinning.
+    if (oldest === undefined) break;
+    onEvict(oldest);
+  }
+}
+
+function updateLRU(key: string) {
+  touchLruKeys(lruKeys, key);
+
+  evictLruKeys(
+    lruKeys,
+    () => lruKeys.length > MAX_LRU_CACHE,
+    (oldest) => {
       db.metadataCache.delete(oldest).catch((e: unknown) =>
         captureError({
           level: "error",
@@ -62,8 +85,8 @@ function updateLRU(key: string) {
           message: `lru-delete-failed: ${classifyMetaError(e).message}`,
         }),
       );
-    }
-  }
+    },
+  );
 
   try {
     localStorage.setItem(METADATA_LRU_KEY, JSON.stringify(lruKeys));
@@ -111,20 +134,16 @@ export function getMemCacheEntry(fileId: string): CachedMetadata | undefined {
 }
 
 export function setMetadataCache(fileId: string, entry: CachedMetadata) {
-  const existing = getMemCacheEntry(fileId);
-  if (existing) {
-    const idx = memCacheKeys.indexOf(fileId);
-    if (idx !== -1) memCacheKeys.splice(idx, 1);
-  }
-  memCacheKeys.push(fileId);
+  touchLruKeys(memCacheKeys, fileId);
   metadataCache[fileId] = entry;
-  while (memCacheKeys.length > MAX_MEM_CACHE) {
-    const oldest = memCacheKeys.shift();
-    if (oldest) {
+  evictLruKeys(
+    memCacheKeys,
+    () => memCacheKeys.length > MAX_MEM_CACHE,
+    (oldest) => {
       // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: the eviction cap must PHYSICALLY remove the key (assigning undefined would leave it enumerable and defeat the memory bound).
       delete metadataCache[oldest];
-    }
-  }
+    },
+  );
 }
 
 export function cacheTrackMetadata(
@@ -168,22 +187,22 @@ export function setFullPictureCache(fileId: string, data: Uint8Array): void {
   }
   fullPictureCache.set(fileId, data);
   fullPictureBytes += data.byteLength;
-  fullPictureOrder = fullPictureOrder.filter((id) => id !== fileId);
-  fullPictureOrder.push(fileId);
+  touchLruKeys(fullPictureOrder, fileId);
   evictFullPictures();
 }
 
 function evictFullPictures(): void {
-  while (
-    fullPictureOrder.length > FULL_PICTURE_MEM_ENTRIES_MAX ||
-    fullPictureBytes > FULL_PICTURE_MEM_BYTES_MAX
-  ) {
-    const oldest = fullPictureOrder.shift();
-    if (oldest === undefined) break;
-    const removed = fullPictureCache.get(oldest);
-    if (removed) fullPictureBytes -= removed.byteLength;
-    fullPictureCache.delete(oldest);
-  }
+  evictLruKeys(
+    fullPictureOrder,
+    () =>
+      fullPictureOrder.length > FULL_PICTURE_MEM_ENTRIES_MAX ||
+      fullPictureBytes > FULL_PICTURE_MEM_BYTES_MAX,
+    (oldest) => {
+      const removed = fullPictureCache.get(oldest);
+      if (removed) fullPictureBytes -= removed.byteLength;
+      fullPictureCache.delete(oldest);
+    },
+  );
 }
 
 /**

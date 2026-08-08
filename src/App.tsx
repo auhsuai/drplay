@@ -366,7 +366,7 @@ function App() {
         }}
         onOk={() => {
           setShowRateLimitModal(false);
-          handleTabChange("Home");
+          handleTabChange(TABS.home);
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
       />
