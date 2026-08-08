@@ -12,6 +12,7 @@ const COVER_SCHEME = "drplay://";
 const COVER_GET_PATH = "cover";
 const COVER_POST_PATH_PREFIX = "cover/";
 const POST_TIMEOUT_MS = 10_000;
+const DEFAULT_COVER_MIME = "image/jpeg";
 // 5xx (DiskWrite -> 500) and 429 are transient; one retry is enough for a
 // local disk write. 4xx (bad id / empty / oversized payload) are permanent.
 const POST_MAX_RETRIES = 1;
@@ -35,6 +36,28 @@ function postKey(fileId: string, thumb: boolean): string {
  */
 export function buildCoverUrl(fileId: string, thumb: boolean): string {
   return `${COVER_SCHEME}${COVER_GET_PATH}?id=${encodeURIComponent(fileId)}&thumb=${thumb ? THUMB_TRUE : THUMB_FALSE}`;
+}
+
+/**
+ * Blob URL for in-memory cover bytes (Fix G). drplay:// (Rust disk cache) is
+ * the PRIMARY cover source; this fallback exists only for runtimes where the
+ * custom scheme is unavailable — a dev browser rejects it with
+ * ERR_UNKNOWN_URL_SCHEME before any fetch happens. The bytes come from the
+ * very picture metadata already parsed, so no extra network/disk read is
+ * needed. Returns null when there are no bytes (nothing to fall back to —
+ * the caller keeps its icon).
+ * The blob is intentionally NOT revoked: covers are small (≤256px thumb /
+ * ≤1000px full) and revoking while an <img> may still reference it risks
+ * broken covers; the browser drops blob URLs on page unload.
+ */
+export function buildCoverBlobUrl(
+  pictureData: Uint8Array | null,
+  pictureFormat?: string,
+): string | null {
+  if (!pictureData || pictureData.byteLength === 0) return null;
+  return URL.createObjectURL(
+    new Blob([pictureData], { type: pictureFormat ?? DEFAULT_COVER_MIME }),
+  );
 }
 
 function buildPostUrl(fileId: string, thumb: boolean): string {

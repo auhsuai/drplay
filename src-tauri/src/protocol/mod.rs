@@ -8,6 +8,20 @@ pub fn init_access_recorder(log_path: std::path::PathBuf) {
     cover::init_access_recorder(log_path);
 }
 
+/// Response builder pre-wired with the CORS header every drplay:// response
+/// must carry.
+///
+/// Browser `fetch()` to the custom scheme (the cover POST) runs through CORS:
+/// a response without `Access-Control-Allow-Origin` is blocked client-side
+/// with "Failed to fetch" even though the OPTIONS preflight passed — that
+/// silently kept every cover out of the Rust disk cache (GETs via `<img>`
+/// are no-cors and never needed the header; POSTs did).
+fn cors_response_builder(status: StatusCode) -> tauri::http::response::Builder {
+    Response::builder()
+        .status(status)
+        .header("Access-Control-Allow-Origin", "*")
+}
+
 pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.register_asynchronous_uri_scheme_protocol("drplay", move |_app, request, responder| {
         tauri::async_runtime::spawn(async move {
@@ -16,8 +30,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 Ok(u) => u,
                 Err(_) => {
                     responder.respond(
-                        Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
+                        cors_response_builder(StatusCode::BAD_REQUEST)
                             .body(Vec::new())
                             .unwrap_or_else(|e| {
                                 eprintln!("[protocol] failed to build BAD_REQUEST (invalid URI) response: {e}");
@@ -33,9 +46,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
 
             if method == "OPTIONS" {
                 responder.respond(
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Access-Control-Allow-Origin", "*")
+                    cors_response_builder(StatusCode::OK)
                         .header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
                         .header("Access-Control-Allow-Headers", "*")
                         .body(Vec::new())
@@ -55,20 +66,20 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let body = request.body();
 
                 match handle_cover_post(raw_id, thumb, body).await {
-                    Ok(_) => responder.respond(Response::builder().status(StatusCode::OK).body(Vec::new()).unwrap_or_else(|e| {
+                    Ok(_) => responder.respond(cors_response_builder(StatusCode::OK).body(Vec::new()).unwrap_or_else(|e| {
                         eprintln!("[protocol] failed to build 200 (cover POST) response: {e}");
                         Response::new(Vec::new())
                     })),
                     // Bad id / bad payload → 400 with a short reason (never the
                     // raw error internals); disk failures → 500 with the error
                     // logged here and a bare body.
-                    Err(CoverError::BadId(e)) => responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(e.into_bytes()).unwrap_or_else(|e| {
+                    Err(CoverError::BadId(e)) => responder.respond(cors_response_builder(StatusCode::BAD_REQUEST).body(e.into_bytes()).unwrap_or_else(|e| {
                         eprintln!("[protocol] failed to build 400 (cover POST) response: {e}");
                         Response::new(Vec::new())
                     })),
                     Err(e) => {
                         eprintln!("[protocol] cover POST failed (id={raw_id}): {e:?}");
-                        responder.respond(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Vec::new()).unwrap_or_else(|e| {
+                        responder.respond(cors_response_builder(StatusCode::INTERNAL_SERVER_ERROR).body(Vec::new()).unwrap_or_else(|e| {
                             eprintln!("[protocol] failed to build 500 (cover POST) response: {e}");
                             Response::new(Vec::new())
                         }))
@@ -82,7 +93,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let file_id = match parsed_url.query_pairs().find(|(k, _)| k == "id") {
                     Some((_, id)) => id.into_owned(),
                     None => {
-                        responder.respond(Response::builder().status(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap_or_else(|e| {
+                        responder.respond(cors_response_builder(StatusCode::BAD_REQUEST).body(b"Missing ID".to_vec()).unwrap_or_else(|e| {
                             eprintln!("[protocol] failed to build 400 (cover missing id) response: {e}");
                             Response::new(Vec::new())
                         }));
@@ -98,8 +109,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     Some(r) => r,
                     None => {
                             responder.respond(
-                                Response::builder()
-                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                cors_response_builder(StatusCode::INTERNAL_SERVER_ERROR)
                                     .body(b"Access recorder not initialized".to_vec())
                                     .unwrap_or_else(|e| {
                                         eprintln!("[protocol] failed to build 500 (access recorder) response: {e}");
@@ -119,9 +129,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     Ok((etag, bytes_val, content_type)) => {
                         if client_etag.as_deref() == Some(etag.as_str()) {
                             responder.respond(
-                                Response::builder()
-                                    .status(StatusCode::NOT_MODIFIED)
-                                    .header("Access-Control-Allow-Origin", "*")
+                                cors_response_builder(StatusCode::NOT_MODIFIED)
                                 .body(Vec::new())
                                 .unwrap_or_else(|e| {
                                     eprintln!("[protocol] failed to build 304 (not modified) response: {e}");
@@ -130,10 +138,8 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                             );
                         } else {
                             responder.respond(
-                                Response::builder()
-                                    .status(StatusCode::OK)
+                                cors_response_builder(StatusCode::OK)
                                     .header("Content-Type", content_type)
-                                    .header("Access-Control-Allow-Origin", "*")
                                     .header("Cache-Control", "public, max-age=31536000, immutable")
                                     .header("ETag", etag)
                                 .body(cover_response_body(bytes_val))
@@ -146,8 +152,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     }
                     Err(CoverError::BadId(e)) => {
                         responder.respond(
-                            Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
+                            cors_response_builder(StatusCode::BAD_REQUEST)
                                 .body(e.into_bytes())
                                 .unwrap_or_else(|e| {
                                     eprintln!("[protocol] failed to build 400 (bad id) response: {e}");
@@ -161,8 +166,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     Err(CoverError::DiskRead(e)) | Err(CoverError::DiskWrite(e)) => {
                         eprintln!("[protocol] cover GET disk error (id={file_id}): {e}");
                         responder.respond(
-                            Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            cors_response_builder(StatusCode::INTERNAL_SERVER_ERROR)
                                 .body(Vec::new())
                                 .unwrap_or_else(|e| {
                                     eprintln!("[protocol] failed to build 500 (cover disk) response: {e}");
@@ -172,9 +176,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                     }
                     Err(CoverError::NoCover) => {
                         responder.respond(
-                            Response::builder()
-                                .status(StatusCode::NO_CONTENT)
-                                .header("Access-Control-Allow-Origin", "*")
+                            cors_response_builder(StatusCode::NO_CONTENT)
                                 .body(Vec::new())
                                 .unwrap_or_else(|e| {
                                     eprintln!("[protocol] failed to build 204 (no cover) response: {e}");
@@ -186,7 +188,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 return;
             }
 
-            responder.respond(Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap_or_else(|e| {
+            responder.respond(cors_response_builder(StatusCode::NOT_FOUND).body(Vec::new()).unwrap_or_else(|e| {
                 eprintln!("[protocol] failed to build 404 response: {e}");
                 Response::new(Vec::new())
             }));
@@ -210,8 +212,41 @@ fn cover_response_body(bytes_val: Bytes) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::cover_response_body;
+    use super::{cover_response_body, cors_response_builder};
     use bytes::Bytes;
+    use tauri::http::StatusCode;
+
+    #[test]
+    fn cors_response_builder_attaches_allow_origin_to_every_status() {
+        for status in [
+            StatusCode::OK,
+            StatusCode::BAD_REQUEST,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::NOT_FOUND,
+            StatusCode::NO_CONTENT,
+            StatusCode::NOT_MODIFIED,
+        ] {
+            let response: tauri::http::Response<Vec<u8>> =
+                cors_response_builder(status).body(Vec::new()).unwrap();
+            assert_eq!(response.status(), status);
+            let header = response
+                .headers()
+                .get("Access-Control-Allow-Origin")
+                .expect("response must carry Access-Control-Allow-Origin")
+                .to_str()
+                .expect("header is valid ASCII");
+            assert_eq!(header, "*");
+        }
+    }
+
+    #[test]
+    fn cors_response_builder_preserves_status_and_body() {
+        let response = cors_response_builder(StatusCode::BAD_REQUEST)
+            .body(b"Bad id".to_vec())
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.body(), &b"Bad id"[..]);
+    }
 
     #[test]
     fn cover_response_body_preserves_exact_payload() {

@@ -299,17 +299,57 @@ describe("SongCard drplay:// cover URL (S4 disk-cache path)", () => {
     expect(container.querySelector(".lucide-music")).toBeNull();
   });
 
-  it("falls back to the Music icon when the drplay:// image errors (no throw)", async () => {
+  it("falls back to a blob URL (built from the picture bytes) when the drplay:// image errors", async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     const img = await screen.findByAltText("Fetched Title");
+    expect(img.getAttribute("src")).toBe(
+      "drplay://cover?id=track-1&thumb=true",
+    );
 
     expect(() => fireEvent.error(img)).not.toThrow();
 
-    expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector(".lucide-music")).not.toBeNull();
+    const imgAfter = container.querySelector("img");
+    expect(imgAfter?.getAttribute("src")).toBe("blob:mock-songcard-cover");
+    expect(container.querySelector(".lucide-music")).toBeNull();
+    const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(blobArg.type).toBe("image/png");
   });
 
-  it("never creates or revokes blob URLs (blob path removed, RAM goal)", async () => {
+  it("shows the Music icon when the blob fallback also errors (guarded, once only)", async () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const img = await screen.findByAltText("Fetched Title");
+
+    fireEvent.error(img);
+    const img2 = await screen.findByAltText("Fetched Title");
+    expect(img2.getAttribute("src")).toBe("blob:mock-songcard-cover");
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+
+    expect(() => fireEvent.error(img2)).not.toThrow();
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the Music icon directly when metadata has no picture bytes (no blob)", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: "Fetched Artist",
+      duration: 0,
+      size: 0,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    await screen.findByText("Fetched Title");
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
+    expect(createObjectURLSpy).not.toHaveBeenCalled();
+  });
+
+  it("creates no blob URL while the drplay:// image loads fine (lazy fallback, RAM goal)", async () => {
     const d = deferred();
     mockedFetch.mockImplementationOnce(() => d.promise);
 
@@ -1201,7 +1241,39 @@ describe("SongCard size text uses shared formatBytes semantics (not the old MB-o
   it('size 0 → shows "0 B" (old formatSize returned "0 MB"; guard hid the span entirely)', async () => {
     renderWithMetaSize(0, 0);
     expect(await screen.findByText("0 B")).not.toBeNull();
-    expect(screen.getByText("00:00:00")).not.toBeNull();
+    // Fix F: a 0/estimated duration renders "–", never the fake "00:00:00".
+    expect(screen.getByText("–")).not.toBeNull();
+    expect(screen.queryByText("00:00:00")).toBeNull();
+  });
+
+  it("real metadata duration renders formatted (no regression)", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 123,
+      durationEstimated: false,
+      size: 500 * 1024,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(await screen.findByText("00:02:03")).not.toBeNull();
+    expect(screen.queryByText("–")).toBeNull();
+  });
+
+  it('estimated duration (placeholder) renders "–" instead of a fake time', async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      durationEstimated: true,
+      size: 0,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(await screen.findByText("–")).not.toBeNull();
+    expect(screen.queryByText("00:00:00")).toBeNull();
   });
 
   it('500 KB (512000 B) → shows "500 KB", not "0.5 MB"', async () => {

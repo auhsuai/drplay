@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
-import { buildCoverUrl } from "../../../utils/coverStore";
+import { buildCoverBlobUrl, buildCoverUrl } from "../../../utils/coverStore";
 import { getPalette } from "../../../utils/color";
 import { captureError } from "../../../utils/errorLog";
 
@@ -81,7 +81,15 @@ export function useNowPlayingMetadata(
             : null;
         if (coverUrl) {
           setCoverUrl(coverUrl);
-
+          // Fix G: drplay:// only resolves inside the Tauri WebView. In a dev
+          // browser the scheme is blocked (ERR_UNKNOWN_URL_SCHEME) and both
+          // the <img> and the palette decode fail. Re-decode from a blob URL
+          // built with the exact bytes metadata already parsed — same-origin,
+          // so the canvas read is untainted. One attempt only: a blob decode
+          // failure means the bytes are bad, so fall through to the icon.
+          const fallbackBytes =
+            metadata.pictureDataFull ?? metadata.pictureData;
+          const fallbackFormat = metadata.pictureFormat;
           try {
             const colors = await getPalette(coverUrl);
             if (isCancelled()) return;
@@ -89,12 +97,36 @@ export function useNowPlayingMetadata(
             if (firstColor !== undefined) setBgColor(firstColor);
             setBgPalette(colors);
           } catch (err) {
-            resetPalette();
-            void captureError({
-              level: "warn",
-              source: NOW_PLAYING_MODULE,
-              message: `palette-failed: ${err instanceof Error ? err.message : String(err)}`,
-            });
+            const blobUrl = buildCoverBlobUrl(fallbackBytes, fallbackFormat);
+            if (blobUrl) {
+              if (isCancelled()) return;
+              setCoverUrl(blobUrl);
+              try {
+                const colors = await getPalette(blobUrl);
+                if (isCancelled()) return;
+                const firstColor = colors[0];
+                if (firstColor !== undefined) setBgColor(firstColor);
+                setBgPalette(colors);
+              } catch (err2) {
+                resetPalette();
+                void captureError({
+                  level: "warn",
+                  source: NOW_PLAYING_MODULE,
+                  message: `palette-failed (drplay:// + blob fallback): ${
+                    err2 instanceof Error ? err2.message : String(err2)
+                  }`,
+                });
+              }
+            } else {
+              resetPalette();
+              void captureError({
+                level: "warn",
+                source: NOW_PLAYING_MODULE,
+                message: `palette-failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              });
+            }
           }
         } else {
           setBgColor("");
