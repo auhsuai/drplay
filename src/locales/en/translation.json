@@ -144,6 +144,7 @@
     "no_track": "No track playing",
     "network_interrupted": "Network connection lost. Retrying...",
     "format_error": "Audio format not supported. Skipping to next track.",
+    "advance_stopped": "Drive is overloaded or locked — auto-playback paused. Try again in a few minutes.",
     "view_now_playing": "View Now Playing",
     "add_favorite": "Add to favorites",
     "remove_favorite": "Remove from favorites",

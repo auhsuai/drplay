@@ -144,6 +144,7 @@
     "no_track": "Chưa có bài hát nào",
     "network_interrupted": "Mất kết nối mạng. Đang thử lại...",
     "format_error": "Định dạng âm thanh không được hỗ trợ. Bỏ qua bài tiếp theo.",
+    "advance_stopped": "Drive đang quá tải hoặc bị khóa — tạm dừng tự phát. Thử lại sau vài phút.",
     "view_now_playing": "Xem Đang Phát",
     "add_favorite": "Thêm vào yêu thích",
     "remove_favorite": "Bỏ khỏi yêu thích",
