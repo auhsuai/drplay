@@ -96,10 +96,11 @@ describe("PremiumCard metadata render", () => {
   });
 });
 
-describe("PremiumCard drplay:// cover URL (S4 disk-cache path)", () => {
+describe("PremiumCard blob cover URL (picture bytes, no drplay://)", () => {
   // jsdom does NOT implement URL.createObjectURL / revokeObjectURL (both are
-  // undefined at runtime) — install observable spies once so the S4 contract
-  // "the blob path is gone, no blob URL is ever created" can be asserted.
+  // undefined at runtime) — install observable spies so the blob URL contract
+  // ("the cover renders straight from the picture bytes metadata") can be
+  // asserted.
   beforeAll(() => {
     if (typeof URL.createObjectURL !== "function") {
       Object.defineProperty(URL, "createObjectURL", {
@@ -154,39 +155,42 @@ describe("PremiumCard drplay:// cover URL (S4 disk-cache path)", () => {
     });
   }
 
-  it("renders the thumb via drplay:// with lazy + async decoding", async () => {
+  it("renders the cover from a blob URL built with the picture bytes (lazy + async decoding)", async () => {
     const { container } = render(<PremiumCard {...baseProps()} />);
     const img = await screen.findByAltText("Fetched Title");
 
-    expect(img.getAttribute("src")).toBe(
-      "drplay://cover?id=track-1&thumb=true",
-    );
+    expect(img.getAttribute("src")).toMatch(/^blob:/);
     expect(img.getAttribute("loading")).toBe("lazy");
     expect(img.getAttribute("decoding")).toBe("async");
     expect(container.querySelector(".lucide-music")).toBeNull();
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the Music icon when the drplay:// image errors (no throw)", async () => {
+  it("drops to the Music icon when the blob image errors (corrupt bytes — no throw)", async () => {
     const { container } = render(<PremiumCard {...baseProps()} />);
     const img = await screen.findByAltText("Fetched Title");
+    expect(img.getAttribute("src")).toBe("blob:mock-premium-cover");
 
     expect(() => fireEvent.error(img)).not.toThrow();
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".lucide-music")).not.toBeNull();
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("never creates or revokes blob URLs (blob path removed, RAM goal)", async () => {
+  it("creates exactly one blob URL from the picture bytes and never revokes it", async () => {
     const { unmount } = render(<PremiumCard {...baseProps()} />);
     await screen.findByAltText("Fetched Title");
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(blobArg.type).toBe("image/png");
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
 
     unmount();
     await flushMicrotasks();
 
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    // The blob is intentionally never revoked (covers are small; the browser
+    // drops blob URLs on page unload).
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
   });
 });

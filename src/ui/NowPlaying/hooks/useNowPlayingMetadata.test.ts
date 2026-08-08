@@ -107,7 +107,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("useNowPlayingMetadata drplay:// cover URL (S4 disk-cache path)", () => {
+describe("useNowPlayingMetadata blob cover URL (picture bytes, no drplay://)", () => {
   function metadataWithFullPicture(): CachedMetadata {
     return {
       ...metadataWithPicture(),
@@ -115,9 +115,8 @@ describe("useNowPlayingMetadata drplay:// cover URL (S4 disk-cache path)", () =>
     };
   }
 
-  it("prefers the full variant URL (thumb=false) and passes it to getPalette", async () => {
+  it("builds the cover from the full picture bytes and passes the blob URL to getPalette", async () => {
     mockedGetTrackMetadata.mockResolvedValue(metadataWithFullPicture());
-    // Palette succeeds on the drplay:// URL -> primary path, no blob fallback.
     mockedGetPalette.mockResolvedValue(["rgba(0, 0, 0, 0.8)"]);
 
     const { result } = renderHook(() =>
@@ -125,15 +124,12 @@ describe("useNowPlayingMetadata drplay:// cover URL (S4 disk-cache path)", () =>
     );
     await flushMicrotasks();
 
-    expect(result.current.coverUrl).toBe(
-      "drplay://cover?id=file-123&thumb=false",
-    );
-    expect(mockedGetPalette).toHaveBeenCalledWith(
-      "drplay://cover?id=file-123&thumb=false",
-    );
+    expect(result.current.coverUrl).toBe(BLOB_URL);
+    expect(mockedGetPalette).toHaveBeenCalledTimes(1);
+    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL);
   });
 
-  it("falls back to the thumb variant URL (thumb=true) when no full picture exists", async () => {
+  it("builds the cover from the thumb picture bytes when no full picture exists", async () => {
     mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
     mockedGetPalette.mockResolvedValue(["rgba(0, 0, 0, 0.8)"]);
 
@@ -142,12 +138,9 @@ describe("useNowPlayingMetadata drplay:// cover URL (S4 disk-cache path)", () =>
     );
     await flushMicrotasks();
 
-    expect(result.current.coverUrl).toBe(
-      "drplay://cover?id=file-123&thumb=true",
-    );
-    expect(mockedGetPalette).toHaveBeenCalledWith(
-      "drplay://cover?id=file-123&thumb=true",
-    );
+    expect(result.current.coverUrl).toBe(BLOB_URL);
+    expect(mockedGetPalette).toHaveBeenCalledTimes(1);
+    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL);
   });
 
   it("keeps coverUrl null and skips the palette when there is no picture at all", async () => {
@@ -166,22 +159,9 @@ describe("useNowPlayingMetadata drplay:// cover URL (S4 disk-cache path)", () =>
     expect(mockedGetPalette).not.toHaveBeenCalled();
   });
 
-  it("creates no blob URL while the drplay:// palette succeeds (lazy fallback, RAM goal)", async () => {
+  it("creates exactly one blob URL from the picture bytes and never revokes it", async () => {
     mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
     mockedGetPalette.mockResolvedValue(["rgba(0, 0, 0, 0.8)"]);
-
-    renderHook(() => useNowPlayingMetadata(makeTrack(), "token"));
-    await flushMicrotasks();
-
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
-  });
-
-  it("falls back to a blob URL and re-decodes the palette when the drplay:// palette fails", async () => {
-    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
-    mockedGetPalette
-      .mockRejectedValueOnce(new Error("Image load error"))
-      .mockResolvedValueOnce(["rgba(1, 2, 3, 0.8)"]);
 
     const { result } = renderHook(() =>
       useNowPlayingMetadata(makeTrack(), "token"),
@@ -189,10 +169,26 @@ describe("useNowPlayingMetadata drplay:// cover URL (S4 disk-cache path)", () =>
     await flushMicrotasks();
 
     expect(result.current.coverUrl).toBe(BLOB_URL);
-    expect(mockedGetPalette).toHaveBeenCalledTimes(2);
-    expect(mockedGetPalette).toHaveBeenLastCalledWith(BLOB_URL);
-    expect(result.current.bgPalette).toEqual(["rgba(1, 2, 3, 0.8)"]);
-    expect(mockedCaptureError).not.toHaveBeenCalled();
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+  });
+
+  it("resets the palette when the blob palette decode fails (one attempt only)", async () => {
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+    mockedGetPalette.mockRejectedValue(new Error("Image load error"));
+
+    const { result } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+
+    // The blob URL stays set (the bytes are still the best cover we have) but
+    // the color treatment is dropped.
+    expect(result.current.coverUrl).toBe(BLOB_URL);
+    expect(mockedGetPalette).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    expect(result.current.bgColor).toBe("");
+    expect(result.current.bgPalette).toEqual([]);
   });
 
   it("does not create a blob URL when there are no picture bytes (icon path)", async () => {

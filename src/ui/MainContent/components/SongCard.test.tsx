@@ -217,10 +217,11 @@ describe("SongCard metadata fetch", () => {
   });
 });
 
-describe("SongCard drplay:// cover URL (S4 disk-cache path)", () => {
+describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
   // jsdom does NOT implement URL.createObjectURL / revokeObjectURL (both are
-  // undefined at runtime) — install observable spies so the S4 contract "the
-  // blob path is gone, no blob URL is ever created" can be asserted.
+  // undefined at runtime) — install observable spies so the blob URL contract
+  // ("the cover renders straight from the picture bytes metadata") can be
+  // asserted.
   beforeAll(() => {
     if (typeof URL.createObjectURL !== "function") {
       Object.defineProperty(URL, "createObjectURL", {
@@ -252,14 +253,6 @@ describe("SongCard drplay:// cover URL (S4 disk-cache path)", () => {
     } as never;
   }
 
-  function deferred() {
-    let resolve!: (value: never) => void;
-    const promise = new Promise<never>((res) => {
-      resolve = res;
-    });
-    return { promise, resolve };
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
     mockedFetch.mockResolvedValue(metadataWithPicture());
@@ -283,56 +276,34 @@ describe("SongCard drplay:// cover URL (S4 disk-cache path)", () => {
     });
   }
 
-  it("renders the thumb via drplay:// with lazy + async decoding inside the fixed 48px slot", async () => {
+  it("renders the cover from a blob URL built with the picture bytes (lazy + async decoding, fixed 48px slot)", async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     const img = await screen.findByAltText("Fetched Title");
 
-    expect(img.getAttribute("src")).toBe(
-      "drplay://cover?id=track-1&thumb=true",
-    );
+    expect(img.getAttribute("src")).toMatch(/^blob:/);
     expect(img.getAttribute("loading")).toBe("lazy");
     expect(img.getAttribute("decoding")).toBe("async");
     // Fixed slot (w-12 h-12 = 48px): explicit width/height reserve the box,
-    // preventing CLS while the drplay:// bytes load (web.dev CLS guidance).
+    // preventing CLS while the blob bytes load (web.dev CLS guidance).
     expect(img.getAttribute("width")).toBe("48");
     expect(img.getAttribute("height")).toBe("48");
     expect(container.querySelector(".lucide-music")).toBeNull();
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to a blob URL (built from the picture bytes) when the drplay:// image errors", async () => {
+  it("drops to the Music icon when the blob image errors (corrupt bytes — no retry chain)", async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     const img = await screen.findByAltText("Fetched Title");
-    expect(img.getAttribute("src")).toBe(
-      "drplay://cover?id=track-1&thumb=true",
-    );
+    expect(img.getAttribute("src")).toBe("blob:mock-songcard-cover");
 
     expect(() => fireEvent.error(img)).not.toThrow();
-
-    const imgAfter = container.querySelector("img");
-    expect(imgAfter?.getAttribute("src")).toBe("blob:mock-songcard-cover");
-    expect(container.querySelector(".lucide-music")).toBeNull();
-    const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
-    expect(blobArg).toBeInstanceOf(Blob);
-    expect(blobArg.type).toBe("image/png");
-  });
-
-  it("shows the Music icon when the blob fallback also errors (guarded, once only)", async () => {
-    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    const img = await screen.findByAltText("Fetched Title");
-
-    fireEvent.error(img);
-    const img2 = await screen.findByAltText("Fetched Title");
-    expect(img2.getAttribute("src")).toBe("blob:mock-songcard-cover");
-    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
-
-    expect(() => fireEvent.error(img2)).not.toThrow();
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".lucide-music")).not.toBeNull();
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the Music icon directly when metadata has no picture bytes (no blob)", async () => {
+  it("shows the Music icon directly when metadata has no picture bytes (no blob URL)", async () => {
     mockedFetch.mockResolvedValue({
       title: "Fetched Title",
       artist: "Fetched Artist",
@@ -349,25 +320,20 @@ describe("SongCard drplay:// cover URL (S4 disk-cache path)", () => {
     expect(createObjectURLSpy).not.toHaveBeenCalled();
   });
 
-  it("creates no blob URL while the drplay:// image loads fine (lazy fallback, RAM goal)", async () => {
-    const d = deferred();
-    mockedFetch.mockImplementationOnce(() => d.promise);
-
+  it("creates exactly one blob URL from the picture bytes and never revokes it", async () => {
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-
-    await act(async () => {
-      d.resolve(metadataWithPicture());
-      await Promise.resolve();
-    });
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    const img = await screen.findByAltText("Fetched Title");
+    expect(img.getAttribute("src")).toBe("blob:mock-songcard-cover");
+    const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
+    expect(blobArg).toBeInstanceOf(Blob);
+    expect(blobArg.type).toBe("image/png");
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
 
     unmount();
     await flushMicrotasks();
 
-    expect(createObjectURLSpy).not.toHaveBeenCalled();
+    // The blob is intentionally never revoked (covers are small; the browser
+    // drops blob URLs on page unload).
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
   });
 });

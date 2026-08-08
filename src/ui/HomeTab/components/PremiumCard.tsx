@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { Track } from "../../../App";
 import { getTrackMetadata } from "../../../utils/metadata";
-import { buildCoverUrl } from "../../../utils/coverStore";
+import { buildCoverBlobUrl } from "../../../utils/coverStore";
 import { Play, Music, MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { captureError } from "../../../utils/errorLog";
@@ -51,10 +51,16 @@ export function PremiumCard({
         if (!isMounted) return;
         if (meta.title) setTitle(meta.title);
         if (meta.artist) setArtist(meta.artist);
-        // S4: covers render from the Rust disk cache via drplay:// (thumb
-        // variant) — no blob URL is kept in RAM. A 204/error falls back to
-        // the icon through the img onError below.
-        setCoverUrl(meta.pictureData ? buildCoverUrl(track.id, true) : null);
+        // Fix G: Chromium/WebView2 rejects the drplay:// custom scheme at the
+        // network stack (ERR_UNKNOWN_URL_SCHEME) before the Rust handler can
+        // respond, so the cover renders straight from a blob URL built with
+        // the thumb bytes metadata already parsed. A 204/error drops to the
+        // icon through the img onError below.
+        setCoverUrl(
+          meta.pictureData
+            ? buildCoverBlobUrl(meta.pictureData, meta.pictureFormat)
+            : null,
+        );
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return; // deliberate cleanup abort — not an error

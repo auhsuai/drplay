@@ -25,6 +25,11 @@ const postSemaphore = createSemaphore(POST_MAX_CONCURRENT);
 // Same (id, variant) already being posted -> skip the duplicate entirely
 // (a cover grid + NowPlaying can compress the same track concurrently).
 const inflightPostKeys = new Set<string>();
+// Chromium/WebView2 rejects the custom drplay:// scheme at the network stack
+// (ERR_UNKNOWN_URL_SCHEME -> TypeError) before any request reaches the Rust
+// handler — in such runtimes EVERY POST fails identically, so after the first
+// such failure the whole upload path is disabled (no per-track warn noise).
+let schemeUnavailable = false;
 
 function postKey(fileId: string, thumb: boolean): string {
   return `${thumb ? "t" : "f"}:${fileId}`;
@@ -78,7 +83,7 @@ export async function postCoverToCache(
   thumb: boolean,
   bytes: Uint8Array,
 ): Promise<void> {
-  if (bytes.byteLength === 0) return;
+  if (schemeUnavailable || bytes.byteLength === 0) return;
   const key = postKey(fileId, thumb);
   if (inflightPostKeys.has(key)) return;
   inflightPostKeys.add(key);
@@ -117,11 +122,22 @@ async function performPostOnce(
   thumb: boolean,
   bytes: Uint8Array,
 ): Promise<number> {
-  const response = await fetch(buildPostUrl(fileId, thumb), {
-    method: "POST",
-    body: bytes,
-    signal: AbortSignal.timeout(POST_TIMEOUT_MS),
-  });
+  let response: Response;
+  try {
+    response = await fetch(buildPostUrl(fileId, thumb), {
+      method: "POST",
+      body: bytes,
+      signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+    });
+  } catch (e) {
+    // A TypeError here means the scheme was rejected before the request could
+    // be sent (Chromium: ERR_UNKNOWN_URL_SCHEME) — the failure is permanent,
+    // so mark the scheme dead and rethrow for the caller's warn + drop.
+    // A TimeoutError (DOMException) is NOT a scheme problem, so it must not
+    // disable the path (the scheme worked, the disk write was just slow).
+    if (e instanceof TypeError) schemeUnavailable = true;
+    throw e;
+  }
   return response.status;
 }
 

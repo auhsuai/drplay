@@ -12,7 +12,7 @@ import { useTranslation } from "react-i18next";
 import type { Track } from "../../../App";
 import type { DriveItem } from "../../../types";
 import { getTrackMetadata } from "../../../utils/metadata";
-import { buildCoverBlobUrl, buildCoverUrl } from "../../../utils/coverStore";
+import { buildCoverBlobUrl } from "../../../utils/coverStore";
 import { formatBytes } from "../../../utils/formatBytes";
 import { captureError } from "../../../utils/errorLog";
 import { MoreMenu } from "../../components/MoreMenu";
@@ -154,15 +154,6 @@ export const SongCard = React.memo(
   }: SongCardProps) {
     const { t } = useTranslation();
     const [coverUrl, setCoverUrl] = useState<string | null>(null);
-    // Fix G: drplay:// only exists inside the Tauri WebView — a dev browser
-    // rejects the scheme (ERR_UNKNOWN_URL_SCHEME), so the card keeps the thumb
-    // bytes metadata already parsed and lazily builds a blob URL when the
-    // drplay:// <img> errors. No blob is created while drplay:// works (RAM).
-    const [coverBytes, setCoverBytes] = useState<{
-      data: Uint8Array;
-      format: string | undefined;
-    } | null>(null);
-    const coverBlobFallbackTried = React.useRef(false);
     // loaded=true only after getTrackMetadata resolves, so the meta row (duration
     // • size) appears only for real metadata — the old size>0 guard also hid
     // legitimate 0-byte files, which must show "0 B" (formatBytes semantics).
@@ -278,23 +269,15 @@ export const SongCard = React.memo(
             return newMeta;
           });
 
-          // S4: covers render straight from the Rust disk cache via the
-          // drplay:// custom scheme (thumb variant) — no blob URL is kept in
-          // RAM anymore. Fix G: the thumb bytes are kept alongside so the
-          // onError below can fall back to a blob URL when the scheme is
-          // unreachable (dev browser). A missing picture keeps the icon.
-          setCoverBytes(
-            metadata.pictureData
-              ? {
-                  data: metadata.pictureData,
-                  format: metadata.pictureFormat,
-                }
-              : null,
-          );
-          // Fresh metadata -> a fresh blob attempt is allowed.
-          coverBlobFallbackTried.current = false;
+          // Fix G: Chromium/WebView2 rejects the drplay:// custom scheme at the
+          // network stack (ERR_UNKNOWN_URL_SCHEME) before the Rust handler can
+          // respond, so the cover renders straight from a blob URL built with
+          // the thumb bytes metadata already parsed — no failed <img> cycle
+          // and no scheme round-trip. A missing picture keeps the icon.
           setCoverUrl(
-            metadata.pictureData ? buildCoverUrl(item.id, true) : null,
+            metadata.pictureData
+              ? buildCoverBlobUrl(metadata.pictureData, metadata.pictureFormat)
+              : null,
           );
         } catch (e) {
           if (controller.signal.aborted) return; // deliberate cleanup abort — not an error (MDN AbortController)
@@ -438,21 +421,9 @@ export const SongCard = React.memo(
                   width={48}
                   height={48}
                   onError={() => {
-                    // Fix G: drplay:// may be unreachable (dev browser blocks
-                    // the custom scheme) — fall back ONCE to a blob URL built
-                    // from the thumb bytes; a second error means those bytes
-                    // are bad too, so drop to the Music icon (old behavior).
-                    if (coverBytes && !coverBlobFallbackTried.current) {
-                      coverBlobFallbackTried.current = true;
-                      const blobUrl = buildCoverBlobUrl(
-                        coverBytes.data,
-                        coverBytes.format,
-                      );
-                      if (blobUrl) {
-                        setCoverUrl(blobUrl);
-                        return;
-                      }
-                    }
+                    // The src is already a blob URL built from the picture
+                    // bytes — an error here means those bytes are corrupt, so
+                    // drop to the Music icon (no retry chain exists anymore).
                     setCoverUrl(null);
                   }}
                   className="w-full h-full object-cover"

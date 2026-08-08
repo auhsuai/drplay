@@ -126,29 +126,6 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
     );
   });
 
-  it("logs a warn and resolves on a network-level failure (no retry)", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.reject(new TypeError("Failed to fetch")),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      postCoverToCache("net-id", true, new Uint8Array([1])),
-    ).resolves.toBeUndefined();
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
-    expect(mockedCaptureError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: "warn",
-        source: "coverStore",
-        message: expect.stringContaining(
-          "cover-post-failed",
-        ) as unknown as string,
-      }),
-    );
-  });
-
   it("logs a warn when the request times out (AbortSignal.timeout fires)", async () => {
     const fetchMock = vi.fn(() =>
       Promise.reject(
@@ -233,5 +210,62 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
       resolve(okResponse());
     }
     await first;
+  });
+
+  // ORDER MATTERS from here on: the two tests below both flip the module-level
+  // schemeUnavailable flag on the SHARED module instance, so they must stay at
+  // the end of this file — any test declared after them would see the scheme
+  // as permanently disabled and fail with 0 fetch calls.
+  it("logs a warn and resolves on a network-level failure (no retry)", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.reject(new TypeError("Failed to fetch")),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      postCoverToCache("net-id", true, new Uint8Array([1])),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "coverStore",
+        message: expect.stringContaining(
+          "cover-post-failed",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("disables future POSTs after the first fetch failure (scheme blocked once)", async () => {
+    // The disable-once flag is module state, so this test imports a FRESH
+    // module copy (cache cleared) — the shared instance may already be
+    // disabled by the "network-level failure" test above.
+    vi.resetModules();
+    const { postCoverToCache: freshPost } = await import("./coverStore");
+    const { captureError: freshCaptureError } = await import("./errorLog");
+    const freshMockedCaptureError = vi.mocked(freshCaptureError);
+
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    // First POST: the network stack rejects (TypeError, ERR_UNKNOWN_URL_SCHEME)
+    // and the failure is logged once, as before.
+    await freshPost("blocked-1", true, new Uint8Array([1]));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(freshMockedCaptureError).toHaveBeenCalledTimes(1);
+
+    // Every later POST must be a no-op: no fetch, no warn noise.
+    await freshPost("blocked-2", true, new Uint8Array([2]));
+    await freshPost("blocked-2", false, new Uint8Array([3]));
+    await freshPost("blocked-3", true, new Uint8Array([4]));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(freshMockedCaptureError).toHaveBeenCalledTimes(1);
   });
 });
