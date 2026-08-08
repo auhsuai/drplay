@@ -150,3 +150,179 @@ describe("sw.js Content-Type override behavior", () => {
     expect(response.headers.get("Content-Type")).not.toBe("audio/flac");
   });
 });
+
+// ---- Content-Range synthesis: Drive's CORS policy strips Content-Range from
+// 206 responses (only Content-Disposition is exposed via
+// Access-Control-Expose-Headers), which Chromium refuses to feed to <audio>
+// (SRC_NOT_SUPPORTED, code=4). The SW must reconstruct the header from the
+// request Range + response Content-Length. These mocks emulate the
+// CORS-filtered response the sandboxed SW actually receives.
+
+type RangeFetchEvent = {
+  request: Request;
+  respondWith: ReturnType<typeof vi.fn>;
+};
+
+// A 206 WITHOUT Content-Range, as Drive actually delivers through the CORS
+// filter (the header is silently dropped server-side before the SW sees it).
+function corsFilteredResponse(
+  contentLength: number,
+  body = "audio-bytes",
+): Response {
+  return new Response(body, {
+    status: 206,
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(contentLength),
+    },
+  });
+}
+
+function makeFetchEventWithRange(
+  fileId: string,
+  range: string | null,
+): RangeFetchEvent {
+  const headers: Record<string, string> = {};
+  if (range !== null) headers.Range = range;
+  const request = new Request(
+    `http://localhost/drive-stream/${fileId}?ext=mp3`,
+    {
+      headers,
+    },
+  );
+  return { request, respondWith: vi.fn() };
+}
+
+async function swResponse(ev: RangeFetchEvent): Promise<Response> {
+  return (await ev.respondWith.mock.calls[0]?.[0]) as Response;
+}
+
+describe("sw.js Content-Range synthesis for CORS-stripped 206", () => {
+  it("reconstructs Content-Range for an open-ended range (bytes=0-) and still overrides MIME", async () => {
+    const sw = makeSw();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(corsFilteredResponse(291813658)),
+    );
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    const ev = makeFetchEventWithRange("abc", "bytes=0-");
+    sw.emit("fetch", ev);
+    const response = await swResponse(ev);
+    vi.unstubAllGlobals();
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(
+      "bytes 0-291813657/291813658",
+    );
+    expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+    expect(await response.text()).toBe("audio-bytes");
+  });
+
+  it("computes the total as start + Content-Length for an open-ended range (bytes=S-)", async () => {
+    const sw = makeSw();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(corsFilteredResponse(139114778)),
+    );
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    const ev = makeFetchEventWithRange("abc", "bytes=152698880-");
+    sw.emit("fetch", ev);
+    const response = await swResponse(ev);
+    vi.unstubAllGlobals();
+    expect(response.headers.get("Content-Range")).toBe(
+      "bytes 152698880-291813657/291813658",
+    );
+  });
+
+  it("passes a closed range through untouched when the total is unknown (metadata prefetch guard)", async () => {
+    const sw = makeSw();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(corsFilteredResponse(131072)),
+    );
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    const ev = makeFetchEventWithRange("abc", "bytes=0-131071");
+    sw.emit("fetch", ev);
+    const response = await swResponse(ev);
+    vi.unstubAllGlobals();
+    expect(response.headers.get("Content-Range")).toBeNull();
+    expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+  });
+
+  it("annotates a closed range with the total cached from an earlier open-ended range (seek)", async () => {
+    const sw = makeSw();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(corsFilteredResponse(291813658))
+        .mockResolvedValue(corsFilteredResponse(4096)),
+    );
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    const learnEv = makeFetchEventWithRange("abc", "bytes=0-");
+    sw.emit("fetch", learnEv);
+    const learnResponse = await swResponse(learnEv);
+    expect(learnResponse.headers.get("Content-Range")).toBe(
+      "bytes 0-291813657/291813658",
+    );
+    const seekEv = makeFetchEventWithRange("abc", "bytes=5000000-5004095");
+    sw.emit("fetch", seekEv);
+    const seekResponse = await swResponse(seekEv);
+    vi.unstubAllGlobals();
+    expect(seekResponse.headers.get("Content-Range")).toBe(
+      "bytes 5000000-5004095/291813658",
+    );
+  });
+
+  it("keeps an existing Content-Range untouched (no double synthesis)", async () => {
+    const response = new Response("audio-bytes", {
+      status: 206,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": "11",
+        "Content-Range": "bytes 0-10/100",
+      },
+    });
+    const sw = makeSw();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    const ev = makeFetchEventWithRange("abc", "bytes=0-");
+    sw.emit("fetch", ev);
+    const result = await swResponse(ev);
+    vi.unstubAllGlobals();
+    expect(result.headers.get("Content-Range")).toBe("bytes 0-10/100");
+  });
+
+  it("passes through when the request has no Range header", async () => {
+    const sw = makeSw();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(corsFilteredResponse(100)),
+    );
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    const ev = makeFetchEventWithRange("abc", null);
+    sw.emit("fetch", ev);
+    const response = await swResponse(ev);
+    vi.unstubAllGlobals();
+    expect(response.headers.get("Content-Range")).toBeNull();
+  });
+
+  it("evicts the oldest cached total beyond the cache limit", async () => {
+    const sw = makeSw();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(corsFilteredResponse(10)));
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    for (let i = 0; i <= 100; i++) {
+      const ev = makeFetchEventWithRange(`f${String(i)}`, "bytes=0-");
+      sw.emit("fetch", ev);
+      await swResponse(ev);
+    }
+    const oldestEv = makeFetchEventWithRange("f0", "bytes=1-2");
+    sw.emit("fetch", oldestEv);
+    const oldest = await swResponse(oldestEv);
+    expect(oldest.headers.get("Content-Range")).toBeNull();
+    const newestEv = makeFetchEventWithRange("f100", "bytes=1-2");
+    sw.emit("fetch", newestEv);
+    const newest = await swResponse(newestEv);
+    vi.unstubAllGlobals();
+    expect(newest.headers.get("Content-Range")).toBe("bytes 1-2/10");
+  });
+});

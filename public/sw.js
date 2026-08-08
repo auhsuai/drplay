@@ -103,6 +103,93 @@ function overrideContentType(response, ext) {
   }
 }
 
+// Drive's CORS policy does not expose Content-Range (only Content-Disposition
+// is listed in its Access-Control-Expose-Headers), so a 206 proxied through
+// the SW arrives with that header stripped. A 206 without Content-Range
+// violates RFC 7233, and Chromium refuses to decode such a response in
+// <audio> (SRC_NOT_SUPPORTED, code=4). The range can be reconstructed exactly
+// from the request's Range header plus the body length in Content-Length,
+// which CORS does allow through.
+const RANGE_PATTERN = /^bytes=(\d+)-(\d*)$/;
+const TOTAL_SIZE_CACHE_LIMIT = 100;
+// Full resource size learned from open-ended ranges (bytes=0- / bytes=S-),
+// where total = start + Content-Length is always exact. Closed ranges
+// (bytes=S-E) — media seeks or metadata prefetches — are only annotated when
+// this cache already holds the total: synthesizing a wrong total for a
+// metadata prefetch (bytes=0-131071 on a 291MB file) would corrupt it.
+const totalSizeByFileId = new Map();
+
+// Returns { start, end } (end === null for open-ended ranges) or null when
+// the Range header is missing, unparseable, or out of order.
+function parseRangeHeader(range) {
+  const match = RANGE_PATTERN.exec(range);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = match[2] === '' ? null : Number(match[2]);
+  if (!Number.isSafeInteger(start)) return null;
+  if (end !== null && (!Number.isSafeInteger(end) || end < start)) return null;
+  return { start, end };
+}
+
+function rememberTotalSize(fileId, total) {
+  totalSizeByFileId.set(fileId, total);
+  // Bounded cache: evict the oldest entry so a long session across many
+  // files cannot grow the SW's memory without limit.
+  if (totalSizeByFileId.size > TOTAL_SIZE_CACHE_LIMIT) {
+    const oldest = totalSizeByFileId.keys().next().value;
+    if (oldest !== undefined) totalSizeByFileId.delete(oldest);
+  }
+}
+
+// Rebuilds the response with the given Content-Range, preserving the body
+// stream, status and every other header.
+function withContentRange(response, contentRange) {
+  const headers = new Headers(response.headers);
+  headers.set('Content-Range', contentRange);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+// Reconstructs Content-Range on a 206 that lost it to the CORS filter.
+// Returns the original response unchanged whenever the range cannot be
+// reconstructed (non-206 status, header already present, no Range header,
+// unparseable range, unknown total for a closed range) — pass-through in
+// every one of those cases.
+function ensureContentRange(fileId, response, request) {
+  if (response.status !== 206) return response;
+  if (response.headers.get('Content-Range')) return response;
+  const contentLength = Number(response.headers.get('Content-Length'));
+  let range;
+  try {
+    range = parseRangeHeader(request.headers.get('Range'));
+  } catch (err) {
+    console.warn('SW ensureContentRange parse failed, passing through', err);
+    return response;
+  }
+  if (!range) return response;
+  if (range.end === null) {
+    // Open-ended range: total = start + body length is exact.
+    if (!Number.isSafeInteger(contentLength) || contentLength < 1) return response;
+    const total = range.start + contentLength;
+    rememberTotalSize(fileId, total);
+    return withContentRange(
+      response,
+      `bytes ${String(range.start)}-${String(total - 1)}/${String(total)}`
+    );
+  }
+  // Closed range: annotate only when the true total is already known; a
+  // range ending at or past EOF is left untouched.
+  const total = totalSizeByFileId.get(fileId);
+  if (!Number.isSafeInteger(total) || range.end >= total) return response;
+  return withContentRange(
+    response,
+    `bytes ${String(range.start)}-${String(range.end)}/${String(total)}`
+  );
+}
+
 self.addEventListener('install', (event) => {
   // Bỏ qua trạng thái waiting, active ngay lập tức
   self.skipWaiting();
@@ -173,9 +260,12 @@ self.addEventListener('fetch', (event) => {
 
     // Thực thi fetch trực tiếp lên Google Drive và trả về cho thẻ audio
     event.respondWith(
-      fetchDriveStream(event, driveUrl).then((response) =>
-        overrideContentType(response, ext ?? '')
-      )
+      fetchDriveStream(event, driveUrl).then((response) => {
+        // Rebuild order matters: synthesize Content-Range FIRST (headers may
+        // need it), then let overrideContentType fix the MIME on top.
+        const rangeAware = ensureContentRange(fileId, response, event.request);
+        return overrideContentType(rangeAware, ext ?? '');
+      })
     );
   }
 });
