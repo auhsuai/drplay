@@ -285,6 +285,76 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     return data.subarray(0, fetchLen);
   }
 
+  /**
+   * Fetch an arbitrary [start, endExclusive) region in ONE range request and
+   * seed the aligned chunk cache from it — the same single-request win
+   * prefetchHead gives the head, applied to regions the parser reads next
+   * (ID3v2 tag bodies past the head, the m4a tail). Without it every read
+   * outside the head fell into getChunk's 64KB-per-request loop (a 600KB tag
+   * cost ~9 requests, a 1MB m4a tail scan 16), and with the app-wide
+   * CONCURRENCY-3 semaphore those requests queued for minutes on big folders.
+   *
+   * The fetch is extended DOWN to the covering 64KB boundary so every seeded
+   * chunk starts at its aligned index (a cache entry must never start
+   * mid-chunk — peekBuffer indexes chunk-relative). A trailing partial chunk
+   * is cached only when it ends at EOF (no bytes exist beyond it); elsewhere
+   * it is left uncached so a later read past the region refetches instead of
+   * silently truncating. Throws BudgetExceededError when the region would
+   * exceed the per-file budget (same contract as prefetchHead); the caller
+   * falls back to chunked reads on any failure.
+   */
+  async prefetchRange(
+    start: number,
+    endExclusive: number,
+  ): Promise<Uint8Array> {
+    const fileSize = this.fileInfo.size ?? 0;
+    const fetchStart = Math.max(0, Math.min(start, fileSize));
+    const fetchEnd = Math.min(Math.max(fetchStart, endExclusive), fileSize);
+    const fetchLen = Math.max(0, fetchEnd - fetchStart);
+    if (fetchLen <= 0) return new Uint8Array(0);
+    const firstChunk = fetchStart - (fetchStart % RANGE_CHUNK);
+    const lastChunk = fetchEnd - 1 - ((fetchEnd - 1) % RANGE_CHUNK);
+    const chunkCount = (lastChunk - firstChunk) / RANGE_CHUNK + 1;
+    // The LRU holds MAX_CACHED_CHUNKS chunks; seeding more than it can keep
+    // is self-defeating: every evicted chunk is re-fetched by the parse,
+    // double-spending the fetch budget (a 25MB tag prefetch + re-fetch of
+    // the evicted 8MB+ thrashed past the raised budget into a placeholder).
+    // Skip when the seed cannot survive; the caller's chunked reads then
+    // behave exactly as before this method existed (a silent no-op, not an
+    // error — like the EOF clamp above).
+    if (this.chunkCache.size + chunkCount > MAX_CACHED_CHUNKS) {
+      return new Uint8Array(0);
+    }
+    const fetchSize = fetchEnd - firstChunk;
+    if (this.loadedBytes + fetchSize > this.budgetBytes) {
+      throw new BudgetExceededError(this.loadedBytes, this.budgetBytes);
+    }
+    const data = await this.fetchChunk(firstChunk, fetchEnd - 1);
+    this.loadedBytes += data.length;
+    for (
+      let chunkStart = firstChunk;
+      chunkStart <= lastChunk;
+      chunkStart += RANGE_CHUNK
+    ) {
+      const chunkEnd = chunkStart + RANGE_CHUNK;
+      const fullyCovered = chunkEnd <= fetchEnd;
+      const endsAtEof = chunkStart === lastChunk && fetchEnd === fileSize;
+      if (!fullyCovered && !endsAtEof) continue;
+      const existing = this.chunkCache.get(chunkStart);
+      const sliceStart = Math.max(firstChunk, chunkStart);
+      const sliceEnd = Math.min(fetchEnd, chunkEnd);
+      const slice = data.subarray(
+        sliceStart - firstChunk,
+        sliceEnd - firstChunk,
+      );
+      if (!existing || slice.length > existing.length) {
+        this.chunkCache.set(chunkStart, slice);
+      }
+    }
+    this.evictOldestChunks();
+    return data.subarray(fetchStart - firstChunk, fetchEnd - firstChunk);
+  }
+
   private async getChunk(
     start: number,
   ): Promise<{ chunkStart: number; data: Uint8Array }> {
@@ -399,7 +469,28 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
       }
       if (response.status === 206) {
         recordDriveSuccess();
-        const body = await response.arrayBuffer();
+        let body: ArrayBuffer;
+        try {
+          body = await response.arrayBuffer();
+        } catch (err: unknown) {
+          // Body-stream read failure after the headers arrived (connection
+          // reset mid-body on a weak link) is a transient network failure —
+          // record it for the circuit breaker and surface it as
+          // RangeFetchNetworkError so the metadata caller treats it as
+          // transient (never pins the v:9 placeholder).
+          recordDriveFailure();
+          void captureError({
+            level: "warn",
+            source: TOKENIZER_MODULE,
+            message: `range-fetch-body-failed (fileId=${this.fileId}, bytes=${String(chunkStart)}-${String(chunkEnd)}): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          });
+          throw new RangeFetchNetworkError(
+            "network",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
         return new Uint8Array(body);
       }
       if (

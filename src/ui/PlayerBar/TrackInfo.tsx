@@ -3,9 +3,15 @@ import { Heart, Maximize2, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from "../components/MoreMenu";
 import { isFavorite, addFavorite, removeFavorite } from "../../utils/favorites";
-import { getTrackMetadata } from "../../utils/metadata";
+import {
+  getTrackMetadata,
+  V_PLACEHOLDER,
+  UNKNOWN_ARTIST,
+} from "../../utils/metadata";
+import type { CachedMetadata } from "../../utils/metadata";
 import { buildCoverBlobUrl } from "../../utils/coverStore";
 import { useAuthStore } from "../../store/authStore";
+import { usePlayerStore } from "../../store/playerStore";
 import { captureError } from "../../utils/errorLog";
 import type { Track } from "../../types";
 
@@ -24,6 +30,15 @@ export function TrackInfo({
   const [isLiked, setIsLiked] = useState(false);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const coverImgRef = useRef<HTMLImageElement>(null);
+  // Parsed tags shown in the bar. PlayerBar is memoized with a comparator that
+  // treats two tracks with the same id as equal, so a store-side title/artist
+  // update (new object, same id) never reaches this component through the
+  // props. TrackInfo therefore owns its own enriched display values: they
+  // fall back to the currentTrack prop until real metadata arrives, then the
+  // local state drives the text (store updates still go out for the
+  // media-session / now-playing consumers).
+  const [displayTitle, setDisplayTitle] = useState<string | null>(null);
+  const [displayArtist, setDisplayArtist] = useState<string | null>(null);
 
   // Reset the liked flag when the track goes away (the heart only renders
   // while a track exists, so this is a defensive reset on the null track).
@@ -36,6 +51,10 @@ export function TrackInfo({
     // A new track must never show the previous one's cover even for a frame:
     // the cover effect below re-fetches it asynchronously.
     setCoverUrl(null);
+    // Drop the previous track's parsed tags; the display falls back to the
+    // new track's prop values until its own metadata arrives.
+    setDisplayTitle(null);
+    setDisplayArtist(null);
   }
 
   // Shared favorite-status check: re-reads the stored status for a track id
@@ -69,6 +88,47 @@ export function TrackInfo({
     };
   }, [currentTrack, checkFavorite]);
 
+  // The player bar displays tags straight off the store's currentTrack, but
+  // several play sources hand over a track before its tags exist (HomeTab
+  // recently-added plays title=filename/artist="", search hits, session
+  // restore) — the fetched metadata was only ever used for the cover. Once a
+  // REAL entry (v < V_PLACEHOLDER) arrives, fold the parsed title/artist into
+  // the store (same updater pattern usePlayer uses for restoreDuration) so
+  // the bar (and useMediaSession, which reads the store) shows the real tags.
+  // Guards: a placeholder entry (filename title, "Unknown Artist") never
+  // writes; the updater returns prev unchanged when nothing actually differs,
+  // so a store update cannot retrigger this effect into a loop.
+  const applyMetadataTags = useCallback((metadata: CachedMetadata) => {
+    // A real entry always carries its cache version (8) — placeholder entries
+    // carry V_PLACEHOLDER (9) and must not touch the display or the store. A
+    // non-numeric v (undefined in some tests) is equally untrusted: comparing
+    // `undefined >= V_PLACEHOLDER` is false, which would wrongly apply.
+    if (typeof metadata.v !== "number" || metadata.v >= V_PLACEHOLDER) return;
+    // Enrich the local display first — the memoized PlayerBar never passes a
+    // same-id store update down as a prop (see the state comment above), so
+    // this local state is what actually repaints the bar. React bails out on
+    // equal values, so a repeat call is a no-op render-wise.
+    if (metadata.title) setDisplayTitle(metadata.title);
+    if (metadata.artist && metadata.artist !== UNKNOWN_ARTIST) {
+      setDisplayArtist(metadata.artist);
+    }
+    usePlayerStore.getState().setCurrentTrack((prev) => {
+      if (!prev) return prev;
+      const title =
+        metadata.title && metadata.title !== prev.title
+          ? metadata.title
+          : prev.title;
+      const artist =
+        metadata.artist &&
+        metadata.artist !== UNKNOWN_ARTIST &&
+        metadata.artist !== prev.artist
+          ? metadata.artist
+          : prev.artist;
+      if (title === prev.title && artist === prev.artist) return prev;
+      return { ...prev, title, artist };
+    });
+  }, []);
+
   // Re-check the current track when favorites change elsewhere (favorites.ts
   // dispatches `favorites-updated` on add/remove), so the heart never shows a
   // stale state while the same track keeps playing.
@@ -90,19 +150,12 @@ export function TrackInfo({
   useEffect(() => {
     if (!currentTrack) return;
     const controller = new AbortController();
-    let isMounted = true;
     // The metadata effect cleanup touches the img element; capture it at
     // setup so the cleanup never reads the (possibly stale) ref
     // (react-hooks/exhaustive-deps ref-cleanup rule).
     const imgElement = coverImgRef.current;
     const token = useAuthStore.getState().accessToken;
     if (!token) return;
-    // Closure guard helper: the abort flag is only ever written by the effect
-    // cleanup, so TypeScript's CFA narrows the captured `let` to `false`
-    // inside the async IIFE — a plain `if (isMounted)` would be a lint false
-    // positive. Reading through a closure function defeats the narrowing
-    // while staying semantically identical.
-    const isMountedCheck = () => isMounted;
     void (async () => {
       try {
         const metadata = await getTrackMetadata(
@@ -112,13 +165,14 @@ export function TrackInfo({
           currentTrack.originalName,
           controller.signal,
         );
-        if (!isMountedCheck()) return;
+        if (controller.signal.aborted) return;
         const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
         setCoverUrl(
           coverBytes
             ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
             : null,
         );
+        applyMetadataTags(metadata);
       } catch (e: unknown) {
         if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
         void captureError({
@@ -129,13 +183,12 @@ export function TrackInfo({
       }
     })();
     return () => {
-      isMounted = false;
       controller.abort();
       if (imgElement) {
         imgElement.src = "";
       }
     };
-  }, [currentTrack]);
+  }, [currentTrack, applyMetadataTags]);
 
   const isFavoriteTogglingRef = useRef(false);
   const handleToggleFavorite = async () => {
@@ -159,8 +212,10 @@ export function TrackInfo({
     }
   };
 
-  const realTitle = currentTrack?.title || t("player.no_track");
-  const realArtist = currentTrack?.artist || t("unknown_artist");
+  const realTitle =
+    (displayTitle ?? currentTrack?.title) || t("player.no_track");
+  const realArtist =
+    (displayArtist ?? currentTrack?.artist) || t("unknown_artist");
 
   return (
     <div className="flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2">

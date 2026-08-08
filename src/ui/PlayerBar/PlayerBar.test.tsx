@@ -16,6 +16,7 @@ import type { PlayerBarProps } from "./types";
 import { usePlayerStore } from "../../store/playerStore";
 import { getTrackMetadata } from "../../utils/metadata";
 import { useAuthStore } from "../../store/authStore";
+import * as errorLog from "../../utils/errorLog";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -79,9 +80,12 @@ vi.mock("../../utils/favorites", () => ({
 vi.mock("../components/MoreMenu", () => ({ MoreMenu: () => null }));
 
 // TrackInfo fetches cover metadata per track; the real module pulls heavy
-// deps (music-metadata, IndexedDB) not needed here.
+// deps (music-metadata, IndexedDB) not needed here. V_PLACEHOLDER /
+// UNKNOWN_ARTIST are mirrored so TrackInfo's real-entry guard works in tests.
 vi.mock("../../utils/metadata", () => ({
   getTrackMetadata: vi.fn(),
+  V_PLACEHOLDER: 9,
+  UNKNOWN_ARTIST: "Unknown Artist",
 }));
 
 const mockedGetTrackMetadata = vi.mocked(getTrackMetadata);
@@ -165,6 +169,25 @@ function renderPlayer(overrides: Partial<PlayerBarProps> = {}) {
   );
 }
 
+// Mirrors the real App wiring (App.tsx passes store.currentTrack down as the
+// prop): subscribing the PlayerBar to the store lets a store-side metadata
+// update flow through to the rendered title/artist text.
+function StoreWiredPlayerBar(overrides: Partial<PlayerBarProps> = {}) {
+  const currentTrack = usePlayerStore((s) => s.currentTrack);
+  return (
+    <PlayerBar
+      currentTrack={currentTrack}
+      isPlaying={false}
+      onTogglePlay={vi.fn()}
+      onNextTrack={vi.fn()}
+      onPrevTrack={vi.fn()}
+      playMode="normal"
+      onTogglePlayMode={vi.fn()}
+      onExpandNowPlaying={vi.fn()}
+      {...overrides}
+    />
+  );
+}
 beforeEach(() => {
   fakeController.on.mockClear();
   fakeController.getBuffered.mockClear();
@@ -1555,5 +1578,119 @@ describe("PlayerBar track cover in TrackInfo (full picture, no drplay://)", () =
       expect.any(Object),
     );
     expect(screen.queryByAltText("Song")).toBeNull();
+  });
+});
+
+describe("PlayerBar TrackInfo folds fetched tags into the store (tags fix)", () => {
+  const REAL_METADATA = {
+    title: "Real Title",
+    artist: "Real Artist",
+    duration: 0,
+    durationEstimated: false,
+    pictureData: null,
+    pictureDataFull: null,
+    size: 1000,
+    v: 8,
+  };
+  const PLACEHOLDER_METADATA = {
+    title: "Song",
+    artist: "Unknown Artist",
+    duration: 0,
+    durationEstimated: true,
+    pictureData: null,
+    pictureDataFull: null,
+    size: 1000,
+    v: 9,
+  };
+
+  beforeEach(() => {
+    mockedGetTrackMetadata.mockReset();
+    useAuthStore.setState({ accessToken: "tok" });
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ accessToken: null });
+    usePlayerStore.setState({ currentTrack: null });
+    vi.restoreAllMocks();
+  });
+
+  it("BUG regression: real metadata (v:8) replaces the filename title and empty artist in the store", async () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack({ title: "Song", artist: "" }),
+    });
+    mockedGetTrackMetadata.mockResolvedValue({ ...REAL_METADATA });
+    renderPlayer({ currentTrack: makeTrack({ title: "Song", artist: "" }) });
+
+    await waitFor(() => {
+      expect(usePlayerStore.getState().currentTrack?.title).toBe("Real Title");
+    });
+    expect(usePlayerStore.getState().currentTrack?.artist).toBe("Real Artist");
+  });
+
+  it("BUG regression: the PlayerBar title/artist TEXT updates to the fetched metadata (store wired like App)", async () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack({ title: "Song", artist: "" }),
+    });
+    mockedGetTrackMetadata.mockResolvedValue({ ...REAL_METADATA });
+    render(<StoreWiredPlayerBar />);
+
+    expect(await screen.findByText("Real Title")).toBeTruthy();
+    expect(screen.getByText("Real Artist")).toBeTruthy();
+  });
+
+  it("BUG regression: a v:9 placeholder entry leaves the store untouched (same reference)", async () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack({ title: "Song", artist: "" }),
+    });
+    const initialTrack = usePlayerStore.getState().currentTrack;
+    mockedGetTrackMetadata.mockResolvedValue({ ...PLACEHOLDER_METADATA });
+    renderPlayer({ currentTrack: makeTrack({ title: "Song", artist: "" }) });
+
+    await waitFor(() => {
+      expect(mockedGetTrackMetadata).toHaveBeenCalledTimes(1);
+    });
+    expect(usePlayerStore.getState().currentTrack).toBe(initialTrack);
+  });
+
+  it("BUG regression: real entry with artist 'Unknown Artist' applies the title but keeps the empty artist", async () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack({ title: "Song", artist: "" }),
+    });
+    mockedGetTrackMetadata.mockResolvedValue({
+      ...REAL_METADATA,
+      artist: "Unknown Artist",
+    });
+    renderPlayer({ currentTrack: makeTrack({ title: "Song", artist: "" }) });
+
+    await waitFor(() => {
+      expect(usePlayerStore.getState().currentTrack?.title).toBe("Real Title");
+    });
+    expect(usePlayerStore.getState().currentTrack?.artist).toBe("");
+  });
+
+  it("BUG regression: abort on unmount skips setState and logs no error (stale-guard via AbortController)", async () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack({ title: "Song", artist: "" }),
+    });
+    const captureErrorSpy = vi.spyOn(errorLog, "captureError");
+    let resolveFetch!: (value: never) => void;
+    mockedGetTrackMetadata.mockReturnValue(
+      new Promise<never>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    const { unmount } = renderPlayer({
+      currentTrack: makeTrack({ title: "Song", artist: "" }),
+    });
+    await waitFor(() => {
+      expect(mockedGetTrackMetadata).toHaveBeenCalledTimes(1);
+    });
+    unmount();
+    resolveFetch({ ...REAL_METADATA } as never);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(captureErrorSpy).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().currentTrack?.title).toBe("Song");
   });
 });

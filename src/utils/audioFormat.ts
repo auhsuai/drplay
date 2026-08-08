@@ -9,7 +9,7 @@ export type AudioFormat =
 // formats in audioQuery.PLAYABLE_AUDIO_EXTENSIONS. public/sw.js carries an
 // independent copy (the SW cannot import TS); src/utils/swMime.test.ts guards
 // the two in sync.
-export const AUDIO_EXTENSION_TO_MIME: Readonly<Record<string, string>> = {
+export const AUDIO_EXTENSION_TO_MIME = {
   mp3: "audio/mpeg",
   flac: "audio/flac",
   wav: "audio/wav",
@@ -17,13 +17,21 @@ export const AUDIO_EXTENSION_TO_MIME: Readonly<Record<string, string>> = {
   m4a: "audio/mp4",
   aac: "audio/aac",
   opus: "audio/opus",
-};
+} as const satisfies Record<string, string>;
 
 const FLAC_MAGIC = 0x664c6143; // 'fLaC'
 const OGG_MAGIC = 0x4f676753; // 'OggS'
 const RIFF_MAGIC = 0x52494646; // 'RIFF'
 const OGG_HEADER_LEN = 27;
 const OGG_PAGE1_MARKER_SCAN = 96;
+
+function matchesAscii(b: Uint8Array, off: number, str: string): boolean {
+  if (off < 0 || off + str.length > b.length) return false;
+  for (let i = 0; i < str.length; i += 1) {
+    if (b[off + i] !== str.charCodeAt(i)) return false;
+  }
+  return true;
+}
 
 // The first Ogg page carries the codec-identification packet right after the
 // 27-byte page header + lacing table: 'OpusHead' (opus) or 0x01 'vorbis'
@@ -34,29 +42,9 @@ function oggPageOneCodec(b: Uint8Array, oggOffset: number): "opus" | "ogg" {
   const start = Math.min(oggOffset + OGG_HEADER_LEN, b.length);
   const window = b.subarray(start, windowEnd);
   for (let i = 0; i + 8 <= window.length; i += 1) {
-    if (
-      window[i] === 0x4f &&
-      window[i + 1] === 0x70 &&
-      window[i + 2] === 0x75 &&
-      window[i + 3] === 0x73 &&
-      window[i + 4] === 0x48 &&
-      window[i + 5] === 0x65 &&
-      window[i + 6] === 0x61 &&
-      window[i + 7] === 0x64
-    ) {
-      return "opus";
-    }
-    if (
-      window[i] === 0x01 &&
-      window[i + 1] === 0x76 &&
-      window[i + 2] === 0x6f &&
-      window[i + 3] === 0x72 &&
-      window[i + 4] === 0x62 &&
-      window[i + 5] === 0x69 &&
-      window[i + 6] === 0x73
-    ) {
+    if (matchesAscii(window, i, "OpusHead")) return "opus";
+    if (window[i] === 0x01 && matchesAscii(window, i + 1, "vorbis"))
       return "ogg";
-    }
   }
   return "ogg";
 }
@@ -81,11 +69,7 @@ function readU64BE(b: Uint8Array, off: number): number {
 }
 
 function fourCC(b: Uint8Array, off: number, type: string): boolean {
-  if (off + 4 > b.length) return false;
-  for (let i = 0; i < 4; i += 1) {
-    if (b[off + i] !== type.charCodeAt(i)) return false;
-  }
-  return true;
+  return matchesAscii(b, off, type);
 }
 
 /**
@@ -100,7 +84,7 @@ export function detectFormat(head: Uint8Array, fileName?: string): AudioFormat {
   if (head.length < 4) return "unknown";
   const u32 = readU32BE(head, 0);
   // 'ID3' is a 3-byte marker (the 4th byte is the tag version) — compare bytes.
-  if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) {
+  if (matchesAscii(head, 0, "ID3")) {
     return "mp3";
   }
   if (u32 === FLAC_MAGIC) return "flac";
@@ -123,6 +107,222 @@ export function detectFormat(head: Uint8Array, fileName?: string): AudioFormat {
     return "aac";
   }
   return "unknown";
+}
+
+export const ID3V2_HEADER_LEN = 10;
+
+/**
+ * ID3v2 syncsafe tag-body size from the 10-byte header, or 0 when the buffer
+ * is too short / not an ID3v2 header. Syncsafe = 4 bytes with MSB 0 each
+ * (28-bit value), bytes 6-9 (id3.org/id3v2.3.0#ID3v2_header).
+ */
+export function readId3v2TagSize(head: Uint8Array): number {
+  if (head.length < ID3V2_HEADER_LEN) return 0;
+  if (!matchesAscii(head, 0, "ID3")) return 0;
+  const b6 = head[6] ?? 0;
+  const b7 = head[7] ?? 0;
+  const b8 = head[8] ?? 0;
+  const b9 = head[9] ?? 0;
+  return (
+    ((b6 & 0x7f) << 21) | ((b7 & 0x7f) << 14) | ((b8 & 0x7f) << 7) | (b9 & 0x7f)
+  );
+}
+
+/**
+ * Offset of the first MPEG frame sync (0xFF + 3 MSB set) at or after `from`,
+ * or -1. music-metadata positions Xing/Info right after the frame header +
+ * side info, so this anchors the embedded-duration-tag scan.
+ */
+export function findMpegFrameSync(head: Uint8Array, from: number): number {
+  for (let i = from; i + 1 < head.length; i += 1) {
+    if (head[i] === 0xff && ((head[i + 1] ?? 0) & 0xe0) === 0xe0) return i;
+  }
+  return -1;
+}
+
+// ---- MPEG audio (MP3) frame-header sniffing ---------------------------------
+// ISO/IEC 11172-3 frame-header tables, mirroring music-metadata's
+// MpegFrameHeader (node_modules/music-metadata/lib/mpeg/MpegParser.js). Used
+// to prove a constant-bitrate MP3 stream from the head bytes alone, so a
+// large CBR file can be parsed at its real size: the parser quits after the
+// 4th frame and derives the exact duration from the file size — no stream
+// scan, no tail fetch.
+
+/** MPEG audio frame syncword: 0xFFE (11 set bits across the first 2 bytes). */
+const MPEG_SYNC_MASK = 0xe0;
+/** Frames music-metadata needs before it classifies a stream as CBR. */
+const CBR_PROBE_FRAMES = 4;
+// Frame-header bit fields (ISO/IEC 11172-3 §2.4.1.3), byte-relative bit
+// offsets counted from the MSB of each header byte.
+const VERSION_INDEX_SHIFT = 3; // byte 1, 2 bits
+const LAYER_INDEX_SHIFT = 1; // byte 1, 2 bits
+const BITRATE_INDEX_SHIFT = 4; // byte 2, 4 bits
+const SAMPLE_RATE_INDEX_SHIFT = 2; // byte 2, 2 bits
+const PADDING_BIT_SHIFT = 1; // byte 2, 1 bit
+const TWO_BIT_MASK = 0x03;
+const FOUR_BIT_MASK = 0x0f;
+
+// Version index (bits) -> MPEG version; index 1 is reserved (invalid).
+const MPEG_VERSION_FROM_INDEX: ReadonlyArray<number | null> = [2.5, null, 2, 1];
+// Layer index (bits) -> layer number; index 0 is reserved (ADTS framing).
+const MPEG_LAYER_FROM_INDEX: ReadonlyArray<number> = [0, 3, 2, 1];
+
+// Bitrate (kbps) per bitrate index (1..14) and codec key
+// 10*floor(version)+layer — the same layout as music-metadata's
+// bitrate_index table. Index 0 (free format) and 15 (reserved) are invalid.
+const MPEG_BITRATE_KBPS: Readonly<Record<number, ReadonlyArray<number>>> = {
+  11: [32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448], // MPEG1 Layer1
+  12: [32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384], // MPEG1 Layer2
+  13: [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320], // MPEG1 Layer3
+  21: [32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256], // MPEG2(.5) Layer1
+  22: [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160], // MPEG2(.5) Layer2
+  23: [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160], // MPEG2(.5) Layer3
+};
+
+// Sample rate (Hz) per version and sample-rate index (0..2; 3 reserved).
+const MPEG_SAMPLE_RATES: Readonly<Record<number, ReadonlyArray<number>>> = {
+  1: [44100, 48000, 32000],
+  2: [22050, 24000, 16000],
+  2.5: [11025, 12000, 8000],
+};
+
+// Samples per frame per version and layer (music-metadata
+// samplesInFrameTable): MPEG1 [-,384,1152,1152], MPEG2(.5) [-,384,1152,576].
+const MPEG_SAMPLES_PER_FRAME: Readonly<Record<number, ReadonlyArray<number>>> =
+  {
+    1: [0, 384, 1152, 1152],
+    2: [0, 384, 1152, 576],
+    2.5: [0, 384, 1152, 576],
+  };
+
+// Slot size (bytes) per layer: Layer1 frames are 4-byte-aligned units.
+const MPEG_SLOT_SIZE: ReadonlyArray<number> = [0, 4, 1, 1];
+
+interface MpegFrameInfo {
+  /** Bitrate in bit/s. */
+  bitrateBps: number;
+  /** Sample rate in Hz. */
+  sampleRate: number;
+  /** Samples decoded per frame (1152 MPEG1 L3, 576 MPEG2(.5) L3). */
+  samplesPerFrame: number;
+  /** Exact frame length in bytes, including the 4-byte header. */
+  frameSize: number;
+}
+
+/**
+ * Parse one MPEG audio frame header at `offset`. Returns null on any invalid
+ * header (bad sync, reserved version/layer, free/reserved bitrate index,
+ * reserved sample-rate index, or a header that does not fit the buffer).
+ */
+function parseMpegFrameHeader(
+  head: Uint8Array,
+  offset: number,
+): MpegFrameInfo | null {
+  if (offset + 4 > head.length) return null;
+  if (head[offset] !== 0xff) return null;
+  const b1 = head[offset + 1] ?? 0;
+  if ((b1 & MPEG_SYNC_MASK) !== MPEG_SYNC_MASK) return null;
+  const version =
+    MPEG_VERSION_FROM_INDEX[(b1 >> VERSION_INDEX_SHIFT) & TWO_BIT_MASK];
+  if (version === null || version === undefined) return null;
+  const layer = MPEG_LAYER_FROM_INDEX[(b1 >> LAYER_INDEX_SHIFT) & TWO_BIT_MASK];
+  if (layer === undefined || layer === 0) return null;
+  const b2 = head[offset + 2] ?? 0;
+  const bitrateIndex = (b2 >> BITRATE_INDEX_SHIFT) & FOUR_BIT_MASK;
+  const bitrateKbps =
+    MPEG_BITRATE_KBPS[10 * Math.floor(version) + layer]?.[bitrateIndex - 1];
+  if (bitrateKbps === undefined || bitrateKbps === 0) return null;
+  const sampleRateIndex = (b2 >> SAMPLE_RATE_INDEX_SHIFT) & TWO_BIT_MASK;
+  const sampleRate = MPEG_SAMPLE_RATES[version]?.[sampleRateIndex];
+  if (sampleRate === undefined || sampleRate === 0) return null;
+  const samplesPerFrame = MPEG_SAMPLES_PER_FRAME[version]?.[layer];
+  if (samplesPerFrame === undefined || samplesPerFrame === 0) return null;
+  const padding = (b2 >> PADDING_BIT_SHIFT) & 0x01;
+  const slotSize = MPEG_SLOT_SIZE[layer] ?? 1;
+  // music-metadata frame_size: floor(bps * bitrate / sampleRate) + padding.
+  const frameSize = Math.floor(
+    (samplesPerFrame / 8) * ((bitrateKbps * 1000) / sampleRate) +
+      padding * slotSize,
+  );
+  return {
+    bitrateBps: bitrateKbps * 1000,
+    sampleRate,
+    samplesPerFrame,
+    frameSize,
+  };
+}
+
+/**
+ * Walk CBR_PROBE_FRAMES consecutive frames from the first sync after the
+ * ID3v2 tag. Returns the per-frame info when every frame is valid AND all
+ * frames share one bitrate and sample rate (constant-bitrate stream), or
+ * null otherwise.
+ */
+function probeMpegCbrFrames(
+  head: Uint8Array,
+  format: AudioFormat,
+): MpegFrameInfo[] | null {
+  if (format !== "mp3") return null;
+  const tagSize = readId3v2TagSize(head);
+  const tagEnd =
+    tagSize > 0 ? Math.min(head.length, tagSize + ID3V2_HEADER_LEN) : 0;
+  const frameStart = findMpegFrameSync(head, tagEnd);
+  if (frameStart < 0) return null;
+  const first = parseMpegFrameHeader(head, frameStart);
+  if (first === null) return null;
+  const frames = [first];
+  let offset = frameStart + first.frameSize;
+  for (let i = 1; i < CBR_PROBE_FRAMES; i += 1) {
+    const info = parseMpegFrameHeader(head, offset);
+    if (info === null) return null;
+    if (
+      info.bitrateBps !== first.bitrateBps ||
+      info.sampleRate !== first.sampleRate
+    ) {
+      return null;
+    }
+    frames.push(info);
+    offset += info.frameSize;
+  }
+  return frames;
+}
+
+/**
+ * True when the head carries at least CBR_PROBE_FRAMES consecutive, valid
+ * MPEG audio frames at the same bitrate and sample rate — a constant-bitrate
+ * stream. music-metadata classifies a stream as CBR at its 4th frame (all
+ * bitrates equal) and then derives the duration from the tokenizer's file
+ * size instead of scanning the stream; proving CBR from the head lets the
+ * caller grant a large file its real size safely.
+ */
+export function isMpegCbr(head: Uint8Array, format: AudioFormat): boolean {
+  return probeMpegCbrFrames(head, format) !== null;
+}
+
+/**
+ * Exact duration (seconds) of a constant-bitrate MP3 computed from the REAL
+ * file size — mirrors music-metadata's finalize() CBR path:
+ * round((size - mpegOffset) / frameSize) * samplesPerFrame / sampleRate,
+ * using the LAST probed frame's size (the frame the parser stops on). Returns
+ * null when the head does not prove a CBR stream.
+ */
+export function mpegCbrDurationFromSize(
+  head: Uint8Array,
+  format: AudioFormat,
+  fileSize: number,
+): number | null {
+  const frames = probeMpegCbrFrames(head, format);
+  if (frames === null || frames.length === 0) return null;
+  const tagSize = readId3v2TagSize(head);
+  const tagEnd =
+    tagSize > 0 ? Math.min(head.length, tagSize + ID3V2_HEADER_LEN) : 0;
+  const mpegOffset = findMpegFrameSync(head, tagEnd);
+  if (mpegOffset < 0) return null;
+  const last = frames[frames.length - 1];
+  if (last === undefined) return null;
+  const numberOfSamples =
+    Math.round((fileSize - mpegOffset) / last.frameSize) * last.samplesPerFrame;
+  return numberOfSamples / last.sampleRate;
 }
 
 export interface Mp4BoxWalk {

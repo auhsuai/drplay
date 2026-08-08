@@ -7,6 +7,7 @@ import {
   RangeFetchNetworkError,
   RangeNotSupportedError,
   SizeUnknownError,
+  isDriveCircuitOpen,
   resetDriveCircuitBreakerForTests,
 } from "./driveRangeTokenizer";
 import * as errorLogModule from "./errorLog";
@@ -213,6 +214,39 @@ describe("DriveRangeTokenizer", () => {
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
+  it("classifies a body-stream read failure after 206 as RangeFetchNetworkError (no retry, counted as drive failure)", async () => {
+    const mock = vi.fn(() => ({
+      status: 206,
+      ok: true,
+      arrayBuffer: () =>
+        Promise.reject(new TypeError("connection reset mid-body")),
+    }));
+    vi.stubGlobal("fetch", mock);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await expect(tz.readRange(0, 10)).rejects.toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "network",
+    });
+    expect(mock).toHaveBeenCalledTimes(1); // no retry on body-stream failure
+    // Three body-stream failures trip the drive throttle circuit breaker —
+    // recordDriveFailure must count them (the 4th read fails fast with no fetch).
+    await expect(tz.readRange(0, 10)).rejects.toBeInstanceOf(
+      RangeFetchNetworkError,
+    );
+    await expect(tz.readRange(0, 10)).rejects.toBeInstanceOf(
+      RangeFetchNetworkError,
+    );
+    expect(isDriveCircuitOpen()).toBe(true);
+    await expect(tz.readRange(0, 10)).rejects.toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "timeout",
+      message: expect.stringContaining(
+        "drive-throttle-circuit-open",
+      ) as unknown as string,
+    });
+    expect(mock).toHaveBeenCalledTimes(3); // circuit-open read did not fetch
+  });
+
   it("classifies timeout rejections as RangeFetchNetworkError with kind timeout", async () => {
     const mock = vi
       .fn()
@@ -346,6 +380,74 @@ describe("DriveRangeTokenizer", () => {
     );
     expect(vf.maxActive()).toBeLessThanOrEqual(3);
     expect(vf.calls).toHaveLength(6);
+  });
+
+  describe("prefetchRange (single-request arbitrary region)", () => {
+    it("fetches [start, end) in exactly one request and returns the region bytes", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      const data = await tz.prefetchRange(100, 71_780);
+      expect(vf.calls).toHaveLength(1);
+      // The fetch is extended DOWN to the covering 64KB boundary so every
+      // seeded chunk keeps an aligned start.
+      expect(vf.calls[0]?.range).toBe("bytes=0-71779");
+      expect(data).toHaveLength(71_680);
+      expect(data[0]).toBe(100 % 256);
+      expect(data[71_679]).toBe(71_779 % 256);
+    });
+
+    it("seeds the aligned chunk cache: reads inside the region add no requests", async () => {
+      const vf = installVirtualFile(71_780, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 71_780);
+      await tz.prefetchRange(100, 71_780);
+      expect(vf.calls).toHaveLength(1);
+      // chunk 0 is fully covered; the trailing partial chunk is cached at EOF
+      const a = await tz.readRange(0, 100);
+      expect(a).toHaveLength(100);
+      const b = await tz.readRange(70_000, 71_780);
+      expect(b).toHaveLength(1_780);
+      expect(b[0]).toBe(70_000 % 256);
+      expect(vf.calls).toHaveLength(1);
+    });
+
+    it("throws BudgetExceededError when the fetch would exceed the per-file budget", async () => {
+      installVirtualFile(300_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 300_000, {
+        budgetBytes: 131_072,
+      });
+      await tz.prefetchRange(0, 100);
+      await expect(tz.prefetchRange(100, 200_000)).rejects.toBeInstanceOf(
+        BudgetExceededError,
+      );
+    });
+
+    it("clamps the region to the file size and no-ops beyond EOF", async () => {
+      const vf = installVirtualFile(10_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 10_000);
+      const data = await tz.prefetchRange(5_000, 999_999);
+      expect(vf.calls).toHaveLength(1);
+      expect(vf.calls[0]?.range).toBe("bytes=0-9999");
+      expect(data).toHaveLength(5_000);
+      // a fully out-of-range region fetches nothing
+      const empty = await tz.prefetchRange(20_000, 30_000);
+      expect(empty).toHaveLength(0);
+      expect(vf.calls).toHaveLength(1);
+    });
+
+    it("a partial trailing chunk (not at EOF) is NOT cached: reads past the region re-fetch", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      await tz.prefetchRange(70_000, 140_000);
+      expect(vf.calls).toHaveLength(1);
+      expect(vf.calls[0]?.range).toBe("bytes=65536-139999");
+      // inside the prefetched region: cache-served
+      await tz.readRange(70_000, 100_000);
+      expect(vf.calls).toHaveLength(1);
+      // beyond it: a normal aligned fetch (no shadowing by a short entry)
+      await tz.readRange(131_000, 132_000);
+      expect(vf.calls).toHaveLength(2);
+      expect(vf.calls[1]?.range).toBe("bytes=131072-196607");
+    });
   });
 
   describe("Drive throttle circuit breaker (Fix H)", () => {

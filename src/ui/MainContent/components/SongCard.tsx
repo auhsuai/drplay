@@ -252,7 +252,11 @@ export const SongCard = React.memo(
             artist: metadata.artist || null,
             duration: metadata.duration || 0,
             durationEstimated: metadata.durationEstimated,
-            size: metadata.size || 0,
+            // Old cached placeholders (pre-fix) carry no size — fall back to
+            // the Drive listing size so a failed metadata fetch never shows
+            // "0 B" next to real sizes (a true 0-byte file keeps "0 B": ?? only
+            // falls back on null/undefined, not on a real 0).
+            size: metadata.size ?? item.trackInfo?.size ?? 0,
             loaded: true,
           };
           setMeta((prev) => {

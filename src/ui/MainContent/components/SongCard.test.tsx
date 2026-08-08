@@ -1303,6 +1303,42 @@ describe("SongCard size text uses shared formatBytes semantics (not the old MB-o
     renderWithMetaSize(1536 * 1024);
     expect(await screen.findByText("1.5 MB")).not.toBeNull();
   });
+
+  // Regression: makePlaceholder dropped `size`, so every failed metadata
+  // fetch rendered "0 B" next to real sizes. A placeholder that carries the
+  // size must render the real size, not "0 B".
+  it('placeholder metadata with size renders the real size, not "0 B"', async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      durationEstimated: true,
+      size: 4096,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(await screen.findByText("4 KB")).not.toBeNull();
+    expect(screen.queryByText("0 B")).toBeNull();
+  });
+
+  // Older cached placeholders (pre-fix) still lack the size field — the card
+  // must fall back to the Drive listing size instead of showing "0 B".
+  it("placeholder metadata without size falls back to the Drive listing size", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      durationEstimated: true,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    const item = makeItem();
+    (item.trackInfo as { size?: number }).size = 4096;
+    render(<SongCard {...baseProps} item={item} />);
+    expect(await screen.findByText("4 KB")).not.toBeNull();
+    expect(screen.queryByText("0 B")).toBeNull();
+  });
 });
 
 describe("SongCard drag-over folder hover (folder drop target)", () => {

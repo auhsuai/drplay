@@ -1,14 +1,14 @@
 // Cover extraction helpers for embedded album art.
 //
 // S2 scope: compress the cover into two JPEG variants — a thumb (≤256px,
-// persisted in IDB) and a full (≤1000px, kept in a bounded in-memory LRU by
-// metadata.ts). Small images are returned untouched (never re-encoded, never
-// upscaled). All decoding happens in the browser (Chromium/WebView2 provides
-// createImageBitmap + OffscreenCanvas) — the module itself is browser-API free
-// so it can be imported by node-env tests.
+// persisted in IDB) and a full (≤2000px, kept in a bounded in-memory LRU by
+// metadata.ts and persisted to IDB when JPEG). Small images are returned
+// untouched (never re-encoded, never upscaled). All decoding happens in the
+// browser (Chromium/WebView2 provides createImageBitmap + OffscreenCanvas) —
+// the globals are mocked in node-env tests (coverCompress.test.ts).
 export const THUMB_MAX_SIZE = 256;
 export const THUMB_QUALITY = 0.7;
-export const FULL_MAX_SIZE = 1000;
+export const FULL_MAX_SIZE = 2000;
 export const FULL_QUALITY = 0.8;
 export const COVER_MAX_BYTES = 50 * 1024 * 1024; // skip covers declaring more than 50MB
 const WHITE_BG = "#ffffff";
@@ -88,17 +88,20 @@ export async function compressCoverImage(
       `image decode failed: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
+  try {
+    if (img.width <= maxSize && img.height <= maxSize) {
+      return { data, format: sourceFormat, keptOriginal: true };
+    }
 
-  if (img.width <= maxSize && img.height <= maxSize) {
-    return { data, format: sourceFormat, keptOriginal: true };
+    const scale = Math.min(maxSize / img.width, maxSize / img.height);
+    const w = Math.max(1, Math.floor(img.width * scale));
+    const h = Math.max(1, Math.floor(img.height * scale));
+
+    const jpeg = await encodeJpeg(img, w, h, sourceFormat, quality);
+    return { data: jpeg, format: "image/jpeg", keptOriginal: false };
+  } finally {
+    img.close();
   }
-
-  const scale = Math.min(maxSize / img.width, maxSize / img.height);
-  const w = Math.max(1, Math.floor(img.width * scale));
-  const h = Math.max(1, Math.floor(img.height * scale));
-
-  const jpeg = await encodeJpeg(img, w, h, sourceFormat, quality);
-  return { data: jpeg, format: "image/jpeg", keptOriginal: false };
 }
 
 async function encodeJpeg(

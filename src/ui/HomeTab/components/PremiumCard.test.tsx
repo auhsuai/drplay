@@ -70,8 +70,19 @@ describe("PremiumCard metadata render", () => {
     cleanup();
   });
 
+  it("debounces metadata loading: no fetch on mount, fetch after ~150ms", async () => {
+    render(<PremiumCard {...baseProps()} />);
+    // The fetch must NOT fire immediately — metadata loads queue behind the
+    // app-wide fetch semaphore and every scroll-hover of the card would
+    // otherwise start a full range-fetch cycle.
+    expect(mockedFetch).not.toHaveBeenCalled();
+    await screen.findByText("Fetched Title");
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("renders fetched title and artist from metadata", async () => {
     const { container } = render(<PremiumCard {...baseProps()} />);
+    await screen.findByText("Fetched Title");
     expect(mockedFetch).toHaveBeenCalledWith(
       "track-1",
       "tok",
@@ -79,7 +90,6 @@ describe("PremiumCard metadata render", () => {
       "my song.mp3",
       expect.any(Object),
     );
-    await screen.findByText("Fetched Title");
     expect(container.querySelector("img")).toBeNull();
   });
 

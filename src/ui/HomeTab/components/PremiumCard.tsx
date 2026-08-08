@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { captureError } from "../../../utils/errorLog";
 
 const PREMIUM_CARD_MODULE = "PremiumCard";
+const METADATA_FETCH_DEBOUNCE_MS = 150;
 const GOOGLE_COLORS = ["#4285F4", "#EA4335", "#FBBC05", "#34A853"];
 export const getFillColor = (str: string) => {
   let hash = 0;
@@ -40,39 +41,49 @@ export function PremiumCard({
     // The cleanup touches the img element; capture it at setup so the
     // cleanup never reads the (possibly stale) ref.
     const imgElement = imgRef.current;
-    getTrackMetadata(
-      track.id,
-      token,
-      track.size,
-      track.originalName,
-      controller.signal,
-    )
-      .then((meta) => {
-        if (!isMounted) return;
-        if (meta.title) setTitle(meta.title);
-        if (meta.artist) setArtist(meta.artist);
-        // Fix G: Chromium/WebView2 rejects the drplay:// custom scheme at the
-        // network stack (ERR_UNKNOWN_URL_SCHEME) before the Rust handler can
-        // respond, so the cover renders straight from a blob URL built with
-        // the picture bytes metadata already parsed. A 204/error drops to the
-        // icon through the img onError below.
-        // Full (≤1000px) bytes win over the 256px thumb — HomeTab cards must
-        // show the sharp cover, not the blurry placeholder-sized one.
-        const coverBytes = meta.pictureDataFull ?? meta.pictureData;
-        setCoverUrl(
-          coverBytes ? buildCoverBlobUrl(coverBytes, meta.pictureFormat) : null,
-        );
-      })
-      .catch((e: unknown) => {
-        if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
-        void captureError({
-          level: "warn",
-          source: PREMIUM_CARD_MODULE,
-          message: `metadata-load-failed: ${e instanceof Error ? e.message : String(e)}`,
+    // Debounce: scrolling a large library mounts many premium cards at once;
+    // fetching metadata for every one immediately queues hundreds of range
+    // requests behind the app-wide CONCURRENCY-3 semaphore (the same storm
+    // that made metadata loads minutes-long). Fetch only for cards that stay
+    // mounted 150ms — mirrors SongCard's debounce.
+    const timerId = setTimeout(() => {
+      getTrackMetadata(
+        track.id,
+        token,
+        track.size,
+        track.originalName,
+        controller.signal,
+      )
+        .then((meta) => {
+          if (!isMounted) return;
+          if (meta.title) setTitle(meta.title);
+          if (meta.artist) setArtist(meta.artist);
+          // Fix G: Chromium/WebView2 rejects the drplay:// custom scheme at the
+          // network stack (ERR_UNKNOWN_URL_SCHEME) before the Rust handler can
+          // respond, so the cover renders straight from a blob URL built with
+          // the picture bytes metadata already parsed. A 204/error drops to the
+          // icon through the img onError below.
+          // Full (≤1000px) bytes win over the 256px thumb — HomeTab cards must
+          // show the sharp cover, not the blurry placeholder-sized one.
+          const coverBytes = meta.pictureDataFull ?? meta.pictureData;
+          setCoverUrl(
+            coverBytes
+              ? buildCoverBlobUrl(coverBytes, meta.pictureFormat)
+              : null,
+          );
+        })
+        .catch((e: unknown) => {
+          if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
+          void captureError({
+            level: "warn",
+            source: PREMIUM_CARD_MODULE,
+            message: `metadata-load-failed: ${e instanceof Error ? e.message : String(e)}`,
+          });
         });
-      });
+    }, METADATA_FETCH_DEBOUNCE_MS);
     return () => {
       isMounted = false;
+      clearTimeout(timerId);
       controller.abort();
       if (imgElement) imgElement.src = "";
     };
