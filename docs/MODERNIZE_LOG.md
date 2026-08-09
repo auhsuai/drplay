@@ -3,6 +3,38 @@
 Theo dõi các file đã được hiện đại hóa (skill: closed-loop-code-modernize).
 Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 
+## Batch 3 — Core network/async utils (2026-08-09)
+
+| # | File | Pattern cũ → mới | Nguồn tra cứu | Trạng thái |
+|---|------|------------------|---------------|------------|
+| 1 | `src/utils/apiClient.ts` | | | chờ audit |
+| 2 | `src/utils/driveHttp.ts` | | | chờ audit |
+| 3 | `src/utils/asyncLimit.ts` | | | chờ audit |
+| 4 | `src/utils/streamPrefetcher.ts` | | | chờ audit |
+| 5 | `src/utils/resumableSession.ts` | | | chờ audit |
+| 6 | `src/utils/driveApi.ts` | | | chờ audit |
+
+## Batch 3 — Core network/async utils (2026-08-09)
+
+Kết luận audit: **6/6 file đã chuẩn 2026 — 0 upgrade đạt threshold**. Audit: `docs/audit_batch3_network_utils.md`.
+
+| # | File | Kết luận | Ghi chú |
+|---|------|----------|---------|
+| 1 | `src/utils/apiClient.ts` | ✅ giữ nguyên | `withTimeout` GIỮ (đính chính batch 1: withResolvers ≈ 0% ngắn hơn — `.then` two-arg bắt buộc chống unhandled rejection); single-flight shared promise đúng, không race |
+| 2 | `src/utils/driveHttp.ts` | ✅ giữ nguyên | retry loop bounded MAX_RETRIES=4 + backoff/jitter/Retry-After; AbortSignal.any guard đúng MDN |
+| 3 | `src/utils/asyncLimit.ts` | ✅ giữ nguyên | semaphore FIFO, try/finally release, có test; p-limit không đáng (behavior khác, dep mới) |
+| 4 | `src/utils/streamPrefetcher.ts` | ✅ giữ nguyên | Map LRU chuẩn ES, không có async chain để upgrade |
+| 5 | `src/utils/resumableSession.ts` | ✅ giữ nguyên | KHÔNG có persistence (logic thuần, spec sai); idempotent upload đúng Google docs |
+| 6 | `src/utils/driveApi.ts` | ✅ giữ nguyên | chỉ 35 dòng barrel re-export (spec sai); pattern thật nằm driveHttp/driveFiles/driveConfig/driveQuota — đã audit |
+
+## Backlog (Batch 3 — cross-file findings)
+
+| Hạng mục | Chi tiết | Skill đề xuất |
+|----------|----------|---------------|
+| `sleep` duplicate ×2 | driveHttp.ts:23 + asyncLimit.ts:72 (cùng signature) | refactor nhỏ |
+| Merge signal+timeout logic trùng ×4 | apiClient.ts:501-505, driveHttp.ts:34-36, driveRangeTokenizer.ts:149-151, nextTrackPrefetcher.ts:47-49 (không guard — không nhất quán) | cần module thứ 3 (driveHttp→apiClient circular) |
+| `catch (err)` không annotate ×2 | style-only | nối backlog batch 1 |
+
 ## Backlog xử lý (2026-08-09) — 3 tasks refactor
 
 | # | Task | Chi tiết | Commit | Trạng thái |
