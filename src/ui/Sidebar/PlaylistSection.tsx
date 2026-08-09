@@ -7,9 +7,8 @@ import { getPlaylists, createPlaylist } from "../../utils/playlists";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import type { TabKey } from "../../utils/driveConstants";
+import { SIDEBAR_MODULE } from "./constants";
 import { NavItem } from "./NavItem";
-
-const SIDEBAR_MODULE = "Sidebar";
 
 interface PlaylistSectionProps {
   onTabChange: (tab: TabKey) => void;

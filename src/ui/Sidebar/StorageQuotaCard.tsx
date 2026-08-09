@@ -6,8 +6,8 @@ import {
 } from "../../utils/driveApi";
 import { formatBytes } from "../../utils/formatBytes";
 import { captureError } from "../../utils/errorLog";
+import { SIDEBAR_MODULE } from "./constants";
 
-const SIDEBAR_MODULE = "Sidebar";
 // Storage bar width (expanded) — matches the FULL NavItem hover-row extent:
 // sidebar w-64 (256px) − nav px-4 right (16px, row hover right edge at 240px)
 // − storage px-4 left (16px) − track ml-3 (12px) = 212px. The row's hover
