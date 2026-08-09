@@ -68,9 +68,7 @@ function makeStorage(): Storage {
       s[k] = v;
     },
     removeItem: (k: string) => {
-      s = Object.fromEntries(
-        Object.entries(s).filter(([key]) => key !== k),
-      );
+      s = Object.fromEntries(Object.entries(s).filter(([key]) => key !== k));
     },
     clear: () => {
       s = {};
@@ -503,5 +501,140 @@ describe("M1b keyring-backed refresh token storage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Spec-guards for the single-flight refresh upgrade: every one of these
+// asserts the CURRENT (pre-upgrade) behavior, so they must pass on both the
+// subscriber-array implementation and the shared-promise implementation.
+describe("getValidToken single-flight refresh", () => {
+  const dispatchEventMock = () =>
+    (
+      globalThis as unknown as {
+        window: { dispatchEvent: ReturnType<typeof vi.fn> };
+      }
+    ).window.dispatchEvent;
+
+  const refreshCallCount = () =>
+    invokeMock.mock.calls.filter((call) => call[0] === "refresh_google_token")
+      .length;
+
+  it("second concurrent caller shares the same in-flight refresh (single-flight)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let releaseRefresh!: (value: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    });
+
+    const lead = getValidToken(true);
+    const follower = getValidToken(true);
+
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    releaseRefresh({ access_token: "shared-token", expires_in: 3600 });
+
+    await expect(lead).resolves.toBe("shared-token");
+    await expect(follower).resolves.toBe("shared-token");
+    expect(refreshCallCount()).toBe(1);
+  });
+
+  it("concurrent callers all reject when the refresh fails", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let rejectRefresh!: (err: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    });
+
+    const lead = getValidToken(true);
+    const follower = getValidToken(true);
+
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    rejectRefresh(new Error("invalid_grant: revoked"));
+
+    // Lead converts the failure into a null return; the follower's shared
+    // promise rejects so the error propagates as a throw.
+    await expect(lead).resolves.toBeNull();
+    await expect(follower).rejects.toBeInstanceOf(TokenRefreshError);
+    expect(refreshCallCount()).toBe(1);
+    // invalid_grant side-effect (auth-logout) fires exactly once, never
+    // once per caller.
+    const authLogoutCalls = dispatchEventMock().mock.calls.filter(
+      ([e]) => (e as Event).type === "auth-logout",
+    );
+    expect(authLogoutCalls).toHaveLength(1);
+  });
+
+  it("lead caller returns null (not throw) when refresh fails", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let rejectRefresh!: (err: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    });
+
+    const lead = getValidToken(true);
+
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    rejectRefresh(new Error("network unreachable"));
+
+    await expect(lead).resolves.toBeNull();
+  });
+
+  it("all callers get empty string when the session changes mid-refresh", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let releaseRefresh!: (value: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    });
+    getCurrentSessionIdMock.mockReturnValueOnce(0).mockReturnValueOnce(1);
+
+    const lead = getValidToken(true);
+    const follower = getValidToken(true);
+
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    releaseRefresh({ access_token: "new", expires_in: 3600 });
+
+    await expect(lead).resolves.toBe("");
+    await expect(follower).resolves.toBe("");
+    expect(storage.getItem(ACCESS_TOKEN_KEY)).toBeNull();
+    expect(storage.getItem(TOKEN_TIME_KEY)).toBeNull();
+  });
+
+  it("refresh starts again after a completed refresh (promise reset)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: { access_token: "first", expires_in: 3600 },
+    });
+
+    await expect(getValidToken(true)).resolves.toBe("first");
+    await expect(getValidToken(true)).resolves.toBe("first");
+    expect(refreshCallCount()).toBe(2);
   });
 });

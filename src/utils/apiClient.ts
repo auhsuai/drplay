@@ -97,11 +97,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-let isRefreshing = false;
-let refreshSubscribers: Array<{
-  resolve: (token: string) => void;
-  reject: (err: Error) => void;
-}> = [];
+// Single-flight guard for concurrent token refresh: while a refresh is in
+// flight, later getValidToken callers await the SAME promise instead of each
+// firing their own refresh. Nulled in a finally once the refresh settles, so
+// the next refresh starts a fresh flight.
+let refreshPromise: Promise<string | null> | null = null;
 let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
 
 export const stopProactiveRefresh = () => {
@@ -352,16 +352,18 @@ export const getValidToken = async (
 
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-    if (isRefreshing) {
-      return new Promise((resolve, reject) => {
-        refreshSubscribers.push({ resolve, reject });
-      });
+    if (refreshPromise) {
+      // Another caller already has a refresh in flight: share the same
+      // promise. Success delivers the same token (or "" when the session
+      // changed) to everyone; failure rejects so every follower throws, while
+      // the lead caller (the one that created the promise, below) converts
+      // the failure into a null return.
+      return refreshPromise;
     }
 
-    isRefreshing = true;
-    const mySessionId = getCurrentSessionId();
+    refreshPromise = (async (): Promise<string | null> => {
+      const mySessionId = getCurrentSessionId();
 
-    try {
       let tokenData: TokenData;
       try {
         tokenData = await withTimeout(
@@ -399,9 +401,6 @@ export const getValidToken = async (
       const accessToken = tokenData.access_token;
 
       if (mySessionId !== getCurrentSessionId()) {
-        refreshSubscribers.forEach((sub) => {
-          sub.resolve("");
-        });
         return "";
       }
 
@@ -421,15 +420,15 @@ export const getValidToken = async (
         new CustomEvent("token-updated", { detail: { token: accessToken } }),
       );
 
-      refreshSubscribers.forEach((sub) => {
-        sub.resolve(accessToken);
-      });
       return accessToken;
-    } catch (err: unknown) {
-      refreshSubscribers.forEach((sub) => {
-        sub.reject(err instanceof Error ? err : new Error(String(err)));
-      });
+    })();
 
+    try {
+      // Lead caller: awaits the shared promise. On failure the promise
+      // rejected (which is what makes followers throw) — handle the
+      // error side-effects exactly once here and return null.
+      return await refreshPromise;
+    } catch (err: unknown) {
       if (err instanceof TokenRefreshError) {
         if (err.kind === "invalid_grant") {
           window.dispatchEvent(new CustomEvent("auth-logout"));
@@ -446,8 +445,7 @@ export const getValidToken = async (
       }
       return null;
     } finally {
-      isRefreshing = false;
-      refreshSubscribers = [];
+      refreshPromise = null;
     }
   }
 
