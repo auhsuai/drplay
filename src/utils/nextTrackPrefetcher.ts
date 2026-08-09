@@ -40,43 +40,37 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
   const controller = new AbortController();
   touch(streamUrl, controller);
 
-  fetch(streamUrl, {
-    headers: { Range: `bytes=0-${String(PREFETCH_RANGE_BYTES - 1)}` },
-    signal: AbortSignal.any([
-      controller.signal,
-      AbortSignal.timeout(PREFETCH_TIMEOUT_MS),
-    ]),
-  })
-    .then((response) => {
+  void (async () => {
+    try {
+      const response = await fetch(streamUrl, {
+        headers: { Range: `bytes=0-${String(PREFETCH_RANGE_BYTES - 1)}` },
+        signal: AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(PREFETCH_TIMEOUT_MS),
+        ]),
+      });
       if (!response.ok) return;
-      const logCancelError = (err: unknown) => {
-        // fire-and-forget: logging must not throw in this sync callback
-        // (captureError never rejects — it swallows failures internally).
+
+      try {
+        await response.body?.cancel();
+      } catch (err) {
         void captureError({
           level: "warn",
           source: "nextTrackPrefetcher",
           message: `Prefetch body cancel failed: ${err instanceof Error ? err.message : String(err)}`,
         });
-      };
-      try {
-        void response.body?.cancel().catch(logCancelError);
-      } catch (err) {
-        logCancelError(err);
       }
-    })
-    .catch((err: unknown) => {
+    } catch (err) {
       const kind = classifyError(err);
-      // fire-and-forget: logging must not throw in this sync callback
-      // (captureError never rejects — it swallows failures internally).
       void captureError({
         level: "warn",
         source: "nextTrackPrefetcher",
         message: `Prefetch failed (${kind}): ${err instanceof Error ? err.message : String(err)}`,
       });
-    })
-    .finally(() => {
+    } finally {
       abortControllers.delete(streamUrl);
-    });
+    }
+  })();
 }
 
 export function clearNextTrackPrefetches(): void {
