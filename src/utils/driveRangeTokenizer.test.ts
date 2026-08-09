@@ -382,6 +382,35 @@ describe("DriveRangeTokenizer", () => {
     expect(vf.calls).toHaveLength(6);
   });
 
+  it("cache evicts the least-recently-used chunk, not the oldest-inserted (LRU vs FIFO)", async () => {
+    // 129 aligned chunks (> MAX_CACHED_CHUNKS 128) forces one eviction.
+    const chunkCount = 129;
+    const size = chunkCount * 65_536 + 100;
+    const vf = installVirtualFile(size, (i) => i % 256);
+    const tz = new DriveRangeTokenizer("f1", size);
+    const readChunk = async (n: number): Promise<void> => {
+      const start = n * 65_536;
+      await tz.readRange(start, start + 100);
+    };
+    // Chunk 0 is fetched, then re-read (cache hit) while only 2 entries exist:
+    // an LRU refresh moves it to the most-recent end, FIFO keeps insertion order.
+    await readChunk(0);
+    await readChunk(1);
+    await readChunk(0);
+    // Fill the cache to its 128-chunk bound with the rest.
+    for (let n = 2; n < 128; n += 1) await readChunk(n);
+    // The 129th chunk evicts exactly one entry: FIFO evicts chunk 0 (oldest
+    // inserted), LRU evicts chunk 1 (least recently read — chunk 0 was
+    // refreshed). Re-reading chunk 0 must therefore be a cache hit under LRU
+    // and a re-fetch under FIFO.
+    await readChunk(128);
+    await readChunk(0);
+    const chunk0Fetches = vf.calls.filter(
+      (c) => c.range === "bytes=0-65535",
+    ).length;
+    expect(chunk0Fetches).toBe(1);
+  });
+
   describe("prefetchRange (single-request arbitrary region)", () => {
     it("fetches [start, end) in exactly one request and returns the region bytes", async () => {
       const vf = installVirtualFile(200_000, (i) => i % 256);

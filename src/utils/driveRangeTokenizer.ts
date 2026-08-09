@@ -361,7 +361,14 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     const fileSize = this.fileInfo.size ?? 0;
     const chunkStart = start - (start % RANGE_CHUNK);
     const cached = this.chunkCache.get(chunkStart);
-    if (cached) return { chunkStart, data: cached };
+    if (cached) {
+      // Map preserves insertion order, so delete+set on a hit "moves to the
+      // end": the first key is now the least-recently-used one, making the
+      // eviction below a true LRU (hot chunks survive repeated seeking).
+      this.chunkCache.delete(chunkStart);
+      this.chunkCache.set(chunkStart, cached);
+      return { chunkStart, data: cached };
+    }
 
     const chunkEnd = Math.min(fileSize - 1, chunkStart + RANGE_CHUNK - 1);
     if (chunkStart > chunkEnd) {
