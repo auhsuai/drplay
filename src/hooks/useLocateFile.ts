@@ -9,6 +9,7 @@ import {
   type TabKey,
 } from "../utils/driveConstants";
 import { captureError } from "../utils/errorLog";
+import { authHeaders } from "../utils/driveFiles";
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
@@ -87,7 +88,7 @@ export function useLocateFile(
               const res = await fetchWithAuth(
                 `https://www.googleapis.com/drive/v3/files/${current}?fields=parents`,
                 {
-                  headers: { Authorization: `Bearer ${accessToken}` },
+                  headers: authHeaders(accessToken),
                 },
               );
               if (res.ok) {
@@ -119,7 +120,7 @@ export function useLocateFile(
               const pRes = await fetchWithAuth(
                 `https://www.googleapis.com/drive/v3/files/${pId}?fields=name`,
                 {
-                  headers: { Authorization: `Bearer ${accessToken}` },
+                  headers: authHeaders(accessToken),
                 },
               );
               if (pRes.ok) {
@@ -167,7 +168,7 @@ export function useLocateFile(
           const response = await fetchWithAuth(
             `https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`,
             {
-              headers: { Authorization: `Bearer ${accessToken}` },
+              headers: authHeaders(accessToken),
             },
           );
           if (response.ok) {
@@ -210,7 +211,7 @@ export function useLocateFile(
             const pRes = await fetchWithAuth(
               `https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`,
               {
-                headers: { Authorization: `Bearer ${accessToken}` },
+                headers: authHeaders(accessToken),
               },
             );
             if (pRes.ok) {

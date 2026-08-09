@@ -14,8 +14,10 @@ const RECENTLY_ADDED_PAGE_SIZE = 100;
 const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 
 // Headers shared by every Drive request in this module. GET/DELETE calls only
-// need the bearer token; JSON-body calls add the JSON content type.
-function authHeaders(token: string): Record<string, string> {
+// need the bearer token; JSON-body calls add the JSON content type. Exported
+// because the fetchWithAuth-based hooks build the same header inline; reusing
+// this helper keeps the "Bearer <token>" format in one place.
+export function authHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
 }
 

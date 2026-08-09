@@ -7,6 +7,7 @@ import { getAppConfig, mergeWithTimeoutSignal } from "../utils/driveApi";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "../utils/driveConstants";
+import { authHeaders } from "../utils/driveFiles";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import {
@@ -105,7 +106,7 @@ export const useDriveInit = ({
                 }
                 const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
                 const verifyRes = await fetchWithAuth(verifyUrl, {
-                  headers: { Authorization: `Bearer ${freshToken}` },
+                  headers: authHeaders(freshToken),
                   signal: mergeWithTimeoutSignal(
                     controller.signal,
                     ROOT_VERIFY_TIMEOUT_MS,
