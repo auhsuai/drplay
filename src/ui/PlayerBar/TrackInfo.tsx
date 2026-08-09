@@ -224,9 +224,7 @@ export function TrackInfo({
         title={t("player.view_now_playing")}
         aria-label={t("player.view_now_playing")}
       >
-        <div
-          className={`relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400`}
-        >
+        <div className="relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400">
           {currentTrack && coverUrl ? (
             <img
               ref={coverImgRef}
