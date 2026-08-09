@@ -256,17 +256,18 @@ export function useFolderPicker({
     setCurrentFolderName(folderName);
   };
 
-  const handleBack = async () => {
-    if (folderHistory.length > 0) {
-      cancelFolderFetch();
-      const newHistory = [...folderHistory];
-      const prevFolder = newHistory.pop();
-      setFolderHistory(newHistory);
-      setCurrentFolderId(prevFolder?.id || resolvedAppRoot || ROOT_FOLDER_ID);
-      setCurrentFolderName(prevFolder?.name || t("drive.my_drive"));
-      return;
-    }
+  const popFolderHistory = (): boolean => {
+    if (folderHistory.length === 0) return false;
+    cancelFolderFetch();
+    const newHistory = [...folderHistory];
+    const prevFolder = newHistory.pop();
+    setFolderHistory(newHistory);
+    setCurrentFolderId(prevFolder?.id || resolvedAppRoot || ROOT_FOLDER_ID);
+    setCurrentFolderName(prevFolder?.name || t("drive.my_drive"));
+    return true;
+  };
 
+  const navigateToParentFolder = async (): Promise<void> => {
     if (
       currentFolderId === ROOT_FOLDER_ID ||
       (!allowEscapeRoot &&
@@ -315,6 +316,11 @@ export function useFolderPicker({
       setCurrentFolderId(ROOT_FOLDER_ID);
       setCurrentFolderName(t("drive.my_drive"));
     }
+  };
+
+  const handleBack = async () => {
+    if (popFolderHistory()) return;
+    await navigateToParentFolder();
   };
 
   const handleBreadcrumbClick = (index: number) => {
