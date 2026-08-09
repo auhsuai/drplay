@@ -25,6 +25,17 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 5 — Per-file sweep (2026-08-09, tuần tự từng file)
+
+| # | File | Kết luận | Ghi chú |
+|---|------|----------|---------|
+| 1 | `src/hooks/useMenuPlaylists.ts` | ✅ giữ nguyên | .then→async/await chỉ ~2-3% ngắn hơn (< threshold); render-time state adjust đúng React 19; catch typed |
+| 2 | `src/ui/Sidebar/StorageQuotaCard.tsx` | ✅ giữ nguyên | .then+cancelled ~2-3%; render-time adjust chuẩn; `as number` có guard trước |
+| 3 | `src/ui/Sidebar/PlaylistSection.tsx` | ✅ giữ nguyên | .then+cancelled ×2 (dup nhưng <2 lần → không đạt DRY threshold); async/await ~3% |
+| 4 | `src/ui/HomeTab/HomeTab.tsx` | ✅ giữ nguyên | generation guards (đã fix race 43e3555); debounce trailing chuẩn lodash; lazy useState greeting |
+| 5 | `src/ui/Settings/SettingsTab.tsx` | ✅ giữ nguyên | .then(setDownloadPath) 1 dòng void; ⚠️ backlog: reject không catch → unhandled (xác minh contract) |
+| 6 | `src/ui/Settings/components/CacheManagerModal.tsx` | ✅ giữ nguyên | .then+cancelled, catch fallback zeroed sizes, Escape guard chuẩn |
+
 ## Batch 4 — Store + Workers (2026-08-09)
 
 Kết luận audit: 6/6 file chuẩn 2026; **1 fix race thật** được APPROVE. Audit: `docs/audit_batch4_store_workers.md`.
