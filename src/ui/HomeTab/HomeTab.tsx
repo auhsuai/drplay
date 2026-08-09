@@ -14,6 +14,7 @@ import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
 import rawGreetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
+import { HomeSection, SectionSkeleton } from "./components/HomeSection";
 import { PremiumCard } from "./components/PremiumCard";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
@@ -319,18 +320,16 @@ export function HomeTab({
 
         {/* QUICK ACCESS: Sleek List View */}
         {recent === null ? (
-          <div data-testid="home-skeleton-section" className="mb-12">
+          <SectionSkeleton>
             <Skeleton className="h-4 w-32 mb-4" />
             <SkeletonCardGrid rows={1} cols={visibleCount} />
-          </div>
+          </SectionSkeleton>
         ) : quickAccess.length > 0 ? (
-          <div className="mb-12">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                <Clock className="w-4 h-4" />
-                {t("home.recent_files")}
-              </h3>
-            </div>
+          <HomeSection
+            icon={Clock}
+            title={t("home.recent_files")}
+            justifyBetween
+          >
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {quickAccess.map((track, index) => {
                 const isOverlay =
@@ -352,23 +351,21 @@ export function HomeTab({
                 );
               })}
             </div>
-          </div>
+          </HomeSection>
         ) : null}
 
         {/* RECENTLY ADDED TO DRIVE */}
         {recentlyAdded === null ? (
-          <div data-testid="home-skeleton-section" className="mb-12">
+          <SectionSkeleton>
             <Skeleton className="h-4 w-32 mb-4" />
             <SkeletonCardGrid rows={1} cols={visibleCount} />
-          </div>
+          </SectionSkeleton>
         ) : recentlyAdded.length > 0 ? (
-          <div className="mb-12">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                <PlusCircle className="w-4 h-4" />
-                {t("home.recently_added")}
-              </h3>
-            </div>
+          <HomeSection
+            icon={PlusCircle}
+            title={t("home.recently_added")}
+            justifyBetween
+          >
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {recentlyAddedItems.map((track, index) => {
                 // Mirror of the Recent Files overlay contract, with one
@@ -398,25 +395,21 @@ export function HomeTab({
                 );
               })}
             </div>
-          </div>
+          </HomeSection>
         ) : null}
 
         {/* JUMP BACK IN: Most Visited Folders */}
         {mostVisitedFolders === null ? (
-          <div data-testid="home-skeleton-section" className="mb-12">
+          <SectionSkeleton>
             <Skeleton className="h-4 w-32 mb-4" />
             <SkeletonRowList
               rows={4}
               variant="folder"
               containerClassName="grid grid-cols-2 md:grid-cols-4 gap-4"
             />
-          </div>
+          </SectionSkeleton>
         ) : mostVisitedFolders.length > 0 ? (
-          <div className="mb-12">
-            <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Folder className="w-4 h-4" />
-              {t("home.jump_back_in")}
-            </h3>
+          <HomeSection icon={Folder} title={t("home.jump_back_in")}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {mostVisitedFolders.map((folder) => (
                 <div
@@ -448,21 +441,17 @@ export function HomeTab({
                 </div>
               ))}
             </div>
-          </div>
+          </HomeSection>
         ) : null}
 
         {/* HEAVY ROTATION */}
         {heavy === null ? (
-          <div data-testid="home-skeleton-section" className="mb-12">
+          <SectionSkeleton>
             <Skeleton className="h-4 w-32 mb-4" />
             <SkeletonCardGrid rows={1} cols={visibleCount} />
-          </div>
+          </SectionSkeleton>
         ) : heavyItems.length > 0 ? (
-          <div className="mb-12">
-            <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Repeat className="w-4 h-4" />
-              {t("home.heavy_rotation")}
-            </h3>
+          <HomeSection icon={Repeat} title={t("home.heavy_rotation")}>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {heavyItems.map((track) => (
                 <PremiumCard
@@ -475,21 +464,17 @@ export function HomeTab({
                 />
               ))}
             </div>
-          </div>
+          </HomeSection>
         ) : null}
 
         {/* DISCOVER: Premium Cards */}
         {discover === null ? (
-          <div data-testid="home-skeleton-section" className="mb-12">
+          <SectionSkeleton>
             <Skeleton className="h-4 w-32 mb-4" />
             <SkeletonCardGrid rows={1} cols={visibleCount} />
-          </div>
+          </SectionSkeleton>
         ) : discoverItems.length > 0 ? (
-          <div className="mb-12">
-            <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Sparkles className="w-4 h-4" />
-              {t("home.discover")}
-            </h3>
+          <HomeSection icon={Sparkles} title={t("home.discover")}>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {discoverItems.map((track) => (
                 <PremiumCard
@@ -502,7 +487,7 @@ export function HomeTab({
                 />
               ))}
             </div>
-          </div>
+          </HomeSection>
         ) : null}
       </div>
     </main>
