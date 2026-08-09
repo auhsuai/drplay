@@ -2939,7 +2939,7 @@ describe("generateClientId", () => {
     vi.useRealTimers();
   });
 
-  it("POSTs generateIds?count=1 with Bearer and returns the generated id", async () => {
+  it("GETs generateIds?count=1 with Bearer and returns the generated id", async () => {
     mockedFetch.mockResolvedValueOnce(
       makeJsonResponse(200, { ids: ["gen-abc"], space: "drive" }),
     );
@@ -2951,7 +2951,7 @@ describe("generateClientId", () => {
     expect(url).toBe(
       "https://www.googleapis.com/drive/v3/files/generateIds?count=1",
     );
-    expect(opts?.method).toBe("POST");
+    expect(opts?.method).toBe("GET");
     expect((opts?.headers as Record<string, string>)["Authorization"]).toBe(
       "Bearer tok",
     );

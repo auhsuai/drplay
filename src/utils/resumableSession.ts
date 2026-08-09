@@ -48,7 +48,7 @@ export async function generateClientId(
   const response = await driveFetch(
     `${GENERATE_IDS_URL}?count=${String(GENERATE_IDS_COUNT)}`,
     {
-      method: "POST",
+      method: "GET",
       headers: authHeaders(token),
       ...(signal ? { signal } : {}),
     },
