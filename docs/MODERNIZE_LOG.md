@@ -3,6 +3,16 @@
 Theo dõi các file đã được hiện đại hóa (skill: closed-loop-code-modernize).
 Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 
+## Backlog xử lý (2026-08-09) — 3 tasks refactor
+
+| # | Task | Chi tiết | Commit | Trạng thái |
+|---|------|----------|--------|------------|
+| 1 | Xoá dead prop `token` LikedSongs | 2 file −2 dòng: interface + caller | `c7119bb` | ✅ xong |
+| 2 | Extract `useClickOutside` (DRY ×5) | Hook mới `src/hooks/useClickOutside.ts` (savedCallback React 19) + 5 caller, +41/−78; test mới 5 case | `8e89d9e` | ✅ xong |
+| 3 | Bump react-easy-crop 6.0.2→6.2.3 | Fix CJS types #663 + debounce #653; không breaking change | `11ff398` | ✅ xong |
+
+Verify cuối: full suite **1492/1492 PASS** + build xanh (26s).
+
 ## Batch 2 — UI screens (2026-08-09)
 
 Kết luận audit: **6/6 file đã đạt chuẩn 2026 — 0 upgrade được duyệt** (không pattern nào đạt threshold ≥20% ngắn hơn / deprecated / perf / type-safe). Audit đầy đủ: `docs/audit_batch2_ui_screens.md`.
