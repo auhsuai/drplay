@@ -337,6 +337,23 @@ describe("AudioController retry lifecycle", () => {
     expect(audio.src).toMatch(/^\/drive-stream\/A\?ext=flac&retry=\d+$/);
   });
 
+  it("Task A: retry keeps an absolute streamUrl absolute with the ext query param", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack({
+      ...trackA,
+      streamUrl: "https://stream.example/A?ext=flac",
+    });
+    const audio = audioEl(1);
+    audio.error = { code: MEDIA_ERR_NETWORK, message: "network" };
+
+    fireError(audio);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(audio.src).toMatch(
+      /^https:\/\/stream\.example\/A\?ext=flac&retry=\d+$/,
+    );
+  });
+
   it("Task A: playTrack without streamUrl builds the URL with the playable extension", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack({

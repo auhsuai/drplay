@@ -419,12 +419,11 @@ export class AudioController {
     // Rebuild the URL keeping every existing query param (the ?ext= MIME hint
     // must survive the retry — dropping it would undo the SW Content-Type
     // override for octet-stream FLAC/OGG/Opus) and replacing the retry marker.
-    const qIdx = src.indexOf("?");
-    const pathPart = qIdx === -1 ? src : src.slice(0, qIdx);
-    const queryPart = qIdx === -1 ? "" : src.slice(qIdx + 1);
-    const params = new URLSearchParams(queryPart);
-    params.set("retry", String(Date.now()));
-    audio.src = `${pathPart}?${params.toString()}`;
+    const url = new URL(src, window.location.origin);
+    url.searchParams.set("retry", String(Date.now()));
+    audio.src = /^[a-z][a-z\d+.-]*:/i.test(src)
+      ? url.href
+      : `${url.pathname}${url.search}`;
     audio.load();
 
     this.seekOnLoadedMetadata(audio, position);
