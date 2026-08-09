@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import type { RefObject } from "react";
+import { useClickOutside } from "../../../hooks/useClickOutside";
 
 interface UseMoreMenuEventsParams {
   isMenuOpen: boolean | undefined;
@@ -18,44 +19,35 @@ export function useMoreMenuEvents({
   dropdownRef,
   setShowPlaylistsSubmenu,
 }: UseMoreMenuEventsParams): void {
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        menuRef.current &&
-        !menuRef.current.contains(event.target as Node) &&
-        (!dropdownRef.current ||
-          !dropdownRef.current.contains(event.target as Node))
-      ) {
-        setIsOpen(false);
-        setShowPlaylistsSubmenu(false);
-        onClose?.();
-      }
-    };
+  const closeMenu = useCallback(() => {
+    setIsOpen(false);
+    setShowPlaylistsSubmenu(false);
+    onClose?.();
+  }, [onClose, setIsOpen, setShowPlaylistsSubmenu]);
 
+  // Outside mousedown closes the menu when the target is outside both the
+  // trigger wrapper and the (portal-rendered) dropdown.
+  useClickOutside([menuRef, dropdownRef], closeMenu, isMenuOpen === true);
+
+  useEffect(() => {
     const handleScroll = (e: Event) => {
       if (dropdownRef.current?.contains(e.target as Node)) return;
-      setIsOpen(false);
-      setShowPlaylistsSubmenu(false);
-      onClose?.();
+      closeMenu();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setIsOpen(false);
-        setShowPlaylistsSubmenu(false);
-        onClose?.();
+        closeMenu();
       }
     };
 
     if (isMenuOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
       window.addEventListener("scroll", handleScroll, true);
       document.addEventListener("keydown", handleKeyDown);
     }
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
       window.removeEventListener("scroll", handleScroll, true);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isMenuOpen, onClose, setShowPlaylistsSubmenu]);
+  }, [isMenuOpen, closeMenu]);
 }

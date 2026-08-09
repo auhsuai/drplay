@@ -1,27 +1,22 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LANGUAGE_KEY } from "../../../utils/storageKeys";
 import { captureError } from "../../../utils/errorLog";
+import { useClickOutside } from "../../../hooks/useClickOutside";
 
 export function LanguageDropdown() {
   const { t, i18n } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isOpen]);
+  useClickOutside(
+    menuRef,
+    () => {
+      setIsOpen(false);
+    },
+    isOpen,
+  );
 
   const languages = [
     { code: "en", label: t("settings.english") },

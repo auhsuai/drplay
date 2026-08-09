@@ -21,6 +21,7 @@ import {
 import { getTrashedFiles } from "../../utils/drivePagination";
 import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 const TRASH_MODULE = "TrashScreen";
 
@@ -54,22 +55,15 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        moreMenuRef.current &&
-        !moreMenuRef.current.contains(e.target as Node)
-      ) {
-        setIsMoreMenuOpen(false);
-      }
-    };
-    if (isMoreMenuOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isMoreMenuOpen]);
+  // Listener exists only while the menu is open (active flag), matching the
+  // previous conditional-add/remove effect exactly.
+  useClickOutside(
+    moreMenuRef,
+    () => {
+      setIsMoreMenuOpen(false);
+    },
+    isMoreMenuOpen,
+  );
 
   const fetchTrashed = async () => {
     try {

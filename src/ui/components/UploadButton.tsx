@@ -7,6 +7,7 @@ import { useDriveStore } from "../../store/driveStore";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { basename } from "../../utils/pathUtils";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 const UPLOAD_BUTTON_MODULE = "UploadButton";
 // Extensions the file picker filters to (no leading dot, per DialogFilter docs).
@@ -52,24 +53,22 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Menu lifecycle listeners (MoreMenu pattern): close on outside mousedown
-  // or Escape. Listeners exist only while the menu is open.
+  // (useClickOutside) or Escape. Listeners exist only while the menu is open.
+  useClickOutside(
+    wrapperRef,
+    () => {
+      setIsMenuOpen(false);
+    },
+    isMenuOpen,
+  );
+
   useEffect(() => {
     if (!isMenuOpen) return;
-    const handleMouseDownOutside = (event: MouseEvent) => {
-      if (
-        wrapperRef.current &&
-        !wrapperRef.current.contains(event.target as Node)
-      ) {
-        setIsMenuOpen(false);
-      }
-    };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setIsMenuOpen(false);
     };
-    document.addEventListener("mousedown", handleMouseDownOutside);
     document.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener("mousedown", handleMouseDownOutside);
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isMenuOpen]);
