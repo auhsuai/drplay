@@ -82,6 +82,40 @@ export function backoffDelay(
   return Math.min(exp + jitter, MAX_DELAY_MS);
 }
 
+// Retryable-by-status set for the resumable-upload loops (429 + any 5xx,
+// Google handle-errors guidance). driveFetch retries a NARROWER historical
+// whitelist instead (isDriveFetchRetryableStatus) — unifying the two would
+// change driveFetch's retry math for 501/505+, so both are preserved and the
+// shared helper takes the predicate as a parameter.
+export const isRetryableDriveStatus = (status: number): boolean =>
+  status === 429 || (status >= 500 && status < 600);
+
+const isDriveFetchRetryableStatus = (status: number): boolean =>
+  RETRYABLE_STATUS.has(status);
+
+/**
+ * Shared retryable-status decision for the three Drive retry loops (driveFetch,
+ * queryResumableStatus, putChunkWithRetry): true when the response's status
+ * warrants ANOTHER attempt — 429/5xx by status alone, or a 403 whose body
+ * reports a Drive rate-limit reason. The 403 body is read via a clone ONLY
+ * while retries remain (attempt < maxRetries), so the final attempt never
+ * consumes the response body. Does NOT enforce the retry budget for the status
+ * match itself — each loop applies its own budget and exhausted behavior
+ * (driveFetch returns the final response; the upload loops throw).
+ */
+export async function shouldRetryDriveResponse(
+  response: Response,
+  attempt: number,
+  maxRetries: number,
+  statusRetryable: (status: number) => boolean = isRetryableDriveStatus,
+): Promise<boolean> {
+  if (statusRetryable(response.status)) return true;
+  if (response.status === 403 && attempt < maxRetries) {
+    return isRateLimit403Response(response);
+  }
+  return false;
+}
+
 /**
  * The Drive API resilience layer: fetch through fetchWithAuth with retry.
  * 429/5xx are retried with exponential backoff + jitter; a 403 is retried
@@ -111,17 +145,22 @@ export async function driveFetch(
       const signal = mergeWithTimeoutSignal(options.signal, timeoutMs);
       const res = await fetchWithAuth(url, { ...options, signal, timeoutMs });
 
-      if (attempt < MAX_RETRIES) {
-        // 429/5xx are retryable by status alone; a 403 only when its body
-        // reports a Drive rate limit. The body is read via a clone so the
-        // response returned to the caller keeps its body; the clone is only
-        // taken on attempts that could still retry (never for 2xx/5xx).
-        const rateLimit403 =
-          res.status === 403 && (await isRateLimit403Response(res));
-        if (RETRYABLE_STATUS.has(res.status) || rateLimit403) {
-          await sleep(backoffDelay(attempt, res.headers.get("Retry-After")));
-          continue;
-        }
+      // 429/5xx are retryable by status alone; a 403 only when its body reports
+      // a Drive rate limit (the body is read via a clone only while retries
+      // remain — the response returned to the caller keeps its body). The
+      // decision is shared with the upload loops via shouldRetryDriveResponse
+      // but keeps this module's narrower whitelist (isDriveFetchRetryableStatus).
+      if (
+        attempt < MAX_RETRIES &&
+        (await shouldRetryDriveResponse(
+          res,
+          attempt,
+          MAX_RETRIES,
+          isDriveFetchRetryableStatus,
+        ))
+      ) {
+        await sleep(backoffDelay(attempt, res.headers.get("Retry-After")));
+        continue;
       }
       return res;
     } catch (err) {

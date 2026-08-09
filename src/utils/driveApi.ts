@@ -18,6 +18,8 @@ export {
   driveFetch,
   readDriveErrorBody,
   isRateLimit403Response,
+  isRetryableDriveStatus,
+  shouldRetryDriveResponse,
 } from "./driveHttp";
 export {
   createFolder,

@@ -4,8 +4,8 @@ import {
   backoffDelay,
   DRIVE_MODULE,
   classifyDriveError,
-  isRateLimit403Response,
   readDriveErrorBody,
+  shouldRetryDriveResponse,
   sleep,
 } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
@@ -128,16 +128,15 @@ export async function queryResumableStatus(
       };
     }
     // 5xx/429 and 403 rate-limits are transient — retried with backoff exactly
-    // like a chunk PUT (same retry bound, backoffDelay honors Retry-After).
-    let rateLimit403 = false;
-    if (response.status === 403 && attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-      rateLimit403 = await isRateLimit403Response(response);
-    }
-    const retryable =
-      response.status === 429 ||
-      (response.status >= 500 && response.status < 600) ||
-      rateLimit403;
-    if (retryable) {
+    // like a chunk PUT (same retry bound, backoffDelay honors Retry-After; the
+    // retryable-status decision is shared via shouldRetryDriveResponse).
+    if (
+      await shouldRetryDriveResponse(
+        response,
+        attempt,
+        UPLOAD_CHUNK_MAX_RETRIES,
+      )
+    ) {
       if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
         await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
         continue;

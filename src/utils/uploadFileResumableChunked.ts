@@ -4,9 +4,9 @@ import {
   DRIVE_MODULE,
   backoffDelay,
   classifyDriveError,
-  isRateLimit403Response,
   mergeWithTimeoutSignal,
   readDriveErrorBody,
+  shouldRetryDriveResponse,
   sleep,
 } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
@@ -90,26 +90,26 @@ async function putChunkWithRetry(
       throw err;
     }
     // 429/5xx are retryable by status alone; a 403 only when its body reports
-    // a Drive rate limit. The body is read via a clone so the response keeps
-    // its body for mapUploadHttpError below; a clone/parse failure means "not
-    // a rate limit" → the 403 returns as-is. Read only on retryable attempts.
-    let rateLimit403 = false;
-    if (response.status === 403 && attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-      rateLimit403 = await isRateLimit403Response(response);
+    // a Drive rate limit (shared decision with the other Drive retry loops via
+    // shouldRetryDriveResponse). The body is read via a clone only while
+    // retries remain, so the response keeps its body for mapUploadHttpError.
+    if (
+      await shouldRetryDriveResponse(
+        response,
+        attempt,
+        UPLOAD_CHUNK_MAX_RETRIES,
+      )
+    ) {
+      if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
+        await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
+        continue;
+      }
+      throw new UploadError(
+        `upload failed (status=${String(response.status)})`,
+        "network",
+      );
     }
-    const retryable =
-      response.status === 429 ||
-      (response.status >= 500 && response.status < 600) ||
-      rateLimit403;
-    if (!retryable) return response;
-    if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-      await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
-      continue;
-    }
-    throw new UploadError(
-      `upload failed (status=${String(response.status)})`,
-      "network",
-    );
+    return response;
   }
 }
 

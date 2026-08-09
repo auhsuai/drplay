@@ -6,6 +6,7 @@ import {
   getDriveStorageQuota,
   getRecentlyAddedAudioFiles,
   saveAppConfig,
+  shouldRetryDriveResponse,
   withSaveConfigLock,
   type DriveFolderItem,
   type DriveFileItem,
@@ -176,6 +177,82 @@ describe("backoffDelay", () => {
   });
 });
 
+// Shared retryable-status check for the THREE Drive retry loops (driveFetch,
+// queryResumableStatus, putChunkWithRetry): 429/5xx by status alone, 403 only
+// when the body reports a Drive rate-limit reason (read via clone, only while
+// retries remain so the final attempt never consumes the body).
+describe("shouldRetryDriveResponse", () => {
+  it("returns true for 429 and 5xx statuses", async () => {
+    expect(await shouldRetryDriveResponse(makeResponse(429), 0, 2)).toBe(true);
+    expect(await shouldRetryDriveResponse(makeResponse(500), 0, 2)).toBe(true);
+    expect(await shouldRetryDriveResponse(makeResponse(503), 0, 2)).toBe(true);
+  });
+
+  it("returns false for 2xx and non-retryable 4xx", async () => {
+    expect(await shouldRetryDriveResponse(makeResponse(200), 0, 2)).toBe(false);
+    expect(await shouldRetryDriveResponse(makeResponse(400), 0, 2)).toBe(false);
+    expect(await shouldRetryDriveResponse(makeResponse(404), 0, 2)).toBe(false);
+  });
+
+  it("returns true for a 403 rate-limit body (rateLimitExceeded) while retries remain", async () => {
+    expect(
+      await shouldRetryDriveResponse(
+        makeRateLimitResponse(403, "rateLimitExceeded"),
+        0,
+        2,
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for a 403 with a non-rate-limit reason (permission error)", async () => {
+    expect(
+      await shouldRetryDriveResponse(
+        makeRateLimitResponse(403, "insufficientFilePermissions"),
+        0,
+        2,
+      ),
+    ).toBe(false);
+  });
+
+  it("never reads the 403 body on the final attempt (attempt >= maxRetries)", async () => {
+    const clone = vi.fn(() => {
+      throw new TypeError("body already used");
+    });
+    const response = {
+      status: 403,
+      ok: false,
+      headers: { get: () => null },
+      clone,
+    } as unknown as Response;
+    expect(await shouldRetryDriveResponse(response, 2, 2)).toBe(false);
+    expect(clone).not.toHaveBeenCalled();
+  });
+
+  it("still reports 429 retryable on the final attempt — the caller decides exhausted behavior", async () => {
+    expect(await shouldRetryDriveResponse(makeResponse(429), 2, 2)).toBe(true);
+  });
+
+  it("honors a caller-supplied status predicate (driveFetch's narrower whitelist)", async () => {
+    const driveFetchWhitelist = (status: number): boolean =>
+      status === 429 ||
+      status === 500 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504;
+    // 501 is retryable under the upload loops' 5xx range formula but NOT under
+    // driveFetch's historical whitelist — the predicate must preserve both.
+    expect(
+      await shouldRetryDriveResponse(
+        makeResponse(501),
+        0,
+        4,
+        driveFetchWhitelist,
+      ),
+    ).toBe(false);
+    expect(await shouldRetryDriveResponse(makeResponse(501), 0, 4)).toBe(true);
+  });
+});
+
 describe("driveFetch retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -298,6 +375,31 @@ describe("driveFetch retry", () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(403);
+  });
+
+  it("honors Retry-After: 5 on a 503 → waits a full 5s before the retry", async () => {
+    const retryAfterResponse = {
+      status: 503,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "5" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch
+      .mockResolvedValueOnce(retryAfterResponse)
+      .mockResolvedValueOnce(makeResponse(200));
+
+    const p = driveFetch("https://www.googleapis.com/drive/v3/files");
+    // backoffDelay(0, "5") is deterministic (no jitter): 5000ms. At t=4000 the
+    // retry must NOT have fired yet — only the original call.
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    const res = await p;
+    expect(res.status).toBe(200);
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 });
 
