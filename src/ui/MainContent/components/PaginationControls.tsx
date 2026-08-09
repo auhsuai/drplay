@@ -58,7 +58,7 @@ export function PaginationControls({
           <div
             role="button"
             tabIndex={0}
-            className={`flex items-center text-sm font-medium text-gray-900 dark:text-white tracking-wider text-center drop-shadow-md transition-colors ${!isEditingPage ? "cursor-pointer hover:text-[#4285F4]" : ""}`}
+            className={`flex items-center text-sm font-medium text-gray-900 dark:text-white tracking-wider text-center drop-shadow-md transition-colors ${!isEditingPage ? "cursor-pointer hover:text-brand-primary" : ""}`}
             onClick={() => {
               if (!isEditingPage) {
                 setIsEditingPage(true);

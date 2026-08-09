@@ -129,7 +129,7 @@ export function PremiumCard({
             </span>
           </div>
         ) : (
-          <div className="absolute bottom-3 right-3 w-11 h-11 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-full flex items-center justify-center shadow-lg shadow-black/20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 hover:scale-105">
+          <div className="absolute bottom-3 right-3 w-11 h-11 bg-brand-primary hover:bg-brand-hover text-white rounded-full flex items-center justify-center shadow-lg shadow-black/20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 hover:scale-105">
             <Play className="w-5 h-5 ml-1" fill="currentColor" />
           </div>
         )}

@@ -238,11 +238,13 @@ describe("FullRecentView now-playing highlight (currentTrack prop)", () => {
     const beta = cardByTitle("Beta");
     expect(alpha).not.toBeNull();
     expect(alpha?.className).toContain("bg-gray-100 dark:bg-[#2a2b2f]");
-    expect(alpha?.className).not.toContain("bg-[#4285F4]/10");
-    expect(alpha?.querySelector("h3")?.className).toContain("text-[#4285F4]!");
+    expect(alpha?.className).not.toContain("bg-brand-primary/10");
+    expect(alpha?.querySelector("h3")?.className).toContain(
+      "text-brand-primary!",
+    );
     expect(beta?.className).not.toContain("bg-gray-100 dark:bg-[#2a2b2f]");
     expect(beta?.querySelector("h3")?.className).not.toContain(
-      "text-[#4285F4]!",
+      "text-brand-primary!",
     );
   });
 
@@ -259,7 +261,7 @@ describe("FullRecentView now-playing highlight (currentTrack prop)", () => {
     const alpha = cardByTitle("Alpha");
     expect(alpha?.className).not.toContain("bg-gray-100 dark:bg-[#2a2b2f]");
     expect(alpha?.querySelector("h3")?.className).not.toContain(
-      "text-[#4285F4]!",
+      "text-brand-primary!",
     );
   });
 });

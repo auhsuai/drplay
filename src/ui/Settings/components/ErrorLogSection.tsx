@@ -179,7 +179,7 @@ export function ErrorLogSection() {
           void handleCopy();
         }}
         disabled={logList.length === 0 || busy}
-        className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center"
+        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center"
       >
         <ScrollText className="w-4 h-4" />
         {copied
@@ -193,7 +193,7 @@ export function ErrorLogSection() {
           void handleClear();
         }}
         disabled={logList.length === 0 || busy}
-        className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
         {t("settings.error_log_clear")}
       </button>
@@ -202,7 +202,7 @@ export function ErrorLogSection() {
 
   return (
     <div ref={containerRef} className="flex flex-col gap-2 mt-6 mb-8">
-      <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
+      <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
         {t("settings.error_log_title")}
       </h2>
 
@@ -212,7 +212,7 @@ export function ErrorLogSection() {
             onClick={() => {
               setSelectedDate(null);
             }}
-            className="text-sm font-semibold text-gray-800 dark:text-gray-200 hover:text-[#4285F4] transition-colors py-2.5"
+            className="text-sm font-semibold text-gray-800 dark:text-gray-200 hover:text-brand-primary transition-colors py-2.5"
           >
             ← {t("settings.error_log_back")}
           </button>

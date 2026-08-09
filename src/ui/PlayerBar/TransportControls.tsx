@@ -52,7 +52,7 @@ export function TransportControls({
 
       <button
         onClick={hasError ? onRetry : onTogglePlay}
-        className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-[#4285F4] hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
+        className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-brand-primary hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
         disabled={!currentTrack || isDownloading}
       >
         {isDownloading || (isBuffering && isPlaying && !hasError) ? (
@@ -79,7 +79,7 @@ export function TransportControls({
       <div className="relative group flex items-center shrink-0">
         <button
           onClick={onTogglePlayMode}
-          className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== "normal" ? "text-[#4285F4] hover:bg-[#4285F4]/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
+          className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== "normal" ? "text-brand-primary hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
           disabled={!currentTrack}
         >
           {playMode === "shuffle" && <Shuffle className="w-5 h-5" />}

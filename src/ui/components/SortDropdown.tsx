@@ -119,7 +119,7 @@ export function SortDropdown({
 
             {/* Blue UP Arrow */}
             <g
-              className={`stroke-[#4285F4] ${isFirstFrame ? (!sortOption.endsWith(" desc") ? "" : "opacity-0") : !sortOption.endsWith(" desc") ? "anim-fill-up" : "anim-drain-up"}`}
+              className={`stroke-brand-primary ${isFirstFrame ? (!sortOption.endsWith(" desc") ? "" : "opacity-0") : !sortOption.endsWith(" desc") ? "anim-fill-up" : "anim-drain-up"}`}
             >
               <path d="m3 8 4-4 4 4" />
               <path d="M7 4v16" />
@@ -135,7 +135,7 @@ export function SortDropdown({
 
             {/* Blue DOWN Arrow */}
             <g
-              className={`stroke-[#4285F4] ${isFirstFrame ? (sortOption.endsWith(" desc") ? "" : "opacity-0") : sortOption.endsWith(" desc") ? "anim-fill-down" : "anim-drain-down"}`}
+              className={`stroke-brand-primary ${isFirstFrame ? (sortOption.endsWith(" desc") ? "" : "opacity-0") : sortOption.endsWith(" desc") ? "anim-fill-down" : "anim-drain-down"}`}
             >
               <path d="m21 16-4 4-4-4" />
               <path d="M17 20V4" />
@@ -176,7 +176,7 @@ export function SortDropdown({
                   onSortChange?.(newOpt);
                   setShowSortMenu(false);
                 }}
-                className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-[#4285F4] dark:hover:text-[#4285F4] ${baseSortOption === opt.id ? "text-[#4285F4] font-medium" : "text-gray-700 dark:text-gray-300"}`}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-brand-primary dark:hover:text-brand-primary ${baseSortOption === opt.id ? "text-brand-primary font-medium" : "text-gray-700 dark:text-gray-300"}`}
               >
                 {opt.label}
                 {baseSortOption === opt.id && <Check className="w-4 h-4" />}

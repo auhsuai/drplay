@@ -260,7 +260,7 @@ export function TrackInfo({
           )}
         </div>
         <div className="overflow-hidden flex-1">
-          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-[#4285F4] transition-colors">
+          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-brand-primary transition-colors">
             {realTitle}
           </h4>
           <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2 overflow-hidden whitespace-nowrap text-ellipsis">
@@ -278,7 +278,7 @@ export function TrackInfo({
             aria-label={
               isLiked ? t("player.remove_favorite") : t("player.add_favorite")
             }
-            className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? "text-[#4285F4]" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
+            className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
           >
             <Heart
               className="w-5 h-5"

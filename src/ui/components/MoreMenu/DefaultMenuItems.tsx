@@ -61,7 +61,7 @@ export function DefaultMenuItems({
             className={uploadingBlocked(MENU_ITEM_BASE_CLASS)}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}
-            iconClassName="w-4 h-4 text-gray-400 group-hover:text-[#4285F4]"
+            iconClassName="w-4 h-4 text-gray-400 group-hover:text-brand-primary"
             truncateLabel={false}
           />
           <MoreMenuItem

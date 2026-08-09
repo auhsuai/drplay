@@ -53,7 +53,7 @@ export function AddToPlaylistItem({
           <button
             onClick={handleToggleSubmenu}
             className={uploadingBlocked(
-              "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center justify-between group mb-1",
+              "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-brand-primary rounded-md transition-all flex items-center justify-between group mb-1",
             )}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}

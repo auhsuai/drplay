@@ -203,9 +203,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         {/* Header */}
         <div className="px-6 py-5 flex items-center justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
               <svg
-                className="w-5 h-5 text-[#4285F4]"
+                className="w-5 h-5 text-brand-primary"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -260,7 +260,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
           ) : (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between px-1 py-3 mb-2">
-                <div className="flex items-center gap-2 text-sm text-[#4285F4] font-medium">
+                <div className="flex items-center gap-2 text-sm text-brand-primary font-medium">
                   <AlertTriangle className="w-5 h-5 shrink-0" />
                   <p>{t("settings.trash_warning")}</p>
                 </div>
@@ -317,7 +317,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                       isSelectionMode ? "cursor-pointer" : ""
                     } ${
                       isSelected
-                        ? "bg-[#4285F4]/10 border border-[#4285F4]/30"
+                        ? "bg-brand-primary/10 border border-brand-primary/30"
                         : "bg-gray-50 dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] border border-transparent"
                     }`}
                     onClick={() => {
@@ -349,7 +349,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                         <div
                           className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
                             isSelected
-                              ? "bg-[#4285F4] border-[#4285F4]"
+                              ? "bg-brand-primary border-brand-primary"
                               : "border-gray-300 dark:border-gray-600 bg-white dark:bg-black/20"
                           }`}
                         >
@@ -359,7 +359,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                         </div>
                       )}
                       <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : "bg-[#4285F4]/10 text-[#4285F4]"}`}
+                        className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : "bg-brand-primary/10 text-brand-primary"}`}
                       >
                         {isFolder ? (
                           <Folder className="w-5 h-5" fill="currentColor" />
@@ -412,7 +412,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                     void handleBulkRestore();
                   }}
                   disabled={selectedIds.size === 0 || isBulkActioning}
-                  className="px-4 py-2.5 bg-[#4285F4] text-white rounded-xl text-sm font-medium hover:bg-[#3367d6] disabled:opacity-50 transition-colors flex items-center gap-2"
+                  className="px-4 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-medium hover:bg-brand-hover disabled:opacity-50 transition-colors flex items-center gap-2"
                 >
                   {isBulkActioning ? (
                     <LoaderCircle className="w-4 h-4 animate-spin" />

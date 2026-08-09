@@ -53,7 +53,7 @@ export function ProgressRing({
         strokeDasharray={RING_CIRCUMFERENCE}
         strokeDashoffset={RING_CIRCUMFERENCE * (1 - clamped)}
         transform={RING_ROTATION}
-        className="stroke-[#4285F4]"
+        className="stroke-brand-primary"
       />
     </svg>
   );

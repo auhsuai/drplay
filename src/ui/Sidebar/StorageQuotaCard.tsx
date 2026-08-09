@@ -110,7 +110,7 @@ export function StorageQuotaCard({
               >
                 <div
                   data-testid="storage-quota-bar"
-                  className={`h-full bg-[#4285F4] ${excessPercent > 0 ? "rounded-l-full" : "rounded-full"}`}
+                  className={`h-full bg-brand-primary ${excessPercent > 0 ? "rounded-l-full" : "rounded-full"}`}
                   style={{ width: `${String(safeZonePercent)}%` }}
                 />
                 {excessPercent > 0 && (
@@ -154,7 +154,7 @@ export function StorageQuotaCard({
                   <span
                     data-testid="storage-quota-usage"
                     className={
-                      isOverThreshold ? "text-red-500" : "text-[#4285F4]"
+                      isOverThreshold ? "text-red-500" : "text-brand-primary"
                     }
                   >
                     {formatBytes(quota.usageInDrive)}

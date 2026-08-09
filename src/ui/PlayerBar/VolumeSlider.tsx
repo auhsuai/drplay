@@ -114,7 +114,7 @@ export function VolumeSlider({ audio }: VolumeSliderProps) {
         onPointerDown={handleVolumePointerDown}
       >
         <div
-          className={`absolute left-0 h-full bg-gray-500 dark:bg-gray-400 group-hover:bg-[#4285F4] ${isVolumeActive ? "!bg-[#4285F4]" : ""} rounded-full transition-colors`}
+          className={`absolute left-0 h-full bg-gray-500 dark:bg-gray-400 group-hover:bg-brand-primary ${isVolumeActive ? "!bg-brand-primary" : ""} rounded-full transition-colors`}
           style={{ width: `${String(volumePercent)}%` }}
         >
           <div

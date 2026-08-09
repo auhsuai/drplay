@@ -102,7 +102,7 @@ export function SettingsTab({
   return (
     <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto px-8 py-10 relative transition-colors duration-300">
       {/* Signature Top Gradient */}
-      <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-[#4285F4]/10 to-transparent pointer-events-none" />
+      <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-brand-primary/10 to-transparent pointer-events-none" />
 
       <div className="max-w-3xl mx-auto relative z-10">
         <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-10 tracking-tight">
@@ -111,13 +111,13 @@ export function SettingsTab({
 
         <div className="space-y-8">
           <div className="flex flex-col gap-2">
-            <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
+            <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
               {t("settings.music_library")}
             </h2>
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <Cloud className="w-6 h-6 text-[#4285F4]" />
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <Cloud className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -129,7 +129,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowFolderSelection(true);
                 }}
-                className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
               >
                 <FolderOpen className="w-4 h-4" />
                 {t("settings.change_folder")}
@@ -142,7 +142,7 @@ export function SettingsTab({
               (manager notifies + prunes), so cancel keeps working live. */}
           {activeUploads.length > 0 && (
             <div className="flex flex-col gap-2 mt-6">
-              <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
+              <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
                 {t("settings.uploads_section")}
               </h2>
               <div className="flex flex-col">
@@ -152,8 +152,8 @@ export function SettingsTab({
                     className="flex items-center justify-between py-4 pb-6"
                   >
                     <div className="flex items-center gap-4 min-w-0">
-                      <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                        <CloudUpload className="w-6 h-6 text-[#4285F4]" />
+                      <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                        <CloudUpload className="w-6 h-6 text-brand-primary" />
                       </div>
                       <div className="min-w-0">
                         <p
@@ -171,7 +171,7 @@ export function SettingsTab({
                       onClick={() => {
                         cancelUpload(entry.id);
                       }}
-                      className="px-4 py-2 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                      className="px-4 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
                     >
                       {t("settings.uploads_cancel")}
                     </button>
@@ -182,13 +182,13 @@ export function SettingsTab({
           )}
 
           <div className="flex flex-col gap-2 mt-6">
-            <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
+            <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
               {t("settings.preferences")}
             </h2>
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <Globe className="w-6 h-6 text-[#4285F4]" />
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <Globe className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -201,8 +201,8 @@ export function SettingsTab({
 
             <div className="flex items-center justify-between py-4">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <Moon className="w-6 h-6 text-[#4285F4]" />
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <Moon className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -216,8 +216,8 @@ export function SettingsTab({
             {/* Close Behavior Setting */}
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <MonitorDown className="w-6 h-6 text-[#4285F4]" />
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <MonitorDown className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div>
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -237,15 +237,15 @@ export function SettingsTab({
                   }}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#4285F4]"></div>
+                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
               </label>
             </div>
 
             {/* Download Location Setting */}
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4 min-w-0">
-                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <Download className="w-6 h-6 text-[#4285F4]" />
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <Download className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -264,7 +264,7 @@ export function SettingsTab({
                   onClick={() => {
                     void handlePickDownloadPath();
                   }}
-                  className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
                 >
                   <FolderOpen className="w-4 h-4" />
                   {t("settings.change_path")}
@@ -275,14 +275,14 @@ export function SettingsTab({
 
           {/* Data Management */}
           <div className="flex flex-col gap-2 mt-6 mb-8">
-            <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
+            <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
               {t("settings.data_management")}
             </h2>
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <svg
-                    className="w-6 h-6 text-[#4285F4]"
+                    className="w-6 h-6 text-brand-primary"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -307,7 +307,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowTrashScreen(true);
                 }}
-                className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t("settings.open_trash")}
               </button>
@@ -315,8 +315,8 @@ export function SettingsTab({
 
             <div className="flex items-center justify-between py-4 pb-6">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-                  <Eraser className="w-6 h-6 text-[#4285F4]" />
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <Eraser className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div className="max-w-[320px]">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -329,7 +329,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowCacheManager(true);
                 }}
-                className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3367d6] text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t("settings.clear_cache_btn")}
               </button>

@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@theme {
+  --color-brand-primary: #4285f4;
+  --color-brand-hover: #3367d6;
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 html,
 body {

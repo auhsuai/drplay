@@ -100,14 +100,14 @@ export function CreditsSection() {
 
   return (
     <div className="flex flex-col gap-2 mt-6 mb-8">
-      <h2 className="text-sm font-bold text-[#4285F4] uppercase tracking-wider mb-2">
+      <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
         {t("settings.contact")}
       </h2>
       {CREDIT_LINKS.map(({ label, display, url, Icon }, index) => (
         <div key={url} className="flex items-center justify-between gap-4 py-4">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-[#4285F4]/10 flex items-center justify-center shrink-0">
-              <Icon className="w-6 h-6 text-[#4285F4]" />
+            <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+              <Icon className="w-6 h-6 text-brand-primary" />
             </div>
             <span className="text-base font-semibold text-gray-900 dark:text-white">
               {label}
@@ -118,7 +118,7 @@ export function CreditsSection() {
               onClick={() => {
                 void handleCopy(index, display)();
               }}
-              className="text-base text-gray-900 dark:text-white hover:text-[#4285F4] hover:underline transition-colors cursor-pointer select-none"
+              className="text-base text-gray-900 dark:text-white hover:text-brand-primary hover:underline transition-colors cursor-pointer select-none"
               title={t("settings.copy")}
             >
               {copiedIndex === index ? t("settings.copied") : display}
@@ -130,7 +130,7 @@ export function CreditsSection() {
               }}
               aria-label={t("settings.open_link")}
               title={t("settings.open_link")}
-              className="text-gray-400 hover:text-[#4285F4] transition-colors"
+              className="text-gray-400 hover:text-brand-primary transition-colors"
             >
               <ExternalLink className="w-5 h-5" aria-hidden="true" />
             </button>

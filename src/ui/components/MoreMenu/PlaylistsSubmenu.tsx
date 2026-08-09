@@ -85,7 +85,7 @@ export function PlaylistsSubmenu({
               onClick={(e) => {
                 onAddToPlaylist(e, p.id);
               }}
-              className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all flex items-center gap-2 group"
+              className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-brand-primary rounded-md transition-all flex items-center gap-2 group"
             >
               <Music className="w-4 h-4 opacity-50 group-hover:opacity-100 transition-opacity" />
               <span className="truncate">{p.name}</span>

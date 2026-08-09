@@ -84,7 +84,7 @@ export function DownloadDialog({
           <button
             onClick={onConfirm}
             disabled={isDownloadingFile || !downloadFileName.trim()}
-            className="px-5 py-2.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-blue-600 rounded-xl shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2 disabled:opacity-50"
+            className="px-5 py-2.5 text-sm font-medium text-white bg-brand-primary hover:bg-blue-600 rounded-xl shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2 disabled:opacity-50"
           >
             {isDownloadingFile ? (
               <LoaderCircle className="w-4 h-4 animate-spin" />

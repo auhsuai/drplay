@@ -64,8 +64,8 @@ export const NowPlayingView = memo(function NowPlayingView({
         >
           <ChevronDown className="w-6 h-6" />
         </button>
-        <div className="w-48 h-48 rounded-2xl bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center mb-6">
-          <Music className="w-24 h-24 text-[#4285F4]/40 dark:text-[#34A853]/50 drop-shadow-sm" />
+        <div className="w-48 h-48 rounded-2xl bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center mb-6">
+          <Music className="w-24 h-24 text-brand-primary/40 dark:text-[#34A853]/50 drop-shadow-sm" />
         </div>
         <h2 className="text-xl font-bold text-gray-500 dark:text-gray-400">
           {t("player.no_track")}
@@ -112,7 +112,7 @@ export const NowPlayingView = memo(function NowPlayingView({
           {/* Cover Art Container */}
           <div className="w-full flex items-center justify-center mt-4 md:mt-8">
             <div
-              className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? "bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 flex items-center justify-center relative" : "bg-gray-100 dark:bg-[#202124]"}`}
+              className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center relative" : "bg-gray-100 dark:bg-[#202124]"}`}
             >
               {coverUrl ? (
                 <img
@@ -129,7 +129,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                 />
               ) : (
                 <>
-                  <Music className="w-20 h-20 text-[#4285F4]/40 drop-shadow-sm" />
+                  <Music className="w-20 h-20 text-brand-primary/40 drop-shadow-sm" />
                 </>
               )}
             </div>
@@ -183,7 +183,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                   <div
                     ref={progressFillRef}
                     data-testid="progress-fill"
-                    className={`absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width] ${isDragging ? "" : "transition-all duration-150"}`}
+                    className={`absolute left-0 h-full bg-brand-primary rounded-full flex items-center transform-gpu will-change-[width] ${isDragging ? "" : "transition-all duration-150"}`}
                   >
                     <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0"></div>
                   </div>

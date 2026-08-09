@@ -137,7 +137,7 @@ export function ImageCropperModal({
               onChange={(e) => {
                 setZoom(Number(e.target.value));
               }}
-              className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-[#4285F4]"
+              className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-brand-primary"
             />
           </div>
 
@@ -154,7 +154,7 @@ export function ImageCropperModal({
                 void handleSave();
               }}
               disabled={isProcessing}
-              className="px-6 py-2 rounded-xl text-sm font-bold bg-[#4285F4] hover:bg-[#3367d6] text-white shadow-md shadow-[#4285F4]/20 transition-all active:scale-95 disabled:opacity-50"
+              className="px-6 py-2 rounded-xl text-sm font-bold bg-brand-primary hover:bg-brand-hover text-white shadow-md shadow-brand-primary/20 transition-all active:scale-95 disabled:opacity-50"
             >
               {isProcessing ? t("menu.saving") : t("menu.save")}
             </button>

@@ -351,7 +351,7 @@ export function SeekBar({ currentTrack, audio }: SeekBarProps) {
         <div
           ref={progressFillRef}
           data-testid="progress-fill"
-          className="absolute left-0 h-full bg-[#4285F4] rounded-full flex items-center transform-gpu will-change-[width]"
+          className="absolute left-0 h-full bg-brand-primary rounded-full flex items-center transform-gpu will-change-[width]"
         >
           <div
             data-testid="seek-thumb"

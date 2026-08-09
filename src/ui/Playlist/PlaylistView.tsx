@@ -181,7 +181,7 @@ export function PlaylistView({
       className="flex-1 overflow-y-auto bg-white dark:bg-[#121212] flex flex-col relative transition-colors duration-300"
     >
       {/* Header Gradient */}
-      <div className="absolute top-0 left-0 right-0 h-80 bg-gradient-to-b from-[#4285F4]/40 to-transparent pointer-events-none opacity-50 dark:opacity-20" />
+      <div className="absolute top-0 left-0 right-0 h-80 bg-gradient-to-b from-brand-primary/40 to-transparent pointer-events-none opacity-50 dark:opacity-20" />
 
       <div className="relative z-10 px-8 pt-20 pb-8 flex items-end gap-6 flex-shrink-0">
         <div
@@ -203,7 +203,7 @@ export function PlaylistView({
               alt={playlist.name}
             />
           ) : (
-            <div className="w-full h-full bg-gradient-to-br from-[#4285F4] to-[#34A853] flex items-center justify-center">
+            <div className="w-full h-full bg-gradient-to-br from-brand-primary to-[#34A853] flex items-center justify-center">
               <Music className="w-20 h-20 text-white opacity-80" />
             </div>
           )}
@@ -254,7 +254,7 @@ export function PlaylistView({
               if (first === undefined) return;
               onPlay(first);
             }}
-            className="w-14 h-14 bg-[#4285F4] rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg mb-8 flex-shrink-0"
+            className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg mb-8 flex-shrink-0"
           >
             <Play className="w-7 h-7 fill-current ml-1" />
           </button>
@@ -321,7 +321,7 @@ export function PlaylistView({
                     }`}
                   >
                     <div
-                      className={`w-8 text-center text-sm ${currentTrack?.id === track.id ? "text-[#4285F4] hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
+                      className={`w-8 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-primary hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
                     >
                       {currentTrack?.id === track.id ? (
                         <Music className="w-4 h-4 mx-auto" />
@@ -333,22 +333,22 @@ export function PlaylistView({
                       className={`w-8 text-center items-center justify-center ${currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
                     >
                       <Play
-                        className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-[#4285F4]" : "text-gray-900 dark:text-white"}`}
+                        className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white"}`}
                         fill="currentColor"
                       />
                     </div>
 
                     <div
-                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-[#4285F4]/10 text-[#4285F4]" : "bg-gray-200 dark:bg-gray-800"}`}
+                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gray-200 dark:bg-gray-800"}`}
                     >
                       <Music
-                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-[#4285F4]" : "text-gray-400"}`}
+                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-400"}`}
                       />
                     </div>
 
                     <div className="flex-1 min-w-0 flex flex-col justify-center">
                       <h4
-                        className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-[#4285F4]" : "text-gray-900 dark:text-white group-hover:text-[#4285F4]"}`}
+                        className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white group-hover:text-brand-primary"}`}
                       >
                         {track.title}
                       </h4>

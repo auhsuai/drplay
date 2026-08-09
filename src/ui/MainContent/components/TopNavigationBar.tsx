@@ -177,7 +177,7 @@ export function TopNavigationBar({
                   onClick={() => {
                     onBreadcrumbClick(folder.id, folder.name, index);
                   }}
-                  className="text-gray-500 dark:text-gray-400 hover:text-[#4285F4] transition-colors truncate max-w-[150px]"
+                  className="text-gray-500 dark:text-gray-400 hover:text-brand-primary transition-colors truncate max-w-[150px]"
                   title={displayFolderName(folder.name)}
                 >
                   {displayFolderName(folder.name)}
@@ -212,7 +212,7 @@ export function TopNavigationBar({
               onChange={(e) => {
                 onSearchChange(e.target.value);
               }}
-              className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-[#4285F4]/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
+              className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-brand-primary/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
             />
             {searchQuery && (
               <button
@@ -240,7 +240,7 @@ export function TopNavigationBar({
           {token && (
             <button
               onClick={onNewFolderClick}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-lg transition-colors shadow-sm active:scale-95"
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-lg transition-colors shadow-sm active:scale-95"
             >
               <FolderPlus className="w-4 h-4" />
               <span className="hidden sm:inline">{t("drive.new_folder")}</span>

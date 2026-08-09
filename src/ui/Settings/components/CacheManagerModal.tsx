@@ -174,7 +174,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
                     onChange={() => {
                       toggleCategory(id);
                     }}
-                    className="peer appearance-none w-4 h-4 rounded border-2 border-gray-400 dark:border-gray-500 bg-white dark:bg-[#2a2b2f] checked:bg-[#4285F4] checked:border-[#4285F4] cursor-pointer transition-colors"
+                    className="peer appearance-none w-4 h-4 rounded border-2 border-gray-400 dark:border-gray-500 bg-white dark:bg-[#2a2b2f] checked:bg-brand-primary checked:border-brand-primary cursor-pointer transition-colors"
                   />
                   <Check
                     className="absolute inset-0 m-auto w-3 h-3 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
@@ -214,7 +214,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
               void handleClear();
             }}
             disabled={selected.size === 0 || clearing}
-            className="px-5 py-2.5 text-sm font-medium text-white bg-[#4285F4] hover:bg-[#3367d6] rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-5 py-2.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {clearing && <LoaderCircle className="w-4 h-4 animate-spin" />}
             {t("settings.clear_cache_btn")}

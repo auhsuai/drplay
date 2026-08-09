@@ -24,7 +24,7 @@ const AUDIO_FILE_EXTENSIONS: ReadonlyArray<string> = [
 const TOGGLE_BUTTON_CLASS =
   "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-all duration-300 w-6 h-6 flex items-center justify-center shrink-0";
 const MENU_ITEM_CLASS =
-  "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-[#4285F4] rounded-md transition-all";
+  "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-brand-primary rounded-md transition-all";
 
 export interface UploadButtonProps {
   token?: string | null | undefined;

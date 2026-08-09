@@ -47,7 +47,7 @@ export function UploadBadge({
       className="w-5 h-5 flex items-center justify-center pointer-events-none"
       aria-label={t("upload.uploaded")}
     >
-      <Check className="w-4 h-4 text-[#4285F4]" />
+      <Check className="w-4 h-4 text-brand-primary" />
     </div>
   );
 }

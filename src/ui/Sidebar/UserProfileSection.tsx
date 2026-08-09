@@ -39,8 +39,8 @@ export function UserProfileSection({
         <div className="ml-1 shrink-0 flex items-center justify-center">
           {userProfile ? (
             avatarFailed ? (
-              <div className="w-10 h-10 rounded-full bg-[#4285F4]/20 flex items-center justify-center">
-                <span className="text-[#4285F4] font-bold">
+              <div className="w-10 h-10 rounded-full bg-brand-primary/20 flex items-center justify-center">
+                <span className="text-brand-primary font-bold">
                   {userProfile.name.charAt(0).toUpperCase()}
                 </span>
               </div>

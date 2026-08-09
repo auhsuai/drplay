@@ -88,7 +88,7 @@ export function FolderSelectionScreen({
         <div className="px-6 py-5 flex items-center justify-between shrink-0">
           <div>
             <h1 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-              <HardDrive className="text-[#4285F4] w-6 h-6" />
+              <HardDrive className="text-brand-primary w-6 h-6" />
               {title || t("folder_selection.select_root")}
             </h1>
             <p className="text-xs text-gray-500 mt-1">
@@ -170,7 +170,7 @@ export function FolderSelectionScreen({
             onClick={() => {
               onSelectFolder(currentFolderId);
             }}
-            className="flex items-center gap-2 bg-[#4285F4] hover:bg-[#3367d6] text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm"
+            className="flex items-center gap-2 bg-brand-primary hover:bg-brand-hover text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm"
           >
             <Check className="w-4 h-4" />
             {t("folder_selection.choose_folder")}

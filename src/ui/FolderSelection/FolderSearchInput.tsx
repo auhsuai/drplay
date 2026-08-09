@@ -23,7 +23,7 @@ export function FolderSearchInput({
         onChange={(e) => {
           onChange(e.target.value);
         }}
-        className="w-full pl-9 pr-3 py-2 text-sm bg-gray-100 dark:bg-[#1c1d21] hover:bg-gray-200 dark:hover:bg-[#25262a] focus:bg-white dark:focus:bg-[#1c1d21] text-gray-900 dark:text-gray-100 rounded-xl border border-transparent focus:border-[#4285F4]/50 outline-none transition-all placeholder:text-gray-500"
+        className="w-full pl-9 pr-3 py-2 text-sm bg-gray-100 dark:bg-[#1c1d21] hover:bg-gray-200 dark:hover:bg-[#25262a] focus:bg-white dark:focus:bg-[#1c1d21] text-gray-900 dark:text-gray-100 rounded-xl border border-transparent focus:border-brand-primary/50 outline-none transition-all placeholder:text-gray-500"
       />
     </div>
   );

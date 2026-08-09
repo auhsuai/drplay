@@ -27,7 +27,7 @@ export function FolderCard({
         <Folder className="w-6 h-6" fill="currentColor" />
       </div>
       <div className="overflow-hidden flex-1">
-        <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-[#4285F4] transition-colors truncate">
+        <h3 className="font-semibold text-gray-800 dark:text-gray-200 group-hover:text-brand-primary transition-colors truncate">
           {folder.name}
         </h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 truncate">

@@ -122,13 +122,13 @@ export const SongCard = React.memo(
     // the same trick. The flash branch keeps its own bg: it is transient
     // (400ms) and already overrides every other state.
     const dragHoverClasses = isDragHovered
-      ? `shadow-md -translate-y-1 ${isSelected ? "bg-[#4285F4]/20! dark:bg-[#4285F4]/30!" : isFlashOn ? "" : "bg-gray-100! dark:bg-[#2a2b2f]!"}`
+      ? `shadow-md -translate-y-1 ${isSelected ? "bg-brand-primary/20! dark:bg-brand-primary/30!" : isFlashOn ? "" : "bg-gray-100! dark:bg-[#2a2b2f]!"}`
       : "";
     // Shared by the idle and uploading title rows; the uploading row adds
     // flex-1 min-w-0 so the h3 truncates instead of pushing the ring out.
     // Drag-over mirrors the real group-hover accent on the title too — during
     // an OS drag there is no :hover, so the accent must be forced on.
-    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isDragHovered || isFlashOn || isPlaying ? "text-[#4285F4]!" : "text-gray-800 dark:text-gray-200"} ${isDragHovered ? "" : "group-hover:text-[#4285F4]"}`;
+    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isDragHovered || isFlashOn || isPlaying ? "text-brand-primary!" : "text-gray-800 dark:text-gray-200"} ${isDragHovered ? "" : "group-hover:text-brand-primary"}`;
 
     const handleCardActivate = () => {
       // Upload race guard (UI layer): an item that is still uploading must not
@@ -185,14 +185,14 @@ export const SongCard = React.memo(
             {isSelectionMode && (
               <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
                 {isSelected ? (
-                  <CheckSquare className="w-5 h-5 text-[#4285F4]" />
+                  <CheckSquare className="w-5 h-5 text-brand-primary" />
                 ) : (
                   <Square className="w-5 h-5 text-gray-400 dark:text-gray-500 group-hover:text-gray-500 dark:group-hover:text-gray-400" />
                 )}
               </div>
             )}
             <div
-              className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-[#4285F4]/10 group-hover:text-[#4285F4] ${isFlashOn || isPlaying ? "bg-[#4285F4]/10! text-[#4285F4]!" : "text-gray-400"}`}`}
+              className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}`}
             >
               {coverUrl && !item.isFolder ? (
                 <img
@@ -284,7 +284,7 @@ export const SongCard = React.memo(
             )}
             {uploadState === "parent-uploading" && (
               <div className="absolute top-2 right-2 pointer-events-none">
-                <LoaderCircle className="w-4 h-4 animate-spin text-[#4285F4]" />
+                <LoaderCircle className="w-4 h-4 animate-spin text-brand-primary" />
               </div>
             )}
           </div>

@@ -95,9 +95,9 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex flex-col relative transition-colors duration-300"
     >
       {/* Header Gradient */}
-      <div className="h-64 bg-gradient-to-b from-[#4285F4] to-white dark:to-[#121212] flex items-end p-8 flex-shrink-0">
+      <div className="h-64 bg-gradient-to-b from-brand-primary to-white dark:to-[#121212] flex items-end p-8 flex-shrink-0">
         <div className="flex items-end gap-6">
-          <div className="w-48 h-48 bg-gradient-to-br from-[#4285F4] to-[#66a3ff] shadow-2xl flex items-center justify-center text-white rounded-md">
+          <div className="w-48 h-48 bg-gradient-to-br from-brand-primary to-[#66a3ff] shadow-2xl flex items-center justify-center text-white rounded-md">
             <Heart className="w-20 h-20" fill="currentColor" />
           </div>
           <div className="text-white dark:text-gray-100 mb-2">
@@ -124,7 +124,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
               onPlay(first, favorites, 0);
             }
           }}
-          className="w-14 h-14 bg-[#4285F4] hover:bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
+          className="w-14 h-14 bg-brand-primary hover:bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
           disabled={favorites.length === 0}
         >
           <Play className="w-6 h-6 ml-1" fill="currentColor" />
@@ -201,7 +201,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                       }`}
                     >
                       <div
-                        className={`w-12 text-center text-sm ${currentTrack?.id === track.id ? "text-[#4285F4] hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
+                        className={`w-12 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-primary hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
                       >
                         {currentTrack?.id === track.id ? (
                           <Music className="w-4 h-4 mx-auto" />
@@ -213,20 +213,20 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                         className={`w-12 text-center items-center justify-center ${currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
                       >
                         <Play
-                          className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-[#4285F4]" : "text-gray-900 dark:text-white"}`}
+                          className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white"}`}
                           fill="currentColor"
                         />
                       </div>
 
                       <div
-                        className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-[#4285F4]/10 text-[#4285F4]" : "bg-gradient-to-br from-[#4285F4]/10 to-[#34A853]/10 text-[#4285F4]"}`}
+                        className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 text-brand-primary"}`}
                       >
                         <Music className="w-5 h-5 opacity-80" />
                       </div>
 
                       <div className="flex-1 min-w-0 flex flex-col justify-center">
                         <h4
-                          className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-[#4285F4]" : "text-gray-900 dark:text-white group-hover:text-[#4285F4]"}`}
+                          className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white group-hover:text-brand-primary"}`}
                         >
                           {track.title}
                         </h4>
@@ -240,7 +240,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                           onClick={(e) => {
                             void handleUnlike(e, track.id);
                           }}
-                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all text-[#4285F4] hover:scale-110"
+                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all text-brand-primary hover:scale-110"
                           title={t("menu.remove_from_liked")}
                         >
                           <Heart className="w-4 h-4" fill="currentColor" />

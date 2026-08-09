@@ -28,7 +28,7 @@ function ErrorIcon({
           type === "access_denied"
         ? FileWarning
         : WifiOff;
-  return <Icon className={`${className} text-[#4285F4]`} />;
+  return <Icon className={`${className} text-brand-primary`} />;
 }
 
 export function ErrorToast({ errorInfo, errorText }: ErrorToastProps) {
@@ -40,7 +40,7 @@ export function ErrorToast({ errorInfo, errorText }: ErrorToastProps) {
         <ErrorIcon type={errorInfo.code} />
         <span className="font-medium truncate">{errorText}</span>
       </div>
-      <div className="w-1.5 self-stretch bg-[#4285F4]" />
+      <div className="w-1.5 self-stretch bg-brand-primary" />
     </div>,
     document.getElementById("content-area") || document.body,
   );

@@ -29,7 +29,7 @@ export function RateLimitModal({ isOpen, onClose, onOk }: RateLimitModalProps) {
           </button>
           <button
             onClick={onOk}
-            className="px-5 py-2.5 rounded-full text-white bg-[#4285F4] hover:bg-blue-600 font-medium transition-colors shadow-md shadow-blue-500/20"
+            className="px-5 py-2.5 rounded-full text-white bg-brand-primary hover:bg-blue-600 font-medium transition-colors shadow-md shadow-blue-500/20"
           >
             {t("ok")}
           </button>

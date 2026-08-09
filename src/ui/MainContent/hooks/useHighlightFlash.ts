@@ -11,9 +11,9 @@ const FLASH_DURATION_MS = 400;
 // NOT use it: the user design wants the now-playing card to look exactly like
 // the hovered idle card (gray bg + blue title/icon + soft shadow) but WITHOUT
 // the hover lift, so it shares the idle hover palette instead of the accent.
-export const ACCENT_CARD_TINT = "bg-[#4285F4]/10 dark:bg-[#4285F4]/20";
+export const ACCENT_CARD_TINT = "bg-brand-primary/10 dark:bg-brand-primary/20";
 export const ACCENT_CARD_TINT_HOVER =
-  "hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30";
+  "hover:bg-brand-primary/20 dark:hover:bg-brand-primary/30";
 
 export function useHighlightFlash({
   isHighlighted,

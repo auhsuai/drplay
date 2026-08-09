@@ -1042,7 +1042,7 @@ describe("SongCard upload progress ring + cancel X (slice 2)", () => {
     // check (user design), not the CircleCheck circle variant.
     const check = container.querySelector(".lucide-check");
     expect(check).not.toBeNull();
-    expect(check?.getAttribute("class")).toContain("text-[#4285F4]");
+    expect(check?.getAttribute("class")).toContain("text-brand-primary");
 
     // Clicking the row to play clears the tint via dismissUploaded.
     fireEvent.click(container.querySelector(".p-3") as Element);
@@ -1179,7 +1179,7 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
     const card = cardDiv(container);
     expect(card).not.toBeNull();
     expect(card?.className).toContain("bg-gray-100 dark:bg-[#2a2b2f]");
-    expect(card?.className).not.toContain("bg-[#4285F4]/10");
+    expect(card?.className).not.toContain("bg-brand-primary/10");
     expect(card?.className).not.toContain("bg-[#F8F9FA]");
     expect(card?.className).toContain("shadow-sm");
   });
@@ -1197,11 +1197,11 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
       <SongCard {...baseProps} item={makeItem()} isPlaying />,
     );
     expect(container.querySelector("h3")?.className).toContain(
-      "text-[#4285F4]!",
+      "text-brand-primary!",
     );
     const iconBox = container.querySelector(".lucide-music")?.parentElement;
-    expect(iconBox?.className).toContain("bg-[#4285F4]/10!");
-    expect(iconBox?.className).toContain("text-[#4285F4]!");
+    expect(iconBox?.className).toContain("bg-brand-primary/10!");
+    expect(iconBox?.className).toContain("text-brand-primary!");
   });
 
   it("idle card keeps the original bg/hover unchanged", () => {
@@ -1211,7 +1211,7 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
     expect(card?.className).toContain(
       "hover:bg-gray-100 dark:hover:bg-[#2a2b2f]",
     );
-    expect(card?.className).not.toContain("bg-[#4285F4]/10");
+    expect(card?.className).not.toContain("bg-brand-primary/10");
   });
 
   it("selected branch keeps priority and its own classes when selection mode is on", () => {
@@ -1220,7 +1220,7 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
     );
     const card = cardDiv(container);
     expect(card?.className).toContain(
-      "bg-[#4285F4]/10 dark:bg-[#4285F4]/20 hover:bg-[#4285F4]/20 dark:hover:bg-[#4285F4]/30",
+      "bg-brand-primary/10 dark:bg-brand-primary/20 hover:bg-brand-primary/20 dark:hover:bg-brand-primary/30",
     );
     expect(card?.className).not.toContain("hover:bg-white");
   });
@@ -1416,8 +1416,10 @@ describe("SongCard drag-over folder hover (folder drop target)", () => {
       />,
     );
     announceHover("track-1");
-    expect(innerDiv(container)?.className).toContain("bg-[#4285F4]/20!");
-    expect(innerDiv(container)?.className).toContain("dark:bg-[#4285F4]/30!");
+    expect(innerDiv(container)?.className).toContain("bg-brand-primary/20!");
+    expect(innerDiv(container)?.className).toContain(
+      "dark:bg-brand-primary/30!",
+    );
   });
 
   it("drag-hover event for a different folder does NOT highlight this card", () => {
