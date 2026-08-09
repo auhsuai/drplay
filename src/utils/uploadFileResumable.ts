@@ -11,6 +11,7 @@ import { authHeaders } from "./driveFiles";
 import {
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
+  asDriveFileItem,
   initiateResumableUpload,
   resolveIdempotentConflict,
 } from "./resumableSession";
@@ -54,8 +55,9 @@ async function putResumableBytes(
       await readDriveErrorBody(response),
     );
   }
+  let body: unknown;
   try {
-    return (await response.json()) as DriveFileItem;
+    body = await response.json();
   } catch (err) {
     await captureError({
       level: "error",
@@ -64,6 +66,16 @@ async function putResumableBytes(
     });
     throw new UploadError("upload response was not valid JSON", "invalid");
   }
+  const file = asDriveFileItem(body);
+  if (file === null) {
+    await captureError({
+      level: "error",
+      source: DRIVE_MODULE,
+      message: `upload-parse-response-failed (status=${String(response.status)})`,
+    });
+    throw new UploadError("upload response was not valid JSON", "invalid");
+  }
+  return file;
 }
 
 // Options for idempotent uploads (pre-generated file id, set ONCE per logical

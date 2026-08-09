@@ -1367,6 +1367,29 @@ describe("uploadFileResumable", () => {
     expect(result).toEqual(uploadedFile);
   });
 
+  // Upgrade: a 2xx body that IS valid JSON but lacks the DriveFileItem shape
+  // (missing id — the field every upload response must carry) must reject
+  // with UploadError('invalid') instead of resolving with a ghost object the
+  // caller would treat as a real file (asDriveFileItem narrowing, same rule
+  // as query-status and the chunked path). Single-attempt path: no restart.
+  it("PUT 2xx body valid JSON but missing the DriveFileItem shape → UploadError invalid, no ghost object", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, { name: "x" }));
+
+    await expect(
+      uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+    ).rejects.toMatchObject({ name: "UploadError", kind: "invalid" });
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        message: "upload-parse-response-failed (status=201)",
+      }),
+    );
+    // initiate + 1 PUT — the invalid body is fatal, no further attempts.
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("PUT 403 with quota message → UploadError kind quota", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
