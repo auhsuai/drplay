@@ -1,5 +1,12 @@
-// @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+﻿// @vitest-environment jsdom
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler } from "react";
 import { TrashScreen } from "./TrashScreen";
@@ -8,7 +15,7 @@ import { TrashScreen } from "./TrashScreen";
 // useTranslation to return the fallback (or the key itself when absent).
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
+    t: (key: string) => key,
   }),
 }));
 
@@ -38,7 +45,8 @@ const mocks = vi.hoisted(() => ({
   getTrashedFiles: vi.fn(),
   showErrorToast: vi.fn(),
   showSuccessToast: vi.fn(),
-  captureError: vi.fn(),
+  captureError:
+    vi.fn<(args: { level: string; source: string; message: string }) => void>(),
 }));
 
 vi.mock("../../utils/driveApi", () => mocks.driveApi);
@@ -186,5 +194,153 @@ describe("TrashScreen skeleton loading", () => {
     if (wrapper) {
       expect(wrapper.className).toContain("h-full");
     }
+  });
+});
+
+describe("TrashScreen bulk operations", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  async function renderWithItems(
+    items: Array<{ id: string; name: string; mimeType: string }>,
+    onClose = vi.fn(),
+  ) {
+    const view = render(<TrashScreen token="test-token" onClose={onClose} />);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      const call = deferredCalls[0];
+      if (call === undefined) throw new Error("expected deferred call");
+      call.resolve(items);
+      await Promise.resolve();
+    });
+    await screen.findByText(items[0]?.name ?? "");
+    return { onClose, ...view };
+  }
+
+  function enterSelectionMode() {
+    const menuBtn = screen
+      .getAllByRole("button")
+      .find((b) => b.className.includes("p-1.5"));
+    if (menuBtn === undefined) throw new Error("menu button not found");
+    act(() => {
+      fireEvent.click(menuBtn);
+    });
+    fireEvent.click(screen.getByText("menu.select_multiple"));
+  }
+
+  it("bulk restore: 1 item fails -> other items still restored + list updates only succeeded", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+    enterSelectionMode();
+    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Track 2" }));
+    expect(screen.getByText("2 common.selected")).toBeTruthy();
+
+    mocks.driveApi.restoreFile.mockResolvedValueOnce({ id: "f1" });
+    mocks.driveApi.restoreFile.mockRejectedValueOnce(new Error("drive 500"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("settings.restore"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.driveApi.restoreFile).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Track 1")).toBeNull();
+      expect(screen.getByText("Track 2")).not.toBeNull();
+      expect(mocks.showErrorToast).toHaveBeenCalledWith(
+        "settings.bulk_restore_error_count",
+      );
+    });
+    expect(screen.getByText("1 common.selected")).toBeTruthy();
+    expect(screen.getByText("common.delete")).toBeTruthy();
+    const loggedMessages = mocks.captureError.mock.calls
+      .map((call) => call[0].message)
+      .join("\n");
+    expect(loggedMessages).toContain("bulk-restore-item-failed");
+  });
+
+  it("bulk delete: partial failure -> selection cleared only for succeeded", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+    enterSelectionMode();
+    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Track 2" }));
+
+    mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
+    mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
+      new Error("drive 500"),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("common.delete"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Track 1")).toBeNull();
+      expect(screen.getByText("Track 2")).not.toBeNull();
+      expect(mocks.showErrorToast).toHaveBeenCalledWith(
+        "settings.bulk_delete_error_count",
+      );
+    });
+    expect(screen.getByText("1 common.selected")).toBeTruthy();
+    expect(screen.getByText("common.delete")).toBeTruthy();
+    const loggedMessages = mocks.captureError.mock.calls
+      .map((call) => call[0].message)
+      .join("\n");
+    expect(loggedMessages).toContain("bulk-delete-item-failed");
+  });
+
+  it("empty trash: partial failure -> no onClose + succeeded items removed", async () => {
+    const onClose = vi.fn();
+    await renderWithItems(
+      [
+        { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+        { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+      ],
+      onClose,
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
+    mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
+      new Error("drive 500"),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("settings.empty_trash"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Track 1")).toBeNull();
+      expect(screen.getByText("Track 2")).not.toBeNull();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(mocks.showSuccessToast).not.toHaveBeenCalled();
+      expect(mocks.showErrorToast).toHaveBeenCalledWith(
+        "settings.empty_trash_error_count",
+      );
+    });
+    const loggedMessages = mocks.captureError.mock.calls
+      .map((call) => call[0].message)
+      .join("\n");
+    expect(loggedMessages).toContain("empty-trash-item-failed");
   });
 });

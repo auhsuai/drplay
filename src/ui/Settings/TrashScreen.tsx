@@ -134,10 +134,33 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       const deletePromises = items.map((item) =>
         permanentlyDeleteFile(token, item.id),
       );
-      await Promise.all(deletePromises);
-      setItems([]);
-      showSuccessToast(t("settings.empty_trash_success"));
-      onClose();
+      const results = await Promise.allSettled(deletePromises);
+      const succeededIds = new Set<string>();
+      let failedCount = 0;
+      results.forEach((result, index) => {
+        const item = items[index];
+        if (item === undefined) return;
+        if (result.status === "fulfilled") {
+          succeededIds.add(item.id);
+        } else {
+          failedCount += 1;
+          void captureError({
+            level: "error",
+            source: TRASH_MODULE,
+            message: `empty-trash-item-failed: ${item.id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+          });
+        }
+      });
+      if (failedCount > 0) {
+        setItems((prev) => prev.filter((item) => !succeededIds.has(item.id)));
+        showErrorToast(
+          t("settings.empty_trash_error_count", { count: failedCount }),
+        );
+      } else {
+        setItems([]);
+        showSuccessToast(t("settings.empty_trash_success"));
+        onClose();
+      }
     } catch (e) {
       void captureError({
         level: "error",
@@ -155,11 +178,40 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
-      await Promise.all(ids.map((id) => restoreFile(token, id)));
-      setItems((prev) => prev.filter((item) => !selectedIds.has(item.id)));
+      const results = await Promise.allSettled(
+        ids.map((id) => restoreFile(token, id)),
+      );
+      const succeededIds = new Set<string>();
+      let failedCount = 0;
+      results.forEach((result, index) => {
+        const id = ids[index];
+        if (id === undefined) return;
+        if (result.status === "fulfilled") {
+          succeededIds.add(id);
+        } else {
+          failedCount += 1;
+          void captureError({
+            level: "error",
+            source: TRASH_MODULE,
+            message: `bulk-restore-item-failed: ${id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+          });
+        }
+      });
+      setItems((prev) => prev.filter((item) => !succeededIds.has(item.id)));
       window.dispatchEvent(new CustomEvent("refresh-drive"));
-      setSelectedIds(new Set());
-      setIsSelectionMode(false);
+      if (failedCount > 0) {
+        showErrorToast(
+          t("settings.bulk_restore_error_count", { count: failedCount }),
+        );
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          succeededIds.forEach((id) => next.delete(id));
+          return next;
+        });
+      } else {
+        setSelectedIds(new Set());
+        setIsSelectionMode(false);
+      }
     } catch (e) {
       void captureError({
         level: "error",
@@ -177,10 +229,39 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
-      await Promise.all(ids.map((id) => permanentlyDeleteFile(token, id)));
-      setItems((prev) => prev.filter((item) => !selectedIds.has(item.id)));
-      setSelectedIds(new Set());
-      setIsSelectionMode(false);
+      const results = await Promise.allSettled(
+        ids.map((id) => permanentlyDeleteFile(token, id)),
+      );
+      const succeededIds = new Set<string>();
+      let failedCount = 0;
+      results.forEach((result, index) => {
+        const id = ids[index];
+        if (id === undefined) return;
+        if (result.status === "fulfilled") {
+          succeededIds.add(id);
+        } else {
+          failedCount += 1;
+          void captureError({
+            level: "error",
+            source: TRASH_MODULE,
+            message: `bulk-delete-item-failed: ${id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+          });
+        }
+      });
+      setItems((prev) => prev.filter((item) => !succeededIds.has(item.id)));
+      if (failedCount > 0) {
+        showErrorToast(
+          t("settings.bulk_delete_error_count", { count: failedCount }),
+        );
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          succeededIds.forEach((id) => next.delete(id));
+          return next;
+        });
+      } else {
+        setSelectedIds(new Set());
+        setIsSelectionMode(false);
+      }
     } catch (e) {
       void captureError({
         level: "error",
