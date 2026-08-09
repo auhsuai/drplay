@@ -6,6 +6,7 @@
 // cover simply stays out of the Rust cache until the next network parse.
 import { createSemaphore } from "./asyncLimit";
 import { captureError } from "./errorLog";
+import { classifyMetaError } from "./metadata/cache";
 
 const COVER_STORE_MODULE = "coverStore";
 const COVER_SCHEME = "drplay://";
@@ -161,6 +162,6 @@ function logCoverPostError(
     level: "warn",
     source: COVER_STORE_MODULE,
     message: `cover-post-failed (fileId=${fileId}, variant=${variant}): ${e instanceof Error ? e.message : String(e)}`,
-    kind: e instanceof Error ? e.name : "UnknownError",
+    kind: classifyMetaError(e).name,
   });
 }

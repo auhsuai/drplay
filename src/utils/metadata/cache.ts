@@ -27,7 +27,14 @@ export function classifyMetaError(err: unknown): {
 
 let lruKeys: string[] = [];
 try {
-  const stored = localStorage.getItem(METADATA_LRU_KEY);
+  // Non-browser runtimes (node tests/SSR) have no localStorage — skipping the
+  // read keeps a ReferenceError from turning into a spurious lru-load-failed
+  // warn on every module import. In a browser the branch is identical to the
+  // unguarded read: getItem/parse failures still fall through to the catch.
+  const stored =
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem(METADATA_LRU_KEY)
+      : null;
   if (stored) {
     const parsed: unknown = JSON.parse(stored);
     if (Array.isArray(parsed)) {
