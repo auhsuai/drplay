@@ -18,12 +18,12 @@ vi.mock("lucide-react", () => {
     "X",
     "RefreshCw",
     "LoaderCircle",
-    "AlertTriangle",
-    "FileAudio",
+    "TriangleAlert",
+    "FileHeadphone",
     "Folder",
     "Check",
-    "CheckSquare",
-    "MoreHorizontal",
+    "SquareCheckBig",
+    "Ellipsis",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   driveApi: {
     restoreFile: vi.fn(),
     permanentlyDeleteFile: vi.fn(),
+    FOLDER_MIME: "application/vnd.google-apps.folder",
   },
   getTrashedFiles: vi.fn(),
   showErrorToast: vi.fn(),
@@ -108,9 +109,7 @@ describe("TrashScreen skeleton loading", () => {
     await act(async () => {
       const call = deferredCalls[0];
       if (call === undefined) throw new Error("expected deferred call");
-      call.resolve([
-        { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
-      ]);
+      call.resolve([{ id: "f1", name: "Track 1", mimeType: "audio/mpeg" }]);
       await Promise.resolve();
     });
 

@@ -4,16 +4,20 @@ import {
   X,
   RefreshCw,
   LoaderCircle,
-  AlertTriangle,
-  FileAudio,
+  TriangleAlert,
+  FileHeadphone,
   Folder,
   Check,
-  CheckSquare,
-  MoreHorizontal,
+  SquareCheckBig,
+  Ellipsis,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SkeletonRowList } from "../components/Skeleton";
-import { restoreFile, permanentlyDeleteFile } from "../../utils/driveApi";
+import {
+  restoreFile,
+  permanentlyDeleteFile,
+  FOLDER_MIME,
+} from "../../utils/driveApi";
 import { getTrashedFiles } from "../../utils/drivePagination";
 import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
@@ -68,7 +72,6 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   }, [isMoreMenuOpen]);
 
   const fetchTrashed = async () => {
-    setIsLoading(true);
     try {
       // Fetch trashed audio files and folders that were deleted by DrPlay
       const q =
@@ -94,9 +97,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   };
 
   useEffect(() => {
-    // fetchTrashed sets isLoading synchronously — that IS the loading
-    // transition (skeleton), not a cascading render; delaying it would
-    // flash the stale empty list.
+    // fetchTrashed only sets state after await, but the React Compiler
+    // lint rule (set-state-in-effect) still traces the finally-setState
+    // through the try/catch exception edges, so the disable stays.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchTrashed();
     // fetchTrashed only closes over token (already in deps); its identity
@@ -190,6 +193,15 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     }
   };
 
+  const toggleItem = (id: string) => {
+    setSelectedIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      return newSet;
+    });
+  };
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
@@ -261,7 +273,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between px-1 py-3 mb-2">
                 <div className="flex items-center gap-2 text-sm text-brand-primary font-medium">
-                  <AlertTriangle className="w-5 h-5 shrink-0" />
+                  <TriangleAlert className="w-5 h-5 shrink-0" />
                   <p>{t("settings.trash_warning")}</p>
                 </div>
                 <div className="relative" ref={moreMenuRef}>
@@ -282,7 +294,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                       }}
                       className="p-1.5 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                     >
-                      <MoreHorizontal className="w-5 h-5" />
+                      <Ellipsis className="w-5 h-5" />
                     </button>
                   )}
 
@@ -295,7 +307,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                         }}
                         className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors group"
                       >
-                        <CheckSquare className="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
+                        <SquareCheckBig className="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
                         <span className="text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
                           {t("menu.select_multiple")}
                         </span>
@@ -305,8 +317,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                 </div>
               </div>
               {items.map((item) => {
-                const isFolder =
-                  item.mimeType === "application/vnd.google-apps.folder";
+                const isFolder = item.mimeType === FOLDER_MIME;
                 const isSelected = selectedIds.has(item.id);
                 return (
                   <div
@@ -321,26 +332,12 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                         : "bg-gray-50 dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] border border-transparent"
                     }`}
                     onClick={() => {
-                      if (isSelectionMode) {
-                        setSelectedIds((prev) => {
-                          const newSet = new Set(prev);
-                          if (newSet.has(item.id)) newSet.delete(item.id);
-                          else newSet.add(item.id);
-                          return newSet;
-                        });
-                      }
+                      if (isSelectionMode) toggleItem(item.id);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        if (isSelectionMode) {
-                          setSelectedIds((prev) => {
-                            const newSet = new Set(prev);
-                            if (newSet.has(item.id)) newSet.delete(item.id);
-                            else newSet.add(item.id);
-                            return newSet;
-                          });
-                        }
+                        if (isSelectionMode) toggleItem(item.id);
                       }
                     }}
                   >
@@ -364,7 +361,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                         {isFolder ? (
                           <Folder className="w-5 h-5" fill="currentColor" />
                         ) : (
-                          <FileAudio className="w-5 h-5" />
+                          <FileHeadphone className="w-5 h-5" />
                         )}
                       </div>
                       <div className="overflow-hidden">
