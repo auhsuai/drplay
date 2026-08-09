@@ -14,6 +14,37 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/utils/resumableSession.ts` | | | chờ audit |
 | 6 | `src/utils/driveApi.ts` | | | chờ audit |
 
+## Batch 4 — Store + Workers (2026-08-09)
+
+| # | File | Pattern cũ → mới | Nguồn tra cứu | Trạng thái |
+|---|------|------------------|---------------|------------|
+| 1 | `src/store/playerStore.ts` | | | chờ audit |
+| 2 | `src/store/driveStore.ts` | | | chờ audit |
+| 3 | `src/store/authStore.ts` | | | chờ audit |
+| 4 | `src/search/searchEngine.ts` | | | chờ audit |
+| 5 | `src/search/search.worker.ts` | | | chờ audit |
+| 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
+
+## Batch 4 — Store + Workers (2026-08-09)
+
+Kết luận audit: 6/6 file chuẩn 2026; **1 fix race thật** được APPROVE. Audit: `docs/audit_batch4_store_workers.md`.
+
+| # | File | Kết luận | Ghi chú |
+|---|------|----------|---------|
+| 1 | `src/store/playerStore.ts` | ✅ giữ nguyên | zustand 5.0.14 đúng v5 API (named import create, useShallow consumers, không deprecated v4); không persist có chủ đích |
+| 2 | `src/store/driveStore.ts` | ✅ giữ nguyên | đã chuẩn v5; nav persist ở useNavStatePersistence (dexie, có chủ đích) |
+| 3 | `src/store/authStore.ts` | ✅ giữ nguyên | 0 log token (grep xác nhận); không persist đúng |
+| 4 | `src/search/searchEngine.ts` | ✅ giữ nguyên | minisearch 7.2.0 — mọi API đúng v7 (searchOptions constructor-level, boost, storeFields, fuzzy 0.2) |
+| 5 | `src/search/search.worker.ts` | 🔧 **FIX race** | invalidate mid-rebuild bị nuốt (stale=false vô điều kiện) → generation guard; test #10 RED→GREEN; commit `8b18820` |
+| 6 | `src/workers/proSync.worker.ts` | ✅ giữ nguyên | glue mỏng không catch ĐÚNG (syncRunner.ts có try/catch + retry giới hạn + refreshTokenAndRetry) |
+
+## Backlog (Batch 4 — cross-file findings)
+
+| Hạng mục | Chi tiết |
+|----------|----------|
+| Worker glue style | search.worker `self.onmessage` vs proSync.worker `addEventListener` — cosmetic, không đạt threshold |
+| Updater-function action | playerStore ×4 + driveStore ×1 — ~8% ngắn hơn, không đạt threshold |
+
 ## Batch 3 — Core network/async utils (2026-08-09)
 
 Kết luận audit: **6/6 file đã chuẩn 2026 — 0 upgrade đạt threshold**. Audit: `docs/audit_batch3_network_utils.md`.
