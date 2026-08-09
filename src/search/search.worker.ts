@@ -47,13 +47,18 @@ export function createSearchWorkerState(): SearchWorkerState {
   return { index: null, stale: true, rebuildPromise: null };
 }
 
-const searchWorkerState: SearchWorkerState = createSearchWorkerState();
+export const searchWorkerState: SearchWorkerState = createSearchWorkerState();
+
+// Bumped on every invalidate so an in-flight rebuild can detect that its DB
+// snapshot predates the invalidation and must not publish a stale index.
+let rebuildGeneration = 0;
 
 // Test seam: wipes the module-level index state between test cases.
 export function resetSearchWorkerState(): void {
   searchWorkerState.index = null;
   searchWorkerState.stale = true;
   searchWorkerState.rebuildPromise = null;
+  rebuildGeneration = 0;
 }
 
 export function isSearchWorkerRequest(
@@ -110,11 +115,17 @@ function errorMessage(prefix: string, err: unknown): string {
 // Reads the full library + real metadata and builds a fresh index. Only the
 // rebuild path touches the DB, so idle workers cost nothing.
 async function performRebuild(deps: SearchWorkerDeps): Promise<void> {
+  const generation = rebuildGeneration;
   const [files, metaRows] = await Promise.all([
     deps.db.files.toArray(),
     deps.db.metadataCache.toArray(),
   ]);
   const realMeta = loadRealMetadata(metaRows);
+  if (generation !== rebuildGeneration) {
+    // An invalidate landed while the DB reads were in flight: this snapshot is
+    // already stale, so don't publish it — the next query rebuilds fresh.
+    return;
+  }
   searchWorkerState.index = deps.build(files, realMeta);
   searchWorkerState.stale = false;
 }
@@ -185,6 +196,7 @@ export async function handleSearchWorkerMessage(
       return;
     case "invalidate":
       searchWorkerState.stale = true;
+      rebuildGeneration++;
       return;
     case "query":
       await handleQuery(msg, deps);

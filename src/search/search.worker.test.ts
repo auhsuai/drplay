@@ -4,6 +4,7 @@ import type { SearchHit } from "./searchEngine";
 import {
   handleSearchWorkerMessage,
   resetSearchWorkerState,
+  searchWorkerState,
   type SearchWorkerDeps,
   type SearchWorkerRequest,
   type SearchWorkerResponse,
@@ -278,5 +279,43 @@ describe("search.worker", () => {
     ).resolves.toBeUndefined();
     expect(deps.posts).toHaveLength(0);
     expect(deps.buildSpy).not.toHaveBeenCalled();
+  });
+
+  it("10. invalidate arriving mid-rebuild is not swallowed (index stays stale)", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    // Deferred DB read keeps the rebuild parked mid-await so the test can
+    // deliver invalidate exactly inside the DB-read window (precedent:
+    // metadata.concurrency.test.ts generation-guard test).
+    let resolveFiles!: (v: DriveFile[]) => void;
+    const filesGate = new Promise<DriveFile[]>((resolve) => {
+      resolveFiles = resolve;
+    });
+    deps.db.files.toArray = () => filesGate;
+
+    // First query kicks off the rebuild; everything before the DB await runs
+    // synchronously, so the rebuild is already in-flight after this call.
+    const firstQuery = handleSearchWorkerMessage(
+      { type: "query", requestId: 10, query: "anh", limit: 10 },
+      deps,
+    );
+    await handleSearchWorkerMessage({ type: "invalidate" }, deps);
+    resolveFiles([makeFile("f1", "Anh.mp3")]);
+    await firstQuery;
+
+    // The invalidate landed mid-rebuild: the freshly built snapshot predates
+    // it, so stale must survive the rebuild instead of being reset to false,
+    // and the in-flight rebuild must not publish its stale snapshot (it is
+    // aborted before even calling deps.build).
+    expect(searchWorkerState.stale).toBe(true);
+    expect(deps.buildSpy).toHaveBeenCalledTimes(0);
+
+    // The next query rebuilds with fresh data and leaves the index usable.
+    await handleSearchWorkerMessage(
+      { type: "query", requestId: 11, query: "anh", limit: 10 },
+      deps,
+    );
+    expect(deps.buildSpy).toHaveBeenCalledTimes(1);
+    expect(searchWorkerState.stale).toBe(false);
+    expect(deps.posts[deps.posts.length - 1]?.type).toBe("results");
   });
 });
