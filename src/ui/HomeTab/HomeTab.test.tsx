@@ -970,3 +970,179 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.getByText(/^Good (morning|afternoon|evening)/)).toBeTruthy();
   });
 });
+
+describe("HomeTab loadData stale-write race", () => {
+  beforeEach(() => {
+    mocks.getRecentlyPlayed.mockReset();
+    mocks.getHeavyRotation.mockReset();
+    mocks.getRandomDiscoveries.mockReset();
+    mocks.getMostVisitedFolders.mockReset();
+    mocks.getRecentlyAddedAudioFiles.mockReset();
+    mocks.captureError.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  const track = (over: Partial<Track> = {}): Track => ({
+    id: "t-1",
+    title: "Track 1",
+    artist: "Artist 1",
+    streamUrl: "stream://t-1",
+    ...over,
+  });
+
+  const folder = (over: Partial<FolderVisitEntry> = {}): FolderVisitEntry => ({
+    id: "v-1",
+    name: "Folder 1",
+    count: 3,
+    lastVisited: Date.now(),
+    ...over,
+  });
+
+  it("a. stale loadData never overwrites a newer loadData (newest flow wins)", async () => {
+    // loadData awaits its reads SEQUENTIALLY, so an older flow can only still
+    // be mid-flight on its last read when a newer flow runs to completion.
+    const stale = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+    };
+    const fresh = {
+      recent: deferred<Track[]>(),
+      heavy: deferred<Track[]>(),
+      discover: deferred<Track[]>(),
+      folders: deferred<FolderVisitEntry[]>(),
+    };
+    mocks.getRecentlyPlayed
+      .mockReturnValueOnce(stale.recent.promise)
+      .mockReturnValueOnce(fresh.recent.promise);
+    mocks.getHeavyRotation
+      .mockReturnValueOnce(stale.heavy.promise)
+      .mockReturnValueOnce(fresh.heavy.promise);
+    mocks.getRandomDiscoveries
+      .mockReturnValueOnce(stale.discover.promise)
+      .mockReturnValueOnce(fresh.discover.promise);
+    mocks.getMostVisitedFolders
+      .mockReturnValueOnce(stale.folders.promise)
+      .mockReturnValueOnce(fresh.folders.promise);
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+
+    render(<HomeTab {...baseProps()} />);
+
+    // Advance flow 1 (mount) one read at a time until its LAST read is pending.
+    await act(async () => {
+      stale.recent.resolve([track({ id: "old-r", title: "Old Recent" })]);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mocks.getHeavyRotation).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      stale.heavy.resolve([track({ id: "old-h", title: "Old Heavy" })]);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mocks.getRandomDiscoveries).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      stale.discover.resolve([track({ id: "old-d", title: "Old Discover" })]);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mocks.getMostVisitedFolders).toHaveBeenCalledTimes(1);
+    });
+
+    // Flow 2 starts (recent-updated) while flow 1's last read is still pending.
+    act(() => {
+      window.dispatchEvent(new Event("recent-updated"));
+    });
+    await waitFor(() => {
+      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(2);
+    });
+
+    // The NEWER flow completes first: every section shows the fresh data.
+    await act(async () => {
+      fresh.recent.resolve([track({ id: "new-r", title: "New Recent" })]);
+      fresh.heavy.resolve([track({ id: "new-h", title: "New Heavy" })]);
+      fresh.discover.resolve([track({ id: "new-d", title: "New Discover" })]);
+      fresh.folders.resolve([folder({ id: "new-v", name: "New Folder" })]);
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("New Recent")).toBeTruthy();
+    expect(screen.getByText("New Heavy")).toBeTruthy();
+    expect(screen.getByText("New Discover")).toBeTruthy();
+    expect(screen.getByText("New Folder")).toBeTruthy();
+
+    // Flow 1's LAST read resolves late with stale data. Without a generation
+    // guard in loadData this write lands after the fresh data (RED — stale
+    // overwrites newest).
+    await act(async () => {
+      stale.folders.resolve([folder({ id: "old-v", name: "Old Folder" })]);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("Old Folder")).toBeNull();
+    expect(screen.getByText("New Folder")).toBeTruthy();
+    expect(screen.getByText("New Recent")).toBeTruthy();
+  });
+
+  it("b. stale loadData stops at its FIRST read when a newer flow starts (no partial overwrite)", async () => {
+    const staleRecent = deferred<Track[]>();
+    const freshRecent = deferred<Track[]>();
+    mocks.getRecentlyPlayed
+      .mockReturnValueOnce(staleRecent.promise)
+      .mockReturnValueOnce(freshRecent.promise);
+    mocks.getHeavyRotation.mockResolvedValue([
+      track({ id: "h", title: "Heavy" }),
+    ]);
+    mocks.getRandomDiscoveries.mockResolvedValue([
+      track({ id: "d", title: "Discover" }),
+    ]);
+    mocks.getMostVisitedFolders.mockResolvedValue([
+      folder({ id: "v", name: "Folder" }),
+    ]);
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+
+    render(<HomeTab {...baseProps()} />);
+    await waitFor(() => {
+      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    });
+
+    // Newer flow starts while the older flow is stuck on its first read.
+    act(() => {
+      window.dispatchEvent(new Event("recent-updated"));
+    });
+    await waitFor(() => {
+      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(2);
+    });
+
+    // Newest flow resolves first → fresh data rendered.
+    await act(async () => {
+      freshRecent.resolve([track({ id: "new-r", title: "New Recent" })]);
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("New Recent")).toBeTruthy();
+
+    // Older flow's read resolves LAST. Without a guard it overwrites recent
+    // with stale data (RED).
+    await act(async () => {
+      staleRecent.resolve([track({ id: "old-r", title: "Old Recent" })]);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("Old Recent")).toBeNull();
+    expect(screen.getByText("New Recent")).toBeTruthy();
+  });
+});

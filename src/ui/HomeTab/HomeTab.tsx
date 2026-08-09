@@ -80,6 +80,12 @@ export function HomeTab({
   // response must never clobber the fresh result. The same bump in the effect
   // cleanup also invalidates in-flight fetches after unmount.
   const recentlyAddedLoadGenRef = useRef(0);
+  // Independent generation guard for the full loadData flow (recent/heavy/
+  // discover/folders). Kept separate from recentlyAddedLoadGenRef so a delta
+  // refresh (which only re-reads Recently Added) can never cancel an in-flight
+  // loadData — only a NEWER loadData may. Bumped in the cleanup so a stale
+  // flow cannot write state after unmount.
+  const loadDataGenRef = useRef(0);
   // Pending trailing-debounce timer for the delta refresh; cancelled on
   // unmount so a queued refetch can never run after the component is gone.
   const deltaRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -133,10 +139,11 @@ export function HomeTab({
   }, [t, i18n.language, randomGreeting]);
 
   useEffect(() => {
-    // The generation counter is shared between loadRecentlyAdded and the
-    // cleanup; capture the (stable) ref object once so the cleanup does not
-    // touch the outer-scope ref directly (react-hooks/exhaustive-deps).
+    // The generation counters are shared between the loaders and the cleanup;
+    // capture the (stable) ref objects once so the cleanup does not touch the
+    // outer-scope refs directly (react-hooks/exhaustive-deps).
     const loadGenRef = recentlyAddedLoadGenRef;
+    const loadDataRef = loadDataGenRef;
     const deltaTimerRef = deltaRefreshTimerRef;
     const visitCount = parseInt(
       sessionStorage.getItem("drplay_home_visit") || "0",
@@ -172,10 +179,19 @@ export function HomeTab({
     };
 
     const loadData = async () => {
-      setRecent(await getRecentlyPlayed());
-      setHeavy(await getHeavyRotation());
-      setDiscover(await getRandomDiscoveries());
-      setMostVisitedFolders(await getMostVisitedFolders());
+      const generation = ++loadDataRef.current;
+      const recent = await getRecentlyPlayed();
+      if (generation !== loadDataRef.current) return;
+      setRecent(recent);
+      const heavy = await getHeavyRotation();
+      if (generation !== loadDataRef.current) return;
+      setHeavy(heavy);
+      const discover = await getRandomDiscoveries();
+      if (generation !== loadDataRef.current) return;
+      setDiscover(discover);
+      const mostVisitedFolders = await getMostVisitedFolders();
+      if (generation !== loadDataRef.current) return;
+      setMostVisitedFolders(mostVisitedFolders);
 
       loadRecentlyAdded(token);
     };
@@ -233,6 +249,7 @@ export function HomeTab({
         deltaTimerRef.current = null;
       }
       loadGenRef.current++;
+      loadDataRef.current++;
     };
     // loadData/loadRecentlyAdded are effect-local closures; only `token`
     // (used by the recently-added fetch) can change the effect's behavior,
