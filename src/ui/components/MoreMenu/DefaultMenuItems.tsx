@@ -1,4 +1,4 @@
-import { CheckSquare, Download, FolderOutput, Trash2 } from "lucide-react";
+import { SquareCheckBig, Download, FolderOutput, Trash2 } from "lucide-react";
 import type { Track } from "../../../App";
 import type { DriveItem } from "../../../types";
 import { MENU_ITEM_BASE_CLASS, MENU_ITEM_DELETE_CLASS } from "./constants";
@@ -50,7 +50,7 @@ export function DefaultMenuItems({
       {driveItem && token && (
         <>
           <MoreMenuItem
-            icon={CheckSquare}
+            icon={SquareCheckBig}
             label={t("menu.select_multiple")}
             onClick={(e) => {
               e.stopPropagation();

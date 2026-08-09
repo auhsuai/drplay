@@ -1,6 +1,6 @@
 import {
   Square,
-  CheckSquare,
+  SquareCheckBig,
   FolderOutput,
   Trash2,
   LoaderCircle,
@@ -39,7 +39,7 @@ export function SelectionToolbar({
         {selectedCount === totalCount ? (
           <Square className="w-4 h-4" />
         ) : (
-          <CheckSquare className="w-4 h-4" />
+          <SquareCheckBig className="w-4 h-4" />
         )}
         <span className="hidden sm:inline">{t("drive.select_all")}</span>
       </button>

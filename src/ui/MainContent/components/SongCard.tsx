@@ -1,5 +1,11 @@
 import React, { useState } from "react";
-import { Folder, Music, Square, CheckSquare, LoaderCircle } from "lucide-react";
+import {
+  Folder,
+  Music,
+  Square,
+  SquareCheckBig,
+  LoaderCircle,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Track } from "../../../App";
 import type { DriveItem } from "../../../types";
@@ -185,7 +191,7 @@ export const SongCard = React.memo(
             {isSelectionMode && (
               <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
                 {isSelected ? (
-                  <CheckSquare className="w-5 h-5 text-brand-primary" />
+                  <SquareCheckBig className="w-5 h-5 text-brand-primary" />
                 ) : (
                   <Square className="w-5 h-5 text-gray-400 dark:text-gray-500 group-hover:text-gray-500 dark:group-hover:text-gray-400" />
                 )}

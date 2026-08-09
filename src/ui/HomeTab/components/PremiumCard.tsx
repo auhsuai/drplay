@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import type { Track } from "../../../App";
 import type { CachedMetadata } from "../../../utils/metadata";
-import { Play, Music, MoreHorizontal } from "lucide-react";
+import { Play, Music, Ellipsis } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { captureError } from "../../../utils/errorLog";
 import {
@@ -103,7 +103,7 @@ export function PremiumCard({
         {isOverlayBtn ? (
           <div className="absolute inset-0 bg-white/70 dark:bg-black/70 flex items-center justify-center opacity-80 group-hover:opacity-100 transition-opacity">
             <span className="font-bold text-gray-900 dark:text-white text-[15px] flex items-center gap-1">
-              <MoreHorizontal className="w-5 h-5" /> {t("view_all")}
+              <Ellipsis className="w-5 h-5" /> {t("view_all")}
             </span>
           </div>
         ) : (

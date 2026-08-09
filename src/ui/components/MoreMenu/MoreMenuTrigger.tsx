@@ -1,4 +1,4 @@
-import { LoaderCircle, MoreHorizontal } from "lucide-react";
+import { LoaderCircle, Ellipsis } from "lucide-react";
 
 interface MoreMenuTriggerProps {
   isOpen: boolean;
@@ -34,7 +34,7 @@ export function MoreMenuTrigger({
       {isDownloadingFile ? (
         <LoaderCircle className="w-5 h-5 animate-spin text-brand-primary" />
       ) : (
-        <MoreHorizontal className="w-5 h-5" />
+        <Ellipsis className="w-5 h-5" />
       )}
     </button>
   );
