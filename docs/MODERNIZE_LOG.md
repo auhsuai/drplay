@@ -25,6 +25,17 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 6 — Workers + lib core sweep (2026-08-09, tuần tự từng file)
+
+| # | File | Kết luận | Ghi chú |
+|---|------|----------|---------|
+| 1 | `src/workers/syncRunner.ts` | ✅ giữ nguyên | async/await toàn bộ, catch phân loại phase, retry bounded + refreshTokenAndRetry, 410→reset full sync |
+| 2 | `src/lib/AudioController.ts` | ✅ giữ nguyên | changeToken monotonic guard chống stale retry, WeakMap listener retention, safePlay phân loại lỗi |
+| 3 | `src/utils/metadata/fetchPipeline.ts` | ✅ giữ nguyên | async/await + typed catch + AbortSignal injection + retry tokenizer |
+| 4 | `src/utils/upload/*` + uploadManager | ✅ giữ nguyên | Promise.all @ queue.ts:251 = batch 2 DB write độc lập (must-await-all đúng); retry bounded 308-resume |
+| 5 | `src/db/db.ts` + `kv.ts` | ✅ giữ nguyên | runOp wrapper: typed catch + rethrow + log ngữ cảnh |
+| 6 | `src/workers/driveFetch.ts` + `tokenRefresh.ts` | ✅ giữ nguyên | AbortSignal.timeout, clone body rate-limit check, Retry-After parse, timeout 15s bounded |
+
 ## Batch 5 — Per-file sweep (2026-08-09, tuần tự từng file)
 
 | # | File | Kết luận | Ghi chú |
