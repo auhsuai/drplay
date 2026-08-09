@@ -49,6 +49,33 @@ export function bindEntries(source: () => readonly InternalEntry[]): void {
   entriesRef = source;
 }
 
+// Active upload coverage — single source of truth shared with queue.ts's
+// getUploadingIds: the ids that count as "uploading" are the entry id, the
+// Drive id once known, and the parent folder id (never 'root') of every
+// queued/uploading entry. queue.ts imports collectActiveCoverage to build its
+// flat set; getUploadState resolves a single id against the same rule.
+function isActiveEntry(entry: InternalEntry): boolean {
+  return entry.status === "queued" || entry.status === "uploading";
+}
+
+export function collectActiveCoverage(): {
+  ids: Set<string>;
+  driveIds: Set<string>;
+  parentIds: Set<string>;
+} {
+  const ids = new Set<string>();
+  const driveIds = new Set<string>();
+  const parentIds = new Set<string>();
+  for (const entry of entriesRef()) {
+    if (!isActiveEntry(entry)) continue;
+    ids.add(entry.id);
+    if (entry.driveId) driveIds.add(entry.driveId);
+    // The parent folder must stay locked (spinner, no dim) while a child uploads.
+    if (entry.parentId !== ROOT_FOLDER_ID) parentIds.add(entry.parentId);
+  }
+  return { ids, driveIds, parentIds };
+}
+
 /**
  * Resolve a single item id to its upload presentation state ('uploading' wins
  * when an id matches both the entry and a child upload under it). Callers use
@@ -57,19 +84,11 @@ export function bindEntries(source: () => readonly InternalEntry[]): void {
  * @returns The state that row should render ('none' when not uploading).
  */
 export function getUploadState(id: string): UploadState {
-  // Mirrors getUploadingIds' coverage (entry id + driveId + parentId) but
-  // resolves a SINGLE id to a presentation state instead of a flat set.
-  // 'uploading' wins when the id matches both (e.g. a folder whose own
-  // driveId matches while a child uploads under it).
-  let isParent = false;
-  for (const entry of entriesRef()) {
-    if (entry.status !== "queued" && entry.status !== "uploading") continue;
-    if (entry.id === id || entry.driveId === id) return "uploading";
-    if (entry.parentId === id && id !== ROOT_FOLDER_ID) isParent = true;
-  }
+  const { ids, driveIds, parentIds } = collectActiveCoverage();
+  if (ids.has(id) || driveIds.has(id)) return "uploading";
+  if (parentIds.has(id)) return "parent-uploading";
   // A folder that just finished must still show its child-upload spinner while
   // a child uploads under it — parent-uploading beats the transient check.
-  if (isParent) return "parent-uploading";
   if (recentlyDoneIds.has(id)) return "uploaded";
   return "none";
 }

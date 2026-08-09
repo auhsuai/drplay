@@ -2,7 +2,6 @@ import { t } from "i18next";
 import { db } from "../../db/db";
 import type { DriveFile, UploadSessionRow } from "../../db/db";
 import type { DriveFileItem } from "../driveApi";
-import { ROOT_FOLDER_ID } from "../driveConstants";
 import { UploadError } from "../driveUpload";
 import { captureError } from "../errorLog";
 import { showErrorToast } from "../simpleToast";
@@ -13,6 +12,7 @@ import {
 } from "./controllers";
 import {
   clearProgressNotifyTimer,
+  collectActiveCoverage,
   markRecentlyDone,
   notify,
   resetProgressNotify,
@@ -137,15 +137,10 @@ export async function resumeInterruptedUploads(
 }
 
 export function getUploadingIds(): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const entry of entries) {
-    if (entry.status !== "queued" && entry.status !== "uploading") continue;
-    ids.add(entry.id);
-    if (entry.driveId) ids.add(entry.driveId);
-    // The parent folder must stay locked (spinner, no dim) while a child uploads.
-    if (entry.parentId !== ROOT_FOLDER_ID) ids.add(entry.parentId);
-  }
-  return ids; // fresh set per call - callers must not cache the reference
+  // The active-coverage rule (entry id + driveId + parentId ≠ root) lives in
+  // events.collectActiveCoverage — this is the flat-set projection of it.
+  const { ids, driveIds, parentIds } = collectActiveCoverage();
+  return new Set<string>([...ids, ...driveIds, ...parentIds]); // fresh set per call - callers must not cache the reference
 }
 
 export function isUploading(id: string): boolean {
