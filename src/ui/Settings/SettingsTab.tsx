@@ -18,6 +18,7 @@ import { CacheManagerModal } from "./components/CacheManagerModal";
 import type { ThemeType } from "../../hooks/useTheme";
 import { open } from "@tauri-apps/plugin-dialog";
 import { showErrorToast } from "../../utils/simpleToast";
+import { captureError } from "../../utils/errorLog";
 import {
   setCustomDownloadPath,
   getEffectiveDownloadPath,
@@ -69,7 +70,15 @@ export function SettingsTab({
   const [uploadEntries, setUploadEntries] = useState<UploadEntry[]>(getEntries);
 
   useEffect(() => {
-    void getEffectiveDownloadPath().then(setDownloadPath);
+    void getEffectiveDownloadPath()
+      .then(setDownloadPath)
+      .catch((err: unknown) => {
+        void captureError({
+          level: "warn",
+          source: "SettingsTab",
+          message: `download-path-load-failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      });
   }, []);
 
   // Live snapshot of the upload queue: subscribe returns an unsubscribe, so

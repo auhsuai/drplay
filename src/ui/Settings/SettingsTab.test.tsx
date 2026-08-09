@@ -71,6 +71,13 @@ vi.mock("../../utils/downloadPath", () => ({
   setCustomDownloadPath: vi.fn(),
 }));
 
+// SettingsTab routes download-path load failures into captureError — mock it
+// so the reject path is asserted without touching IndexedDB.
+const captureErrorMocks = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("../../utils/errorLog", () => ({
+  captureError: captureErrorMocks.captureError,
+}));
+
 // The in-progress uploads section (slice 5.3) consumes uploadManager's
 // subscribe/getEntries/cancelUpload — mocked here so the section's behavior
 // (render/hide/cancel/live updates) is tested in isolation from the real
@@ -112,6 +119,7 @@ describe("SettingsTab download path display", () => {
 
   beforeEach(() => {
     getEffectiveDownloadPath.mockReset();
+    captureErrorMocks.captureError.mockReset();
   });
 
   it("exposes the full path via title while showing the middle-truncated path", async () => {
@@ -139,6 +147,26 @@ describe("SettingsTab download path display", () => {
       expect(el).not.toBeNull();
       expect(el?.textContent).toBe("");
     });
+  });
+
+  it("logs the failure and keeps the path empty when resolving the download path rejects", async () => {
+    getEffectiveDownloadPath.mockRejectedValue(new Error("invoke failed"));
+    render(<SettingsTab {...baseProps} />);
+    await waitFor(() => {
+      expect(captureErrorMocks.captureError).toHaveBeenCalledTimes(1);
+    });
+    expect(captureErrorMocks.captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "SettingsTab",
+        message: expect.stringContaining(
+          "download-path-load-failed",
+        ) as unknown as string,
+      }),
+    );
+    const el = document.querySelector('p[title=""]');
+    expect(el).not.toBeNull();
+    expect(el?.textContent).toBe("");
   });
 });
 
