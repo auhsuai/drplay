@@ -25,6 +25,16 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 7 — Backlog fix + UI core sweep (2026-08-09)
+
+| # | File | Kết luận | Ghi chú |
+|---|------|----------|---------|
+| 1 | `src/ui/Settings/SettingsTab.tsx` | 🔧 **FIX** | backlog: `.then(setDownloadPath)` không catch → downloadDir() reject = unhandled rejection. Thêm catch → captureError warn. TDD: RED (Unhandled Rejection "invoke failed") → GREEN 13/13. Commit `d6d9596` |
+| 2 | `src/ui/MainContent/MainContent.tsx` | ✅ giữ nguyên | effects cleanup đủ, setTimeout cancellation, useEventListener |
+| 3 | `src/ui/PlayerBar/*` + `SeekBar.tsx` | ✅ giữ nguyên | pointer capture + removeEventListener đầy đủ, comment why |
+| 4 | `src/ui/NowPlaying/*` + hooks | ✅ giữ nguyên | không pattern cũ |
+| 5 | `src/ui/Sidebar/*` | ✅ giữ nguyên | (StorageQuotaCard audit batch 5) |
+
 ## Batch 6 — Workers + lib core sweep (2026-08-09, tuần tự từng file)
 
 | # | File | Kết luận | Ghi chú |
