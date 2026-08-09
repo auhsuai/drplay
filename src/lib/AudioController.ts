@@ -131,6 +131,18 @@ export class AudioController {
     audio.addEventListener("loadedmetadata", onMetadata);
   }
 
+  // Buffer-bar reliability beyond `progress`: for a small/fast file the LAST
+  // native progress event can fire with buffered still empty, then loading
+  // finishes with NO further progress event — the bar would stay empty even
+  // though buffered is full (race). These discrete events prove the buffered
+  // state may have changed, so re-emit `progress` so consumers re-read
+  // getBuffered(). They fire rarely -> no throttle (no DOM churn).
+  private reemitProgress(audio: HTMLAudioElement): void {
+    if (audio === this.activeAudio) {
+      this.emit("progress", undefined);
+    }
+  }
+
   private setupAudio(audio: HTMLAudioElement) {
     // Handlers are held as named properties (not inline anonymous closures)
     // so each reference is retained in this.elementListeners and removable.
@@ -158,28 +170,16 @@ export class AudioController {
       }
     };
 
-    // Buffer-bar reliability beyond `progress`: for a small/fast file the LAST
-    // native progress event can fire with buffered still empty, then loading
-    // finishes with NO further progress event — the bar would stay empty even
-    // though buffered is full (race). These discrete events prove the buffered
-    // state may have changed, so re-emit `progress` so consumers re-read
-    // getBuffered(). They fire rarely -> no throttle (no DOM churn).
     handlers.seeked = () => {
-      if (audio === this.activeAudio) {
-        this.emit("progress", undefined);
-      }
+      this.reemitProgress(audio);
     };
 
     handlers.loadeddata = () => {
-      if (audio === this.activeAudio) {
-        this.emit("progress", undefined);
-      }
+      this.reemitProgress(audio);
     };
 
     handlers.suspend = () => {
-      if (audio === this.activeAudio) {
-        this.emit("progress", undefined);
-      }
+      this.reemitProgress(audio);
     };
 
     // Native `progress` fires periodically while the media resource loads —
