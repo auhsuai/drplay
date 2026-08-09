@@ -3,16 +3,12 @@ import { Heart, Maximize2, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from "../components/MoreMenu";
 import { isFavorite, addFavorite, removeFavorite } from "../../utils/favorites";
-import {
-  getTrackMetadata,
-  V_PLACEHOLDER,
-  UNKNOWN_ARTIST,
-} from "../../utils/metadata";
+import { V_PLACEHOLDER, UNKNOWN_ARTIST } from "../../utils/metadata";
 import type { CachedMetadata } from "../../utils/metadata";
-import { buildCoverBlobUrl } from "../../utils/coverStore";
 import { useAuthStore } from "../../store/authStore";
 import { usePlayerStore } from "../../store/playerStore";
 import { captureError } from "../../utils/errorLog";
+import { useTrackMetadata } from "../../hooks/useTrackMetadata";
 import type { Track } from "../../types";
 
 const PLAYER_BAR_MODULE = "PlayerBar";
@@ -28,7 +24,6 @@ export function TrackInfo({
 }: TrackInfoProps) {
   const { t } = useTranslation();
   const [isLiked, setIsLiked] = useState(false);
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const coverImgRef = useRef<HTMLImageElement>(null);
   // Parsed tags shown in the bar. PlayerBar is memoized with a comparator that
   // treats two tracks with the same id as equal, so a store-side title/artist
@@ -39,6 +34,80 @@ export function TrackInfo({
   // media-session / now-playing consumers).
   const [displayTitle, setDisplayTitle] = useState<string | null>(null);
   const [displayArtist, setDisplayArtist] = useState<string | null>(null);
+
+  // The player bar displays tags straight off the store's currentTrack, but
+  // several play sources hand over a track before its tags exist (HomeTab
+  // recently-added plays title=filename/artist="", search hits, session
+  // restore) — the fetched metadata was only ever used for the cover. Once a
+  // REAL entry (v < V_PLACEHOLDER) arrives, fold the parsed title/artist into
+  // the store (same updater pattern usePlayer uses for restoreDuration) so
+  // the bar (and useMediaSession, which reads the store) shows the real tags.
+  // Guards: a placeholder entry (filename title, "Unknown Artist") never
+  // writes; the updater returns prev unchanged when nothing actually differs,
+  // so a store update cannot retrigger this effect into a loop.
+  const applyMetadataTags = useCallback((metadata: CachedMetadata) => {
+    // A real entry always carries its cache version (8) — placeholder entries
+    // carry V_PLACEHOLDER (9) and must not touch the display or the store. A
+    // non-numeric v (undefined in some tests) is equally untrusted: comparing
+    // `undefined >= V_PLACEHOLDER` is false, which would wrongly apply.
+    if (typeof metadata.v !== "number" || metadata.v >= V_PLACEHOLDER) return;
+    // Enrich the local display first — the memoized PlayerBar never passes a
+    // same-id store update down as a prop (see the state comment above), so
+    // this local state is what actually repaints the bar. React bails out on
+    // equal values, so a repeat call is a no-op render-wise.
+    if (metadata.title) setDisplayTitle(metadata.title);
+    if (metadata.artist && metadata.artist !== UNKNOWN_ARTIST) {
+      setDisplayArtist(metadata.artist);
+    }
+    usePlayerStore.getState().setCurrentTrack((prev) => {
+      if (!prev) return prev;
+      const title =
+        metadata.title && metadata.title !== prev.title
+          ? metadata.title
+          : prev.title;
+      const artist =
+        metadata.artist &&
+        metadata.artist !== UNKNOWN_ARTIST &&
+        metadata.artist !== prev.artist
+          ? metadata.artist
+          : prev.artist;
+      if (title === prev.title && artist === prev.artist) return prev;
+      return { ...prev, title, artist };
+    });
+  }, []);
+
+  // Cover: fetch metadata once per track (no debounce — only one track plays)
+  // and render the FULL (≤1000px) picture when present, thumb as fallback
+  // (parity with useNowPlayingMetadata and the cards). No picture keeps the
+  // Music icon. The track box carries no token prop, so it reads the store
+  // (the login gate mounts the player only after auth, so the token is
+  // already set by the time the first track renders).
+  const authToken = useAuthStore.getState().accessToken;
+  const onCoverError = useCallback(
+    (error: unknown) => {
+      // onError only fires while the fetch effect is enabled, i.e. when
+      // currentTrack is non-null — the ?? "" keeps the template literal
+      // lint-clean without ever changing the reachable message.
+      const trackId = currentTrack?.id ?? "";
+      void captureError({
+        level: "warn",
+        source: PLAYER_BAR_MODULE,
+        message: `cover-metadata-failed (trackId=${trackId}): ${error instanceof Error ? error.message : String(error)}`,
+      });
+    },
+    [currentTrack?.id],
+  );
+
+  const { coverUrl, setCoverUrl } = useTrackMetadata({
+    fileId: currentTrack?.id ?? null,
+    token: authToken,
+    size: currentTrack?.size,
+    originalName: currentTrack?.originalName,
+    enabled: !!currentTrack && !!authToken,
+    imgRef: coverImgRef,
+    onMetadata: applyMetadataTags,
+    onError: onCoverError,
+  });
 
   // Reset the liked flag when the track goes away (the heart only renders
   // while a track exists, so this is a defensive reset on the null track).
@@ -88,47 +157,6 @@ export function TrackInfo({
     };
   }, [currentTrack, checkFavorite]);
 
-  // The player bar displays tags straight off the store's currentTrack, but
-  // several play sources hand over a track before its tags exist (HomeTab
-  // recently-added plays title=filename/artist="", search hits, session
-  // restore) — the fetched metadata was only ever used for the cover. Once a
-  // REAL entry (v < V_PLACEHOLDER) arrives, fold the parsed title/artist into
-  // the store (same updater pattern usePlayer uses for restoreDuration) so
-  // the bar (and useMediaSession, which reads the store) shows the real tags.
-  // Guards: a placeholder entry (filename title, "Unknown Artist") never
-  // writes; the updater returns prev unchanged when nothing actually differs,
-  // so a store update cannot retrigger this effect into a loop.
-  const applyMetadataTags = useCallback((metadata: CachedMetadata) => {
-    // A real entry always carries its cache version (8) — placeholder entries
-    // carry V_PLACEHOLDER (9) and must not touch the display or the store. A
-    // non-numeric v (undefined in some tests) is equally untrusted: comparing
-    // `undefined >= V_PLACEHOLDER` is false, which would wrongly apply.
-    if (typeof metadata.v !== "number" || metadata.v >= V_PLACEHOLDER) return;
-    // Enrich the local display first — the memoized PlayerBar never passes a
-    // same-id store update down as a prop (see the state comment above), so
-    // this local state is what actually repaints the bar. React bails out on
-    // equal values, so a repeat call is a no-op render-wise.
-    if (metadata.title) setDisplayTitle(metadata.title);
-    if (metadata.artist && metadata.artist !== UNKNOWN_ARTIST) {
-      setDisplayArtist(metadata.artist);
-    }
-    usePlayerStore.getState().setCurrentTrack((prev) => {
-      if (!prev) return prev;
-      const title =
-        metadata.title && metadata.title !== prev.title
-          ? metadata.title
-          : prev.title;
-      const artist =
-        metadata.artist &&
-        metadata.artist !== UNKNOWN_ARTIST &&
-        metadata.artist !== prev.artist
-          ? metadata.artist
-          : prev.artist;
-      if (title === prev.title && artist === prev.artist) return prev;
-      return { ...prev, title, artist };
-    });
-  }, []);
-
   // Re-check the current track when favorites change elsewhere (favorites.ts
   // dispatches `favorites-updated` on add/remove), so the heart never shows a
   // stale state while the same track keeps playing.
@@ -142,53 +170,6 @@ export function TrackInfo({
       window.removeEventListener("favorites-updated", handleFavoritesUpdated);
     };
   }, [currentTrack, checkFavorite]);
-
-  // Cover: fetch metadata once per track (no debounce — only one track plays)
-  // and render the FULL (≤1000px) picture when present, thumb as fallback
-  // (parity with useNowPlayingMetadata and the cards). No picture keeps the
-  // Music icon. The track box carries no token prop, so it reads the store.
-  useEffect(() => {
-    if (!currentTrack) return;
-    const controller = new AbortController();
-    // The metadata effect cleanup touches the img element; capture it at
-    // setup so the cleanup never reads the (possibly stale) ref
-    // (react-hooks/exhaustive-deps ref-cleanup rule).
-    const imgElement = coverImgRef.current;
-    const token = useAuthStore.getState().accessToken;
-    if (!token) return;
-    void (async () => {
-      try {
-        const metadata = await getTrackMetadata(
-          currentTrack.id,
-          token,
-          currentTrack.size,
-          currentTrack.originalName,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
-        setCoverUrl(
-          coverBytes
-            ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
-            : null,
-        );
-        applyMetadataTags(metadata);
-      } catch (e: unknown) {
-        if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
-        void captureError({
-          level: "warn",
-          source: PLAYER_BAR_MODULE,
-          message: `cover-metadata-failed (trackId=${currentTrack.id}): ${e instanceof Error ? e.message : String(e)}`,
-        });
-      }
-    })();
-    return () => {
-      controller.abort();
-      if (imgElement) {
-        imgElement.src = "";
-      }
-    };
-  }, [currentTrack, applyMetadataTags]);
 
   const isFavoriteTogglingRef = useRef(false);
   const handleToggleFavorite = async () => {

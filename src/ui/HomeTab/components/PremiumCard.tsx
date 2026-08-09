@@ -1,13 +1,15 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import type { Track } from "../../../App";
-import { getTrackMetadata } from "../../../utils/metadata";
-import { buildCoverBlobUrl } from "../../../utils/coverStore";
+import type { CachedMetadata } from "../../../utils/metadata";
 import { Play, Music, MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { captureError } from "../../../utils/errorLog";
+import {
+  useTrackMetadata,
+  TRACK_METADATA_DEBOUNCE_MS,
+} from "../../../hooks/useTrackMetadata";
 
 const PREMIUM_CARD_MODULE = "PremiumCard";
-const METADATA_FETCH_DEBOUNCE_MS = 150;
 const GOOGLE_COLORS = ["#4285F4", "#EA4335", "#FBBC05", "#34A853"];
 export const getFillColor = (str: string) => {
   let hash = 0;
@@ -28,66 +30,42 @@ export function PremiumCard({
   isOverlayBtn?: boolean;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const fillColor = getFillColor(track.id);
   const [title, setTitle] = useState(track.title);
   const [artist, setArtist] = useState(track.artist);
   const { t } = useTranslation();
 
-  useEffect(() => {
-    if (!token) return;
-    const controller = new AbortController();
-    let isMounted = true;
-    // The cleanup touches the img element; capture it at setup so the
-    // cleanup never reads the (possibly stale) ref.
-    const imgElement = imgRef.current;
+  const onMetadata = useCallback((metadata: CachedMetadata) => {
+    // Truthy-guard: never overwrite the placeholder title/artist with empty
+    // values from a metadata entry that lacks them.
+    if (metadata.title) setTitle(metadata.title);
+    if (metadata.artist) setArtist(metadata.artist);
+  }, []);
+
+  const onError = useCallback((error: unknown) => {
+    void captureError({
+      level: "warn",
+      source: PREMIUM_CARD_MODULE,
+      message: `metadata-load-failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }, []);
+
+  const { coverUrl, setCoverUrl } = useTrackMetadata({
+    fileId: track.id,
+    token,
+    size: track.size,
+    originalName: track.originalName,
+    enabled: !!token,
     // Debounce: scrolling a large library mounts many premium cards at once;
     // fetching metadata for every one immediately queues hundreds of range
     // requests behind the app-wide CONCURRENCY-3 semaphore (the same storm
     // that made metadata loads minutes-long). Fetch only for cards that stay
     // mounted 150ms — mirrors SongCard's debounce.
-    const timerId = setTimeout(() => {
-      getTrackMetadata(
-        track.id,
-        token,
-        track.size,
-        track.originalName,
-        controller.signal,
-      )
-        .then((meta) => {
-          if (!isMounted) return;
-          if (meta.title) setTitle(meta.title);
-          if (meta.artist) setArtist(meta.artist);
-          // Fix G: Chromium/WebView2 rejects the drplay:// custom scheme at the
-          // network stack (ERR_UNKNOWN_URL_SCHEME) before the Rust handler can
-          // respond, so the cover renders straight from a blob URL built with
-          // the picture bytes metadata already parsed. A 204/error drops to the
-          // icon through the img onError below.
-          // Full (≤1000px) bytes win over the 256px thumb — HomeTab cards must
-          // show the sharp cover, not the blurry placeholder-sized one.
-          const coverBytes = meta.pictureDataFull ?? meta.pictureData;
-          setCoverUrl(
-            coverBytes
-              ? buildCoverBlobUrl(coverBytes, meta.pictureFormat)
-              : null,
-          );
-        })
-        .catch((e: unknown) => {
-          if (controller.signal.aborted) return; // deliberate cleanup abort — not an error
-          void captureError({
-            level: "warn",
-            source: PREMIUM_CARD_MODULE,
-            message: `metadata-load-failed: ${e instanceof Error ? e.message : String(e)}`,
-          });
-        });
-    }, METADATA_FETCH_DEBOUNCE_MS);
-    return () => {
-      isMounted = false;
-      clearTimeout(timerId);
-      controller.abort();
-      if (imgElement) imgElement.src = "";
-    };
-  }, [track.id, token, track.size, track.originalName]);
+    debounceMs: TRACK_METADATA_DEBOUNCE_MS,
+    imgRef,
+    onMetadata,
+    onError,
+  });
 
   return (
     <div
