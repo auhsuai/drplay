@@ -158,7 +158,6 @@ export function TabContentRouter({
             onPlay={(t: Track, c: Track[]) => {
               onPlayTrack(t, c);
             }}
-            token={token}
             currentTrack={currentTrack}
           />
         ) : activeTab.startsWith("playlist_") ? (

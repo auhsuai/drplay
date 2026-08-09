@@ -17,7 +17,6 @@ const LIKED_SONGS_MODULE = "LikedSongs";
 
 interface LikedSongsProps {
   onPlay: (track: Track, context: Track[], startIndex?: number) => void;
-  token: string | null;
   currentTrack?: Track | null;
 }
 
