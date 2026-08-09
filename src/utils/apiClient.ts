@@ -43,6 +43,10 @@ const REFRESH_TIMEOUT_MS = 15_000;
 // transient and readRefreshToken has a localStorage fallback anyway.
 const KEYRING_TIMEOUT_MS = 5000;
 
+// Revoke (logout) is best-effort fire-and-forget: bound it so a stalled
+// Google endpoint cannot delay the logout flow.
+const REVOKE_TIMEOUT_MS = 5000;
+
 const PROACTIVE_REFRESH_MARGIN_SEC = 300;
 const PROACTIVE_REFRESH_MIN_MS = 5000;
 // Single source of truth for the token stale threshold: getValidToken treats a
@@ -162,13 +166,13 @@ export async function revokeGoogleToken(token: string): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: `token=${encodeURIComponent(token)}`,
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
     });
   } catch (err: unknown) {
     await captureError({
       level: "warn",
       source: "apiClient",
-      message: `refresh-token-keyring-read-failed, falling back to localStorage: ${err instanceof Error ? err.message : String(err)}`,
+      message: `refresh-token-revoke-failed: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
 }
