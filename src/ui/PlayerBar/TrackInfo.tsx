@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Heart, Maximize2, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from "../components/MoreMenu";
-import { isFavorite, addFavorite, removeFavorite } from "../../utils/favorites";
+import {
+  isFavorite,
+  addFavorite,
+  removeFavorite,
+  FAVORITES_UPDATED_EVENT,
+} from "../../utils/favorites";
 import { V_PLACEHOLDER, UNKNOWN_ARTIST } from "../../utils/metadata";
 import type { CachedMetadata } from "../../utils/metadata";
 import { useAuthStore } from "../../store/authStore";
@@ -165,9 +170,12 @@ export function TrackInfo({
       if (!currentTrack) return;
       void checkFavorite(currentTrack.id, () => false);
     };
-    window.addEventListener("favorites-updated", handleFavoritesUpdated);
+    window.addEventListener(FAVORITES_UPDATED_EVENT, handleFavoritesUpdated);
     return () => {
-      window.removeEventListener("favorites-updated", handleFavoritesUpdated);
+      window.removeEventListener(
+        FAVORITES_UPDATED_EVENT,
+        handleFavoritesUpdated,
+      );
     };
   }, [currentTrack, checkFavorite]);
 

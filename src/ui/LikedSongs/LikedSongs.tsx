@@ -3,7 +3,11 @@ import { Play, Heart, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Track } from "../../App";
-import { getFavorites, removeFavorite } from "../../utils/favorites";
+import {
+  getFavorites,
+  removeFavorite,
+  FAVORITES_UPDATED_EVENT,
+} from "../../utils/favorites";
 import { showErrorToast } from "../../utils/simpleToast";
 import { MoreMenu } from "../components/MoreMenu";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
@@ -42,10 +46,10 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
           }),
       );
     };
-    window.addEventListener("favorites-updated", handleUpdate);
+    window.addEventListener(FAVORITES_UPDATED_EVENT, handleUpdate);
     window.addEventListener("user-changed", handleUpdate);
     return () => {
-      window.removeEventListener("favorites-updated", handleUpdate);
+      window.removeEventListener(FAVORITES_UPDATED_EVENT, handleUpdate);
       window.removeEventListener("user-changed", handleUpdate);
     };
   }, []);

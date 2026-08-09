@@ -7,6 +7,10 @@ import i18n from "../i18n";
 
 const FAV_MODULE = "favorites";
 
+// Broadcast on add/remove favorite so listeners (player bar heart, liked
+// songs list) can re-read the persisted state.
+export const FAVORITES_UPDATED_EVENT = "favorites-updated";
+
 // Classify a favorites persistence error for observability. Returns name +
 // message only — never the error object/stack, which can leak track data.
 function classifyFavoriteError(err: unknown): string {
@@ -44,7 +48,7 @@ export async function addFavorite(track: Track): Promise<void> {
           userEmail: email,
           createdAt: Date.now(),
         });
-        window.dispatchEvent(new CustomEvent("favorites-updated"));
+        window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
       }
     });
   } catch (e: unknown) {
@@ -63,7 +67,7 @@ export async function removeFavorite(trackId: string): Promise<void> {
     // never another user's favorite of the same track.
     const email = getCurrentUserEmail();
     await db.favorites.delete([email, trackId]);
-    window.dispatchEvent(new CustomEvent("favorites-updated"));
+    window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
   } catch (e: unknown) {
     await captureError({
       level: "error",

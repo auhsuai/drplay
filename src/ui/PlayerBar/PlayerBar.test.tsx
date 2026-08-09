@@ -17,6 +17,7 @@ import { usePlayerStore } from "../../store/playerStore";
 import { getTrackMetadata } from "../../utils/metadata";
 import { useAuthStore } from "../../store/authStore";
 import * as errorLog from "../../utils/errorLog";
+import { FAVORITES_UPDATED_EVENT } from "../../utils/favorites";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -75,6 +76,9 @@ vi.mock("../../utils/favorites", () => ({
   isFavorite,
   addFavorite,
   removeFavorite,
+  // Mirrors the constant from favorites.ts so the test-side dispatch uses
+  // the same event name the component under test listens for.
+  FAVORITES_UPDATED_EVENT: "favorites-updated",
 }));
 
 vi.mock("../components/MoreMenu", () => ({ MoreMenu: () => null }));
@@ -1037,7 +1041,7 @@ describe("PlayerBar favorite (heart) button", () => {
     isFavorite.mockResolvedValue(true);
 
     act(() => {
-      window.dispatchEvent(new CustomEvent("favorites-updated"));
+      window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
     });
 
     expect(isFavorite).toHaveBeenCalledWith("track-1");
@@ -1064,7 +1068,7 @@ describe("PlayerBar favorite (heart) button", () => {
 
     expect(() => {
       act(() => {
-        window.dispatchEvent(new CustomEvent("favorites-updated"));
+        window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
       });
     }).not.toThrow();
     expect(isFavorite).not.toHaveBeenCalled();

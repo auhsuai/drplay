@@ -113,6 +113,7 @@ import {
   addFavorite,
   removeFavorite,
   isFavorite,
+  FAVORITES_UPDATED_EVENT,
 } from "./favorites";
 import { db } from "../db/db";
 import { captureError } from "./errorLog";
@@ -194,7 +195,7 @@ describe("favorites (Dexie-backed)", () => {
   it("removeFavorite deletes the row and dispatches the update event", async () => {
     setUser(EMAIL_A);
     const handler = vi.fn();
-    window.addEventListener("favorites-updated", handler);
+    window.addEventListener(FAVORITES_UPDATED_EVENT, handler);
 
     await addFavorite(track("1"));
     await removeFavorite("1");
@@ -202,7 +203,7 @@ describe("favorites (Dexie-backed)", () => {
     expect(handler).toHaveBeenCalledTimes(2);
     expect(await getFavorites()).toEqual([]);
 
-    window.removeEventListener("favorites-updated", handler);
+    window.removeEventListener(FAVORITES_UPDATED_EVENT, handler);
   });
 
   it("addFavorite shows the localized toast key when the write fails (no hardcoded language)", async () => {
