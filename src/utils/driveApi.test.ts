@@ -1750,6 +1750,36 @@ describe("uploadFileResumableChunked", () => {
     expect(fractions).toEqual([8388608 / 10000000, 1]);
   });
 
+  // Upgrade: a 2xx body that IS valid JSON but lacks the DriveFileItem shape
+  // (missing id — the field every upload response must carry) must reject
+  // with UploadError('invalid') instead of resolving with a ghost object the
+  // caller would treat as a real file (asDriveFileItem narrowing, same rule
+  // as query-status). The UploadError propagates WITHOUT a session restart
+  // (uploadChunksInSession: instanceof UploadError → throw).
+  it("2xx body valid JSON but missing the DriveFileItem shape → UploadError invalid, no ghost object, no restart", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, { name: "x" }));
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    await expect(
+      uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      }),
+    ).rejects.toMatchObject({ name: "UploadError", kind: "invalid" });
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        message: "upload-parse-response-failed (status=201)",
+      }),
+    );
+    // initiate + 1 chunk PUT — the invalid body is fatal, no session restart.
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("308 Range mid-chunk → resumes at lastByte+1 (readChunk called with the new offset)", async () => {
     const total = 20_000_000; // 3 full chunks + 1 tail, room for a mid-chunk resume
     mockedFetch

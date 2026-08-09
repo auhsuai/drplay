@@ -15,6 +15,7 @@ import {
   RANGE_HEADER_PATTERN,
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
+  asDriveFileItem,
   initiateResumableUpload,
   resolveIdempotentConflict,
 } from "./resumableSession";
@@ -174,8 +175,9 @@ async function uploadChunksInSession(
     onProgress?.(Math.min(1, (offset + chunk.byteLength) / totalSize));
 
     if (response.status >= 200 && response.status < 300) {
+      let body: unknown;
       try {
-        return (await response.json()) as DriveFileItem;
+        body = await response.json();
       } catch (err) {
         await captureError({
           level: "error",
@@ -184,6 +186,16 @@ async function uploadChunksInSession(
         });
         throw new UploadError("upload response was not valid JSON", "invalid");
       }
+      const file = asDriveFileItem(body);
+      if (file === null) {
+        await captureError({
+          level: "error",
+          source: DRIVE_MODULE,
+          message: `upload-parse-response-failed (status=${String(response.status)})`,
+        });
+        throw new UploadError("upload response was not valid JSON", "invalid");
+      }
+      return file;
     }
     if (response.status === 308) {
       const range = response.headers.get("Range");
