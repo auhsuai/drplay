@@ -15,7 +15,7 @@ import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
 import rawGreetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { HomeSection, SectionSkeleton } from "./components/HomeSection";
-import { PremiumCard } from "./components/PremiumCard";
+import { PremiumGrid } from "./components/PremiumGrid";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 import { captureError } from "../../utils/errorLog";
@@ -330,27 +330,17 @@ export function HomeTab({
             title={t("home.recent_files")}
             justifyBetween
           >
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {quickAccess.map((track, index) => {
-                const isOverlay =
-                  index === visibleCount - 1 && recent.length > visibleCount;
-                return (
-                  <PremiumCard
-                    key={track.id}
-                    track={track}
-                    onPlay={() => {
-                      if (isOverlay) {
-                        setShowFullRecent(true);
-                      } else {
-                        onPlay(track, quickAccess);
-                      }
-                    }}
-                    token={token}
-                    isOverlayBtn={isOverlay}
-                  />
-                );
-              })}
-            </div>
+            <PremiumGrid
+              items={quickAccess}
+              onPlay={onPlay}
+              token={token}
+              isOverlay={(_track, index) =>
+                index === visibleCount - 1 && recent.length > visibleCount
+              }
+              onOverlayClick={() => {
+                setShowFullRecent(true);
+              }}
+            />
           </HomeSection>
         ) : null}
 
@@ -366,35 +356,25 @@ export function HomeTab({
             title={t("home.recently_added")}
             justifyBetween
           >
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {recentlyAddedItems.map((track, index) => {
-                // Mirror of the Recent Files overlay contract, with one
-                // deliberate difference: `>=` instead of `>`. The list is
-                // capped at RECENTLY_ADDED_PAGE_SIZE (100), so a list exactly
-                // as long as the grid (e.g. 5 == visibleCount on desktop)
-                // means the API page was FULL — more files may exist behind
-                // it, and the last card must open the full view. Recent Files
-                // keeps `>`: its data is an unbounded local history slice.
-                const isOverlay =
-                  index === visibleCount - 1 &&
-                  recentlyAdded.length >= visibleCount;
-                return (
-                  <PremiumCard
-                    key={track.id}
-                    track={track}
-                    onPlay={() => {
-                      if (isOverlay) {
-                        setShowFullRecentlyAdded(true);
-                      } else {
-                        onPlay(track, recentlyAddedItems);
-                      }
-                    }}
-                    token={token}
-                    isOverlayBtn={isOverlay}
-                  />
-                );
-              })}
-            </div>
+            {/* Mirror of the Recent Files overlay contract, with one
+                deliberate difference: `>=` instead of `>`. The list is
+                capped at RECENTLY_ADDED_PAGE_SIZE (100), so a list exactly
+                as long as the grid (e.g. 5 == visibleCount on desktop)
+                means the API page was FULL — more files may exist behind
+                it, and the last card must open the full view. Recent Files
+                keeps `>`: its data is an unbounded local history slice. */}
+            <PremiumGrid
+              items={recentlyAddedItems}
+              onPlay={onPlay}
+              token={token}
+              isOverlay={(_track, index) =>
+                index === visibleCount - 1 &&
+                recentlyAdded.length >= visibleCount
+              }
+              onOverlayClick={() => {
+                setShowFullRecentlyAdded(true);
+              }}
+            />
           </HomeSection>
         ) : null}
 
@@ -452,18 +432,7 @@ export function HomeTab({
           </SectionSkeleton>
         ) : heavyItems.length > 0 ? (
           <HomeSection icon={Repeat} title={t("home.heavy_rotation")}>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {heavyItems.map((track) => (
-                <PremiumCard
-                  key={track.id}
-                  track={track}
-                  onPlay={() => {
-                    onPlay(track, heavyItems);
-                  }}
-                  token={token}
-                />
-              ))}
-            </div>
+            <PremiumGrid items={heavyItems} onPlay={onPlay} token={token} />
           </HomeSection>
         ) : null}
 
@@ -475,18 +444,7 @@ export function HomeTab({
           </SectionSkeleton>
         ) : discoverItems.length > 0 ? (
           <HomeSection icon={Sparkles} title={t("home.discover")}>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {discoverItems.map((track) => (
-                <PremiumCard
-                  key={track.id}
-                  track={track}
-                  onPlay={() => {
-                    onPlay(track, discoverItems);
-                  }}
-                  token={token}
-                />
-              ))}
-            </div>
+            <PremiumGrid items={discoverItems} onPlay={onPlay} token={token} />
           </HomeSection>
         ) : null}
       </div>
