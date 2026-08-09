@@ -291,7 +291,7 @@ describe("isMpegCbr", () => {
 });
 
 describe("walkMp4TopBoxes", () => {
-  it("[ftyp][moov][mdat] â†’ moovBeforeMdat=true", () => {
+  it("[ftyp][moov][mdat] → moovBeforeMdat=true", () => {
     const data = new Uint8Array([
       ...box(20, "ftyp", new Array<number>(12).fill(0)),
       ...box(8, "moov"),
@@ -304,7 +304,7 @@ describe("walkMp4TopBoxes", () => {
     expect(walk.moovSize).toBe(8);
   });
 
-  it("[ftyp][mdat size 4GB] â†’ mdatBeforeMoov=true and terminates (no infinite loop)", () => {
+  it("[ftyp][mdat size 4GB] → mdatBeforeMoov=true and terminates (no infinite loop)", () => {
     const data = new Uint8Array([
       ...box(8, "ftyp"),
       ...box(0xffffffff, "mdat"),
@@ -315,14 +315,14 @@ describe("walkMp4TopBoxes", () => {
     expect(walk.moovBeforeMdat).toBe(false);
   });
 
-  it("[ftyp][moov extends beyond buffer] â†’ moovBeforeMdat=true (moov starts in head)", () => {
+  it("[ftyp][moov extends beyond buffer] → moovBeforeMdat=true (moov starts in head)", () => {
     const data = new Uint8Array([...box(8, "ftyp"), ...box(0x10000, "moov")]);
     const walk = walkMp4TopBoxes(data, 200_000);
     expect(walk.moovBeforeMdat).toBe(true);
     expect(walk.mdatBeforeMoov).toBe(false);
   });
 
-  it("empty buffer â†’ both flags false", () => {
+  it("empty buffer → both flags false", () => {
     const walk = walkMp4TopBoxes(new Uint8Array(0), 1000);
     expect(walk.moovBeforeMdat).toBe(false);
     expect(walk.mdatBeforeMoov).toBe(false);

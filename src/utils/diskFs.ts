@@ -195,7 +195,7 @@ export async function openDiskReadStream(
       payload instanceof ArrayBuffer
         ? new Uint8Array(payload)
         : Uint8Array.from(payload);
-    // The plugin guarantees â‰¥8 elements; anything shorter is a protocol
+    // The plugin guarantees ≥8 elements; anything shorter is a protocol
     // violation and would misparse nread into silently wrong chunk data.
     if (arr.byteLength < NREAD_BYTES) {
       const wrapped = new Error(

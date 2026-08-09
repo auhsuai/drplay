@@ -41,7 +41,7 @@ vi.mock("../utils/driveApi", async (importOriginal) => {
 vi.mock("../utils/driveUpload", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/driveUpload")>();
   return {
-    ...actual, // keep the REAL UploadError class â€” `instanceof` must work
+    ...actual, // keep the REAL UploadError class — `instanceof` must work
     generateClientId: vi.fn(),
     uploadFileResumable: vi.fn(),
     uploadFileResumableChunked: vi.fn(),
@@ -96,7 +96,7 @@ let UploadErrorClass: typeof import("../utils/driveUpload").UploadError;
 beforeEach(async () => {
   vi.useRealTimers();
   // vi.mock factories are NOT re-run by vi.resetModules() (vitest caches the
-  // mocked module), so the same vi.fn() instances persist â€” clear their call
+  // mocked module), so the same vi.fn() instances persist — clear their call
   // history here; the default implementations are re-applied right below.
   vi.clearAllMocks();
   vi.resetModules();
@@ -210,7 +210,7 @@ function deferred<T>(): {
 }
 
 // fake-indexeddb schedules every IDB operation via setImmediate (see
-// fake-indexeddb lib/scheduling.js â€” jsdom does not provide it, so Node's real
+// fake-indexeddb lib/scheduling.js — jsdom does not provide it, so Node's real
 // setImmediate is used). Under real timers a macrotask yield lets those ops
 // land, which a pure-microtask flush would miss. 20 iterations covers the
 // schema-v9 uploadSessions writes (persist + clear) on top of the files rows.
@@ -244,7 +244,7 @@ async function realTick(times = 10): Promise<void> {
   }
 }
 
-// Fire only the faked timers (backoff sleep) â€” microtasks flush in between.
+// Fire only the faked timers (backoff sleep) — microtasks flush in between.
 async function advanceBackoff(ms: number): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms);
 }
@@ -282,7 +282,7 @@ function firedEvents(type: string): CustomEvent[] {
 
 // Terminal entries are pruned right after the final notify(), so getEntries()
 // no longer exposes them once the queue idles. The subscriber callback runs
-// INSIDE notify() â€” before the prune â€” so snapshotting there still observes
+// INSIDE notify() — before the prune — so snapshotting there still observes
 // the terminal state while getEntries() after idle returns [].
 function captureSnapshots(): Array<
   Array<{ status: string; error?: string | undefined }>
@@ -299,7 +299,7 @@ function captureSnapshots(): Array<
 }
 
 describe("uploadManager", () => {
-  it("1. queue tuáº§n tá»±: upload tiáº¿p theo chá»‰ báº¯t Ä‘áº§u sau khi cÃ¡i trÆ°á»›c xong", async () => {
+  it("1. queue tuần tự: upload tiếp theo chỉ bắt đầu sau khi cái trước xong", async () => {
     const d1 = deferred<DriveFileItem>();
     const d2 = deferred<DriveFileItem>();
     const d3 = deferred<DriveFileItem>();
@@ -347,7 +347,7 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
   });
 
-  it("2. happy path (bytes): pending row put khi uploading, row tháº­t vá»›i drive id khi done", async () => {
+  it("2. happy path (bytes): pending row put khi uploading, row thật với drive id khi done", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
     const snapshots = captureSnapshots();
@@ -393,7 +393,7 @@ describe("uploadManager", () => {
     expect(rows[0]?.isFolder).toBe(false);
   });
 
-  it("3. UploadError invalid â†’ entry error + pending row deleted + captureError + khÃ´ng retry", async () => {
+  it("3. UploadError invalid → entry error + pending row deleted + captureError + không retry", async () => {
     uploadFileResumable.mockRejectedValueOnce(
       new UploadErrorClass("bad request (400)", "invalid"),
     );
@@ -413,7 +413,7 @@ describe("uploadManager", () => {
     );
   });
 
-  it("4. quota exceeded â†’ error quota + toast + khÃ´ng gá»i upload", async () => {
+  it("4. quota exceeded → error quota + toast + không gọi upload", async () => {
     getDriveStorageQuota.mockResolvedValue({
       limit: 100,
       usage: 90,
@@ -434,7 +434,7 @@ describe("uploadManager", () => {
     expect(await db.files.toArray()).toHaveLength(0);
   });
 
-  it("5. quota unlimited (limit=null) â†’ upload váº«n cháº¡y", async () => {
+  it("5. quota unlimited (limit=null) → upload vẫn chạy", async () => {
     const snapshots = captureSnapshots();
 
     um.startUploads([fileSeed("ok.mp3")], TOKEN);
@@ -446,7 +446,7 @@ describe("uploadManager", () => {
     ]);
   });
 
-  it("6. quota fetch fail (reject hoáº·c null) â†’ khÃ´ng block, upload váº«n cháº¡y", async () => {
+  it("6. quota fetch fail (reject hoặc null) → không block, upload vẫn chạy", async () => {
     getDriveStorageQuota.mockRejectedValueOnce(new Error("network down"));
     getDriveStorageQuota.mockResolvedValueOnce(null);
     const snapshots = captureSnapshots();
@@ -464,7 +464,7 @@ describe("uploadManager", () => {
     );
   });
 
-  it("7. retry: network fail láº§n 1 â†’ backoff 1â€“1.5s (exp+jitter) â†’ láº§n 2 pass â†’ done", async () => {
+  it("7. retry: network fail lần 1 → backoff 1–1.5s (exp+jitter) → lần 2 pass → done", async () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     uploadFileResumable
       .mockRejectedValueOnce(new UploadErrorClass("network hiccup", "network"))
@@ -475,7 +475,7 @@ describe("uploadManager", () => {
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
-    await advanceBackoff(1500); // backoffDelay(attempt-1=0) âˆˆ [1000, 1500)
+    await advanceBackoff(1500); // backoffDelay(attempt-1=0) ∈ [1000, 1500)
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(2);
 
@@ -486,7 +486,7 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
   });
 
-  it("8. retry háº¿t: network x3 â†’ error, Ä‘Ãºng 3 calls", async () => {
+  it("8. retry hết: network x3 → error, đúng 3 calls", async () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     uploadFileResumable.mockRejectedValue(
       new UploadErrorClass("network down", "network"),
@@ -497,11 +497,11 @@ describe("uploadManager", () => {
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
-    await advanceBackoff(1500); // backoffDelay(attempt-1=0) âˆˆ [1000, 1500)
+    await advanceBackoff(1500); // backoffDelay(attempt-1=0) ∈ [1000, 1500)
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(2);
 
-    await advanceBackoff(3000); // backoffDelay(attempt-1=1) âˆˆ [2000, 3000)
+    await advanceBackoff(3000); // backoffDelay(attempt-1=1) ∈ [2000, 3000)
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(3);
     await realTick();
@@ -514,7 +514,7 @@ describe("uploadManager", () => {
     expect(uploadFileResumable).toHaveBeenCalledTimes(3);
   });
 
-  it("9. kind aborted â†’ error ngay, 1 call duy nháº¥t", async () => {
+  it("9. kind aborted → error ngay, 1 call duy nhất", async () => {
     uploadFileResumable.mockRejectedValueOnce(
       new UploadErrorClass("aborted", "aborted"),
     );
@@ -544,7 +544,7 @@ describe("uploadManager", () => {
     expect(uploadFileResumable).toHaveBeenCalledTimes(1);
     expect(generateClientId).toHaveBeenCalledTimes(1);
 
-    await advanceBackoff(1500); // backoffDelay(attempt-1=0) âˆˆ [1000, 1500)
+    await advanceBackoff(1500); // backoffDelay(attempt-1=0) ∈ [1000, 1500)
     await realTick();
     expect(uploadFileResumable).toHaveBeenCalledTimes(2);
 
@@ -605,7 +605,7 @@ describe("uploadManager", () => {
     ]);
   });
 
-  it("10. folder upload: createFolder chuá»—i + memoize subfolder + basename/parent Ä‘Ãºng", async () => {
+  it("10. folder upload: createFolder chuỗi + memoize subfolder + basename/parent đúng", async () => {
     walkDiskFolder.mockResolvedValue([
       {
         path: "C:/Music/a.mp3",
@@ -712,7 +712,7 @@ describe("uploadManager", () => {
     ).toBe(true);
   });
 
-  it("11. folder pending row â†’ row tháº­t (id = driveId) sau createFolder", async () => {
+  it("11. folder pending row → row thật (id = driveId) sau createFolder", async () => {
     walkDiskFolder.mockResolvedValue([]);
     const d = deferred<DriveFileItem>();
     createFolderMock.mockReturnValueOnce(d.promise);
@@ -735,11 +735,11 @@ describe("uploadManager", () => {
     expect(rows[0]?.id).toBe("folder-1");
     expect(rows[0]?.isFolder).toBe(true);
     expect(rows[0]?.mimeType).toBe(FOLDER_MIME);
-    // quota check chá»‰ cháº¡y trÆ°á»›c file upload, khÃ´ng pháº£i folder-create
+    // quota check chỉ chạy trước file upload, không phải folder-create
     expect(getDriveStorageQuota).not.toHaveBeenCalled();
   });
 
-  it("12. getUploadingIds: entry + parentId + driveId (folder), khÃ´ng bao giá» chá»©a root; sáº¡ch sau done", async () => {
+  it("12. getUploadingIds: entry + parentId + driveId (folder), không bao giờ chứa root; sạch sau done", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -761,7 +761,7 @@ describe("uploadManager", () => {
     expect(um.isUploading(entryId)).toBe(false);
   });
 
-  it("12b. folder Ä‘ang upload (Ä‘Ã£ cÃ³ driveId) â†’ driveId náº±m trong uploading ids qua parentId cá»§a con", async () => {
+  it("12b. folder đang upload (đã có driveId) → driveId nằm trong uploading ids qua parentId của con", async () => {
     walkDiskFolder.mockResolvedValue([
       {
         path: "C:/Music/a.mp3",
@@ -790,14 +790,14 @@ describe("uploadManager", () => {
     expect(um.getUploadingIds().size).toBe(0);
   });
 
-  it("13. subscribe/unsubscribe: cb gá»i Ä‘Ãºng sá»‘ láº§n; unsubscribe â†’ khÃ´ng gá»i ná»¯a", async () => {
+  it("13. subscribe/unsubscribe: cb gọi đúng số lần; unsubscribe → không gọi nữa", async () => {
     const cb = vi.fn();
     const unsub = um.subscribe(cb);
 
     um.startUploads([fileSeed("s.mp3")], TOKEN);
     await waitIdle();
 
-    // queued-push + uploading + done = 3 láº§n
+    // queued-push + uploading + done = 3 lần
     expect(cb).toHaveBeenCalledTimes(3);
     expect(firedEvents("upload-status-changed")).toHaveLength(3);
 
@@ -807,7 +807,7 @@ describe("uploadManager", () => {
     expect(cb).toHaveBeenCalledTimes(3);
   });
 
-  it("14. drive-files-changed fire sau má»—i done vá»›i detail.count=1", async () => {
+  it("14. drive-files-changed fire sau mỗi done với detail.count=1", async () => {
     um.startUploads([fileSeed("s.mp3")], TOKEN);
     await waitIdle();
 
@@ -816,7 +816,7 @@ describe("uploadManager", () => {
     expect(fired[0]?.detail).toEqual({ count: 1 });
   });
 
-  it("15. seed khÃ´ng há»£p lá»‡ â†’ error invalid-seed ngay, khÃ´ng gá»i API", async () => {
+  it("15. seed không hợp lệ → error invalid-seed ngay, không gọi API", async () => {
     um.startUploads(
       [
         { name: "FolderNoPath", isFolder: true, parentId: "root" },
@@ -836,7 +836,7 @@ describe("uploadManager", () => {
     expect(createFolderMock).not.toHaveBeenCalled();
   });
 
-  it("16. startUploads khi queue Ä‘ang cháº¡y â†’ ná»‘i thÃªm, khÃ´ng Ä‘á»¥ng entry Ä‘ang upload", async () => {
+  it("16. startUploads khi queue đang chạy → nối thêm, không đụng entry đang upload", async () => {
     const d1 = deferred<DriveFileItem>();
     uploadFileResumable
       .mockReturnValueOnce(d1.promise)
@@ -860,7 +860,7 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
   });
 
-  it("17. isUploading(id) theo Ä‘Ãºng getUploadingIds", async () => {
+  it("17. isUploading(id) theo đúng getUploadingIds", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -879,7 +879,7 @@ describe("uploadManager", () => {
     expect(um.isUploading(id)).toBe(false);
   });
 
-  it("file seed tá»« diskPath: register + stat + openDiskReadStream + chunked upload vá»›i basename", async () => {
+  it("file seed từ diskPath: register + stat + openDiskReadStream + chunked upload với basename", async () => {
     const path = "C:\\Music\\Live Album\\Track One.mp3";
     um.startUploads([diskFileSeed("irrelevant", path)], TOKEN);
     await waitIdle();
@@ -897,12 +897,12 @@ describe("uploadManager", () => {
     expect(opts.totalSize).toBe(2);
     expect(typeof opts.readChunk).toBe("function");
     expect(typeof opts.onProgress).toBe("function");
-    // Disk files stream via the chunked uploader â€” the whole-file bytes path
+    // Disk files stream via the chunked uploader — the whole-file bytes path
     // must NOT be used.
     expect(uploadFileResumable).not.toHaveBeenCalled();
 
     // The stream opened for the upload is closed on completion (finally).
-    // (mock.results holds the raw Promise â€” await it to get the stream.)
+    // (mock.results holds the raw Promise — await it to get the stream.)
     const firstResult = openDiskReadStream.mock.results[0];
     if (firstResult === undefined)
       throw new Error("expected stream open result");
@@ -912,7 +912,7 @@ describe("uploadManager", () => {
     expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
-  it("openDiskReadStream fail â†’ entry error failed, khÃ´ng upload", async () => {
+  it("openDiskReadStream fail → entry error failed, không upload", async () => {
     openDiskReadStream.mockRejectedValue(new Error("os error 2"));
     const snapshots = captureSnapshots();
 
@@ -927,7 +927,7 @@ describe("uploadManager", () => {
     expect(await db.files.toArray()).toHaveLength(0);
   });
 
-  it("statDiskPath null (file biáº¿n máº¥t giá»¯a chá»«ng) â†’ entry error failed, khÃ´ng upload", async () => {
+  it("statDiskPath null (file biến mất giữa chừng) → entry error failed, không upload", async () => {
     statDiskPath.mockResolvedValue(null);
     const snapshots = captureSnapshots();
 
@@ -941,7 +941,7 @@ describe("uploadManager", () => {
     expect(uploadFileResumableChunked).not.toHaveBeenCalled();
   });
 
-  it("disk file: totalSize tá»« stat Ä‘Æ°á»£c dÃ¹ng cho quota check trÆ°á»›c khi má»Ÿ stream", async () => {
+  it("disk file: totalSize từ stat được dùng cho quota check trước khi mở stream", async () => {
     getDriveStorageQuota.mockResolvedValue({
       limit: 100,
       usage: 99,
@@ -968,7 +968,7 @@ describe("uploadManager", () => {
     expect(showErrorToast).toHaveBeenCalledWith("upload.quota_exceeded");
   });
 
-  it("chunked upload progress: onProgress ghi entry.progress + throttle 1 notify sau 500ms; done xÃ³a timer", async () => {
+  it("chunked upload progress: onProgress ghi entry.progress + throttle 1 notify sau 500ms; done xóa timer", async () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     const d = deferred<DriveFileItem>();
     uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
@@ -982,7 +982,7 @@ describe("uploadManager", () => {
     await realTick();
 
     expect(um.getEntries()[0]?.progress).toBe(0.42);
-    // queued-push + uploading only â€” the progress update sits in the throttled
+    // queued-push + uploading only — the progress update sits in the throttled
     // timer, subscribers are NOT spammed per chunk.
     expect(cb).toHaveBeenCalledTimes(2);
 
@@ -996,7 +996,7 @@ describe("uploadManager", () => {
     expect(vi.getTimerCount()).toBe(1);
   });
 
-  it("chunked upload throw â†’ stream.close váº«n Ä‘Æ°á»£c gá»i (finally)", async () => {
+  it("chunked upload throw → stream.close vẫn được gọi (finally)", async () => {
     uploadFileResumableChunked.mockRejectedValueOnce(
       new UploadErrorClass("network down", "network"),
     );
@@ -1017,7 +1017,7 @@ describe("uploadManager", () => {
     expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
-  it("chunked 308-rewind: readChunk offset < vá»‹ trÃ­ stream â†’ reopen stream má»›i tá»« Ä‘áº§u", async () => {
+  it("chunked 308-rewind: readChunk offset < vị trí stream → reopen stream mới từ đầu", async () => {
     const s1 = {
       read: vi
         .fn()
@@ -1057,7 +1057,7 @@ describe("uploadManager", () => {
     expect(Array.from(chunks[1])).toEqual([3, 4]);
   });
 
-  it("chunked 308 partial-ack giá»¯a chunk: skip overshoot â†’ tráº£ remainder báº¯t Ä‘áº§u ÄÃšNG offset (khÃ´ng lá»‡ch vá»‹ trÃ­)", async () => {
+  it("chunked 308 partial-ack giữa chunk: skip overshoot → trả remainder bắt đầu ĐÚNG offset (không lệch vị trí)", async () => {
     // Stream chunks encode their absolute file position in byte values so a
     // misaligned read is immediately visible: chunk0 = [0..7], chunk1 = [8..15].
     const chunk0 = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -1113,7 +1113,7 @@ describe("uploadManager", () => {
     expect(seen[2]).toEqual(chunk1);
   });
 
-  it("file growth: totalSize tá»« stat.size, readChunk khÃ´ng truncate á»Ÿ táº§ng manager", async () => {
+  it("file growth: totalSize từ stat.size, readChunk không truncate ở tầng manager", async () => {
     statDiskPath.mockResolvedValue({
       path: "C:/grow.mp3",
       name: "grow.mp3",
@@ -1127,7 +1127,7 @@ describe("uploadManager", () => {
       read: vi
         .fn()
         .mockResolvedValueOnce(seq(0, 64)) // bytes 0..63
-        .mockResolvedValueOnce(seq(64, 64)) // bytes 64..127 â€” stream outlives the announced size
+        .mockResolvedValueOnce(seq(64, 64)) // bytes 64..127 — stream outlives the announced size
         .mockResolvedValueOnce(null),
       close: vi.fn().mockResolvedValue(undefined),
     });
@@ -1143,14 +1143,14 @@ describe("uploadManager", () => {
 
     expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
     expect(uploadFileResumableChunked.mock.calls[0]?.[1]?.totalSize).toBe(100);
-    // readChunk stays a pure reader â€” overshoot handling lives in driveApi.
+    // readChunk stays a pure reader — overshoot handling lives in driveApi.
     expect(reads[0]).toEqual(seq(0, 64));
     expect(reads[1]).toEqual(seq(64, 64));
   });
 
-  it("getUploadState: entry.id Ä‘ang upload/queued â†’ uploading", async () => {
+  it("getUploadState: entry.id đang upload/queued → uploading", async () => {
     const d = deferred<DriveFileItem>();
-    // NOTE: no second once-implementation â€” the queue is sequential, so b.mp3
+    // NOTE: no second once-implementation — the queue is sequential, so b.mp3
     // never starts while a.mp3 is deferred; a leftover once-impl would leak
     // into the next test (vitest clearAllMocks does NOT clear once-queue).
     uploadFileResumable.mockReturnValueOnce(d.promise);
@@ -1171,7 +1171,7 @@ describe("uploadManager", () => {
     await waitIdle();
   });
 
-  it("getUploadState: folder batch â€” con Ä‘ang upload (parentId=folder driveId) â†’ folder chá»‰ parent-uploading (háº¿t má»)", async () => {
+  it("getUploadState: folder batch — con đang upload (parentId=folder driveId) → folder chỉ parent-uploading (hết mờ)", async () => {
     walkDiskFolder.mockResolvedValue([
       {
         path: "C:/Music/a.mp3",
@@ -1192,15 +1192,15 @@ describe("uploadManager", () => {
     um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
     await flush();
 
-    // folder root Ä‘Ã£ done (driveId='folder-1'); con Ä‘ang upload vá»›i parentId='folder-1'
-    // â†’ folder chá»‰ 'parent-uploading' (háº¿t má», giá»¯ spinner) â€” ADR deviation Ä‘Ã£ chá»‘t.
+    // folder root đã done (driveId='folder-1'); con đang upload với parentId='folder-1'
+    // → folder chỉ 'parent-uploading' (hết mờ, giữ spinner) — ADR deviation đã chốt.
     expect(um.getUploadState("folder-1")).toBe("parent-uploading");
 
     d.resolve(makeDriveFile("f-a", "a.mp3"));
     await waitIdle();
   });
 
-  it("getUploadState: parentId â†’ parent-uploading; root khÃ´ng bao giá» parent-uploading", async () => {
+  it("getUploadState: parentId → parent-uploading; root không bao giờ parent-uploading", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -1214,7 +1214,7 @@ describe("uploadManager", () => {
     await waitIdle();
   });
 
-  it("getUploadState: sau done â†’ none", async () => {
+  it("getUploadState: sau done → none", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -1230,7 +1230,7 @@ describe("uploadManager", () => {
     expect(um.getUploadState(id)).toBe("none");
   });
 
-  it("getUploadState: sau done â†’ uploaded (check xanh qua driveId); dismissUploaded â†’ none ngay; pending id Ä‘Ã£ prune â†’ none", async () => {
+  it("getUploadState: sau done → uploaded (check xanh qua driveId); dismissUploaded → none ngay; pending id đã prune → none", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -1243,12 +1243,12 @@ describe("uploadManager", () => {
     d.resolve(makeDriveFile("f9", "s.mp3"));
     await waitIdle();
 
-    // markRecentlyDone nháº­n driveId — cÃ¡i id live list biáº¿t item báº±ng — nÃªn
-    // check hiá»ƒn cho driveId; pending id (entry Ä‘Ã£ bá»‹ prune) tráº£ vá» none.
+    // markRecentlyDone nhận driveId — cái id live list biết item bằng — nên
+    // check hiển cho driveId; pending id (entry đã bị prune) trả về none.
     expect(um.getUploadState("f9")).toBe("uploaded");
     expect(um.getUploadState(entryId)).toBe("none");
 
-    // Click play â†’ dismissUploaded â†’ row vá» idle MoreMenu ngay (khÃ´ng chá» 10s).
+    // Click play → dismissUploaded → row về idle MoreMenu ngay (không chờ 10s).
     um.dismissUploaded("f9");
     expect(um.getUploadState("f9")).toBe("none");
   });
@@ -1276,7 +1276,7 @@ describe("uploadManager", () => {
     expect(cb).toHaveBeenCalledTimes(notifiesBefore + 1);
   });
 
-  it("uploaded tint tá»± háº¿t sau 10s qua timer; dismissUploaded id khÃ´ng náº±m trong set â†’ no-op khÃ´ng throw", async () => {
+  it("uploaded tint tự hết sau 10s qua timer; dismissUploaded id không nằm trong set → no-op không throw", async () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
@@ -1288,7 +1288,7 @@ describe("uploadManager", () => {
 
     expect(um.getUploadState("f9")).toBe("uploaded");
 
-    // Chá»‰ cÃ²n Ä‘Ãºng 1 timer: tint 10s (auto-clears, khÃ´ng leak).
+    // Chỉ còn đúng 1 timer: tint 10s (auto-clears, không leak).
     expect(vi.getTimerCount()).toBe(1);
     await advanceBackoff(10_000);
     expect(um.getUploadState("f9")).toBe("none");
@@ -1300,7 +1300,7 @@ describe("uploadManager", () => {
     expect(um.getUploadState("f9")).toBe("none");
   });
 
-  it("createFolder subfolder fail â†’ subfolder error; file con trong Ä‘Ã³ â†’ parent-folder-missing", async () => {
+  it("createFolder subfolder fail → subfolder error; file con trong đó → parent-folder-missing", async () => {
     walkDiskFolder.mockResolvedValue([
       {
         path: "C:/Music/sub",
@@ -1340,7 +1340,7 @@ describe("uploadManager", () => {
     expect(uploadFileResumable).not.toHaveBeenCalled();
   });
 
-  it("A. prune: 3 file bytes upload xong â†’ getEntries tráº£ [] (khÃ´ng giá»¯ entry terminal)", async () => {
+  it("A. prune: 3 file bytes upload xong → getEntries trả [] (không giữ entry terminal)", async () => {
     um.startUploads(
       [fileSeed("a.mp3"), fileSeed("b.mp3"), fileSeed("c.mp3")],
       TOKEN,
@@ -1351,7 +1351,7 @@ describe("uploadManager", () => {
     expect(um.getUploadingIds().size).toBe(0);
   });
 
-  it("B. prune: entry error (UploadError invalid) â†’ getEntries tráº£ []", async () => {
+  it("B. prune: entry error (UploadError invalid) → getEntries trả []", async () => {
     uploadFileResumable.mockRejectedValueOnce(
       new UploadErrorClass("bad request (400)", "invalid"),
     );
@@ -1365,7 +1365,7 @@ describe("uploadManager", () => {
     );
   });
 
-  it("B2. UploadError invalid â†’ log gá»“m name + kind + message UploadError (status 4xx)", async () => {
+  it("B2. UploadError invalid → log gồm name + kind + message UploadError (status 4xx)", async () => {
     uploadFileResumable.mockRejectedValueOnce(
       new UploadErrorClass("upload failed (status=400)", "invalid"),
     );
@@ -1379,7 +1379,7 @@ describe("uploadManager", () => {
     expect(message).toContain("status=400");
   });
 
-  it("B3. Plain Error tá»« diskFs (message chá»©a full disk path) â†’ log chá»‰ name+kind, khÃ´ng lá»™ path", async () => {
+  it("B3. Plain Error từ diskFs (message chứa full disk path) → log chỉ name+kind, không lộ path", async () => {
     const fullPath = "C:\\Music\\Secret Album\\track.flac";
     openDiskReadStream.mockRejectedValue(
       new Error(`EACCES: permission denied, open '${fullPath}'`),
@@ -1394,7 +1394,7 @@ describe("uploadManager", () => {
     expect(message).not.toContain("Secret Album");
   });
 
-  it("C. prune: folder batch (folder + subfolder + 2 files con) xong â†’ getEntries tráº£ []", async () => {
+  it("C. prune: folder batch (folder + subfolder + 2 files con) xong → getEntries trả []", async () => {
     walkDiskFolder.mockResolvedValue([
       {
         path: "C:/Music/a.mp3",
@@ -1446,7 +1446,7 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
   });
 
-  it("D. prune khÃ´ng phÃ¡ queue: startUploads batch 2 sau batch 1 xong â†’ cháº¡y bÃ¬nh thÆ°á»ng", async () => {
+  it("D. prune không phá queue: startUploads batch 2 sau batch 1 xong → chạy bình thường", async () => {
     um.startUploads([fileSeed("a.mp3")], TOKEN);
     await waitIdle();
     expect(um.getEntries()).toEqual([]);
@@ -1459,7 +1459,7 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
   });
 
-  it("E. prune: sau done, getUploadingIds/isUploading/getUploadState khÃ´ng cÃ²n dÃ­nh entry Ä‘Ã£ xong", async () => {
+  it("E. prune: sau done, getUploadingIds/isUploading/getUploadState không còn dính entry đã xong", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -1478,10 +1478,10 @@ describe("uploadManager", () => {
   });
 
   describe("cancelUpload", () => {
-    it("1. cancel entry Ä‘ang upload (chunked) â†’ error aborted + khÃ´ng toast + xÃ³a pending row + prune", async () => {
+    it("1. cancel entry đang upload (chunked) → error aborted + không toast + xóa pending row + prune", async () => {
       uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
         // Real driveApi listens on the wired signal and rejects with
-        // UploadError('aborted') â€” mirror that so the manager's markError
+        // UploadError('aborted') — mirror that so the manager's markError
         // branch is exercised end-to-end.
         return new Promise<DriveFileItem>((_resolve, reject) => {
           opts.signal?.addEventListener(
@@ -1524,7 +1524,7 @@ describe("uploadManager", () => {
       expect(firedEvents("drive-files-changed")).toHaveLength(0);
     });
 
-    it("2. cancel entry queued â†’ khÃ´ng gá»i upload API cho nÃ³, error aborted + prune ngay, queue khÃ´ng Ä‘á»¥ng", async () => {
+    it("2. cancel entry queued → không gọi upload API cho nó, error aborted + prune ngay, queue không đụng", async () => {
       const d = deferred<DriveFileItem>();
       uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -1540,18 +1540,18 @@ describe("uploadManager", () => {
       expect(b.status).toBe("queued");
 
       um.cancelUpload(b.id);
-      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // b chÆ°a bao giá» start
-      expect(um.getEntries().map((e) => e.id)).toEqual([a.id]); // b bá»‹ prune ngay
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // b chưa bao giờ start
+      expect(um.getEntries().map((e) => e.id)).toEqual([a.id]); // b bị prune ngay
       expect(showErrorToast).not.toHaveBeenCalled();
 
       d.resolve(makeDriveFile("f1", "a.mp3"));
       await waitIdle();
-      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // pump bá» qua b (Ä‘Ã£ error)
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // pump bỏ qua b (đã error)
       expect(um.getEntries()).toEqual([]);
       expect(showErrorToast).not.toHaveBeenCalled();
     });
 
-    it("3. cancel id khÃ´ng tá»“n táº¡i â†’ no-op khÃ´ng throw, entries khÃ´ng Ä‘á»•i", async () => {
+    it("3. cancel id không tồn tại → no-op không throw, entries không đổi", async () => {
       const d = deferred<DriveFileItem>();
       uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -1568,7 +1568,7 @@ describe("uploadManager", () => {
       await waitIdle();
     });
 
-    it("4. cancel 2 láº§n liÃªn tiáº¿p â†’ láº§n 2 no-op (abort idempotent), chá»‰ 1 láº§n xá»­ lÃ½ aborted", async () => {
+    it("4. cancel 2 lần liên tiếp → lần 2 no-op (abort idempotent), chỉ 1 lần xử lý aborted", async () => {
       let abortEvents = 0;
       uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
         return new Promise<DriveFileItem>((_resolve, reject) => {
@@ -1592,7 +1592,7 @@ describe("uploadManager", () => {
       const id = firstEntry.id;
 
       um.cancelUpload(id);
-      um.cancelUpload(id); // signal Ä‘Ã£ aborted â†’ abort() lÃ  no-op
+      um.cancelUpload(id); // signal đã aborted → abort() là no-op
       await waitIdle();
 
       expect(abortEvents).toBe(1);
@@ -1604,7 +1604,7 @@ describe("uploadManager", () => {
       expect(showErrorToast).not.toHaveBeenCalled();
     });
 
-    it("5. cancel sau khi entry terminal (done) â†’ no-op khÃ´ng throw", async () => {
+    it("5. cancel sau khi entry terminal (done) → no-op không throw", async () => {
       um.startUploads([fileSeed("a.mp3")], TOKEN);
       await waitIdle();
       expect(um.getEntries()).toEqual([]);
@@ -1614,7 +1614,7 @@ describe("uploadManager", () => {
       }).not.toThrow();
     });
 
-    it("6. cancel folder root khi Ä‘ang walk â†’ aborted + khÃ´ng toast + khÃ´ng createFolder + khÃ´ng enqueue children", async () => {
+    it("6. cancel folder root khi đang walk → aborted + không toast + không createFolder + không enqueue children", async () => {
       walkDiskFolder.mockImplementation(async (_path, signal) => {
         return new Promise<DiskEntry[]>((_resolve, reject) => {
           if (signal?.aborted) {
@@ -1656,7 +1656,7 @@ describe("uploadManager", () => {
       expect(await db.files.toArray()).toHaveLength(0);
     });
 
-    it("7. cancel folder root sau walk, trong lÃºc createFolder â†’ aborted + khÃ´ng enqueue children", async () => {
+    it("7. cancel folder root sau walk, trong lúc createFolder → aborted + không enqueue children", async () => {
       walkDiskFolder.mockResolvedValue([
         {
           path: "C:/Music/a.mp3",
@@ -1712,7 +1712,7 @@ describe("uploadManager", () => {
       expect(await db.files.toArray()).toHaveLength(0);
     });
 
-    it("8. cancel folder child (Ä‘ang createFolder subfolder) â†’ child aborted + khÃ´ng toast + file con khÃ´ng upload", async () => {
+    it("8. cancel folder child (đang createFolder subfolder) → child aborted + không toast + file con không upload", async () => {
       walkDiskFolder.mockResolvedValue([
         {
           path: "C:/Music/sub",
@@ -1761,12 +1761,12 @@ describe("uploadManager", () => {
       const messages = captureError.mock.calls.map((c) => c[0].message);
       expect(messages).toContain("upload-cancelled name=sub");
       expect(showErrorToast).not.toHaveBeenCalled();
-      // x.mp3's parent subfolder never materialized â†’ it must not upload.
+      // x.mp3's parent subfolder never materialized → it must not upload.
       expect(uploadFileResumableChunked).not.toHaveBeenCalled();
       expect(um.getEntries()).toEqual([]);
     });
 
-    it("11. cancel bytes-upload Ä‘ang retry giá»¯a backoff â†’ khÃ´ng retry tiáº¿p, error aborted", async () => {
+    it("11. cancel bytes-upload đang retry giữa backoff → không retry tiếp, error aborted", async () => {
       vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
       uploadFileResumable
         .mockRejectedValueOnce(
@@ -1786,11 +1786,11 @@ describe("uploadManager", () => {
       const firstEntry = um.getEntries()[0];
       if (!firstEntry) throw new Error("expected upload entry");
       const id = firstEntry.id;
-      um.cancelUpload(id); // abort trong lÃºc backoff
-      await advanceBackoff(1500); // backoffDelay(attempt-1=0) âˆˆ [1000, 1500)
+      um.cancelUpload(id); // abort trong lúc backoff
+      await advanceBackoff(1500); // backoffDelay(attempt-1=0) ∈ [1000, 1500)
       await realTick();
 
-      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // khÃ´ng retry sau abort
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // không retry sau abort
       expect(um.getEntries()).toEqual([]);
       expect(
         captureError.mock.calls.some((c) =>
@@ -1805,7 +1805,7 @@ describe("uploadManager", () => {
   });
 
   describe("getUploadProgress", () => {
-    it("10. tráº£ progress fraction cá»§a entry uploading; undefined khi chÆ°a cÃ³ / id láº¡ / sau done", async () => {
+    it("10. trả progress fraction của entry uploading; undefined khi chưa có / id lạ / sau done", async () => {
       const d = deferred<DriveFileItem>();
       uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
         opts.onProgress?.(0.42);
@@ -1826,7 +1826,7 @@ describe("uploadManager", () => {
       expect(um.getUploadProgress(entryId)).toBeUndefined(); // sau done (pruned)
     });
 
-    it("10b. bytes upload / entry queued (chÆ°a cÃ³ progress) â†’ undefined", async () => {
+    it("10b. bytes upload / entry queued (chưa có progress) → undefined", async () => {
       const d = deferred<DriveFileItem>();
       uploadFileResumable.mockReturnValueOnce(d.promise);
 
@@ -1838,7 +1838,7 @@ describe("uploadManager", () => {
       const b = entries[1];
       if (a === undefined || b === undefined)
         throw new Error("expected 2 upload entries");
-      expect(um.getUploadProgress(a.id)).toBeUndefined(); // uploading nhÆ°ng chÆ°a cÃ³ progress
+      expect(um.getUploadProgress(a.id)).toBeUndefined(); // uploading nhưng chưa có progress
       expect(um.getUploadProgress(b.id)).toBeUndefined(); // queued
 
       d.resolve(makeDriveFile("f1", "a.mp3"));
@@ -1847,7 +1847,7 @@ describe("uploadManager", () => {
   });
 
   describe("progress throttle", () => {
-    it("6. onProgress 3 láº§n nhanh â†’ coalesce 1 notify sau 500ms; Ä‘á»£t 2 cÃ¡ch >500ms â†’ notify thá»© 2", async () => {
+    it("6. onProgress 3 lần nhanh → coalesce 1 notify sau 500ms; đợt 2 cách >500ms → notify thứ 2", async () => {
       vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
       const d = deferred<DriveFileItem>();
       let onProgress: ((f: number) => void) | undefined;
@@ -1865,22 +1865,22 @@ describe("uploadManager", () => {
       await realTick();
 
       expect(um.getEntries()[0]?.progress).toBe(0.9);
-      expect(cb).toHaveBeenCalledTimes(2); // queued + uploading â€” burst Ä‘ang chá» timer
+      expect(cb).toHaveBeenCalledTimes(2); // queued + uploading — burst đang chờ timer
       await advanceBackoff(500);
-      expect(cb).toHaveBeenCalledTimes(3); // 3 onProgress nhanh â†’ Ä‘Ãºng 1 notify
+      expect(cb).toHaveBeenCalledTimes(3); // 3 onProgress nhanh → đúng 1 notify
 
-      onProgress?.(0.95); // Ä‘á»£t 2, cÃ¡ch > 500ms
+      onProgress?.(0.95); // đợt 2, cách > 500ms
       expect(cb).toHaveBeenCalledTimes(3);
       await advanceBackoff(500);
-      expect(cb).toHaveBeenCalledTimes(4); // notify thá»© 2
+      expect(cb).toHaveBeenCalledTimes(4); // notify thứ 2
 
       d.resolve(makeDriveFile("f1", "x.mp3"));
       await realTick(12);
-      expect(cb).toHaveBeenCalledTimes(5); // done notify NGAY, khÃ´ng bá»‹ delay bá»Ÿi throttle
+      expect(cb).toHaveBeenCalledTimes(5); // done notify NGAY, không bị delay bởi throttle
       expect(vi.getTimerCount()).toBe(1); // +1 tint timer (10s, auto-clears)
     });
 
-    it("7. progress khÃ´ng Ä‘á»•i â†’ khÃ´ng notify thá»«a (1 notify duy nháº¥t cho cÃ¹ng giÃ¡ trá»‹)", async () => {
+    it("7. progress không đổi → không notify thừa (1 notify duy nhất cho cùng giá trị)", async () => {
       vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
       const d = deferred<DriveFileItem>();
       let onProgress: ((f: number) => void) | undefined;
@@ -1896,11 +1896,11 @@ describe("uploadManager", () => {
       um.startUploads([diskFileSeed("x", "C:/x.mp3")], TOKEN);
       await realTick();
       await advanceBackoff(500);
-      expect(cb).toHaveBeenCalledTimes(3); // 2 baseline + Ä‘Ãºng 1 notify (coalesce cÃ¹ng giÃ¡ trá»‹)
+      expect(cb).toHaveBeenCalledTimes(3); // 2 baseline + đúng 1 notify (coalesce cùng giá trị)
 
-      onProgress?.(0.5); // cÃ¹ng giÃ¡ trá»‹ láº·p láº¡i
+      onProgress?.(0.5); // cùng giá trị lặp lại
       await advanceBackoff(500);
-      expect(cb).toHaveBeenCalledTimes(3); // khÃ´ng notify thÃªm
+      expect(cb).toHaveBeenCalledTimes(3); // không notify thêm
 
       d.resolve(makeDriveFile("f1", "x.mp3"));
       await realTick(12);
@@ -1908,7 +1908,7 @@ describe("uploadManager", () => {
       expect(vi.getTimerCount()).toBe(1); // +1 tint timer (10s, auto-clears)
     });
 
-    it("9. timer dá»n khi entry done â€” khÃ´ng cÃ²n pending timer (trÃ¡nh leak)", async () => {
+    it("9. timer dọn khi entry done — không còn pending timer (tránh leak)", async () => {
       vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
       const d = deferred<DriveFileItem>();
       uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
