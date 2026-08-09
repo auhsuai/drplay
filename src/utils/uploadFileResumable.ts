@@ -7,6 +7,7 @@ import {
   readDriveErrorBody,
 } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
+import { authHeaders } from "./driveFiles";
 import {
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
@@ -31,7 +32,7 @@ async function putResumableBytes(
   const response = await fetchWithAuth(uploadUri, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(token),
       "Content-Type": UPLOAD_MIME_TYPE,
       "Content-Range": `bytes 0-${String(byteLength - 1)}/${String(byteLength)}`,
     },

@@ -9,6 +9,7 @@ import {
   sleep,
 } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
+import { authHeaders } from "./driveFiles";
 import {
   QUERY_STATUS_TIMEOUT_MS,
   RANGE_HEADER_PATTERN,
@@ -53,7 +54,7 @@ export async function queryResumableStatus(
       response = await fetchWithAuth(uploadUri, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...authHeaders(token),
           // The current position is unknown — the wildcard range tells Drive
           // to report how much it received (docs: Content-Range */<total>).
           "Content-Range": `*/${String(totalSize)}`,

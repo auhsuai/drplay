@@ -1,6 +1,7 @@
 import { captureError } from "./errorLog";
 import { DRIVE_MODULE, driveFetch, readDriveErrorBody } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
+import { authHeaders } from "./driveFiles";
 import {
   IdempotentConflictError,
   UploadError,
@@ -48,7 +49,7 @@ export async function generateClientId(
     `${GENERATE_IDS_URL}?count=${String(GENERATE_IDS_COUNT)}`,
     {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       ...(signal ? { signal } : {}),
     },
   );
@@ -107,7 +108,7 @@ export async function resolveIdempotentConflict(
   });
   const url = `${DRIVE_FILES_BASE_URL}/${encodeURIComponent(fileId)}?fields=${FILE_GET_FIELDS}`;
   const response = await driveFetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders(token),
     signal,
   });
   if (!response.ok) {
@@ -138,7 +139,7 @@ export async function initiateResumableUpload(
   const response = await driveFetch(RESUMABLE_UPLOAD_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(token),
       "Content-Type": UPLOAD_METADATA_CONTENT_TYPE,
       "X-Upload-Content-Type": UPLOAD_MIME_TYPE,
       "X-Upload-Content-Length": String(byteLength),

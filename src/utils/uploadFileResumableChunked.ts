@@ -10,6 +10,7 @@ import {
   sleep,
 } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
+import { authHeaders } from "./driveFiles";
 import {
   RANGE_HEADER_PATTERN,
   UPLOAD_MIME_TYPE,
@@ -76,7 +77,7 @@ async function putChunkWithRetry(
       response = await fetchWithAuth(uploadUri, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...authHeaders(token),
           "Content-Type": UPLOAD_MIME_TYPE,
           "Content-Range": `bytes ${String(start)}-${String(end)}/${String(totalSize)}`,
         },
