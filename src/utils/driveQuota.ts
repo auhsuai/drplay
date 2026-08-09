@@ -1,4 +1,5 @@
 import { captureError } from "./errorLog";
+import { authHeaders } from "./driveFiles";
 import { classifyDriveError, driveFetch } from "./driveHttp";
 import { DRIVE_MODULE } from "./driveTypes";
 import type { DriveStorageQuota } from "./driveTypes";
@@ -39,7 +40,7 @@ export async function getDriveStorageQuota(
     const response = await driveFetch(
       `${QUOTA_API_URL}?fields=${QUOTA_FIELDS}`,
       {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authHeaders(token),
       },
     );
     if (!response.ok) {

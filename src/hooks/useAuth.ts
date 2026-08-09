@@ -22,6 +22,7 @@ import {
   deleteRefreshToken,
 } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
+import { authHeaders } from "../utils/driveFiles";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
 import { PLAYER_STOP_EVENT } from "./usePlayer";
@@ -367,7 +368,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       void (async () => {
         try {
           const res = await fetchWithAuth(GOOGLE_USERINFO_URL, {
-            headers: { Authorization: `Bearer ${accessToken}` },
+            headers: authHeaders(accessToken),
             signal: controller.signal,
           });
           if (!res.ok)

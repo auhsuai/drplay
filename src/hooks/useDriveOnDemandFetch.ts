@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { db } from "../db/db";
 import { driveFetch } from "../utils/driveApi";
 import type { DriveFileItem, DriveFilesListResponse } from "../utils/driveApi";
+import { authHeaders } from "../utils/driveFiles";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
@@ -57,7 +58,7 @@ export function useDriveOnDemandFetch({
           // immediate rejection (Google handle-errors guidance). A response
           // returned here is final — retried or non-retryable.
           const res = await driveFetch(url.toString(), {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: authHeaders(token),
             signal: abortController.signal,
           });
           if (isAborted()) break;

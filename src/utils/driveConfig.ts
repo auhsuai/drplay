@@ -1,7 +1,7 @@
 import { captureError } from "./errorLog";
 import { classifyDriveError, driveFetch } from "./driveHttp";
 import { DRIVE_MODULE } from "./driveTypes";
-import { parseFilesList } from "./driveFiles";
+import { authHeaders, parseFilesList } from "./driveFiles";
 
 const CONFIG_FILENAME = "drplay_config.json";
 const APP_DATA_FOLDER = "appDataFolder";
@@ -29,7 +29,7 @@ export async function getAppConfig(
 
   try {
     const searchRes = await driveFetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     });
 
     if (!searchRes.ok) return null;
@@ -42,7 +42,7 @@ export async function getAppConfig(
       const fileId = first.id;
       const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
       const downloadRes = await driveFetch(downloadUrl, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authHeaders(token),
       });
 
       if (downloadRes.ok) {
@@ -95,7 +95,7 @@ async function saveAppConfigInternal(
 
   try {
     const searchRes = await driveFetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     });
 
     let fileId: string | null = null;
@@ -134,7 +134,7 @@ async function saveAppConfigInternal(
     const uploadRes = await driveFetch(uploadUrl, {
       method: fileId ? "PATCH" : "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...authHeaders(token),
         "Content-Type": `multipart/related; boundary=${boundary}`,
       },
       body: multipartRequestBody,

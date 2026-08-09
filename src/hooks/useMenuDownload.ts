@@ -7,6 +7,7 @@ import {
   getCustomDownloadPath,
 } from "../utils/downloadPath";
 import { mergeWithTimeoutSignal } from "../utils/driveApi";
+import { authHeaders } from "../utils/driveFiles";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
@@ -115,9 +116,7 @@ export function useMenuDownload(t: TFunction) {
 
       const downloadUrl = `https://www.googleapis.com/drive/v3/files/${downloadTrack.id}?alt=media`;
       const response = await fetch(downloadUrl, {
-        headers: {
-          Authorization: `Bearer ${freshToken}`,
-        },
+        headers: authHeaders(freshToken),
         signal,
       });
 

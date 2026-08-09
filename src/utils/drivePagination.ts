@@ -1,5 +1,6 @@
 import { driveFetch, FOLDER_MIME } from "./driveApi";
 import type { DriveFileItem, DriveFolderItem } from "./driveApi";
+import { authHeaders } from "./driveFiles";
 
 // Drive files.list caps each request at 1000 results (docs: values above 1000
 // are coerced to 1000). We aggregate pages so large folders/searches are never
@@ -36,7 +37,7 @@ async function fetchAllPages<T>(
       ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}`
       : baseUrl;
     const response = await driveFetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       ...(signal ? { signal } : {}),
     });
     if (!response.ok) {
