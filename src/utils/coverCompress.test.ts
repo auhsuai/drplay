@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   compressCoverImage,
+  compressCoverVariants,
   isImageTruncated,
   InvalidImageError,
   CoverEncodeError,
@@ -36,9 +37,15 @@ let ctxStubs: CtxStub[] = [];
 let canvasStubs: CanvasStub[] = [];
 let bitmapStubs: BitmapStub[] = [];
 
-function installCanvasStub(opts: { failConvert?: boolean } = {}): void {
+function installCanvasStub(
+  opts: { failConvert?: boolean; failConvertAt?: number } = {},
+): void {
   ctxStubs = [];
   canvasStubs = [];
+  // 1-based index of the convertToBlob call that should fail (per-variant
+  // failure tests). Call order matches canvas creation order because every
+  // encode runs synchronously up to its first await.
+  let convertCall = 0;
   class MockOffscreenCanvas implements CanvasStub {
     width = 0;
     height = 0;
@@ -53,7 +60,8 @@ function installCanvasStub(opts: { failConvert?: boolean } = {}): void {
       return ctx;
     });
     convertToBlob = vi.fn(() => {
-      if (opts.failConvert)
+      convertCall += 1;
+      if (opts.failConvert || convertCall === opts.failConvertAt)
         return Promise.reject(new Error("convertToBlob failed"));
       return Promise.resolve(new Blob([JPEG_BYTES], { type: "image/jpeg" }));
     });
@@ -300,6 +308,163 @@ describe("compressCoverImage", () => {
         THUMB_QUALITY,
       ),
     ).rejects.toBeInstanceOf(CoverEncodeError);
+    expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("compressCoverVariants (one decode, many variants)", () => {
+  const thumbSpec = { maxSize: THUMB_MAX_SIZE, quality: THUMB_QUALITY };
+  const fullSpec = { maxSize: FULL_MAX_SIZE, quality: FULL_QUALITY };
+  const input = new Uint8Array([0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]);
+
+  it("decodes once and re-encodes both variants from the shared bitmap (2500x2500)", async () => {
+    installCanvasStub();
+    const createBitmap = installBitmapStub(2500, 2500);
+
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
+
+    expect(createBitmap).toHaveBeenCalledTimes(1);
+    const [thumbCanvas, fullCanvas] = canvasStubs;
+    expect(thumbCanvas?.width).toBe(THUMB_MAX_SIZE);
+    expect(thumbCanvas?.height).toBe(THUMB_MAX_SIZE);
+    expect(fullCanvas?.width).toBe(FULL_MAX_SIZE);
+    expect(fullCanvas?.height).toBe(FULL_MAX_SIZE);
+    expect(thumbCanvas?.convertToBlob).toHaveBeenCalledWith({
+      type: "image/jpeg",
+      quality: THUMB_QUALITY,
+    });
+    expect(fullCanvas?.convertToBlob).toHaveBeenCalledWith({
+      type: "image/jpeg",
+      quality: FULL_QUALITY,
+    });
+    expect(outcomes).toEqual([
+      {
+        ok: true,
+        result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+      },
+      {
+        ok: true,
+        result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+      },
+    ]);
+    expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps both originals for a small image but still decodes once (200x200)", async () => {
+    installCanvasStub();
+    const createBitmap = installBitmapStub(200, 200);
+
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
+
+    // Still one decode — dimensions are only known after decoding.
+    expect(createBitmap).toHaveBeenCalledTimes(1);
+    expect(outcomes).toEqual([
+      {
+        ok: true,
+        result: { data: input, format: "image/jpeg", keptOriginal: true },
+      },
+      {
+        ok: true,
+        result: { data: input, format: "image/jpeg", keptOriginal: true },
+      },
+    ]);
+    expect(canvasStubs.length).toBe(0);
+    expect(ctxStubs.length).toBe(0);
+    expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-encodes the thumb but keeps the original full bytes at mid size (800x800)", async () => {
+    installCanvasStub();
+    installBitmapStub(800, 800);
+
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
+
+    expect(outcomes[0]).toEqual({
+      ok: true,
+      result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+    });
+    expect(outcomes[1]).toEqual({
+      ok: true,
+      result: { data: input, format: "image/jpeg", keptOriginal: true },
+    });
+    expect(canvasStubs.length).toBe(1);
+    expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the full variant when the thumb encode fails (per-variant isolation)", async () => {
+    installCanvasStub({ failConvertAt: 1 });
+    installBitmapStub(2500, 2500);
+
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
+
+    expect(outcomes[0]).toEqual({
+      ok: false,
+      error: expect.any(CoverEncodeError) as CoverEncodeError,
+    });
+    expect(outcomes[1]).toEqual({
+      ok: true,
+      result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+    });
+    expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the thumb variant when the full encode fails", async () => {
+    installCanvasStub({ failConvertAt: 2 });
+    installBitmapStub(2500, 2500);
+
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
+
+    expect(outcomes[0]).toEqual({
+      ok: true,
+      result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+    });
+    expect(outcomes[1]).toEqual({
+      ok: false,
+      error: expect.any(CoverEncodeError) as CoverEncodeError,
+    });
+    expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws InvalidImageError on decode failure without leaking a bitmap", async () => {
+    installCanvasStub();
+    const createBitmap = installBitmapStub(0, 0);
+    vi.mocked(
+      globalThis.createImageBitmap as ReturnType<typeof vi.fn>,
+    ).mockRejectedValueOnce(new Error("Image decode error"));
+
+    await expect(
+      compressCoverVariants(input, "image/jpeg", [thumbSpec, fullSpec]),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(createBitmap).toHaveBeenCalledTimes(1);
+    expect(bitmapStubs.length).toBe(0);
+  });
+
+  it("closes the bitmap exactly once even when every variant fails", async () => {
+    installCanvasStub({ failConvert: true });
+    installBitmapStub(2500, 2500);
+
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
+
+    expect(outcomes[0]?.ok).toBe(false);
+    expect(outcomes[1]?.ok).toBe(false);
     expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
   });
 });

@@ -69,10 +69,62 @@ export function isImageTruncated(data: Uint8Array): boolean {
 }
 
 /**
- * Scales an embedded cover down to maxSize (longest edge) and encodes it as
- * JPEG at the given quality. Images that already fit are returned unchanged —
- * no re-encode, no upscale. Throws InvalidImageError on decode failure and
- * CoverEncodeError when the canvas cannot produce the JPEG blob.
+ * A single cover variant: longest-edge cap + JPEG quality. Grouped so
+ * compressCoverVariants can describe N variants without N parameters.
+ */
+export interface CoverVariantSpec {
+  /** Longest-edge cap for this variant; smaller images are returned untouched. */
+  maxSize: number;
+  /** JPEG quality used when this variant must be re-encoded. */
+  quality: number;
+}
+
+/**
+ * Outcome of one variant. A successful variant carries the compressed bytes;
+ * a failed variant carries its CoverEncodeError (decode failures are shared
+ * and thrown by compressCoverVariants, never reported here).
+ */
+export type CoverVariantResult =
+  | { ok: true; result: CoverCompressResult }
+  | { ok: false; error: CoverEncodeError };
+
+/**
+ * Decodes `data` ONCE and derives every variant from the same ImageBitmap —
+ * a track cover costs a single decode no matter how many variants are
+ * produced (was: one createImageBitmap per variant). Result order matches
+ * `variants` order.
+ *
+ * Decode failure throws InvalidImageError (shared by all variants). Encode
+ * failures are isolated per variant via CoverVariantResult — one broken
+ * variant never drops the others, and callers can log each separately.
+ */
+export async function compressCoverVariants(
+  data: Uint8Array,
+  sourceFormat: string,
+  variants: CoverVariantSpec[],
+): Promise<CoverVariantResult[]> {
+  if (variants.length === 0) return [];
+  const img = await decodeCover(data, sourceFormat);
+  try {
+    const settled = await Promise.allSettled(
+      variants.map((spec) => encodeVariant(img, data, sourceFormat, spec)),
+    );
+    return settled.map((s) => {
+      if (s.status === "fulfilled") {
+        return { ok: true, result: s.value };
+      }
+      return { ok: false, error: asCoverEncodeError(s.reason) };
+    });
+  } finally {
+    // Exactly one close on every path (success or any encode failure): the
+    // shared bitmap is disposed once after all variants consumed it.
+    img.close();
+  }
+}
+
+/**
+ * Single-variant wrapper over compressCoverVariants, kept for callers that
+ * need exactly one cover (interface and behavior unchanged).
  */
 export async function compressCoverImage(
   data: Uint8Array,
@@ -80,28 +132,53 @@ export async function compressCoverImage(
   maxSize: number,
   quality: number,
 ): Promise<CoverCompressResult> {
-  let img: ImageBitmap;
+  const outcomes = await compressCoverVariants(data, sourceFormat, [
+    { maxSize, quality },
+  ]);
+  const outcome = outcomes[0];
+  if (!outcome) {
+    throw new CoverEncodeError("no cover variant was produced");
+  }
+  if (outcome.ok) return outcome.result;
+  throw outcome.error;
+}
+
+async function decodeCover(
+  data: Uint8Array,
+  sourceFormat: string,
+): Promise<ImageBitmap> {
   try {
-    img = await createImageBitmap(new Blob([data], { type: sourceFormat }));
+    return await createImageBitmap(new Blob([data], { type: sourceFormat }));
   } catch (e: unknown) {
     throw new InvalidImageError(
       `image decode failed: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  try {
-    if (img.width <= maxSize && img.height <= maxSize) {
-      return { data, format: sourceFormat, keptOriginal: true };
-    }
+}
 
-    const scale = Math.min(maxSize / img.width, maxSize / img.height);
-    const w = Math.max(1, Math.floor(img.width * scale));
-    const h = Math.max(1, Math.floor(img.height * scale));
-
-    const jpeg = await encodeJpeg(img, w, h, sourceFormat, quality);
-    return { data: jpeg, format: "image/jpeg", keptOriginal: false };
-  } finally {
-    img.close();
+async function encodeVariant(
+  img: ImageBitmap,
+  originalData: Uint8Array,
+  sourceFormat: string,
+  spec: CoverVariantSpec,
+): Promise<CoverCompressResult> {
+  if (img.width <= spec.maxSize && img.height <= spec.maxSize) {
+    return { data: originalData, format: sourceFormat, keptOriginal: true };
   }
+
+  const scale = Math.min(spec.maxSize / img.width, spec.maxSize / img.height);
+  const w = Math.max(1, Math.floor(img.width * scale));
+  const h = Math.max(1, Math.floor(img.height * scale));
+
+  const jpeg = await encodeJpeg(img, w, h, sourceFormat, spec.quality);
+  return { data: jpeg, format: "image/jpeg", keptOriginal: false };
+}
+
+function asCoverEncodeError(reason: unknown): CoverEncodeError {
+  if (reason instanceof CoverEncodeError) return reason;
+  return new CoverEncodeError(
+    reason instanceof Error ? reason.message : String(reason),
+  );
 }
 
 async function encodeJpeg(

@@ -45,7 +45,7 @@ vi.mock("./errorLog", () => ({
 
 vi.mock("./coverCompress", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./coverCompress")>();
-  return { ...actual, compressCoverImage: vi.fn() };
+  return { ...actual, compressCoverVariants: vi.fn() };
 });
 
 vi.mock("./driveRangeTokenizer", async (importOriginal) => {
@@ -80,7 +80,8 @@ import {
 } from "./metadata";
 import { captureError } from "./errorLog";
 import {
-  compressCoverImage,
+  compressCoverVariants,
+  CoverEncodeError,
   InvalidImageError,
   FULL_MAX_SIZE,
 } from "./coverCompress";
@@ -821,16 +822,22 @@ describe("getTrackMetadata head fetch + transient network failures", () => {
   const fresh = () => import("./metadata");
 
   beforeEach(() => {
-    vi.mocked(compressCoverImage).mockReset();
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data:
-          maxSize >= FULL_MAX_SIZE
-            ? new Uint8Array([9, 8, 7])
-            : new Uint8Array([1, 2, 3]),
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockReset();
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data:
+                v.maxSize >= FULL_MAX_SIZE
+                  ? new Uint8Array([9, 8, 7])
+                  : new Uint8Array([1, 2, 3]),
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
   });
 
@@ -919,17 +926,23 @@ describe("cover extraction + full picture LRU", () => {
   const fresh = () => import("./metadata");
 
   function mockCompress(thumbBytes: Uint8Array, fullBytes: Uint8Array) {
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data: maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data: v.maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
   }
 
   beforeEach(() => {
-    vi.mocked(compressCoverImage).mockReset();
+    vi.mocked(compressCoverVariants).mockReset();
     mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
   });
 
@@ -995,15 +1008,21 @@ describe("cover extraction + full picture LRU", () => {
         makeJpeg(),
       ),
     );
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data:
-          maxSize >= FULL_MAX_SIZE
-            ? new Uint8Array(FULL_PERSIST_MAX_BYTES + 1)
-            : new Uint8Array([1, 2, 3]),
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data:
+                v.maxSize >= FULL_MAX_SIZE
+                  ? new Uint8Array(FULL_PERSIST_MAX_BYTES + 1)
+                  : new Uint8Array([1, 2, 3]),
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
 
     const r = await getTrackMetadata("pic-bigfull", "tok", 2048, "pic.mp3");
@@ -1021,15 +1040,21 @@ describe("cover extraction + full picture LRU", () => {
     makeFetchMock(
       buildMp3WithPicture("PNG Pic", "PNG Artist", "PNG Album", makeJpeg()),
     );
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data:
-          maxSize >= FULL_MAX_SIZE
-            ? new Uint8Array([9, 8, 7])
-            : new Uint8Array([1, 2, 3]),
-        format: "image/png",
-        keptOriginal: true,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data:
+                v.maxSize >= FULL_MAX_SIZE
+                  ? new Uint8Array([9, 8, 7])
+                  : new Uint8Array([1, 2, 3]),
+              format: "image/png",
+              keptOriginal: true,
+            },
+          })),
+        ),
     );
 
     const r = await getTrackMetadata("pic-png", "tok", 2048, "pic.mp3");
@@ -1101,7 +1126,7 @@ describe("cover extraction + full picture LRU", () => {
         ) as unknown as string,
       }),
     );
-    expect(compressCoverImage).not.toHaveBeenCalled();
+    expect(compressCoverVariants).not.toHaveBeenCalled();
   });
 
   it("skips a truncated picture with a warning but keeps the v:8 text entry", async () => {
@@ -1130,15 +1155,18 @@ describe("cover extraction + full picture LRU", () => {
         ) as unknown as string,
       }),
     );
-    expect(compressCoverImage).not.toHaveBeenCalled();
+    expect(compressCoverVariants).not.toHaveBeenCalled();
   });
 
-  it("decode failure keeps the v:8 text entry and still stores the full variant", async () => {
+  it("decode failure keeps the v:8 text entry and drops both variants (shared decode)", async () => {
     const { getTrackMetadata } = await fresh();
     makeFetchMock(
       buildMp3WithPicture("Fail Song", "Fail Artist", "Fail Album", makeJpeg()),
     );
-    vi.mocked(compressCoverImage).mockRejectedValueOnce(
+    // One shared decode feeds both variants — a decode rejection now drops
+    // the thumb AND the full (previously each variant decoded separately, so
+    // the full could survive a thumb decode failure).
+    vi.mocked(compressCoverVariants).mockRejectedValueOnce(
       new InvalidImageError("decode boom"),
     );
 
@@ -1146,7 +1174,7 @@ describe("cover extraction + full picture LRU", () => {
     expect(r.v).toBe(8);
     expect(r.title).toBe("Fail Song");
     expect(r.pictureData).toBeNull();
-    expect(r.pictureDataFull).toEqual(new Uint8Array([9, 8, 7]));
+    expect(r.pictureDataFull).toBeNull();
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
@@ -1156,6 +1184,13 @@ describe("cover extraction + full picture LRU", () => {
         ) as unknown as string,
       }),
     );
+    // Exactly ONE cover-compress-failed log (was: two per-variant decode logs).
+    const coverLogs = vi
+      .mocked(captureError)
+      .mock.calls.filter(([args]) =>
+        args.message.includes("cover-compress-failed"),
+      );
+    expect(coverLogs).toHaveLength(1);
   });
 
   it("salvages the v:8 text entry when the cover read blows the range budget", async () => {
@@ -1187,7 +1222,7 @@ describe("cover extraction + full picture LRU", () => {
         ) as unknown as string,
       }),
     );
-    expect(compressCoverImage).not.toHaveBeenCalled();
+    expect(compressCoverVariants).not.toHaveBeenCalled();
   });
 
   it("evicts the oldest full picture when the entry cap (64) is exceeded", async () => {
@@ -1201,15 +1236,21 @@ describe("cover extraction + full picture LRU", () => {
         makeJpeg(),
       ),
     );
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data:
-          maxSize >= FULL_MAX_SIZE
-            ? new Uint8Array(1024)
-            : new Uint8Array([1, 2, 3]),
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data:
+                v.maxSize >= FULL_MAX_SIZE
+                  ? new Uint8Array(1024)
+                  : new Uint8Array([1, 2, 3]),
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
 
     for (let i = 0; i < 65; i++) {
@@ -1236,15 +1277,21 @@ describe("cover extraction + full picture LRU", () => {
         makeJpeg(),
       ),
     );
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data:
-          maxSize >= FULL_MAX_SIZE
-            ? new Uint8Array(300 * 1024)
-            : new Uint8Array([1, 2, 3]),
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data:
+                v.maxSize >= FULL_MAX_SIZE
+                  ? new Uint8Array(300 * 1024)
+                  : new Uint8Array([1, 2, 3]),
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
 
     for (let i = 0; i < 55; i++) {
@@ -1271,7 +1318,7 @@ describe("cover extraction + full picture LRU", () => {
     expect(r.title).toBe("Plain FLAC");
     expect(r.pictureData).toBeNull();
     expect(r.pictureDataFull).toBeNull();
-    expect(compressCoverImage).not.toHaveBeenCalled();
+    expect(compressCoverVariants).not.toHaveBeenCalled();
   });
 
   it("MP3 with a 25MB ID3v2 tag parses with a raised tokenizer budget (v:8 + cover)", async () => {
@@ -1372,18 +1419,24 @@ describe("cover POST to the Rust disk cache (S4)", () => {
   const fresh = () => import("./metadata");
 
   function mockCompress(thumbBytes: Uint8Array, fullBytes: Uint8Array) {
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data: maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data: v.maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
   }
 
   beforeEach(() => {
     postCoverToCacheMock.mockReset();
-    vi.mocked(compressCoverImage).mockReset();
+    vi.mocked(compressCoverVariants).mockReset();
     mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
   });
 
@@ -1413,13 +1466,23 @@ describe("cover POST to the Rust disk cache (S4)", () => {
   });
 
   it("POSTs only the thumb when full compression fails (per-variant independence)", async () => {
-    vi.mocked(compressCoverImage)
-      .mockResolvedValueOnce({
-        data: new Uint8Array([1, 2, 3]),
-        format: "image/jpeg",
-        keptOriginal: false,
-      })
-      .mockRejectedValueOnce(new Error("full encode failed"));
+    // Encode failures are isolated per variant: the full outcome carries the
+    // error while the thumb still succeeds (one compressCoverVariants call
+    // yields both outcomes from the shared decode).
+    vi.mocked(compressCoverVariants).mockResolvedValue([
+      {
+        ok: true as const,
+        result: {
+          data: new Uint8Array([1, 2, 3]),
+          format: "image/jpeg",
+          keptOriginal: false,
+        },
+      },
+      {
+        ok: false as const,
+        error: new CoverEncodeError("full encode failed"),
+      },
+    ]);
 
     const { getTrackMetadata } = await fresh();
     makeFetchMock(
@@ -1439,15 +1502,21 @@ describe("cover POST to the Rust disk cache (S4)", () => {
   });
 
   it("does not POST any variant when the cover is not JPEG (PNG bytes kept original)", async () => {
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data:
-          maxSize >= FULL_MAX_SIZE
-            ? new Uint8Array([9, 8, 7])
-            : new Uint8Array([1, 2, 3]),
-        format: "image/png",
-        keptOriginal: true,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data:
+                v.maxSize >= FULL_MAX_SIZE
+                  ? new Uint8Array([9, 8, 7])
+                  : new Uint8Array([1, 2, 3]),
+              format: "image/png",
+              keptOriginal: true,
+            },
+          })),
+        ),
     );
 
     const { getTrackMetadata } = await fresh();
@@ -1463,17 +1532,24 @@ describe("cover POST to the Rust disk cache (S4)", () => {
   });
 
   it("POSTs only the JPEG thumb when the full variant is a PNG original (mixed formats)", async () => {
-    vi.mocked(compressCoverImage)
-      .mockResolvedValueOnce({
-        data: new Uint8Array([1, 2, 3]),
-        format: "image/jpeg",
-        keptOriginal: false,
-      })
-      .mockResolvedValueOnce({
-        data: new Uint8Array([9, 8, 7]),
-        format: "image/png",
-        keptOriginal: true,
-      });
+    vi.mocked(compressCoverVariants).mockResolvedValue([
+      {
+        ok: true as const,
+        result: {
+          data: new Uint8Array([1, 2, 3]),
+          format: "image/jpeg",
+          keptOriginal: false,
+        },
+      },
+      {
+        ok: true as const,
+        result: {
+          data: new Uint8Array([9, 8, 7]),
+          format: "image/png",
+          keptOriginal: true,
+        },
+      },
+    ]);
 
     const { getTrackMetadata } = await fresh();
     makeFetchMock(
@@ -1646,17 +1722,23 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
   }
 
   function mockCompress(thumbBytes: Uint8Array, fullBytes: Uint8Array) {
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data: maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data: v.maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
   }
 
   beforeEach(() => {
-    vi.mocked(compressCoverImage).mockReset();
+    vi.mocked(compressCoverVariants).mockReset();
     mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
   });
 
@@ -1866,17 +1948,23 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
   const fresh = () => import("./metadata");
 
   function mockCompress(thumbBytes: Uint8Array, fullBytes: Uint8Array) {
-    vi.mocked(compressCoverImage).mockImplementation((_data, _fmt, maxSize) =>
-      Promise.resolve({
-        data: maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
-        format: "image/jpeg",
-        keptOriginal: false,
-      }),
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data: v.maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
     );
   }
 
   beforeEach(() => {
-    vi.mocked(compressCoverImage).mockReset();
+    vi.mocked(compressCoverVariants).mockReset();
     mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
   });
 
