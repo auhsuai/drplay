@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { Play, Heart, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import {
   getFavorites,
   removeFavorite,

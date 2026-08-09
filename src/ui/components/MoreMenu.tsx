@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import { formatTime } from "../../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from "../../../utils/bufferedRange";
 import { captureError } from "../../../utils/errorLog";

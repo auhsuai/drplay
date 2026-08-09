@@ -11,7 +11,7 @@ import {
 } from "@testing-library/react";
 import { MoreMenu } from "./MoreMenu";
 import en from "../../locales/en/translation.json";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
 
 const mocks = vi.hoisted(() => ({

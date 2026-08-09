@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import { Music, Play, X, Trash2, Camera } from "lucide-react";
 import type { Playlist } from "../../utils/playlists";
 import {

@@ -10,7 +10,7 @@ import {
   vi,
 } from "vitest";
 import type { MockInstance } from "vitest";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import type { CachedMetadata } from "../../../utils/metadata";
 import { getTrackMetadata } from "../../../utils/metadata";
 import { getPalette } from "../../../utils/color";

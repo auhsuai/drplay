@@ -1,6 +1,6 @@
 import React from "react";
 import { useVirtualizer, type ScrollToOptions } from "@tanstack/react-virtual";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
 import { SongCard } from "./SongCard";
 import {

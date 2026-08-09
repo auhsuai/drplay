@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import type { CachedMetadata } from "../../../utils/metadata";
 import { getPalette } from "../../../utils/color";
 import { captureError } from "../../../utils/errorLog";

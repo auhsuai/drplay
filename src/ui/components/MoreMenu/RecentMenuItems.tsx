@@ -1,5 +1,5 @@
 import { Download, MapPin, Trash2 } from "lucide-react";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
 import { MENU_ITEM_BASE_CLASS, MENU_ITEM_DELETE_CLASS } from "./constants";
 import { MoreMenuItem } from "./MoreMenuItem";

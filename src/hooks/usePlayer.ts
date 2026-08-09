@@ -6,7 +6,7 @@ import {
   start as keepAwakeStart,
   stop as keepAwakeStop,
 } from "tauri-plugin-keepawake-api";
-import type { Track } from "../App";
+import type { Track } from "../types";
 import { recordPlay } from "../utils/history";
 import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";

@@ -1,6 +1,6 @@
 import { Music, ChevronRight } from "lucide-react";
 import type { Playlist } from "../../../utils/playlists";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import { PlaylistsSubmenu } from "./PlaylistsSubmenu";
 
 interface AddToPlaylistItemProps {

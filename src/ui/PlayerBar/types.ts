@@ -1,4 +1,4 @@
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 
 export interface PlayerBarProps {
   currentTrack: Track | null;

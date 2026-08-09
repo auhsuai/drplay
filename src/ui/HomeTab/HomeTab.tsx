@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import type { UserProfile } from "../../types";
 import type { FolderVisitEntry } from "../../utils/history";
 import {

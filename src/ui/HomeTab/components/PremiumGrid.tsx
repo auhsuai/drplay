@@ -1,4 +1,4 @@
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import { PremiumCard } from "./PremiumCard";
 
 const PREMIUM_GRID_CLASS =

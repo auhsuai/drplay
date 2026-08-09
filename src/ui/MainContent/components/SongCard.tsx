@@ -7,7 +7,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
 import { formatBytes } from "../../../utils/formatBytes";
 import { dismissUploaded } from "../../../utils/uploadManager";

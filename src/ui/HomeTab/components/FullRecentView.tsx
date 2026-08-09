@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
 import { useTranslation } from "react-i18next";
 import { prefetchVisibleTracks } from "../../../utils/streamPrefetcher";

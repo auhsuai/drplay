@@ -8,7 +8,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import { NowPlayingView } from "./NowPlayingView";
 import en from "../../locales/en/translation.json";
 

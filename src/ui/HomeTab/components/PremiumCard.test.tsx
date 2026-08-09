@@ -19,7 +19,7 @@ import {
 import type { MockInstance } from "vitest";
 import { PremiumCard } from "./PremiumCard";
 import { getTrackMetadata } from "../../../utils/metadata";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 
 vi.mock("../../../utils/metadata", () => ({
   getTrackMetadata: vi.fn(),

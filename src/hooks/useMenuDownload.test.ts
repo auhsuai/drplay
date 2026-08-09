@@ -3,7 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MouseEvent } from "react";
 import type { TFunction } from "i18next";
-import type { Track } from "../App";
+import type { Track } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { join } from "@tauri-apps/api/path";
 import { getValidToken } from "../utils/apiClient";

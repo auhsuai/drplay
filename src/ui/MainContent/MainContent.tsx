@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from "react";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 

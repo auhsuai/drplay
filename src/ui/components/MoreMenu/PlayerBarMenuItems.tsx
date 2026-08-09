@@ -1,5 +1,5 @@
 import { Download, MapPin } from "lucide-react";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import { MENU_ITEM_BASE_CLASS } from "./constants";
 import { MoreMenuItem } from "./MoreMenuItem";
 

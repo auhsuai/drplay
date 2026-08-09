@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import type { Track } from "../../../App";
+import type { Track } from "../../../types";
 import type { CachedMetadata } from "../../../utils/metadata";
 import { Play, Music, Ellipsis } from "lucide-react";
 import { useTranslation } from "react-i18next";

@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockInstance } from "vitest";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import { PlayerBar } from "./PlayerBar";
 import en from "../../locales/en/translation.json";
 import type { PlayerBarProps } from "./types";

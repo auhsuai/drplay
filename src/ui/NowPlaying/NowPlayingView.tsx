@@ -1,5 +1,5 @@
 import { memo } from "react";
-import type { Track } from "../../App";
+import type { Track } from "../../types";
 import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
