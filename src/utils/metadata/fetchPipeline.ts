@@ -33,6 +33,7 @@ import {
   FALLBACK_AUDIO_FILENAME,
   LARGE_FILE_THRESHOLD,
   METADATA_KEY_PREFIX,
+  METADATA_NETWORK_COOLDOWN_MS,
   META_MODULE,
   REAL_METADATA_VERSION,
   TAG_BUDGET_MAX,
@@ -45,6 +46,21 @@ import {
   makePlaceholder,
   stripExtension,
 } from "./pipelineHelpers";
+
+// ---- Per-file network cooldown (re-hang loop fix).
+// Google Drive media endpoints have a known 30±5s first-byte delay under
+// load (rclone forum threads 22681/8320). After ONE network failure for a
+// fileId, every re-mount of the same card (scroll/filter re-render) used to
+// re-spawn the range fetch and re-hang the UI for another ~30s before
+// falling into the same placeholder. This map (fileId -> cooldown expiry)
+// makes re-mounts inside the cooldown return the placeholder immediately
+// WITHOUT touching the network — no spam of a Drive that just failed, no
+// repeated hang. Unlike the app-wide circuit breaker (fail-fast after a
+// throttle threshold), this is per-file: one slow file does not block the
+// rest. forceNetwork bypasses the cooldown (manual retry via RefreshCw).
+// Entries are pruned lazily on read; only recently-failed files are ever in
+// the map, so it stays tiny and needs no timer.
+const networkCooldownUntil = new Map<string, number>();
 
 async function getTrackMetadataImpl(
   fileId: string,
@@ -95,6 +111,21 @@ async function getTrackMetadataImpl(
     const placeholder = makePlaceholder(safeName);
     setMetadataCache(fileId, placeholder);
     return placeholder;
+  }
+
+  // Per-file network cooldown: a re-mount of a file whose last fetch failed
+  // returns the placeholder immediately (no network, no cache pinning) until
+  // the cooldown expires, then re-fetches naturally. forceNetwork bypasses
+  // this so the manual retry always goes to the network.
+  if (!forceNetwork) {
+    const cooldownUntil = networkCooldownUntil.get(fileId);
+    if (cooldownUntil !== undefined) {
+      if (cooldownUntil > Date.now()) {
+        return makePlaceholder(safeName, size);
+      }
+      // Lazy prune: the entry expired — drop it so the map never grows stale.
+      networkCooldownUntil.delete(fileId);
+    }
   }
 
   const isLargeFile = size > LARGE_FILE_THRESHOLD;
@@ -349,8 +380,15 @@ async function getTrackMetadataImpl(
     // reload (the mem entry shadows any later fetch). Deterministic failures
     // (parse errors, RangeNotSupported, budget, unknown size) still cache:
     // re-fetching those can only fail again. A network failure returns the
-    // placeholder to THIS caller but the next getTrackMetadata re-fetches.
-    if (!(e instanceof RangeFetchNetworkError)) {
+    // placeholder to THIS caller but the next getTrackMetadata re-fetches —
+    // gated by the per-file cooldown so the re-fetch does not re-hang the
+    // card while Drive is still slow.
+    if (e instanceof RangeFetchNetworkError) {
+      networkCooldownUntil.set(
+        fileId,
+        Date.now() + METADATA_NETWORK_COOLDOWN_MS,
+      );
+    } else {
       setMetadataCache(fileId, placeholder);
     }
     return placeholder;

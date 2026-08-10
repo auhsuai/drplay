@@ -32,6 +32,12 @@ export const MAX_LRU_CACHE = 100;
 export const CACHE_VERSION = 2;
 export const INFLIGHT_TIMEOUT = 30_000;
 
+// After one network/timeout failure for a fileId, re-mounts of that card
+// (scroll/filter) are served a placeholder without touching the network for
+// this long. Drive's first-byte delay is 30±5s, so the cooldown outlasts a
+// single retry window and stops the re-hang loop while Drive is slow.
+export const METADATA_NETWORK_COOLDOWN_MS = 60_000;
+
 export const MAX_MEM_CACHE = 1000; // 1000 entries cap; entries may carry pictureData (thumb) so real usage can reach tens of MB - bounded by count, not bytes.
 
 // Full-picture (≤2000px) memory LRU + IDB persistence gate. Thumbnails persist

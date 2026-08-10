@@ -78,6 +78,7 @@ import {
   TAG_BUDGET_MAX,
   FULL_PERSIST_MAX_BYTES,
 } from "./metadata";
+import { METADATA_NETWORK_COOLDOWN_MS } from "./metadata/constants";
 import { captureError } from "./errorLog";
 import {
   compressCoverVariants,
@@ -899,26 +900,118 @@ describe("getTrackMetadata head fetch + transient network failures", () => {
     expect(mock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not lock the placeholder after a transient network failure (next call refetches)", async () => {
+  it("does not lock the placeholder after a transient network failure (forceNetwork retry succeeds)", async () => {
     const { getTrackMetadata } = await fresh();
     // First call: network failure -> placeholder is returned (v:9) but must
-    // NOT be pinned into the memory cache.
+    // NOT be pinned into the memory cache (it also starts the 60s per-file
+    // cooldown, so a plain re-mount would stay a placeholder by design).
     makeFetchMock(new Uint8Array(0), { reject: true });
     const r1 = await getTrackMetadata("net-fail", "tok", 2048, "nf.mp3");
     expect(r1.v).toBe(V_PLACEHOLDER);
 
-    // Second call (refresh / re-render): mock now serves a real file -> the
-    // fetch MUST run again and return real metadata, not the stuck placeholder.
+    // Second call: the manual retry (forceNetwork, e.g. the RefreshCw button)
+    // bypasses the cooldown -> the fetch MUST run again and return real
+    // metadata, not the stuck placeholder.
     const fixture = buildMp3Fixture(
       "Recovered",
       "Recovered Artist",
       "Recovered Album",
     );
     const { mock } = makeFetchMock(fixture);
-    const r2 = await getTrackMetadata("net-fail", "tok", 2048, "nf.mp3");
+    const r2 = await getTrackMetadata(
+      "net-fail",
+      "tok",
+      2048,
+      "nf.mp3",
+      undefined,
+      true,
+    );
     expect(r2.v).toBe(8);
     expect(r2.title).toBe("Recovered");
     expect(mock).toHaveBeenCalled();
+  });
+});
+
+describe("getTrackMetadata per-file network cooldown", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("re-mount inside the cooldown returns the placeholder without a new fetch", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    // First call: network failure -> placeholder, ONE fetch attempt.
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    const r1 = await getTrackMetadata("cd-a", "tok", 2048, "cd.mp3");
+    expect(r1.v).toBe(V_PLACEHOLDER);
+    const callsAfterFail = calls.length;
+    expect(callsAfterFail).toBeGreaterThan(0);
+
+    // Re-mount (scroll/filter re-render) inside the 60s cooldown: no new
+    // fetch (call count unchanged), placeholder returned, nothing cached.
+    const r2 = await getTrackMetadata("cd-a", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBe(callsAfterFail);
+    expect(r2.v).toBe(V_PLACEHOLDER);
+  });
+
+  it("forceNetwork bypasses the cooldown and re-fetches", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    await getTrackMetadata("cd-b", "tok", 2048, "cd.mp3");
+    const callsAfterFail = calls.length;
+
+    // Manual retry (RefreshCw) bypasses the cooldown -> fetch runs again.
+    const r = await getTrackMetadata(
+      "cd-b",
+      "tok",
+      2048,
+      "cd.mp3",
+      undefined,
+      true,
+    );
+    expect(calls.length).toBeGreaterThan(callsAfterFail);
+    expect(r.v).toBe(V_PLACEHOLDER);
+  });
+
+  it("a failing fileId does not put other fileIds into cooldown", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    await getTrackMetadata("cd-c", "tok", 2048, "cd.mp3");
+    const callsAfterFirst = calls.length;
+
+    // A DIFFERENT fileId is unaffected by cd-c's cooldown -> fetch runs.
+    const rOther = await getTrackMetadata("cd-d", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBeGreaterThan(callsAfterFirst);
+    expect(rOther.v).toBe(V_PLACEHOLDER);
+    const callsAfterSecond = calls.length;
+
+    // cd-c is still inside ITS OWN cooldown -> still no new fetch.
+    await getTrackMetadata("cd-c", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBe(callsAfterSecond);
+  });
+
+  it("after the cooldown expires the natural re-fetch runs and can succeed", async () => {
+    vi.useFakeTimers();
+    const { getTrackMetadata } = await import("./metadata");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    await getTrackMetadata("cd-e", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBeGreaterThan(0);
+
+    // Cooldown (60s) expires.
+    await vi.advanceTimersByTimeAsync(METADATA_NETWORK_COOLDOWN_MS + 1);
+
+    // Drive recovered: the natural re-fetch runs and parses real metadata —
+    // proving the failure placeholder was never pinned into the cache.
+    const fixture = buildMp3Fixture("Back Song", "Back Artist", "Back Album");
+    const { calls: okCalls } = makeFetchMock(fixture);
+    const r = await getTrackMetadata("cd-e", "tok", 2048, "cd.mp3");
+    expect(okCalls.length).toBeGreaterThan(0);
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Back Song");
   });
 });
 

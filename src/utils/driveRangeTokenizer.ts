@@ -17,7 +17,12 @@ export const HEAD_BYTES = 131_072; // head region read before parsing (128KB)
 export const TAIL_BYTES = 1_048_576; // tail region scanned for moov (1MB)
 export const BUDGET_CAP = 20 * 1024 * 1024; // max bytes fetched per file (20MB)
 export const CONCURRENCY = 3; // max app-wide concurrent range fetches
-export const REQUEST_TIMEOUT_MS = 30_000; // per-request timeout
+// Per-request timeout. Google Drive media endpoints show a known 30±5s
+// first-byte delay under load (rclone forum threads 22681/8320) — the old
+// 30s timeout aborted requests exactly AT that boundary, failing when Drive
+// was about to deliver. 45s clears the delay range with margin: a slow
+// success beats a fast timeout + placeholder (metadata fetch storm fix).
+export const REQUEST_TIMEOUT_MS = 45_000;
 export const MAX_RETRIES = 2; // extra attempts for 5xx/429 (total 3 tries)
 const TIMEOUT_RETRIES = 1; // extra attempt for timeouts (total 2 tries)
 const RETRY_BACKOFF_MS = 250;
