@@ -101,6 +101,7 @@ export function useSongCardMetadata({
     debounceMs: TRACK_METADATA_DEBOUNCE_MS,
     listenMetadataUpdated: true,
     imgRef,
+    thumbnailUrl: item.thumbnailLink,
     onMetadata,
     onError,
   });

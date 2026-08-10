@@ -30,6 +30,15 @@ export interface TrackMetadataOptions {
   /** The <img> the cover renders into; its src is cleared on cleanup. Captured at setup so the cleanup never reads the (possibly stale) ref (react-hooks/exhaustive-deps ref-cleanup rule). */
   imgRef?: RefObject<HTMLImageElement | null>;
   /**
+   * Drive-provided instant thumbnail URL (files.thumbnailLink). Assigned to
+   * imgRef.src immediately at setup — BEFORE any debounce — so the card shows
+   * art while the slower range-fetch metadata parse runs. The resolved cover
+   * blob URL overrides it; cleanup restores it instead of clearing to "".
+   * Optional: consumers without a thumbnail keep the old (icon until
+   * metadata) behavior.
+   */
+  thumbnailUrl?: string | null | undefined;
+  /**
    * Called after a resolved fetch (post-abort-check) with the resolved
    * metadata, the cover blob URL (null when the track has no picture) and
    * the abort signal — consumers that keep awaiting beyond the hook (e.g.
@@ -67,6 +76,7 @@ export function useTrackMetadata({
   listenMetadataUpdated = false,
   refreshKey,
   imgRef,
+  thumbnailUrl,
   onMetadata,
   onError,
   onCleanup,
@@ -82,6 +92,18 @@ export function useTrackMetadata({
     const controller = new AbortController();
     let isMounted = true;
     const imgElement = imgRef?.current ?? null;
+
+    // Instant art: assign Drive's thumbnail right away, before the debounce
+    // window, so a card shows art on first paint instead of waiting for the
+    // slower range-fetch metadata parse. The resolved cover blob overrides it.
+    // The react-hooks/immutability rule flags this write because imgElement
+    // aliases a ref — but the write is a deliberate DOM side effect on the
+    // consumer-owned <img> (not React state), the exact same pattern as the
+    // cleanup write below that the rule allows.
+    if (imgElement && thumbnailUrl) {
+      // eslint-disable-next-line react-hooks/immutability -- DOM side effect, not React state
+      imgElement.src = thumbnailUrl;
+    }
 
     const fetchMetadata = async () => {
       try {
@@ -101,6 +123,12 @@ export function useTrackMetadata({
           ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
           : null;
         setCoverUrl(nextCoverUrl);
+        // Full cover wins over the Drive thumbnail once parsed (DOM-level
+        // override for img-first consumers; React's src prop handles the
+        // state-driven re-render on top).
+        if (imgElement && nextCoverUrl) {
+          imgElement.src = nextCoverUrl;
+        }
         onMetadata(metadata, nextCoverUrl, controller.signal);
       } catch (error) {
         // Deliberate cleanup abort (or an AbortError from the fetch layer) is
@@ -142,7 +170,10 @@ export function useTrackMetadata({
       isMounted = false;
       if (timerId !== undefined) clearTimeout(timerId);
       controller.abort();
-      if (imgElement) imgElement.src = "";
+      // Restore the Drive thumbnail instead of clearing unconditionally — an
+      // unmount/refresh must not blank out instant art the next consumer of
+      // this img sees ("" only when there never was a thumbnail).
+      if (imgElement) imgElement.src = thumbnailUrl ?? "";
       removeMetadataListener?.();
       onCleanup?.();
     };
@@ -156,6 +187,7 @@ export function useTrackMetadata({
     listenMetadataUpdated,
     refreshKey,
     imgRef,
+    thumbnailUrl,
     onMetadata,
     onError,
     onCleanup,

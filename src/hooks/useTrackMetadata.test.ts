@@ -350,6 +350,80 @@ describe("useTrackMetadata abort / error handling", () => {
   });
 });
 
+describe("useTrackMetadata Drive thumbnail (thumbnailUrl)", () => {
+  const THUMB_URL = "https://thumb.example.com/abc123";
+
+  it("assigns the thumbnail to img.src immediately at mount, without waiting for the debounce", () => {
+    vi.useFakeTimers();
+    const img = document.createElement("img");
+    const imgRef: RefObject<HTMLImageElement | null> = { current: img };
+    renderTrackMetadata({
+      imgRef,
+      thumbnailUrl: THUMB_URL,
+      debounceMs: TRACK_METADATA_DEBOUNCE_MS,
+    });
+    // No timers advanced — the thumbnail must appear before any fetch runs.
+    expect(img.getAttribute("src")).toBe(THUMB_URL);
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("overrides img.src with the cover blob when metadata resolves", async () => {
+    mockedFetch.mockResolvedValue(
+      makeMetadata({
+        pictureData: new Uint8Array([1]),
+        pictureDataFull: new Uint8Array([1, 2]),
+        pictureFormat: "image/jpeg",
+      }),
+    );
+    const img = document.createElement("img");
+    const imgRef: RefObject<HTMLImageElement | null> = { current: img };
+    renderTrackMetadata({ imgRef, thumbnailUrl: THUMB_URL });
+    await waitFor(() => {
+      expect(mockedBuildCover).toHaveBeenCalled();
+    });
+    expect(img.getAttribute("src")).toBe("blob:mock-cover");
+  });
+
+  it("restores the thumbnail (not empty) on unmount when thumbnailUrl is present", async () => {
+    const img = document.createElement("img");
+    const imgRef: RefObject<HTMLImageElement | null> = { current: img };
+    const { unmount } = renderTrackMetadata({
+      imgRef,
+      thumbnailUrl: THUMB_URL,
+    });
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+    unmount();
+    expect(img.getAttribute("src")).toBe(THUMB_URL);
+  });
+
+  it("keeps the thumbnail when the metadata fetch fails (placeholder path does not clear img.src)", async () => {
+    mockedFetch.mockRejectedValue(new Error("boom"));
+    const img = document.createElement("img");
+    const imgRef: RefObject<HTMLImageElement | null> = { current: img };
+    const { onError } = renderTrackMetadata({
+      imgRef,
+      thumbnailUrl: THUMB_URL,
+    });
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+    expect(img.getAttribute("src")).toBe(THUMB_URL);
+  });
+
+  it("still clears img.src to empty on unmount when there is no thumbnailUrl", async () => {
+    const img = document.createElement("img");
+    const imgRef: RefObject<HTMLImageElement | null> = { current: img };
+    const { unmount } = renderTrackMetadata({ imgRef });
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+    unmount();
+    expect(img.getAttribute("src")).toBe("");
+  });
+});
+
 describe("useTrackMetadata img cleanup", () => {
   it("clears the captured img src on unmount (ref captured at setup)", async () => {
     const img = document.createElement("img");

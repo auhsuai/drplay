@@ -123,7 +123,7 @@ export async function getTrashedFiles(
   return fetchAllPages<DriveFileItem>(
     token,
     query,
-    "nextPageToken,files(id,name,mimeType)",
+    "nextPageToken,files(id,name,mimeType,thumbnailLink)",
     "fetch trashed files",
     signal,
     "folder,name",

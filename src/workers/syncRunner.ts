@@ -5,6 +5,7 @@ import {
   isAudioFile,
 } from "../utils/audioQuery";
 import { FOLDER_MIME } from "../utils/driveApi";
+import { AUDIO_FILE_FIELDS_WITH_PARENTS } from "../utils/driveTypes";
 import {
   isValidDriveFile,
   partitionValidFiles,
@@ -129,7 +130,7 @@ async function performFullSync() {
         url.searchParams.append("q", getAudioQuery());
         url.searchParams.append(
           "fields",
-          "nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)",
+          `nextPageToken,files(${AUDIO_FILE_FIELDS_WITH_PARENTS})`,
         );
         url.searchParams.append("pageSize", "1000");
         if (pageToken) url.searchParams.append("pageToken", pageToken);
@@ -247,7 +248,7 @@ async function performDeltaSync(startPageToken: string) {
       url.searchParams.append("pageToken", pageToken);
       url.searchParams.append(
         "fields",
-        "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,size,modifiedTime,trashed))",
+        `nextPageToken,newStartPageToken,changes(fileId,removed,file(${AUDIO_FILE_FIELDS_WITH_PARENTS},trashed))`,
       );
 
       const res = await fetchDrive("changes", currentToken, url);

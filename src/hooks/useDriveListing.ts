@@ -68,6 +68,7 @@ export function useDriveListing({
         isFolder: file.isFolder,
         size: file.size,
         modifiedTime: file.modifiedTime,
+        thumbnailLink: file.thumbnailLink,
         trackInfo: file.isFolder
           ? undefined
           : {

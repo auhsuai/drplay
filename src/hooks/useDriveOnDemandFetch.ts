@@ -6,6 +6,7 @@ import { authHeaders } from "../utils/driveFiles";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
+import { AUDIO_FILE_FIELDS_WITH_PARENTS } from "../utils/driveTypes";
 
 const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_PAGE_SIZE = 1000;
@@ -47,7 +48,7 @@ export function useDriveOnDemandFetch({
           url.searchParams.set("q", q);
           url.searchParams.set(
             "fields",
-            "nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)",
+            `nextPageToken,files(${AUDIO_FILE_FIELDS_WITH_PARENTS})`,
           );
           url.searchParams.set("pageSize", String(DRIVE_PAGE_SIZE));
           if (pageToken) url.searchParams.set("pageToken", pageToken);
@@ -91,6 +92,7 @@ export function useDriveOnDemandFetch({
               modifiedTime: f.modifiedTime,
               trashed: false,
               isFolder: f.mimeType === GOOGLE_FOLDER_MIME,
+              thumbnailLink: f.thumbnailLink,
             }));
             try {
               await db.files.bulkPut(filesToInsert);

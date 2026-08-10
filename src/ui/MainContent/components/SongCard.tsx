@@ -114,6 +114,22 @@ export const SongCard = React.memo(
     });
     const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
     const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
+    // Drive thumbnails are short-lived signed URLs (hours) that can 403/expire
+    // — once a thumbnail errors, drop to the icon for this URL (the parsed
+    // cover blob, when it arrives, still takes over via coverUrl).
+    const [thumbnailFailed, setThumbnailFailed] = useState(false);
+    // Virtualized rows reuse this card instance for different items (same
+    // virtual key) — a failed thumbnail is per-URL, so forget it when the
+    // item's thumbnail changes.
+    React.useEffect(() => {
+      setThumbnailFailed(false);
+    }, [item.thumbnailLink]);
+    // The Drive thumbnail fills the gap between mount and the metadata parse:
+    // it renders instantly, the parsed cover blob overrides it (coverUrl),
+    // and a failed/absent thumbnail falls back to the icon.
+    const showThumbnail =
+      !item.isFolder && !!item.thumbnailLink && !thumbnailFailed;
+    const imgSrc = coverUrl ?? (showThumbnail ? item.thumbnailLink : null);
     const [contextMenuPos, setContextMenuPos] = useState<{
       x: number;
       y: number;
@@ -200,19 +216,27 @@ export const SongCard = React.memo(
             <div
               className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}`}
             >
-              {coverUrl && !item.isFolder ? (
+              {imgSrc ? (
                 <img
                   ref={imgRef}
-                  src={coverUrl}
+                  src={imgSrc}
                   alt={meta.title}
                   loading="lazy"
                   decoding="async"
                   width={48}
                   height={48}
-                  // The src is already a blob URL built from the picture
-                  // bytes — an error here means those bytes are corrupt, so
-                  // drop to the Music icon (no retry chain exists anymore).
-                  onError={clearCover}
+                  onError={() => {
+                    // A failing blob URL means the parsed cover bytes are
+                    // corrupt (drop the cover — the Drive thumbnail, if any,
+                    // shows instead); a failing Drive thumbnail (403/expired
+                    // signed URL) must not clear the img src — fall back to
+                    // the icon via the failed flag. Never crashes.
+                    if (coverUrl) {
+                      clearCover();
+                    } else {
+                      setThumbnailFailed(true);
+                    }
+                  }}
                   className="w-full h-full object-cover"
                 />
               ) : item.isFolder ? (
@@ -305,6 +329,7 @@ export const SongCard = React.memo(
       prev.item.isFolder === next.item.isFolder &&
       prev.item.trackInfo?.id === next.item.trackInfo?.id &&
       prev.item.trackInfo?.queueItemId === next.item.trackInfo?.queueItemId &&
+      prev.item.thumbnailLink === next.item.thumbnailLink &&
       prev.item.size === next.item.size &&
       prev.isPlaying === next.isPlaying &&
       prev.isSelected === next.isSelected &&

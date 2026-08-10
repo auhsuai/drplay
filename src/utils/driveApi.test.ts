@@ -130,19 +130,32 @@ describe("getRecentlyAddedAudioFiles", () => {
     const url = firstCall[0] as string;
     expect(url).toContain("pageSize=100");
     expect(url).toContain("orderBy=createdTime desc");
-    expect(url).toContain("fields=files(id,name,mimeType,size,modifiedTime)");
+    expect(url).toContain(
+      "fields=files(id,name,mimeType,size,modifiedTime,thumbnailLink)",
+    );
     expect(url).toContain("q=");
   });
 
-  it("maps the Drive response files array into the returned list", async () => {
+  it("maps the Drive response files array into the returned list (thumbnailLink passed through)", async () => {
     mockedFetch.mockResolvedValue(
       makeJsonResponse(200, {
-        files: [{ id: "x", name: "A.mp3", mimeType: "audio/mpeg" }],
+        files: [
+          {
+            id: "x",
+            name: "A.mp3",
+            mimeType: "audio/mpeg",
+            thumbnailLink: "https://thumb.example.com/x",
+          },
+          { id: "y", name: "B.mp3", mimeType: "audio/mpeg" },
+        ],
       }),
     );
     const items = await getRecentlyAddedAudioFiles("tok-test");
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(2);
     expect(items[0]?.id).toBe("x");
+    expect(items[0]?.thumbnailLink).toBe("https://thumb.example.com/x");
+    // A file without a thumbnail must map to undefined, never a crash.
+    expect(items[1]?.thumbnailLink).toBeUndefined();
   });
 });
 

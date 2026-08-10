@@ -19,6 +19,7 @@ import {
 import { SongCard } from "./SongCard";
 import { DRAG_FOLDER_HOVER_EVENT } from "../../components/DropZone";
 import { getTrackMetadata } from "../../../utils/metadata";
+import type { CachedMetadata } from "../../../utils/metadata";
 import type { MockInstance } from "vitest";
 import type { DriveItem } from "../../../types";
 
@@ -380,6 +381,80 @@ describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
     // The blob is intentionally never revoked (covers are small; the browser
     // drops blob URLs on page unload).
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("SongCard Drive thumbnail (thumbnailLink instant art)", () => {
+  const THUMB_URL = "https://thumb.example.com/track-1";
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the Drive thumbnail immediately when the item has a thumbnailLink (before metadata resolves)", () => {
+    // Never resolve: the thumbnail must be on screen without any fetch.
+    mockedFetch.mockReturnValue(new Promise<CachedMetadata>(() => {}));
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ thumbnailLink: THUMB_URL })} />,
+    );
+    const img = container.querySelector<HTMLImageElement>("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("src")).toBe(THUMB_URL);
+    expect(container.querySelector(".lucide-music")).toBeNull();
+  });
+
+  it("swaps the thumbnail for the cover blob when metadata resolves (blob overrides thumbnail)", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: "Fetched Artist",
+      duration: 0,
+      size: 0,
+      pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      pictureFormat: "image/png",
+    } as never);
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ thumbnailLink: THUMB_URL })} />,
+    );
+    const img = await screen.findByAltText("Fetched Title");
+    expect(img.getAttribute("src")).toMatch(/^blob:/);
+    expect(container.querySelector(".lucide-music")).toBeNull();
+  });
+
+  it("drops to the Music icon when the thumbnail errors (403/expired signed URL) without crashing", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ thumbnailLink: THUMB_URL })} />,
+    );
+    const img = container.querySelector<HTMLImageElement>("img");
+    expect(img?.getAttribute("src")).toBe(THUMB_URL);
+
+    expect(() => fireEvent.error(img as HTMLImageElement)).not.toThrow();
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
+  });
+
+  it("keeps the thumbnail when metadata fails (placeholder path never clears it)", async () => {
+    mockedFetch.mockRejectedValue(new Error("boom"));
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ thumbnailLink: THUMB_URL })} />,
+    );
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img).not.toBeNull();
+    expect(img.getAttribute("src")).toBe(THUMB_URL);
+  });
+
+  it("shows the icon instead of an img when there is no thumbnailLink (old behavior until metadata)", () => {
+    mockedFetch.mockReturnValue(new Promise<never>(() => {}));
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
   });
 });
 

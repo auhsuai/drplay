@@ -193,6 +193,20 @@ describe("toDriveFileRow", () => {
     ).toBeUndefined();
   });
 
+  it("maps thumbnailLink through to the DB row (Drive instant thumbnail)", () => {
+    const row = toDriveFileRow(
+      {
+        id: "t1",
+        name: "t1.mp3",
+        mimeType: "audio/mpeg",
+        parents: ["p1"],
+        thumbnailLink: "https://thumb.example.com/t1",
+      },
+      false,
+    );
+    expect(row.thumbnailLink).toBe("https://thumb.example.com/t1");
+  });
+
   it("produces the exact DB row shape used by full-sync and delta-sync", () => {
     const row = toDriveFileRow(
       {

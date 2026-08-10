@@ -11,6 +11,8 @@ export interface DriveFile {
   createdTime?: string;
   modifiedTime?: string;
   md5Checksum?: string;
+  /** Short-lived Drive thumbnail URL (files.thumbnailLink), persisted so cards can show instant art. */
+  thumbnailLink?: string;
 }
 export interface DriveChangesList {
   changes?: DriveChange[];
@@ -52,6 +54,7 @@ export function toDriveFileRow(
     modifiedTime: f.modifiedTime,
     trashed: false,
     isFolder,
+    thumbnailLink: f.thumbnailLink,
   };
 }
 

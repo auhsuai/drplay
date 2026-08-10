@@ -2,6 +2,7 @@ import { getAudioFilesQuery } from "./audioQuery";
 import { captureError } from "./errorLog";
 import { driveFetch } from "./driveHttp";
 import { DRIVE_MODULE, FOLDER_MIME } from "./driveTypes";
+import { AUDIO_FILE_FIELDS } from "./driveTypes";
 import type { DriveFileItem } from "./driveTypes";
 
 // "Recently Added to Drive" fetches a single page of the newest files. 100 is
@@ -262,7 +263,7 @@ export async function getRecentlyAddedAudioFiles(
   token: string,
 ): Promise<DriveFileItem[]> {
   const q = getAudioFilesQuery();
-  const url = `${DRIVE_FILES_URL}?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${String(RECENTLY_ADDED_PAGE_SIZE)}`;
+  const url = `${DRIVE_FILES_URL}?q=${encodeURIComponent(q)}&fields=files(${AUDIO_FILE_FIELDS})&orderBy=createdTime desc&pageSize=${String(RECENTLY_ADDED_PAGE_SIZE)}`;
 
   const response = await driveFetch(url, {
     headers: authHeaders(token),
