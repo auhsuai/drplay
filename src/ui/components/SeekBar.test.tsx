@@ -652,3 +652,25 @@ describe("SeekBar active gating (NowPlaying closed view)", () => {
     expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
   });
 });
+
+describe("SeekBar interleaved layout (time spans on both sides of the bar)", () => {
+  it("renders start time before the bar and end time after the bar (no both-times-on-one-side regression)", () => {
+    const { container } = renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+
+    const bar = screen.getByRole("progressbar");
+    // The bar's siblings within the flex row are the two time spans — the
+    // start clock on the left, the end duration on the right. This asserts
+    // DOM ORDER, which text queries can't: the split regression stacked both
+    // spans before the bar and no old test caught it.
+    expect(bar.previousElementSibling?.tagName).toBe("SPAN");
+    expect(bar.nextElementSibling?.tagName).toBe("SPAN");
+    expect(bar.nextElementSibling?.textContent).toBe("4:00");
+    expect(container.firstElementChild?.firstElementChild?.tagName).toBe(
+      "SPAN",
+    );
+    expect(container.firstElementChild?.lastElementChild?.tagName).toBe("SPAN");
+  });
+});

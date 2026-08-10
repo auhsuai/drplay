@@ -234,7 +234,7 @@ export function SeekBar({
 
   return (
     <div className="w-full flex items-center gap-3">
-      <SeekClock timeTextRef={currentTimeTextRef} duration={duration} />
+      <SeekClock timeTextRef={currentTimeTextRef} />
       <SeekRail
         progressBarRef={progressBarRef}
         bufferFillRef={bufferFillRef}
@@ -249,6 +249,9 @@ export function SeekBar({
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}
       />
+      <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">
+        {formatTime(duration)}
+      </span>
     </div>
   );
 }
