@@ -1,11 +1,11 @@
 import { memo } from "react";
 import type { Track } from "../../types";
-import { formatTime } from "../../utils/formatTime";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { AudioController } from "../../lib/AudioController";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
-import { useNowPlayingProgress } from "./hooks/useNowPlayingProgress";
 import { NowPlayingControls } from "./components/NowPlayingControls";
+import { SeekBar } from "../components/SeekBar";
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -36,24 +36,6 @@ export const NowPlayingView = memo(function NowPlayingView({
 
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
-  const {
-    duration,
-    isDragging,
-    progressBarRef,
-    progressFillRef,
-    bufferFillRef,
-    currentTimeTextRef,
-    handlePointerDown,
-  } = useNowPlayingProgress(currentTrack, isOpen);
-
-  // Render-time mirror of the fill width (the hook writes it DOM-direct). The
-  // percentage feeds aria-valuenow on the progressbar. The fill className
-  // carries rounded-full statically: both ends stay round at every width
-  // (original look — no small 2px right corner, no rail-end toggle).
-  const fillPercent = progressFillRef.current
-    ? parseFloat(progressFillRef.current.style.width) || 0
-    : 0;
-  const progressPercent = Math.round(fillPercent);
 
   if (!currentTrack) {
     return (
@@ -157,41 +139,15 @@ export const NowPlayingView = memo(function NowPlayingView({
                 onTogglePlayMode={onTogglePlayMode}
               />
 
-              <div className="w-full flex items-center gap-3 mb-2">
-                <span
-                  ref={currentTimeTextRef}
-                  className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums"
-                >
-                  0:00
-                </span>
-                <div
-                  ref={progressBarRef}
-                  role="progressbar"
-                  aria-label={t("now_playing.progress")}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={progressPercent}
-                  className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
-                  onPointerDown={handlePointerDown}
-                >
-                  <div
-                    ref={bufferFillRef}
-                    data-testid="buffer-fill"
-                    className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
-                  ></div>
-
-                  <div
-                    ref={progressFillRef}
-                    data-testid="progress-fill"
-                    className={`absolute left-0 h-full bg-brand-primary rounded-full flex items-center transform-gpu will-change-[width] ${isDragging ? "" : "transition-all duration-150"}`}
-                  >
-                    <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0"></div>
-                  </div>
-                </div>
-                <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">
-                  {formatTime(duration)}
-                </span>
-              </div>
+              {/* Shared seekbar: single source of truth with PlayerBar. The
+                  view never seeks with the global arrow keys (PlayerBar owns
+                  that) and gates the 4/s timeupdate subscription on isOpen. */}
+              <SeekBar
+                currentTrack={currentTrack}
+                audio={AudioController.getInstance()}
+                active={isOpen}
+                keyboardSeek={false}
+              />
             </div>
           </div>
         </div>

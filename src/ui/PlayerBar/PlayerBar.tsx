@@ -6,7 +6,7 @@ import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
-import { SeekBar } from "./SeekBar";
+import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
 import { ErrorToast } from "./ErrorToast";
 

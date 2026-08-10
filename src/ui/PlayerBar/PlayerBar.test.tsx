@@ -415,7 +415,7 @@ describe("PlayerBar buffer bar", () => {
   });
 });
 
-describe("PlayerBar seek-drag (parity with useNowPlayingProgress)", () => {
+describe("PlayerBar seek-drag", () => {
   beforeEach(() => {
     fakeController.seek.mockClear();
   });
