@@ -146,34 +146,6 @@ describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(3);
   });
 
-  it("requests thumbnailLink in the fields mask and persists it into the DB row", async () => {
-    mockedFetch.mockResolvedValueOnce(
-      makePage([
-        {
-          id: "thumb-file",
-          name: "thumb.mp3",
-          mimeType: "audio/mpeg",
-          parents: [FOLDER_ID],
-          size: "1000",
-          modifiedTime: "2024-01-01T00:00:00.000Z",
-          thumbnailLink: "https://thumb.example.com/thumb-file",
-        },
-      ]),
-    );
-
-    renderHook(() =>
-      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
-    );
-
-    await waitFor(async () => {
-      const row = await db.files.get("thumb-file");
-      expect(row?.thumbnailLink).toBe("https://thumb.example.com/thumb-file");
-    });
-
-    const url = mockedFetch.mock.calls[0]?.[0] as string;
-    expect(url).toContain("thumbnailLink");
-  });
-
   it("does not write anything when the component unmounts before first page resolves", async () => {
     let resolveFirst: (v: Response) => void = () => {};
     mockedFetch.mockImplementationOnce(

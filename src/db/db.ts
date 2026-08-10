@@ -11,8 +11,6 @@ export interface DriveFile {
   modifiedTime?: string | undefined;
   trashed: boolean;
   isFolder: boolean;
-  /** Drive's short-lived thumbnail URL (files.thumbnailLink), shown as instant card art while metadata parses. Not indexed — plain data column, no schema version bump. */
-  thumbnailLink?: string | undefined;
   metadata?: unknown; // For future ID3 tag caching
 }
 

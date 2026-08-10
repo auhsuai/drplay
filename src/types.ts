@@ -38,13 +38,6 @@ export type DriveItem = {
   trackInfo?: Track | undefined;
   size?: number | undefined;
   modifiedTime?: string | undefined;
-  /**
-   * Drive-provided short-lived thumbnail (files.thumbnailLink, output only).
-   * Cards render it as instant art while the slower range-fetch metadata
-   * parse runs; the parsed cover blob overrides it once ready. Optional so
-   * older DB rows / search hits keep working unchanged.
-   */
-  thumbnailLink?: string | undefined;
 };
 
 // moved from App.tsx
