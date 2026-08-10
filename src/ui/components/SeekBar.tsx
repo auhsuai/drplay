@@ -1,22 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 import { formatTime } from "../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from "../../utils/bufferedRange";
-import { captureError } from "../../utils/errorLog";
 import type { AudioController } from "../../lib/AudioController";
 import type { Track } from "../../types";
-
-const SEEK_BAR_MODULE = "SeekBar";
-const SEEK_STEP_SECONDS = 5;
-const DRAG_RELEASE_DELAY_MS = 150;
-// jsdom reports offsetWidth 0 (no layout); this fallback approximates the
-// rendered tooltip width so the edge clamp behaves identically in tests and
-// browsers.
-const SEEK_TOOLTIP_FALLBACK_WIDTH_PX = 44;
-
-const clamp = (value: number, min: number, max: number): number =>
-  Math.min(Math.max(value, min), max);
-const clamp01 = (value: number): number => clamp(value, 0, 1);
+import { SeekClock } from "./SeekClock";
+import { SeekRail } from "./SeekRail";
+import { useSeekDrag } from "./useSeekDrag";
+import { useSeekHover } from "./useSeekHover";
+import { useSeekKeyboard } from "./useSeekKeyboard";
 
 export interface SeekBarProps {
   currentTrack: Track | null;
@@ -37,8 +28,6 @@ export function SeekBar({
   active = true,
   keyboardSeek = true,
 }: SeekBarProps) {
-  const { t } = useTranslation();
-
   // Refs for high-performance DOM updates (owned locally: seek drag / restore
   // session touch the DOM per event, never through React state).
   const progressFillRef = useRef<HTMLDivElement>(null);
@@ -53,20 +42,14 @@ export function SeekBar({
   // media clock (audio.getCurrentTime()) can be ~200ms ahead of the throttled
   // timeupdate while playing, which would open a gap/overlap at the preview head.
   const playheadRef = useRef(0);
+  // Shared with useSeekDrag: the timeupdate effect below reads it as the
+  // closure-safe drag guard; the hook writes it on pointerdown/commit.
   const isDraggingRef = useRef(false);
   // Mirror of `duration` for the drag math: the window pointer listeners
   // created on pointerdown outlive the render closure, so they must read the
   // LATEST duration (a mid-drag durationchange must re-scale the drag) — never
   // the value captured at pointerdown.
   const durationRef = useRef(0);
-  // Handlers registered on `window` by handlePointerDown are mirrored into
-  // refs so the unmount cleanup below can remove them even when the component
-  // unmounts mid-drag — otherwise the listeners would leak and keep firing
-  // setState on the unmounted component. No-op initials make removal of a
-  // never-registered handler safe (removeEventListener is a no-op then).
-  const pointerMoveRef = useRef<(e: PointerEvent) => void>(() => {});
-  const pointerUpRef = useRef<(e: PointerEvent) => void>(() => {});
-  const pointerCancelRef = useRef<(e: PointerEvent) => void>(() => {});
 
   // Single write-point for the fill width so every path (timeupdate / drag /
   // restore) stays in sync — DOM-direct like playheadRef (no React re-render
@@ -89,15 +72,6 @@ export function SeekBar({
   // and is written ~4/s by timeupdate — keeping it local stops those updates
   // from re-rendering the whole PlayerBar tree (render-critical isolation).
   const [duration, setDuration] = useState(0);
-
-  // Hover visibility is low-frequency (enter/leave) so React state is fine;
-  // per-pixel tooltip/preview updates go straight to the DOM via refs (same
-  // hot-path pattern as the timeupdate handler below).
-  const [isHovering, setIsHovering] = useState(false);
-  // Render mirror of isDraggingRef: the ref stays the closure-safe source of
-  // truth for the timeupdate guard; this state exists only to re-render the
-  // thumb on pointerdown/commit (refs never trigger renders).
-  const [isDragging, setIsDragging] = useState(false);
 
   // Reset transient track state when the track changes. Done during render
   // (React "adjusting state during render" pattern) so no setState happens
@@ -227,253 +201,54 @@ export function SeekBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack]);
 
-  // Unmount safety net: if the component unmounts mid-drag (view closed /
-  // track switched while dragging), the window listeners added by
-  // handlePointerDown would otherwise never be removed.
-  useEffect(
-    () => () => {
-      window.removeEventListener("pointermove", pointerMoveRef.current);
-      window.removeEventListener("pointerup", pointerUpRef.current);
-      window.removeEventListener("pointercancel", pointerCancelRef.current);
-    },
-    [],
-  );
-
-  // Drag-to-seek: pointer capture on the bar, clamped percent -> time math,
-  // commit on pointerup/cancel (seek + immediate buffer redraw), and a small
-  // release delay so stale in-flight timeupdate events cannot jump the thumb.
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!progressBarRef.current || duration === 0) return;
-    try {
-      progressBarRef.current.setPointerCapture(e.pointerId);
-    } catch (err) {
-      void captureError({
-        level: "warn",
-        source: SEEK_BAR_MODULE,
-        message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-
-    const bounds = progressBarRef.current.getBoundingClientRect();
-    const updateTime = (clientX: number) => {
-      const percent = clamp01((clientX - bounds.left) / bounds.width);
-      const newTime = percent * (durationRef.current || duration);
-      if (progressFillRef.current) setFillWidth(percent * 100);
-      if (currentTimeTextRef.current)
-        currentTimeTextRef.current.textContent = formatTime(newTime);
-      playheadRef.current = newTime;
-      return newTime;
-    };
-
-    isDraggingRef.current = true;
-    setIsDragging(true);
-    updateTime(e.clientX);
-
-    const onMove = (moveEvent: PointerEvent) => updateTime(moveEvent.clientX);
-    const commit = (upEvent: PointerEvent) => {
-      audio.seek(updateTime(upEvent.clientX));
-      // Redraw immediately (not clear): updateBufferBar drops stale pre-seek
-      // ranges, so an immediate redraw shows the real buffer at the new
-      // position without the empty-bar blink a clear would cause. The UI
-      // playhead (just written by updateTime) drives the stale-range drop
-      // filters, so the raw clock cannot drop a range the fill is still
-      // covering or leave the bar looking wrong in the interim frame.
-      updateBufferBar(
-        bufferFillRef.current,
-        audio.getBuffered(),
-        playheadRef.current,
-      );
-      // Give the audio engine a small window to flush old timeupdate events
-      setTimeout(() => {
-        isDraggingRef.current = false;
-        setIsDragging(false);
-      }, DRAG_RELEASE_DELAY_MS);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onCancel);
-    };
-    const onUp = (upEvent: PointerEvent) => {
-      commit(upEvent);
-    };
-    const onCancel = (cancelEvent: PointerEvent) => {
-      commit(cancelEvent);
-    };
-
-    pointerMoveRef.current = onMove;
-    pointerUpRef.current = onUp;
-    pointerCancelRef.current = onCancel;
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onCancel);
-  };
-
-  // Hover preview: tooltip + buffer highlight + thumb visibility. Position and
-  // text are written DOM-direct on every pointermove (hot path, no re-render);
-  // only the visibility toggle (enter/leave) goes through React state.
-  const handlePointerEnter = () => {
-    setIsHovering(true);
-  };
-  const handlePointerLeave = () => {
-    setIsHovering(false);
-  };
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (duration === 0 || !progressBarRef.current) return;
-    const bounds = progressBarRef.current.getBoundingClientRect();
-    if (bounds.width <= 0) return;
-    const percent = clamp01((e.clientX - bounds.left) / bounds.width);
-
-    if (tooltipRef.current) {
-      tooltipRef.current.textContent = formatTime(percent * duration);
-      // Center the tooltip on the pointer but keep its edges inside the bar:
-      // the anchor is clamped to [halfWidth, width - halfWidth] of the
-      // tooltip's own measured width (-translate-x-1/2 centers it on it).
-      const halfWidth =
-        (tooltipRef.current.offsetWidth || SEEK_TOOLTIP_FALLBACK_WIDTH_PX) / 2;
-      tooltipRef.current.style.left = `${String(
-        clamp(
-          percent * bounds.width,
-          halfWidth,
-          Math.max(halfWidth, bounds.width - halfWidth),
-        ),
-      )}px`;
-    }
-
-    if (bufferPreviewRef.current) {
-      // The highlight only makes sense ahead of the playhead ("would buffer to
-      // here"); hovering behind the playhead shows nothing.
-      // Playhead source: the mirrored UI playhead (throttled timeupdate / drag /
-      // restore) — the SAME value the blue fill is showing. Reading the raw
-      // media clock instead would start the preview ~200ms ahead of the fill
-      // while playing (timeupdate is throttled), splitting the bar into a gap
-      // or an overlap at the preview head.
-      const playheadPercent = clamp01(playheadRef.current / duration);
-      if (percent > playheadPercent) {
-        bufferPreviewRef.current.style.left = `${String(
-          playheadPercent * 100,
-        )}%`;
-        bufferPreviewRef.current.style.width = `${String(
-          (percent - playheadPercent) * 100,
-        )}%`;
-      } else {
-        bufferPreviewRef.current.style.width = "0%";
-      }
-    }
-  };
-
-  // ArrowLeft/Right seek the track and redraw the buffer bar synchronously.
-  // Lives here (not the global shortcuts hook) because it needs the local
-  // bufferFillRef; global transport keys stay in useKeyboardShortcuts.
-  // Gated on `keyboardSeek`: the NowPlaying instance stays silent so the
-  // always-mounted PlayerBar instance is the only keydown listener (two
-  // subscriptions would double the seek step).
-  useEffect(() => {
-    if (!keyboardSeek) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const activeEl = document.activeElement as HTMLElement | null;
-      if (
-        activeEl?.tagName === "INPUT" ||
-        activeEl?.tagName === "TEXTAREA" ||
-        activeEl?.isContentEditable
-      )
-        return;
-
-      switch (e.key) {
-        case "ArrowLeft":
-          e.preventDefault();
-          audio.seek(Math.max(0, audio.getCurrentTime() - SEEK_STEP_SECONDS));
-          // Redraw immediately instead of clearing: updateBufferBar already
-          // drops stale pre-seek ranges, and clearing first would flash an
-          // empty bar for a frame before the next progress event (blink on
-          // every seek). The UI playhead (the position the fill still shows —
-          // the fill moves on the next timeupdate) drives the stale-range
-          // drop filters in the interim frame.
-          updateBufferBar(
-            bufferFillRef.current,
-            audio.getBuffered(),
-            playheadRef.current,
-          );
-          break;
-        case "ArrowRight":
-          e.preventDefault();
-          audio.seek(
-            Math.min(
-              audio.getDuration(),
-              audio.getCurrentTime() + SEEK_STEP_SECONDS,
-            ),
-          );
-          updateBufferBar(
-            bufferFillRef.current,
-            audio.getBuffered(),
-            playheadRef.current,
-          );
-          break;
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [audio, keyboardSeek]);
+  const {
+    isHovering,
+    handlePointerEnter,
+    handlePointerMove,
+    handlePointerLeave,
+  } = useSeekHover({
+    progressBarRef,
+    tooltipRef,
+    bufferPreviewRef,
+    playheadRef,
+    duration,
+  });
+  const { isDragging, handlePointerDown } = useSeekDrag({
+    audio,
+    progressBarRef,
+    progressFillRef,
+    currentTimeTextRef,
+    bufferFillRef,
+    playheadRef,
+    durationRef,
+    isDraggingRef,
+    duration,
+    setFillWidth,
+  });
+  useSeekKeyboard({
+    audio,
+    bufferFillRef,
+    playheadRef,
+    enabled: keyboardSeek,
+  });
 
   return (
     <div className="w-full flex items-center gap-3">
-      <span
-        ref={currentTimeTextRef}
-        className="text-xs text-gray-500 min-w-[52px] text-right tabular-nums"
-      >
-        0:00
-      </span>
-      <div
-        ref={progressBarRef}
-        role="progressbar"
-        aria-label={t("now_playing.progress")}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={0}
-        className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
+      <SeekClock timeTextRef={currentTimeTextRef} duration={duration} />
+      <SeekRail
+        progressBarRef={progressBarRef}
+        bufferFillRef={bufferFillRef}
+        progressFillRef={progressFillRef}
+        tooltipRef={tooltipRef}
+        bufferPreviewRef={bufferPreviewRef}
+        isHovering={isHovering}
+        isDragging={isDragging}
+        duration={duration}
         onPointerDown={handlePointerDown}
         onPointerEnter={handlePointerEnter}
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}
-      >
-        <div
-          ref={bufferFillRef}
-          data-testid="buffer-fill"
-          className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
-        ></div>
-        {isHovering && (
-          <div
-            ref={bufferPreviewRef}
-            data-testid="buffer-preview"
-            className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-r-sm pointer-events-none"
-            style={{ left: "0%", width: "0%" }}
-          ></div>
-        )}
-        <div
-          ref={progressFillRef}
-          data-testid="progress-fill"
-          className="absolute left-0 h-full bg-brand-primary rounded-full flex items-center transform-gpu will-change-[width]"
-        >
-          <div
-            data-testid="seek-thumb"
-            className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none transition-opacity ${
-              isHovering || isDragging ? "opacity-100" : "opacity-0"
-            }`}
-          ></div>
-        </div>
-        {isHovering && duration > 0 && (
-          <div
-            ref={tooltipRef}
-            data-testid="seek-tooltip"
-            className="absolute bottom-full mb-2 left-0 -translate-x-1/2 z-10 px-2 py-1 rounded bg-gray-800 text-white text-xs whitespace-nowrap tabular-nums shadow pointer-events-none select-none"
-          >
-            0:00
-          </div>
-        )}
-      </div>
-      <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">
-        {formatTime(duration)}
-      </span>
+      />
     </div>
   );
 }
