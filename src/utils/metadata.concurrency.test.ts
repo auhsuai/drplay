@@ -127,14 +127,19 @@ describe("getTrackMetadata caching", () => {
     vi.mocked(invoke).mockReset();
   });
 
-  it("returns a placeholder entry on first call and never invokes IPC (DB commands removed)", async () => {
+  it("returns a placeholder entry on first call (disk-first check runs, no network fetch)", async () => {
     const r1 = await getTrackMetadata("file-1", "tok", 1000, "song.mp3");
     expect(r1.title).toBe("song");
     expect(r1.artist).toBe("Unknown Artist");
     expect(r1.duration).toBe(0);
     expect(r1.durationEstimated).toBe(true);
     expect(r1.v).toBe(V_PLACEHOLDER);
-    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
+    // Seed-offline pipeline: the disk-first read (read_metadata_disk) runs on
+    // every fetch; the mock returns undefined so it misses and falls through
+    // to the placeholder. Only the network fetch stays untouched.
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("read_metadata_disk", {
+      fileId: "file-1",
+    });
   });
 
   it("returns the same entry from memory cache on second call (no IPC)", async () => {
@@ -246,7 +251,11 @@ describe("lruKeys + cache invalidation hardening", () => {
 
     const r = await getTrackMetadata("stale-ver", "tok", 1000, "stale.mp3");
     expect(r.title).toBe("stale");
-    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
+    // The stale IDB entry is a miss, so the disk-first read runs; it misses
+    // too (mock returns undefined) and the entry still resolves via fallback.
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("read_metadata_disk", {
+      fileId: "stale-ver",
+    });
   });
 
   it("loads corrupt lruKeys JSON (non-array) from localStorage without crashing", async () => {
