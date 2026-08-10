@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import { getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
 import { METADATA_UPDATED_EVENT } from "../utils/metadata/constants";
-import { buildCoverBlobUrl } from "../utils/coverStore";
+import { buildCoverBlobUrl, buildCoverUrl } from "../utils/coverStore";
 
 // Single source of truth for the metadata-fetch debounce window shared by the
 // card-style consumers (SongCard / PremiumCard): fetch only if the consumer
@@ -96,10 +96,15 @@ export function useTrackMetadata({
         // Fix G: the cover renders straight from a blob URL built with the
         // picture bytes metadata already parsed — full (≤1000px) bytes win
         // over the 256px thumb; a missing picture keeps the consumer's icon.
+        // Seed offline (2026-08-10): disk entries (coverOnDisk) have no bytes
+        // — render the drplay:// GET URL instead (Rust disk + moka cache),
+        // asking for the FULL variant when bytes exist, the thumb otherwise.
         const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
-        const nextCoverUrl = coverBytes
-          ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
-          : null;
+        const nextCoverUrl = metadata.coverOnDisk
+          ? buildCoverUrl(fileId, metadata.pictureDataFull ? false : true)
+          : coverBytes
+            ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
+            : null;
         setCoverUrl(nextCoverUrl);
         onMetadata(metadata, nextCoverUrl, controller.signal);
       } catch (error) {

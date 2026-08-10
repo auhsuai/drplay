@@ -5,6 +5,7 @@ import {
   MonitorDown,
   Download,
   Eraser,
+  Archive,
   Cloud,
   CloudUpload,
 } from "lucide-react";
@@ -17,7 +18,8 @@ import { CacheManagerModal } from "./components/CacheManagerModal";
 
 import type { ThemeType } from "../../hooks/useTheme";
 import { open } from "@tauri-apps/plugin-dialog";
-import { showErrorToast } from "../../utils/simpleToast";
+import { invoke } from "@tauri-apps/api/core";
+import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import {
   setCustomDownloadPath,
@@ -67,6 +69,7 @@ export function SettingsTab({
   const { t } = useTranslation();
   const [downloadPath, setDownloadPath] = useState<string>("");
   const [showCacheManager, setShowCacheManager] = useState(false);
+  const [importingSeed, setImportingSeed] = useState(false);
   const [uploadEntries, setUploadEntries] = useState<UploadEntry[]>(getEntries);
 
   useEffect(() => {
@@ -105,6 +108,58 @@ export function SettingsTab({
       }
     } catch {
       showErrorToast(t("settings.select_folder_error"));
+    }
+  };
+
+  // Seed offline import (2026-08-10): one-shot restore of a metadata+cover
+  // backup produced by the Colab scanner. The picked zip is unpacked by Rust
+  // (import_metadata_seed) into <app_cache_dir>/metadata + /covers; mounted
+  // cards pick the data up on their next fetch (disk-first), already-mounted
+  // placeholders refresh on re-mount — the toast is the import's own signal.
+  interface ImportSeedStats {
+    metadataCount: number;
+    coverCount: number;
+    skipped: number;
+  }
+  const handleImportSeed = async () => {
+    if (importingSeed) return;
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        filters: [{ name: t("settings.import_seed"), extensions: ["zip"] }],
+      });
+      // Cancelled / no selection: nothing to import.
+      if (typeof selected !== "string") return;
+      setImportingSeed(true);
+      try {
+        const stats = await invoke<ImportSeedStats>("import_metadata_seed", {
+          zipPath: selected,
+        });
+        showSuccessToast(
+          t("settings.import_seed_success", {
+            metadata: stats.metadataCount,
+            covers: stats.coverCount,
+            skipped: stats.skipped,
+          }),
+        );
+      } catch (err) {
+        await captureError({
+          level: "error",
+          source: "SettingsTab",
+          message: `import-seed-failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        showErrorToast(t("settings.import_seed_error"));
+      } finally {
+        setImportingSeed(false);
+      }
+    } catch (err) {
+      await captureError({
+        level: "error",
+        source: "SettingsTab",
+        message: `open-seed-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      showErrorToast(t("settings.import_seed_error"));
     }
   };
 
@@ -341,6 +396,29 @@ export function SettingsTab({
                 className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t("settings.clear_cache_btn")}
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <Archive className="w-6 h-6 text-brand-primary" />
+                </div>
+                <div className="max-w-[320px]">
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                    {t("settings.import_seed")}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => {
+                  void handleImportSeed();
+                }}
+                disabled={importingSeed}
+                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t("settings.import_seed")}
               </button>
             </div>
           </div>

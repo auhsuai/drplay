@@ -60,6 +60,10 @@ moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["
 walkdir = "2.5.0"
 log = "0.4.33"
 rand = "0.8.5"
+# Seed offline import (2026-08-10): read metadata+cover backups (seed.zip).
+# zip 2.x (resolves 2.6.1, 2025-04-04) provides ZipArchive::by_index +
+# ZipFile::enclosed_name — the safe-path (zip-slip) check the import relies on.
+zip = "2"
 
 [profile.release]
 lto = true

@@ -9,6 +9,7 @@ mod auth;
 mod tray;
 mod memory;
 mod token_store;
+mod seed;
 
 use auth::{login_google_native, refresh_google_token};
 use memory::{apply_window_activity, WindowActivityEvent};
@@ -177,6 +178,9 @@ pub fn run() {
                 let covers_root = cache_dir.join("covers");
                 crate::protocol::cover::init_covers_root(covers_root.clone());
                 crate::protocol::cover::spawn_covers_gc(covers_root);
+                // Seed offline import: <app_cache_dir>/metadata holds the
+                // imported metadata JSONs (read disk-first by the pipeline).
+                crate::seed::init_metadata_root(cache_dir.join("metadata"));
             }
 
             setup_tray(app)?;
@@ -214,6 +218,8 @@ pub fn run() {
             clear_local_cache,
             get_cache_info,
             clear_thumbnail_dir,
+            seed::import_metadata_seed,
+            seed::read_metadata_disk,
             token_store::set_refresh_token,
             token_store::get_refresh_token,
             token_store::delete_refresh_token,

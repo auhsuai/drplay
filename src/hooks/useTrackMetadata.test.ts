@@ -8,7 +8,7 @@ import {
 } from "./useTrackMetadata";
 import type { TrackMetadataOptions } from "./useTrackMetadata";
 import { getTrackMetadata } from "../utils/metadata";
-import { buildCoverBlobUrl } from "../utils/coverStore";
+import { buildCoverBlobUrl, buildCoverUrl } from "../utils/coverStore";
 import type { CachedMetadata } from "../utils/metadata";
 
 vi.mock("../utils/metadata", () => ({
@@ -17,10 +17,12 @@ vi.mock("../utils/metadata", () => ({
 
 vi.mock("../utils/coverStore", () => ({
   buildCoverBlobUrl: vi.fn(),
+  buildCoverUrl: vi.fn(),
 }));
 
 const mockedFetch = vi.mocked(getTrackMetadata);
 const mockedBuildCover = vi.mocked(buildCoverBlobUrl);
+const mockedBuildCoverUrl = vi.mocked(buildCoverUrl);
 
 function makeMetadata(overrides: Partial<CachedMetadata> = {}): CachedMetadata {
   return {
@@ -72,6 +74,8 @@ beforeEach(() => {
   mockedFetch.mockResolvedValue(makeMetadata());
   mockedBuildCover.mockReset();
   mockedBuildCover.mockReturnValue("blob:mock-cover");
+  mockedBuildCoverUrl.mockReset();
+  mockedBuildCoverUrl.mockReturnValue("drplay:mock-cover-url");
 });
 
 afterEach(() => {
@@ -275,6 +279,47 @@ describe("useTrackMetadata cover blob URL", () => {
       result.current.setCoverUrl(null);
     });
     expect(result.current.coverUrl).toBeNull();
+  });
+});
+
+describe("useTrackMetadata coverOnDisk (seed offline drplay:// covers)", () => {
+  it("renders the drplay:// GET URL (thumb=true) for a disk entry with no full picture", async () => {
+    mockedFetch.mockResolvedValue(makeMetadata({ coverOnDisk: true }));
+    const { result, onMetadata } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("drplay:mock-cover-url");
+    });
+    expect(mockedBuildCoverUrl).toHaveBeenCalledWith("file-1", true);
+    expect(onMetadata.mock.calls[0]?.[1]).toBe("drplay:mock-cover-url");
+  });
+
+  it("renders the drplay:// GET URL (thumb=false) when a full picture is present", async () => {
+    mockedFetch.mockResolvedValue(
+      makeMetadata({
+        coverOnDisk: true,
+        pictureDataFull: new Uint8Array([1, 2, 3]),
+      }),
+    );
+    const { result } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("drplay:mock-cover-url");
+    });
+    expect(mockedBuildCoverUrl).toHaveBeenCalledWith("file-1", false);
+  });
+
+  it("keeps the blob path when coverOnDisk is false/undefined", async () => {
+    mockedFetch.mockResolvedValue(
+      makeMetadata({ pictureData: new Uint8Array([9]) }),
+    );
+    const { result } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("blob:mock-cover");
+    });
+    expect(mockedBuildCoverUrl).not.toHaveBeenCalled();
+    expect(mockedBuildCover).toHaveBeenCalledWith(
+      new Uint8Array([9]),
+      undefined,
+    );
   });
 });
 

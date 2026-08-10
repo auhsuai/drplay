@@ -1,5 +1,6 @@
 import { parseFromTokenizer } from "music-metadata";
 import type { IAudioMetadata } from "music-metadata";
+import { invoke } from "@tauri-apps/api/core";
 import { db } from "../../db/db";
 import { captureError } from "../errorLog";
 import {
@@ -100,6 +101,31 @@ async function getTrackMetadataImpl(
         level: "warn",
         source: META_MODULE,
         message: `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+      });
+    }
+  }
+
+  // 1.5 DISK Check (seed offline import): <app_cache_dir>/metadata read via
+  // Rust (read_metadata_disk). Imports land on disk so a mounted library
+  // renders INSTANTLY — no range fetch, no IDB write (the disk is the single
+  // source of truth for imported entries; IDB would duplicate them). Any
+  // failure (no Tauri runtime, IO error, unparseable JSON) degrades to the
+  // IDB/network pipeline below — never a hard error for the caller.
+  if (!forceNetwork) {
+    try {
+      const diskJson = await invoke<string | null>("read_metadata_disk", {
+        fileId,
+      });
+      const diskEntry = parseDiskMetadata(diskJson);
+      if (diskEntry) {
+        setMetadataCache(fileId, diskEntry);
+        return diskEntry;
+      }
+    } catch (e: unknown) {
+      await captureError({
+        level: "warn",
+        source: META_MODULE,
+        message: `disk-metadata-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
       });
     }
   }
@@ -393,6 +419,79 @@ async function getTrackMetadataImpl(
     }
     return placeholder;
   }
+}
+
+/**
+ * Validates a metadata JSON read from the disk-first source (seed offline
+ * import). Returns null for anything that is not a well-formed v:8 entry
+ * (wrong version, missing required fields, invalid JSON) so the caller can
+ * fall through to the IDB/network pipeline — a corrupt or stale file must
+ * never hard-fail a card.
+ *
+ * Required: v === REAL_METADATA_VERSION (8), title is a non-empty string,
+ * duration is a finite number. pictureData/pictureDataFull are forced to
+ * null (disk entries carry no embedded bytes — the cover renders through the
+ * drplay:// GET from the Rust cover cache) and coverOnDisk is set to true.
+ * Extended fields are optional and type-checked individually; an invalid
+ * optional field is dropped, not fatal.
+ */
+export function parseDiskMetadata(
+  raw: string | null | undefined,
+): CachedMetadata | null {
+  if (typeof raw !== "string") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.v !== REAL_METADATA_VERSION) return null;
+  if (typeof obj.title !== "string" || obj.title.length === 0) return null;
+  if (typeof obj.duration !== "number" || !Number.isFinite(obj.duration)) {
+    return null;
+  }
+  const entry: CachedMetadata = {
+    title: obj.title,
+    artist: typeof obj.artist === "string" ? obj.artist : UNKNOWN_ARTIST,
+    album: typeof obj.album === "string" ? obj.album : "",
+    duration: obj.duration,
+    durationEstimated:
+      typeof obj.durationEstimated === "boolean"
+        ? obj.durationEstimated
+        : !(obj.duration > 0),
+    pictureData: null,
+    pictureDataFull: null,
+    v: REAL_METADATA_VERSION,
+    coverOnDisk: true,
+  };
+  if (typeof obj.pictureFormat === "string")
+    entry.pictureFormat = obj.pictureFormat;
+  if (typeof obj.bitrate === "number" && Number.isFinite(obj.bitrate)) {
+    entry.bitrate = obj.bitrate;
+  }
+  if (typeof obj.size === "number" && Number.isFinite(obj.size)) {
+    entry.size = obj.size;
+  }
+  if (typeof obj.genre === "string") entry.genre = obj.genre;
+  if (typeof obj.year === "number" && Number.isFinite(obj.year)) {
+    entry.year = obj.year;
+  }
+  if (typeof obj.trackNumber === "number" && Number.isFinite(obj.trackNumber)) {
+    entry.trackNumber = obj.trackNumber;
+  }
+  if (typeof obj.albumArtist === "string") entry.albumArtist = obj.albumArtist;
+  if (typeof obj.sampleRate === "number" && Number.isFinite(obj.sampleRate)) {
+    entry.sampleRate = obj.sampleRate;
+  }
+  if (typeof obj.bitDepth === "number" && Number.isFinite(obj.bitDepth)) {
+    entry.bitDepth = obj.bitDepth;
+  }
+  if (typeof obj.channels === "number" && Number.isFinite(obj.channels)) {
+    entry.channels = obj.channels;
+  }
+  return entry;
 }
 
 export { getTrackMetadataImpl };

@@ -14,7 +14,15 @@ const tokenizerConstructions = vi.hoisted(
   () => [] as Array<{ budgetBytes: number | undefined }>,
 );
 
+// Mock of the Tauri IPC bridge: the disk-first path (seed offline import)
+// reads <app_cache_dir>/metadata through invoke('read_metadata_disk'). The
+// default null means "no disk entry" so pre-existing tests fall through to the
+// IDB/network pipeline untouched.
+const invokeMock = vi.hoisted(() => vi.fn());
+
 const memoryStore = new Map<string, MetadataCacheRow>();
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 vi.mock("./coverStore", () => ({
   postCoverToCache: postCoverToCacheMock,
@@ -74,6 +82,7 @@ import {
   metadataCache,
   cacheTrackMetadata,
   clearAllMetadataCache,
+  getTrackMetadata,
   V_PLACEHOLDER,
   TAG_BUDGET_MAX,
   FULL_PERSIST_MAX_BYTES,
@@ -554,6 +563,10 @@ beforeEach(async () => {
   filesUpdate.mockClear();
   tokenizerConstructions.length = 0;
   vi.mocked(captureError).mockClear();
+  // Disk-first default: no entry on disk → the IDB/network pipeline runs
+  // exactly as before for every pre-existing test.
+  invokeMock.mockReset();
+  invokeMock.mockResolvedValue(null);
   clearAllMetadataCache();
   // Fix H: the Drive throttle breaker is module-level, and these tests share
   // ONE tokenizer module instance across describe blocks (fresh() is a cached
@@ -2204,5 +2217,163 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     // the head prefetch is the ONLY request: the tag region must NOT be
     // re-fetched for a large file whose tag cannot fit the clamped head.
     expect(calls).toHaveLength(1);
+  });
+});
+
+// ---- Seed offline import: disk-first reads through invoke('read_metadata_disk')
+
+// A valid v:8 disk entry as the Colab notebook writes it (CachedMetadata +
+// coverOnDisk + extended fields). pictureData/pictureDataFull are null on
+// disk — the cover renders via the drplay:// GET from the Rust disk cache.
+const DISK_JSON_V8 = JSON.stringify({
+  title: "Disk Title",
+  artist: "Disk Artist",
+  album: "Disk Album",
+  duration: 180.5,
+  durationEstimated: false,
+  pictureData: null,
+  pictureDataFull: null,
+  pictureFormat: "image/jpeg",
+  bitrate: 320000,
+  size: 12345678,
+  v: 8,
+  coverOnDisk: true,
+  genre: "Rock",
+  year: 1999,
+  trackNumber: 3,
+  albumArtist: "Album Artist",
+  sampleRate: 44100,
+  bitDepth: 16,
+  channels: 2,
+});
+
+describe("getTrackMetadata disk-first (seed offline)", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("serves a valid v:8 disk JSON without touching the network", async () => {
+    invokeMock.mockResolvedValue(DISK_JSON_V8);
+    const entry = await getTrackMetadata(
+      "disk-id-1",
+      "test-token",
+      2048,
+      "song.mp3",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("read_metadata_disk", {
+      fileId: "disk-id-1",
+    });
+    expect(entry.title).toBe("Disk Title");
+    expect(entry.artist).toBe("Disk Artist");
+    expect(entry.duration).toBe(180.5);
+    expect(entry.v).toBe(8);
+    expect(entry.coverOnDisk).toBe(true);
+    expect(entry.pictureData).toBeNull();
+    expect(entry.pictureDataFull).toBeNull();
+    // Extended fields survive the disk read untouched.
+    expect(entry.genre).toBe("Rock");
+    expect(entry.year).toBe(1999);
+    expect(entry.trackNumber).toBe(3);
+    expect(entry.albumArtist).toBe("Album Artist");
+    expect(entry.sampleRate).toBe(44100);
+    expect(entry.bitDepth).toBe(16);
+    expect(entry.channels).toBe(2);
+    // No range fetch, no parse: the network pipeline was never reached.
+    expect(tokenizerConstructions).toHaveLength(0);
+  });
+
+  it("keeps the disk entry out of IDB (disk is the single source of truth)", async () => {
+    invokeMock.mockResolvedValue(DISK_JSON_V8);
+    await getTrackMetadata("disk-id-1", "test-token", 2048, "song.mp3");
+    expect(memoryStore.size).toBe(0);
+  });
+
+  it("falls through to the network when the disk JSON has a wrong version", async () => {
+    invokeMock.mockResolvedValue(
+      JSON.stringify({
+        title: "Stale",
+        artist: "Stale Artist",
+        duration: 10,
+        v: 9,
+      }),
+    );
+    const fixture = buildMp3Fixture(
+      "Disk Fallback Title",
+      "Disk Fallback Artist",
+      "Album",
+    );
+    makeFetchMock(fixture);
+    const entry = await getTrackMetadata(
+      "disk-id-2",
+      "test-token",
+      2048,
+      "song.mp3",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("read_metadata_disk", {
+      fileId: "disk-id-2",
+    });
+    expect(entry.title).toBe("Disk Fallback Title");
+    expect(entry.coverOnDisk).toBeUndefined();
+  });
+
+  it("falls through when the disk JSON is missing a required field (no title)", async () => {
+    invokeMock.mockResolvedValue(
+      JSON.stringify({ artist: "X", duration: 10, v: 8 }),
+    );
+    const fixture = buildMp3Fixture(
+      "Disk Missing Title",
+      "Disk Missing Artist",
+      "Album",
+    );
+    makeFetchMock(fixture);
+    const entry = await getTrackMetadata(
+      "disk-id-2",
+      "test-token",
+      2048,
+      "song.mp3",
+    );
+    expect(entry.title).toBe("Disk Missing Title");
+  });
+
+  it("falls through to the network when the disk read invoke rejects (no Tauri / error)", async () => {
+    invokeMock.mockRejectedValue(
+      new Error("window.__TAURI_INTERNALS__ is undefined"),
+    );
+    const fixture = buildMp3Fixture(
+      "Reject Fallback",
+      "Reject Artist",
+      "Album",
+    );
+    makeFetchMock(fixture);
+    const entry = await getTrackMetadata(
+      "disk-id-3",
+      "test-token",
+      2048,
+      "song.mp3",
+    );
+    expect(entry.title).toBe("Reject Fallback");
+    // Not swallowed: the failure is logged with a context label.
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "metadata",
+        message: expect.stringContaining(
+          "disk-metadata-read-failed",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("falls through when the disk JSON is not valid JSON", async () => {
+    invokeMock.mockResolvedValue("{not json");
+    const fixture = buildMp3Fixture("Bad Json", "Bad Artist", "Album");
+    makeFetchMock(fixture);
+    const entry = await getTrackMetadata(
+      "disk-id-4",
+      "test-token",
+      2048,
+      "song.mp3",
+    );
+    expect(entry.title).toBe("Bad Json");
   });
 });
