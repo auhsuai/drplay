@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ArrowLeft, HardDrive, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
@@ -7,6 +8,7 @@ import { useFolderPicker } from "./useFolderPicker";
 import { FolderGrid } from "./FolderGrid";
 import { FolderBreadcrumb } from "./FolderBreadcrumb";
 import { FolderSearchInput } from "./FolderSearchInput";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 interface FolderSelectionScreenProps {
   token: string;
@@ -34,6 +36,18 @@ export function FolderSelectionScreen({
   allowEscapeRoot = false,
 }: FolderSelectionScreenProps) {
   const { t } = useTranslation();
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): the folder
+  // data comes from useFolderPicker (not settable from outside), so a local
+  // flag overrides the props handed to FolderGrid instead. onDebugEvent
+  // no-ops in production builds; the listener never runs there.
+  const [debugForceEmpty, setDebugForceEmpty] = useState(false);
+
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.FOLDERS_EMPTY, () => {
+      setDebugForceEmpty(true);
+    });
+  }, []);
 
   // Resolve appRootFolder from props or localStorage.
   // localStorage access can throw SecurityError (storage blocked by policy —
@@ -148,10 +162,10 @@ export function FolderSelectionScreen({
 
         {/* Folder List */}
         <FolderGrid
-          isLoading={isLoading}
+          isLoading={debugForceEmpty ? false : isLoading}
           isSearchingApi={isSearchingApi}
           searchQuery={searchQuery}
-          filteredFolders={filteredFolders}
+          filteredFolders={debugForceEmpty ? [] : filteredFolders}
           apiSearchResults={apiSearchResults}
           onOpenFolder={handleOpenFolder}
         />

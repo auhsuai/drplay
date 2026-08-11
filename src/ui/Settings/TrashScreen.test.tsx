@@ -10,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler } from "react";
 import { TrashScreen } from "./TrashScreen";
+import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 // react-i18next has no initialized instance in the node test env, so stub
 // useTranslation to return the fallback (or the key itself when absent).
@@ -342,5 +343,69 @@ describe("TrashScreen bulk operations", () => {
       .map((call) => call[0].message)
       .join("\n");
     expect(loggedMessages).toContain("empty-trash-item-failed");
+  });
+});
+
+describe("TrashScreen debug empty trigger", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function dispatchTrashEmpty() {
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.TRASH_EMPTY));
+    });
+  }
+
+  it("dispatches TRASH_EMPTY while the fetch is still pending -> empty state, no skeleton", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    expect(screen.queryAllByTestId("skeleton-row")).not.toHaveLength(0);
+
+    dispatchTrashEmpty();
+
+    expect(screen.getByText("settings.trash_empty")).not.toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+    expect(screen.queryByRole("status", { name: "loading" })).toBeNull();
+  });
+
+  it("dispatches TRASH_EMPTY after items loaded -> list replaced by the empty state", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      const call = deferredCalls[0];
+      if (call === undefined) throw new Error("expected deferred call");
+      call.resolve([{ id: "f1", name: "Track 1", mimeType: "audio/mpeg" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Track 1");
+
+    dispatchTrashEmpty();
+
+    expect(screen.getByText("settings.trash_empty")).not.toBeNull();
+    expect(screen.queryByText("Track 1")).toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+  });
+
+  it("unmount -> dispatching TRASH_EMPTY is a no-op (listener cleaned up)", async () => {
+    const { unmount } = renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    unmount();
+    expect(() => {
+      dispatchTrashEmpty();
+    }).not.toThrow();
   });
 });

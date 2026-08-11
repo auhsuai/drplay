@@ -22,6 +22,7 @@ import { getTrashedFiles } from "../../utils/drivePagination";
 import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { useClickOutside } from "../../hooks/useClickOutside";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 const TRASH_MODULE = "TrashScreen";
 
@@ -100,6 +101,17 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     // changes every render but the effect must only run on token change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
+  // trash empty state by clearing items and dropping the loading flag so the
+  // skeleton leaves immediately. onDebugEvent no-ops in production builds;
+  // the listener never runs there.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.TRASH_EMPTY, () => {
+      setItems([]);
+      setIsLoading(false);
+    });
+  }, []);
 
   const handleRestore = async (id: string) => {
     setRestoringId(id);

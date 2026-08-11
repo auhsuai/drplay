@@ -196,11 +196,7 @@ describe("DebugPanel", () => {
       usageInDrive: 40 * GB,
       limit: 100 * GB,
     },
-    {
-      label: "Quota: over 80% (red)",
-      usageInDrive: 95 * GB,
-      limit: 100 * GB,
-    },
+    { label: "Quota: over 80% (red)", usageInDrive: 95 * GB, limit: 100 * GB },
     { label: "Quota: unlimited", usageInDrive: 50 * GB, limit: null },
   ])(
     "demo $label button dispatches QUOTA with the preset detail",
@@ -215,6 +211,28 @@ describe("DebugPanel", () => {
       const event = spy.mock.calls[0]?.[0] as CustomEvent;
       expect(event.type).toBe(DEBUG_EVENTS.QUOTA);
       expect(event.detail).toEqual({ usageInDrive, limit });
+    },
+  );
+
+  it.each([
+    { label: "Empty: Playlist", event: DEBUG_EVENTS.PLAYLIST_EMPTY },
+    { label: "Empty: Liked Songs", event: DEBUG_EVENTS.LIKED_EMPTY },
+    { label: "Empty: Trash", event: DEBUG_EVENTS.TRASH_EMPTY },
+    { label: "Empty: Folder selection", event: DEBUG_EVENTS.FOLDERS_EMPTY },
+  ])(
+    "$label button dispatches $event with undefined detail",
+    ({ label, event }) => {
+      render(<DebugPanel />);
+      openPanel();
+      const spy = vi.spyOn(window, "dispatchEvent");
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const dispatched = spy.mock.calls[0]?.[0] as CustomEvent;
+      expect(dispatched.type).toBe(event);
+      // jsdom normalizes the app's `{ detail: undefined }` init to null.
+      expect(dispatched.detail).toBeNull();
     },
   );
 

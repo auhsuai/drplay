@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler } from "react";
 import { FolderSelectionScreen } from "./FolderSelectionScreen";
 import en from "../../locales/en/translation.json";
+import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -516,5 +517,71 @@ describe("FolderSelectionScreen API search gating", () => {
 
     expect(mocks.driveApi.searchFolders).not.toHaveBeenCalled();
     expect(screen.getByText("No folders here.")).not.toBeNull();
+  });
+});
+
+describe("FolderSelectionScreen debug empty trigger", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function dispatchFoldersEmpty() {
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.FOLDERS_EMPTY));
+    });
+  }
+
+  it("dispatches FOLDERS_EMPTY while the folder fetch is still pending -> no-folders empty state, no skeleton", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    expect(screen.queryAllByTestId("skeleton-row")).not.toHaveLength(0);
+
+    dispatchFoldersEmpty();
+
+    expect(screen.getByText("No folders here.")).not.toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+    expect(screen.queryByRole("status", { name: "Loading..." })).toBeNull();
+  });
+
+  it("dispatches FOLDERS_EMPTY after folders loaded -> grid replaced by the empty state", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Folder 1");
+
+    dispatchFoldersEmpty();
+
+    expect(screen.getByText("No folders here.")).not.toBeNull();
+    expect(screen.queryByText("Folder 1")).toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+  });
+
+  it("unmount -> dispatching FOLDERS_EMPTY is a no-op (listener cleaned up)", async () => {
+    const { unmount } = renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    unmount();
+    expect(() => {
+      dispatchFoldersEmpty();
+    }).not.toThrow();
   });
 });

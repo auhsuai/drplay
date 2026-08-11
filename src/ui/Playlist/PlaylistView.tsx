@@ -14,6 +14,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 const PLAYLIST_VIEW_MODULE = "PlaylistView";
 
@@ -78,6 +79,29 @@ export function PlaylistView({
     if (!playlist) return;
     if (playlist.tracks.length > 0) prefetchVisibleTracks(playlist.tracks);
   }, [playlist]);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
+  // empty state by swapping in a valid Playlist with no tracks. Keeps the
+  // real playlist's identity when it is already loaded; otherwise builds a
+  // minimal fake from the mount-time playlistId (the view only mounts while a
+  // playlist_* tab is active, so playlistId is stable for the mounted view).
+  // onDebugEvent no-ops in production builds; the listener never runs there.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.PLAYLIST_EMPTY, () => {
+      setPlaylist((prev) =>
+        prev
+          ? { ...prev, tracks: [] }
+          : {
+              id: playlistId,
+              userEmail: "",
+              name: playlistId,
+              createdAt: 0,
+              tracks: [],
+            },
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once debug listener; re-subscribing on playlistId change would only matter after a direct playlist-to-playlist switch (no remount), and the real load effect overwrites the fake on that switch anyway.
+  }, []);
 
   const tracks = playlist?.tracks ?? [];
 

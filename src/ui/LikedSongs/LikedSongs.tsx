@@ -12,6 +12,7 @@ import { showErrorToast } from "../../utils/simpleToast";
 import { MoreMenu } from "../components/MoreMenu";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 const LIKED_SONGS_MODULE = "LikedSongs";
 
@@ -69,6 +70,17 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   useEffect(() => {
     if (favorites.length > 0) prefetchVisibleTracks(favorites);
   }, [favorites]);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
+  // empty state by clearing the loaded favorites. onDebugEvent no-ops in
+  // production builds; the listener never runs there. A later real
+  // favorites-updated / user-changed event legitimately reloads and
+  // overwrites the debug state.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.LIKED_EMPTY, () => {
+      setFavorites([]);
+    });
+  }, []);
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
   const rowVirtualizer = useVirtualizer({

@@ -205,7 +205,40 @@ export function DebugPanel() {
             </button>
           ))}
         </DebugSection>
-        <DebugSection title="Empty states" />
+        <DebugSection title="Empty states">
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.PLAYLIST_EMPTY, undefined);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Empty: Playlist
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.LIKED_EMPTY, undefined);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Empty: Liked Songs
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.TRASH_EMPTY, undefined);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Empty: Trash
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.FOLDERS_EMPTY, undefined);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Empty: Folder selection
+          </button>
+        </DebugSection>
         <DebugSection title="Loading / MainContent" />
         <DebugSection title="Toasts">
           <button
