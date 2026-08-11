@@ -9,6 +9,7 @@ import { TransportControls } from "./TransportControls";
 import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
 import { ErrorToast } from "./ErrorToast";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 // Fix I — auto-advance storm guard. When EVERY track fails with format_error
 // (unrecoverable decode / SRC_NOT_SUPPORTED — e.g. Drive locked or quota hit),
@@ -188,6 +189,17 @@ function PlayerBarImpl({
       unsubEnded();
     };
   }, [onNextTrack, audio, resetAdvanceGuard]);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel): renders the SAME error banner
+  // as a real AudioController error via setErrorInfo only — it deliberately
+  // does NOT touch the storm guard (no markTrackBroken, no formatErrorCountRef)
+  // so the debug channel can never fake a storm or mark tracks broken. The
+  // helper no-ops in production builds.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.PLAYER_ERROR, ({ code, message }) => {
+      setErrorInfo({ code, message });
+    });
+  }, []);
 
   // Handle Keyboard Shortcuts (transport keys; seek/volume keys live in
   // SeekBar/VolumeSlider). Fix I: wrapped handlers so keyboard next/prev/play

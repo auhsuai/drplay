@@ -75,6 +75,48 @@ describe("DebugPanel", () => {
     expect(event.type).toBe(DEBUG_EVENTS.RATE_LIMIT);
   });
 
+  it.each([
+    {
+      label: "Player error: network_interrupted",
+      code: "network_interrupted",
+      message: "Mạng không ổn định, đang thử lại...",
+    },
+    {
+      label: "Player error: format_error",
+      code: "format_error",
+      message: "File lỗi định dạng, đang bỏ qua...",
+    },
+    {
+      label: "Player error: advance_stopped",
+      code: "advance_stopped",
+      message: "Drive is overloaded or locked — auto-playback paused.",
+    },
+    {
+      label: "Player error: rate_limited",
+      code: "rate_limited",
+      message: "Request rate limit exceeded — try again later.",
+    },
+    {
+      label: "Player error: access_denied",
+      code: "access_denied",
+      message: "Access denied — the file may no longer be available.",
+    },
+  ])(
+    "demo $code button dispatches PLAYER_ERROR with the preset message",
+    ({ label, code, message }) => {
+      render(<DebugPanel />);
+      openPanel();
+      const spy = vi.spyOn(window, "dispatchEvent");
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const event = spy.mock.calls[0]?.[0] as CustomEvent;
+      expect(event.type).toBe(DEBUG_EVENTS.PLAYER_ERROR);
+      expect(event.detail).toEqual({ code, message });
+    },
+  );
+
   it("closes when the X close button is clicked", () => {
     render(<DebugPanel />);
     openPanel();

@@ -11,6 +11,7 @@ import { useShallow } from "zustand/react/shallow";
 import { TabContentRouter } from "./ui/layouts/TabContentRouter";
 import { AppShell } from "./ui/layouts/AppShell";
 import { DebugPanel } from "./ui/debug/DebugPanel";
+import { DEBUG_EVENTS, onDebugEvent } from "./ui/debug/debugEvents";
 
 import "./App.css";
 
@@ -57,6 +58,15 @@ function App() {
 
   // Listen to Tauri events (Quota Exceeded, Repair Thumbnail)
   useTauriEvents(setShowRateLimitModal);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel): same setShowRateLimitModal
+  // path as the Tauri event, so the modal opens exactly like a real quota
+  // failure. The helper no-ops in production builds.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.RATE_LIMIT, () => {
+      setShowRateLimitModal(true);
+    });
+  }, [setShowRateLimitModal]);
 
   // setAppRootFolder is produced by useDrive() BELOW, while the logout cleanup
   // callback above runs at logout time. A ref bridges the TDZ (the callback

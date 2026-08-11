@@ -18,6 +18,7 @@ import { getTrackMetadata } from "../../utils/metadata";
 import { useAuthStore } from "../../store/authStore";
 import * as errorLog from "../../utils/errorLog";
 import { FAVORITES_UPDATED_EVENT } from "../../utils/favorites";
+import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -611,6 +612,94 @@ describe("PlayerBar error banner recovery", () => {
     unmount();
 
     expect(fakeController._handlers["play"] ?? []).toHaveLength(0);
+  });
+});
+
+describe("PlayerBar debug player-error trigger (DEV only)", () => {
+  const NETWORK_ERROR_TEXT = en.player.network_interrupted;
+
+  it("shows the error banner when PLAYER_ERROR fires with a mapped code", () => {
+    renderPlayer();
+    expect(screen.queryByText(NETWORK_ERROR_TEXT)).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.PLAYER_ERROR, {
+          detail: {
+            code: "network_interrupted",
+            message: "Mạng không ổn định, đang thử lại...",
+          },
+        }),
+      );
+    });
+
+    expect(screen.getByText(NETWORK_ERROR_TEXT)).toBeTruthy();
+  });
+
+  it("falls back to the raw message for an unmapped code", () => {
+    renderPlayer();
+    const rawMessage = "some unexpected failure";
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.PLAYER_ERROR, {
+          detail: { code: "unknown_code", message: rawMessage },
+        }),
+      );
+    });
+
+    expect(screen.getByText(rawMessage)).toBeTruthy();
+  });
+
+  it("format_error renders the banner WITHOUT marking the track broken or tripping the storm guard", () => {
+    usePlayerStore.setState({ currentTrack: makeTrack(), brokenTrackIds: [] });
+    const onNext = vi.fn();
+    renderPlayer({ onNextTrack: onNext });
+
+    const dispatchFormatError = () => {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent(DEBUG_EVENTS.PLAYER_ERROR, {
+            detail: {
+              code: "format_error",
+              message: "File lỗi định dạng, đang bỏ qua...",
+            },
+          }),
+        );
+      });
+    };
+
+    dispatchFormatError();
+    expect(screen.getByText(en.player.format_error)).toBeTruthy();
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
+
+    // 3 format_error dispatches through the debug channel — the storm
+    // threshold — must NOT block auto-advance: the debug listener only sets
+    // errorInfo, it never runs the storm-guard refs of audio.on("error").
+    dispatchFormatError();
+    dispatchFormatError();
+    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
+
+    act(() => {
+      fakeController._emit("ended");
+    });
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
+  });
+
+  it("does not crash when PLAYER_ERROR fires after unmount (listener cleaned up)", () => {
+    const { unmount } = renderPlayer();
+    unmount();
+
+    expect(() => {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent(DEBUG_EVENTS.PLAYER_ERROR, {
+            detail: { code: "format_error", message: "x" },
+          }),
+        );
+      });
+    }).not.toThrow();
   });
 });
 

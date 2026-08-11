@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { loadMinimizeToTrayState } from "./App";
 import { TABS } from "./utils/driveConstants";
+import { DEBUG_EVENTS } from "./ui/debug/debugEvents";
 
 // Shared state for App-level mocks: hoisted so vi.mock factories (which are
 // hoisted above imports) can reach it. authState is MUTABLE so tests can flip
@@ -68,6 +69,15 @@ const mocks = vi.hoisted(() => {
       setIsLoadingTracks: vi.fn(),
       isLoadingTracks: false,
     })),
+    // RateLimitGate stub captures the live RateLimitModal props so tests can
+    // assert isOpen flips when the debug RATE_LIMIT event fires.
+    rateLimitModalProps: {
+      value: null as null | {
+        isOpen: boolean;
+        onClose: () => void;
+        onOk: () => void;
+      },
+    },
   };
 });
 
@@ -117,7 +127,14 @@ vi.mock("./ui/FolderSelection/FolderSelectionScreen", () => ({
 }));
 vi.mock("./ui/Settings/TrashScreen", () => ({ TrashScreen: () => null }));
 vi.mock("./ui/components/RateLimitModal", () => ({
-  RateLimitModal: () => null,
+  RateLimitModal: (props: {
+    isOpen: boolean;
+    onClose: () => void;
+    onOk: () => void;
+  }) => {
+    mocks.rateLimitModalProps.value = props;
+    return null;
+  },
 }));
 // DebugPanel is DEV-gated via import.meta.env.DEV, which vitest evaluates as
 // true — mock it so the App-level tests stay unaffected by the debug overlay.
@@ -291,5 +308,62 @@ describe("HomeTab keep-alive across tab switches", () => {
     if (homeParent2) {
       expect(homeParent2.className).not.toContain("hidden");
     }
+  });
+});
+
+describe("App debug rate-limit trigger (DEV only)", () => {
+  afterEach(() => {
+    mocks.rateLimitModalProps.value = null;
+    cleanup();
+  });
+
+  it("opens the rate-limit modal when the RATE_LIMIT debug event fires", () => {
+    render(<App />);
+    expect(mocks.rateLimitModalProps.value?.isOpen).toBe(false);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.RATE_LIMIT));
+    });
+
+    expect(mocks.rateLimitModalProps.value?.isOpen).toBe(true);
+  });
+
+  it("stays open on a second RATE_LIMIT while already open (idempotent — no toggle)", () => {
+    render(<App />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.RATE_LIMIT));
+    });
+    expect(mocks.rateLimitModalProps.value?.isOpen).toBe(true);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.RATE_LIMIT));
+    });
+
+    expect(mocks.rateLimitModalProps.value?.isOpen).toBe(true);
+  });
+
+  it("closes through the existing onClose mechanism after a debug-open", () => {
+    render(<App />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.RATE_LIMIT));
+    });
+    expect(mocks.rateLimitModalProps.value?.isOpen).toBe(true);
+
+    act(() => {
+      mocks.rateLimitModalProps.value?.onClose();
+    });
+
+    expect(mocks.rateLimitModalProps.value?.isOpen).toBe(false);
+  });
+
+  it("removes the listener on unmount (no crash on a later dispatch)", () => {
+    const { unmount } = render(<App />);
+    unmount();
+
+    expect(() => {
+      act(() => {
+        window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.RATE_LIMIT));
+      });
+    }).not.toThrow();
   });
 });

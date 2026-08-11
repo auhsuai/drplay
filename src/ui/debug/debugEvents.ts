@@ -40,3 +40,24 @@ export function dispatchDebugEvent<K extends keyof DebugEventMap>(
 ): void {
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
+
+// DEV-only subscribe helper shared by every debug listener (App rate-limit,
+// PlayerBar player-error, ...). Guards itself with import.meta.env.DEV: in a
+// production build it is a no-op that never touches window, so the shipped
+// app carries zero listener overhead. Returns the unsubscribe function for
+// effect cleanup (a plain window event listener — no error paths, no try/catch).
+export function onDebugEvent<K extends keyof DebugEventMap>(
+  name: K,
+  handler: (detail: DebugEventMap[K]) => void,
+): () => void {
+  if (!import.meta.env.DEV) {
+    return () => {};
+  }
+  const listener = (event: Event) => {
+    handler((event as CustomEvent<DebugEventMap[K]>).detail);
+  };
+  window.addEventListener(name, listener);
+  return () => {
+    window.removeEventListener(name, listener);
+  };
+}

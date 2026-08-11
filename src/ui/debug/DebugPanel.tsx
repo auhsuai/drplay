@@ -10,6 +10,43 @@ const DEBUG_PANEL_Z_INDEX = "z-[9000]";
 const DEBUG_BUTTON_CLASS =
   "px-3 py-1.5 rounded-lg text-sm text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors";
 
+// Player error presets: messages mirror the real AudioController / PlayerBar
+// strings (lib/AudioController.ts, PlayerBar.tsx) so the debug banner reads
+// exactly like a live failure. rate_limited / access_denied have no real
+// emission site today — ErrorToast maps their icons (CloudOff / FileWarning),
+// so the presets carry plain English messages instead.
+const PLAYER_ERROR_PRESETS: ReadonlyArray<{
+  code: string;
+  label: string;
+  message: string;
+}> = [
+  {
+    code: "network_interrupted",
+    label: "Player error: network_interrupted",
+    message: "Mạng không ổn định, đang thử lại...",
+  },
+  {
+    code: "format_error",
+    label: "Player error: format_error",
+    message: "File lỗi định dạng, đang bỏ qua...",
+  },
+  {
+    code: "advance_stopped",
+    label: "Player error: advance_stopped",
+    message: "Drive is overloaded or locked — auto-playback paused.",
+  },
+  {
+    code: "rate_limited",
+    label: "Player error: rate_limited",
+    message: "Request rate limit exceeded — try again later.",
+  },
+  {
+    code: "access_denied",
+    label: "Player error: access_denied",
+    message: "Access denied — the file may no longer be available.",
+  },
+];
+
 export function DebugSection({
   title,
   children,
@@ -80,6 +117,20 @@ export function DebugPanel() {
           >
             Rate limit modal (403/quota)
           </button>
+          {PLAYER_ERROR_PRESETS.map((preset) => (
+            <button
+              key={preset.code}
+              onClick={() => {
+                dispatchDebugEvent(DEBUG_EVENTS.PLAYER_ERROR, {
+                  code: preset.code,
+                  message: preset.message,
+                });
+              }}
+              className={DEBUG_BUTTON_CLASS}
+            >
+              {preset.label}
+            </button>
+          ))}
         </DebugSection>
         <DebugSection title="Player" />
         <DebugSection title="Storage quota" />
