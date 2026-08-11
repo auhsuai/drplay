@@ -7,6 +7,7 @@ import {
 import { formatBytes } from "../../utils/formatBytes";
 import { captureError } from "../../utils/errorLog";
 import { SIDEBAR_MODULE } from "./constants";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 // Storage bar width (expanded) — matches the FULL NavItem hover-row extent:
 // sidebar w-64 (256px) − nav px-4 right (16px, row hover right edge at 240px)
@@ -71,6 +72,29 @@ export function StorageQuotaCard({
       window.removeEventListener("user-changed", loadQuota);
     };
   }, [token]);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Storage quota" presets):
+  // pushes quota state directly so the three card states (under 80% / over
+  // 80% / unlimited) can be previewed without a real Drive account. Own
+  // mount-once effect, deliberately separate from the fetch effect above
+  // (which re-runs on token change) — the listener only sets quota and lets
+  // the existing render logic drive the display. onDebugEvent no-ops in
+  // production builds; token gating stays untouched (the card only renders
+  // with a token, and the render-adjust reset still clears quota on logout).
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.QUOTA, (detail) => {
+      // The debug detail only carries usageInDrive + limit; DriveStorageQuota
+      // requires usage/usageInDriveTrash too. usageInDriveTrash is unknown in
+      // the preset (0) and usage mirrors usageInDrive — the card only reads
+      // usageInDrive and limit, so the placeholder fields never surface.
+      setQuota({
+        limit: detail.limit,
+        usage: detail.usageInDrive,
+        usageInDrive: detail.usageInDrive,
+        usageInDriveTrash: 0,
+      });
+    });
+  }, []);
 
   const quotaAvailable = quota && quota.limit !== null && quota.limit > 0;
   const usageFraction = quotaAvailable

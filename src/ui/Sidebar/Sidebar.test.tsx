@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar, type SidebarProps } from "./Sidebar";
 import en from "../../locales/en/translation.json";
 import type { DriveStorageQuota } from "../../utils/driveApi";
+import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -489,6 +490,83 @@ describe("Sidebar storage quota", () => {
     await waitFor(() => {
       expect(mocks.getDriveStorageQuota).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // Debug QUOTA presets (Ctrl+Shift+D panel → "Storage quota" section) push
+  // quota state directly through the DEV-only event bus. The fetch mock stays
+  // PENDING (never-settling promise) so the real fetch cannot race and
+  // overwrite the debug-set quota; the card then shows exactly the debug data.
+  const dispatchQuota = (detail: {
+    usageInDrive: number;
+    limit: number | null;
+  }) => {
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.QUOTA, { detail }));
+    });
+  };
+
+  it("debug QUOTA under 80% renders the card with a blue-only bar (no red segment)", () => {
+    mocks.getDriveStorageQuota.mockReturnValue(new Promise(() => {}));
+    render(<Sidebar {...baseProps()} />);
+
+    dispatchQuota({ usageInDrive: 40 * GB, limit: 100 * GB });
+
+    expect(screen.getByTestId("storage-quota")).toBeTruthy();
+    const blue = screen.getByTestId("storage-quota-bar");
+    expect(blue.style.width).toBe("40%");
+    expect(blue.className).toContain("bg-brand-primary");
+    expect(screen.queryByTestId("storage-quota-bar-red")).toBeNull();
+    expect(quotaTextClass()).toContain("text-brand-primary");
+  });
+
+  it("debug QUOTA over 80% renders the red excess segment with red usage text", () => {
+    mocks.getDriveStorageQuota.mockReturnValue(new Promise(() => {}));
+    render(<Sidebar {...baseProps()} />);
+
+    dispatchQuota({ usageInDrive: 95 * GB, limit: 100 * GB });
+
+    const blue = screen.getByTestId("storage-quota-bar");
+    const red = screen.getByTestId("storage-quota-bar-red");
+    // Safe zone (0→80%) stays blue; the 15% above the threshold turns red.
+    expect(blue.style.width).toBe("80%");
+    expect(red.style.width).toBe("15%");
+    expect(red.className).toContain("bg-red-500");
+    expect(quotaTextClass()).toContain("text-red-500");
+  });
+
+  it("debug QUOTA unlimited renders the unlimited text with no bar", () => {
+    mocks.getDriveStorageQuota.mockReturnValue(new Promise(() => {}));
+    render(<Sidebar {...baseProps()} />);
+
+    dispatchQuota({ usageInDrive: 50 * GB, limit: null });
+
+    expect(screen.getByTestId("storage-quota")).toBeTruthy();
+    expect(screen.queryByTestId("storage-quota-bar")).toBeNull();
+    expect(screen.queryByTestId("storage-quota-bar-red")).toBeNull();
+    expect(quotaTextContent()).toBe("Storage used 50 GB");
+  });
+
+  it("debug QUOTA does not render the card when there is no token", () => {
+    mocks.getDriveStorageQuota.mockReturnValue(new Promise(() => {}));
+    render(<Sidebar {...baseProps({ token: null })} />);
+
+    dispatchQuota({ usageInDrive: 40 * GB, limit: 100 * GB });
+
+    expect(screen.queryByTestId("storage-quota")).toBeNull();
+    expect(mocks.getDriveStorageQuota).not.toHaveBeenCalled();
+  });
+
+  it("debug QUOTA after unmount is a no-op (listener cleaned up, no crash)", () => {
+    mocks.getDriveStorageQuota.mockReturnValue(new Promise(() => {}));
+    const { unmount } = render(<Sidebar {...baseProps()} />);
+
+    dispatchQuota({ usageInDrive: 40 * GB, limit: 100 * GB });
+    expect(screen.getByTestId("storage-quota")).toBeTruthy();
+
+    unmount();
+    expect(() => {
+      dispatchQuota({ usageInDrive: 95 * GB, limit: 100 * GB });
+    }).not.toThrow();
   });
 
   it("hides the section when the token prop changes to null (logout)", async () => {

@@ -1,17 +1,69 @@
 ﻿// @vitest-environment jsdom
+import { Component } from "react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { DebugPanel } from "./DebugPanel";
 import { DEBUG_EVENTS } from "./debugEvents";
 
+// DebugPanel now consumes react-i18next (login toast keys). No initialized
+// i18n instance exists in the jsdom test env — stub t() to return the key so
+// assertions pin the exact translation key (the shipped strings are verified
+// by LoginScreen.test against the real locale resources).
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+const debugMocks = vi.hoisted(() => ({
+  showErrorToast: vi.fn(),
+  showSuccessToast: vi.fn(),
+  captureError: vi.fn(),
+}));
+
+vi.mock("../../utils/simpleToast", () => ({
+  showErrorToast: debugMocks.showErrorToast,
+  showSuccessToast: debugMocks.showSuccessToast,
+}));
+vi.mock("../../utils/errorLog", () => ({
+  captureError: debugMocks.captureError,
+}));
+
+const GB = 1024 * 1024 * 1024;
+
 const openPanel = () => {
   fireEvent.keyDown(window, { key: "d", ctrlKey: true, shiftKey: true });
 };
+
+// Test-local ErrorBoundary: the crash button makes DebugPanel throw inside its
+// render, exactly like the app-level ErrorBoundary (main.tsx) catches it in
+// production. Without a boundary the throw would escape the test renderer.
+class TestErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  override state = { hasError: false };
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div role="alert" data-testid="test-boundary-fallback">
+          Boundary fallback
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 describe("DebugPanel", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   it("renders nothing while closed by default", () => {
@@ -136,5 +188,97 @@ describe("DebugPanel", () => {
     // A stray shortcut after unmount must be a no-op (no crash, no panel).
     openPanel();
     expect(screen.queryByText("Debug UI")).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "Quota: under 80% (blue)",
+      usageInDrive: 40 * GB,
+      limit: 100 * GB,
+    },
+    {
+      label: "Quota: over 80% (red)",
+      usageInDrive: 95 * GB,
+      limit: 100 * GB,
+    },
+    { label: "Quota: unlimited", usageInDrive: 50 * GB, limit: null },
+  ])(
+    "demo $label button dispatches QUOTA with the preset detail",
+    ({ label, usageInDrive, limit }) => {
+      render(<DebugPanel />);
+      openPanel();
+      const spy = vi.spyOn(window, "dispatchEvent");
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const event = spy.mock.calls[0]?.[0] as CustomEvent;
+      expect(event.type).toBe(DEBUG_EVENTS.QUOTA);
+      expect(event.detail).toEqual({ usageInDrive, limit });
+    },
+  );
+
+  it("crash button throws during render and the surrounding ErrorBoundary shows its fallback", () => {
+    render(
+      <TestErrorBoundary>
+        <DebugPanel />
+      </TestErrorBoundary>,
+    );
+    openPanel();
+    expect(screen.getByText("Debug UI")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /crash ui/i }));
+
+    expect(screen.getByTestId("test-boundary-fallback")).toBeTruthy();
+    expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
+  it("Error toast button calls showErrorToast with the debug message", () => {
+    render(<DebugPanel />);
+    openPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Error toast" }));
+
+    expect(debugMocks.showErrorToast).toHaveBeenCalledWith("Debug error toast");
+  });
+
+  it("Success toast button calls showSuccessToast with the debug message", () => {
+    render(<DebugPanel />);
+    openPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Success toast" }));
+
+    expect(debugMocks.showSuccessToast).toHaveBeenCalledWith(
+      "Debug success toast",
+    );
+  });
+
+  it.each([
+    { label: "Login: cancelled", key: "login.cancelled" },
+    { label: "Login: timeout", key: "login.timeout_error" },
+    { label: "Login: failed", key: "login.failed" },
+  ])(
+    "$label shows an error toast with the translated key $key",
+    ({ label, key }) => {
+      render(<DebugPanel />);
+      openPanel();
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(debugMocks.showErrorToast).toHaveBeenCalledWith(key);
+    },
+  );
+
+  it("Seed error log entry button captures a log entry sourced from DebugPanel", () => {
+    render(<DebugPanel />);
+    openPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /seed error log/i }));
+
+    expect(debugMocks.captureError).toHaveBeenCalledWith({
+      level: "error",
+      source: "DebugPanel",
+      message: "Debug seed error log entry",
+    });
   });
 });

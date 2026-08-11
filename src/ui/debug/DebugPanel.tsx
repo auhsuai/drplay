@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
+import { captureError } from "../../utils/errorLog";
 import { DEBUG_EVENTS, dispatchDebugEvent } from "./debugEvents";
 
 // Below RateLimitModal (z-[10000]) and ErrorBoundary (z-[10002]) on purpose:
@@ -47,6 +50,40 @@ const PLAYER_ERROR_PRESETS: ReadonlyArray<{
   },
 ];
 
+// Bytes per gigabyte (1024^3) — matches formatBytes' 1024-based units so the
+// quota preset buttons read like the sidebar card ("40 GB" not "40 000 MB").
+const GB = 1024 * 1024 * 1024;
+
+// Storage quota presets: one button per card state. usageInDrive/limit mirror
+// the DriveStorageQuota fields the sidebar card reads (driveTypes.ts); the
+// card derives its 3 states from these two values (under 80% blue / over 80%
+// blue+red / unlimited text).
+const QUOTA_PRESETS: ReadonlyArray<{
+  label: string;
+  usageInDrive: number;
+  limit: number | null;
+}> = [
+  {
+    label: "Quota: under 80% (blue)",
+    usageInDrive: 40 * GB,
+    limit: 100 * GB,
+  },
+  {
+    label: "Quota: over 80% (red)",
+    usageInDrive: 95 * GB,
+    limit: 100 * GB,
+  },
+  { label: "Quota: unlimited", usageInDrive: 50 * GB, limit: null },
+];
+
+// Toast/error-log debug messages: hardcoded English (dev-only surface, not
+// shipped copy) EXCEPT the login toasts, which go through t() so the debug
+// panel exercises the real translated strings used by LoginScreen.
+const DEBUG_TOAST_MESSAGES = {
+  error: "Debug error toast",
+  success: "Debug success toast",
+} as const;
+
 export function DebugSection({
   title,
   children,
@@ -68,6 +105,13 @@ export function DebugSection({
 
 export function DebugPanel() {
   const [isOpen, setIsOpen] = useState(false);
+  // Crash test: once armed, DebugPanel throws inside its render on purpose so
+  // the app-level ErrorBoundary (main.tsx) shows its fallback. This is the
+  // documented ErrorBoundary pattern (throw in render, caught by
+  // getDerivedStateFromError). Deliberately no way to un-arm — the boundary
+  // replaces the whole subtree, matching a real render crash.
+  const [crashArmed, setCrashArmed] = useState(false);
+  const { t } = useTranslation();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -88,6 +132,10 @@ export function DebugPanel() {
   }, []);
 
   if (!isOpen) return null;
+
+  if (crashArmed) {
+    throw new Error("Debug crash test — ErrorBoundary fallback");
+  }
 
   return (
     <div
@@ -131,12 +179,90 @@ export function DebugPanel() {
               {preset.label}
             </button>
           ))}
+          <button
+            onClick={() => {
+              setCrashArmed(true);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Crash UI (ErrorBoundary)
+          </button>
         </DebugSection>
         <DebugSection title="Player" />
-        <DebugSection title="Storage quota" />
+        <DebugSection title="Storage quota">
+          {QUOTA_PRESETS.map((preset) => (
+            <button
+              key={preset.label}
+              onClick={() => {
+                dispatchDebugEvent(DEBUG_EVENTS.QUOTA, {
+                  usageInDrive: preset.usageInDrive,
+                  limit: preset.limit,
+                });
+              }}
+              className={DEBUG_BUTTON_CLASS}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </DebugSection>
         <DebugSection title="Empty states" />
         <DebugSection title="Loading / MainContent" />
-        <DebugSection title="Toasts" />
+        <DebugSection title="Toasts">
+          <button
+            onClick={() => {
+              showErrorToast(DEBUG_TOAST_MESSAGES.error);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Error toast
+          </button>
+          <button
+            onClick={() => {
+              showSuccessToast(DEBUG_TOAST_MESSAGES.success);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Success toast
+          </button>
+          <button
+            onClick={() => {
+              showErrorToast(t("login.cancelled"));
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Login: cancelled
+          </button>
+          <button
+            onClick={() => {
+              showErrorToast(t("login.timeout_error"));
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Login: timeout
+          </button>
+          <button
+            onClick={() => {
+              showErrorToast(t("login.failed"));
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Login: failed
+          </button>
+        </DebugSection>
+        <DebugSection title="Error log">
+          <button
+            onClick={() => {
+              void captureError({
+                level: "error",
+                source: "DebugPanel",
+                message: "Debug seed error log entry",
+              });
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Seed error log entry
+          </button>
+        </DebugSection>
       </div>
     </div>
   );
