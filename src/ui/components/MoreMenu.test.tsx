@@ -13,6 +13,7 @@ import { MoreMenu } from "./MoreMenu";
 import en from "../../locales/en/translation.json";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
+import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 const mocks = vi.hoisted(() => ({
   driveApi: {
@@ -523,5 +524,47 @@ describe("MoreMenu upload race guards", () => {
     expect(mocks.showErrorToast).toHaveBeenCalledWith(
       "This item is already uploading. Please wait.",
     );
+  });
+});
+
+describe("MoreMenu debug download toast trigger", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function dispatchDownloadToast(message: string) {
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.DOWNLOAD_TOAST, { detail: { message } }),
+      );
+    });
+  }
+
+  it("DOWNLOAD_TOAST dispatch renders the DownloadToast with the message", () => {
+    render(<MoreMenu track={makeTrack()} token="tok" />);
+
+    dispatchDownloadToast("Downloaded: debug-test.mp3");
+
+    expect(screen.getByText("Downloaded: debug-test.mp3")).not.toBeNull();
+  });
+
+  it("a second DOWNLOAD_TOAST replaces the message (latest wins)", () => {
+    render(<MoreMenu track={makeTrack()} token="tok" />);
+    dispatchDownloadToast("Downloaded: first.mp3");
+    expect(screen.getByText("Downloaded: first.mp3")).not.toBeNull();
+
+    dispatchDownloadToast("Downloaded: second.mp3");
+
+    expect(screen.getByText("Downloaded: second.mp3")).not.toBeNull();
+    expect(screen.queryByText("Downloaded: first.mp3")).toBeNull();
+  });
+
+  it("unmount -> dispatching DOWNLOAD_TOAST is a no-op (listener cleaned up)", () => {
+    const { unmount } = render(<MoreMenu track={makeTrack()} token="tok" />);
+    unmount();
+
+    expect(() => {
+      dispatchDownloadToast("Downloaded: debug-test.mp3");
+    }).not.toThrow();
   });
 });

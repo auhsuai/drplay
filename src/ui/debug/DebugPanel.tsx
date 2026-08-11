@@ -239,7 +239,78 @@ export function DebugPanel() {
             Empty: Folder selection
           </button>
         </DebugSection>
-        <DebugSection title="Loading / MainContent" />
+        <DebugSection title="Loading / MainContent">
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.SKELETON, {
+                target: "main-content",
+              });
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Skeleton: MainContent
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.SKELETON, { target: "trash" });
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Skeleton: Trash
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.SKELETON, {
+                target: "folders",
+              });
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Skeleton: Folder selection
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.SKELETON, { target: "home" });
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Skeleton: Home
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.DOWNLOAD_TOAST, {
+                message: "Downloaded: debug-test.mp3",
+              });
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Download toast
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.BULK_DELETE, undefined);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Bulk delete modal
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.SELECTION_MODE, undefined);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Selection toolbar
+          </button>
+          <button
+            onClick={() => {
+              dispatchDebugEvent(DEBUG_EVENTS.PAGINATION, undefined);
+            }}
+            className={DEBUG_BUTTON_CLASS}
+          >
+            Pagination
+          </button>
+        </DebugSection>
         <DebugSection title="Toasts">
           <button
             onClick={() => {

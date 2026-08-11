@@ -14,6 +14,7 @@ import type { Track, UserProfile } from "../../types";
 import type { DriveFileItem } from "../../utils/driveApi";
 import type { FolderVisitEntry } from "../../utils/history";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
+import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -1144,5 +1145,63 @@ describe("HomeTab loadData stale-write race", () => {
 
     expect(screen.queryByText("Old Recent")).toBeNull();
     expect(screen.getByText("New Recent")).toBeTruthy();
+  });
+});
+
+describe("HomeTab debug skeleton trigger", () => {
+  beforeEach(() => {
+    mocks.getRecentlyPlayed.mockResolvedValue([
+      { id: "r-1", title: "Recent Track", artist: "Artist", streamUrl: "" },
+    ]);
+    mocks.getHeavyRotation.mockResolvedValue([]);
+    mocks.getRandomDiscoveries.mockResolvedValue([]);
+    mocks.getMostVisitedFolders.mockResolvedValue([]);
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function dispatchSkeleton(target: unknown = "home") {
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.SKELETON, { detail: { target } }),
+      );
+    });
+  }
+
+  it("SKELETON target home after data loaded -> every section returns to its skeleton (null state)", async () => {
+    render(<HomeTab {...baseProps()} />);
+    await screen.findByText("Recent Track");
+    expect(screen.queryByTestId("home-greeting-skeleton")).toBeNull();
+    expect(screen.queryAllByTestId("home-skeleton-section")).toHaveLength(0);
+
+    dispatchSkeleton();
+
+    expect(screen.getByTestId("home-greeting-skeleton")).not.toBeNull();
+    expect(screen.getAllByTestId("home-skeleton-section")).toHaveLength(5);
+    expect(screen.queryByText("Recent Track")).toBeNull();
+  });
+
+  it("SKELETON with a non-home target leaves the loaded sections untouched", async () => {
+    render(<HomeTab {...baseProps()} />);
+    await screen.findByText("Recent Track");
+
+    dispatchSkeleton("folders");
+
+    expect(screen.queryByTestId("home-greeting-skeleton")).toBeNull();
+    expect(screen.getByText("Recent Track")).not.toBeNull();
+  });
+
+  it("unmount -> dispatching SKELETON is a no-op (listener cleaned up)", async () => {
+    const { unmount } = render(<HomeTab {...baseProps()} />);
+    await screen.findByText("Recent Track");
+
+    unmount();
+    expect(() => {
+      dispatchSkeleton();
+    }).not.toThrow();
   });
 });

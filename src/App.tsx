@@ -142,6 +142,21 @@ function App() {
       isLoadingTracks: s.isLoadingTracks,
     })),
   );
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Loading / MainContent"):
+  // forces the My Drive skeleton through the same store flag useDrive flips
+  // during a real folder fetch (App is the store owner; MainContent merely
+  // receives the derived prop). Placed AFTER the useDriveStore destructure
+  // above — the effect body must not touch a `const` declared later (TDZ).
+  // Other SKELETON targets (trash/folders/home) are handled inside their own
+  // views. onDebugEvent no-ops in production builds; the listener never runs
+  // there.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.SKELETON, (detail) => {
+      if (detail.target === "main-content") {
+        setIsLoadingTracks(true);
+      }
+    });
+  }, [setIsLoadingTracks]);
   // Locate File Logic
   const { highlightedFileId } = useLocateFile(
     accessToken,

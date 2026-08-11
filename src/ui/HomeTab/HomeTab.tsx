@@ -19,6 +19,7 @@ import { PremiumGrid } from "./components/PremiumGrid";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 import { captureError } from "../../utils/errorLog";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 import {
   Skeleton,
   SkeletonCardGrid,
@@ -271,6 +272,23 @@ export function HomeTab({
     ];
     if (tracks.length > 0) prefetchVisibleTracks(tracks);
   }, [recent, heavy, discover, recentlyAdded]);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Loading / MainContent"):
+  // returns every section to its null = skeleton state (the same branch the
+  // first load shows). HomeTab fetches internally, so the data states are the
+  // only lever; the next mount (tab switch / session change) reloads it like a
+  // fresh visit. onDebugEvent no-ops in production builds.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.SKELETON, (detail) => {
+      if (detail.target === "home") {
+        setRecent(null);
+        setHeavy(null);
+        setDiscover(null);
+        setMostVisitedFolders(null);
+        setRecentlyAdded(null);
+      }
+    });
+  }, []);
 
   const visibleCount = useResponsiveItems();
 

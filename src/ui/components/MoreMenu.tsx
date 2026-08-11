@@ -9,6 +9,7 @@ import {
 } from "../../utils/uploadManager";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 // Custom Hooks and Components
 import { useMenuDownload } from "../../hooks/useMenuDownload";
@@ -123,6 +124,7 @@ export function MoreMenu({
     downloadFileName,
     setDownloadFileName,
     downloadMessage,
+    setDownloadMessage,
     handleDownloadClick,
     executeDownload,
   } = useMenuDownload(t);
@@ -171,6 +173,16 @@ export function MoreMenu({
   useEffect(() => {
     onOpenChange?.(isOpen);
   }, [isOpen, onOpenChange]);
+
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Loading / MainContent"):
+  // a fake download completion message, rendered through the exact
+  // DownloadToast portal the real download flow uses. onDebugEvent no-ops
+  // in production builds; the listener never runs there.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.DOWNLOAD_TOAST, (detail) => {
+      setDownloadMessage(detail.message);
+    });
+  }, [setDownloadMessage]);
 
   const handleNavigateClick = (e: React.MouseEvent) => {
     e.stopPropagation();

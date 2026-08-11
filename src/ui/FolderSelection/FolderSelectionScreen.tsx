@@ -49,6 +49,20 @@ export function FolderSelectionScreen({
     });
   }, []);
 
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Loading / MainContent"):
+  // forces the folder grid skeleton through the same prop-override pattern
+  // as the FOLDERS_EMPTY trigger above. onDebugEvent no-ops in production
+  // builds; the listener never runs there.
+  const [debugForceLoading, setDebugForceLoading] = useState(false);
+
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.SKELETON, (detail) => {
+      if (detail.target === "folders") {
+        setDebugForceLoading(true);
+      }
+    });
+  }, []);
+
   // Resolve appRootFolder from props or localStorage.
   // localStorage access can throw SecurityError (storage blocked by policy —
   // see MDN Window.localStorage), so the read is guarded and falls back to
@@ -162,7 +176,9 @@ export function FolderSelectionScreen({
 
         {/* Folder List */}
         <FolderGrid
-          isLoading={debugForceEmpty ? false : isLoading}
+          isLoading={
+            debugForceLoading ? true : debugForceEmpty ? false : isLoading
+          }
           isSearchingApi={isSearchingApi}
           searchQuery={searchQuery}
           filteredFolders={debugForceEmpty ? [] : filteredFolders}

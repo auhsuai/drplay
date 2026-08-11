@@ -367,3 +367,80 @@ describe("App debug rate-limit trigger (DEV only)", () => {
     }).not.toThrow();
   });
 });
+
+describe("App debug skeleton trigger (DEV only)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  // The useDriveStore mock returns a fresh object per call; grab the setters
+  // from the LAST render (the one this test mounted).
+  function lastStoreSetters() {
+    const results = mocks.useDriveStore.mock.results;
+    const store = results[results.length - 1]?.value as
+      { setIsLoadingTracks: ReturnType<typeof vi.fn> } | undefined;
+    if (store === undefined) throw new Error("expected useDriveStore call");
+    return store.setIsLoadingTracks;
+  }
+
+  it("flips setIsLoadingTracks(true) when the SKELETON event targets main-content", () => {
+    render(<App />);
+    const setIsLoadingTracks = lastStoreSetters();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.SKELETON, {
+          detail: { target: "main-content" },
+        }),
+      );
+    });
+
+    expect(setIsLoadingTracks).toHaveBeenCalledWith(true);
+  });
+
+  it("ignores SKELETON events targeting another view (no store write)", () => {
+    render(<App />);
+    const setIsLoadingTracks = lastStoreSetters();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.SKELETON, {
+          detail: { target: "trash" },
+        }),
+      );
+    });
+
+    expect(setIsLoadingTracks).not.toHaveBeenCalled();
+  });
+
+  it("ignores a raw SKELETON event with an unknown target (no crash)", () => {
+    render(<App />);
+    const setIsLoadingTracks = lastStoreSetters();
+
+    expect(() => {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent(DEBUG_EVENTS.SKELETON, {
+            detail: { target: "unknown" },
+          }),
+        );
+      });
+    }).not.toThrow();
+    expect(setIsLoadingTracks).not.toHaveBeenCalled();
+  });
+
+  it("removes the listener on unmount (no crash on a later dispatch)", () => {
+    const { unmount } = render(<App />);
+    unmount();
+
+    expect(() => {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent(DEBUG_EVENTS.SKELETON, {
+            detail: { target: "main-content" },
+          }),
+        );
+      });
+    }).not.toThrow();
+  });
+});

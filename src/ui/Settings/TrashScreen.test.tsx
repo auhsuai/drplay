@@ -409,3 +409,89 @@ describe("TrashScreen debug empty trigger", () => {
     }).not.toThrow();
   });
 });
+
+describe("TrashScreen debug skeleton trigger", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function dispatchSkeleton(target: unknown = "trash") {
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.SKELETON, { detail: { target } }),
+      );
+    });
+  }
+
+  it("SKELETON target trash while the fetch is still pending -> skeleton stays on screen", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    expect(screen.queryAllByTestId("skeleton-row")).not.toHaveLength(0);
+
+    dispatchSkeleton();
+
+    expect(screen.queryAllByTestId("skeleton-row")).not.toHaveLength(0);
+    expect(screen.getByRole("status", { name: "loading" })).not.toBeNull();
+    expect(screen.queryByText("settings.trash_empty")).toBeNull();
+  });
+
+  it("SKELETON target trash after items loaded -> list replaced by the skeleton", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      const call = deferredCalls[0];
+      if (call === undefined) throw new Error("expected deferred call");
+      call.resolve([{ id: "f1", name: "Track 1", mimeType: "audio/mpeg" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Track 1");
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+
+    dispatchSkeleton();
+
+    expect(screen.queryByText("Track 1")).toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).not.toHaveLength(0);
+    expect(screen.getByRole("status", { name: "loading" })).not.toBeNull();
+  });
+
+  it("SKELETON with a non-trash target leaves the loaded list untouched", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      const call = deferredCalls[0];
+      if (call === undefined) throw new Error("expected deferred call");
+      call.resolve([{ id: "f1", name: "Track 1", mimeType: "audio/mpeg" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Track 1");
+
+    dispatchSkeleton("folders");
+
+    expect(screen.getByText("Track 1")).not.toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+  });
+
+  it("unmount -> dispatching SKELETON is a no-op (listener cleaned up)", async () => {
+    const { unmount } = renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    unmount();
+    expect(() => {
+      dispatchSkeleton();
+    }).not.toThrow();
+  });
+});

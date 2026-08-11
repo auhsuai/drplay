@@ -212,6 +212,7 @@ export function useMenuDownload(t: TFunction) {
     downloadFileName,
     setDownloadFileName,
     downloadMessage,
+    setDownloadMessage,
     handleDownloadClick,
     executeDownload,
   };

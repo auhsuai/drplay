@@ -299,4 +299,59 @@ describe("DebugPanel", () => {
       message: "Debug seed error log entry",
     });
   });
+
+  it.each([
+    { label: "Skeleton: MainContent", target: "main-content" },
+    { label: "Skeleton: Trash", target: "trash" },
+    { label: "Skeleton: Folder selection", target: "folders" },
+    { label: "Skeleton: Home", target: "home" },
+  ])(
+    "$label button dispatches SKELETON with target $target",
+    ({ label, target }) => {
+      render(<DebugPanel />);
+      openPanel();
+      const spy = vi.spyOn(window, "dispatchEvent");
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const event = spy.mock.calls[0]?.[0] as CustomEvent;
+      expect(event.type).toBe(DEBUG_EVENTS.SKELETON);
+      expect(event.detail).toEqual({ target });
+    },
+  );
+
+  it("Download toast button dispatches DOWNLOAD_TOAST with the preset message", () => {
+    render(<DebugPanel />);
+    openPanel();
+    const spy = vi.spyOn(window, "dispatchEvent");
+
+    fireEvent.click(screen.getByRole("button", { name: "Download toast" }));
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const event = spy.mock.calls[0]?.[0] as CustomEvent;
+    expect(event.type).toBe(DEBUG_EVENTS.DOWNLOAD_TOAST);
+    expect(event.detail).toEqual({ message: "Downloaded: debug-test.mp3" });
+  });
+
+  it.each([
+    { label: "Bulk delete modal", event: DEBUG_EVENTS.BULK_DELETE },
+    { label: "Selection toolbar", event: DEBUG_EVENTS.SELECTION_MODE },
+    { label: "Pagination", event: DEBUG_EVENTS.PAGINATION },
+  ])(
+    "$label button dispatches $event with undefined detail",
+    ({ label, event }) => {
+      render(<DebugPanel />);
+      openPanel();
+      const spy = vi.spyOn(window, "dispatchEvent");
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const dispatched = spy.mock.calls[0]?.[0] as CustomEvent;
+      expect(dispatched.type).toBe(event);
+      // jsdom normalizes the app's `{ detail: undefined }` init to null.
+      expect(dispatched.detail).toBeNull();
+    },
+  );
 });

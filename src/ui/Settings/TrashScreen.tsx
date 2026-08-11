@@ -113,6 +113,19 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     });
   }, []);
 
+  // DEV-only debug trigger (Ctrl+Shift+D panel → "Loading / MainContent"):
+  // forces the trash skeleton. isLoading is checked BEFORE items in the
+  // render branch, so the loaded list is simply hidden again; the next fetch
+  // (token change / reopen) leaves the skeleton as usual. onDebugEvent no-ops
+  // in production builds; the listener never runs there.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.SKELETON, (detail) => {
+      if (detail.target === "trash") {
+        setIsLoading(true);
+      }
+    });
+  }, []);
+
   const handleRestore = async (id: string) => {
     setRestoringId(id);
     try {

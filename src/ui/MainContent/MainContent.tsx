@@ -23,6 +23,7 @@ import { SelectionToolbar } from "./components/SelectionToolbar";
 import { PaginationControls } from "./components/PaginationControls";
 import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 import { SkeletonRowList } from "../components/Skeleton";
+import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 // How long to wait after switching to the target page before scrolling the
 // highlighted item into view — the new page must render first; 50ms is just
@@ -99,6 +100,13 @@ export const MainContent = React.memo(function MainContent({
   const [showBulkMoveScreen, setShowBulkMoveScreen] = React.useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] =
     React.useState(false);
+  // DEV-only override (Ctrl+Shift+D panel → "Pagination"): totalPages is
+  // DERIVED from real data (Math.ceil(filteredItems.length / ITEMS_PER_PAGE)),
+  // so it cannot be set directly — a local override forces the controls to
+  // render while the real setCurrentPage stays wired underneath.
+  const [debugTotalPages, setDebugTotalPages] = React.useState<number | null>(
+    null,
+  );
   // While a native drag is in flight (DropZone announces it), the header
   // chrome and pagination hide so the drop target area is unambiguous; the
   // file-list container also doubles as the scoped dim region ([data-drop-region]).
@@ -257,6 +265,33 @@ export const MainContent = React.memo(function MainContent({
     setShowBulkDeleteConfirm(true);
   }, []);
 
+  // DEV-only debug triggers (Ctrl+Shift+D panel → "Loading / MainContent"):
+  // bulk-delete modal and selection toolbar drive the SAME local/explorer
+  // state the real flows use, so every subsequent interaction (close modal,
+  // exit selection, bulk action) keeps working unchanged. onDebugEvent no-ops
+  // in production builds; the listeners never run there.
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.BULK_DELETE, () => {
+      setShowBulkDeleteConfirm(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.SELECTION_MODE, () => {
+      explorer.setIsSelectionMode(true);
+    });
+    // The hook returns a fresh explorer object every render; the setter itself
+    // is the stable useState setter, so only the member dep is meaningful.
+    // Same shape as the highlight-scroll effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [explorer.setIsSelectionMode]);
+
+  useEffect(() => {
+    return onDebugEvent(DEBUG_EVENTS.PAGINATION, () => {
+      setDebugTotalPages(2);
+    });
+  }, []);
+
   return (
     <main
       ref={mainRef}
@@ -393,7 +428,7 @@ export const MainContent = React.memo(function MainContent({
             >
               <PaginationControls
                 currentPage={explorer.currentPage}
-                totalPages={explorer.totalPages}
+                totalPages={debugTotalPages ?? explorer.totalPages}
                 setCurrentPage={explorer.setCurrentPage}
                 onScrollTop={() =>
                   virtualizedListRef.current?.scrollToIndex(0, {

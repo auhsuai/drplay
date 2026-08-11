@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  cleanup,
+  act,
+  fireEvent,
+} from "@testing-library/react";
 import { MainContent } from "./MainContent";
 import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 import type { DriveItem } from "../../types";
+import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(({ count }: { count: number }) => ({
@@ -277,5 +284,134 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
     }
     // While loading, the empty-state branch must never be reachable.
     expect(screen.queryByText("drive.no_audio")).toBeNull();
+  });
+});
+
+describe("MainContent debug triggers (DEV only)", () => {
+  beforeEach(() => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Explorer mock whose setters actually mutate the state object, so a
+  // dispatch that calls explorer.setIsSelectionMode(true) is visible to a
+  // rerender (the real hook's useState setters trigger their own render —
+  // the mock cannot, so the tests rerender explicitly).
+  function makeControllableExplorer(items: DriveItem[]) {
+    const explorer = makeExplorerState(items);
+    explorer.setIsSelectionMode.mockImplementation((v: boolean) => {
+      explorer.isSelectionMode = v;
+    });
+    return explorer;
+  }
+
+  it("BULK_DELETE dispatch opens the BulkDeleteConfirmModal", () => {
+    render(<MainContent {...baseProps} />);
+    expect(screen.queryByText("drive.bulk_delete_title")).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.BULK_DELETE));
+    });
+
+    expect(screen.getByText("drive.bulk_delete_title")).not.toBeNull();
+  });
+
+  it("the debug-opened bulk delete modal still closes through its normal onClose", () => {
+    render(<MainContent {...baseProps} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.BULK_DELETE));
+    });
+    expect(screen.getByText("drive.bulk_delete_title")).not.toBeNull();
+
+    fireEvent.click(screen.getByText("menu.cancel"));
+
+    expect(screen.queryByText("drive.bulk_delete_title")).toBeNull();
+  });
+
+  it("SELECTION_MODE dispatch enters selection mode (toolbar appears)", () => {
+    useDriveExplorerMock.mockReturnValue(
+      makeControllableExplorer(makeItems(3)),
+    );
+    const { rerender } = render(<MainContent {...baseProps} />);
+    expect(screen.queryByText("drive.select_all")).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.SELECTION_MODE));
+    });
+    // MainContent is React.memo-wrapped, so a props-identical rerender is
+    // skipped; the explorer mock's setter cannot trigger React on its own
+    // (the real useState setter can). An unrelated prop change flushes the
+    // mutated selection state into the DOM. The toolbar lives in the header
+    // chrome, which renders regardless of isLoading.
+    rerender(<MainContent {...baseProps} isLoading={true} />);
+
+    expect(screen.getByText("drive.select_all")).not.toBeNull();
+  });
+
+  it("selection can still be exited through the existing clear-selection path", () => {
+    const explorer = makeControllableExplorer(makeItems(3));
+    useDriveExplorerMock.mockReturnValue(explorer);
+    const { rerender } = render(<MainContent {...baseProps} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.SELECTION_MODE));
+    });
+    rerender(<MainContent {...baseProps} isLoading={true} />);
+    expect(screen.getByText("drive.select_all")).not.toBeNull();
+
+    // The real clear path: TopNavigationBar onClearSelection calls
+    // explorer.setIsSelectionMode(false) + setSelectedIds(new Set()).
+    act(() => {
+      explorer.setIsSelectionMode(false);
+    });
+    rerender(<MainContent {...baseProps} isLoading={false} />);
+
+    expect(screen.queryByText("drive.select_all")).toBeNull();
+  });
+
+  it("PAGINATION dispatch forces the pagination controls to appear (debug totalPages override)", () => {
+    const explorer = makeExplorerState(makeItems(3));
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    expect(screen.queryByText("playlist.next")).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.PAGINATION));
+    });
+
+    expect(screen.getByText("playlist.next")).not.toBeNull();
+    expect(screen.getByText("/ 2")).not.toBeNull();
+  });
+
+  it("clicking a page after the PAGINATION dispatch routes through the real onPageChange (no crash)", async () => {
+    const explorer = makeExplorerState(makeItems(3));
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.PAGINATION));
+    });
+    expect(screen.getByText("playlist.next")).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("playlist.next"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(explorer.setCurrentPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("unmount -> dispatching BULK_DELETE / SELECTION_MODE / PAGINATION is a no-op (listeners cleaned up)", () => {
+    const { unmount } = render(<MainContent {...baseProps} />);
+    unmount();
+
+    expect(() => {
+      act(() => {
+        window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.BULK_DELETE));
+        window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.SELECTION_MODE));
+        window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.PAGINATION));
+      });
+    }).not.toThrow();
   });
 });

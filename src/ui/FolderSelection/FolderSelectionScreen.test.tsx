@@ -585,3 +585,75 @@ describe("FolderSelectionScreen debug empty trigger", () => {
     }).not.toThrow();
   });
 });
+
+describe("FolderSelectionScreen debug skeleton trigger", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function dispatchSkeleton(target: unknown = "folders") {
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(DEBUG_EVENTS.SKELETON, { detail: { target } }),
+      );
+    });
+  }
+
+  it("SKELETON target folders after folders loaded -> grid replaced by the skeleton", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Folder 1");
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+
+    dispatchSkeleton();
+
+    expect(screen.queryByText("Folder 1")).toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).not.toHaveLength(0);
+    expect(screen.getByRole("status", { name: "Loading..." })).not.toBeNull();
+  });
+
+  it("SKELETON with a non-folders target leaves the loaded grid untouched", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Folder 1");
+
+    dispatchSkeleton("home");
+
+    expect(screen.getByText("Folder 1")).not.toBeNull();
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+  });
+
+  it("unmount -> dispatching SKELETON is a no-op (listener cleaned up)", async () => {
+    const { unmount } = renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    unmount();
+    expect(() => {
+      dispatchSkeleton();
+    }).not.toThrow();
+  });
+});
