@@ -10,6 +10,7 @@ import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
 import { useShallow } from "zustand/react/shallow";
 import { TabContentRouter } from "./ui/layouts/TabContentRouter";
 import { AppShell } from "./ui/layouts/AppShell";
+import { DebugPanel } from "./ui/debug/DebugPanel";
 
 import "./App.css";
 
@@ -374,6 +375,9 @@ function App() {
       {/* Toast container: simpleToast appends here; must stay mounted for the
           app's whole lifetime so showErrorToast/showSuccessToast work everywhere */}
       <div id="toast-root" />
+
+      {/* DEV-only debug UI panel (Ctrl+Shift+D); never shipped in production */}
+      {import.meta.env.DEV && <DebugPanel />}
     </div>
   );
 }
