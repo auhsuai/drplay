@@ -1,5 +1,3 @@
-import { captureError } from "./errorLog";
-
 const FADE_OUT_MS = 200;
 
 type ToastVariant = "error" | "success";
@@ -9,45 +7,74 @@ const TOAST_DEFAULT_DURATION: Record<ToastVariant, number> = {
   success: 3000,
 };
 
+// At most one toast is ever shown: a new showToast replaces the previous one
+// immediately. Module-level refs track the active toast and its pending
+// timers so replacement can cancel them. Removals are additionally guarded
+// by activeToastEl identity, so no stale timer can ever remove the toast
+// that replaced it.
+let activeToastEl: HTMLElement | null = null;
+let activeFadeOutTimer: ReturnType<typeof setTimeout> | undefined;
+let activeRemoveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearActiveToastTimers(): void {
+  if (activeFadeOutTimer !== undefined) {
+    clearTimeout(activeFadeOutTimer);
+    activeFadeOutTimer = undefined;
+  }
+  if (activeRemoveTimer !== undefined) {
+    clearTimeout(activeRemoveTimer);
+    activeRemoveTimer = undefined;
+  }
+}
+
 function showToast(
   message: string,
   variant: ToastVariant,
   durationOverride?: number,
 ): void {
-  const root = document.getElementById("toast-root");
-  if (!root) {
-    // fire-and-forget: logging must not throw in this sync path (captureError
-    // never rejects — it swallows failures internally).
-    void captureError({
-      level: "warn",
-      source: "simpleToast",
-      message: `[Toast fallback] ${message}`,
-    });
-    return;
+  // Rendered inside #content-area (the region right of the sidebar) so the
+  // toast sits flush against the sidebar's right edge, above the PlayerBar —
+  // same portal target as ErrorToast. Falls back to document.body when the
+  // app shell isn't mounted (e.g. unit tests).
+  const root = document.getElementById("content-area") || document.body;
+
+  // Replace the previous toast right away: cancel its timers and remove it
+  // from the DOM so only one toast is ever visible at a time.
+  clearActiveToastTimers();
+  if (activeToastEl !== null) {
+    activeToastEl.remove();
+    activeToastEl = null;
   }
 
   const toastEl = document.createElement("div");
   toastEl.className = `app-toast app-toast--${variant}`;
   toastEl.textContent = message;
   root.appendChild(toastEl);
+  activeToastEl = toastEl;
 
-  let removeTimer: ReturnType<typeof setTimeout> | undefined;
   const removeToast = () => {
-    if (removeTimer !== undefined) {
-      clearTimeout(removeTimer);
-      removeTimer = undefined;
+    if (activeRemoveTimer !== undefined) {
+      clearTimeout(activeRemoveTimer);
+      activeRemoveTimer = undefined;
     }
-    toastEl.remove();
+    if (activeToastEl === toastEl) {
+      toastEl.remove();
+      activeToastEl = null;
+    }
   };
 
   const duration = Math.max(
     0,
     durationOverride ?? TOAST_DEFAULT_DURATION[variant],
   );
-  setTimeout(() => {
+  activeFadeOutTimer = setTimeout(() => {
+    if (activeToastEl !== toastEl) {
+      return;
+    }
+    activeFadeOutTimer = undefined;
     toastEl.style.opacity = "0";
     toastEl.style.transform = "translateY(10px) scale(0.95)";
-    removeTimer = setTimeout(removeToast, FADE_OUT_MS);
+    activeRemoveTimer = setTimeout(removeToast, FADE_OUT_MS);
   }, duration);
 }
 

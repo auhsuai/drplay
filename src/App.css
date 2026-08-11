@@ -101,16 +101,17 @@ body {
 
 /* Toast Styles */
 .app-toast {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
+  position: absolute;
+  bottom: 80px;
+  left: 0;
+  z-index: 9999;
   padding: 12px 20px;
   border-radius: 8px;
   background: #dc2626;
   color: white;
   animation: fadeIn 0.2s ease-out;
-  z-index: 9999;
   transition: all 0.2s;
+  pointer-events: auto;
 }
 .app-toast--success {
   background: #16a34a;

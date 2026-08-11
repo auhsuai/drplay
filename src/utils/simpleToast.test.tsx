@@ -7,7 +7,7 @@ import { showErrorToast, showSuccessToast } from "./simpleToast";
 
 describe("simpleToast", () => {
   beforeEach(() => {
-    document.body.innerHTML = '<div id="toast-root"></div>';
+    document.body.innerHTML = '<div id="content-area"></div>';
     vi.useFakeTimers();
   });
 
@@ -69,6 +69,41 @@ describe("simpleToast", () => {
     }).not.toThrow();
 
     vi.advanceTimersByTime(200);
+    expect(document.querySelector(".app-toast")).toBeNull();
+  });
+
+  it("second toast replaces the first immediately (only one .app-toast in DOM)", () => {
+    showErrorToast("A");
+    showErrorToast("B");
+
+    expect(document.querySelectorAll(".app-toast").length).toBe(1);
+    expect(document.querySelector(".app-toast")?.textContent).toBe("B");
+  });
+
+  it("replacing a toast does not inherit the old toast's timer", () => {
+    showErrorToast("A");
+    vi.advanceTimersByTime(100);
+    showErrorToast("B");
+
+    // A (4000ms) would have started fading at t=4000: B must still be alive.
+    vi.advanceTimersByTime(3900);
+    expect(document.querySelector(".app-toast")?.textContent).toBe("B");
+    // A would have been removed at t=4200: still no early removal of B.
+    vi.advanceTimersByTime(200);
+    expect(document.querySelector(".app-toast")?.textContent).toBe("B");
+    // B's own lifecycle: 4000ms (from B's show at t=100) + 200ms fade.
+    vi.advanceTimersByTime(100);
+    expect(document.querySelector(".app-toast")).toBeNull();
+  });
+
+  it("after a toast expires naturally, the next toast works", () => {
+    showErrorToast("A");
+    vi.advanceTimersByTime(4200);
+    expect(document.querySelector(".app-toast")).toBeNull();
+
+    showErrorToast("B");
+    expect(document.querySelector(".app-toast")?.textContent).toBe("B");
+    vi.advanceTimersByTime(4200);
     expect(document.querySelector(".app-toast")).toBeNull();
   });
 });
