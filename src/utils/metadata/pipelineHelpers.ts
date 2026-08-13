@@ -1,4 +1,5 @@
 import { findMpegDataStart, type AudioFormat } from "../audioFormat";
+import { stripAudioExtension } from "../pathUtils";
 import {
   DURATION_TAG_SCAN_BYTES,
   UNKNOWN_ARTIST,
@@ -6,9 +7,7 @@ import {
 } from "./constants";
 import type { CachedMetadata } from "./types";
 
-function stripExtension(name: string): string {
-  return name.replace(/\.[^.]+$/, "");
-}
+const stripExtension = (name: string): string => stripAudioExtension(name);
 
 /**
  * True when the head carries an embedded duration tag music-metadata actually

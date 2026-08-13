@@ -8,6 +8,7 @@ import {
 } from "../utils/uploadManager";
 import { useLiveQuery } from "dexie-react-hooks";
 import { metadataCache } from "../utils/metadata";
+import { stripAudioExtension } from "../utils/pathUtils";
 
 // Module-level so the items useMemo sort (re-run on every dbFiles change or
 // uploadStatusVersion bump) never re-initializes the collator — locale data
@@ -16,6 +17,67 @@ const SORT_COLLATOR = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
 });
+
+// metadataCache is typed Record<string, CachedMetadata> but is a sparse
+// module-level cache — index access can still be undefined at runtime.
+const cachedTitle = (id: string): string | undefined =>
+  metadataCache[id]?.title;
+
+// Pure sort extracted from the listing memo so it is unit-testable and the
+// sort memo only re-runs on [partitioned, sortOption] instead of re-sorting
+// on every uploadStatusVersion bump. Comparator logic is frozen from the
+// original switch — including the asymmetry that the name/default cases use
+// cachedTitle(a.id) || a.title while the modifiedTime/size tie-breaks use the
+// RAW title (a.title), which must NOT be "unified".
+export function sortDriveItems(
+  items: DriveItem[],
+  sortOption: string,
+  collator: Intl.Collator,
+  cachedTitle: (id: string) => string | undefined,
+): DriveItem[] {
+  // Copy-on-sort: output order is identical to the original in-place
+  // restItems.sort() but the input array is never mutated.
+  return [...items].sort((a, b) => {
+    if (a.isFolder && !b.isFolder) return -1;
+    if (!a.isFolder && b.isFolder) return 1;
+
+    switch (sortOption) {
+      case "name desc": {
+        const titleA = cachedTitle(a.id) || a.title;
+        const titleB = cachedTitle(b.id) || b.title;
+        return collator.compare(titleB, titleA);
+      }
+      case "modifiedTime": {
+        const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+        const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+        if (timeA === timeB) return collator.compare(a.title, b.title);
+        return timeA - timeB;
+      }
+      case "modifiedTime desc": {
+        const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+        const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+        if (timeA === timeB) return collator.compare(a.title, b.title);
+        return timeB - timeA;
+      }
+      case "size": {
+        const diff = (a.size || 0) - (b.size || 0);
+        if (diff === 0) return collator.compare(a.title, b.title);
+        return diff;
+      }
+      case "size desc": {
+        const diff = (b.size || 0) - (a.size || 0);
+        if (diff === 0) return collator.compare(a.title, b.title);
+        return diff;
+      }
+      // "name" + every unknown option (name_natural, …) — cached title wins.
+      default: {
+        const titleA = cachedTitle(a.id) || a.title;
+        const titleB = cachedTitle(b.id) || b.title;
+        return collator.compare(titleA, titleB);
+      }
+    }
+  });
+}
 
 // Monotonic upload-status version: bumped on every uploadManager notify so the
 // explorer re-runs the pin partition below with fresh getUploadState()
@@ -35,7 +97,7 @@ export function useDriveListing({
   sortOption: string;
 }): { items: DriveItem[]; dbFiles: DriveFile[] | undefined } {
   const stripExt = (name: string, isFolder: boolean) =>
-    isFolder ? name : name.replace(/\.[^/.]+$/, "");
+    isFolder ? name : stripAudioExtension(name);
 
   // Re-render on every upload status change so the pin partition below re-runs
   // with fresh getUploadState() verdicts while an upload is in flight.
@@ -58,8 +120,12 @@ export function useDriveListing({
     return db.files.where("parentId").equals(currentFolderId).toArray();
   }, [currentFolderId]);
 
-  const items = useMemo(() => {
-    if (!dbFiles) return [];
+  // Partition memo: maps rows to DriveItems and buckets them by upload state.
+  // Split from the sort so a version bump only re-reads the fresh
+  // getUploadState() verdicts (partition) without re-running the O(n log n)
+  // sort — the sort memo below only re-runs on [partitioned, sortOption].
+  const partitioned = useMemo(() => {
+    if (!dbFiles) return null;
     const _items: DriveItem[] = dbFiles.map((file) => {
       const title = stripExt(file.name, file.isFolder);
       return {
@@ -104,71 +170,35 @@ export function useDriveListing({
       }
     }
 
-    const collator = SORT_COLLATOR;
-    // metadataCache is typed Record<string, CachedMetadata> but is a sparse
-    // module-level cache — index access can still be undefined at runtime.
-    const cachedTitle = (id: string): string | undefined => {
-      const meta = metadataCache[id];
-      return meta?.title;
-    };
-    restItems.sort((a, b) => {
-      if (a.isFolder && !b.isFolder) return -1;
-      if (!a.isFolder && b.isFolder) return 1;
+    return { uploadedItems, uploadingItems, restItems };
+    // uploadStatusVersion IS load-bearing here: the partition must re-run when
+    // a started/finished upload changes the pin partition — the re-render that
+    // makes that visible is triggered by useSyncExternalStore, which the rule
+    // cannot see.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbFiles, currentFolderName, uploadStatusVersion]);
 
-      switch (sortOption) {
-        case "name": {
-          const titleA = cachedTitle(a.id) || a.title;
-          const titleB = cachedTitle(b.id) || b.title;
-          return collator.compare(titleA, titleB);
-        }
-        case "name desc": {
-          const titleA = cachedTitle(a.id) || a.title;
-          const titleB = cachedTitle(b.id) || b.title;
-          return collator.compare(titleB, titleA);
-        }
-        case "modifiedTime": {
-          const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
-          const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
-          if (timeA === timeB) return collator.compare(a.title, b.title);
-          return timeA - timeB;
-        }
-        case "modifiedTime desc": {
-          const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
-          const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
-          if (timeA === timeB) return collator.compare(a.title, b.title);
-          return timeB - timeA;
-        }
-        case "size": {
-          const diff = (a.size || 0) - (b.size || 0);
-          if (diff === 0) return collator.compare(a.title, b.title);
-          return diff;
-        }
-        case "size desc": {
-          const diff = (b.size || 0) - (a.size || 0);
-          if (diff === 0) return collator.compare(a.title, b.title);
-          return diff;
-        }
-        default: {
-          const titleA = cachedTitle(a.id) || a.title;
-          const titleB = cachedTitle(b.id) || b.title;
-          return collator.compare(titleA, titleB);
-        }
-      }
-    });
+  // Sort memo: sorts the non-pinned bucket only; deps are complete (partition
+  // reference + sort option), so the exhaustive-deps disable moved to the
+  // partition memo where the version counter is load-bearing.
+  const items = useMemo(() => {
+    if (!partitioned) return [];
+    const { uploadedItems, uploadingItems, restItems } = partitioned;
+    const sortedRest = sortDriveItems(
+      restItems,
+      sortOption,
+      SORT_COLLATOR,
+      cachedTitle,
+    );
 
     // Uploading items keep their _items (dbFiles) order — pending rows are
     // inserted in upload enqueue order and the queue is strictly sequential,
     // so this mirrors the order uploads started, not the active sort option.
     // Uploaded items sit ahead of them (fresh tint must be the most visible).
     if (uploadedItems.length === 0 && uploadingItems.length === 0)
-      return restItems;
-    return [...uploadedItems, ...uploadingItems, ...restItems];
-    // uploadStatusVersion IS load-bearing here: the memo must re-run when a
-    // started/finished upload changes the pin partition — the re-render that
-    // makes that visible is triggered by useSyncExternalStore, which the rule
-    // cannot see.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dbFiles, sortOption, currentFolderName, uploadStatusVersion]);
+      return sortedRest;
+    return [...uploadedItems, ...uploadingItems, ...sortedRest];
+  }, [partitioned, sortOption]);
 
   return { items, dbFiles };
 }
