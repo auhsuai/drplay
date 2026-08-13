@@ -196,6 +196,13 @@ function StoreWiredPlayerBar(overrides: Partial<PlayerBarProps> = {}) {
 beforeEach(() => {
   fakeController.on.mockClear();
   fakeController.getBuffered.mockClear();
+  // Reset both duration and currentTime to the no-metadata default so a
+  // mockReturnValue from an earlier describe (seek tests) never leaks into
+  // later ones (tooltip/pause tests rely on duration 0).
+  fakeController.getDuration.mockReset();
+  fakeController.getDuration.mockImplementation(() => 0);
+  fakeController.getCurrentTime.mockReset();
+  fakeController.getCurrentTime.mockImplementation(() => 0);
   installFakeOn();
   setBuffered([]);
   fakeController._handlers = {};
@@ -491,6 +498,9 @@ describe("PlayerBar seek-drag", () => {
 describe("PlayerBar seek redraws buffer bar immediately (no empty blink)", () => {
   beforeEach(() => {
     fakeController.seek.mockClear();
+    // seekRelative guards on duration <= 0 (metadata not loaded) — these
+    // seek tests need a loaded duration or the seek is a deliberate no-op.
+    fakeController.getDuration.mockReturnValue(240);
   });
 
   it("BUG regression: ArrowLeft seek redraws the buffer bar synchronously (no empty-blink, stale ranges filtered)", () => {
