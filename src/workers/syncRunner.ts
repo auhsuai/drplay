@@ -24,6 +24,19 @@ let currentToken: string | null = null;
 const MAX_SYNC_RETRIES = 3;
 const syncRetry = { count: 0, max: MAX_SYNC_RETRIES };
 
+// Dexie syncState key holding the Drive changes start-page token.
+const START_PAGE_TOKEN_KEY = "startPageToken";
+
+// Drive API v3 endpoints — base + derived names (values byte-identical to the
+// historical literals; DRIVE_FILES_URL mirrors src/utils/driveFiles.ts).
+const DRIVE_SYNC_URL = "https://www.googleapis.com/drive/v3";
+const DRIVE_FILES_URL = `${DRIVE_SYNC_URL}/files`;
+const DRIVE_CHANGES_URL = `${DRIVE_SYNC_URL}/changes`;
+const DRIVE_START_PAGE_TOKEN_URL = `${DRIVE_CHANGES_URL}/startPageToken`;
+
+// File projection shared by the files-list and changes fields parameters.
+const FILES_FIELDS = "id,name,mimeType,parents,size,modifiedTime";
+
 // Entry-point bridge for the "sync" message branch: guards against a sync
 // already in progress, records the token, and runs the sync pass (busy flag
 // cleared in a finally so a throwing pass never wedges the worker).
@@ -57,7 +70,7 @@ export function pushToken(token: string): void {
 async function startProSync() {
   if (!currentToken) return;
   try {
-    const tokenState = await db.syncState.get("startPageToken");
+    const tokenState = await db.syncState.get(START_PAGE_TOKEN_KEY);
 
     if (!tokenState || !tokenState.value) {
       await performFullSync();
@@ -83,11 +96,9 @@ async function performFullSync() {
     retryFullSync = false;
 
     try {
-      const tokenUrl = new URL(
-        "https://www.googleapis.com/drive/v3/changes/startPageToken",
-      );
+      const tokenUrl = new URL(DRIVE_START_PAGE_TOKEN_URL);
       const tokenRes = await fetchDrive(
-        "startPageToken",
+        START_PAGE_TOKEN_KEY,
         currentToken,
         tokenUrl,
       );
@@ -106,7 +117,7 @@ async function performFullSync() {
       }
       if (tokenRes.ok) {
         const tokenData = await parseDriveJson<{ startPageToken: string }>(
-          "startPageToken",
+          START_PAGE_TOKEN_KEY,
           tokenRes,
         );
         startToken = tokenData.startPageToken;
@@ -115,7 +126,7 @@ async function performFullSync() {
       if (err instanceof WorkerAbortError) return;
       logWorkerError(
         "proSync/full-sync",
-        { phase: "startPageToken" },
+        { phase: START_PAGE_TOKEN_KEY },
         err,
         "error",
       );
@@ -125,11 +136,11 @@ async function performFullSync() {
     let pageToken: string | undefined = undefined;
     try {
       do {
-        const url = new URL("https://www.googleapis.com/drive/v3/files");
+        const url = new URL(DRIVE_FILES_URL);
         url.searchParams.append("q", getAudioQuery());
         url.searchParams.append(
           "fields",
-          "nextPageToken,files(id,name,mimeType,parents,size,modifiedTime)",
+          `nextPageToken,files(${FILES_FIELDS})`,
         );
         url.searchParams.append("pageSize", "1000");
         if (pageToken) url.searchParams.append("pageToken", pageToken);
@@ -147,6 +158,15 @@ async function performFullSync() {
             )
               continue;
           }
+          // Non-ok with no retry left (refresh refused/failed or a non-401
+          // status): say so instead of breaking silently — the poller would
+          // otherwise wait for a SYNC_COMPLETE that never comes.
+          logWorkerError(
+            "proSync/full-sync",
+            { phase: "files", status: res.status },
+            new Error(`Failed to fetch files (${String(res.status)})`),
+            "warn",
+          );
           break;
         }
 
@@ -199,7 +219,7 @@ async function performFullSync() {
 
   if (startToken) {
     try {
-      await db.syncState.put({ key: "startPageToken", value: startToken });
+      await db.syncState.put({ key: START_PAGE_TOKEN_KEY, value: startToken });
     } catch (err) {
       logWorkerError(
         "proSync/full-sync",
@@ -243,11 +263,11 @@ async function performDeltaSync(startPageToken: string) {
 
   try {
     do {
-      const url = new URL("https://www.googleapis.com/drive/v3/changes");
+      const url = new URL(DRIVE_CHANGES_URL);
       url.searchParams.append("pageToken", pageToken);
       url.searchParams.append(
         "fields",
-        "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,size,modifiedTime,trashed))",
+        `nextPageToken,newStartPageToken,changes(fileId,removed,file(${FILES_FIELDS},trashed))`,
       );
 
       const res = await fetchDrive("changes", currentToken, url);
@@ -256,7 +276,7 @@ async function performDeltaSync(startPageToken: string) {
         if (res.status === 410) {
           syncRetry.count = 0;
           try {
-            await db.syncState.delete("startPageToken");
+            await db.syncState.delete(START_PAGE_TOKEN_KEY);
           } catch (err) {
             logWorkerError(
               "proSync/delta-sync",
@@ -278,6 +298,15 @@ async function performDeltaSync(startPageToken: string) {
           )
             continue;
         }
+        // Non-ok with no retry left (refresh refused/failed or a status other
+        // than 410/401): say so instead of breaking silently — the poller
+        // would otherwise wait for a SYNC_COMPLETE that never comes.
+        logWorkerError(
+          "proSync/delta-sync",
+          { phase: "changes", status: res.status },
+          new Error(`Failed to fetch changes (${String(res.status)})`),
+          "warn",
+        );
         break;
       }
 
@@ -347,7 +376,7 @@ async function performDeltaSync(startPageToken: string) {
     if (newStartPageToken !== startPageToken) {
       try {
         await db.syncState.put({
-          key: "startPageToken",
+          key: START_PAGE_TOKEN_KEY,
           value: newStartPageToken,
         });
       } catch (err) {
