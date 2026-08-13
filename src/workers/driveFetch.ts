@@ -3,6 +3,7 @@ import {
   logWorkerError,
   WorkerAbortError,
 } from "./workerError";
+import { authHeaders } from "../utils/authHeaders";
 
 const SYNC_FETCH_TIMEOUT_MS = 30000;
 // Transient HTTP errors (429 rate-limit, 5xx server errors, and 403 whose
@@ -116,7 +117,7 @@ export async function fetchDrive(
     let res: Response;
     try {
       res = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authHeaders(token),
         signal: AbortSignal.timeout(SYNC_FETCH_TIMEOUT_MS),
       });
     } catch (err) {

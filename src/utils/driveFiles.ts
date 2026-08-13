@@ -1,8 +1,14 @@
 import { getAudioFilesQuery } from "./audioQuery";
+import { authHeaders, authJsonHeaders } from "./authHeaders";
 import { captureError } from "./errorLog";
 import { driveFetch } from "./driveHttp";
 import { DRIVE_MODULE, FOLDER_MIME } from "./driveTypes";
 import type { DriveFileItem } from "./driveTypes";
+
+// Re-exported so the ~15 main-thread callers importing authHeaders from
+// driveFiles keep working; the implementation now lives in the
+// dependency-free authHeaders module shared with the proSync worker.
+export { authHeaders };
 
 // "Recently Added to Drive" fetches a single page of the newest files. 100 is
 // the largest page size Drive returns per request; it must exceed every
@@ -12,18 +18,6 @@ const RECENTLY_ADDED_PAGE_SIZE = 100;
 
 // Drive Files API base URL — every request in this module targets it.
 const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
-
-// Headers shared by every Drive request in this module. GET/DELETE calls only
-// need the bearer token; JSON-body calls add the JSON content type. Exported
-// because the fetchWithAuth-based hooks build the same header inline; reusing
-// this helper keeps the "Bearer <token>" format in one place.
-export function authHeaders(token: string): Record<string, string> {
-  return { Authorization: `Bearer ${token}` };
-}
-
-function authJsonHeaders(token: string): Record<string, string> {
-  return { ...authHeaders(token), "Content-Type": "application/json" };
-}
 
 // Shared guard for the simple `Failed to <action> (status)` throw pattern.
 // NOT used where a non-ok response has its own handling (null returns,
