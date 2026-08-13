@@ -4,41 +4,33 @@ import {
   WorkerAbortError,
 } from "./workerError";
 import { authHeaders } from "../utils/authHeaders";
+import {
+  DRIVE_RATE_LIMIT_REASONS,
+  isTransientDriveStatus,
+} from "../utils/driveTypes";
+import { backoffDelay, sleep } from "../utils/retryDelay";
 
 const SYNC_FETCH_TIMEOUT_MS = 30000;
 // Transient HTTP errors (429 rate-limit, 5xx server errors, and 403 whose
 // JSON error body reports a Drive rate-limit reason) are retried with bounded
 // exponential backoff (base * 2^attempt + jitter), honoring the Retry-After
 // header (capped at MAX_RETRY_DELAY_MS) — max 3 attempts, never retried
-// forever (AGENTS.md Luật 4).
+// forever (AGENTS.md Luật 4). The backoff math itself comes from the shared
+// ./retryDelay module (backoffDelay), configured with the historical worker
+// constants below.
 const MAX_TRANSIENT_RETRIES = 2;
-const TRANSIENT_RETRY_BASE_DELAY_MS = 1000;
 // Upper bound for a Retry-After-derived delay so a misbehaving server cannot
 // stall a sync indefinitely.
 const MAX_RETRY_DELAY_MS = 8000;
 // Random extra delay (0..500ms) added to every retry so concurrent syncs do
 // not retry in lockstep (thundering herd).
 const RETRY_JITTER_MAX_MS = 500;
-// Google Drive reports rate limiting as 403 with these `error.errors[].reason`
-// values (usage limits): https://developers.google.com/drive/api/guides/handle-errors
-const DRIVE_RATE_LIMIT_REASONS = new Set([
-  "rateLimitExceeded",
-  "userRateLimitExceeded",
-]);
 
-// Resolves after `ms`, used as the exponential backoff between transient
-// retries. setTimeout is available in the worker scope.
-export function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Transient HTTP statuses worth retrying: 429 (rate limit) and 5xx server
-// errors, per Google API guidance. Other statuses (2xx, 4xx) are not retried.
-// A 403 is only transient when its JSON body identifies a Drive rate limit
-// (see isDriveRateLimitResponse).
-export function isTransientStatus(status: number): boolean {
-  return status === 429 || (status >= 500 && status < 600);
-}
+// Re-exported under the historical worker names so proSync.worker (and its
+// tests) keep the exact same surface; the implementations live in the shared
+// modules (sleep in ./retryDelay, isTransientDriveStatus in ../utils/driveTypes).
+export { sleep as delay };
+export { isTransientDriveStatus as isTransientStatus };
 
 // True when a Drive error body reports a rate-limit reason (usage limits).
 // Any parse failure means we cannot confirm a rate limit, so callers treat
@@ -90,15 +82,6 @@ async function isDriveRateLimitResponse(
   }
 }
 
-// Retry-After as <delay-seconds> (RFC 9110). The HTTP-date form and malformed
-// values fall back to the regular exponential backoff.
-function parseRetryAfterSeconds(res: Response): number | null {
-  const raw = res.headers.get("Retry-After");
-  if (raw === null || raw.trim() === "") return null;
-  const seconds = Number(raw);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
-}
-
 // fetch() wrapper that applies the shared timeout and classifies transport
 // failures (network / timeout / abort). HTTP status is still the caller's job.
 // Transient statuses (429 / 5xx, plus 403 whose body reports a Drive rate
@@ -147,20 +130,17 @@ export async function fetchDrive(
     // JSON body identifies a Drive rate limit (rateLimitExceeded /
     // userRateLimitExceeded). Other 403s (permissions…) are not retried.
     const transient =
-      isTransientStatus(res.status) ||
+      isTransientDriveStatus(res.status) ||
       (res.status === 403 && (await isDriveRateLimitResponse(ctx, res)));
     if (!transient) {
       return res;
     }
 
-    const backoffMs = TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** attempt;
-    const retryAfterMs = parseRetryAfterSeconds(res);
-    const cappedRetryAfterMs =
-      retryAfterMs === null
-        ? null
-        : Math.min(retryAfterMs * 1000, MAX_RETRY_DELAY_MS);
-    const jitterMs = Math.floor(Math.random() * (RETRY_JITTER_MAX_MS + 1));
-    const delayMs = (cappedRetryAfterMs ?? backoffMs) + jitterMs;
+    const retryAfterHeader = res.headers.get("Retry-After");
+    const delayMs = backoffDelay(attempt, retryAfterHeader, {
+      maxMs: MAX_RETRY_DELAY_MS,
+      jitterMaxMs: RETRY_JITTER_MAX_MS,
+    });
     logWorkerError(
       "proSync/" + ctx,
       {
@@ -169,17 +149,16 @@ export async function fetchDrive(
         status: res.status,
         attempt: attempt + 1,
         delayMs,
-        ...(cappedRetryAfterMs !== null
-          ? { retryAfterMs: cappedRetryAfterMs }
+        ...(retryAfterHeader !== null && retryAfterHeader.trim() !== ""
+          ? { retryAfter: retryAfterHeader }
           : {}),
-        jitterMs,
       },
       new Error(
         `transient HTTP ${String(res.status)}, retrying in ${String(delayMs)}ms`,
       ),
       "warn",
     );
-    await delay(delayMs);
+    await sleep(delayMs);
     attempt += 1;
   }
 }

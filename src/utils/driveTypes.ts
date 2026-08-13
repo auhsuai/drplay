@@ -35,6 +35,22 @@ export interface DriveStorageQuota {
   usageInDriveTrash: number;
 }
 
+// Google Drive reports rate limiting as 403 with these `error.errors[].reason`
+// values (usage limits): https://developers.google.com/drive/api/guides/handle-errors.
+// Single source shared by the main-thread client (driveHttp) and the proSync
+// worker (driveFetch) so the reason set cannot drift between the two.
+export const DRIVE_RATE_LIMIT_REASONS = new Set([
+  "rateLimitExceeded",
+  "userRateLimitExceeded",
+]);
+
+// Transient HTTP statuses worth retrying: 429 (rate limit) and 5xx server
+// errors, per Google API guidance. Other statuses (2xx, 4xx) are not retried.
+// A 403 is only transient when its body identifies a Drive rate limit (see
+// DRIVE_RATE_LIMIT_REASONS) — the callers decide that, not this predicate.
+export const isTransientDriveStatus = (status: number): boolean =>
+  status === 429 || (status >= 500 && status < 600);
+
 // Google Drive error responses carry { error: { message, reason } } with the
 // failure reason ALSO inside error.errors[].reason (handle-errors docs — real
 // API shape). Only the public message/reason are read (never the raw body —

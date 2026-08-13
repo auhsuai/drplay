@@ -3,6 +3,7 @@ import { backoffDelay, mergeWithTimeoutSignal, sleep } from "./retryDelay";
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 const realDelay = (ms: number): Promise<void> =>
@@ -53,6 +54,21 @@ describe("backoffDelay", () => {
 
   it("prefers Retry-After over the exponential base even at attempt 0", () => {
     expect(backoffDelay(0, "0")).toBe(0); // 0s is finite and valid
+  });
+
+  it("applies opts.maxMs as the cap on Retry-After and exponential paths", () => {
+    expect(backoffDelay(0, "100", { maxMs: 8000 })).toBe(8000); // 100s > 8s cap
+    expect(backoffDelay(5, undefined, { maxMs: 8000 })).toBe(8000); // exp capped
+  });
+
+  it("uses opts.jitterMaxMs as a fixed integer jitter window, also on Retry-After", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    try {
+      expect(backoffDelay(0, undefined, { jitterMaxMs: 500 })).toBe(1500); // 1000 + floor(0.999*501)
+      expect(backoffDelay(0, "3", { jitterMaxMs: 500 })).toBe(3500); // 3000 + 500
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

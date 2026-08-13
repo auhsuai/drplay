@@ -1,16 +1,15 @@
 import { fetchWithAuth } from "./apiClient";
-import type { DriveErrorBody } from "./driveTypes";
+import {
+  DRIVE_RATE_LIMIT_REASONS,
+  isTransientDriveStatus,
+  type DriveErrorBody,
+} from "./driveTypes";
 import { backoffDelay, mergeWithTimeoutSignal, sleep } from "./retryDelay";
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 // 403 is retryable ONLY when its body reports a Drive usage-limit reason
-// (official docs: "403 error: rateLimitExceeded" / "userRateLimitExceeded" —
-// developers.google.com/workspace/drive/api/guides/handle-errors; same set as
-// the proSync worker precedent). Other 403s (permissions…) are never retried.
-const DRIVE_RATE_LIMIT_REASONS = new Set([
-  "rateLimitExceeded",
-  "userRateLimitExceeded",
-]);
+// (DRIVE_RATE_LIMIT_REASONS in driveTypes — same set as the proSync worker).
+// Other 403s (permissions…) are never retried.
 const MAX_RETRIES = 4;
 const DEFAULT_TIMEOUT_MS = 20000;
 
@@ -45,13 +44,15 @@ export function classifyDriveError(err: unknown): string {
   return "unknown";
 }
 
-// Retryable-by-status set for the resumable-upload loops (429 + any 5xx,
-// Google handle-errors guidance). driveFetch retries a NARROWER historical
-// whitelist instead (isDriveFetchRetryableStatus) — unifying the two would
-// change driveFetch's retry math for 501/505+, so both are preserved and the
-// shared helper takes the predicate as a parameter.
-export const isRetryableDriveStatus = (status: number): boolean =>
-  status === 429 || (status >= 500 && status < 600);
+// Retryable-by-status predicate for the resumable-upload loops and
+// shouldRetryDriveResponse's default (429 + any 5xx, Google handle-errors
+// guidance); the main-thread driveFetch keeps a NARROWER historical
+// whitelist (isDriveFetchRetryableStatus) — unifying the two would change
+// driveFetch's retry math for 501/505+, so both are preserved and the shared
+// helper takes the predicate as a parameter. The predicate itself lives in
+// driveTypes as isTransientDriveStatus; re-exported under the historical name
+// so existing "./driveApi" consumers keep the exact same surface.
+export { isTransientDriveStatus as isRetryableDriveStatus };
 
 const isDriveFetchRetryableStatus = (status: number): boolean =>
   RETRYABLE_STATUS.has(status);
@@ -70,7 +71,7 @@ export async function shouldRetryDriveResponse(
   response: Response,
   attempt: number,
   maxRetries: number,
-  statusRetryable: (status: number) => boolean = isRetryableDriveStatus,
+  statusRetryable: (status: number) => boolean = isTransientDriveStatus,
 ): Promise<boolean> {
   if (statusRetryable(response.status)) return true;
   if (response.status === 403 && attempt < maxRetries) {
