@@ -53,7 +53,7 @@ bytes = "1.6.0"
 # the ones already in Cargo.lock via tauri/wry — no new crate graph nodes.
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38.2"
-windows-core = "0.61.2"
+windows-core = "0.62.2"
 
 uuid = { version = "1.8.0", features = ["v4"] }
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
