@@ -5,10 +5,12 @@ import {
   V_PLACEHOLDER,
   type CachedMetadata,
 } from "../utils/metadata";
+import { CACHE_VERSION } from "../utils/metadata/constants";
+import { stripExtension } from "../utils/metadata/pipelineHelpers";
 import type { DriveFile, MetadataCacheRow } from "../db/db";
 
-// Pure in-memory search engine over MiniSearch (v7), Vietnamese-aware via the
-// shared normalizeText util. No IO — later tasks host this in a worker.
+// Pure functions over MiniSearch (v7), Vietnamese-aware via the shared
+// normalizeText util. Hosted in search.worker.ts via useSearchWorker.
 
 export interface SearchDoc {
   id: string;
@@ -43,8 +45,7 @@ const ARTIST_BOOST = 1.5;
 // Fractional fuzziness: max edit distance = 20% of the term length.
 const FUZZY = 0.2;
 // Only metadataCache entries with this entry.version are candidates
-// (metadata.ts writes CACHE_VERSION=2 rows).
-const METADATA_CACHE_VERSION = 2;
+// (constants.ts CACHE_VERSION, shared with cache.ts).
 
 interface MetadataCacheEntryShape {
   version: number;
@@ -57,7 +58,7 @@ interface MetadataCacheEntryShape {
 function isRealCacheEntry(entry: unknown): entry is MetadataCacheEntryShape {
   if (typeof entry !== "object" || entry === null) return false;
   if (!("version" in entry)) return false;
-  if (entry.version !== METADATA_CACHE_VERSION) return false;
+  if (entry.version !== CACHE_VERSION) return false;
   if (!("data" in entry)) return false;
   const data = entry.data;
   if (typeof data !== "object" || data === null) return false;
@@ -67,16 +68,18 @@ function isRealCacheEntry(entry: unknown): entry is MetadataCacheEntryShape {
   return typeof data.v === "number" && data.v < V_PLACEHOLDER;
 }
 
-function stripExtension(name: string): string {
-  return name.replace(/\.[^.]+$/, "");
-}
-
 // Strips the metadata_ key prefix (metadata.ts:6) so the map keys are fileIds
 // matching DriveFile.id. Keys without the prefix are used verbatim.
 function fileIdFromKey(key: string): string {
   return key.startsWith(METADATA_KEY_PREFIX)
     ? key.slice(METADATA_KEY_PREFIX.length)
     : key;
+}
+
+// Whitespace-split + normalization: one token per non-empty term, normalized
+// to the same term space used at index time (processTerm).
+function tokenizeQuery(query: string): string[] {
+  return query.split(/\s+/).filter(Boolean).map(normalizeText);
 }
 
 export function loadRealMetadata(
@@ -154,7 +157,7 @@ export function queryIndex(
   query: string,
   limit: number,
 ): SearchHit[] {
-  const tokens = query.split(/\s+/).filter(Boolean).map(normalizeText);
+  const tokens = tokenizeQuery(query);
   if (tokens.length === 0) return [];
 
   const results = index.search(tokens.join(" "), {
@@ -164,8 +167,9 @@ export function queryIndex(
   });
 
   return results.slice(0, Math.max(0, limit)).map((result) => {
-    // MiniSearch types stored fields as `any` via an index signature, so the
-    // typed getter + typeof narrowing keeps this mapping strict-lint clean.
+    // MiniSearch types stored fields as Record<string, unknown> (v7.2.0), so
+    // the typed getter + typeof narrowing keeps this mapping strict-lint
+    // clean.
     const stored = index.getStoredFields(result.id);
     const name = typeof stored?.name === "string" ? stored.name : "";
     const isFolder = stored?.isFolder === true;
@@ -195,7 +199,7 @@ export function queryIndex(
 
 export function matchesNormalized(text: string, query: string): boolean {
   if (query.trim() === "") return false;
-  const tokens = query.split(/\s+/).filter(Boolean).map(normalizeText);
+  const tokens = tokenizeQuery(query);
   // Substring semantics on the normalized text keep the old small-list
   // behavior: every query token must appear (AND), anywhere in the string.
   const normalizedText = normalizeText(text);
