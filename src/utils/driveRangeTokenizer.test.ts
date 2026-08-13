@@ -480,6 +480,70 @@ describe("DriveRangeTokenizer", () => {
     });
   });
 
+  describe("concurrent in-flight chunk dedup", () => {
+    it("dedupes concurrent reads of the same chunk: one fetch, one budget charge", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000, {
+        budgetBytes: 131_072,
+      });
+      // Both reads land in chunk 0 and race: without in-flight dedup they
+      // issue two fetches for bytes=0-65535 and charge the budget twice.
+      await Promise.all([tz.readRange(0, 100), tz.readRange(100, 200)]);
+      const chunk0Fetches = vf.calls.filter(
+        (c) => c.range === "bytes=0-65535",
+      ).length;
+      expect(chunk0Fetches).toBe(1);
+      // The budget was charged once: reading chunk 1 still fits under the
+      // 2-chunk budget (a double charge would throw BudgetExceededError).
+      const data = await tz.readRange(65_536, 65_636);
+      expect(data).toHaveLength(100);
+      expect(vf.calls).toHaveLength(2);
+    });
+
+    it("a read racing an in-flight prefetchRange joins its fetch instead of issuing a second request", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      await Promise.all([tz.prefetchRange(100, 71_780), tz.readRange(10, 90)]);
+      expect(vf.calls).toHaveLength(1);
+      expect(vf.calls[0]?.range).toBe("bytes=0-71779");
+      const data = await tz.readRange(0, 100);
+      expect(data).toHaveLength(100);
+      expect(data[0]).toBe(0);
+      expect(vf.calls).toHaveLength(1);
+    });
+
+    it("dedupes two concurrent prefetchRanges of the same region", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      const [a, b] = await Promise.all([
+        tz.prefetchRange(100, 71_780),
+        tz.prefetchRange(100, 71_780),
+      ]);
+      expect(vf.calls).toHaveLength(1);
+      expect(a).toHaveLength(71_680);
+      expect(b).toHaveLength(71_680);
+      expect(a[0]).toBe(100 % 256);
+      expect(b[0]).toBe(100 % 256);
+    });
+
+    it("a read never joins a prefetch whose first chunk is only partially covered (full chunk is refetched)", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      // prefetchRange(70000, 70100) fetches bytes=65536-70099 — chunk 65536
+      // is only partially covered, so the joining read must not be served
+      // short data; it refetches the full chunk.
+      await Promise.all([
+        tz.prefetchRange(70_000, 70_100),
+        tz.readRange(70_000, 70_100),
+      ]);
+      expect(vf.calls).toHaveLength(2);
+      expect(vf.calls.some((c) => c.range === "bytes=65536-131071")).toBe(true);
+      const data = await tz.readRange(131_000, 131_100);
+      expect(data).toHaveLength(100);
+      expect(vf.calls).toHaveLength(3);
+    });
+  });
+
   describe("Drive throttle circuit breaker (Fix H)", () => {
     it("opens the circuit after 3 consecutive failures and fails fast without fetching", async () => {
       vi.useFakeTimers();

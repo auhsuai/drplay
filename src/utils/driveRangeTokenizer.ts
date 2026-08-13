@@ -162,6 +162,10 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
   private readonly budgetBytes: number;
   private readonly callerSignal: AbortSignal | undefined;
   private readonly chunkCache = new Map<number, Uint8Array>();
+  // In-flight chunk fetches keyed by aligned chunkStart: a read racing an
+  // already-running fetch of the same chunk joins it instead of issuing a
+  // second request (which would double-charge the per-file fetch budget).
+  private readonly inflightChunks = new Map<number, Promise<Uint8Array>>();
   private loadedBytes = 0;
   override fileInfo: IFileInfo = { size: 0 };
 
@@ -270,7 +274,6 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
       throw new BudgetExceededError(this.loadedBytes, this.budgetBytes);
     }
     const data = await this.fetchChunk(0, fetchLen - 1);
-    this.loadedBytes += data.length;
     // Populate the aligned chunk cache so parse-time reads inside the head
     // region are served without extra requests. A trailing partial chunk is
     // safe: the prefetched region always ends at min(headBytes, fileSize), so
@@ -327,7 +330,6 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
       throw new BudgetExceededError(this.loadedBytes, this.budgetBytes);
     }
     const data = await this.fetchChunk(firstChunk, fetchEnd - 1);
-    this.loadedBytes += data.length;
     for (
       let chunkStart = firstChunk;
       chunkStart <= lastChunk;
@@ -378,10 +380,16 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     }
 
     const data = await this.fetchChunk(chunkStart, chunkEnd);
-    this.loadedBytes += data.length;
-    this.chunkCache.set(chunkStart, data);
+    // A joined in-flight fetch (prefetchRange/prefetchHead) can cover more
+    // than this chunk — cache only the chunk's own extent so cache entries
+    // keep their exact-chunk shape (a short EOF body stays short, as before).
+    const chunkData = data.subarray(
+      0,
+      Math.min(data.length, chunkEnd - chunkStart + 1),
+    );
+    this.chunkCache.set(chunkStart, chunkData);
     this.evictOldestChunks();
-    return { chunkStart, data };
+    return { chunkStart, data: chunkData };
   }
 
   private evictOldestChunks(): void {
@@ -396,9 +404,33 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     chunkStart: number,
     chunkEnd: number,
   ): Promise<Uint8Array> {
-    return rangeFetchSemaphore.run(() =>
-      this.fetchChunkWithRetry(chunkStart, chunkEnd),
-    );
+    const inFlight = this.inflightChunks.get(chunkStart);
+    if (inFlight) {
+      const data = await inFlight;
+      // Join only when the in-flight fetch covers this request. A prefetchRange
+      // whose first chunk ends mid-chunk resolves short here — it has settled
+      // and left the map, so fetch the full extent ourselves (never serve
+      // short data for a chunk read).
+      if (data.length >= chunkEnd - chunkStart + 1) return data;
+      return this.fetchChunk(chunkStart, chunkEnd);
+    }
+    const promise = rangeFetchSemaphore.run(async () => {
+      const data = await this.fetchChunkWithRetry(chunkStart, chunkEnd);
+      // Charge the budget exactly once per real fetch — joiners never reach
+      // this line, so concurrent readers of one chunk cannot double-charge.
+      this.loadedBytes += data.length;
+      return data;
+    });
+    this.inflightChunks.set(chunkStart, promise);
+    try {
+      return await promise;
+    } finally {
+      // Remove only our own entry: a fallback re-registration may have
+      // replaced it while this fetch was settling.
+      if (this.inflightChunks.get(chunkStart) === promise) {
+        this.inflightChunks.delete(chunkStart);
+      }
+    }
   }
 
   private throwCircuitOpen(chunkStart: number, chunkEnd: number): never {
