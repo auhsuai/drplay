@@ -1,3 +1,5 @@
+import { captureError } from "./errorLog";
+
 // Single source of truth for localStorage keys shared across modules.
 export const USER_EMAIL_KEY = "drplay_current_user_email";
 export const DEFAULT_USER_EMAIL = "default";
@@ -17,5 +19,42 @@ export function getCurrentUserEmail(): string {
     return localStorage.getItem(USER_EMAIL_KEY) || DEFAULT_USER_EMAIL;
   } catch {
     return DEFAULT_USER_EMAIL;
+  }
+}
+
+// Error message contract: `<label>-failed:<err.name|unknown>`, level warn,
+// source "useDrive" — the useDriveInit call sites pin these exact strings.
+function localStorageFailureMessage(label: string, err: unknown): string {
+  return `${label}-failed:${
+    err instanceof Error || err instanceof DOMException ? err.name : "unknown"
+  }`;
+}
+
+export function safeLocalStorageGet(key: string, label: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch (err) {
+    void captureError({
+      level: "warn",
+      source: "useDrive",
+      message: localStorageFailureMessage(label, err),
+    });
+    return null;
+  }
+}
+
+export function safeLocalStorageSet(
+  key: string,
+  value: string,
+  label: string,
+): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch (err) {
+    void captureError({
+      level: "warn",
+      source: "useDrive",
+      message: localStorageFailureMessage(label, err),
+    });
   }
 }

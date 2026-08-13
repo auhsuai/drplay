@@ -24,7 +24,7 @@ vi.mock("../utils/apiClient", () => ({
 vi.mock("../utils/driveApi", () => ({
   getAppConfig: vi.fn(),
   saveAppConfig: vi.fn(),
-  mergeWithTimeoutSignal: (signal: AbortSignal) => signal,
+  FOLDER_MIME: "application/vnd.google-apps.folder",
 }));
 
 vi.mock("../utils/cache", () => ({

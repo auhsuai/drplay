@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
-import { getAppConfig, mergeWithTimeoutSignal } from "../utils/driveApi";
+import { getAppConfig, FOLDER_MIME } from "../utils/driveApi";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "../utils/driveConstants";
@@ -17,10 +17,25 @@ import {
   FOLDER_HISTORY_KEY,
   SORT_OPTION_KEY,
   DB_NAV_STATE_KEY,
+  safeLocalStorageGet,
+  safeLocalStorageSet,
 } from "../utils/storageKeys";
 import { classifyError } from "./useDriveShared";
 
-const ROOT_VERIFY_TIMEOUT_MS = 15_000;
+// Validates the persisted folder-history shape the same way the Dexie branch
+// does: an entry survives only when it is an object with a string `id`. The
+// type predicate narrows `name` as string even though runtime only checks
+// `id` — identical to the inline filter it replaces.
+function parseNavHistory(value: unknown): { id: string; name: string }[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (x: unknown): x is { id: string; name: string } =>
+          typeof x === "object" &&
+          x !== null &&
+          typeof (x as Record<string, unknown>).id === "string",
+      )
+    : [];
+}
 
 interface UseDriveInitParams {
   accessToken: string | null;
@@ -63,30 +78,18 @@ export const useDriveInit = ({
       // hydratedRef.current=false forever and the app would silently stop
       // persisting navigation state.
       try {
-        let savedSort: string | null = null;
-        try {
-          savedSort = localStorage.getItem(SORT_OPTION_KEY);
-        } catch (err) {
-          void captureError({
-            level: "warn",
-            source: "useDrive",
-            message: `sort-option-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-          });
-        }
+        const savedSort = safeLocalStorageGet(
+          SORT_OPTION_KEY,
+          "sort-option-read",
+        );
         if (savedSort) {
           setSortOption(savedSort);
         }
 
-        let localRoot: string | null = null;
-        try {
-          localRoot = localStorage.getItem(ROOT_FOLDER_KEY);
-        } catch (err) {
-          void captureError({
-            level: "warn",
-            source: "useDrive",
-            message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-          });
-        }
+        let localRoot = safeLocalStorageGet(
+          ROOT_FOLDER_KEY,
+          "root-folder-read",
+        );
 
         if (isLoggedIn && accessToken) {
           try {
@@ -107,10 +110,9 @@ export const useDriveInit = ({
                 const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
                 const verifyRes = await fetchWithAuth(verifyUrl, {
                   headers: authHeaders(freshToken),
-                  signal: mergeWithTimeoutSignal(
-                    controller.signal,
-                    ROOT_VERIFY_TIMEOUT_MS,
-                  ),
+                  // Timeout is guaranteed by fetchWithAuth itself (15s default
+                  // merged with the caller signal via AbortSignal.any).
+                  signal: controller.signal,
                 });
                 if (isCancelled()) return;
                 if (!verifyRes.ok) {
@@ -126,9 +128,7 @@ export const useDriveInit = ({
                     mimeType?: unknown;
                     driveId?: unknown;
                   };
-                  if (
-                    verifyData.mimeType !== "application/vnd.google-apps.folder"
-                  ) {
+                  if (verifyData.mimeType !== FOLDER_MIME) {
                     void captureError({
                       level: "warn",
                       source: "useDrive",
@@ -147,26 +147,16 @@ export const useDriveInit = ({
                   }
                 }
                 if (localRoot) {
-                  let savedRoot: string | null = null;
-                  try {
-                    savedRoot = localStorage.getItem(ROOT_FOLDER_KEY);
-                  } catch (err) {
-                    void captureError({
-                      level: "warn",
-                      source: "useDrive",
-                      message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-                    });
-                  }
+                  const savedRoot = safeLocalStorageGet(
+                    ROOT_FOLDER_KEY,
+                    "root-folder-read",
+                  );
                   if (remoteConfig.rootFolderId !== savedRoot) {
-                    try {
-                      localStorage.setItem(ROOT_FOLDER_KEY, localRoot);
-                    } catch (err) {
-                      void captureError({
-                        level: "warn",
-                        source: "useDrive",
-                        message: `root-folder-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-                      });
-                    }
+                    safeLocalStorageSet(
+                      ROOT_FOLDER_KEY,
+                      localRoot,
+                      "root-folder-write",
+                    );
                     // Invalidate the local listing only when the configured
                     // root actually changed. initApp also re-runs on a plain
                     // proactive token refresh; wiping db.files then would
@@ -222,15 +212,7 @@ export const useDriveInit = ({
                     id: obj.id,
                     name:
                       typeof obj.name === "string" ? obj.name : MY_DRIVE_TAB,
-                    history: Array.isArray(obj.history)
-                      ? obj.history.filter(
-                          (x: unknown): x is { id: string; name: string } =>
-                            typeof x === "object" &&
-                            x !== null &&
-                            typeof (x as Record<string, unknown>).id ===
-                              "string",
-                        )
-                      : [],
+                    history: parseNavHistory(obj.history),
                   };
                   const savedId = sv.id;
                   const suspectRoot =
@@ -251,38 +233,18 @@ export const useDriveInit = ({
                 fallbackToRoot();
               }
             } else {
-              let savedCurrentId: string | null = null;
-              try {
-                savedCurrentId = localStorage.getItem(CURRENT_FOLDER_ID_KEY);
-              } catch (err) {
-                void captureError({
-                  level: "warn",
-                  source: "useDrive",
-                  message: `current-folder-id-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-                });
-              }
-              let savedCurrentName: string | null = null;
-              try {
-                savedCurrentName = localStorage.getItem(
-                  CURRENT_FOLDER_NAME_KEY,
-                );
-              } catch (err) {
-                void captureError({
-                  level: "warn",
-                  source: "useDrive",
-                  message: `current-folder-name-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-                });
-              }
-              let savedHistoryStr: string | null = null;
-              try {
-                savedHistoryStr = localStorage.getItem(FOLDER_HISTORY_KEY);
-              } catch (err) {
-                void captureError({
-                  level: "warn",
-                  source: "useDrive",
-                  message: `folder-history-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-                });
-              }
+              const savedCurrentId = safeLocalStorageGet(
+                CURRENT_FOLDER_ID_KEY,
+                "current-folder-id-read",
+              );
+              const savedCurrentName = safeLocalStorageGet(
+                CURRENT_FOLDER_NAME_KEY,
+                "current-folder-name-read",
+              );
+              const savedHistoryStr = safeLocalStorageGet(
+                FOLDER_HISTORY_KEY,
+                "folder-history-read",
+              );
 
               if (savedCurrentId && savedCurrentName && savedHistoryStr) {
                 setCurrentFolderId(savedCurrentId);
@@ -293,10 +255,7 @@ export const useDriveInit = ({
                 );
                 try {
                   setFolderHistory(
-                    JSON.parse(savedHistoryStr) as {
-                      id: string;
-                      name: string;
-                    }[],
+                    parseNavHistory(JSON.parse(savedHistoryStr)),
                   );
                 } catch (e: unknown) {
                   void captureError({
