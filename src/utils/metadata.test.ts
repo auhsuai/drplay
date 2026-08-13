@@ -88,6 +88,7 @@ import {
   FULL_PERSIST_MAX_BYTES,
 } from "./metadata";
 import { METADATA_NETWORK_COOLDOWN_MS } from "./metadata/constants";
+import { parseDiskMetadata } from "./metadata/fetchPipeline";
 import { captureError } from "./errorLog";
 import {
   compressCoverVariants,
@@ -2375,5 +2376,144 @@ describe("getTrackMetadata disk-first (seed offline)", () => {
       "song.mp3",
     );
     expect(entry.title).toBe("Bad Json");
+  });
+});
+
+// ---- parseDiskMetadata unit contract (guard tests for the validation refactor)
+// Direct unit tests pin the exact validation contract so a refactor of the
+// manual typeof checks cannot silently change fallback/drop semantics.
+
+function diskRaw(patch: Record<string, unknown>): string {
+  return JSON.stringify({
+    title: "Disk Title",
+    duration: 180.5,
+    v: 8,
+    ...patch,
+  });
+}
+
+describe("parseDiskMetadata validation contract", () => {
+  it("returns null when raw is not a string", () => {
+    expect(parseDiskMetadata(null)).toBeNull();
+    expect(parseDiskMetadata(undefined)).toBeNull();
+  });
+
+  it("returns null when JSON.parse fails", () => {
+    expect(parseDiskMetadata("{not json")).toBeNull();
+  });
+
+  it("returns null when parsed is not an object", () => {
+    expect(parseDiskMetadata("42")).toBeNull();
+    expect(parseDiskMetadata("null")).toBeNull();
+  });
+
+  it("returns null on a wrong metadata version", () => {
+    expect(parseDiskMetadata(diskRaw({ v: 9 }))).toBeNull();
+  });
+
+  it("returns null when title is missing, empty, or not a string", () => {
+    expect(parseDiskMetadata(diskRaw({ title: undefined }))).toBeNull();
+    expect(parseDiskMetadata(diskRaw({ title: "" }))).toBeNull();
+    expect(parseDiskMetadata(diskRaw({ title: 42 }))).toBeNull();
+  });
+
+  it("returns null when duration is missing or not a finite number", () => {
+    expect(parseDiskMetadata(diskRaw({ duration: undefined }))).toBeNull();
+    expect(parseDiskMetadata(diskRaw({ duration: null }))).toBeNull();
+    expect(parseDiskMetadata(diskRaw({ duration: "180.5" }))).toBeNull();
+  });
+
+  it("falls back artist to UNKNOWN_ARTIST and album to empty string", () => {
+    const entry = parseDiskMetadata(diskRaw({ artist: 42, album: null }));
+    expect(entry?.artist).toBe("Unknown Artist");
+    expect(entry?.album).toBe("");
+  });
+
+  it("keeps valid artist/album values", () => {
+    const entry = parseDiskMetadata(diskRaw({ artist: "A", album: "B" }));
+    expect(entry?.artist).toBe("A");
+    expect(entry?.album).toBe("B");
+  });
+
+  it("derives durationEstimated from duration>0 when not a boolean", () => {
+    const positive = parseDiskMetadata(diskRaw({ durationEstimated: "yes" }));
+    expect(positive?.durationEstimated).toBe(false);
+    const zero = parseDiskMetadata(
+      diskRaw({ duration: 0, durationEstimated: undefined }),
+    );
+    expect(zero?.durationEstimated).toBe(true);
+    const negative = parseDiskMetadata(
+      diskRaw({ duration: -5, durationEstimated: 1 }),
+    );
+    expect(negative?.durationEstimated).toBe(true);
+  });
+
+  it("honors an explicit boolean durationEstimated", () => {
+    const entry = parseDiskMetadata(diskRaw({ durationEstimated: true }));
+    expect(entry?.durationEstimated).toBe(true);
+  });
+
+  it("drops invalid optional fields instead of failing", () => {
+    const entry = parseDiskMetadata(
+      diskRaw({
+        pictureFormat: 7,
+        genre: 123,
+        albumArtist: null,
+        bitrate: "320000",
+        size: {},
+        year: "1999",
+        trackNumber: Infinity,
+        sampleRate: null,
+        bitDepth: "16",
+        channels: "2",
+      }),
+    );
+    expect(entry?.pictureFormat).toBeUndefined();
+    expect(entry?.genre).toBeUndefined();
+    expect(entry?.albumArtist).toBeUndefined();
+    expect(entry?.bitrate).toBeUndefined();
+    expect(entry?.size).toBeUndefined();
+    expect(entry?.year).toBeUndefined();
+    expect(entry?.trackNumber).toBeUndefined();
+    expect(entry?.sampleRate).toBeUndefined();
+    expect(entry?.bitDepth).toBeUndefined();
+    expect(entry?.channels).toBeUndefined();
+    expect(entry?.title).toBe("Disk Title");
+    expect(entry?.duration).toBe(180.5);
+  });
+
+  it("keeps valid optional fields", () => {
+    const entry = parseDiskMetadata(
+      diskRaw({
+        pictureFormat: "image/jpeg",
+        genre: "Rock",
+        albumArtist: "AA",
+        bitrate: 320000,
+        size: 12345,
+        year: 1999,
+        trackNumber: 3,
+        sampleRate: 44100,
+        bitDepth: 16,
+        channels: 2,
+      }),
+    );
+    expect(entry?.pictureFormat).toBe("image/jpeg");
+    expect(entry?.genre).toBe("Rock");
+    expect(entry?.albumArtist).toBe("AA");
+    expect(entry?.bitrate).toBe(320000);
+    expect(entry?.size).toBe(12345);
+    expect(entry?.year).toBe(1999);
+    expect(entry?.trackNumber).toBe(3);
+    expect(entry?.sampleRate).toBe(44100);
+    expect(entry?.bitDepth).toBe(16);
+    expect(entry?.channels).toBe(2);
+  });
+
+  it("forces pictureData/pictureDataFull to null and coverOnDisk to true", () => {
+    const entry = parseDiskMetadata(diskRaw({}));
+    expect(entry?.pictureData).toBeNull();
+    expect(entry?.pictureDataFull).toBeNull();
+    expect(entry?.coverOnDisk).toBe(true);
+    expect(entry?.v).toBe(8);
   });
 });

@@ -435,6 +435,24 @@ async function getTrackMetadataImpl(
  * Extended fields are optional and type-checked individually; an invalid
  * optional field is dropped, not fatal.
  */
+function pickString(
+  obj: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = obj[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function pickFinite(
+  obj: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = obj[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
 export function parseDiskMetadata(
   raw: string | null | undefined,
 ): CachedMetadata | null {
@@ -448,49 +466,44 @@ export function parseDiskMetadata(
   if (typeof parsed !== "object" || parsed === null) return null;
   const obj = parsed as Record<string, unknown>;
   if (obj.v !== REAL_METADATA_VERSION) return null;
-  if (typeof obj.title !== "string" || obj.title.length === 0) return null;
-  if (typeof obj.duration !== "number" || !Number.isFinite(obj.duration)) {
-    return null;
-  }
+  const title = pickString(obj, "title");
+  if (title === undefined || title.length === 0) return null;
+  const duration = pickFinite(obj, "duration");
+  if (duration === undefined) return null;
   const entry: CachedMetadata = {
-    title: obj.title,
-    artist: typeof obj.artist === "string" ? obj.artist : UNKNOWN_ARTIST,
-    album: typeof obj.album === "string" ? obj.album : "",
-    duration: obj.duration,
+    title,
+    artist: pickString(obj, "artist") ?? UNKNOWN_ARTIST,
+    album: pickString(obj, "album") ?? "",
+    duration,
     durationEstimated:
       typeof obj.durationEstimated === "boolean"
         ? obj.durationEstimated
-        : !(obj.duration > 0),
+        : !(duration > 0),
     pictureData: null,
     pictureDataFull: null,
     v: REAL_METADATA_VERSION,
     coverOnDisk: true,
   };
-  if (typeof obj.pictureFormat === "string")
-    entry.pictureFormat = obj.pictureFormat;
-  if (typeof obj.bitrate === "number" && Number.isFinite(obj.bitrate)) {
-    entry.bitrate = obj.bitrate;
-  }
-  if (typeof obj.size === "number" && Number.isFinite(obj.size)) {
-    entry.size = obj.size;
-  }
-  if (typeof obj.genre === "string") entry.genre = obj.genre;
-  if (typeof obj.year === "number" && Number.isFinite(obj.year)) {
-    entry.year = obj.year;
-  }
-  if (typeof obj.trackNumber === "number" && Number.isFinite(obj.trackNumber)) {
-    entry.trackNumber = obj.trackNumber;
-  }
-  if (typeof obj.albumArtist === "string") entry.albumArtist = obj.albumArtist;
-  if (typeof obj.sampleRate === "number" && Number.isFinite(obj.sampleRate)) {
-    entry.sampleRate = obj.sampleRate;
-  }
-  if (typeof obj.bitDepth === "number" && Number.isFinite(obj.bitDepth)) {
-    entry.bitDepth = obj.bitDepth;
-  }
-  if (typeof obj.channels === "number" && Number.isFinite(obj.channels)) {
-    entry.channels = obj.channels;
-  }
+  const pictureFormat = pickString(obj, "pictureFormat");
+  if (pictureFormat !== undefined) entry.pictureFormat = pictureFormat;
+  const bitrate = pickFinite(obj, "bitrate");
+  if (bitrate !== undefined) entry.bitrate = bitrate;
+  const size = pickFinite(obj, "size");
+  if (size !== undefined) entry.size = size;
+  const genre = pickString(obj, "genre");
+  if (genre !== undefined) entry.genre = genre;
+  const year = pickFinite(obj, "year");
+  if (year !== undefined) entry.year = year;
+  const trackNumber = pickFinite(obj, "trackNumber");
+  if (trackNumber !== undefined) entry.trackNumber = trackNumber;
+  const albumArtist = pickString(obj, "albumArtist");
+  if (albumArtist !== undefined) entry.albumArtist = albumArtist;
+  const sampleRate = pickFinite(obj, "sampleRate");
+  if (sampleRate !== undefined) entry.sampleRate = sampleRate;
+  const bitDepth = pickFinite(obj, "bitDepth");
+  if (bitDepth !== undefined) entry.bitDepth = bitDepth;
+  const channels = pickFinite(obj, "channels");
+  if (channels !== undefined) entry.channels = channels;
   return entry;
 }
 
