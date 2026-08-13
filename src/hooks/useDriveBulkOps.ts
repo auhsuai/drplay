@@ -1,19 +1,36 @@
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { db } from "../db/db";
-import { deleteFile, moveFile, createFolder } from "../utils/driveApi";
+import {
+  deleteFile,
+  moveFile,
+  createFolder,
+  FOLDER_MIME,
+} from "../utils/driveApi";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { t } from "i18next";
 import { captureError } from "../utils/errorLog";
-
-const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 
 // Bulk ops must never touch items that are still uploading (a pending row can
 // not be deleted/moved — it has no Drive id yet). Excluded ids get a toast and
 // the rest of the batch proceeds unchanged.
 function filterUploading(ids: string[]): string[] {
   return ids.filter((id) => !isUploading(id));
+}
+
+// Shared pre-flight for bulk delete/move: drop ids still uploading, toast once
+// if any were excluded, and return null when the whole selection was blocked
+// (caller bails out early, selection stays untouched).
+function prepareBulkSelection(
+  selectedIds: Set<string>,
+  toast: typeof showErrorToast,
+): string[] | null {
+  const ids = filterUploading([...selectedIds]);
+  if (ids.length < selectedIds.size) {
+    toast(t("upload.uploading_blocked"));
+  }
+  return ids.length === 0 ? null : ids;
 }
 
 export function useDriveBulkOps({
@@ -61,18 +78,22 @@ export function useDriveBulkOps({
           id: res.id,
           name: res.name || folderName,
           parentId: currentFolderId,
-          mimeType: GOOGLE_FOLDER_MIME,
+          mimeType: FOLDER_MIME,
           isFolder: true,
           trashed: false,
           modifiedTime: new Date().toISOString(),
         });
       }
       onRefresh();
+      // onComplete only on success (not in finally): keep the modal open on
+      // failure so the typed folder name survives for a retry — the error
+      // toast explains what went wrong while isCreatingFolder resets in
+      // finally.
       onComplete();
     } catch (e: unknown) {
       void captureError({
         level: "error",
-        source: "useDriveExplorer",
+        source: "useDriveBulkOps",
         message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}`,
       });
       showErrorToast(t("drive.create_folder_error"));
@@ -84,11 +105,8 @@ export function useDriveBulkOps({
   const handleBulkDelete = async (onComplete: () => void) => {
     if (!token || selectedIds.size === 0) return;
 
-    const itemsToDelete = filterUploading([...selectedIds]);
-    if (itemsToDelete.length < selectedIds.size) {
-      showErrorToast(t("upload.uploading_blocked"));
-    }
-    if (itemsToDelete.length === 0) return;
+    const itemsToDelete = prepareBulkSelection(selectedIds, showErrorToast);
+    if (itemsToDelete === null) return;
 
     setSelectedIds(new Set());
     setIsSelectionMode(false);
@@ -105,7 +123,7 @@ export function useDriveBulkOps({
           failedIds.push(id);
           void captureError({
             level: "error",
-            source: "useDriveExplorer",
+            source: "useDriveBulkOps",
             message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
           });
         }
@@ -123,7 +141,7 @@ export function useDriveBulkOps({
     } catch (e: unknown) {
       void captureError({
         level: "error",
-        source: "useDriveExplorer",
+        source: "useDriveBulkOps",
         message: `bulk-delete unexpected error: ${e instanceof Error ? e.message : String(e)}`,
       });
       showErrorToast(t("drive.delete_error"));
@@ -139,11 +157,8 @@ export function useDriveBulkOps({
   ) => {
     if (!token || selectedIds.size === 0) return;
 
-    const itemsToMove = filterUploading([...selectedIds]);
-    if (itemsToMove.length < selectedIds.size) {
-      showErrorToast(t("upload.uploading_blocked"));
-    }
-    if (itemsToMove.length === 0) return;
+    const itemsToMove = prepareBulkSelection(selectedIds, showErrorToast);
+    if (itemsToMove === null) return;
 
     setSelectedIds(new Set());
     setIsSelectionMode(false);
@@ -160,7 +175,7 @@ export function useDriveBulkOps({
           failedIds.push(id);
           void captureError({
             level: "error",
-            source: "useDriveExplorer",
+            source: "useDriveBulkOps",
             message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
           });
         }
@@ -183,7 +198,7 @@ export function useDriveBulkOps({
     } catch (e: unknown) {
       void captureError({
         level: "error",
-        source: "useDriveExplorer",
+        source: "useDriveBulkOps",
         message: `bulk-move unexpected error: ${e instanceof Error ? e.message : String(e)}`,
       });
       showErrorToast(t("drive.move_error"));

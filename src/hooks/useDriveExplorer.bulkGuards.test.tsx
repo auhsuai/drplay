@@ -5,9 +5,15 @@ import { act, renderHook } from "@testing-library/react";
 import { db } from "../db/db";
 import { useDriveExplorer } from "./useDriveExplorer";
 import { useDriveStore } from "../store/driveStore";
-import { deleteFile, moveFile, driveFetch } from "../utils/driveApi";
+import {
+  deleteFile,
+  moveFile,
+  createFolder,
+  driveFetch,
+} from "../utils/driveApi";
 import { isUploading, getUploadState } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
+import { captureError } from "../utils/errorLog";
 
 // Network layer mocked (mirrors useDriveExplorer.fetchOnDemand.test.tsx);
 // uploadManager/driveApi/simpleToast mocked so bulk guards can be asserted
@@ -30,13 +36,18 @@ vi.mock("../utils/driveApi", () => ({
 vi.mock("../utils/simpleToast", () => ({
   showErrorToast: vi.fn(),
 }));
+vi.mock("../utils/errorLog", () => ({
+  captureError: vi.fn(),
+}));
 
 const mockedIsUploading = vi.mocked(isUploading);
 const mockedDeleteFile = vi.mocked(deleteFile);
 const mockedMoveFile = vi.mocked(moveFile);
+const mockedCreateFolder = vi.mocked(createFolder);
 const mockedShowErrorToast = vi.mocked(showErrorToast);
 const mockedGetUploadState = vi.mocked(getUploadState);
 const mockedDriveFetch = vi.mocked(driveFetch);
+const mockedCaptureError = vi.mocked(captureError);
 
 const FOLDER_ID = "bulk-folder";
 const TOKEN = "bulk-token";
@@ -62,7 +73,15 @@ beforeEach(async () => {
     mimeType: "audio/mpeg",
     parents: [FOLDER_ID],
   });
+  mockedCreateFolder.mockReset();
+  mockedCreateFolder.mockResolvedValue({
+    id: "new-folder",
+    name: "x",
+    mimeType: "application/vnd.google-apps.folder",
+    parents: [FOLDER_ID],
+  });
   mockedShowErrorToast.mockReset();
+  mockedCaptureError.mockReset();
   // fetchOnDemand runs on mount with the real token; a non-retryable 404 keeps
   // it out of the way (no retries, no real-time backoff).
   mockedDriveFetch.mockReset();
@@ -187,5 +206,60 @@ describe("useDriveExplorer bulk guard: upload-uploading items are never moved", 
 
     expect(mockedMoveFile).toHaveBeenCalledTimes(2);
     expect(mockedShowErrorToast).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDriveBulkOps logs bulk failures with source useDriveBulkOps", () => {
+  it("logs a per-item bulk-delete failure with the bulk-ops source", async () => {
+    mockedDeleteFile.mockRejectedValue(new Error("boom"));
+    const result = setupSelection(["a"]);
+
+    await act(async () => {
+      await result.current.handleBulkDelete(vi.fn());
+    });
+
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "useDriveBulkOps",
+        message: "bulk-delete failed for item a: boom",
+      }),
+    );
+  });
+
+  it("logs a per-item bulk-move failure with the bulk-ops source", async () => {
+    mockedMoveFile.mockRejectedValue(new Error("boom"));
+    const result = setupSelection(["a"]);
+
+    await act(async () => {
+      await result.current.handleBulkMove("dest-folder", vi.fn());
+    });
+
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "useDriveBulkOps",
+        message: "bulk-move failed for item a: boom",
+      }),
+    );
+  });
+
+  it("logs a create-folder failure with the bulk-ops source", async () => {
+    mockedCreateFolder.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", TOKEN, () => {}),
+    );
+
+    await act(async () => {
+      await result.current.handleCreateFolder("New Folder", vi.fn());
+    });
+
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "useDriveBulkOps",
+        message: "create-folder failed: boom",
+      }),
+    );
   });
 });
