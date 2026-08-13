@@ -67,8 +67,21 @@ bindEntries(() => entries);
  * @param token Drive access token for this batch's requests.
  */
 export function startUploads(seeds: UploadSeed[], token: string): void {
+  const queued: InternalEntry[] = [];
   for (const seed of seeds) {
-    entries.push(createEntry(seed, token));
+    const entry = createEntry(seed, token);
+    entries.push(entry);
+    // Invalid seeds are terminal 'error' entries — they never touch the DB.
+    if (entry.status === "queued") queued.push(entry);
+  }
+  if (queued.length > 0) {
+    // Publish a pending db.files row for EVERY queued seed up-front so the My
+    // Drive list renders the whole batch immediately, not one card at a time
+    // as the sequential pump reaches each entry (processEntry alone only wrote
+    // the row of the entry currently uploading). Best-effort: a failed
+    // bulkPut only costs the early visibility — processEntry re-puts each row
+    // when its own turn comes, so nothing downstream depends on this write.
+    void enqueuePendingRows(queued);
   }
   notify();
   void pump();
@@ -131,6 +144,21 @@ export async function resumeInterruptedUploads(
   }
   if (resumed.length > 0) {
     entries.push(...resumed);
+    // Publish pending rows for resumed entries the same way fresh seeds do, so
+    // the list shows them immediately instead of when their pump turn starts.
+    // resumeEntryFromRow only ever returns diskFile / folderChildFile entries
+    // (folderRoot / folderChild / bytes rows are not resumable), and BOTH kinds
+    // carry a REAL parentId when resumed: diskFile keeps the seed's parent, and
+    // a folderChildFile's parent was resolved by handleChildFile BEFORE its
+    // session URI was persisted (resumeEntryFromRow refuses URI-less rows), so
+    // its row.parentId is the actual Drive folder. The kind filter below is
+    // defensive — if resumeEntryFromRow ever resumes a placeholder-parented
+    // entry, that entry keeps getting its row at processEntry as before.
+    void enqueuePendingRows(
+      resumed.filter(
+        (e) => e.kind === "diskFile" || e.kind === "folderChildFile",
+      ),
+    );
     notify();
     void pump();
   }
@@ -225,6 +253,33 @@ function failSeed(entry: InternalEntry, reason: string): void {
   });
 }
 
+// A queued entry's placeholder db.files row (the dimmed card in the live
+// list) — same shape whether written at enqueue or by processEntry; putting
+// the same id + content is idempotent, so both writes coexist safely.
+function pendingRow(entry: InternalEntry): DriveFile {
+  return {
+    id: entry.id,
+    name: entry.name,
+    mimeType: entry.isFolder ? FOLDER_MIME : AUDIO_FILE_MIME,
+    parentId: entry.parentId,
+    trashed: false,
+    isFolder: entry.isFolder,
+    modifiedTime: new Date().toISOString(),
+  };
+}
+
+// Best-effort batch publish of pending rows at enqueue time — ONE bulkPut
+// transaction so the list pin (which keeps dbFiles insertion order) mirrors
+// enqueue order. Never blocks the upload: a failed write only delays the
+// dimmed card until processEntry's own put (withDbCapture logs the warn).
+function enqueuePendingRows(batch: InternalEntry[]): Promise<void> {
+  if (batch.length === 0) return Promise.resolve();
+  return dbRowOp(
+    () => db.files.bulkPut(batch.map((e) => pendingRow(e))),
+    "enqueue-pending-rows",
+  );
+}
+
 async function pump(): Promise<void> {
   if (busy) return;
   busy = true;
@@ -249,19 +304,7 @@ async function processEntry(entry: InternalEntry): Promise<void> {
   // exists before handleByKind without adding a DB roundtrip to the upload
   // pipeline.
   await Promise.all([
-    dbRowOp(
-      () =>
-        db.files.put({
-          id: entry.id,
-          name: entry.name,
-          mimeType: entry.isFolder ? FOLDER_MIME : AUDIO_FILE_MIME,
-          parentId: entry.parentId,
-          trashed: false,
-          isFolder: entry.isFolder,
-          modifiedTime: new Date().toISOString(),
-        }),
-      "pending-row",
-    ),
+    dbRowOp(() => db.files.put(pendingRow(entry)), "pending-row"),
     persistActiveSession(entry),
   ]);
   try {

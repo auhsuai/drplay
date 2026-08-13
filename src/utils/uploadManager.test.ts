@@ -393,6 +393,164 @@ describe("uploadManager", () => {
     expect(rows[0]?.isFolder).toBe(false);
   });
 
+  describe("enqueue-time pending rows (bugfix: multi-file visibility)", () => {
+    it("R1. nhiều file upload → TẤT CẢ pending rows xuất hiện ngay tại enqueue (không phải chỉ file đang upload)", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable
+        .mockReturnValueOnce(d.promise) // chỉ file a được xử lý; b, c nằm queued
+        .mockImplementation((_t, _bytes, name) =>
+          Promise.resolve(makeDriveFile(`f-${name}`, name)),
+        );
+
+      um.startUploads(
+        [fileSeed("a.mp3"), fileSeed("b.mp3"), fileSeed("c.mp3")],
+        TOKEN,
+      );
+      await flush();
+
+      const rows = await db.files.toArray();
+      // TRƯỚC fix: 1 row (chỉ a) → FAIL "expected 1 to be 3" hoặc tương tự
+      expect(rows).toHaveLength(3);
+      expect(rows.every((r) => r.id.startsWith("pending-"))).toBe(true);
+      expect(rows.map((r) => r.name).sort()).toEqual([
+        "a.mp3",
+        "b.mp3",
+        "c.mp3",
+      ]);
+      expect(
+        rows.every((r) => r.parentId === "root" && !r.trashed && !r.isFolder),
+      ).toBe(true);
+
+      d.resolve(makeDriveFile("f-a", "a.mp3"));
+      await waitIdle();
+      const done = await db.files.toArray();
+      expect(done).toHaveLength(3);
+      expect(done.every((r) => !r.id.startsWith("pending-"))).toBe(true);
+    });
+
+    it("R2. cancel entry QUEUED → pending row của nó bị xóa ngay, các entry khác vẫn giữ rows", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable
+        .mockReturnValueOnce(d.promise)
+        .mockImplementation((_t, _bytes, name) =>
+          Promise.resolve(makeDriveFile(`f-${name}`, name)),
+        );
+
+      um.startUploads(
+        [fileSeed("a.mp3"), fileSeed("b.mp3"), fileSeed("c.mp3")],
+        TOKEN,
+      );
+      await flush();
+
+      // Cả 3 đều có pending rows ngay tại enqueue (b, c chưa từng được pump xử lý).
+      expect(await db.files.toArray()).toHaveLength(3);
+      const b = um.getEntries().find((e) => e.name === "b.mp3");
+      if (!b) throw new Error("expected queued entry b.mp3");
+      expect(b.status).toBe("queued");
+
+      um.cancelUpload(b.id);
+      await flush();
+
+      const after = await db.files.toArray();
+      expect(after).toHaveLength(2);
+      expect(after.map((r) => r.name).sort()).toEqual(["a.mp3", "c.mp3"]);
+      expect(after.every((r) => r.id.startsWith("pending-"))).toBe(true);
+
+      d.resolve(makeDriveFile("f-a", "a.mp3"));
+      await waitIdle();
+      const done = await db.files.toArray();
+      expect(done).toHaveLength(2);
+      expect(done.every((r) => !r.id.startsWith("pending-"))).toBe(true);
+    });
+
+    it("R3. seed invalid (folder không diskPath) trộn với seed hợp lệ → invalid KHÔNG tạo pending row, hợp lệ vẫn có", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumable.mockReturnValueOnce(d.promise);
+
+      um.startUploads(
+        [
+          { name: "FolderNoPath", isFolder: true, parentId: "root" }, // invalid
+          fileSeed("a.mp3"),
+          fileSeed("b.mp3"),
+        ],
+        TOKEN,
+      );
+      await flush();
+
+      const rows = await db.files.toArray();
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.id.startsWith("pending-"))).toBe(true);
+      expect(rows.map((r) => r.name).sort()).toEqual(["a.mp3", "b.mp3"]);
+
+      d.resolve(makeDriveFile("f-a", "a.mp3"));
+      await waitIdle();
+    });
+
+    it("R4. folder root: đúng 1 pending row tại enqueue — KHÔNG có row thừa nào", async () => {
+      walkDiskFolder.mockResolvedValue([]);
+      const d = deferred<DriveFileItem>();
+      createFolderMock.mockReturnValueOnce(d.promise);
+
+      um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
+      await flush();
+
+      const rows = await db.files.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toMatch(/^pending-/);
+      expect(rows[0]?.name).toBe("Album");
+      expect(rows[0]?.isFolder).toBe(true);
+      expect(rows[0]?.mimeType).toBe(FOLDER_MIME);
+      expect(rows[0]?.parentId).toBe("root");
+
+      d.resolve({ id: "folder-1", name: "Album", mimeType: FOLDER_MIME });
+      await waitIdle();
+      const done = await db.files.toArray();
+      expect(done.map((r) => r.id)).toEqual(["folder-1"]);
+    });
+
+    it("R4b. folder child: chưa có pending row cho con với parentId placeholder — con nhận row khi processEntry chạy", async () => {
+      walkDiskFolder.mockResolvedValue([
+        {
+          path: "C:/Music/a.mp3",
+          name: "a.mp3",
+          relativePath: "a.mp3",
+          isDirectory: false,
+          size: 5,
+        },
+      ]);
+      const dRoot = deferred<DriveFileItem>();
+      createFolderMock.mockReturnValueOnce(dRoot.promise);
+      const dFile = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(dFile.promise);
+
+      um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
+      await flush();
+
+      // Root chưa resolve → rows CHỈ có folder root; con đã được enqueue bởi
+      // handleFolderRoot nhưng phải KHÔNG có row (parentId của nó là placeholder).
+      let rows = await db.files.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.name).toBe("Album");
+      expect(rows[0]?.id).toMatch(/^pending-/);
+
+      dRoot.resolve({ id: "folder-1", name: "Album", mimeType: FOLDER_MIME });
+      await flush();
+
+      // Con bắt đầu được xử lý → row của con xuất hiện qua processEntry (như cũ).
+      rows = await db.files.toArray();
+      expect(rows).toHaveLength(2);
+      const child = rows.find((r) => r.name === "a.mp3");
+      expect(child?.id).toMatch(/^pending-/);
+
+      dFile.resolve(makeDriveFile("f-a", "a.mp3"));
+      await waitIdle();
+      const done = await db.files.toArray();
+      // 'f-a' sorts before 'folder-1' lexically ('-' < 'o') — order from sort().
+      expect(done.map((r) => r.id).sort()).toEqual(["f-a", "folder-1"]);
+      expect(done.find((r) => r.name === "a.mp3")?.parentId).toBe("folder-1");
+    });
+  });
+
   it("3. UploadError invalid → entry error + pending row deleted + captureError + không retry", async () => {
     uploadFileResumable.mockRejectedValueOnce(
       new UploadErrorClass("bad request (400)", "invalid"),
@@ -2290,6 +2448,39 @@ describe("uploadManager", () => {
       d.resolve(makeDriveFile("f1", "a.mp3"));
       await waitIdle();
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("R5. resumed diskFile nhận pending row ngay tại enqueue (qua bulkPut, không chờ pump xử lý)", async () => {
+      // vi.resetModules() in beforeEach gives the queue a FRESH DriveDatabase
+      // instance — spy the freshly-imported one (same pattern as slice-5.1 (e)).
+      const freshDb = await import("../db/db");
+      const putSpy = vi
+        .spyOn(freshDb.db.files, "put")
+        .mockRejectedValue(new Error("db closed"));
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      await insertSessionRow({
+        id: "pending-old-r5",
+        name: "a.mp3",
+        kind: "diskFile",
+        diskPath: "C:/a.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      // processEntry's put bị chặn — row chỉ có thể đến từ enqueue-time
+      // bulkPut → chứng minh resumed entry được publish ngay khi resume.
+      const rows = await db.files.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.name).toBe("a.mp3");
+      expect(rows[0]?.id).toMatch(/^pending-/);
+
+      putSpy.mockRestore();
+      d.resolve(makeDriveFile("f1", "a.mp3"));
+      await waitIdle();
     });
 
     it("(f) stat null on resume (file deleted/moved/renamed) → entry failed + toast upload.resume_not_found + old row deleted", async () => {
