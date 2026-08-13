@@ -1410,6 +1410,22 @@ describe("cover extraction + full picture LRU", () => {
     expect(getFullPictureData("ev-b54")).not.toBeNull();
   });
 
+  it("re-setting a full picture refreshes its write-recency (write-LRU eviction order)", async () => {
+    const cacheMod = await import("./metadata/cache");
+    const { setFullPictureCache, getFullPictureData } = cacheMod;
+    // Entry-count cap (64) drives eviction with tiny payloads.
+    setFullPictureCache("lru-a", new Uint8Array(8));
+    setFullPictureCache("lru-b", new Uint8Array(8));
+    // Re-set = write-touch: A is now newer than B.
+    setFullPictureCache("lru-a", new Uint8Array(8));
+    for (let i = 0; i < 63; i++) {
+      setFullPictureCache(`lru-fill-${String(i)}`, new Uint8Array(8));
+    }
+    // 65 distinct keys: the least-recently-WRITTEN (B) is evicted, A survives.
+    expect(getFullPictureData("lru-b")).toBeNull();
+    expect(getFullPictureData("lru-a")).not.toBeNull();
+  });
+
   it("FLAC without a picture block yields a v:8 entry with null picture fields", async () => {
     const { getTrackMetadata } = await fresh();
     const fixture = buildFlacWithPicture("Plain FLAC", "Plain Artist", []);

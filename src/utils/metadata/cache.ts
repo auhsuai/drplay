@@ -56,10 +56,10 @@ try {
 }
 
 // Shared LRU helpers: `touchLruKeys` moves `id` to the back (most-recently
-// used goes last), `evictLruKeys` shifts the oldest entry while `shouldEvict`
-// holds. All three caches (IDB lruKeys, mem metadataCache, fullPictureCache)
-// use the same order/guard semantics — the per-cache differences live in the
-// onEvict callback.
+// written goes last), `evictLruKeys` shifts the oldest entry while
+// `shouldEvict` holds. lruKeys (IDB) and mem metadataCache use these helpers;
+// fullPictureCache mirrors the same write-LRU ordering natively via Map
+// delete+set. The per-cache differences live in the onEvict callback.
 function touchLruKeys(keys: string[], id: string): void {
   keys.splice(0, keys.length, ...keys.filter((k) => k !== id), id);
 }
@@ -113,14 +113,27 @@ export async function getCacheEntry(
 ): Promise<CacheEntry | undefined> {
   const row = await db.metadataCache.get(key);
   const entry = row?.entry;
-  if (
-    entry &&
-    typeof entry === "object" &&
-    (entry as { version?: unknown }).version === CACHE_VERSION
-  ) {
-    return entry as CacheEntry;
+  if (isCacheEntry(entry) && entry.version === CACHE_VERSION) {
+    return entry;
   }
   return undefined;
+}
+
+// Shape guard for a cached row: a row whose version happens to match but whose
+// payload is garbage (e.g. data: {} or a string from a partial write) is a
+// MISS, not a hit — parity with parseDiskMetadata, which validates the full
+// entry before trusting it.
+function isCacheEntry(u: unknown): u is CacheEntry {
+  if (typeof u !== "object" || u === null) return false;
+  const entry = u as Record<string, unknown>;
+  const data = entry.data;
+  return (
+    typeof entry.version === "number" &&
+    typeof data === "object" &&
+    data !== null &&
+    typeof (data as Record<string, unknown>).v === "number" &&
+    typeof entry.ts === "number"
+  );
 }
 
 export async function putCacheEntry(
@@ -185,31 +198,33 @@ function canPersistFullPicture(entry: CachedMetadata): boolean {
 }
 
 const fullPictureCache = new Map<string, Uint8Array>();
-let fullPictureOrder: string[] = [];
 let fullPictureBytes = 0;
 
 export function setFullPictureCache(fileId: string, data: Uint8Array): void {
   if (fullPictureCache.has(fileId)) {
     fullPictureBytes -= fullPictureCache.get(fileId)?.byteLength ?? 0;
   }
+  // delete+set is the Map-native write-touch: the key re-inserts at the tail,
+  // making the oldest entry the one at the head (iteration order).
+  fullPictureCache.delete(fileId);
   fullPictureCache.set(fileId, data);
   fullPictureBytes += data.byteLength;
-  touchLruKeys(fullPictureOrder, fileId);
   evictFullPictures();
 }
 
 function evictFullPictures(): void {
-  evictLruKeys(
-    fullPictureOrder,
-    () =>
-      fullPictureOrder.length > FULL_PICTURE_MEM_ENTRIES_MAX ||
-      fullPictureBytes > FULL_PICTURE_MEM_BYTES_MAX,
-    (oldest) => {
-      const removed = fullPictureCache.get(oldest);
-      if (removed) fullPictureBytes -= removed.byteLength;
-      fullPictureCache.delete(oldest);
-    },
-  );
+  while (
+    fullPictureCache.size > FULL_PICTURE_MEM_ENTRIES_MAX ||
+    fullPictureBytes > FULL_PICTURE_MEM_BYTES_MAX
+  ) {
+    const oldest = fullPictureCache.keys().next().value;
+    // shouldEvict may stay true with an empty Map (e.g. a byte budget the
+    // remaining entries can never satisfy) — break instead of spinning.
+    if (oldest === undefined) break;
+    const removed = fullPictureCache.get(oldest);
+    if (removed) fullPictureBytes -= removed.byteLength;
+    fullPictureCache.delete(oldest);
+  }
 }
 
 /**
@@ -246,7 +261,6 @@ export function clearAllMetadataCache(): void {
   memCacheKeys.length = 0;
   lruKeys = [];
   fullPictureCache.clear();
-  fullPictureOrder = [];
   fullPictureBytes = 0;
 }
 

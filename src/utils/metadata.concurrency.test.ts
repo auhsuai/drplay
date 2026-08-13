@@ -258,6 +258,25 @@ describe("lruKeys + cache invalidation hardening", () => {
     });
   });
 
+  it("getCacheEntry treats a corrupt entry (valid version, garbage data) as a miss", async () => {
+    localStorage.removeItem(METADATA_LRU_KEY);
+    clearAllMetadataCache();
+    vi.mocked(invoke).mockReset();
+
+    memoryStore.set("metadata_corrupt-data", {
+      key: "metadata_corrupt-data",
+      entry: { version: 2, data: {}, ts: Date.now() },
+    });
+    memoryStore.set("metadata_corrupt-str", {
+      key: "metadata_corrupt-str",
+      entry: { version: 2, data: "garbage", ts: Date.now() },
+    });
+
+    const { getCacheEntry } = await import("./metadata/cache");
+    expect(await getCacheEntry("metadata_corrupt-data")).toBeUndefined();
+    expect(await getCacheEntry("metadata_corrupt-str")).toBeUndefined();
+  });
+
   it("loads corrupt lruKeys JSON (non-array) from localStorage without crashing", async () => {
     localStorage.setItem(METADATA_LRU_KEY, JSON.stringify({}));
     vi.resetModules();
