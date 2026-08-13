@@ -1773,6 +1773,175 @@ describe("uploadFileResumableChunked", () => {
     expect(fractions).toEqual([8388608 / 10000000, 1]);
   });
 
+  // Upgrade: per-request timeout signals instead of ONE whole-upload signal.
+  // A single AbortSignal.timeout created at upload start fires ONCE at its
+  // wall-clock deadline and stays aborted forever — every later request
+  // (later chunks, query-status, initiate) would then reject instantly,
+  // killing any upload whose TOTAL duration exceeds UPLOAD_TIMEOUT_MS (the
+  // multi-GB slow-link case this file exists for).
+  // Clock note: AbortSignal.timeout uses Node's INTERNAL timer, which vitest
+  // fake timers do NOT fake (verified 2026-08-13, Node 24) — so these tests
+  // substitute a test-controlled clock that aborts each timeout signal at its
+  // deadline, mirroring AbortSignal.timeout semantics exactly (fires once,
+  // wall-clock ms after creation).
+  interface HeldRequest {
+    signal: AbortSignal | null;
+    aborted: boolean;
+    resolve: (response: Response) => void;
+  }
+
+  function installTimeoutClock(): { advance: (ms: number) => void } {
+    let now = 0;
+    const timeouts: Array<{ controller: AbortController; deadline: number }> =
+      [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      timeouts.push({ controller, deadline: now + ms });
+      return controller.signal;
+    });
+    return {
+      advance: (ms: number) => {
+        now += ms;
+        for (const t of timeouts) {
+          if (!t.controller.signal.aborted && now >= t.deadline) {
+            t.controller.abort(
+              new DOMException(
+                "The operation was aborted due to timeout",
+                "TimeoutError",
+              ),
+            );
+          }
+        }
+      },
+    };
+  }
+
+  // Abort-aware fetch mock mirroring real fetch: a call whose signal is
+  // already aborted rejects immediately; otherwise the request stays pending
+  // until the test resolves it (or its signal aborts while in flight). Settled
+  // entries are removed from the queue, so the queue holds exactly the
+  // in-flight requests.
+  function holdFetch(): HeldRequest[] {
+    const pending: HeldRequest[] = [];
+    mockedFetch.mockImplementation((_url, opts) => {
+      const signal = opts?.signal ?? null;
+      if (signal instanceof AbortSignal && signal.aborted) {
+        return Promise.reject(abortReason(signal));
+      }
+      return new Promise<Response>((resolve, reject) => {
+        const entry: HeldRequest = { signal, aborted: false, resolve };
+        pending.push(entry);
+        const settle = () => {
+          const idx = pending.indexOf(entry);
+          if (idx !== -1) pending.splice(idx, 1);
+        };
+        entry.resolve = (r) => {
+          settle();
+          resolve(r);
+        };
+        if (signal instanceof AbortSignal) {
+          signal.addEventListener(
+            "abort",
+            () => {
+              entry.aborted = true;
+              settle();
+              reject(abortReason(signal));
+            },
+            { once: true },
+          );
+        }
+      });
+    });
+    return pending;
+  }
+
+  function nextHeld(pending: HeldRequest[]): HeldRequest {
+    const entry = pending[0];
+    if (entry === undefined)
+      throw new Error("expected an in-flight fetch, none held");
+    return entry;
+  }
+
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it("upload spanning > UPLOAD_TIMEOUT_MS total time completes (timeouts are per-request, not whole-upload)", async () => {
+    const controller = new AbortController();
+    const clock = installTimeoutClock();
+    const pending = holdFetch();
+    try {
+      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      const p = uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+        signal: controller.signal,
+      });
+
+      await tick();
+      nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+      await tick();
+      // Chunk 1 PUT starts at t=0 with its own 120s bound.
+      const chunk1 = nextHeld(pending);
+
+      // Chunk 1 takes 60s — well inside its per-request bound.
+      clock.advance(60_000);
+      expect(chunk1.aborted).toBe(false);
+      chunk1.resolve(makeRangeResponse(308, "bytes=0-8388607"));
+      await tick();
+      // Chunk 2 PUT starts at t=60s and must carry a FRESH 120s bound (a
+      // whole-upload signal created at t=0 would fire at t=120s and kill it).
+      const chunk2 = nextHeld(pending);
+
+      // Total now 121s > 120s: a whole-upload signal (old code) fires here.
+      clock.advance(61_000);
+      expect(chunk2.aborted).toBe(false);
+      chunk2.resolve(makeJsonResponse(201, uploadedFile));
+
+      await expect(p).resolves.toEqual(uploadedFile);
+      expect(reader.offsets).toEqual([0, CHUNK_SIZE]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a chunk PUT stalled past UPLOAD_TIMEOUT_MS is still killed per-request; the upload restarts and completes", async () => {
+    const controller = new AbortController();
+    const clock = installTimeoutClock();
+    const pending = holdFetch();
+    try {
+      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      const p = uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: TOTAL_SIZE,
+        readChunk: reader.readChunk,
+        signal: controller.signal,
+      });
+
+      await tick();
+      nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+      await tick();
+      // The single chunk PUT stalls beyond its per-request 120s bound.
+      const stalledPut = nextHeld(pending);
+      clock.advance(PUT_TIMEOUT_MS + 1);
+      expect(stalledPut.aborted).toBe(true); // per-request timeout fired
+
+      // Transient → session restart → query-status on the old session gets a
+      // FRESH bound (the old shared signal would have been aborted forever).
+      await tick();
+      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8388607"));
+      await tick();
+      // The surviving session resumes at the server-confirmed byte.
+      nextHeld(pending).resolve(makeJsonResponse(201, uploadedFile));
+
+      await expect(p).resolves.toEqual(uploadedFile);
+      expect(reader.offsets).toEqual([0, 8388608]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   // Upgrade: a 2xx body that IS valid JSON but lacks the DriveFileItem shape
   // (missing id — the field every upload response must carry) must reject
   // with UploadError('invalid') instead of resolving with a ghost object the

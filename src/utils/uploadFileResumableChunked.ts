@@ -15,6 +15,7 @@ import {
   RANGE_HEADER_PATTERN,
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
+  QUERY_STATUS_TIMEOUT_MS,
   asDriveFileItem,
   initiateResumableUpload,
   resolveIdempotentConflict,
@@ -69,12 +70,19 @@ async function putChunkWithRetry(
   start: number,
   end: number,
   totalSize: number,
-  mergedSignal: AbortSignal,
   callerSignal: AbortSignal | null | undefined,
 ): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     let response: Response;
     try {
+      // Fresh timeout signal PER attempt (pattern: driveFetch/driveHttp.ts).
+      // A single whole-upload signal would fire ONCE at its wall-clock
+      // deadline and stay aborted, killing every later request of an upload
+      // longer than UPLOAD_TIMEOUT_MS (the multi-GB slow-link case this file
+      // exists for). Per-request signals bound only the current request — and
+      // a fresh one after each backoff sleep, so the bound excludes sleep
+      // time. The caller's abort still cancels everything via the merge.
+      const signal = mergeWithTimeoutSignal(callerSignal, UPLOAD_TIMEOUT_MS);
       response = await fetchWithAuth(uploadUri, {
         method: "PUT",
         headers: {
@@ -83,8 +91,9 @@ async function putChunkWithRetry(
           "Content-Range": `bytes ${String(start)}-${String(end)}/${String(totalSize)}`,
         },
         body: chunk,
-        signal: mergedSignal,
-        // fetchWithAuth's 15s internal default would kill a slow chunk PUT before the session's 120s bound — keep both in sync.
+        signal,
+        // fetchWithAuth's per-request timeout stays in sync with the merged
+        // per-attempt signal (same bound) so neither fires first.
         timeoutMs: UPLOAD_TIMEOUT_MS,
       });
     } catch (err) {
@@ -124,7 +133,6 @@ async function uploadChunksInSession(
   uploadUri: string,
   token: string,
   opts: ChunkedUploadOptions,
-  mergedSignal: AbortSignal,
   startOffset = 0,
 ): Promise<DriveFileItem> {
   const { totalSize, readChunk, onProgress, signal } = opts;
@@ -169,7 +177,6 @@ async function uploadChunksInSession(
       offset,
       end,
       totalSize,
-      mergedSignal,
       signal,
     );
     onProgress?.(Math.min(1, (offset + chunk.byteLength) / totalSize));
@@ -216,11 +223,13 @@ async function uploadChunksInSession(
     if (response.status === 409 && opts.clientGeneratedId) {
       // Retry of an idempotent upload whose first attempt completed
       // server-side: the file already exists — resolve DONE with the real
-      // file instead of creating a duplicate.
+      // file instead of creating a duplicate. Fresh per-call merge (never a
+      // shared whole-upload signal); the conflict GET is itself bounded
+      // per-attempt by driveFetch.
       return resolveIdempotentConflict(
         token,
         opts.clientGeneratedId,
-        mergedSignal,
+        mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS),
       );
     }
     const uploadError = mapUploadHttpError(
@@ -255,7 +264,6 @@ async function resumePreviousSessionOrNull(
   uploadUri: string,
   token: string,
   opts: ChunkedUploadOptions,
-  mergedSignal: AbortSignal,
   attempt: number,
 ): Promise<DriveFileItem | null> {
   let resumeOffset: number | null = null;
@@ -264,7 +272,11 @@ async function resumePreviousSessionOrNull(
       uploadUri,
       token,
       opts.totalSize,
-      mergedSignal,
+      // Fresh per-call merge with the query-status bound (the empty PUT is
+      // cheap — no 120s chunk bound; resumableSession.ts). The old shared
+      // whole-upload signal would have been aborted forever by then, killing
+      // this status query instantly on any long upload.
+      mergeWithTimeoutSignal(opts.signal, QUERY_STATUS_TIMEOUT_MS),
       opts.signal,
       opts.clientGeneratedId,
     );
@@ -286,13 +298,7 @@ async function resumePreviousSessionOrNull(
   // The session survived the interruption — continue it at the byte the
   // server confirmed instead of re-uploading from 0.
   try {
-    return await uploadChunksInSession(
-      uploadUri,
-      token,
-      opts,
-      mergedSignal,
-      resumeOffset,
-    );
+    return await uploadChunksInSession(uploadUri, token, opts, resumeOffset);
   } catch (err) {
     if (opts.signal?.aborted) throw abortedUploadError();
     if (err instanceof UploadError) throw err;
@@ -324,7 +330,15 @@ export async function uploadFileResumableChunked(
     // Google's resumable docs define no Content-Range format for empty files (same rule as uploadFileResumable).
     throw new UploadError("cannot upload an empty file", "invalid");
   }
-  const mergedSignal = mergeWithTimeoutSignal(opts.signal, UPLOAD_TIMEOUT_MS);
+  // NOTE: no whole-upload timeout signal. ONE AbortSignal.timeout at upload
+  // start would fire at its wall-clock deadline and STAY aborted — every
+  // later request (later chunks, query-status, initiate) would reject
+  // instantly, killing any upload whose TOTAL duration exceeds
+  // UPLOAD_TIMEOUT_MS (the multi-GB slow-link case this file exists for).
+  // Each request bounds itself per-request instead: chunk PUTs and
+  // query-status via their own merges (UPLOAD_TIMEOUT_MS /
+  // QUERY_STATUS_TIMEOUT_MS), initiate + conflict-GET via driveFetch's
+  // per-attempt bound — only the caller's abort signal flows down.
   // The session URI lives across iterations so a restart can first ask Drive
   // how much of the session survived (Slice 3) instead of paying for a fresh
   // session URI and re-sending bytes Drive already holds. Slice 5.2: a URI
@@ -346,7 +360,6 @@ export async function uploadFileResumableChunked(
         uploadUri,
         token,
         opts,
-        mergedSignal,
         attempt,
       );
       if (resumed !== null) return resumed;
@@ -358,7 +371,9 @@ export async function uploadFileResumableChunked(
         opts.name,
         opts.parentId,
         opts.totalSize,
-        mergedSignal,
+        // Fresh per-call merge; the POST itself is bounded per-attempt by
+        // driveFetch (20s default) — this only carries the caller's abort.
+        mergeWithTimeoutSignal(opts.signal, UPLOAD_TIMEOUT_MS),
         opts.clientGeneratedId,
       );
     } catch (err) {
@@ -389,7 +404,7 @@ export async function uploadFileResumableChunked(
       });
     }
     try {
-      return await uploadChunksInSession(uploadUri, token, opts, mergedSignal);
+      return await uploadChunksInSession(uploadUri, token, opts);
     } catch (err) {
       if (opts.signal?.aborted) throw abortedUploadError();
       if (err instanceof UploadError) throw err;
