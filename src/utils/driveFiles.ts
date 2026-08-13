@@ -10,14 +10,15 @@ import type { DriveFileItem } from "./driveTypes";
 // dependency-free authHeaders module shared with the proSync worker.
 export { authHeaders };
 
-// "Recently Added to Drive" fetches a single page of the newest files. 100 is
-// the largest page size Drive returns per request; it must exceed every
-// responsive grid count (2/4/5) so the grid can always tell "list is full →
-// more files may exist" apart from "list really is that short".
+// "Recently Added to Drive" fetches a single page of the newest files. 100
+// bounds the response (Drive's default page size for shared drives; the max
+// is 1000) and must exceed every responsive grid count (2/4/5) so the grid
+// can always tell "list is full → more files may exist" apart from "list
+// really is that short".
 const RECENTLY_ADDED_PAGE_SIZE = 100;
 
 // Drive Files API base URL — every request in this module targets it.
-const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
+export const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 
 // Shared guard for the simple `Failed to <action> (status)` throw pattern.
 // NOT used where a non-ok response has its own handling (null returns,
@@ -43,6 +44,19 @@ export function parseFilesList(data: unknown): DriveFileItem[] {
   if (typeof data !== "object" || data === null) return [];
   const files = (data as { files?: unknown }).files;
   return Array.isArray(files) ? (files as DriveFileItem[]) : [];
+}
+
+// Narrow a single-item response (create/delete/move/restore). Required fields
+// on DriveFileItem are id/name/mimeType — anything less is not an item, so the
+// callers fail in a controlled way instead of leaking an object missing
+// required fields into the app.
+function parseDriveFileItem(data: unknown): DriveFileItem | null {
+  if (typeof data !== "object" || data === null) return null;
+  const item = data as Partial<DriveFileItem>;
+  if (typeof item.id !== "string") return null;
+  if (typeof item.name !== "string") return null;
+  if (typeof item.mimeType !== "string") return null;
+  return item as DriveFileItem;
 }
 
 function parseName(data: unknown): string | null {
@@ -93,7 +107,10 @@ export async function createFolder(
 
   assertDriveOk(response, "create folder");
   const data: unknown = await response.json();
-  return data as DriveFileItem;
+  const item = parseDriveFileItem(data);
+  if (item === null)
+    throw new Error("Failed to create folder (invalid response)");
+  return item;
 }
 
 /**
@@ -125,7 +142,10 @@ export async function deleteFile(
 
   assertDriveOk(response, "delete file");
   const data: unknown = await response.json();
-  return data as DriveFileItem;
+  const item = parseDriveFileItem(data);
+  if (item === null)
+    throw new Error("Failed to delete file (invalid response)");
+  return item;
 }
 
 /**
@@ -173,8 +193,7 @@ export async function moveFile(
     `${DRIVE_FILES_URL}/${fileId}?addParents=${newParentId}&removeParents=${removeParents}`,
     {
       method: "PATCH",
-      headers: authJsonHeaders(token),
-      body: JSON.stringify({}),
+      headers: authHeaders(token),
     },
   );
 
@@ -191,7 +210,9 @@ export async function moveFile(
     throw new Error(`Failed to move file (${String(response.status)})`);
   }
   const data: unknown = await response.json();
-  return data as DriveFileItem;
+  const item = parseDriveFileItem(data);
+  if (item === null) throw new Error("Failed to move file (invalid response)");
+  return item;
 }
 
 /**
@@ -220,7 +241,10 @@ export async function restoreFile(
 
   assertDriveOk(response, "restore file");
   const data: unknown = await response.json();
-  return data as DriveFileItem;
+  const item = parseDriveFileItem(data);
+  if (item === null)
+    throw new Error("Failed to restore file (invalid response)");
+  return item;
 }
 
 /**

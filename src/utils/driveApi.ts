@@ -22,6 +22,7 @@ export {
   shouldRetryDriveResponse,
 } from "./driveHttp";
 export {
+  DRIVE_FILES_URL,
   createFolder,
   deleteFile,
   moveFile,

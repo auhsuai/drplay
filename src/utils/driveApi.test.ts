@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   backoffDelay,
   createFolder,
+  deleteFile,
   driveFetch,
+  moveFile,
+  restoreFile,
   getAppConfig,
   getDriveStorageQuota,
   getRecentlyAddedAudioFiles,
@@ -737,6 +740,44 @@ describe("createFolder abort propagation (Bug 1d)", () => {
     await assertion;
     // User abort must not schedule retries (same contract as driveFetch 1b).
     expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Single-item responses (create/delete/move/restore) are narrowed before use:
+// a malformed body must fail in a controlled way instead of leaking an
+// object missing required fields to the caller.
+describe("single-item response narrowing", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("createFolder throws on a malformed body", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, {}));
+    await expect(createFolder("tok", "Album", "root")).rejects.toThrow(
+      /invalid response/,
+    );
+  });
+
+  it("deleteFile throws on a malformed body", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, {}));
+    await expect(deleteFile("tok", "f1")).rejects.toThrow(/invalid response/);
+  });
+
+  it("moveFile throws on a malformed body", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(200, { parents: ["root"] }))
+      .mockResolvedValueOnce(makeJsonResponse(200, {}));
+    await expect(moveFile("tok", "f1", "root", "target")).rejects.toThrow(
+      /invalid response/,
+    );
+  });
+
+  it("restoreFile throws on a malformed body", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, {}));
+    await expect(restoreFile("tok", "f1")).rejects.toThrow(/invalid response/);
   });
 });
 
