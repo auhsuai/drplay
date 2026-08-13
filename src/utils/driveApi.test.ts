@@ -21,6 +21,7 @@ import {
   uploadFileResumableChunked,
   generateClientId,
 } from "./driveUpload";
+import { queryResumableStatus } from "./resumableStatus";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
 // exercise driveFetch's retry/backoff path without real network calls.
@@ -113,6 +114,91 @@ function abortReason(signal: AbortSignal): Error {
     ? signal.reason
     : new DOMException("aborted", "AbortError");
 }
+
+// Upgrade helpers (mirror of the per-request-timeout test tools inside the
+// uploadFileResumableChunked describe): a test-controlled clock that aborts
+// each AbortSignal.timeout signal at its deadline, plus an abort-aware fetch
+// mock. Clock note: AbortSignal.timeout uses Node's INTERNAL timer, which
+// vitest fake timers do NOT fake (verified 2026-08-13, Node 24) — so these
+// tests substitute a manual clock that mirrors AbortSignal.timeout semantics
+// exactly (fires once, wall-clock ms after creation).
+interface HeldRequest {
+  signal: AbortSignal | null;
+  aborted: boolean;
+  resolve: (response: Response) => void;
+}
+
+function installTimeoutClock(): { advance: (ms: number) => void } {
+  let now = 0;
+  const timeouts: Array<{ controller: AbortController; deadline: number }> = [];
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+    const controller = new AbortController();
+    timeouts.push({ controller, deadline: now + ms });
+    return controller.signal;
+  });
+  return {
+    advance: (ms: number) => {
+      now += ms;
+      for (const t of timeouts) {
+        if (!t.controller.signal.aborted && now >= t.deadline) {
+          t.controller.abort(
+            new DOMException(
+              "The operation was aborted due to timeout",
+              "TimeoutError",
+            ),
+          );
+        }
+      }
+    },
+  };
+}
+
+// Abort-aware fetch mock mirroring real fetch: a call whose signal is already
+// aborted rejects immediately; otherwise the request stays pending until the
+// test resolves it (or its signal aborts while in flight). Settled entries are
+// removed from the queue, so the queue holds exactly the in-flight requests.
+function holdFetch(): HeldRequest[] {
+  const pending: HeldRequest[] = [];
+  mockedFetch.mockImplementation((_url, opts) => {
+    const signal = opts?.signal ?? null;
+    if (signal instanceof AbortSignal && signal.aborted) {
+      return Promise.reject(abortReason(signal));
+    }
+    return new Promise<Response>((resolve, reject) => {
+      const entry: HeldRequest = { signal, aborted: false, resolve };
+      pending.push(entry);
+      const settle = () => {
+        const idx = pending.indexOf(entry);
+        if (idx !== -1) pending.splice(idx, 1);
+      };
+      entry.resolve = (r) => {
+        settle();
+        resolve(r);
+      };
+      if (signal instanceof AbortSignal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            entry.aborted = true;
+            settle();
+            reject(abortReason(signal));
+          },
+          { once: true },
+        );
+      }
+    });
+  });
+  return pending;
+}
+
+function nextHeld(pending: HeldRequest[]): HeldRequest {
+  const entry = pending[0];
+  if (entry === undefined)
+    throw new Error("expected an in-flight fetch, none held");
+  return entry;
+}
+
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe("getRecentlyAddedAudioFiles", () => {
   beforeEach(() => {
@@ -1638,6 +1724,50 @@ describe("uploadFileResumable", () => {
         uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
       ).rejects.toMatchObject({ kind: "invalid" });
       expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+
+    // Upgrade: per-request timeout signals instead of ONE whole-upload signal.
+    // A single AbortSignal.timeout created before the initiate fires ONCE at
+    // its wall-clock deadline and stays aborted forever — a slow body PUT on
+    // an upload whose TOTAL duration (initiate + PUT) exceeds UPLOAD_TIMEOUT_MS
+    // would be killed mid-flight by a deadline that started ticking before the
+    // PUT even began.
+    it("upload spanning > UPLOAD_TIMEOUT_MS total time completes (timeouts are per-request, not whole-upload)", async () => {
+      const controller = new AbortController();
+      const clock = installTimeoutClock();
+      const pending = holdFetch();
+      try {
+        const p = uploadFileResumable(
+          "tok",
+          new Uint8Array(3),
+          "a.mp3",
+          "p",
+          controller.signal,
+        );
+
+        // The initiate POST (driveFetch, 20s per-attempt bound) takes 10s.
+        await tick();
+        const initiate = nextHeld(pending);
+        clock.advance(10_000);
+        expect(initiate.aborted).toBe(false);
+        initiate.resolve(makeLocationResponse(200, LOCATION));
+        await tick();
+
+        // The body PUT starts at t=10s. OLD code: it carried the whole-upload
+        // signal created at t=0 (deadline t=120s) — the PUT would be killed
+        // 110s into its flight. NEW code: the PUT carries its OWN 120s bound,
+        // created when the PUT starts (deadline t=130s).
+        const put = nextHeld(pending);
+
+        // t=125s: past the old whole-upload deadline, inside the per-request bound.
+        clock.advance(115_000);
+        expect(put.aborted).toBe(false);
+        put.resolve(makeJsonResponse(201, uploadedFile));
+
+        await expect(p).resolves.toEqual(uploadedFile);
+      } finally {
+        vi.restoreAllMocks();
+      }
     });
   });
 });
@@ -3260,5 +3390,73 @@ describe("saveAppConfig serialization lock (promise-chain mutex)", () => {
     });
     expect(result).toBe(42);
     expect(order).toEqual(["t1", "t2"]);
+  });
+});
+
+// Upgrade: queryResumableStatus must merge a FRESH timeout signal per attempt
+// inside its retry loop (per-request bound, refreshed after each backoff sleep
+// so the bound excludes sleep time) instead of reusing ONE signal across the
+// whole query. A single signal fires once at its wall-clock deadline and stays
+// aborted forever — killing every later retry of a status query whose total
+// duration (requests + backoff) exceeds QUERY_STATUS_TIMEOUT_MS.
+describe("queryResumableStatus per-attempt timeout signals", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const UPLOAD_URI =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=query-1";
+
+  function makeRangeResponse(status: number, range: string | null): Response {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === "range" ? range : null),
+      },
+      json: () => ({}),
+    } as unknown as Response;
+  }
+
+  it("status query whose retries span > QUERY_STATUS_TIMEOUT_MS total completes (fresh signal per attempt)", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const clock = installTimeoutClock();
+    const pending = holdFetch();
+    try {
+      // Final form: only the raw caller signal flows in — the function merges
+      // a fresh QUERY_STATUS_TIMEOUT_MS signal per attempt itself.
+      const p = queryResumableStatus(
+        UPLOAD_URI,
+        "tok",
+        1000,
+        controller.signal,
+      );
+
+      // Attempt 0 takes 10s (inside its 20s per-request bound) → 429 → retry.
+      await vi.advanceTimersByTimeAsync(0);
+      const attempt0 = nextHeld(pending);
+      clock.advance(10_000);
+      expect(attempt0.aborted).toBe(false);
+      attempt0.resolve(makeResponse(429));
+
+      // Retry decision + backoff sleep (faked timers) → attempt 1 fires.
+      await vi.advanceTimersByTimeAsync(100_000);
+      const attempt1 = nextHeld(pending);
+      // Total now t=21s. OLD code: attempt 1 reused the t=0 signal whose 20s
+      // deadline has passed → aborted instantly. NEW code: attempt 1 carries a
+      // FRESH 20s bound from its own start.
+      clock.advance(11_000);
+      expect(attempt1.aborted).toBe(false);
+      attempt1.resolve(makeRangeResponse(308, "bytes=0-99"));
+
+      await expect(p).resolves.toEqual({ status: "resume", offset: 100 });
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

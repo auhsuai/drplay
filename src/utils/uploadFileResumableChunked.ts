@@ -15,7 +15,6 @@ import {
   RANGE_HEADER_PATTERN,
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
-  QUERY_STATUS_TIMEOUT_MS,
   asDriveFileItem,
   initiateResumableUpload,
   resolveIdempotentConflict,
@@ -272,11 +271,12 @@ async function resumePreviousSessionOrNull(
       uploadUri,
       token,
       opts.totalSize,
-      // Fresh per-call merge with the query-status bound (the empty PUT is
-      // cheap — no 120s chunk bound; resumableSession.ts). The old shared
-      // whole-upload signal would have been aborted forever by then, killing
-      // this status query instantly on any long upload.
-      mergeWithTimeoutSignal(opts.signal, QUERY_STATUS_TIMEOUT_MS),
+      // Per-attempt merges happen INSIDE queryResumableStatus (fresh
+      // QUERY_STATUS_TIMEOUT_MS signal per request, refreshed after each
+      // backoff sleep so the bound excludes sleep time) — only the caller's
+      // abort flows down. A signal merged here would be shared by every
+      // attempt of the query loop, firing once and staying aborted (the same
+      // bug the per-request chunk signals fixed).
       opts.signal,
       opts.clientGeneratedId,
     );

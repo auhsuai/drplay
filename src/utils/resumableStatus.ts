@@ -4,6 +4,7 @@ import {
   backoffDelay,
   DRIVE_MODULE,
   classifyDriveError,
+  mergeWithTimeoutSignal,
   readDriveErrorBody,
   shouldRetryDriveResponse,
   sleep,
@@ -44,13 +45,24 @@ export async function queryResumableStatus(
   uploadUri: string,
   token: string,
   totalSize: number,
-  mergedSignal: AbortSignal,
   callerSignal: AbortSignal | null | undefined,
   clientGeneratedId?: string,
 ): Promise<ResumableStatusResult> {
   for (let attempt = 0; ; attempt++) {
     let response: Response;
     try {
+      // Fresh timeout signal PER attempt (pattern: putChunkWithRetry in
+      // uploadFileResumableChunked.ts). ONE signal created at call time would
+      // fire at its wall-clock deadline and STAY aborted, killing every later
+      // retry of a status query whose total duration (requests + backoff)
+      // exceeds QUERY_STATUS_TIMEOUT_MS. Per-attempt signals bound only the
+      // current request — and a fresh one after each backoff sleep, so the
+      // bound excludes sleep time. The caller's abort still cancels
+      // everything via the merge.
+      const mergedSignal = mergeWithTimeoutSignal(
+        callerSignal,
+        QUERY_STATUS_TIMEOUT_MS,
+      );
       response = await fetchWithAuth(uploadUri, {
         method: "PUT",
         headers: {
@@ -119,12 +131,14 @@ export async function queryResumableStatus(
       // Retry of an idempotent upload whose first attempt completed
       // server-side: the file already exists — resolve DONE with the real
       // file instead of creating a duplicate (same rule as the chunk PUT).
+      // Fresh per-attempt merge: the conflict GET is itself bounded
+      // per-attempt by driveFetch.
       return {
         status: "done",
         file: await resolveIdempotentConflict(
           token,
           clientGeneratedId,
-          mergedSignal,
+          mergeWithTimeoutSignal(callerSignal, QUERY_STATUS_TIMEOUT_MS),
         ),
       };
     }

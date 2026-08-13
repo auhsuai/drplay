@@ -112,21 +112,33 @@ export async function uploadFileResumable(
   }
 
   const clientGeneratedId = options?.clientGeneratedId;
-  const mergedSignal = mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS);
+  // NOTE: no whole-upload timeout signal (pattern: uploadFileResumableChunked.ts).
+  // ONE AbortSignal.timeout created before the initiate would fire at its
+  // wall-clock deadline and STAY aborted — killing the body PUT of any upload
+  // whose TOTAL duration (initiate + PUT) exceeds UPLOAD_TIMEOUT_MS, even when
+  // each individual request is fast enough on its own. Each request bounds
+  // itself per-request instead: fresh merges below (the initiate is additionally
+  // bounded per-attempt by driveFetch's 20s default) — only the caller's abort
+  // signal is shared across both.
   try {
     const uploadUri = await initiateResumableUpload(
       token,
       name,
       parentId,
       byteLength,
-      mergedSignal,
+      // Fresh per-request merge; the POST itself is bounded per-attempt by
+      // driveFetch (20s default) — this only carries the caller's abort.
+      mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS),
       clientGeneratedId,
     );
     return await putResumableBytes(
       uploadUri,
       token,
       data,
-      mergedSignal,
+      // Fresh per-request merge — the PUT's 120s bound starts when the PUT
+      // starts, not when the upload started (a whole-upload signal would fire
+      // at its fixed deadline and stay aborted, killing the PUT mid-flight).
+      mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS),
       clientGeneratedId,
     );
   } catch (err) {
