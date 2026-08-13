@@ -105,6 +105,7 @@ export function TabContentRouter({
       >
         <HomeTab
           key={isLoggedIn ? "session-in" : "session-out"}
+          isActive={activeTab === TABS.home}
           onPlay={(t: Track, c?: Track[]) => {
             onPlayTrack(t, c);
           }}

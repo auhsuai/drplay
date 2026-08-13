@@ -53,12 +53,14 @@ export function HomeTab({
   token,
   userProfile,
   currentTrack,
+  isActive = true,
 }: {
   onPlay: (track: Track, contextQueue?: Track[]) => void;
   onOpenFolder: (id: string, name: string) => void;
   token: string | null;
   userProfile?: UserProfile | null;
   currentTrack?: Track | null;
+  isActive?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   // null = first load still in flight (skeleton); [] = genuinely empty.
@@ -289,6 +291,25 @@ export function HomeTab({
       }
     });
   }, []);
+
+  // Block the WebView's default find dialog on Home: Home has no search box,
+  // and the app's only other Ctrl+F handler (MyDrive's search focus) lives in
+  // MainContent, which is mounted solely on the MyDrive tab. The guard MUST be
+  // gated on isActive because HomeTab is keep-alive (TabContentRouter hides it
+  // with display:none instead of unmounting) — an always-on listener would
+  // swallow Ctrl+F on other tabs too, breaking MyDrive's search shortcut.
+  useEffect(() => {
+    if (!isActive) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isActive]);
 
   const visibleCount = useResponsiveItems();
 

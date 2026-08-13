@@ -120,6 +120,7 @@ interface HomeTabProps {
   token: string | null;
   userProfile?: UserProfile;
   currentTrack?: Track | null;
+  isActive?: boolean;
 }
 
 interface FullRecentViewProps {
@@ -1203,5 +1204,115 @@ describe("HomeTab debug skeleton trigger", () => {
     expect(() => {
       dispatchSkeleton();
     }).not.toThrow();
+  });
+});
+
+describe("HomeTab Ctrl+F guard (browser find dialog must not open on Home)", () => {
+  beforeEach(() => {
+    mocks.getRecentlyPlayed.mockResolvedValue([
+      { id: "r-1", title: "Recent Track", artist: "Artist", streamUrl: "" },
+    ]);
+    mocks.getHeavyRotation.mockResolvedValue([]);
+    mocks.getRandomDiscoveries.mockResolvedValue([]);
+    mocks.getMostVisitedFolders.mockResolvedValue([]);
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  // A spy registered AFTER HomeTab's own listener: window listeners run in
+  // registration order, so the spy observes the final defaultPrevented state
+  // — the exact thing the WebView's default find dialog checks before opening.
+  function collectDefaultPrevented(): {
+    values: boolean[];
+    remove: () => void;
+  } {
+    const values: boolean[] = [];
+    const spy = (e: Event) => {
+      values.push((e as KeyboardEvent).defaultPrevented);
+    };
+    window.addEventListener("keydown", spy);
+    return {
+      values,
+      remove: () => {
+        window.removeEventListener("keydown", spy);
+      },
+    };
+  }
+
+  it("active: every Ctrl+F variant is prevented (find dialog must not open)", async () => {
+    render(<HomeTab {...baseProps({ isActive: true })} />);
+    await screen.findByText("Recent Track");
+    const { values, remove } = collectDefaultPrevented();
+    try {
+      fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+      // Uppercase F + Shift hits the same guard branch (key.toLowerCase()).
+      fireEvent.keyDown(window, { key: "F", ctrlKey: true, shiftKey: true });
+      // Meta variant (macOS) is covered by the same (ctrlKey || metaKey) check.
+      fireEvent.keyDown(window, { key: "f", metaKey: true });
+      expect(values).toEqual([true, true, true]);
+    } finally {
+      remove();
+    }
+  });
+
+  it("inactive: Ctrl+F is NOT prevented (other tabs keep their shortcut)", async () => {
+    render(<HomeTab {...baseProps({ isActive: false })} />);
+    await screen.findByText("Recent Track");
+    const { values, remove } = collectDefaultPrevented();
+    try {
+      fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+      // The spy fires, but HomeTab's guard is not registered -> the event
+      // survives unprevented (the WebView find dialog would open).
+      expect(values).toEqual([false]);
+    } finally {
+      remove();
+    }
+  });
+
+  it("unmount: listener is removed, Ctrl+F no longer prevented", async () => {
+    const { unmount } = render(<HomeTab {...baseProps({ isActive: true })} />);
+    await screen.findByText("Recent Track");
+    unmount();
+    const { values, remove } = collectDefaultPrevented();
+    try {
+      fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+      expect(values).toEqual([false]);
+    } finally {
+      remove();
+    }
+  });
+
+  it("isActive true -> false via rerender removes the listener", async () => {
+    const { rerender } = render(<HomeTab {...baseProps({ isActive: true })} />);
+    await screen.findByText("Recent Track");
+    const { values, remove } = collectDefaultPrevented();
+    try {
+      fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+      expect(values).toEqual([true]);
+
+      rerender(<HomeTab {...baseProps({ isActive: false })} />);
+      fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+      // The spy still fires, but HomeTab's guard is gone -> not prevented.
+      expect(values).toEqual([true, false]);
+    } finally {
+      remove();
+    }
+  });
+
+  it("other keys are not intercepted", async () => {
+    render(<HomeTab {...baseProps({ isActive: true })} />);
+    await screen.findByText("Recent Track");
+    const { values, remove } = collectDefaultPrevented();
+    try {
+      fireEvent.keyDown(window, { key: "n" });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(values).toEqual([false, false]);
+    } finally {
+      remove();
+    }
   });
 });
