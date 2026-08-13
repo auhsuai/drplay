@@ -440,14 +440,25 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
           signal: buildRequestSignal(this.callerSignal),
         });
       } catch (err: unknown) {
-        recordDriveFailure();
+        // Caller-abort (unmount/navigation) is deliberate cancellation, not
+        // a transient Drive failure: it must not feed the app-wide circuit
+        // breaker (a few quick cancels would otherwise pin the whole app to
+        // a placeholder for the cooldown) and it is not a timeout either.
+        // Only the internal AbortSignal.timeout() fires AbortError with the
+        // caller signal still un-aborted — that one is a real timeout.
+        const callerAborted = this.callerSignal?.aborted === true;
+        if (!callerAborted) {
+          recordDriveFailure();
+        }
         const kind = classifyFetchError(err);
         if (kind === "timeout") {
-          void captureError({
-            level: "warn",
-            source: TOKENIZER_MODULE,
-            message: `range-fetch-timeout (fileId=${this.fileId}, bytes=${String(chunkStart)}-${String(chunkEnd)})`,
-          });
+          if (!callerAborted) {
+            void captureError({
+              level: "warn",
+              source: TOKENIZER_MODULE,
+              message: `range-fetch-timeout (fileId=${this.fileId}, bytes=${String(chunkStart)}-${String(chunkEnd)})`,
+            });
+          }
           // Timeouts are usually first-byte latency spikes on large Drive
           // files, so a bounded retry can rescue them. Never retry when the
           // CALLER aborted — that is deliberate cancellation, not a

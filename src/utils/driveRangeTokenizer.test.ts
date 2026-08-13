@@ -575,5 +575,67 @@ describe("DriveRangeTokenizer", () => {
 
       expect(mock).toHaveBeenCalledTimes(4); // never opened: window expired
     });
+
+    it("caller-abort does not feed the circuit breaker (deliberate cancel, not a failure)", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const captureSpy = vi
+        .spyOn(errorLogModule, "captureError")
+        .mockResolvedValue();
+      const mock = vi.fn(() =>
+        Promise.reject(
+          new DOMException("The user aborted a request", "AbortError"),
+        ),
+      );
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000, {
+        abortSignal: controller.signal,
+      });
+
+      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+        RangeFetchNetworkError,
+      );
+      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+        RangeFetchNetworkError,
+      );
+      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+        RangeFetchNetworkError,
+      );
+
+      // 3 cancels inside the failure window must NOT open the app-wide
+      // circuit (unmount/navigation is deliberate, not Drive throttling)...
+      expect(isDriveCircuitOpen()).toBe(false);
+      // ...so a 4th read must still fetch (no fail-fast placeholder pinning).
+      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+        RangeFetchNetworkError,
+      );
+      expect(mock).toHaveBeenCalledTimes(4);
+      // A caller cancel is not a timeout: no "range-fetch-timeout" warn.
+      expect(captureSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "range-fetch-timeout",
+          ) as unknown as string,
+        }),
+      );
+    });
+
+    it("AbortError from the internal timeout (no caller abort) still counts as a drive failure", async () => {
+      vi.useFakeTimers();
+      const mock = vi.fn(() =>
+        Promise.reject(
+          new DOMException("The operation was aborted", "AbortError"),
+        ),
+      );
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      await settleWithTimers(tz.readRange(0, 8)); // 2 failures (timeout + retry)
+      await settleWithTimers(tz.readRange(0, 8)); // 1 more failure -> circuit opens
+      await settleWithTimers(tz.readRange(0, 8)); // fail fast, no fetch
+
+      expect(isDriveCircuitOpen()).toBe(true);
+      expect(mock).toHaveBeenCalledTimes(3);
+    });
   });
 });
