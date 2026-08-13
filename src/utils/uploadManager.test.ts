@@ -299,7 +299,7 @@ function captureSnapshots(): Array<
 }
 
 describe("uploadManager", () => {
-  it("1. queue tuần tự: upload tiếp theo chỉ bắt đầu sau khi cái trước xong", async () => {
+  it("1. queue concurrency 2: 2 file đầu bắt đầu đồng thời theo FIFO, file 3 chỉ sau khi 1 trong 2 đầu xong", async () => {
     const d1 = deferred<DriveFileItem>();
     const d2 = deferred<DriveFileItem>();
     const d3 = deferred<DriveFileItem>();
@@ -325,21 +325,24 @@ describe("uploadManager", () => {
       TOKEN,
     );
     await flush();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+    // Concurrency 2: a và b cùng bắt đầu, FIFO theo thứ tự enqueue.
+    expect(uploadFileResumable).toHaveBeenCalledTimes(2);
     expect(uploadFileResumable.mock.calls[0]?.[2]).toBe("a.mp3");
+    expect(uploadFileResumable.mock.calls[1]?.[2]).toBe("b.mp3");
+    expect(maxActive).toBe(2);
 
     d1.resolve(makeDriveFile("f1", "a.mp3"));
     await flush();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(2);
-    expect(uploadFileResumable.mock.calls[1]?.[2]).toBe("b.mp3");
+    expect(uploadFileResumable).toHaveBeenCalledTimes(3);
+    // c lấy đúng slot a vừa nhả (b vẫn đang upload).
+    expect(uploadFileResumable.mock.calls[2]?.[2]).toBe("c.mp3");
+    expect(maxActive).toBe(2); // chưa bao giờ vượt 2
 
     d2.resolve(makeDriveFile("f2", "b.mp3"));
-    await flush();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(3);
     d3.resolve(makeDriveFile("f3", "c.mp3"));
     await waitIdle();
 
-    expect(maxActive).toBe(1);
+    expect(maxActive).toBe(2);
     // Subscriber snapshot of the last notify still carries the final 'done'.
     expect(snapshots[snapshots.length - 1]?.map((s) => s.status)).toEqual([
       "done",
@@ -395,12 +398,15 @@ describe("uploadManager", () => {
 
   describe("enqueue-time pending rows (bugfix: multi-file visibility)", () => {
     it("R1. nhiều file upload → TẤT CẢ pending rows xuất hiện ngay tại enqueue (không phải chỉ file đang upload)", async () => {
-      const d = deferred<DriveFileItem>();
+      const da = deferred<DriveFileItem>();
+      const dbB = deferred<DriveFileItem>();
+      const dc = deferred<DriveFileItem>();
+      // Cả 3 deferred: nếu b/c resolve ngay, row thật (f-b/f-c) thay thế
+      // pending row của chúng trong lúc assert (concurrency 2).
       uploadFileResumable
-        .mockReturnValueOnce(d.promise) // chỉ file a được xử lý; b, c nằm queued
-        .mockImplementation((_t, _bytes, name) =>
-          Promise.resolve(makeDriveFile(`f-${name}`, name)),
-        );
+        .mockReturnValueOnce(da.promise)
+        .mockReturnValueOnce(dbB.promise)
+        .mockReturnValueOnce(dc.promise);
 
       um.startUploads(
         [fileSeed("a.mp3"), fileSeed("b.mp3"), fileSeed("c.mp3")],
@@ -421,7 +427,9 @@ describe("uploadManager", () => {
         rows.every((r) => r.parentId === "root" && !r.trashed && !r.isFolder),
       ).toBe(true);
 
-      d.resolve(makeDriveFile("f-a", "a.mp3"));
+      da.resolve(makeDriveFile("f-a", "a.mp3"));
+      dbB.resolve(makeDriveFile("f-b", "b.mp3"));
+      dc.resolve(makeDriveFile("f-c", "c.mp3"));
       await waitIdle();
       const done = await db.files.toArray();
       expect(done).toHaveLength(3);
@@ -429,9 +437,11 @@ describe("uploadManager", () => {
     });
 
     it("R2. cancel entry QUEUED → pending row của nó bị xóa ngay, các entry khác vẫn giữ rows", async () => {
-      const d = deferred<DriveFileItem>();
+      const da = deferred<DriveFileItem>();
+      const dbB = deferred<DriveFileItem>();
       uploadFileResumable
-        .mockReturnValueOnce(d.promise)
+        .mockReturnValueOnce(da.promise)
+        .mockReturnValueOnce(dbB.promise)
         .mockImplementation((_t, _bytes, name) =>
           Promise.resolve(makeDriveFile(`f-${name}`, name)),
         );
@@ -442,21 +452,24 @@ describe("uploadManager", () => {
       );
       await flush();
 
-      // Cả 3 đều có pending rows ngay tại enqueue (b, c chưa từng được pump xử lý).
+      // Cả 3 đều có pending rows ngay tại enqueue (c chưa từng được pump xử lý).
       expect(await db.files.toArray()).toHaveLength(3);
-      const b = um.getEntries().find((e) => e.name === "b.mp3");
-      if (!b) throw new Error("expected queued entry b.mp3");
-      expect(b.status).toBe("queued");
+      // Concurrency 2: a, b đang upload → c nằm queued chờ slot.
+      const c = um.getEntries().find((e) => e.name === "c.mp3");
+      if (!c) throw new Error("expected queued entry c.mp3");
+      expect(c.status).toBe("queued");
 
-      um.cancelUpload(b.id);
+      um.cancelUpload(c.id);
       await flush();
 
       const after = await db.files.toArray();
       expect(after).toHaveLength(2);
-      expect(after.map((r) => r.name).sort()).toEqual(["a.mp3", "c.mp3"]);
+      expect(after.map((r) => r.name).sort()).toEqual(["a.mp3", "b.mp3"]);
       expect(after.every((r) => r.id.startsWith("pending-"))).toBe(true);
+      expect(uploadFileResumable).toHaveBeenCalledTimes(2); // c chưa bao giờ start
 
-      d.resolve(makeDriveFile("f-a", "a.mp3"));
+      da.resolve(makeDriveFile("f-a", "a.mp3"));
+      dbB.resolve(makeDriveFile("f-b", "b.mp3"));
       await waitIdle();
       const done = await db.files.toArray();
       expect(done).toHaveLength(2);
@@ -464,8 +477,13 @@ describe("uploadManager", () => {
     });
 
     it("R3. seed invalid (folder không diskPath) trộn với seed hợp lệ → invalid KHÔNG tạo pending row, hợp lệ vẫn có", async () => {
-      const d = deferred<DriveFileItem>();
-      uploadFileResumable.mockReturnValueOnce(d.promise);
+      const da = deferred<DriveFileItem>();
+      const dbB = deferred<DriveFileItem>();
+      // Concurrency 2: cả 2 hợp lệ start ngay — nếu b resolve ngay, row thật
+      // (f-b) thay thế pending row của nó trong lúc assert.
+      uploadFileResumable
+        .mockReturnValueOnce(da.promise)
+        .mockReturnValueOnce(dbB.promise);
 
       um.startUploads(
         [
@@ -482,7 +500,8 @@ describe("uploadManager", () => {
       expect(rows.every((r) => r.id.startsWith("pending-"))).toBe(true);
       expect(rows.map((r) => r.name).sort()).toEqual(["a.mp3", "b.mp3"]);
 
-      d.resolve(makeDriveFile("f-a", "a.mp3"));
+      da.resolve(makeDriveFile("f-a", "a.mp3"));
+      dbB.resolve(makeDriveFile("f-b", "b.mp3"));
       await waitIdle();
     });
 
@@ -1040,6 +1059,140 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
   });
 
+  it("17b. concurrency 2: 2 file bắt đầu chồng nhau — entry 2 start trước khi entry 1 xong", async () => {
+    const d1 = deferred<DriveFileItem>();
+    const d2 = deferred<DriveFileItem>();
+    const pending = [d1.promise, d2.promise];
+    const started: string[] = [];
+    uploadFileResumable.mockImplementation(async (_t, _bytes, name) => {
+      started.push(name);
+      const next = pending.shift();
+      if (next === undefined) throw new Error("upload queue exhausted");
+      return await next;
+    });
+
+    um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
+    await flush();
+
+    // Cả 2 đã start dù chưa cái nào xong (sequential cũ: chỉ a).
+    expect(started).toEqual(["a.mp3", "b.mp3"]);
+    expect(um.getEntries().map((e) => e.name)).toEqual(["a.mp3", "b.mp3"]);
+
+    d1.resolve(makeDriveFile("f1", "a.mp3"));
+    d2.resolve(makeDriveFile("f2", "b.mp3"));
+    await waitIdle();
+    expect(um.getEntries()).toEqual([]);
+  });
+
+  it("17c. concurrency 2: 3 file → tối đa 2 upload cùng lúc; entry 3 start sau khi 1 trong 2 entry đầu xong", async () => {
+    const d1 = deferred<DriveFileItem>();
+    const d2 = deferred<DriveFileItem>();
+    const d3 = deferred<DriveFileItem>();
+    const pending = [d1.promise, d2.promise, d3.promise];
+    const started: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    uploadFileResumable.mockImplementation(async (_t, _bytes, name) => {
+      started.push(name);
+      active++;
+      maxActive = Math.max(maxActive, active);
+      try {
+        const next = pending.shift();
+        if (next === undefined) throw new Error("upload queue exhausted");
+        return await next;
+      } finally {
+        active--;
+      }
+    });
+
+    um.startUploads(
+      [fileSeed("a.mp3"), fileSeed("b.mp3"), fileSeed("c.mp3")],
+      TOKEN,
+    );
+    await flush();
+
+    expect(started).toEqual(["a.mp3", "b.mp3"]); // 2 slots — c chưa start
+    expect(maxActive).toBe(2);
+
+    d1.resolve(makeDriveFile("f1", "a.mp3"));
+    await flush();
+    // c start ngay khi a xong (slot 1 vừa nhả), b vẫn đang upload.
+    expect(started).toEqual(["a.mp3", "b.mp3", "c.mp3"]);
+    expect(maxActive).toBe(2); // không bao giờ vượt 2
+
+    d2.resolve(makeDriveFile("f2", "b.mp3"));
+    d3.resolve(makeDriveFile("f3", "c.mp3"));
+    await waitIdle();
+    expect(um.getEntries()).toEqual([]);
+  });
+
+  it("17d. concurrency 2: folder child file KHÔNG start trước khi subfolder parent resolve memo ('' marker)", async () => {
+    walkDiskFolder.mockResolvedValue([
+      {
+        path: "C:/Music/a.mp3",
+        name: "a.mp3",
+        relativePath: "a.mp3",
+        isDirectory: false,
+        size: 5,
+      },
+      {
+        path: "C:/Music/sub",
+        name: "sub",
+        relativePath: "sub",
+        isDirectory: true,
+        size: 0,
+      },
+      {
+        path: "C:/Music/sub/x.mp3",
+        name: "x.mp3",
+        relativePath: "sub/x.mp3",
+        isDirectory: false,
+        size: 5,
+      },
+    ]);
+    const dSub = deferred<DriveFileItem>();
+    createFolderMock.mockImplementation((_t, name) => {
+      if (name === "Album")
+        return Promise.resolve({ id: "folder-1", name, mimeType: FOLDER_MIME });
+      return dSub.promise; // 'sub' deferred — memo của nó chưa resolve
+    });
+    const dA = deferred<DriveFileItem>();
+    const dX = deferred<DriveFileItem>();
+    uploadFileResumableChunked
+      .mockReturnValueOnce(dA.promise)
+      .mockReturnValueOnce(dX.promise);
+
+    um.startUploads([folderSeed("Album", "C:/Music")], TOKEN);
+    await flush();
+
+    // a.mp3 (root-level) + sub đang upload song song (2 slots); x.mp3 queued
+    // chờ sub resolve memo (sequential cũ: sub chưa bắt đầu → RED).
+    expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+    expect(uploadFileResumableChunked.mock.calls[0]?.[1]?.name).toBe("a.mp3");
+    expect(createFolderMock).toHaveBeenCalledTimes(2); // Album + sub
+
+    // a xong → slot free → x VẪN không được claim (sub chưa resolve memo).
+    dA.resolve(makeDriveFile("f-a", "a.mp3"));
+    await flush();
+    expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+    expect(um.getEntries().find((e) => e.name === "x.mp3")?.status).toBe(
+      "queued",
+    );
+
+    // sub resolve → memo 'sub' -> sub-1 → x được claim.
+    dSub.resolve({ id: "sub-1", name: "sub", mimeType: FOLDER_MIME });
+    await flush();
+    expect(uploadFileResumableChunked).toHaveBeenCalledTimes(2);
+    expect(uploadFileResumableChunked.mock.calls[1]?.[1]?.name).toBe("x.mp3");
+    expect(uploadFileResumableChunked.mock.calls[1]?.[1]?.parentId).toBe(
+      "sub-1",
+    );
+
+    dX.resolve(makeDriveFile("f-x", "x.mp3"));
+    await waitIdle();
+    expect(um.getEntries()).toEqual([]);
+  });
+
   it("17. isUploading(id) theo đúng getUploadingIds", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
@@ -1329,11 +1482,13 @@ describe("uploadManager", () => {
   });
 
   it("getUploadState: entry.id đang upload/queued → uploading", async () => {
-    const d = deferred<DriveFileItem>();
-    // NOTE: no second once-implementation — the queue is sequential, so b.mp3
-    // never starts while a.mp3 is deferred; a leftover once-impl would leak
-    // into the next test (vitest clearAllMocks does NOT clear once-queue).
-    uploadFileResumable.mockReturnValueOnce(d.promise);
+    const da = deferred<DriveFileItem>();
+    const dbB = deferred<DriveFileItem>();
+    // Concurrency 2: cả a lẫn b start ngay — cả 2 cần deferred để giữ trạng
+    // thái uploading (nếu b resolve ngay, entry b bị prune khỏi danh sách).
+    uploadFileResumable
+      .mockReturnValueOnce(da.promise)
+      .mockReturnValueOnce(dbB.promise);
 
     um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
     await flush();
@@ -1347,7 +1502,8 @@ describe("uploadManager", () => {
     expect(um.getUploadState(b.id)).toBe("uploading");
     expect(um.getUploadState("unknown-id")).toBe("none");
 
-    d.resolve(makeDriveFile("f1", "a.mp3"));
+    da.resolve(makeDriveFile("f1", "a.mp3"));
+    dbB.resolve(makeDriveFile("f2", "b.mp3"));
     await waitIdle();
   });
 
@@ -1705,28 +1861,37 @@ describe("uploadManager", () => {
     });
 
     it("2. cancel entry queued → không gọi upload API cho nó, error aborted + prune ngay, queue không đụng", async () => {
-      const d = deferred<DriveFileItem>();
-      uploadFileResumable.mockReturnValueOnce(d.promise);
+      const da = deferred<DriveFileItem>();
+      const dbB = deferred<DriveFileItem>();
+      uploadFileResumable
+        .mockReturnValueOnce(da.promise)
+        .mockReturnValueOnce(dbB.promise);
 
-      um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
+      um.startUploads(
+        [fileSeed("a.mp3"), fileSeed("b.mp3"), fileSeed("c.mp3")],
+        TOKEN,
+      );
       await flush();
 
-      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+      // Concurrency 2: a, b đang upload → c nằm queued chờ slot.
+      expect(uploadFileResumable).toHaveBeenCalledTimes(2);
       const entries = um.getEntries();
       const a = entries[0];
       const b = entries[1];
-      if (a === undefined || b === undefined)
-        throw new Error("expected 2 upload entries");
-      expect(b.status).toBe("queued");
+      const c = entries[2];
+      if (a === undefined || b === undefined || c === undefined)
+        throw new Error("expected 3 upload entries");
+      expect(c.status).toBe("queued");
 
-      um.cancelUpload(b.id);
-      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // b chưa bao giờ start
-      expect(um.getEntries().map((e) => e.id)).toEqual([a.id]); // b bị prune ngay
+      um.cancelUpload(c.id);
+      expect(uploadFileResumable).toHaveBeenCalledTimes(2); // c chưa bao giờ start
+      expect(um.getEntries().map((e) => e.id)).toEqual([a.id, b.id]); // c bị prune ngay
       expect(showErrorToast).not.toHaveBeenCalled();
 
-      d.resolve(makeDriveFile("f1", "a.mp3"));
+      da.resolve(makeDriveFile("f1", "a.mp3"));
+      dbB.resolve(makeDriveFile("f2", "b.mp3"));
       await waitIdle();
-      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // pump bỏ qua b (đã error)
+      expect(uploadFileResumable).toHaveBeenCalledTimes(2); // pump bỏ qua c (đã error)
       expect(um.getEntries()).toEqual([]);
       expect(showErrorToast).not.toHaveBeenCalled();
     });
@@ -2007,8 +2172,13 @@ describe("uploadManager", () => {
     });
 
     it("10b. bytes upload / entry queued (chưa có progress) → undefined", async () => {
-      const d = deferred<DriveFileItem>();
-      uploadFileResumable.mockReturnValueOnce(d.promise);
+      const da = deferred<DriveFileItem>();
+      const dbB = deferred<DriveFileItem>();
+      // Concurrency 2: cả 2 start — nếu b resolve ngay, entry b bị prune và
+      // getEntries()[1] trả undefined (test không còn ý nghĩa).
+      uploadFileResumable
+        .mockReturnValueOnce(da.promise)
+        .mockReturnValueOnce(dbB.promise);
 
       um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
       await flush();
@@ -2019,9 +2189,10 @@ describe("uploadManager", () => {
       if (a === undefined || b === undefined)
         throw new Error("expected 2 upload entries");
       expect(um.getUploadProgress(a.id)).toBeUndefined(); // uploading nhưng chưa có progress
-      expect(um.getUploadProgress(b.id)).toBeUndefined(); // queued
+      expect(um.getUploadProgress(b.id)).toBeUndefined(); // uploading nhưng chưa có progress
 
-      d.resolve(makeDriveFile("f1", "a.mp3"));
+      da.resolve(makeDriveFile("f1", "a.mp3"));
+      dbB.resolve(makeDriveFile("f2", "b.mp3"));
       await waitIdle();
     });
   });
@@ -2301,26 +2472,35 @@ describe("uploadManager", () => {
     });
 
     it("(d1) cancel queued → no session row remains (delete of a never-persisted id is a safe no-op)", async () => {
-      const d = deferred<DriveFileItem>();
-      uploadFileResumable.mockReturnValueOnce(d.promise);
+      const da = deferred<DriveFileItem>();
+      const dbB = deferred<DriveFileItem>();
+      uploadFileResumable
+        .mockReturnValueOnce(da.promise)
+        .mockReturnValueOnce(dbB.promise);
 
-      um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
+      um.startUploads(
+        [fileSeed("a.mp3"), fileSeed("b.mp3"), fileSeed("c.mp3")],
+        TOKEN,
+      );
       await flush();
 
-      const b = um.getEntries().find((e) => e.name === "b.mp3");
-      if (!b) throw new Error("expected queued entry");
-      expect(b.status).toBe("queued");
-      // The active upload owns a row; the queued entry never persisted one.
-      expect(await db.uploadSessions.toArray()).toHaveLength(1);
+      // Concurrency 2: a, b đang upload → c nằm queued (chưa bao giờ persist
+      // session row — cancel nó phải là delete no-op an toàn).
+      const c = um.getEntries().find((e) => e.name === "c.mp3");
+      if (!c) throw new Error("expected queued entry");
+      expect(c.status).toBe("queued");
+      // Hai upload đang chạy sở hữu 2 rows; entry queued chưa persist row nào.
+      expect(await db.uploadSessions.toArray()).toHaveLength(2);
 
       expect(() => {
-        um.cancelUpload(b.id);
+        um.cancelUpload(c.id);
       }).not.toThrow();
       expect(
-        await db.uploadSessions.where("id").equals(b.id).toArray(),
+        await db.uploadSessions.where("id").equals(c.id).toArray(),
       ).toHaveLength(0);
 
-      d.resolve(makeDriveFile("f1", "a.mp3"));
+      da.resolve(makeDriveFile("f1", "a.mp3"));
+      dbB.resolve(makeDriveFile("f2", "b.mp3"));
       await waitIdle();
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });

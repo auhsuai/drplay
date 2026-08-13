@@ -62,6 +62,12 @@ let resumeRunning = false;
 //    it, because the filter copy shifts every later index left by one.
 let nextScanIndex = 0;
 
+// Uploads run at most UPLOAD_CONCURRENCY entries in parallel. Google Drive's
+// per-user quota (325,000 units/min, units model since 2026-05-01) allows this
+// generously; 2 is the safe default against 429 storms on weak links — raise
+// only after measuring real throughput.
+const UPLOAD_CONCURRENCY = 2;
+
 // events.ts (notify/getEntries/getUploadState) must READ the live entries but
 // never own/mutate them — hand it a read-only getter so the import graph stays
 // acyclic (queue -> events, never events -> queue).
@@ -299,21 +305,52 @@ function enqueuePendingRows(batch: InternalEntry[]): Promise<void> {
   );
 }
 
-// First entry with status 'queued', scanned from the monotonic head — FIFO
-// by array order, identical selection to the old entries.find from index 0,
+// A folder-child FILE cannot start before its parent folder's Drive id is
+// known: handleChildFile throws ParentFolderMissingError on the '' memo
+// marker. The parent (a folderChild entry) is always enqueued before its
+// children (walk order), so a child whose memo is still '' is blocked while
+// the parent is queued/uploading — once the parent settles (done → memo set,
+// or cancelled/errored → gone from the queue) the child is claimable again
+// and either uploads or fails with parent-folder-missing like the sequential
+// queue did.
+function childParentResolved(entry: InternalEntry): boolean {
+  if (entry.kind !== "folderChildFile" || entry.batchMemo === undefined) {
+    return true;
+  }
+  const dir = entry.relativeDir ?? "";
+  if (entry.batchMemo.get(dir)) return true;
+  return !entries.some(
+    (e) =>
+      e.batchMemo === entry.batchMemo &&
+      e.kind === "folderChild" &&
+      e.relativeDir === dir &&
+      (e.status === "queued" || e.status === "uploading"),
+  );
+}
+
+// First CLAIMABLE entry with status 'queued', scanned from the monotonic head —
+// FIFO by array order, identical selection to the old entries.find from index 0,
 // but each entry is visited at most once per pass (entries at index < head
 // are settled by invariant — see the nextScanIndex comment). When the scan
 // runs out, the head resets to the tail so the next pump pass starts fresh.
+// A blocked child (parent folder still resolving) does NOT advance the head —
+// the next scan re-evaluates it, while a claimable entry further along the
+// queue is still claimed (a free slot must not stall behind one unresolved
+// parent).
 function nextQueued(): InternalEntry | undefined {
+  let firstBlocked: number | undefined;
   for (let i = nextScanIndex; i < entries.length; i++) {
     const candidate = entries[i];
     if (candidate === undefined) continue; // noUncheckedIndexedAccess guard — array has no holes
-    if (candidate.status === "queued") {
-      nextScanIndex = i + 1;
-      return candidate;
+    if (candidate.status !== "queued") continue;
+    if (!childParentResolved(candidate)) {
+      if (firstBlocked === undefined) firstBlocked = i;
+      continue;
     }
+    nextScanIndex = firstBlocked ?? i + 1;
+    return candidate;
   }
-  nextScanIndex = entries.length;
+  nextScanIndex = firstBlocked ?? entries.length;
   return undefined;
 }
 
@@ -321,10 +358,27 @@ async function pump(): Promise<void> {
   if (busy) return;
   busy = true;
   try {
+    // Runs started by THIS pump, tracked so the loop stays alive until all of
+    // them settle: a folder root pushes its children mid-flight, and the
+    // re-scan must still catch them after the initial claim ran dry. The set
+    // IS the concurrency counter (UPLOAD_CONCURRENCY slots); Promise.race
+    // refills a slot the moment ANY run settles, so the next queued entry
+    // starts as soon as one of the in-flight entries finishes — never later.
+    const inFlight = new Set<Promise<void>>();
     for (;;) {
-      const next = nextQueued();
-      if (!next) break;
-      await processEntry(next);
+      while (inFlight.size < UPLOAD_CONCURRENCY) {
+        const next = nextQueued();
+        if (!next) break;
+        const task = processEntry(next);
+        inFlight.add(task);
+        void task.finally(() => {
+          inFlight.delete(task);
+        });
+      }
+      if (inFlight.size === 0) break;
+      // processEntry never rejects (every path ends in markDone/markError),
+      // and each task is already observed by the finally above.
+      await Promise.race([...inFlight]);
     }
   } finally {
     busy = false;
