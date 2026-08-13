@@ -3,6 +3,7 @@ import {
   backoffDelay,
   createFolder,
   driveFetch,
+  getAppConfig,
   getDriveStorageQuota,
   getRecentlyAddedAudioFiles,
   saveAppConfig,
@@ -3390,6 +3391,73 @@ describe("saveAppConfig serialization lock (promise-chain mutex)", () => {
     });
     expect(result).toBe(42);
     expect(order).toEqual(["t1", "t2"]);
+  });
+});
+
+// Upgrade: saveAppConfig must NOT blind-POST when the config search itself
+// fails (non-ok). Pre-fix a failed search still POSTed a new file — a
+// transient 4xx (e.g. 403) during first-save could create a second duplicate
+// drplay_config.json in appDataFolder (Drive has no conditional upsert).
+// Now: search fail → warn + return false, no upload request is made.
+describe("saveAppConfig search-failure guard (no blind POST)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("search fails (non-ok) → returns false WITHOUT POSTing a new file", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(400, {})) // search: non-ok
+      .mockResolvedValueOnce(makeResponse(200)); // would-be upload — must NOT happen
+
+    const saved = await saveAppConfig("tok-1", { a: 1 });
+
+    expect(saved).toBe(false);
+    // Only the search request happened — no upload call.
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(fetchCallAt(0)[0]).toContain("spaces=appDataFolder");
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: "config-search-failed, skip upload",
+      }),
+    );
+  });
+});
+
+// Upgrade: getAppConfig must forward a caller AbortSignal into the Drive
+// fetches (driveFetch turns the abort into an immediate non-retried
+// rejection). Pre-fix the signal was dropped, so a cancelled init (unmount /
+// token refresh) still issued network calls.
+describe("getAppConfig caller abort signal", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("aborted caller signal → driveFetch rejects inside → returns null, never reads the file", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    mockedFetch.mockImplementation((_url, opts) => {
+      if (opts?.signal?.aborted) {
+        return Promise.reject(new DOMException("aborted", "AbortError"));
+      }
+      return Promise.resolve(
+        makeJsonResponse(200, { files: [{ id: "file-1" }] }),
+      );
+    });
+
+    const result = await getAppConfig("tok-1", controller.signal);
+
+    expect(result).toBeNull();
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        message: expect.stringContaining(
+          "get-config-failed",
+        ) as unknown as string,
+      }),
+    );
   });
 });
 

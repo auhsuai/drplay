@@ -96,7 +96,10 @@ export const useDriveInit = ({
             const freshToken = await getValidToken();
             if (isCancelled()) return;
             if (freshToken) {
-              const remoteConfig = await getAppConfig(freshToken);
+              const remoteConfig = await getAppConfig(
+                freshToken,
+                controller.signal,
+              );
               if (isCancelled()) return;
               if (remoteConfig && remoteConfig.rootFolderId) {
                 // The config id is a Drive file id (string) by contract; the

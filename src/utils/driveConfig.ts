@@ -14,42 +14,74 @@ function buildConfigSearchUrl(): string {
   return `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
 }
 
+// Shared search helper: query appDataFolder for the config file. The ok flag
+// separates a FAILED search (non-ok response — the write path must abort to
+// avoid a blind POST that could create a duplicate config file) from a
+// SUCCESSFUL search that simply found no file (fileId null — the first-save
+// path that may POST a brand-new file).
+type ConfigSearchResult =
+  { ok: true; fileId: string | null } | { ok: false; status: number };
+
+async function findConfigFileId(
+  token: string,
+  signal?: AbortSignal,
+): Promise<ConfigSearchResult> {
+  const url = buildConfigSearchUrl();
+  const searchRes = await driveFetch(url, {
+    headers: authHeaders(token),
+    ...(signal ? { signal } : {}),
+  });
+  if (!searchRes.ok) {
+    return { ok: false, status: searchRes.status };
+  }
+  const searchData: unknown = await searchRes.json();
+  const files = parseFilesList(searchData);
+  const first = files[0];
+  return { ok: true, fileId: first === undefined ? null : first.id };
+}
+
 /**
  * Read the app config JSON from Drive's appDataFolder (invisible to the
  * user's Drive UI). The config is the source of truth for app settings that
  * must survive reinstalls; a missing/corrupt file or a failed request returns
- * null so the app falls back to defaults (logged, never thrown).
+ * null so the app falls back to defaults. Failures never throw: network/parse
+ * errors and non-ok responses (search or download) all log and return null.
  * @param token Drive access token.
+ * @param signal Optional AbortSignal to cancel the request (e.g. unmount).
  * @returns The parsed config object, or null when absent/unreadable.
  */
 export async function getAppConfig(
   token: string,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown> | null> {
-  const url = buildConfigSearchUrl();
-
   try {
-    const searchRes = await driveFetch(url, {
+    const search = await findConfigFileId(token, signal);
+    if (!search.ok) {
+      await captureError({
+        level: "warn",
+        source: DRIVE_MODULE,
+        message: `get-config-search-failed (status=${String(search.status)})`,
+      });
+      return null;
+    }
+    const fileId = search.fileId;
+    if (fileId === null) return null;
+
+    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+    const downloadRes = await driveFetch(downloadUrl, {
       headers: authHeaders(token),
+      ...(signal ? { signal } : {}),
     });
 
-    if (!searchRes.ok) return null;
-    const searchData: unknown = await searchRes.json();
-    const files = parseFilesList(searchData);
-
-    if (files.length > 0) {
-      const first = files[0];
-      if (first === undefined) return null;
-      const fileId = first.id;
-      const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-      const downloadRes = await driveFetch(downloadUrl, {
-        headers: authHeaders(token),
-      });
-
-      if (downloadRes.ok) {
-        const config: unknown = await downloadRes.json();
-        return config as Record<string, unknown> | null;
-      }
+    if (downloadRes.ok) {
+      const config: unknown = await downloadRes.json();
+      return config as Record<string, unknown> | null;
     }
+    await captureError({
+      level: "warn",
+      source: DRIVE_MODULE,
+      message: `get-config-download-failed (status=${String(downloadRes.status)})`,
+    });
   } catch (e: unknown) {
     await captureError({
       level: "error",
@@ -90,23 +122,19 @@ export async function withSaveConfigLock<T>(fn: () => Promise<T>): Promise<T> {
 async function saveAppConfigInternal(
   token: string,
   config: unknown,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const url = buildConfigSearchUrl();
-
   try {
-    const searchRes = await driveFetch(url, {
-      headers: authHeaders(token),
-    });
-
-    let fileId: string | null = null;
-    if (searchRes.ok) {
-      const searchData: unknown = await searchRes.json();
-      const files = parseFilesList(searchData);
-      if (files.length > 0) {
-        const first = files[0];
-        if (first !== undefined) fileId = first.id;
-      }
+    const search = await findConfigFileId(token, signal);
+    if (!search.ok) {
+      await captureError({
+        level: "warn",
+        source: DRIVE_MODULE,
+        message: "config-search-failed, skip upload",
+      });
+      return false;
     }
+    const fileId = search.fileId;
 
     const boundary = "-------314159265358979323846";
     const delimiter = `\r\n--${boundary}\r\n`;
@@ -138,6 +166,7 @@ async function saveAppConfigInternal(
         "Content-Type": `multipart/related; boundary=${boundary}`,
       },
       body: multipartRequestBody,
+      ...(signal ? { signal } : {}),
     });
 
     if (!uploadRes.ok) {
@@ -164,15 +193,20 @@ async function saveAppConfigInternal(
  * first save and PATCHing it afterwards. Serialized through a promise-chain
  * mutex (withSaveConfigLock): two concurrent saves would both search, find
  * nothing, and POST — creating duplicate config files (Drive has no
- * conditional upsert). Failures log and return false; the caller keeps using
- * its in-memory config.
+ * conditional upsert). A failed search (non-ok) aborts the save without
+ * POSTing — blind-POSTing on a 4xx search could create a second duplicate
+ * config file. Failures log and return false; the caller keeps using its
+ * in-memory config.
  * @param token Drive access token.
  * @param config Any JSON-serializable config object.
+ * @param signal Optional AbortSignal forwarded to the Drive calls inside the
+ * lock (the lock itself is never aborted).
  * @returns true when Drive confirmed the write, false on any failure.
  */
 export async function saveAppConfig(
   token: string,
   config: unknown,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  return withSaveConfigLock(() => saveAppConfigInternal(token, config));
+  return withSaveConfigLock(() => saveAppConfigInternal(token, config, signal));
 }
