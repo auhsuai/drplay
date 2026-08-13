@@ -602,8 +602,21 @@ describe("SeekBar keyboard seek gating", () => {
     expect(fakeController.seek).toHaveBeenCalledWith(5);
   });
 
+  it("BUG regression: ArrowRight không seek về 0 khi duration chưa load (duration=0, currentTime=30 → giữ nguyên vị trí)", () => {
+    renderSeekBar();
+    fakeController.getDuration.mockReturnValue(0);
+    fakeController.getCurrentTime.mockReturnValue(30);
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+    });
+
+    expect(fakeController.seek).not.toHaveBeenCalled();
+  });
+
   it("default keyboardSeek seeks with ArrowRight and redraws the buffer bar synchronously", () => {
     renderSeekBar();
+    fakeController.getDuration.mockReturnValue(240);
     const buffer = screen.getByTestId("buffer-fill");
 
     setBuffered([[0, 300]]);

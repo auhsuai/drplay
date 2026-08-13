@@ -2,8 +2,7 @@ import { useEffect } from "react";
 import type { RefObject } from "react";
 import type { AudioController } from "../../lib/AudioController";
 import { updateBufferBar } from "../../utils/bufferedRange";
-
-const SEEK_STEP_SECONDS = 5;
+import { seekRelative, SEEK_STEP_SECONDS } from "../../hooks/player/utils";
 
 export interface UseSeekKeyboardOptions {
   audio: AudioController;
@@ -38,7 +37,7 @@ export function useSeekKeyboard({
       switch (e.key) {
         case "ArrowLeft":
           e.preventDefault();
-          audio.seek(Math.max(0, audio.getCurrentTime() - SEEK_STEP_SECONDS));
+          seekRelative(audio, -SEEK_STEP_SECONDS);
           // Redraw immediately instead of clearing: updateBufferBar already
           // drops stale pre-seek ranges, and clearing first would flash an
           // empty bar for a frame before the next progress event (blink on
@@ -53,12 +52,7 @@ export function useSeekKeyboard({
           break;
         case "ArrowRight":
           e.preventDefault();
-          audio.seek(
-            Math.min(
-              audio.getDuration(),
-              audio.getCurrentTime() + SEEK_STEP_SECONDS,
-            ),
-          );
+          seekRelative(audio, SEEK_STEP_SECONDS);
           updateBufferBar(
             bufferFillRef.current,
             audio.getBuffered(),

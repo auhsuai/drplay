@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePlayerStore } from "../store/playerStore";
 import { AudioController } from "../lib/AudioController";
+import { seekRelative, SEEK_STEP_SECONDS } from "./player/utils";
 
 export interface UseMediaSessionOptions {
   /** Resume playback (usePlayer.handleTogglePlay — covers the no-streamUrl resume path). */
@@ -25,12 +26,6 @@ const MEDIA_SESSION_ACTIONS: ReadonlyArray<MediaSessionAction> = [
   "seekbackward",
   "seekforward",
 ];
-
-/**
- * Fallback step for the seekbackward/seekforward media keys when the OS does
- * not provide a seekOffset. Matches the app's existing seek step (SeekBar).
- */
-const SEEK_STEP_SECONDS = 5;
 
 /** The app never changes playback speed (no playbackRate API) → always 1. */
 const PLAYBACK_RATE = 1;
@@ -113,19 +108,12 @@ export function useMediaSession(options: UseMediaSessionOptions) {
     });
     register("seekbackward", (details) => {
       const audio = AudioController.getInstance();
-      const step = details.seekOffset ?? SEEK_STEP_SECONDS;
-      audio.seek(Math.max(0, audio.getCurrentTime() - step));
+      seekRelative(audio, -(details.seekOffset ?? SEEK_STEP_SECONDS));
       updatePositionState();
     });
     register("seekforward", (details) => {
       const audio = AudioController.getInstance();
-      const step = details.seekOffset ?? SEEK_STEP_SECONDS;
-      const duration = audio.getDuration();
-      audio.seek(
-        duration > 0
-          ? Math.min(duration, audio.getCurrentTime() + step)
-          : audio.getCurrentTime() + step,
-      );
+      seekRelative(audio, details.seekOffset ?? SEEK_STEP_SECONDS);
       updatePositionState();
     });
 
