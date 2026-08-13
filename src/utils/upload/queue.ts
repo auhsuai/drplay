@@ -51,6 +51,16 @@ let busy = false;
 // Slice 5.2: re-entrancy guard for resumeInterruptedUploads — set synchronously
 // before the first await so a second concurrent call returns immediately.
 let resumeRunning = false;
+// Monotonic scan head for pump: the first queued entry is searched from here
+// instead of from index 0 on every iteration (a batch of N uploads was
+// O(n²) — ~3N² array ops at N=5000). Invariants that keep it correct:
+// 1) every enqueue path (startUploads, resumeInterruptedUploads, folder
+//    children) appends at the TAIL, i.e. at index >= nextScanIndex;
+// 2) nothing before the head ever returns to 'queued' (processEntry flips to
+//    'uploading' synchronously, terminal entries are pruned);
+// 3) pruneEntry pulls the head back by one when it removes an entry AHEAD of
+//    it, because the filter copy shifts every later index left by one.
+let nextScanIndex = 0;
 
 // events.ts (notify/getEntries/getUploadState) must READ the live entries but
 // never own/mutate them — hand it a read-only getter so the import graph stays
@@ -175,6 +185,13 @@ export function isUploading(id: string): boolean {
   return getUploadingIds().has(id);
 }
 
+// An entry is reachable by its pending id ('pending-…') or, once known, by its
+// Drive id — callers may hold either. Shared lookup for cancelUpload and
+// getUploadProgress.
+function findEntryByAnyId(id: string): InternalEntry | undefined {
+  return entries.find((e) => e.id === id || e.driveId === id);
+}
+
 /**
  * User-initiated cancel. An in-flight 'uploading' entry aborts its wired
  * AbortController (the Drive request rejects and the entry turns into a
@@ -184,7 +201,7 @@ export function isUploading(id: string): boolean {
  * @param id The entry id ('pending-…') or the Drive id once known.
  */
 export function cancelUpload(id: string): void {
-  const entry = entries.find((e) => e.id === id || e.driveId === id);
+  const entry = findEntryByAnyId(id);
   if (!entry || entry.status === "done" || entry.status === "error") return;
   if (entry.status === "queued") {
     cancelQueuedEntry(entry);
@@ -212,12 +229,14 @@ function cancelQueuedEntry(entry: InternalEntry): void {
 // the pending entry id or the Drive id. undefined when the id is unknown,
 // terminal, or no progress has been reported yet.
 export function getUploadProgress(id: string): number | undefined {
-  const entry = entries.find(
-    (e) =>
-      (e.id === id || e.driveId === id) &&
-      (e.status === "queued" || e.status === "uploading"),
-  );
-  return entry?.progress;
+  const entry = findEntryByAnyId(id);
+  if (
+    entry === undefined ||
+    (entry.status !== "queued" && entry.status !== "uploading")
+  ) {
+    return undefined;
+  }
+  return entry.progress;
 }
 
 function createEntry(seed: UploadSeed, token: string): InternalEntry {
@@ -280,12 +299,30 @@ function enqueuePendingRows(batch: InternalEntry[]): Promise<void> {
   );
 }
 
+// First entry with status 'queued', scanned from the monotonic head — FIFO
+// by array order, identical selection to the old entries.find from index 0,
+// but each entry is visited at most once per pass (entries at index < head
+// are settled by invariant — see the nextScanIndex comment). When the scan
+// runs out, the head resets to the tail so the next pump pass starts fresh.
+function nextQueued(): InternalEntry | undefined {
+  for (let i = nextScanIndex; i < entries.length; i++) {
+    const candidate = entries[i];
+    if (candidate === undefined) continue; // noUncheckedIndexedAccess guard — array has no holes
+    if (candidate.status === "queued") {
+      nextScanIndex = i + 1;
+      return candidate;
+    }
+  }
+  nextScanIndex = entries.length;
+  return undefined;
+}
+
 async function pump(): Promise<void> {
   if (busy) return;
   busy = true;
   try {
     for (;;) {
-      const next = entries.find((e) => e.status === "queued");
+      const next = nextQueued();
       if (!next) break;
       await processEntry(next);
     }
@@ -351,7 +388,14 @@ function handleByKind(entry: InternalEntry): Promise<DriveFileItem> {
 // their final notify() first so subscribers still observe the terminal state.
 function pruneEntry(entry: InternalEntry): void {
   entry.bytes = undefined;
+  const removedIndex = entries.indexOf(entry);
   entries = entries.filter((e) => e !== entry);
+  // The filter copy shifts every index after the removed one left by one, so
+  // a removal AHEAD of the scan head must pull the head back to keep pointing
+  // at the same logical position (removals behind it leave it untouched).
+  if (removedIndex !== -1 && removedIndex < nextScanIndex) {
+    nextScanIndex -= 1;
+  }
 }
 
 // Shared terminal cleanup for the two async terminal paths: drop the pending

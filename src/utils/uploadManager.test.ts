@@ -1018,6 +1018,28 @@ describe("uploadManager", () => {
     expect(um.getEntries()).toEqual([]);
   });
 
+  it("16b. queue lớn (50 entries): pump giữ FIFO đúng thứ tự, không bỏ sót entry dù prune giữa chừng", async () => {
+    const names = Array.from(
+      { length: 50 },
+      (_, i) => `t${String(i).padStart(2, "0")}.mp3`,
+    );
+    const called: string[] = [];
+    uploadFileResumable.mockImplementation((_t, _bytes, name) => {
+      called.push(name);
+      return Promise.resolve(makeDriveFile(`f-${String(called.length)}`, name));
+    });
+
+    um.startUploads(
+      names.map((n) => fileSeed(n)),
+      TOKEN,
+    );
+    await waitIdle();
+
+    expect(called).toHaveLength(50);
+    expect(called).toEqual(names); // FIFO: đúng thứ tự enqueue
+    expect(um.getEntries()).toEqual([]);
+  });
+
   it("17. isUploading(id) theo đúng getUploadingIds", async () => {
     const d = deferred<DriveFileItem>();
     uploadFileResumable.mockReturnValueOnce(d.promise);
