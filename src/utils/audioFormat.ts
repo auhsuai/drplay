@@ -140,8 +140,22 @@ export function findMpegFrameSync(head: Uint8Array, from: number): number {
   return -1;
 }
 
+/**
+ * Offset of the first MPEG frame sync after the ID3v2 tag (if any), or -1
+ * when the head carries no ID3v2 tag and no sync is found. Deduplicates the
+ * tagEnd dance that the CBR probe, the size-derived duration, and the
+ * metadata pipeline each copied.
+ */
+export function findMpegDataStart(head: Uint8Array): number {
+  const tagSize = readId3v2TagSize(head);
+  const tagEnd =
+    tagSize > 0 ? Math.min(head.length, tagSize + ID3V2_HEADER_LEN) : 0;
+  return findMpegFrameSync(head, tagEnd);
+}
+
 // ---- MPEG audio (MP3) frame-header sniffing ---------------------------------
-// ISO/IEC 11172-3 frame-header tables, mirroring music-metadata's
+// verified against music-metadata 11.14.0 (node_modules) — re-verify on
+// upgrade. ISO/IEC 11172-3 frame-header tables, mirroring music-metadata's
 // MpegFrameHeader (node_modules/music-metadata/lib/mpeg/MpegParser.js). Used
 // to prove a constant-bitrate MP3 stream from the head bytes alone, so a
 // large CBR file can be parsed at its real size: the parser quits after the
@@ -263,10 +277,7 @@ function probeMpegCbrFrames(
   format: AudioFormat,
 ): MpegFrameInfo[] | null {
   if (format !== "mp3") return null;
-  const tagSize = readId3v2TagSize(head);
-  const tagEnd =
-    tagSize > 0 ? Math.min(head.length, tagSize + ID3V2_HEADER_LEN) : 0;
-  const frameStart = findMpegFrameSync(head, tagEnd);
+  const frameStart = findMpegDataStart(head);
   if (frameStart < 0) return null;
   const first = parseMpegFrameHeader(head, frameStart);
   if (first === null) return null;
@@ -294,6 +305,8 @@ function probeMpegCbrFrames(
  * bitrates equal) and then derives the duration from the tokenizer's file
  * size instead of scanning the stream; proving CBR from the head lets the
  * caller grant a large file its real size safely.
+ * Test-only surface: no production callers — exported solely for the CBR
+ * spec-guard in audioFormat.test.ts.
  */
 export function isMpegCbr(head: Uint8Array, format: AudioFormat): boolean {
   return probeMpegCbrFrames(head, format) !== null;
@@ -313,16 +326,41 @@ export function mpegCbrDurationFromSize(
 ): number | null {
   const frames = probeMpegCbrFrames(head, format);
   if (frames === null || frames.length === 0) return null;
-  const tagSize = readId3v2TagSize(head);
-  const tagEnd =
-    tagSize > 0 ? Math.min(head.length, tagSize + ID3V2_HEADER_LEN) : 0;
-  const mpegOffset = findMpegFrameSync(head, tagEnd);
+  const mpegOffset = findMpegDataStart(head);
   if (mpegOffset < 0) return null;
   const last = frames[frames.length - 1];
   if (last === undefined) return null;
   const numberOfSamples =
     Math.round((fileSize - mpegOffset) / last.frameSize) * last.samplesPerFrame;
   return numberOfSamples / last.sampleRate;
+}
+
+/**
+ * Read an MP4 box header at `off`: 8 bytes (32-bit size + 4-char type), or
+ * 16 bytes when the size is 1 (64-bit extended size, ISO/IEC 14496-12 §4.2).
+ * Returns null when the header does not fit within `bound` — the caller
+ * decides how to react (walkMp4TopBoxes stops the walk, scanTailForMoov
+ * skips the offset).
+ */
+function readBoxHeader(
+  buffer: Uint8Array,
+  off: number,
+  bound: number,
+): { size: number; type: string } | null {
+  if (off + 8 > bound) return null;
+  let size = readU32BE(buffer, off);
+  if (size === 1) {
+    // 64-bit extended size: a second 8-byte size follows the header.
+    if (off + 16 > bound) return null;
+    size = readU64BE(buffer, off + 8);
+  }
+  const type = String.fromCharCode(
+    buffer[off + 4] ?? 0,
+    buffer[off + 5] ?? 0,
+    buffer[off + 6] ?? 0,
+    buffer[off + 7] ?? 0,
+  );
+  return { size, type };
 }
 
 export interface Mp4BoxWalk {
@@ -353,19 +391,16 @@ export function walkMp4TopBoxes(
   const bufSize = Math.min(buffer.length, Math.max(0, fileSize));
   let offset = 0;
   while (offset + 8 <= bufSize) {
-    let size = readU32BE(buffer, offset);
-    if (size === 1) {
-      // 64-bit extended size: a second 8-byte size follows the header.
-      if (offset + 16 > bufSize) break;
-      size = readU64BE(buffer, offset + 8);
-    }
-    if (fourCC(buffer, offset + 4, "moov")) {
+    const header = readBoxHeader(buffer, offset, bufSize);
+    if (header === null) break;
+    const { size, type } = header;
+    if (type === "moov") {
       result.moovBeforeMdat = true;
       result.moovOffset = offset;
       result.moovSize = size;
       break;
     }
-    if (fourCC(buffer, offset + 4, "mdat")) {
+    if (type === "mdat") {
       result.mdatBeforeMoov = true;
     }
     // size 0 extends to EOF; size < 8 is malformed; a size beyond the buffer
@@ -404,11 +439,9 @@ export function scanTailForMoov(
   for (let i = maxI; i >= 0; i -= 4) {
     if (!fourCC(tailBuffer, i + 4, "moov")) continue;
     const absOffset = tailStart + i;
-    let size = readU32BE(tailBuffer, i);
-    if (size === 1) {
-      if (i + 16 > tailBuffer.length) continue;
-      size = readU64BE(tailBuffer, i + 8);
-    }
+    const header = readBoxHeader(tailBuffer, i, tailBuffer.length);
+    if (header === null) continue;
+    const { size } = header;
     // size 0 = box extends to EOF (valid); otherwise the declared size must
     // fit inside the file or the header is a false positive.
     if (size === 0 || (size >= 8 && absOffset + size <= fileSize)) {

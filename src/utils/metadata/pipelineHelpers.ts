@@ -1,9 +1,4 @@
-import {
-  findMpegFrameSync,
-  readId3v2TagSize,
-  ID3V2_HEADER_LEN,
-  type AudioFormat,
-} from "../audioFormat";
+import { findMpegDataStart, type AudioFormat } from "../audioFormat";
 import {
   DURATION_TAG_SCAN_BYTES,
   UNKNOWN_ARTIST,
@@ -30,10 +25,7 @@ function hasEmbeddedDurationTag(
   format: AudioFormat,
 ): boolean {
   if (format !== "mp3" && format !== "unknown") return true;
-  const tagSize = readId3v2TagSize(head);
-  const tagEnd =
-    tagSize > 0 ? Math.min(head.length, tagSize + ID3V2_HEADER_LEN) : 0;
-  const frameStart = findMpegFrameSync(head, tagEnd);
+  const frameStart = findMpegDataStart(head);
   if (frameStart < 0) return false;
   const searchEnd = Math.min(head.length, frameStart + DURATION_TAG_SCAN_BYTES);
   for (let i = frameStart + 4; i + 3 < searchEnd; i += 1) {
