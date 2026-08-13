@@ -25,7 +25,7 @@ import type { InternalEntry } from "./types";
 // a transient failure is retried at most 3 times, never 3×2). Disk paths
 // bypass this and go through uploadDiskFileStreaming — the chunked uploader
 // retries transient failures internally (2 session restarts via its own
-// MAX_UPLOAD_ATTEMPTS + per-chunk backoff through the 308-resume protocol), a
+// CHUNKED_SESSION_MAX_ATTEMPTS + per-chunk backoff through the 308-resume protocol), a
 // DIFFERENT mechanism, so layering the manager retries on top would multiply
 // upload attempts.
 export async function uploadWithQuotaAndRetry(

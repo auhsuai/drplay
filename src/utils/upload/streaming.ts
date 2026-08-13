@@ -142,7 +142,7 @@ async function uploadDiskPathChunked(
   totalSize: number,
 ): Promise<DriveFileItem> {
   // Generated ONCE per logical upload: the chunked uploader restarts its
-  // session internally (MAX_UPLOAD_ATTEMPTS), and every session must stay
+  // session internally (CHUNKED_SESSION_MAX_ATTEMPTS), and every session must stay
   // bound to the same pre-generated id (idempotent retry — see tryGenerateClientId).
   // A RESUMED upload REUSES the id persisted with its session (slice 5.2): a
   // retry that already completed server-side then answers 409 → resolve DONE

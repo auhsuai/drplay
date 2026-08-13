@@ -22,7 +22,7 @@ import {
 import { queryResumableStatus } from "./resumableStatus";
 import {
   IdempotentConflictError,
-  MAX_UPLOAD_ATTEMPTS,
+  CHUNKED_SESSION_MAX_ATTEMPTS,
   SESSION_DEAD_STATUS_MAX,
   SESSION_DEAD_STATUS_MIN,
   SessionExpiredError,
@@ -275,11 +275,11 @@ async function resumePreviousSessionOrNull(
     // auth/quota are fatal — a fresh session cannot fix them.
     if (err instanceof UploadError) throw err;
     // Dead session or transient query failure — restart with a fresh
-    // session (bounded by MAX_UPLOAD_ATTEMPTS in the caller).
+    // session (bounded by CHUNKED_SESSION_MAX_ATTEMPTS in the caller).
     await captureError({
       level: "warn",
       source: DRIVE_MODULE,
-      message: `${err instanceof SessionExpiredError ? "upload-session-expired" : "upload-session-restarted"} (attempt=${String(attempt + 1)}/${String(MAX_UPLOAD_ATTEMPTS)}): query-status: ${classifyDriveError(err)}`,
+      message: `${err instanceof SessionExpiredError ? "upload-session-expired" : "upload-session-restarted"} (attempt=${String(attempt + 1)}/${String(CHUNKED_SESSION_MAX_ATTEMPTS)}): query-status: ${classifyDriveError(err)}`,
     });
   }
   if (resumeOffset === null) return null;
@@ -298,15 +298,15 @@ async function resumePreviousSessionOrNull(
     if (err instanceof UploadError) throw err;
     surfaceSessionUploadError(err, attempt);
     // The resumed session died too and no attempt is left — fail (a fresh
-    // initiate in the caller would exceed MAX_UPLOAD_ATTEMPTS).
-    if (attempt + 1 >= MAX_UPLOAD_ATTEMPTS) {
+    // initiate in the caller would exceed CHUNKED_SESSION_MAX_ATTEMPTS).
+    if (attempt + 1 >= CHUNKED_SESSION_MAX_ATTEMPTS) {
       throw uploadAttemptsExhaustedError();
     }
     const expired = err instanceof SessionExpiredError;
     await captureError({
       level: "warn",
       source: DRIVE_MODULE,
-      message: `${expired ? "upload-session-expired" : "upload-session-restarted"} (attempt=${String(attempt + 1)}/${String(MAX_UPLOAD_ATTEMPTS)}): ${classifyDriveError(err)}`,
+      message: `${expired ? "upload-session-expired" : "upload-session-restarted"} (attempt=${String(attempt + 1)}/${String(CHUNKED_SESSION_MAX_ATTEMPTS)}): ${classifyDriveError(err)}`,
     });
     return null;
   }
@@ -331,7 +331,7 @@ export async function uploadFileResumableChunked(
   // persisted by an earlier run seeds attempt 0 — the resume query runs
   // BEFORE the first initiate.
   let uploadUri: string | null = opts.initialUploadUri ?? null;
-  for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < CHUNKED_SESSION_MAX_ATTEMPTS; attempt++) {
     if (opts.signal?.aborted) throw abortedUploadError();
 
     // Slice 3: a previous attempt left a session behind — query its status
@@ -365,12 +365,12 @@ export async function uploadFileResumableChunked(
       if (err instanceof IdempotentConflictError) return err.file;
       if (opts.signal?.aborted) throw abortedUploadError();
       if (err instanceof UploadError) throw err;
-      // Initiate exhausted its own retries with a transient failure — try a fresh session (bounded by MAX_UPLOAD_ATTEMPTS).
-      if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
+      // Initiate exhausted its own retries with a transient failure — try a fresh session (bounded by CHUNKED_SESSION_MAX_ATTEMPTS).
+      if (attempt + 1 < CHUNKED_SESSION_MAX_ATTEMPTS) {
         await captureError({
           level: "warn",
           source: DRIVE_MODULE,
-          message: `upload-session-restarted (attempt=${String(attempt + 1)}/${String(MAX_UPLOAD_ATTEMPTS)}): ${classifyDriveError(err)}`,
+          message: `upload-session-restarted (attempt=${String(attempt + 1)}/${String(CHUNKED_SESSION_MAX_ATTEMPTS)}): ${classifyDriveError(err)}`,
         });
         continue;
       }
@@ -385,7 +385,7 @@ export async function uploadFileResumableChunked(
       await captureError({
         level: "warn",
         source: DRIVE_MODULE,
-        message: `upload-session-update-failed (attempt=${String(attempt + 1)}/${String(MAX_UPLOAD_ATTEMPTS)}): ${classifyDriveError(err)}`,
+        message: `upload-session-update-failed (attempt=${String(attempt + 1)}/${String(CHUNKED_SESSION_MAX_ATTEMPTS)}): ${classifyDriveError(err)}`,
       });
     }
     try {
@@ -394,13 +394,13 @@ export async function uploadFileResumableChunked(
       if (opts.signal?.aborted) throw abortedUploadError();
       if (err instanceof UploadError) throw err;
       surfaceSessionUploadError(err, attempt);
-      // Session expired (404/4xx) or transient network/timeout — restart the whole upload from a fresh session URI, bounded by MAX_UPLOAD_ATTEMPTS.
-      if (attempt + 1 < MAX_UPLOAD_ATTEMPTS) {
+      // Session expired (404/4xx) or transient network/timeout — restart the whole upload from a fresh session URI, bounded by CHUNKED_SESSION_MAX_ATTEMPTS.
+      if (attempt + 1 < CHUNKED_SESSION_MAX_ATTEMPTS) {
         const expired = err instanceof SessionExpiredError;
         await captureError({
           level: "warn",
           source: DRIVE_MODULE,
-          message: `${expired ? "upload-session-expired" : "upload-session-restarted"} (attempt=${String(attempt + 1)}/${String(MAX_UPLOAD_ATTEMPTS)}): ${classifyDriveError(err)}`,
+          message: `${expired ? "upload-session-expired" : "upload-session-restarted"} (attempt=${String(attempt + 1)}/${String(CHUNKED_SESSION_MAX_ATTEMPTS)}): ${classifyDriveError(err)}`,
         });
         continue;
       }

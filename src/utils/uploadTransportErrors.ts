@@ -9,7 +9,7 @@ import type { DriveErrorBody, DriveFileItem } from "./driveApi";
 // path (uploadFileResumable) is a single attempt and delegates retry to
 // uploadManager — one retry layer per mechanism, never two stacked on the
 // same call.
-export const MAX_UPLOAD_ATTEMPTS = 2;
+export const CHUNKED_SESSION_MAX_ATTEMPTS = 2;
 // Cap errBody.message/reason strings in error logs: a 400 can echo the
 // request payload; the log must stay bounded yet carry diagnostics.
 const UPLOAD_ERROR_DETAIL_MAX_LENGTH = 200;
@@ -131,7 +131,7 @@ export function abortedUploadError(): UploadError {
 
 export function uploadAttemptsExhaustedError(): UploadError {
   return new UploadError(
-    `upload failed after ${String(MAX_UPLOAD_ATTEMPTS)} attempts`,
+    `upload failed after ${String(CHUNKED_SESSION_MAX_ATTEMPTS)} attempts`,
     "network",
   );
 }
@@ -148,7 +148,7 @@ export function surfaceSessionUploadError(
   if (
     err instanceof SessionExpiredError &&
     err.uploadError !== undefined &&
-    attempt + 1 >= MAX_UPLOAD_ATTEMPTS
+    attempt + 1 >= CHUNKED_SESSION_MAX_ATTEMPTS
   ) {
     throw err.uploadError;
   }
