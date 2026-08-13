@@ -52,12 +52,12 @@ function renderLogin() {
 }
 
 function toastRootText(): string {
-  return document.getElementById("toast-root")?.textContent ?? "";
+  return document.getElementById("content-area")?.textContent ?? "";
 }
 
 describe("LoginScreen invoke login error handling", () => {
   beforeEach(() => {
-    document.body.innerHTML = '<div id="toast-root"></div>';
+    document.body.innerHTML = '<div id="content-area"></div>';
     invokeMock.mockReset();
     captureErrorMock.mockClear();
   });
