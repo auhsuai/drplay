@@ -122,33 +122,16 @@ export async function compressCoverVariants(
   }
 }
 
-/**
- * Single-variant wrapper over compressCoverVariants, kept for callers that
- * need exactly one cover (interface and behavior unchanged).
- */
-export async function compressCoverImage(
-  data: Uint8Array,
-  sourceFormat: string,
-  maxSize: number,
-  quality: number,
-): Promise<CoverCompressResult> {
-  const outcomes = await compressCoverVariants(data, sourceFormat, [
-    { maxSize, quality },
-  ]);
-  const outcome = outcomes[0];
-  if (!outcome) {
-    throw new CoverEncodeError("no cover variant was produced");
-  }
-  if (outcome.ok) return outcome.result;
-  throw outcome.error;
-}
-
 async function decodeCover(
   data: Uint8Array,
   sourceFormat: string,
 ): Promise<ImageBitmap> {
   try {
-    return await createImageBitmap(new Blob([data], { type: sourceFormat }));
+    // EXIF orientation is applied ("from-image" — the spec default, made
+    // explicit) so camera-shot covers decode upright.
+    return await createImageBitmap(new Blob([data], { type: sourceFormat }), {
+      imageOrientation: "from-image",
+    });
   } catch (e: unknown) {
     throw new InvalidImageError(
       `image decode failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -199,6 +182,9 @@ async function encodeJpeg(
     if (bytes) return bytes;
     return await encodeViaDomCanvas(img, width, height, sourceFormat, quality);
   } catch (e: unknown) {
+    // Keep an already-typed CoverEncodeError (e.g. the JPEG type guard) as
+    // its own message; wrap everything else with canvas context.
+    if (e instanceof CoverEncodeError) throw e;
     throw new CoverEncodeError(
       `canvas encode failed: ${e instanceof Error ? e.message : String(e)}`,
     );
@@ -216,10 +202,7 @@ async function encodeViaOffscreenCanvas(
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("OffscreenCanvas 2d context unavailable");
-  prepareCanvas(ctx, width, height, sourceFormat);
-  ctx.drawImage(img, 0, 0, width, height);
-  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
-  return new Uint8Array(await blob.arrayBuffer());
+  return encodeCanvasToJpeg(img, canvas, ctx, sourceFormat, quality);
 }
 
 async function encodeViaDomCanvas(
@@ -234,12 +217,38 @@ async function encodeViaDomCanvas(
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas 2d context unavailable");
-  prepareCanvas(ctx, width, height, sourceFormat);
-  ctx.drawImage(img, 0, 0, width, height);
-  const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, "image/jpeg", quality);
-  });
+  return encodeCanvasToJpeg(img, canvas, ctx, sourceFormat, quality);
+}
+
+/**
+ * Shared encode path for both canvas flavors (OffscreenCanvas and DOM):
+ * prepare → draw → blob → bytes. Callers keep their own null-vs-throw
+ * semantics for canvas creation; the JPEG type guard here fails loud
+ * instead of shipping bytes the disk cache would trust as JPEG.
+ */
+async function encodeCanvasToJpeg(
+  img: ImageBitmap,
+  canvas: HTMLCanvasElement | OffscreenCanvas,
+  ctx: Ctx2D,
+  sourceFormat: string,
+  quality: number,
+): Promise<Uint8Array> {
+  prepareCanvas(ctx, canvas.width, canvas.height, sourceFormat);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const blob =
+    typeof OffscreenCanvas !== "undefined" && canvas instanceof OffscreenCanvas
+      ? await canvas.convertToBlob({ type: "image/jpeg", quality })
+      : await new Promise<Blob | null>((resolve) => {
+          (canvas as HTMLCanvasElement).toBlob(resolve, "image/jpeg", quality);
+        });
   if (!blob) throw new Error("toBlob produced no output");
+  // MDN: convertToBlob/toBlob silently export PNG when the requested type is
+  // unsupported — never hand a PNG blob back as "image/jpeg".
+  if (blob.type !== "image/jpeg") {
+    throw new CoverEncodeError(
+      `canvas encode produced ${blob.type}, expected image/jpeg`,
+    );
+  }
   return new Uint8Array(await blob.arrayBuffer());
 }
 

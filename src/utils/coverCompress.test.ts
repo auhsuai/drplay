@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  compressCoverImage,
   compressCoverVariants,
   isImageTruncated,
   InvalidImageError,
@@ -38,7 +37,11 @@ let canvasStubs: CanvasStub[] = [];
 let bitmapStubs: BitmapStub[] = [];
 
 function installCanvasStub(
-  opts: { failConvert?: boolean; failConvertAt?: number } = {},
+  opts: {
+    failConvert?: boolean;
+    failConvertAt?: number;
+    blobType?: string;
+  } = {},
 ): void {
   ctxStubs = [];
   canvasStubs = [];
@@ -63,7 +66,9 @@ function installCanvasStub(
       convertCall += 1;
       if (opts.failConvert || convertCall === opts.failConvertAt)
         return Promise.reject(new Error("convertToBlob failed"));
-      return Promise.resolve(new Blob([JPEG_BYTES], { type: "image/jpeg" }));
+      return Promise.resolve(
+        new Blob([JPEG_BYTES], { type: opts.blobType ?? "image/jpeg" }),
+      );
     });
     constructor(width: number, height: number) {
       this.width = width;
@@ -131,19 +136,20 @@ describe("isImageTruncated", () => {
   });
 });
 
-describe("compressCoverImage", () => {
-  it("re-encodes a 2500x2500 image down to maxSize with the right canvas size and JPEG quality", async () => {
+describe("compressCoverVariants (cover compression)", () => {
+  const thumbSpec = { maxSize: THUMB_MAX_SIZE, quality: THUMB_QUALITY };
+  const fullSpec = { maxSize: FULL_MAX_SIZE, quality: FULL_QUALITY };
+  const input = new Uint8Array([0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]);
+
+  it("re-encodes a 2500x2500 image down to each variant's maxSize with the right canvas size and JPEG quality", async () => {
     installCanvasStub();
     installBitmapStub(2500, 2500);
 
     const input = new Uint8Array([0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]);
-    const thumb = await compressCoverImage(
-      input,
-      "image/jpeg",
-      THUMB_MAX_SIZE,
-      THUMB_QUALITY,
-    );
-    await compressCoverImage(input, "image/jpeg", FULL_MAX_SIZE, FULL_QUALITY);
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
 
     const [thumbCanvas, fullCanvas] = canvasStubs;
     expect(thumbCanvas?.width).toBe(256);
@@ -167,11 +173,17 @@ describe("compressCoverImage", () => {
       256,
     );
 
-    expect(thumb.data).toEqual(JPEG_BYTES);
-    expect(thumb.format).toBe("image/jpeg");
-    expect(thumb.keptOriginal).toBe(false);
+    expect(outcomes).toEqual([
+      {
+        ok: true,
+        result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+      },
+      {
+        ok: true,
+        result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+      },
+    ]);
     expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
-    expect(bitmapStubs[1]?.close).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the original bytes when the image already fits (no re-encode, no upscale)", async () => {
@@ -179,24 +191,19 @@ describe("compressCoverImage", () => {
     installBitmapStub(200, 200);
     const input = new Uint8Array([0xff, 0xd8, 7, 8, 9, 0xff, 0xd9]);
 
-    const thumb = await compressCoverImage(
-      input,
-      "image/jpeg",
-      THUMB_MAX_SIZE,
-      THUMB_QUALITY,
-    );
-    const full = await compressCoverImage(
-      input,
-      "image/jpeg",
-      FULL_MAX_SIZE,
-      FULL_QUALITY,
-    );
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
 
-    expect(thumb.data).toBe(input);
-    expect(thumb.format).toBe("image/jpeg");
-    expect(thumb.keptOriginal).toBe(true);
-    expect(full.data).toBe(input);
-    expect(full.keptOriginal).toBe(true);
+    expect(outcomes[0]).toEqual({
+      ok: true,
+      result: { data: input, format: "image/jpeg", keptOriginal: true },
+    });
+    expect(outcomes[1]).toEqual({
+      ok: true,
+      result: { data: input, format: "image/jpeg", keptOriginal: true },
+    });
     expect(canvasStubs.length).toBe(0);
     expect(ctxStubs.length).toBe(0);
   });
@@ -206,16 +213,14 @@ describe("compressCoverImage", () => {
     installBitmapStub(2000, 2000);
     const input = new Uint8Array([0xff, 0xd8, 7, 8, 9, 0xff, 0xd9]);
 
-    const full = await compressCoverImage(
-      input,
-      "image/jpeg",
-      FULL_MAX_SIZE,
-      FULL_QUALITY,
-    );
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      fullSpec,
+    ]);
 
-    expect(full.data).toBe(input);
-    expect(full.format).toBe("image/jpeg");
-    expect(full.keptOriginal).toBe(true);
+    expect(outcomes[0]).toEqual({
+      ok: true,
+      result: { data: input, format: "image/jpeg", keptOriginal: true },
+    });
     expect(canvasStubs.length).toBe(0);
     expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
   });
@@ -225,23 +230,20 @@ describe("compressCoverImage", () => {
     installBitmapStub(800, 800);
     const input = new Uint8Array([0xff, 0xd8, 1, 1, 1, 0xff, 0xd9]);
 
-    const thumb = await compressCoverImage(
-      input,
-      "image/jpeg",
-      THUMB_MAX_SIZE,
-      THUMB_QUALITY,
-    );
-    const full = await compressCoverImage(
-      input,
-      "image/jpeg",
-      FULL_MAX_SIZE,
-      FULL_QUALITY,
-    );
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+      fullSpec,
+    ]);
 
-    expect(thumb.keptOriginal).toBe(false);
+    expect(outcomes[0]).toEqual({
+      ok: true,
+      result: { data: JPEG_BYTES, format: "image/jpeg", keptOriginal: false },
+    });
     expect(canvasStubs[0]?.width).toBe(256);
-    expect(full.keptOriginal).toBe(true);
-    expect(full.data).toBe(input);
+    expect(outcomes[1]).toEqual({
+      ok: true,
+      result: { data: input, format: "image/jpeg", keptOriginal: true },
+    });
     expect(canvasStubs.length).toBe(1);
   });
 
@@ -253,12 +255,9 @@ describe("compressCoverImage", () => {
     ).mockRejectedValueOnce(new Error("Image decode error"));
 
     await expect(
-      compressCoverImage(
-        new Uint8Array([1, 2, 3]),
-        "image/jpeg",
-        THUMB_MAX_SIZE,
-        THUMB_QUALITY,
-      ),
+      compressCoverVariants(new Uint8Array([1, 2, 3]), "image/jpeg", [
+        thumbSpec,
+      ]),
     ).rejects.toBeInstanceOf(InvalidImageError);
   });
 
@@ -266,11 +265,10 @@ describe("compressCoverImage", () => {
     installCanvasStub();
     installBitmapStub(500, 500);
 
-    await compressCoverImage(
+    await compressCoverVariants(
       new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]),
       "image/png",
-      THUMB_MAX_SIZE,
-      THUMB_QUALITY,
+      [thumbSpec],
     );
 
     const ctx = ctxStubs[0];
@@ -285,29 +283,45 @@ describe("compressCoverImage", () => {
     installCanvasStub();
     installBitmapStub(2000, 2000);
 
-    await compressCoverImage(
+    await compressCoverVariants(
       new Uint8Array([0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]),
       "image/jpeg",
-      THUMB_MAX_SIZE,
-      THUMB_QUALITY,
+      [thumbSpec],
     );
 
     const ctx = ctxStubs[0];
     expect(ctx?.imageSmoothingQuality).toBe("high");
   });
 
-  it("throws CoverEncodeError when the canvas blob conversion fails", async () => {
+  it("reports CoverEncodeError when the canvas blob conversion fails", async () => {
     installCanvasStub({ failConvert: true });
     installBitmapStub(2000, 2000);
 
-    await expect(
-      compressCoverImage(
-        new Uint8Array([1, 2, 3]),
-        "image/jpeg",
-        THUMB_MAX_SIZE,
-        THUMB_QUALITY,
-      ),
-    ).rejects.toBeInstanceOf(CoverEncodeError);
+    const outcomes = await compressCoverVariants(
+      new Uint8Array([1, 2, 3]),
+      "image/jpeg",
+      [thumbSpec],
+    );
+
+    expect(outcomes[0]).toEqual({
+      ok: false,
+      error: expect.any(CoverEncodeError) as CoverEncodeError,
+    });
+    expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails loud when convertToBlob falls back to a non-JPEG blob (no silent PNG-as-JPEG)", async () => {
+    installCanvasStub({ blobType: "image/png" });
+    installBitmapStub(2500, 2500);
+
+    const outcomes = await compressCoverVariants(input, "image/jpeg", [
+      thumbSpec,
+    ]);
+
+    expect(outcomes[0]).toEqual({
+      ok: false,
+      error: expect.any(CoverEncodeError) as CoverEncodeError,
+    });
     expect(bitmapStubs[0]?.close).toHaveBeenCalledTimes(1);
   });
 });
