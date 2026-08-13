@@ -1,5 +1,6 @@
 import { fetchWithAuth } from "./apiClient";
 import type { DriveErrorBody } from "./driveTypes";
+import { backoffDelay, mergeWithTimeoutSignal, sleep } from "./retryDelay";
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 // 403 is retryable ONLY when its body reports a Drive usage-limit reason
@@ -11,31 +12,13 @@ const DRIVE_RATE_LIMIT_REASONS = new Set([
   "userRateLimitExceeded",
 ]);
 const MAX_RETRIES = 4;
-const BASE_DELAY_MS = 1000;
-const MAX_DELAY_MS = 32000;
 const DEFAULT_TIMEOUT_MS = 20000;
 
-/**
- * Delay helper (exported for tests). Exposes the retry backoff this module
- * uses, honoring Retry-After when present, otherwise exponential backoff with
- * jitter, capped at MAX_DELAY_MS.
- */
-export const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-// Merge a caller-supplied abort signal with a fresh timeout signal so a
-// stalled network still fails after timeoutMs. A caller signal must NOT
-// disable the timeout (same pattern as apiClient.fetchWithAuth); on runtimes
-// lacking AbortSignal.any the timeout alone is used.
-export function mergeWithTimeoutSignal(
-  callerSignal: AbortSignal | null | undefined,
-  timeoutMs: number,
-): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  return callerSignal && typeof AbortSignal.any === "function"
-    ? AbortSignal.any([callerSignal, timeoutSignal])
-    : timeoutSignal;
-}
+// Retry primitives (sleep / mergeWithTimeoutSignal / backoffDelay) now live in
+// the dependency-free ./retryDelay module — credential-isolated modules like
+// driveRangeTokenizer import from there directly. Re-exported here so existing
+// "./driveApi" consumers keep the exact same surface.
+export { backoffDelay, mergeWithTimeoutSignal, sleep };
 
 /**
  * Derive a short, safe classification tag from an error's message ONLY.
@@ -60,26 +43,6 @@ export function classifyDriveError(err: unknown): string {
   const statusMatch = m.match(/\((\d{3})\)/);
   if (statusMatch) return `http-${statusMatch[1] ?? "000"}`;
   return "unknown";
-}
-
-export function backoffDelay(
-  attempt: number,
-  retryAfter?: string | null,
-): number {
-  if (retryAfter) {
-    const secs = Number(retryAfter);
-    if (Number.isFinite(secs) && secs >= 0) {
-      return Math.min(secs * 1000, MAX_DELAY_MS);
-    }
-    const dateMs = Date.parse(retryAfter);
-    if (Number.isFinite(dateMs)) {
-      const diff = dateMs - Date.now();
-      if (diff > 0) return Math.min(diff, MAX_DELAY_MS);
-    }
-  }
-  const exp = Math.min(BASE_DELAY_MS * 2 ** attempt, MAX_DELAY_MS);
-  const jitter = Math.random() * exp * 0.5;
-  return Math.min(exp + jitter, MAX_DELAY_MS);
 }
 
 // Retryable-by-status set for the resumable-upload loops (429 + any 5xx,

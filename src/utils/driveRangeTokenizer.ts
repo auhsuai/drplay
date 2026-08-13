@@ -10,6 +10,7 @@ import type { IFileInfo, IReadChunkOptions, ITokenizerOptions } from "strtok3";
 import { EndOfStreamError } from "strtok3";
 import { createSemaphore, sleep } from "./asyncLimit";
 import { captureError } from "./errorLog";
+import { backoffDelay, mergeWithTimeoutSignal } from "./retryDelay";
 import { DRIVE_STREAM_PREFIX } from "./streamPrefetcher";
 
 export const RANGE_CHUNK = 65_536; // aligned chunk size (64KB)
@@ -25,7 +26,6 @@ export const CONCURRENCY = 3; // max app-wide concurrent range fetches
 export const REQUEST_TIMEOUT_MS = 45_000;
 export const MAX_RETRIES = 2; // extra attempts for 5xx/429 (total 3 tries)
 const TIMEOUT_RETRIES = 1; // extra attempt for timeouts (total 2 tries)
-const RETRY_BACKOFF_MS = 250;
 const MAX_CACHED_CHUNKS = 128; // LRU bound (~8MB at 64KB chunks)
 const TOKENIZER_MODULE = "driveRangeTokenizer";
 
@@ -148,14 +148,6 @@ function classifyFetchError(err: unknown): "network" | "timeout" {
       return "timeout";
   }
   return "network";
-}
-
-function buildRequestSignal(callerSignal?: AbortSignal): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  if (callerSignal && typeof AbortSignal.any === "function") {
-    return AbortSignal.any([callerSignal, timeoutSignal]);
-  }
-  return timeoutSignal;
 }
 
 /**
@@ -437,7 +429,7 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
             Range: `bytes=${String(chunkStart)}-${String(chunkEnd)}`,
           },
           cache: "no-store",
-          signal: buildRequestSignal(this.callerSignal),
+          signal: mergeWithTimeoutSignal(this.callerSignal, REQUEST_TIMEOUT_MS),
         });
       } catch (err: unknown) {
         // Caller-abort (unmount/navigation) is deliberate cancellation, not
@@ -470,7 +462,7 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
             !(this.callerSignal?.aborted ?? false) &&
             !isDriveCircuitOpen()
           ) {
-            await sleep(RETRY_BACKOFF_MS * 2 ** (attempt + 1));
+            await sleep(backoffDelay(attempt));
             continue;
           }
           throw new RangeFetchNetworkError(
@@ -526,7 +518,7 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
         if (isDriveCircuitOpen()) {
           this.throwCircuitOpen(chunkStart, chunkEnd);
         }
-        await sleep(RETRY_BACKOFF_MS * 2 ** (attempt + 1));
+        await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
         continue;
       }
       throw new RangeNotSupportedError(response.status);

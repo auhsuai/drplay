@@ -44,6 +44,7 @@ function installVirtualFile(
       return {
         status,
         ok: status >= 200 && status < 300,
+        headers: new Headers(),
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
       };
     }
