@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
+import { isAbortError } from "./player/utils";
 import { getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
 import { METADATA_UPDATED_EVENT } from "../utils/metadata/constants";
@@ -44,10 +45,6 @@ export interface TrackMetadataOptions {
   onError: (error: unknown) => void;
   /** Extra cleanup work for consumer state the hook cannot reach (e.g. NowPlaying's palette reset). Runs on every cleanup. */
   onCleanup?: () => void;
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
 }
 
 /**
@@ -101,7 +98,7 @@ export function useTrackMetadata({
         // asking for the FULL variant when bytes exist, the thumb otherwise.
         const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
         const nextCoverUrl = metadata.coverOnDisk
-          ? buildCoverUrl(fileId, metadata.pictureDataFull ? false : true)
+          ? buildCoverUrl(fileId, !metadata.pictureDataFull)
           : coverBytes
             ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
             : null;

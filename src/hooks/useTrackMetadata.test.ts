@@ -371,6 +371,13 @@ describe("useTrackMetadata abort / error handling", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("skips onError when the fetch rejects with a duck-typed { name: 'AbortError' } object while mounted", async () => {
+    mockedFetch.mockRejectedValue({ name: "AbortError" });
+    const { onError } = renderTrackMetadata();
+    await flushMicrotasks();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("calls onError with the failure when the fetch rejects while mounted", async () => {
     mockedFetch.mockRejectedValue(new Error("boom"));
     const { onError, result } = renderTrackMetadata();
