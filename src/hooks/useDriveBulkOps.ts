@@ -1,8 +1,12 @@
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { db } from "../db/db";
-import { trashOrDefer } from "../utils/deferredTrash";
-import { moveFile, createFolder, FOLDER_MIME } from "../utils/driveApi";
+import {
+  deleteFile,
+  moveFile,
+  createFolder,
+  FOLDER_MIME,
+} from "../utils/driveApi";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { t } from "i18next";
@@ -118,7 +122,7 @@ export function useDriveBulkOps({
     try {
       for (const id of itemsToDelete) {
         try {
-          await trashOrDefer(id, token);
+          await deleteFile(token, id);
           deletedIds.push(id);
         } catch (e: unknown) {
           failedIds.push(id);
