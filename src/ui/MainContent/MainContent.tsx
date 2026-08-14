@@ -296,7 +296,6 @@ export const MainContent = React.memo(function MainContent({
     <main
       ref={mainRef}
       className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto overscroll-none relative transition-colors duration-300"
-      style={{ contain: "layout style paint" }}
     >
       {showBulkMoveScreen && token && (
         <FolderSelectionScreen
