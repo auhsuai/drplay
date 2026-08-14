@@ -148,7 +148,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
         role="dialog"
         aria-modal="true"
         data-testid="cache-manager-modal"
-        className="bg-white dark:bg-[#202124] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
+        className="bg-white dark:bg-[#202124] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5"
       >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">
@@ -189,10 +189,11 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
                   {t(`cache.label.${id}`, CACHE_CATEGORY_LABELS[id])}
                 </span>
               </span>
-              <span className="w-14 shrink-0 flex items-center justify-end">
+              <span className="w-14 h-5 shrink-0 flex items-center justify-end">
                 {sizes[id] === null ? (
-                  // Skeleton bar sized to the size column (56px = w-14): the
-                  // column keeps its exact width in both states, so nothing
+                  // Skeleton bar sized to the size column (56px = w-14) inside
+                  // a fixed h-5 slot (text-sm line height = 20px): the column
+                  // keeps its exact width AND height in both states, so nothing
                   // visibly jumps when sizes load.
                   <span
                     data-testid="size-placeholder"
@@ -201,7 +202,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
                     aria-label={t("loading")}
                   />
                 ) : (
-                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                  <span className="text-sm leading-none text-gray-500 dark:text-gray-400">
                     {formatBytes(sizes[id])}
                   </span>
                 )}
