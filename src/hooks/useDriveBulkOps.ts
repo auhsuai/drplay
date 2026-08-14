@@ -7,6 +7,7 @@ import {
   createFolder,
   FOLDER_MIME,
 } from "../utils/driveApi";
+import { stopPlaybackIfTrack } from "../utils/stopPlayback";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { t } from "i18next";
@@ -124,6 +125,10 @@ export function useDriveBulkOps({
         try {
           await deleteFile(token, id);
           deletedIds.push(id);
+          // If this file is the track currently playing, stop it right away —
+          // never keep playing audio that no longer exists. Only after a
+          // successful Drive delete (a failed delete falls into catch).
+          stopPlaybackIfTrack(id);
         } catch (e: unknown) {
           failedIds.push(id);
           void captureError({

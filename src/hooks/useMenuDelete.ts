@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { deleteFile } from "../utils/driveApi";
 import { db } from "../db/db";
+import { stopPlaybackIfTrack } from "../utils/stopPlayback";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
@@ -38,6 +39,10 @@ export function useMenuDelete(t: TFunction) {
     setIsDeleting(true);
     try {
       await deleteFile(token, deleteDriveItem.id);
+      // If the deleted file is the track currently playing, stop it right
+      // away — never keep playing audio that no longer exists. Only after a
+      // successful Drive delete (a failed delete falls to catch, no stop).
+      stopPlaybackIfTrack(deleteDriveItem.id);
       await db.files.delete(deleteDriveItem.id);
       setShowDeleteConfirm(false);
       setIsOpen(false);
