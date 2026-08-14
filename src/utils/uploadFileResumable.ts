@@ -11,13 +11,14 @@ import { authHeaders } from "./driveFiles";
 import {
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
-  asDriveFileItem,
   initiateResumableUpload,
+  parseUploadResponseJson,
   resolveIdempotentConflict,
 } from "./resumableSession";
 import {
   IdempotentConflictError,
   UploadError,
+  abortedUploadError,
   mapUploadHttpError,
 } from "./uploadTransportErrors";
 
@@ -55,27 +56,11 @@ async function putResumableBytes(
       await readDriveErrorBody(response),
     );
   }
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch (err) {
-    await captureError({
-      level: "error",
-      source: DRIVE_MODULE,
-      message: `upload-parse-response-failed (status=${String(response.status)}): ${classifyDriveError(err)}`,
-    });
-    throw new UploadError("upload response was not valid JSON", "invalid");
-  }
-  const file = asDriveFileItem(body);
-  if (file === null) {
-    await captureError({
-      level: "error",
-      source: DRIVE_MODULE,
-      message: `upload-parse-response-failed (status=${String(response.status)})`,
-    });
-    throw new UploadError("upload response was not valid JSON", "invalid");
-  }
-  return file;
+  return await parseUploadResponseJson(
+    response,
+    "upload-parse-response-failed",
+    "upload response was not valid JSON",
+  );
 }
 
 // Options for idempotent uploads (pre-generated file id, set ONCE per logical
@@ -100,7 +85,7 @@ export async function uploadFileResumable(
   options?: UploadFileOptions,
 ): Promise<DriveFileItem> {
   if (signal?.aborted) {
-    throw new UploadError("upload aborted by caller", "aborted");
+    throw abortedUploadError();
   }
 
   const data =
@@ -146,7 +131,7 @@ export async function uploadFileResumable(
       return err.file;
     }
     if (signal?.aborted) {
-      throw new UploadError("upload aborted by caller", "aborted");
+      throw abortedUploadError();
     }
     if (err instanceof UploadError) {
       throw err;

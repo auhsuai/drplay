@@ -13,6 +13,11 @@ export const CHUNKED_SESSION_MAX_ATTEMPTS = 2;
 // Cap errBody.message/reason strings in error logs: a 400 can echo the
 // request payload; the log must stay bounded yet carry diagnostics.
 const UPLOAD_ERROR_DETAIL_MAX_LENGTH = 200;
+// Single source of truth for the two shared upload error messages: the
+// manager layer (upload/errors.ts re-exports both) and the transport layer
+// (mapUploadHttpError / abortedUploadError) must spell them identically.
+export const ERROR_QUOTA_EXCEEDED = "drive storage quota exceeded";
+export const ABORTED_UPLOAD_MESSAGE = "upload aborted by caller";
 
 // Chunked resumable upload (developers.google.com/drive/api/guides/manage-uploads):
 // chunk sizes MUST be multiples of 256 KiB except the final; the server
@@ -95,8 +100,30 @@ export function mapUploadHttpError(
   if (status === 401)
     return new UploadError("upload unauthorized (401)", "auth");
   if (status === 403 && isQuotaExceeded(errBody))
-    return new UploadError("drive storage quota exceeded", "quota");
+    return new UploadError(ERROR_QUOTA_EXCEEDED, "quota");
   return new UploadError(`upload failed (status=${String(status)})`, "invalid");
+}
+
+// Shared 4xx wrap for resumable-session responses (chunk PUTs and the
+// query-status PUT): mapUploadHttpError then, when the mapped error is an
+// internal 'invalid' 4xx, the session expired server-side (Google: any 4xx
+// during a resumable upload must be restarted from a new session URI) — throw
+// SessionExpiredError carrying the concrete UploadError. auth/quota are NOT
+// wrapped (a fresh session cannot fix them), nor are 'invalid' errors outside
+// the 4xx band.
+export function mapResumableSessionError(
+  status: number,
+  errBody: DriveErrorBody | null,
+): UploadError {
+  const uploadError = mapUploadHttpError(status, errBody);
+  if (
+    uploadError.kind === "invalid" &&
+    status >= SESSION_DEAD_STATUS_MIN &&
+    status < SESSION_DEAD_STATUS_MAX
+  ) {
+    throw new SessionExpiredError(uploadError);
+  }
+  return uploadError;
 }
 
 // Internal marker: the initiate step answered 409 for a pre-generated id — it
@@ -126,7 +153,7 @@ export class SessionExpiredError extends Error {
 }
 
 export function abortedUploadError(): UploadError {
-  return new UploadError("upload aborted by caller", "aborted");
+  return new UploadError(ABORTED_UPLOAD_MESSAGE, "aborted");
 }
 
 export function uploadAttemptsExhaustedError(): UploadError {

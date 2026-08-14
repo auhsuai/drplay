@@ -26,7 +26,13 @@ import {
   generateClientId,
 } from "./driveUpload";
 import { queryResumableStatus } from "./resumableStatus";
-import { uploadChunkTimeoutMs } from "./resumableSession";
+import {
+  parseUploadResponseJson,
+  resolveConflictOrNull,
+  resumeOffsetFromRange,
+  uploadChunkTimeoutMs,
+} from "./resumableSession";
+import { mapResumableSessionError } from "./uploadTransportErrors";
 import { nextChunkLevel } from "./uploadFileResumableChunked";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
@@ -3937,5 +3943,183 @@ describe("queryResumableStatus per-attempt timeout signals", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+// Unit coverage for the helpers extracted during the transport-layer dedup:
+// the chunk loop, the query-status loop and the single-request PUT previously
+// each inlined these patterns — the extracted functions must keep the exact
+// same semantics (offset math, log labels, error kinds/messages).
+describe("shared transport helpers (dedup)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  const uploadedFile: DriveFileItem = {
+    id: "f1",
+    name: "song.flac",
+    mimeType: "audio/flac",
+    size: "1000",
+    modifiedTime: "2026-01-01T00:00:00Z",
+  };
+
+  describe("resumeOffsetFromRange", () => {
+    it('"bytes=0-42" → next offset 43 (lastByte + 1)', () => {
+      expect(resumeOffsetFromRange("bytes=0-42", 1000)).toBe(43);
+    });
+
+    it("null Range → nothing received, resume from 0", () => {
+      expect(resumeOffsetFromRange(null, 1000)).toBe(0);
+    });
+
+    it("malformed Range → resume from 0 (regex does not match)", () => {
+      expect(resumeOffsetFromRange("garbage", 1000)).toBe(0);
+    });
+
+    it("offset >= totalSize → UploadError invalid, exact anomaly message", () => {
+      let thrown: unknown;
+      try {
+        resumeOffsetFromRange("bytes=0-999", 1000);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toMatchObject({
+        kind: "invalid",
+        message:
+          "resumable server reported a complete range without completing the upload",
+      });
+    });
+  });
+
+  describe("parseUploadResponseJson", () => {
+    it("valid 2xx body → narrowed DriveFileItem (no extra fields)", async () => {
+      const file = await parseUploadResponseJson(
+        makeJsonResponse(201, uploadedFile),
+        "upload-parse-response-failed",
+        "upload response was not valid JSON",
+      );
+      expect(file).toEqual(uploadedFile);
+    });
+
+    it("2xx body missing the DriveFileItem shape → UploadError invalid + label log without detail", async () => {
+      await expect(
+        parseUploadResponseJson(
+          makeJsonResponse(201, { id: 1 }),
+          "query-status-parse-failed",
+          "query-status response was not valid JSON",
+        ),
+      ).rejects.toMatchObject({
+        kind: "invalid",
+        message: "query-status response was not valid JSON",
+      });
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "error",
+          message: "query-status-parse-failed (status=201)",
+        }),
+      );
+    });
+
+    it("json() rejects → UploadError invalid + label log with the classified cause", async () => {
+      const broken = {
+        status: 201,
+        ok: true,
+        headers: { get: () => null },
+        json: () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as unknown as Response;
+      await expect(
+        parseUploadResponseJson(
+          broken,
+          "upload-parse-response-failed",
+          "upload response was not valid JSON",
+        ),
+      ).rejects.toMatchObject({
+        kind: "invalid",
+        message: "upload response was not valid JSON",
+      });
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "error",
+          message: "upload-parse-response-failed (status=201): unknown",
+        }),
+      );
+    });
+  });
+
+  describe("mapResumableSessionError", () => {
+    it("401 → UploadError auth returned unwrapped (a fresh session cannot fix auth)", () => {
+      expect(mapResumableSessionError(401, null)).toMatchObject({
+        kind: "auth",
+      });
+    });
+
+    it("500 → UploadError invalid returned unwrapped (5xx are retried, not session-dead)", () => {
+      expect(mapResumableSessionError(500, null)).toMatchObject({
+        kind: "invalid",
+      });
+    });
+
+    it("404 → SessionExpiredError wrapping the mapped UploadError (session dead)", () => {
+      let thrown: unknown;
+      try {
+        mapResumableSessionError(404, null);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toMatchObject({
+        name: "SessionExpiredError",
+        uploadError: { kind: "invalid" },
+      });
+    });
+
+    it("400 → SessionExpiredError wrapping the mapped UploadError (any 4xx is session-dead)", () => {
+      let thrown: unknown;
+      try {
+        mapResumableSessionError(400, null);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toMatchObject({
+        name: "SessionExpiredError",
+        uploadError: { kind: "invalid" },
+      });
+    });
+  });
+
+  describe("resolveConflictOrNull", () => {
+    const existingFile: DriveFileItem = {
+      id: "gen-1",
+      name: "song.mp3",
+      mimeType: "audio/mpeg",
+      size: "10",
+      modifiedTime: "2026-01-01T00:00:00Z",
+    };
+
+    it("undefined id → null without any network call (409 is unrelated)", async () => {
+      const file = await resolveConflictOrNull(
+        "tok",
+        undefined,
+        new AbortController().signal,
+      );
+      expect(file).toBeNull();
+      expect(mockedFetch).not.toHaveBeenCalled();
+    });
+
+    it("bound id → the already-created file fetched by its pre-generated id", async () => {
+      mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, existingFile));
+      const file = await resolveConflictOrNull(
+        "tok",
+        "gen-1",
+        new AbortController().signal,
+      );
+      expect(file).toEqual(existingFile);
+      const [getUrl] = fetchCallAt(0);
+      expect(getUrl).toBe(
+        "https://www.googleapis.com/drive/v3/files/gen-1?fields=id,name,mimeType,size,modifiedTime",
+      );
+    });
   });
 });

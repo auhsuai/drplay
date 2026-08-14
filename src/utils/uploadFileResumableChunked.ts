@@ -12,26 +12,24 @@ import {
 import type { DriveFileItem } from "./driveApi";
 import { authHeaders } from "./driveFiles";
 import {
-  RANGE_HEADER_PATTERN,
   UPLOAD_CHUNK_LEVELS,
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
-  asDriveFileItem,
   initiateResumableUpload,
-  resolveIdempotentConflict,
+  parseUploadResponseJson,
+  resolveConflictOrNull,
+  resumeOffsetFromRange,
   uploadChunkTimeoutMs,
 } from "./resumableSession";
 import { queryResumableStatus } from "./resumableStatus";
 import {
   IdempotentConflictError,
   CHUNKED_SESSION_MAX_ATTEMPTS,
-  SESSION_DEAD_STATUS_MAX,
-  SESSION_DEAD_STATUS_MIN,
   SessionExpiredError,
   UploadError,
   UPLOAD_CHUNK_MAX_RETRIES,
   abortedUploadError,
-  mapUploadHttpError,
+  mapResumableSessionError,
   surfaceSessionUploadError,
   uploadAttemptsExhaustedError,
 } from "./uploadTransportErrors";
@@ -239,73 +237,39 @@ async function uploadChunksInSession(
     onProgress?.(Math.min(1, (offset + chunk.byteLength) / totalSize));
 
     if (response.status >= 200 && response.status < 300) {
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch (err) {
-        await captureError({
-          level: "error",
-          source: DRIVE_MODULE,
-          message: `upload-parse-response-failed (status=${String(response.status)}): ${classifyDriveError(err)}`,
-        });
-        throw new UploadError("upload response was not valid JSON", "invalid");
-      }
-      const file = asDriveFileItem(body);
-      if (file === null) {
-        await captureError({
-          level: "error",
-          source: DRIVE_MODULE,
-          message: `upload-parse-response-failed (status=${String(response.status)})`,
-        });
-        throw new UploadError("upload response was not valid JSON", "invalid");
-      }
-      return file;
+      return await parseUploadResponseJson(
+        response,
+        "upload-parse-response-failed",
+        "upload response was not valid JSON",
+      );
     }
     if (response.status === 308) {
-      const range = response.headers.get("Range");
-      const match = range ? RANGE_HEADER_PATTERN.exec(range) : null;
-      // "bytes=0-<lastByte>" → next offset = lastByte + 1; no/malformed Range → nothing received, resend from the start (Drive docs).
-      offset = match ? Number(match[2]) + 1 : 0;
-      if (offset >= totalSize) {
-        // 308 claiming the whole file is received without a 200/201 is a
-        // server anomaly — continuing would send an out-of-range chunk.
-        throw new UploadError(
-          "resumable server reported a complete range without completing the upload",
-          "invalid",
-        );
-      }
+      offset = resumeOffsetFromRange(response.headers.get("Range"), totalSize);
       continue;
     }
     if (response.status === 404) throw new SessionExpiredError();
-    if (response.status === 409 && opts.clientGeneratedId) {
+    if (response.status === 409) {
       // Retry of an idempotent upload whose first attempt completed
       // server-side: the file already exists — resolve DONE with the real
       // file instead of creating a duplicate. Fresh per-call merge (never a
       // shared whole-upload signal); the conflict GET is itself bounded
       // per-attempt by driveFetch.
-      return resolveIdempotentConflict(
+      const file = await resolveConflictOrNull(
         token,
         opts.clientGeneratedId,
         mergeWithTimeoutSignal(signal, UPLOAD_TIMEOUT_MS),
       );
+      if (file !== null) return file;
     }
-    const uploadError = mapUploadHttpError(
-      response.status,
-      await readDriveErrorBody(response),
-    );
     // Google: any 4xx (including 403) during a resumable upload means the
     // session expired and must be restarted from a new session URI. auth and
     // quota are NOT wrapped (a fresh session cannot fix them), nor are the
     // internal 'invalid' errors (data ended early, bad JSON…) — those are
     // client-side and restarting would be futile.
-    if (
-      uploadError.kind === "invalid" &&
-      response.status >= SESSION_DEAD_STATUS_MIN &&
-      response.status < SESSION_DEAD_STATUS_MAX
-    ) {
-      throw new SessionExpiredError(uploadError);
-    }
-    throw uploadError;
+    throw mapResumableSessionError(
+      response.status,
+      await readDriveErrorBody(response),
+    );
   }
 }
 

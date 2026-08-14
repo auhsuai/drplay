@@ -124,6 +124,12 @@ async function uploadWithRetry(
     ? lastErr
     : new UploadError("upload failed", "network");
 }
+// NOTE: deliberately NOT deduped with uploadTransportErrors.abortedUploadError.
+// uploadManager.test.ts mocks ../utils/driveUpload (whose UploadError re-export
+// is pinned by the mock cache) but NOT uploadTransportErrors — a fresh
+// class from a re-imported module would fail queue.ts's `instanceof UploadError`
+// cancel classification. The MESSAGE stays single-sourced (ABORTED_UPLOAD_MESSAGE
+// lives in uploadTransportErrors, re-exported through ./errors).
 export function abortedUploadError(): UploadError {
   return new UploadError(ABORTED_UPLOAD_MESSAGE, ERROR_ABORTED);
 }

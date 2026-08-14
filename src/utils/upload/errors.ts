@@ -1,5 +1,12 @@
 import { UploadError } from "../driveUpload";
 import type { InternalEntry } from "./types";
+// Single source of truth for these two messages is the transport layer
+// (uploadTransportErrors) — mapUploadHttpError and abortedUploadError there
+// must spell them identically; this file only re-exports for the manager.
+export {
+  ABORTED_UPLOAD_MESSAGE,
+  ERROR_QUOTA_EXCEEDED,
+} from "../uploadTransportErrors";
 
 // Sequential queue (1 upload at a time) + pending db.files rows that render as
 // dimmed cards; CustomEvents drive cards, race guards, Recently Added refresh.
@@ -20,7 +27,6 @@ export const ERROR_ABORTED = "aborted";
 // Disk-path error messages shared by every disk entry kind (file, child file,
 // folder root); named constants keep one spelling across all call sites.
 export const ERROR_MISSING_DISK_PATH = "missing disk path";
-export const ERROR_QUOTA_EXCEEDED = "drive storage quota exceeded";
 export const ERROR_TOO_LARGE_MESSAGE = "file exceeds 5 TB limit";
 // Google Drive's documented maximum uploadable file size (5 TB per file —
 // https://developers.google.com/workspace/drive/api/guides/limits). Files
@@ -32,7 +38,6 @@ export const MAX_FILE_BYTES = 5 * 1024 ** 4;
 // fire once per chunk (128× on a 1 GB file) and per-chunk notifies would spam
 // renders, so progress bursts are coalesced into a single trailing-edge notify.
 export const PROGRESS_NOTIFY_INTERVAL_MS = 500;
-export const ABORTED_UPLOAD_MESSAGE = "upload aborted by caller";
 
 export class ParentFolderMissingError extends Error {
   constructor(relativeDir: string) {

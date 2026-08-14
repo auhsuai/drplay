@@ -1,5 +1,10 @@
 import { captureError } from "./errorLog";
-import { DRIVE_MODULE, driveFetch, readDriveErrorBody } from "./driveApi";
+import {
+  DRIVE_MODULE,
+  classifyDriveError,
+  driveFetch,
+  readDriveErrorBody,
+} from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
 import { authHeaders } from "./driveFiles";
 import {
@@ -65,6 +70,60 @@ const FILE_GET_FIELDS = "id,name,mimeType,size,modifiedTime";
 
 // A missing Range header on 308 means no bytes were received — resend from 0.
 export const RANGE_HEADER_PATTERN = /^bytes=(\d+)-(\d+)$/;
+
+// Shared 308 handling (chunk PUTs and the query-status PUT): parse the Range
+// header ("bytes=0-<lastByte>" → next offset = lastByte + 1; no/malformed
+// Range → nothing received, continue from 0 — Drive docs) and reject a server
+// anomaly where 308 claims the whole file without a 200/201 (resuming would
+// send an out-of-range chunk).
+export function resumeOffsetFromRange(
+  range: string | null,
+  totalSize: number,
+): number {
+  const match = range ? RANGE_HEADER_PATTERN.exec(range) : null;
+  const offset = match ? Number(match[2]) + 1 : 0;
+  if (offset >= totalSize) {
+    throw new UploadError(
+      "resumable server reported a complete range without completing the upload",
+      "invalid",
+    );
+  }
+  return offset;
+}
+
+// Shared 2xx body narrowing (the final chunk PUT, the query-status PUT and the
+// single-request bytes PUT all answer 200/201 with the created file's JSON):
+// parse + narrow via asDriveFileItem; a JSON parse failure or a missing
+// DriveFileItem shape logs `logLabel` with the concrete status (byte-for-byte
+// the historical per-call-site message) and throws UploadError(errorMessage,
+// 'invalid') — never a ghost object.
+export async function parseUploadResponseJson(
+  response: Response,
+  logLabel: string,
+  errorMessage: string,
+): Promise<DriveFileItem> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (err) {
+    await captureError({
+      level: "error",
+      source: DRIVE_MODULE,
+      message: `${logLabel} (status=${String(response.status)}): ${classifyDriveError(err)}`,
+    });
+    throw new UploadError(errorMessage, "invalid");
+  }
+  const file = asDriveFileItem(body);
+  if (file === null) {
+    await captureError({
+      level: "error",
+      source: DRIVE_MODULE,
+      message: `${logLabel} (status=${String(response.status)})`,
+    });
+    throw new UploadError(errorMessage, "invalid");
+  }
+  return file;
+}
 
 // Generate ONE pre-generated file id (driveFetch retries transient failures
 // internally). The id is bound into the initiate metadata, so a retried
@@ -157,6 +216,21 @@ export async function resolveIdempotentConflict(
   return item;
 }
 
+// Shared 409 branching for every resumable-upload step: with a pre-generated
+// id bound, a 409 means a retry of an idempotent upload whose first attempt
+// completed server-side — the file already exists, so return it (null when the
+// 409 is unrelated). Callers keep their own ending: the chunk PUT and the
+// query-status PUT resolve DONE with the file, the initiate throws
+// IdempotentConflictError.
+export async function resolveConflictOrNull(
+  token: string,
+  fileId: string | undefined,
+  signal: AbortSignal,
+): Promise<DriveFileItem | null> {
+  if (!fileId) return null;
+  return resolveIdempotentConflict(token, fileId, signal);
+}
+
 // Step 1: initiate a resumable session. POST is idempotent (metadata only) so it reuses driveFetch's retry/backoff — unlike the PUT step. With a pre-generated id the session is bound to that id: a retried session for an already-created file answers 409 here or at the PUT step.
 export async function initiateResumableUpload(
   token: string,
@@ -183,12 +257,13 @@ export async function initiateResumableUpload(
   });
 
   if (!response.ok) {
-    if (response.status === 409 && generatedId) {
-      // The file already exists from a previous (response-lost) attempt of the
-      // same idempotent upload — resolve DONE with the real file.
-      throw new IdempotentConflictError(
-        await resolveIdempotentConflict(token, generatedId, signal),
-      );
+    if (response.status === 409) {
+      const file = await resolveConflictOrNull(token, generatedId, signal);
+      if (file !== null) {
+        // The file already exists from a previous (response-lost) attempt of
+        // the same idempotent upload — resolve DONE with the real file.
+        throw new IdempotentConflictError(file);
+      }
     }
     throw mapUploadHttpError(
       response.status,
