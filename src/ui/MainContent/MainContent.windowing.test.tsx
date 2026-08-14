@@ -78,6 +78,27 @@ vi.mock("./components/SongCard", () => ({
   )),
 }));
 
+// FolderSelectionScreen is out of scope for this task (bulk move closes
+// immediately); the stub simulates the real screen's "choose folder" action
+// so MainContent's onSelectFolder wiring can be tested in isolation.
+vi.mock("../FolderSelection/FolderSelectionScreen", () => ({
+  FolderSelectionScreen: ({
+    onSelectFolder,
+  }: {
+    onSelectFolder: (folderId: string) => void;
+  }) => (
+    <div data-testid="folder-screen-stub">
+      <button
+        onClick={() => {
+          onSelectFolder("dest-folder");
+        }}
+      >
+        choose destination
+      </button>
+    </div>
+  ),
+}));
+
 function makeItems(n: number): DriveItem[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `id${String(i)}`,
@@ -413,5 +434,68 @@ describe("MainContent debug triggers (DEV only)", () => {
         window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.PAGINATION));
       });
     }).not.toThrow();
+  });
+});
+
+describe("MainContent bulk dialogs close immediately on confirm (background action)", () => {
+  beforeEach(() => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("bulk delete: Confirm closes the modal immediately while the delete action is still pending", () => {
+    const explorer = makeExplorerState(makeItems(3));
+    // Mirrors the real hook (useDriveBulkOps): onComplete fires synchronously
+    // before the network loop starts; the action promise itself stays pending.
+    explorer.handleBulkDelete.mockImplementation((onComplete: () => void) => {
+      onComplete();
+      return new Promise<never>(() => {});
+    });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.BULK_DELETE));
+    });
+    expect(screen.getByText("drive.bulk_delete_title")).not.toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByText("drive.delete"));
+    });
+
+    // The modal unmounts while the delete is still running in the background.
+    expect(screen.queryByText("drive.bulk_delete_title")).toBeNull();
+    expect(explorer.handleBulkDelete).toHaveBeenCalledTimes(1);
+    expect(explorer.handleBulkDelete).toHaveBeenCalledWith(
+      expect.any(Function),
+    );
+  });
+
+  it("bulk move: picking a destination closes the folder screen immediately while the move is still pending", () => {
+    const explorer = makeExplorerState(makeItems(3));
+    explorer.isSelectionMode = true;
+    explorer.selectedIds = new Set(["id0"]);
+    explorer.handleBulkMove.mockImplementation(
+      (_dest: string, onComplete: () => void) => {
+        onComplete();
+        return new Promise<never>(() => {});
+      },
+    );
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    fireEvent.click(screen.getByText("drive.bulk_move"));
+    expect(screen.getByTestId("folder-screen-stub")).not.toBeNull();
+
+    fireEvent.click(screen.getByText("choose destination"));
+
+    // The screen unmounts while the move is still running in the background.
+    expect(screen.queryByTestId("folder-screen-stub")).toBeNull();
+    expect(explorer.handleBulkMove).toHaveBeenCalledTimes(1);
+    expect(explorer.handleBulkMove).toHaveBeenCalledWith(
+      "dest-folder",
+      expect.any(Function),
+    );
   });
 });

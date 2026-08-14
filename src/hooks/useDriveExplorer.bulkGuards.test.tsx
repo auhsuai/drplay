@@ -11,6 +11,7 @@ import {
   createFolder,
   driveFetch,
 } from "../utils/driveApi";
+import type { DriveFileItem } from "../utils/driveApi";
 import { isUploading, getUploadState } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
@@ -261,5 +262,142 @@ describe("useDriveBulkOps logs bulk failures with source useDriveBulkOps", () =>
         message: "create-folder failed: boom",
       }),
     );
+  });
+});
+
+describe("useDriveBulkOps closes the confirm dialog immediately (action runs in background)", () => {
+  function makeResolvedItem(id: string) {
+    return { id, name: id, mimeType: "audio/mpeg", parents: [FOLDER_ID] };
+  }
+
+  it("bulk delete: calls onComplete BEFORE deleteFile resolves — the dialog closes while the network is still pending", async () => {
+    const resolvers: Array<(value: DriveFileItem) => void> = [];
+    mockedDeleteFile.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const result = setupSelection(["a", "b"]);
+    const onComplete = vi.fn();
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.handleBulkDelete(onComplete);
+    });
+
+    // The dialog must be closable right away — deleteFile is STILL pending
+    // here (old code fired onComplete only in finally, after the whole batch).
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(mockedDeleteFile).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      // Settle each in-flight delete one at a time, yielding a microtask so
+      // the loop can issue the next call, until the whole batch is drained.
+      for (let i = 0; i < 10 && resolvers.length > 0; i++) {
+        resolvers.shift()?.(makeResolvedItem("x"));
+        await Promise.resolve();
+      }
+      await pending;
+    });
+
+    // The background action still runs to completion after the dialog closed.
+    expect(mockedDeleteFile).toHaveBeenCalledTimes(2);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(result.current.isBulkOperating).toBe(false);
+    expect(result.current.selectedIds.size).toBe(0);
+  });
+
+  it("bulk delete: pre-flight failure (every id uploading) never calls onComplete — the dialog stays open", async () => {
+    uploadingId("a");
+    const result = setupSelection(["a"]);
+    const onComplete = vi.fn();
+
+    await act(async () => {
+      await result.current.handleBulkDelete(onComplete);
+    });
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(mockedDeleteFile).not.toHaveBeenCalled();
+    expect(result.current.selectedIds.has("a")).toBe(true);
+  });
+
+  it("bulk delete: onComplete fires early even when an item fails later — the error toast still surfaces", async () => {
+    let rejectDelete!: (e: Error) => void;
+    mockedDeleteFile.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectDelete = reject;
+        }),
+    );
+    const result = setupSelection(["a"]);
+    const onComplete = vi.fn();
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.handleBulkDelete(onComplete);
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectDelete(new Error("boom"));
+      await pending;
+    });
+
+    expect(mockedShowErrorToast).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("bulk move: calls onComplete BEFORE moveFile resolves — the screen closes while the network is still pending", async () => {
+    const resolvers: Array<
+      (value: DriveFileItem | { success: boolean }) => void
+    > = [];
+    mockedMoveFile.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const result = setupSelection(["a"]);
+    const onComplete = vi.fn();
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.handleBulkMove("dest-folder", onComplete);
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      for (let i = 0; i < 10 && resolvers.length > 0; i++) {
+        resolvers.shift()?.(makeResolvedItem("x"));
+        await Promise.resolve();
+      }
+      await pending;
+    });
+
+    expect(mockedMoveFile).toHaveBeenCalledTimes(1);
+    expect(mockedMoveFile).toHaveBeenCalledWith(
+      TOKEN,
+      "a",
+      FOLDER_ID,
+      "dest-folder",
+    );
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(result.current.isBulkOperating).toBe(false);
+  });
+
+  it("bulk move: pre-flight failure (every id uploading) never calls onComplete — the screen stays open", async () => {
+    uploadingId("a");
+    const result = setupSelection(["a"]);
+    const onComplete = vi.fn();
+
+    await act(async () => {
+      await result.current.handleBulkMove("dest-folder", onComplete);
+    });
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(mockedMoveFile).not.toHaveBeenCalled();
   });
 });

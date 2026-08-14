@@ -111,6 +111,11 @@ export function useDriveBulkOps({
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);
+    // Close the confirm dialog right away — the batch runs in the background
+    // (industry standard: NN/g + Material 3 — dialogs close on confirm, errors
+    // surface via toast). NOT in finally: a pre-flight failure above must
+    // keep the dialog open so the user sees the selection error.
+    onComplete();
 
     const deletedIds: string[] = [];
     const failedIds: string[] = [];
@@ -147,7 +152,6 @@ export function useDriveBulkOps({
       showErrorToast(t("drive.delete_error"));
     } finally {
       setIsBulkOperating(false);
-      onComplete();
     }
   };
 
@@ -163,6 +167,9 @@ export function useDriveBulkOps({
     setSelectedIds(new Set());
     setIsSelectionMode(false);
     setIsBulkOperating(true);
+    // Close the folder-selection screen right away — the move runs in the
+    // background (same industry-standard rationale as bulk delete above).
+    onComplete();
 
     const movedIds: string[] = [];
     const failedIds: string[] = [];
@@ -204,7 +211,6 @@ export function useDriveBulkOps({
       showErrorToast(t("drive.move_error"));
     } finally {
       setIsBulkOperating(false);
-      onComplete();
     }
   };
 
