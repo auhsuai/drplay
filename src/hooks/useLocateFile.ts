@@ -9,7 +9,7 @@ import {
   type TabKey,
 } from "../utils/driveConstants";
 import { captureError } from "../utils/errorLog";
-import { authHeaders } from "../utils/driveFiles";
+import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
@@ -86,7 +86,7 @@ export function useLocateFile(
           if (!folderInfo || !folderInfo.parentId) {
             try {
               const res = await fetchWithAuth(
-                `https://www.googleapis.com/drive/v3/files/${current}?fields=parents`,
+                `${DRIVE_FILES_URL}/${current}?fields=parents`,
                 {
                   headers: authHeaders(accessToken),
                 },
@@ -118,7 +118,7 @@ export function useLocateFile(
           if (!parentInfo) {
             try {
               const pRes = await fetchWithAuth(
-                `https://www.googleapis.com/drive/v3/files/${pId}?fields=name`,
+                `${DRIVE_FILES_URL}/${pId}?fields=name`,
                 {
                   headers: authHeaders(accessToken),
                 },
@@ -166,7 +166,7 @@ export function useLocateFile(
 
         try {
           const response = await fetchWithAuth(
-            `https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`,
+            `${DRIVE_FILES_URL}/${fileId}?fields=parents`,
             {
               headers: authHeaders(accessToken),
             },
@@ -209,7 +209,7 @@ export function useLocateFile(
             folderName = parentInfo.name;
           } else {
             const pRes = await fetchWithAuth(
-              `https://www.googleapis.com/drive/v3/files/${parentId}?fields=name`,
+              `${DRIVE_FILES_URL}/${parentId}?fields=name`,
               {
                 headers: authHeaders(accessToken),
               },

@@ -7,7 +7,7 @@ import { getAppConfig, FOLDER_MIME } from "../utils/driveApi";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "../utils/driveConstants";
-import { authHeaders } from "../utils/driveFiles";
+import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import {
@@ -110,7 +110,7 @@ export const useDriveInit = ({
                 if (rootId !== localRoot) {
                   localRoot = rootId;
                 }
-                const verifyUrl = `https://www.googleapis.com/drive/v3/files/${localRoot}?fields=id,name,driveId,mimeType`;
+                const verifyUrl = `${DRIVE_FILES_URL}/${localRoot}?fields=id,name,driveId,mimeType`;
                 const verifyRes = await fetchWithAuth(verifyUrl, {
                   headers: authHeaders(freshToken),
                   // Timeout is guaranteed by fetchWithAuth itself (15s default

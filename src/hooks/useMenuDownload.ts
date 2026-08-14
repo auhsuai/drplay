@@ -7,7 +7,7 @@ import {
   getCustomDownloadPath,
 } from "../utils/downloadPath";
 import { mergeWithTimeoutSignal } from "../utils/driveApi";
-import { authHeaders } from "../utils/driveFiles";
+import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
@@ -114,7 +114,7 @@ export function useMenuDownload(t: TFunction) {
       const freshToken = await getValidToken(false, signal);
       if (!freshToken) throw new Error("No valid token");
 
-      const downloadUrl = `https://www.googleapis.com/drive/v3/files/${downloadTrack.id}?alt=media`;
+      const downloadUrl = `${DRIVE_FILES_URL}/${downloadTrack.id}?alt=media`;
       const response = await fetch(downloadUrl, {
         headers: authHeaders(freshToken),
         signal,

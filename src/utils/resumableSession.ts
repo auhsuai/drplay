@@ -6,7 +6,7 @@ import {
   readDriveErrorBody,
 } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
-import { authHeaders } from "./driveFiles";
+import { authHeaders, DRIVE_FILES_URL } from "./driveFiles";
 import {
   IdempotentConflictError,
   UploadError,
@@ -61,8 +61,7 @@ export function uploadChunkTimeoutMs(chunkBytes: number): number {
 // after an indeterminate server error or timeout re-run safely — if the file
 // was already created, Drive answers the retry with 409 Conflict and NO
 // duplicate file is created.
-const DRIVE_FILES_BASE_URL = "https://www.googleapis.com/drive/v3/files";
-const GENERATE_IDS_URL = `${DRIVE_FILES_BASE_URL}/generateIds`;
+const GENERATE_IDS_URL = `${DRIVE_FILES_URL}/generateIds`;
 const GENERATE_IDS_COUNT = 1;
 // The 409 body carries no file id — fetch the file that already owns the
 // pre-generated id so the retry resolves as DONE with the real file.
@@ -195,7 +194,7 @@ export async function resolveIdempotentConflict(
     source: DRIVE_MODULE,
     message: "idempotent-conflict-resolved",
   });
-  const url = `${DRIVE_FILES_BASE_URL}/${encodeURIComponent(fileId)}?fields=${FILE_GET_FIELDS}`;
+  const url = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=${FILE_GET_FIELDS}`;
   const response = await driveFetch(url, {
     headers: authHeaders(token),
     signal,

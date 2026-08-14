@@ -1,7 +1,7 @@
 import { captureError } from "./errorLog";
 import { classifyDriveError, driveFetch } from "./driveHttp";
 import { DRIVE_MODULE } from "./driveTypes";
-import { authHeaders, parseFilesList } from "./driveFiles";
+import { authHeaders, DRIVE_FILES_URL, parseFilesList } from "./driveFiles";
 
 const CONFIG_FILENAME = "drplay_config.json";
 const APP_DATA_FOLDER = "appDataFolder";
@@ -11,7 +11,7 @@ const APP_DATA_FOLDER = "appDataFolder";
 // saveAppConfigInternal so both always query the exact same endpoint).
 function buildConfigSearchUrl(): string {
   const q = `name = '${CONFIG_FILENAME}' and '${APP_DATA_FOLDER}' in parents`;
-  return `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
+  return `${DRIVE_FILES_URL}?spaces=appDataFolder&q=${encodeURIComponent(q)}&fields=files(id)`;
 }
 
 // Shared search helper: query appDataFolder for the config file. The ok flag
@@ -67,7 +67,7 @@ export async function getAppConfig(
     const fileId = search.fileId;
     if (fileId === null) return null;
 
-    const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+    const downloadUrl = `${DRIVE_FILES_URL}/${fileId}?alt=media`;
     const downloadRes = await driveFetch(downloadUrl, {
       headers: authHeaders(token),
       ...(signal ? { signal } : {}),

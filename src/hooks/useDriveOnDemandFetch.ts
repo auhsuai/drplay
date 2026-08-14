@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { db } from "../db/db";
 import { driveFetch } from "../utils/driveApi";
 import type { DriveFileItem, DriveFilesListResponse } from "../utils/driveApi";
-import { authHeaders } from "../utils/driveFiles";
+import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
@@ -43,7 +43,7 @@ export function useDriveOnDemandFetch({
         let pageToken: string | undefined = undefined;
 
         while (hasMore && isMounted && !abortController.signal.aborted) {
-          const url = new URL("https://www.googleapis.com/drive/v3/files");
+          const url = new URL(DRIVE_FILES_URL);
           url.searchParams.set("q", q);
           url.searchParams.set(
             "fields",

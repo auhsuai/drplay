@@ -1,6 +1,6 @@
 import { driveFetch, FOLDER_MIME } from "./driveApi";
 import type { DriveFileItem, DriveFolderItem } from "./driveApi";
-import { authHeaders } from "./driveFiles";
+import { authHeaders, DRIVE_FILES_URL } from "./driveFiles";
 
 // Drive files.list caps each request at 1000 results (docs: values above 1000
 // are coerced to 1000). We aggregate pages so large folders/searches are never
@@ -28,7 +28,7 @@ async function fetchAllPages<T>(
   signal?: AbortSignal,
   orderBy: string = "name",
 ): Promise<T[]> {
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=${orderBy}&pageSize=${String(PAGINATION_PAGE_SIZE)}`;
+  const baseUrl = `${DRIVE_FILES_URL}?q=${encodeURIComponent(query)}&fields=${fields}&orderBy=${orderBy}&pageSize=${String(PAGINATION_PAGE_SIZE)}`;
   const all: T[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
