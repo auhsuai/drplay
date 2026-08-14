@@ -141,32 +141,38 @@ async function putChunkWithRetry(
 const CHUNK_TIMEOUT_BUDGET_FRACTION = 0.6;
 
 // Adaptive chunk sizing: measure the throughput of a finished chunk PUT and
-// return the level index for the NEXT chunk (UPLOAD_CHUNK_LEVELS). Steps DOWN
-// (8 MiB → 2 MiB → 512 KiB) while the current level is projected to outlast
-// its timeout budget; never steps up mid-upload — a recovering network keeps
-// its smaller chunk (simpler, and a wrong up-step would re-fail the very
-// chunk that caused the step-down). `chunkBytes` is the size actually sent
-// (the first chunk is always 8 MiB, so its measurement reflects the true
-// link speed even when the next level differs).
+// return the level index for the NEXT chunk (UPLOAD_CHUNK_LEVELS). A slow
+// measurement steps DOWN exactly ONE level (8 MiB → 2 MiB → 512 KiB) — the
+// next chunk is measured at ITS OWN size, so a medium link lands and holds on
+// 2 MiB instead of jumping straight to the floor (Google manage-uploads:
+// "keep the chunk size as large as possible so that the upload is
+// efficient"). Never steps up mid-upload — a recovering network keeps its
+// smaller chunk (simpler, and a wrong up-step would re-fail the very chunk
+// that caused the step-down). `chunkBytes` is the size actually sent (the
+// first chunk is always 8 MiB, so its measurement reflects the true link
+// speed even when the next level differs).
 export function nextChunkLevel(
   levelIndex: number,
   chunkBytes: number,
   elapsedMs: number,
 ): number {
+  // At the floor (512 KiB) there is no smaller level to step to.
+  if (levelIndex >= UPLOAD_CHUNK_LEVELS.length - 1) return levelIndex;
+  const level = UPLOAD_CHUNK_LEVELS[levelIndex];
+  if (level === undefined) return levelIndex;
   const bytesPerMs = chunkBytes / Math.max(elapsedMs, 1);
-  let idx = levelIndex;
-  while (idx < UPLOAD_CHUNK_LEVELS.length - 1) {
-    const level = UPLOAD_CHUNK_LEVELS[idx];
-    if (level === undefined) break;
-    const projectedMs = level / bytesPerMs;
-    if (
-      projectedMs <=
-      CHUNK_TIMEOUT_BUDGET_FRACTION * uploadChunkTimeoutMs(level)
-    )
-      break;
-    idx++;
+  // Project the CURRENT level (the chunk just sent) against its own timeout
+  // budget. Projecting the NEXT level instead would skip it entirely — its
+  // timeout scales linearly with size, so a measurement that fails 8 MiB
+  // would also fail 2 MiB and the middle level would never be used.
+  const projectedMs = level / bytesPerMs;
+  if (
+    projectedMs >
+    CHUNK_TIMEOUT_BUDGET_FRACTION * uploadChunkTimeoutMs(level)
+  ) {
+    return levelIndex + 1;
   }
-  return idx;
+  return levelIndex;
 }
 
 // Upload one session's worth of chunks. Throws UploadError for fatal errors

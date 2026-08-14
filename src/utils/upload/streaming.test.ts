@@ -300,7 +300,7 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
     expectSameBytes(put2.body, data.slice(8 * 1024 * 1024));
   });
 
-  it("slow link: 8 MiB chunk measured at 80 s -> the remaining 2 MiB disk chunk is sliced into 4x 512 KiB PUTs, no bytes lost", async () => {
+  it("slow link: 8 MiB chunk measured at 80 s -> ONE-level step: the remaining 2 MiB tail is sent as a single 2 MiB PUT, no bytes lost", async () => {
     const data = makeData(10 * 1024 * 1024);
     mockedOpenStream.mockImplementation(() =>
       Promise.resolve(makeFakeStream(data)),
@@ -315,27 +315,19 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
       nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
       await tick();
       // First chunk (8 MiB) takes 80 s — past the 0.6·128 s budget -> the
-      // level steps down to 512 KiB for every following read.
+      // level steps down ONE level (2 MiB) for the following read.
       clock.set(80_000);
       nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8388607"));
       await tick();
-      // 512 KiB slices of the remaining 2 MiB — exactly 4 PUTs.
-      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8912895"));
-      await tick();
-      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-9437183"));
-      await tick();
-      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-9961471"));
-      await tick();
+      // The 2 MiB tail is measured at ~0 ms (clock not advanced) and stays
+      // at 2 MiB — exactly ONE PUT covers the remainder.
       nextHeld(pending).resolve(makeJsonResponse(201, UPLOADED_FILE));
 
       await expect(p).resolves.toMatchObject({ id: "file-9" });
-      expect(mockedFetch).toHaveBeenCalledTimes(6);
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
       const expected: Array<[string, number, number]> = [
         ["bytes 0-8388607/10485760", 0, 8388608],
-        ["bytes 8388608-8912895/10485760", 8388608, 8912896],
-        ["bytes 8912896-9437183/10485760", 8912896, 9437184],
-        ["bytes 9437184-9961471/10485760", 9437184, 9961472],
-        ["bytes 9961472-10485759/10485760", 9961472, 10485760],
+        ["bytes 8388608-10485759/10485760", 8388608, 10485760],
       ];
       for (let k = 0; k < expected.length; k++) {
         const [range, start, end] = expected[k] ?? ["", 0, 0];
@@ -348,7 +340,7 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
     }
   });
 
-  it("308 resume mid-chunk after a step-down: reopened stream + straddle remainder + 512 KiB slicing, every PUT byte-exact", async () => {
+  it("308 resume mid-chunk after a step-down: reopened stream + straddle remainder + 2 MiB slicing, every PUT byte-exact", async () => {
     const data = makeData(20 * 1024 * 1024);
     mockedOpenStream.mockImplementation(() =>
       Promise.resolve(makeFakeStream(data)),
@@ -368,10 +360,10 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
       clock.set(80_000);
       nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-4194303"));
       await tick();
-      // 32 x 512 KiB chunks from 4194304 to 20971520; the last answers 201.
-      for (let i = 1; i <= 32; i++) {
-        const start = 4194304 + (i - 1) * 512 * 1024;
-        const end = start + 512 * 1024 - 1;
+      // 8 x 2 MiB chunks from 4194304 to 20971520; the last answers 201.
+      for (let i = 1; i <= 8; i++) {
+        const start = 4194304 + (i - 1) * 2 * 1024 * 1024;
+        const end = start + 2 * 1024 * 1024 - 1;
         nextHeld(pending).resolve(
           end === data.length - 1
             ? makeJsonResponse(201, UPLOADED_FILE)
@@ -386,8 +378,60 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
       }
 
       await expect(p).resolves.toMatchObject({ id: "file-9" });
-      // initiate + 8 MiB chunk + 32 x 512 KiB chunks.
-      expect(mockedFetch).toHaveBeenCalledTimes(34);
+      // initiate + 8 MiB chunk + 8 x 2 MiB chunks.
+      expect(mockedFetch).toHaveBeenCalledTimes(10);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("very slow link: 8 MiB at 80 s -> 2 MiB at 20 s -> 512 KiB floor, every PUT byte-exact", async () => {
+    const data = makeData(12 * 1024 * 1024);
+    mockedOpenStream.mockImplementation(() =>
+      Promise.resolve(makeFakeStream(data)),
+    );
+    mockedStat.mockResolvedValue(statResult(data.length));
+    const clock = installElapsedClock();
+    const pending = holdFetch();
+    try {
+      const p = handleDiskFile(makeEntry("C:\\Music\\big.flac"));
+
+      await tick();
+      nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+      await tick();
+      // Chunk 0 (8 MiB) at 80 s: past 0.6·128 s -> one step down to 2 MiB.
+      clock.set(80_000);
+      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8388607"));
+      await tick();
+      // Chunk 1 (2 MiB) at 20 s: past 0.6·32 s -> one step down to 512 KiB.
+      clock.set(100_000);
+      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-10485759"));
+      await tick();
+      // Chunks 2..5 (512 KiB) measure ~0 ms -> the floor holds.
+      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-11010047"));
+      await tick();
+      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-11534335"));
+      await tick();
+      nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-12058623"));
+      await tick();
+      nextHeld(pending).resolve(makeJsonResponse(201, UPLOADED_FILE));
+
+      await expect(p).resolves.toMatchObject({ id: "file-9" });
+      expect(mockedFetch).toHaveBeenCalledTimes(7);
+      const expected: Array<[string, number, number]> = [
+        ["bytes 0-8388607/12582912", 0, 8388608],
+        ["bytes 8388608-10485759/12582912", 8388608, 10485760],
+        ["bytes 10485760-11010047/12582912", 10485760, 11010048],
+        ["bytes 11010048-11534335/12582912", 11010048, 11534336],
+        ["bytes 11534336-12058623/12582912", 11534336, 12058624],
+        ["bytes 12058624-12582911/12582912", 12058624, 12582912],
+      ];
+      for (let k = 0; k < expected.length; k++) {
+        const [range, start, end] = expected[k] ?? ["", 0, 0];
+        const put = putAt(k);
+        expect(put.range).toBe(range);
+        expectSameBytes(put.body, data.slice(start, end));
+      }
     } finally {
       vi.restoreAllMocks();
     }
