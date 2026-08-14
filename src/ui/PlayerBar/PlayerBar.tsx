@@ -2,6 +2,7 @@ import { memo, useCallback, useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { usePlayerStore } from "../../store/playerStore";
+import { IS_MOBILE } from "../../utils/platform";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
@@ -263,8 +264,11 @@ function PlayerBarImpl({
         <SeekBar currentTrack={currentTrack} audio={audio} />
       </div>
 
-      {/* Right: Volume Controls */}
-      <VolumeSlider audio={audio} />
+      {/* Right: Volume Controls. Mobile (Task 11 / Task 8B ADR): the on-screen
+          slider is a no-op there — Android uses the hardware volume keys
+          (ExoPlayer handles them natively), so the control is simply not
+          rendered; no logic is rewritten. Desktop is untouched. */}
+      {!IS_MOBILE && <VolumeSlider audio={audio} />}
 
       {/* Error Toast */}
       <ErrorToast errorInfo={errorInfo} errorText={errorText} />
