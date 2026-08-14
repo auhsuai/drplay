@@ -32,7 +32,7 @@ import {
   resumeOffsetFromRange,
   uploadChunkTimeoutMs,
 } from "./resumableSession";
-import { mapResumableSessionError } from "./uploadTransportErrors";
+import { UploadError, mapResumableSessionError } from "./uploadTransportErrors";
 import { nextChunkLevel } from "./uploadFileResumableChunked";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
@@ -1272,6 +1272,29 @@ describe("uploadFileResumable", () => {
     });
   }
 
+  // 429/5xx responses carry a Retry-After header (RFC 9110) that the
+  // bytes-path transport must surface on the thrown UploadError so the
+  // manager's backoff can honor it — the same header driveFetch reads before
+  // its own retry sleep.
+  function makeErrorResponseWithRetryAfter(
+    status: number,
+    message: string,
+    retryAfter: string,
+  ): Response {
+    const ok = status >= 200 && status < 300;
+    return {
+      status,
+      ok,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? retryAfter : null,
+      },
+      json: () => ({
+        error: { code: status, message, reason: "badRequest" },
+      }),
+    } as unknown as Response;
+  }
+
   it("happy path: POST initiate 200 + Location, PUT 201 + body → returns DriveFileItem", async () => {
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
@@ -1819,6 +1842,125 @@ describe("uploadFileResumable", () => {
         vi.restoreAllMocks();
       }
     });
+  });
+
+  // Bytes-path retry asymmetry fix: a transient HTTP status (429/5xx/403
+  // rate-limit) on the single PUT is surfaced as kind 'network' + status +
+  // Retry-After so the manager's uploadWithRetry — the ONE retry layer for
+  // the bytes path — can retry with backoff, mirroring the chunked path's
+  // per-chunk retry. The transport itself stays a single attempt.
+  describe("transient HTTP status on PUT → kind network (manager retries)", () => {
+    it("PUT 429 → UploadError kind network + status 429 + retryAfter, single attempt", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorResponseWithRetryAfter(429, "Rate Limit Exceeded", "5"),
+        );
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({
+        name: "UploadError",
+        kind: "network",
+        status: 429,
+        retryAfter: "5",
+      });
+      // Exactly one session: retry lives at the manager, never stacked here.
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+      expect(fetchCallAt(1)[0]).toBe(LOCATION);
+      // The concrete status must still reach the log (mapUploadHttpError fires
+      // in both branches) — the manager only records the kind, so without this
+      // a 429 would be invisible in the error log.
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          message: expect.stringContaining("status=429") as unknown as string,
+        }),
+      );
+    });
+
+    it("PUT 503 → kind network + status 503, no transport retry", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(503, "Service Unavailable"),
+        );
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({ kind: "network", status: 503 });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("PUT 403 rate-limit body (rateLimitExceeded) → kind network + status 403", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeRateLimitResponse(403, "rateLimitExceeded"));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({ kind: "network", status: 403 });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // UploadError.status must carry the concrete HTTP status for every mapped
+  // kind (auth/quota/invalid) — the kind alone hides the exact 4xx.
+  describe("UploadError.status on non-retryable kinds", () => {
+    it("PUT 401 → kind auth + status 401", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeErrorBodyResponse(401, "Unauthorized"));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({ kind: "auth", status: 401 });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("PUT 403 quota body → kind quota + status 403", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(
+          makeErrorBodyResponse(
+            403,
+            "The user's Drive storage quota has been exceeded.",
+            "storageQuotaExceeded",
+          ),
+        );
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({ kind: "quota", status: 403 });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("PUT 400 → kind invalid + status 400", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeErrorBodyResponse(400, "Bad Request"));
+
+      await expect(
+        uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
+      ).rejects.toMatchObject({ kind: "invalid", status: 400 });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("local failure (empty file) → status/retryAfter undefined (no HTTP involved)", async () => {
+    let caught: unknown;
+    try {
+      await uploadFileResumable("tok", new Uint8Array(0), "a.mp3", "p");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UploadError);
+    if (caught instanceof UploadError) {
+      expect(caught.kind).toBe("invalid");
+      expect(caught.status).toBeUndefined();
+      expect(caught.retryAfter).toBeUndefined();
+    }
+    expect(mockedFetch).not.toHaveBeenCalled();
   });
 });
 

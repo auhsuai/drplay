@@ -5,9 +5,11 @@ import {
   classifyDriveError,
   mergeWithTimeoutSignal,
   readDriveErrorBody,
+  shouldRetryDriveResponse,
 } from "./driveApi";
 import type { DriveFileItem } from "./driveApi";
 import { authHeaders } from "./driveFiles";
+import { MAX_UPLOAD_ATTEMPTS } from "./upload/errors";
 import {
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
@@ -51,6 +53,26 @@ async function putResumableBytes(
       // file instead of creating a duplicate.
       return resolveIdempotentConflict(token, clientGeneratedId, signal);
     }
+    // Transient HTTP (429/5xx/rate-limit-403): surface as kind 'network' with
+    // the concrete status + Retry-After so the manager's single retry layer
+    // (uploadWithRetry, budget MAX_UPLOAD_ATTEMPTS) can retry with backoff —
+    // mirroring the chunked path's per-chunk retry. attempt=0/maxRetries-1
+    // only gates the 403 body read (a quota 403 must stay non-retryable); the
+    // retry BUDGET itself is enforced by the manager, not here.
+    if (await shouldRetryDriveResponse(response, 0, MAX_UPLOAD_ATTEMPTS - 1)) {
+      // mapUploadHttpError logs the concrete status + sanitized reason in
+      // both branches, so a retried 429 stays visible in the log.
+      const mapped = mapUploadHttpError(
+        response.status,
+        await readDriveErrorBody(response),
+      );
+      throw new UploadError(
+        mapped.message,
+        "network",
+        response.status,
+        response.headers.get("Retry-After") ?? undefined,
+      );
+    }
     throw mapUploadHttpError(
       response.status,
       await readDriveErrorBody(response),
@@ -71,8 +93,9 @@ export interface UploadFileOptions {
 }
 
 // Upload file bytes via the resumable protocol (POST initiate → PUT bytes) —
-// exactly ONE attempt. Transient network/timeout failures wrap into
-// UploadError('network') so uploadManager.uploadWithRetry — the single retry
+// exactly ONE attempt. Transient failures — network/timeout rejections AND
+// 429/5xx/rate-limit-403 HTTP answers — wrap into UploadError('network',
+// status, Retry-After) so uploadManager.uploadWithRetry — the single retry
 // layer for the bytes path (3 attempts + backoff) — can classify and retry.
 // Retrying here too would stack two retry layers on the same call and multiply
 // upload sessions. Non-retryable HTTP errors map to UploadError kinds; aborts win.

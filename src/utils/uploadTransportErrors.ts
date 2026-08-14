@@ -34,16 +34,25 @@ export const SESSION_DEAD_STATUS_MIN = 400;
 export const SESSION_DEAD_STATUS_MAX = 500; // exclusive — 5xx are retried per chunk
 
 // Typed upload failure; kind lets callers (uploadManager) branch on the real
-// cause: quota/network/auth/invalid/aborted (no string-matching).
+// cause: quota/network/auth/invalid/aborted (no string-matching). status
+// carries the concrete HTTP status (undefined for local failures) so logs and
+// the retry layer can see the exact 4xx/5xx; retryAfter carries the response's
+// Retry-After header (RFC 9110) for the manager's backoff to honor.
 export class UploadError extends Error {
   readonly kind: "quota" | "network" | "auth" | "invalid" | "aborted";
+  readonly status: number | undefined;
+  readonly retryAfter: string | undefined;
   constructor(
     message: string,
     kind: "quota" | "network" | "auth" | "invalid" | "aborted",
+    status?: number,
+    retryAfter?: string,
   ) {
     super(message);
     this.name = "UploadError";
     this.kind = kind;
+    this.status = status;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -98,10 +107,14 @@ export function mapUploadHttpError(
     message: `upload-http-error (status=${String(status)})${detail ? `: ${detail}` : ""}`,
   });
   if (status === 401)
-    return new UploadError("upload unauthorized (401)", "auth");
+    return new UploadError("upload unauthorized (401)", "auth", status);
   if (status === 403 && isQuotaExceeded(errBody))
-    return new UploadError(ERROR_QUOTA_EXCEEDED, "quota");
-  return new UploadError(`upload failed (status=${String(status)})`, "invalid");
+    return new UploadError(ERROR_QUOTA_EXCEEDED, "quota", status);
+  return new UploadError(
+    `upload failed (status=${String(status)})`,
+    "invalid",
+    status,
+  );
 }
 
 // Shared 4xx wrap for resumable-session responses (chunk PUTs and the

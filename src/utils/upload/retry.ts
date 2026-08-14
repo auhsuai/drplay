@@ -86,7 +86,10 @@ export async function tryGenerateClientId(
   }
 }
 
-// Only transient network failures are retried (bounded backoff); pending row stays.
+// Only transient failures are retried (bounded backoff); pending row stays.
+// Transient = network rejections (fetch throw) AND 429/5xx/rate-limit-403
+// HTTP answers — the transport maps those to kind 'network' (carrying the
+// status + Retry-After), so this single retry layer covers both.
 async function uploadWithRetry(
   entry: InternalEntry,
   data: Blob | Uint8Array,
@@ -114,7 +117,10 @@ async function uploadWithRetry(
         err.kind === "network" &&
         attempt < MAX_UPLOAD_ATTEMPTS;
       if (!retryable) throw err;
-      await sleep(backoffDelay(attempt - 1));
+      // A Retry-After header (RFC 9110) from a 429/5xx overrides the
+      // exponential backoff when present; backoffDelay falls back to
+      // exponential + jitter when undefined.
+      await sleep(backoffDelay(attempt - 1, err.retryAfter));
       // An abort during the backoff must not schedule another attempt — the
       // user asked to cancel; re-firing would waste a fresh upload session.
       if (signal?.aborted) throw abortedUploadError();

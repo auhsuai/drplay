@@ -764,6 +764,127 @@ describe("uploadManager", () => {
     );
   });
 
+  it("9e. retry: UploadError network kèm status 429 (transport map) → backoff HONOR Retry-After 5s → lần 2 pass", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+    // The transport now surfaces transient HTTP (429) as kind 'network' with
+    // the Retry-After header; the manager's single retry layer must sleep
+    // ~5s (RFC 9110) instead of the 1–1.5s exponential base.
+    uploadFileResumable
+      .mockRejectedValueOnce(
+        new UploadErrorClass("rate limited (429)", "network", 429, "5"),
+      )
+      .mockResolvedValueOnce(makeDriveFile("file-9e", "ra.mp3"));
+    const snapshots = captureSnapshots();
+
+    um.startUploads([fileSeed("ra.mp3")], TOKEN);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+
+    // 4.9s in: the Retry-After sleep (5s) has NOT elapsed — exp+jitter would
+    // have fired by now, so this bounds the sleep to the honored header.
+    await advanceBackoff(4900);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+
+    // Crossing 5s: the Retry-After sleep resolves → attempt 2 fires.
+    await advanceBackoff(200);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(2);
+
+    await realTick();
+    expect(snapshots[snapshots.length - 1]).toEqual([
+      { status: "done", error: undefined },
+    ]);
+    expect(um.getEntries()).toEqual([]);
+  });
+
+  it("9f. retry hết: network x3 kèm status 500 → đúng 3 calls, error cuối kind network", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+    uploadFileResumable.mockRejectedValue(
+      new UploadErrorClass("server error", "network", 500),
+    );
+    const snapshots = captureSnapshots();
+
+    um.startUploads([fileSeed("n500.mp3")], TOKEN);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+
+    await advanceBackoff(1500);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(2);
+
+    await advanceBackoff(3000);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(3);
+    await realTick();
+
+    expect(snapshots[snapshots.length - 1]).toEqual([
+      { status: "error", error: "network" },
+    ]);
+    expect(um.getEntries()).toEqual([]);
+    await advanceBackoff(10_000);
+    expect(uploadFileResumable).toHaveBeenCalledTimes(3);
+  });
+
+  it("9g. kind auth (status 401) → không retry, 1 call, error auth", async () => {
+    uploadFileResumable.mockRejectedValueOnce(
+      new UploadErrorClass("unauthorized (401)", "auth", 401),
+    );
+    const snapshots = captureSnapshots();
+
+    um.startUploads([fileSeed("auth.mp3")], TOKEN);
+    await waitIdle();
+
+    expect(snapshots[snapshots.length - 1]).toEqual([
+      { status: "error", error: "auth" },
+    ]);
+    expect(um.getEntries()).toEqual([]);
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+  });
+
+  it("9h. kind quota (status 403) → không retry, 1 call, error quota", async () => {
+    uploadFileResumable.mockRejectedValueOnce(
+      new UploadErrorClass("drive storage quota exceeded", "quota", 403),
+    );
+    const snapshots = captureSnapshots();
+
+    um.startUploads([fileSeed("quota.mp3")], TOKEN);
+    await waitIdle();
+
+    expect(snapshots[snapshots.length - 1]).toEqual([
+      { status: "error", error: "quota" },
+    ]);
+    expect(um.getEntries()).toEqual([]);
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+  });
+
+  it("9i. cancel giữa backoff → không attempt tiếp (abort thắng retry)", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+    uploadFileResumable.mockRejectedValue(
+      new UploadErrorClass("network hiccup", "network"),
+    );
+    const snapshots = captureSnapshots();
+
+    um.startUploads([fileSeed("ab.mp3")], TOKEN);
+    await realTick();
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+
+    const entry = um.getEntries()[0];
+    if (!entry) throw new Error("expected upload entry");
+    um.cancelUpload(entry.id);
+
+    // Even with the backoff fully elapsed, the aborted signal must stop the
+    // loop from firing a second attempt.
+    await advanceBackoff(10_000);
+    await realTick();
+
+    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+    expect(snapshots[snapshots.length - 1]).toEqual([
+      { status: "error", error: "aborted" },
+    ]);
+    expect(um.getEntries()).toEqual([]);
+  });
+
   it("9d. disk path: 1 pre-generated id per entry truyen vao chunked uploader", async () => {
     generateClientId.mockResolvedValue("gen-7");
     const snapshots = captureSnapshots();
