@@ -37,6 +37,15 @@ vi.mock("../../utils/simpleToast", () => ({
 }));
 vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 
+// IS_MOBILE is read inside the component body (render time), so a
+// getter-backed mock lets the same module flip between desktop/mobile.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const AUDIO_FILTER = {
   name: "upload.audio_files",
   extensions: ["mp3", "flac", "wav", "m4a", "ogg", "aac", "opus"],
@@ -63,6 +72,7 @@ async function selectFolderOption() {
 
 describe("UploadButton", () => {
   beforeEach(() => {
+    platformMock.IS_MOBILE = false;
     mocks.open.mockReset();
     mocks.startUploads.mockReset();
     mocks.showErrorToast.mockReset();
@@ -300,5 +310,23 @@ describe("UploadButton", () => {
     const user = userEvent.setup();
     await user.click(openButton());
     expect(onHeaderClick).not.toHaveBeenCalled();
+  });
+});
+
+describe("UploadButton mobile gate (IS_MOBILE)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders nothing on mobile (uploads are desktop-only)", () => {
+    platformMock.IS_MOBILE = true;
+    render(<UploadButton token="tok-1" />);
+    expect(screen.queryByTitle(BUTTON_TITLE)).toBeNull();
+  });
+
+  it("renders normally on desktop", () => {
+    platformMock.IS_MOBILE = false;
+    render(<UploadButton token="tok-1" />);
+    expect(openButton()).toBeTruthy();
   });
 });

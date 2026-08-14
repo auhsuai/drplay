@@ -44,6 +44,15 @@ vi.mock("../../utils/simpleToast", () => ({
 }));
 vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 
+// IS_MOBILE is read inside the effect body (registration time), so a
+// getter-backed mock lets the same module flip between desktop/mobile.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const OVERLAY_TESTID = "drop-overlay";
 const DROP_FAILED_TOAST = "upload.drop_failed";
 // Rect of the fake [data-drop-region] file-list container installed by
@@ -135,6 +144,7 @@ function emit(event: { payload: DropPayload }): void {
 
 describe("DropZone", () => {
   beforeEach(() => {
+    platformMock.IS_MOBILE = false;
     capturedHandler = null;
     removeDropRegion();
     Object.defineProperty(document, "elementFromPoint", {
@@ -188,6 +198,13 @@ describe("DropZone", () => {
 
   it("does not register the listener when there is no token", () => {
     render(<DropZone token={null} />);
+    expect(mocks.getCurrentWebview).not.toHaveBeenCalled();
+    expect(mocks.onDragDropEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not register the drag-drop listener on mobile (IS_MOBILE)", () => {
+    platformMock.IS_MOBILE = true;
+    render(<DropZone token="tok-1" />);
     expect(mocks.getCurrentWebview).not.toHaveBeenCalled();
     expect(mocks.onDragDropEvent).not.toHaveBeenCalled();
   });

@@ -8,6 +8,7 @@ import { useDriveStore } from "../../store/driveStore";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { basename } from "../../utils/pathUtils";
+import { IS_MOBILE } from "../../utils/platform";
 
 const DROPZONE_MODULE = "DropZone";
 // Bus between DropZone and folder cards: the OS drag is a Tauri event, not a
@@ -144,7 +145,9 @@ export function DropZone({ token }: DropZoneProps) {
 
   useEffect(() => {
     // Dropping before login is meaningless: the seeds would fail auth anyway.
-    if (!token) return;
+    // Mobile has no OS drag-and-drop, and the upload pipeline is desktop-only
+    // — never register the Tauri drag-drop listener there.
+    if (!token || IS_MOBILE) return;
     let cancelled = false;
     let unlisten: UnlistenFn | null = null;
 

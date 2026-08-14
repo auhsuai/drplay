@@ -11,6 +11,7 @@ import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
+import { IS_MOBILE } from "../utils/platform";
 import { isAbortError } from "./player/utils";
 import type { Track } from "../types";
 import type { TFunction } from "i18next";
@@ -125,7 +126,11 @@ export function useMenuDownload(t: TFunction) {
 
       const bytes = new Uint8Array(await response.arrayBuffer());
       const dir = await getEffectiveDownloadPath();
-      if (getCustomDownloadPath()) {
+      // Mobile downloads go to the app dir (never $DOWNLOAD), which sits
+      // outside the fs write scope (capabilities allow $DOWNLOAD/**) — extend
+      // the scope unconditionally there. Desktop: only when the user picked a
+      // custom dir outside the default scope.
+      if (IS_MOBILE || getCustomDownloadPath()) {
         try {
           // Extend the fs scope so write_file may write outside the base
           // $DOWNLOAD scope (runtime scope extension, tauri_plugin_fs::FsExt).
@@ -163,7 +168,15 @@ export function useMenuDownload(t: TFunction) {
         headers: { path: encodeURIComponent(savePath) },
       });
 
-      setDownloadMessage(`${t("menu.saved_at")} ${savePath}`);
+      setDownloadMessage(
+        IS_MOBILE
+          ? // Mobile files land in app-private storage the user cannot browse
+            // from a file manager — say so instead of dumping the internal
+            // /data path. defaultValue keeps the string working until the
+            // i18n JSONs carry the key (they are owned by another branch).
+            t("menu.saved_at_app", { defaultValue: "Saved to app storage" })
+          : `${t("menu.saved_at")} ${savePath}`,
+      );
     } catch (err: unknown) {
       // Duck-typed name extraction: DOMException is NOT instanceof Error in
       // some environments (jsdom), yet carries a reliable .name. Still needed

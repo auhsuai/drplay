@@ -7,6 +7,7 @@ import { useDriveStore } from "../../store/driveStore";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { basename } from "../../utils/pathUtils";
+import { IS_MOBILE } from "../../utils/platform";
 import { useClickOutside } from "../../hooks/useClickOutside";
 
 const UPLOAD_BUTTON_MODULE = "UploadButton";
@@ -73,7 +74,10 @@ export function UploadButton({ token, disabled = false }: UploadButtonProps) {
     };
   }, [isMenuOpen]);
 
-  if (!token) return null;
+  // Mobile has no upload: no native file dialog story, and the upload
+  // pipeline (fs scope extension, resumable session) is desktop-only. The
+  // gate lives in the component so every mount site is covered at once.
+  if (!token || IS_MOBILE) return null;
 
   const handleToggleMenu = (event: React.MouseEvent) => {
     event.stopPropagation();

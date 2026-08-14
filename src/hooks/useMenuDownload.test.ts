@@ -31,6 +31,15 @@ vi.mock("../utils/downloadPath", () => ({
   getCustomDownloadPath: vi.fn(),
 }));
 
+// IS_MOBILE is read at call time inside the hook, so a getter-backed mock
+// lets the same module flip between desktop/mobile.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const mockedInvoke = vi.mocked(invoke);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedGetEffectiveDownloadPath = vi.mocked(getEffectiveDownloadPath);
@@ -39,17 +48,26 @@ const mockedJoin = vi.mocked(join);
 
 // Minimal TFunction backed by the real en resources: the hook no longer
 // passes fallbacks to t(), so a real resource lookup keeps the asserted
-// UI strings in sync with the shipped copy.
-const t = ((key: string, fallback?: string) => {
+// UI strings in sync with the shipped copy. Object-form options
+// ({ defaultValue }) are honoured for keys not yet present in the JSON
+// (mobile-only strings land via defaultValue until the JSON is updated).
+const t = ((key: string, fallback?: string | Record<string, unknown>) => {
+  const resolveFallback = (): string => {
+    if (fallback && typeof fallback === "object") {
+      const value = fallback.defaultValue;
+      return typeof value === "string" ? value : "";
+    }
+    return typeof fallback === "string" ? fallback : "";
+  };
   let acc: unknown = en;
   for (const part of key.split(".")) {
     if (typeof acc === "object" && acc !== null) {
       acc = (acc as Record<string, unknown>)[part];
     } else {
-      return fallback ?? "";
+      return resolveFallback();
     }
   }
-  return (typeof acc === "string" ? acc : fallback) ?? "";
+  return typeof acc === "string" ? acc : resolveFallback();
 }) as unknown as TFunction;
 
 function makeTrack(overrides: Partial<Track> = {}): Track {
@@ -110,6 +128,7 @@ function expectNoWriteFile(): void {
 }
 
 beforeEach(() => {
+  platformMock.IS_MOBILE = false;
   vi.useFakeTimers();
   vi.clearAllMocks();
   mockedGetValidToken.mockResolvedValue("test-token");
@@ -355,5 +374,49 @@ describe("useMenuDownload save path building (RC3)", () => {
     expect(pathHeader).toBe(
       encodeURIComponent("/home/user/Music/Test Song - Test Artist.mp3"),
     );
+  });
+});
+
+describe("useMenuDownload mobile (IS_MOBILE)", () => {
+  it("extends the fs scope to the app dir before writing (mobile has no $DOWNLOAD write scope)", async () => {
+    platformMock.IS_MOBILE = true;
+    mockedGetEffectiveDownloadPath.mockResolvedValue(
+      "/data/user/0/com.drplay/files",
+    );
+    mockedGetCustomDownloadPath.mockReturnValue(null);
+    mockedJoin.mockImplementation((dir: string, file: string) =>
+      Promise.resolve(`${dir}/${file}`),
+    );
+    fetchResolved();
+
+    await runDownload();
+
+    const registerIdx = mockedInvoke.mock.calls.findIndex(
+      (c) => c[0] === "register_download_path",
+    );
+    const writeIdx = mockedInvoke.mock.calls.findIndex(
+      (c) => c[0] === "plugin:fs|write_file",
+    );
+    expect(registerIdx).toBeGreaterThanOrEqual(0);
+    expect(writeIdx).toBeGreaterThan(registerIdx);
+    expect(mockedInvoke.mock.calls[registerIdx]).toEqual([
+      "register_download_path",
+      { path: "/data/user/0/com.drplay/files" },
+    ]);
+    const { pathHeader } = writeFileCall();
+    expect(pathHeader).toBe(
+      encodeURIComponent(
+        "/data/user/0/com.drplay/files/Test Song - Test Artist.mp3",
+      ),
+    );
+  });
+
+  it("shows the app-storage message on mobile instead of the raw internal path", async () => {
+    platformMock.IS_MOBILE = true;
+    fetchResolved();
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toBe("Saved to app storage");
   });
 });
