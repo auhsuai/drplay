@@ -3,8 +3,19 @@ import { useDriveListing } from "./useDriveListing";
 import { useDriveOnDemandFetch } from "./useDriveOnDemandFetch";
 import { useDriveSearch } from "./useDriveSearch";
 import { useDriveBulkOps } from "./useDriveBulkOps";
+import { IS_MOBILE } from "../utils/platform";
 
-export const ITEMS_PER_PAGE = 50;
+// Mobile (Task 14): every list renders through @tanstack/react-virtual with
+// NO pagination UX, so one "page" spans the entire list. MAX_SAFE_INTEGER
+// keeps every consumer of this constant correct with zero extra code:
+//   - totalPages = ceil(len / ITEMS_PER_PAGE) = 1 → PaginationControls hides
+//     itself (it also gates on IS_MOBILE directly)
+//   - currentItems slice covers the whole list → the virtualizer owns
+//     rendering, no load-more/paging for the user
+//   - MainContent's highlight math (floor(idx / ITEMS_PER_PAGE) + 1) resolves
+//     to page 1 and scrollToIndex(idx % ITEMS_PER_PAGE) to the TRUE index
+// Desktop keeps the historical 50-item page contract unchanged.
+export const ITEMS_PER_PAGE = IS_MOBILE ? Number.MAX_SAFE_INTEGER : 50;
 
 /**
  * Drive explorer logic for one folder view: keeps the local Dexie mirror warm

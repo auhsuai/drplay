@@ -1,5 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
+import { IS_MOBILE } from "../../../utils/platform";
 
 interface PaginationControlsProps {
   currentPage: number;
@@ -19,7 +20,9 @@ export function PaginationControls({
   const [pageInputValue, setPageInputValue] = React.useState("");
   const pageInputRef = React.useRef<HTMLInputElement>(null);
 
-  if (totalPages <= 1) return null;
+  // Task 14: mobile has NO pagination UX — the list is one virtualized
+  // scroll, so the paging bar never renders there. Desktop unchanged.
+  if (IS_MOBILE || totalPages <= 1) return null;
 
   return (
     <div

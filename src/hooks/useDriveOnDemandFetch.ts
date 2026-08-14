@@ -6,6 +6,9 @@ import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
+import { MAX_PAGINATION_PAGES } from "../utils/driveConstants";
+import { showSuccessToast } from "../utils/simpleToast";
+import i18n from "../i18n";
 
 const DRIVE_PAGE_SIZE = 1000;
 
@@ -40,8 +43,18 @@ export function useDriveOnDemandFetch({
         const q = getFolderAudioQuery(currentFolderId);
         let hasMore = true;
         let pageToken: string | undefined = undefined;
+        let pageCount = 0;
+        // True only when the loop ended BECAUSE the safety cap was hit (the
+        // MAXth page still carried a nextPageToken) — not on abort/error.
+        let capReached = false;
 
-        while (hasMore && isMounted && !abortController.signal.aborted) {
+        while (
+          hasMore &&
+          pageCount < MAX_PAGINATION_PAGES &&
+          isMounted &&
+          !abortController.signal.aborted
+        ) {
+          pageCount += 1;
           const url = new URL(DRIVE_FILES_URL);
           url.searchParams.set("q", q);
           url.searchParams.set(
@@ -104,7 +117,28 @@ export function useDriveOnDemandFetch({
           }
 
           pageToken = data?.nextPageToken;
-          if (!pageToken) hasMore = false;
+          if (!pageToken) {
+            hasMore = false;
+          } else if (pageCount >= MAX_PAGINATION_PAGES) {
+            // Safety cap: Drive keeps issuing tokens past 10k files in one
+            // folder. Stop silently truncating past the cap — tell the user
+            // once instead of hanging (or looping forever).
+            capReached = true;
+            pageToken = undefined;
+            hasMore = false;
+          }
+        }
+
+        // Soft notification: folder has more files than the cap shows. i18n
+        // keys land in translation.json (en/vi) after the cover branch merges;
+        // until then the defaultValue is the visible text.
+        if (capReached && isMounted && !abortController.signal.aborted) {
+          showSuccessToast(
+            i18n.t("drive.folder_cap_reached", {
+              defaultValue:
+                "This folder has more than 10,000 files — showing the first 10,000.",
+            }),
+          );
         }
       } catch (err) {
         if (abortController.signal.aborted) return;
