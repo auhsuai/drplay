@@ -1,5 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { exit } from "@tauri-apps/plugin-process";
 import { LoginGate } from "./ui/LoginGate";
 import { FolderSelectionGate } from "./ui/FolderSelectionGate";
 import { TrashGate } from "./ui/TrashGate";
@@ -34,6 +36,8 @@ import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
 import { useDriveStore } from "./store/driveStore";
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
+import { handleGlobalBack, useHardwareBack } from "./hooks/useHardwareBack";
+import { IS_MOBILE } from "./utils/platform";
 
 import type { Track, UserProfile, TabKey } from "./types";
 export type { Track, UserProfile };
@@ -256,6 +260,87 @@ function App() {
       setFolderHistory,
     ],
   );
+
+  // Hardware back button (mobile only): overlay-close handlers run in LIFO
+  // order — the LAST registered (highest priority) runs first. Priority:
+  // rate-limit modal > trash > folder selection > sidebar. All handlers are
+  // no-ops on desktop (useHardwareBack skips registration when inactive, and
+  // the popstate effect below early-returns on !IS_MOBILE).
+  useHardwareBack(() => {
+    setIsSidebarOpen(false);
+    return true;
+  }, isSidebarOpen);
+
+  useHardwareBack(() => {
+    setShowFolderSelection(false);
+    return true;
+  }, showFolderSelection);
+
+  useHardwareBack(() => {
+    setShowTrashScreen(false);
+    return true;
+  }, showTrashScreen);
+
+  useHardwareBack(() => {
+    setShowRateLimitModal(false);
+    return true;
+  }, showRateLimitModal);
+
+  // Popstate interception for the Android hardware back button via the
+  // History API: push a synthetic entry on mount so the first back press
+  // lands here. Back order: registered overlay stack → NowPlaying → any
+  // non-Home tab → Home → exit the app (Android convention: back at root
+  // exits). Runs ONLY on mobile — desktop keeps native window history.
+  const navStateRef = useRef({ isNowPlayingOpen, activeTab, handleTabChange });
+  useEffect(() => {
+    navStateRef.current = { isNowPlayingOpen, activeTab, handleTabChange };
+  }, [isNowPlayingOpen, activeTab, handleTabChange]);
+
+  useEffect(() => {
+    if (!IS_MOBILE) return;
+
+    window.history.pushState({ internal: true }, "");
+
+    const onPopState = () => {
+      if (handleGlobalBack()) {
+        window.history.pushState({ internal: true }, "");
+        return;
+      }
+
+      const state = navStateRef.current;
+      let handled = false;
+
+      if (state.isNowPlayingOpen) {
+        setIsNowPlayingOpen(false);
+        handled = true;
+      } else if (state.activeTab !== TABS.home) {
+        state.handleTabChange(TABS.home);
+        handled = true;
+      }
+
+      if (handled) {
+        // Push state again to intercept the next back press.
+        window.history.pushState({ internal: true }, "");
+      } else {
+        // Root (Home): exit the app. plugin-process exit(0) is the documented
+        // Tauri v2 way to exit on Android; the WebView's own window.close()
+        // would be a no-op there (Chromium only lets scripts close windows
+        // they opened), so it stays as the last-resort fallback.
+        exit(0).catch(() => {
+          getCurrentWindow()
+            .close()
+            .catch(() => {
+              window.close();
+            });
+        });
+      }
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, []);
 
   return (
     <div className="relative flex flex-col h-screen overflow-hidden bg-white dark:bg-[#121212] transition-colors duration-300">

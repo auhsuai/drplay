@@ -28,6 +28,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 # streaming) — workspace member so tauri-cli builds its Android/Kotlin side.
 tauri-plugin-native-audio = { path = "tauri-plugin-native-audio" }
 tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
