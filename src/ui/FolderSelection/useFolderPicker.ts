@@ -8,11 +8,11 @@ import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import { searchFolders, listFolderChildren } from "../../utils/drivePagination";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { isAbortError } from "../../hooks/player/utils";
 import {
   FOLDER_MODULE,
   SEARCH_DEBOUNCE_MS,
   classifyFolderError,
-  isAbortError,
   isAborted,
 } from "./folderSelectionHelpers";
 import type { FolderItem } from "./folderSelectionHelpers";

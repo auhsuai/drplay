@@ -11,6 +11,7 @@ import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
+import { isAbortError } from "./player/utils";
 import type { Track } from "../types";
 import type { TFunction } from "i18next";
 
@@ -165,15 +166,16 @@ export function useMenuDownload(t: TFunction) {
       setDownloadMessage(`${t("menu.saved_at")} ${savePath}`);
     } catch (err: unknown) {
       // Duck-typed name extraction: DOMException is NOT instanceof Error in
-      // some environments (jsdom), yet carries a reliable .name ('AbortError'
-      // for cancels, 'TimeoutError' for AbortSignal.timeout).
+      // some environments (jsdom), yet carries a reliable .name. Still needed
+      // here for 'TimeoutError' (AbortSignal.timeout) and the failure log —
+      // the AbortError branch itself uses the shared isAbortError check.
       const errName =
         err &&
         typeof err === "object" &&
         typeof (err as { name?: unknown }).name === "string"
           ? (err as { name: string }).name
           : "";
-      if (errName === "AbortError") {
+      if (isAbortError(err)) {
         // Deliberate cancel (unmount / superseded download): the component may
         // already be gone, so do NOT touch state — and do not surface a
         // failure message for a user-initiated cancel. Log for visibility.

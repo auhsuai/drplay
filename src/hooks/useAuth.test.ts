@@ -15,6 +15,7 @@ import {
 } from "../utils/apiClient";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
+import { fetchWithAuth } from "../utils/apiClient";
 import {
   startProSyncWorker,
   stopProSyncWorker,
@@ -102,6 +103,7 @@ const mockedRevokeGoogleToken = vi.mocked(revokeGoogleToken);
 const mockedStopProactiveRefresh = vi.mocked(stopProactiveRefresh);
 const mockedClearAllMetadataCache = vi.mocked(clearAllMetadataCache);
 const mockedCaptureError = vi.mocked(captureError);
+const mockedFetchWithAuth = vi.mocked(fetchWithAuth);
 const mockedStartProSyncWorker = vi.mocked(startProSyncWorker);
 const mockedStopProSyncWorker = vi.mocked(stopProSyncWorker);
 const mockedSetTokenRefreshHandler = vi.mocked(setTokenRefreshHandler);
@@ -422,5 +424,76 @@ describe("useAuth handleLogout revokes the refresh token too (M2)", () => {
     expect(mockedRevokeGoogleToken).toHaveBeenCalledWith("tok-123");
     expect(mockedDeleteRefreshToken).toHaveBeenCalledTimes(1);
     expect(onLogoutExt).toHaveBeenCalled();
+  });
+});
+
+describe("useAuth profile fetch abort handling (isAbortError unified)", () => {
+  const renderLoggedIn = () => {
+    authState.isLoggedIn = true;
+    authState.accessToken = "tok-123";
+    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
+    renderHook(() => useAuth());
+  };
+
+  afterEach(() => {
+    authState.isLoggedIn = false;
+    authState.accessToken = null;
+  });
+
+  it("does not log when the profile fetch is aborted (DOMException AbortError, jsdom shape not instanceof Error)", async () => {
+    mockedFetchWithAuth.mockRejectedValue(
+      new DOMException("The operation was aborted", "AbortError"),
+    );
+
+    renderLoggedIn();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+
+  it("does not log a duck-typed AbortError reject (name field only, no Error/DOMException identity)", async () => {
+    mockedFetchWithAuth.mockRejectedValue({ name: "AbortError" });
+
+    renderLoggedIn();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+
+  it("logs the profile fetch failure for a non-AbortError reject that is not an Error instance (was silently swallowed)", async () => {
+    mockedFetchWithAuth.mockRejectedValue({
+      name: "SomeError",
+      message: "boom",
+    });
+
+    renderLoggedIn();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(
+      mockedCaptureError.mock.calls.some(([c]) =>
+        c.message.includes("Failed to fetch user profile (best-effort)"),
+      ),
+    ).toBe(true);
+  });
+
+  it("still logs a plain Error reject (network failure path preserved)", async () => {
+    mockedFetchWithAuth.mockRejectedValue(new Error("network down"));
+
+    renderLoggedIn();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(
+      mockedCaptureError.mock.calls.some(([c]) =>
+        c.message.includes("Failed to fetch user profile (best-effort)"),
+      ),
+    ).toBe(true);
   });
 });

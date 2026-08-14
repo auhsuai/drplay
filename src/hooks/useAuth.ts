@@ -9,6 +9,7 @@ import {
   updateWorkerToken,
 } from "../utils/proSyncManager";
 import { useProSyncPoller } from "./useProSyncPoller";
+import { isAbortError } from "./player/utils";
 import { invalidateCurrentSession } from "../utils/sessionGuard";
 import {
   revokeGoogleToken,
@@ -392,11 +393,14 @@ export const useAuth = (onLogoutExt?: () => void) => {
             window.dispatchEvent(new CustomEvent("user-changed"));
           }
         } catch (err: unknown) {
-          if (err instanceof Error && err.name !== "AbortError") {
+          if (!isAbortError(err)) {
+            // isAbortError does not narrow the type, so fall back to the same
+            // name/message extraction used elsewhere (classifyFolderError).
+            const message = err instanceof Error ? err.message : String(err);
             void captureError({
               level: "error",
               source: AUTH_MODULE,
-              message: `Failed to fetch user profile (best-effort): ${err.message}`,
+              message: `Failed to fetch user profile (best-effort): ${message}`,
             });
           }
         }
