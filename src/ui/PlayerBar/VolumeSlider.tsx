@@ -103,7 +103,7 @@ export function VolumeSlider({ audio }: VolumeSliderProps) {
           : Volume2;
 
   return (
-    <div className="flex items-center justify-end shrink-0 ml-auto pl-2 gap-3">
+    <div className="flex items-center justify-end w-[30%] min-w-[120px] pl-2 gap-3">
       <VolumeIcon
         className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer"
         onClick={toggleMute}
