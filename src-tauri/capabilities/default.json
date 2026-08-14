@@ -16,8 +16,6 @@
     },
     "dialog:allow-open",
     "dialog:allow-save",
-    "keepawake:allow-start",
-    "keepawake:allow-stop",
     {
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "$DOWNLOAD/**" }]

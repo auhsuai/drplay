@@ -24,7 +24,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
-tauri-plugin-keepawake = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 oauth2 = "4.4.2"
@@ -47,14 +46,6 @@ sha2 = "0.10.8"
 
 bytes = "1.6.0"
 
-# Direct access to the WebView2 COM API to set MemoryUsageTargetLevel when the
-# window goes inactive (wry's WebViewExtWindows is not reachable through
-# tauri::webview::PlatformWebview, whose fields are private). Versions match
-# the ones already in Cargo.lock via tauri/wry — no new crate graph nodes.
-[target.'cfg(windows)'.dependencies]
-webview2-com = "0.38.2"
-windows-core = "0.61.2"
-
 uuid = { version = "1.8.0", features = ["v4"] }
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
 walkdir = "2.5.0"
@@ -64,6 +55,20 @@ rand = "0.8.5"
 # zip 2.x (resolves 2.6.1, 2025-04-04) provides ZipArchive::by_index +
 # ZipFile::enclosed_name — the safe-path (zip-slip) check the import relies on.
 zip = "2"
+
+# keepawake has no Android backend (keepawake 0.5.1 src/sys/mod.rs:14
+# compile_error "Unsupported cfg") — desktop only; frontend already
+# catch-warns on invoke failure.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-keepawake = "0.1.0"
+
+# Direct access to the WebView2 COM API to set MemoryUsageTargetLevel when the
+# window goes inactive (wry's WebViewExtWindows is not reachable through
+# tauri::webview::PlatformWebview, whose fields are private). Versions match
+# the ones already in Cargo.lock via tauri/wry — no new crate graph nodes.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38.2"
+windows-core = "0.61.2"
 
 [profile.release]
 lto = true

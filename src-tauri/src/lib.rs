@@ -1,11 +1,14 @@
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use tauri::Manager;
+
+#[cfg(desktop)]
+use std::sync::atomic::Ordering;
 
 pub mod protocol;
 mod thumbnail;
 mod auth;
+#[cfg(desktop)]
 mod tray;
 mod memory;
 mod token_store;
@@ -14,6 +17,7 @@ mod seed;
 use auth::{login_google_native, refresh_google_token};
 use memory::{apply_window_activity, WindowActivityEvent};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
+#[cfg(desktop)]
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
@@ -152,20 +156,22 @@ fn register_upload_path(app: tauri::AppHandle, path: String) -> Result<(), Strin
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivityEvent) {
     if let Some(webview_window) = window.get_webview_window("main") {
         apply_window_activity(&webview_window, event);
     }
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app_result = protocol::register(tauri::Builder::default())
+    let builder = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_keepawake::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
+    #[cfg(not(target_os = "android"))]
+    let builder = builder.plugin(tauri_plugin_keepawake::init());
+    let app_result = builder
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
 
@@ -183,11 +189,13 @@ pub fn run() {
                 crate::seed::init_metadata_root(cache_dir.join("metadata"));
             }
 
+            #[cfg(desktop)]
             setup_tray(app)?;
 
             Ok(())
         })
         .on_window_event(|window, event| match event {
+            #[cfg(desktop)]
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if !IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) && MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
                     let _ = window.hide();
@@ -214,6 +222,7 @@ pub fn run() {
             refresh_google_token,
             register_download_path,
             register_upload_path,
+            #[cfg(desktop)]
             update_minimize_to_tray,
             clear_local_cache,
             get_cache_info,
@@ -235,6 +244,7 @@ pub fn run() {
     };
 
     app.run(|_app_handle, event| match event {
+            #[cfg(desktop)]
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 IS_QUITTING.store(true, Ordering::SeqCst);
             }
