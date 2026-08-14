@@ -38,7 +38,13 @@ oauth2 = "4.4.2"
 # Secure storage for the Google OAuth refresh token: keyring's v1 feature
 # (default) routes to the OS credential vault — Windows Credential Manager on
 # Windows (windows-native-keyring-store). Replaces plaintext localStorage.
-keyring = "4.1.6"
+# On Android, v1's one-time store init has no Android arm (keyring-4.1.6
+# src/v1.rs:109-129) — the feature only pulls in the store crate, so
+# token_store.rs sets the default store itself (keyring_core::set_default_store).
+keyring = { version = "4.1.6", features = ["android-native-keyring-store"] }
+# Same version keyring 4.1.6 uses (keyring-core 1.0.0); needed to call
+# set_default_store directly on Android.
+keyring-core = "1.0.0"
 base64 = "0.22.1"
 url = "2.5.0"
 reqwest = { version = "0.12.4", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }
@@ -69,6 +75,18 @@ zip = "2"
 # catch-warns on invoke failure.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tauri-plugin-keepawake = "0.1.0"
+
+# Android Keystore-backed credential store for the refresh token
+# (keyring-compatible, same 1.0.0 version keyring 4.1.6 enables via its
+# "android-native-keyring-store" feature; direct dep because Rust cannot use
+# transitive deps). Shared-preferences file encrypted with a Keystore key.
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1.0.0"
+# jni 0.21 matches wry + android-native-keyring-store; used to capture the
+# process JavaVM + application Context for ndk-context (tauri 2.11/tao 0.35
+# no longer initialize it — see token_store.rs android_keystore module).
+jni = "0.21"
+ndk-context = "0.1"
 
 # Direct access to the WebView2 COM API to set MemoryUsageTargetLevel when the
 # window goes inactive (wry's WebViewExtWindows is not reachable through
