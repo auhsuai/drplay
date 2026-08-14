@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { deleteFile } from "../utils/driveApi";
+import { trashOrDefer } from "../utils/deferredTrash";
 import { db } from "../db/db";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
@@ -37,7 +37,7 @@ export function useMenuDelete(t: TFunction) {
     }
     setIsDeleting(true);
     try {
-      await deleteFile(token, deleteDriveItem.id);
+      await trashOrDefer(deleteDriveItem.id, token);
       await db.files.delete(deleteDriveItem.id);
       setShowDeleteConfirm(false);
       setIsOpen(false);
