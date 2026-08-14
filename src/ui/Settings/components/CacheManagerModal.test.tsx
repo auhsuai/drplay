@@ -133,7 +133,7 @@ describe("CacheManagerModal", () => {
     );
   });
 
-  it("renders the 4 category rows immediately with per-row size spinners, then swaps in sizes", async () => {
+  it("renders the 4 category rows immediately with per-row size placeholders, then swaps in sizes", async () => {
     // Deferred promise: the modal must not gate the rows on the fetch.
     let resolveSizes!: (v: CacheCategoryInfo[]) => void;
     vi.mocked(getCacheSizes).mockReturnValue(
@@ -150,13 +150,14 @@ describe("CacheManagerModal", () => {
     expect(screen.getByText("Prefetched data")).toBeTruthy();
     expect(screen.queryByText("Loading...")).toBeNull();
 
-    // Every row shows a small spinner in its size slot until the fetch resolves.
-    expect(screen.getAllByTestId("size-spinner")).toHaveLength(4);
+    // Every row shows a text placeholder in its size slot until the fetch
+    // resolves — same text-sm as the real size, so the column never jumps.
+    expect(screen.getAllByTestId("size-placeholder")).toHaveLength(4);
     expect(screen.queryByText("1 KB")).toBeNull();
 
     resolveSizes(SIZES);
     await waitFor(() => {
-      expect(screen.queryAllByTestId("size-spinner")).toHaveLength(0);
+      expect(screen.queryAllByTestId("size-placeholder")).toHaveLength(0);
     });
     expect(screen.getByText("1 KB")).toBeTruthy();
     expect(screen.getByText("2 KB")).toBeTruthy();

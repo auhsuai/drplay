@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, LoaderCircle, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -130,7 +131,10 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
     }
   };
 
-  return (
+  // Rendered through a portal into document.body so the overlay escapes the
+  // SettingsTab scroll container — backdrop-blur otherwise only applies inside
+  // the scroll container and the PlayerBar (outside <main>) stays unblurred.
+  return createPortal(
     <div
       data-testid="cache-manager-overlay"
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4"
@@ -187,10 +191,16 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
               </span>
               <span className="w-14 shrink-0 flex items-center justify-end">
                 {sizes[id] === null ? (
-                  <LoaderCircle
-                    data-testid="size-spinner"
-                    className="w-3.5 h-3.5 animate-spin text-gray-400"
-                  />
+                  // Text placeholder (same text-sm as the real size) instead of
+                  // a small spinner: the size column keeps its exact width in
+                  // both states, so nothing visibly jumps when sizes load.
+                  <span
+                    data-testid="size-placeholder"
+                    className="text-sm text-gray-400 dark:text-gray-500"
+                    aria-label={t("loading")}
+                  >
+                    —
+                  </span>
                 ) : (
                   <span className="text-sm text-gray-500 dark:text-gray-400">
                     {formatBytes(sizes[id])}
@@ -221,6 +231,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
