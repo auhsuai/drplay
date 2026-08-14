@@ -5,6 +5,13 @@ import { getCurrentUserEmail } from "../storageKeys";
 import { MODULE, PENDING_ID_PREFIX, describeError } from "./errors";
 import type { InternalEntry } from "./types";
 
+// Google resumable upload sessions expire after one week of inactivity
+// (developers.google.com/workspace/drive/api/guides/manage-uploads — "A
+// resumable session URI expires after one week"). A persisted row whose last
+// activity is older than this is a dead session: resuming it would only cost
+// a 404 query-status round-trip and a restart.
+export const UPLOAD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 // Build a queue entry from a persisted session row (slice 5.2). Returns null
 // when the row cannot be resumed — such rows only count toward the aggregated
 // interrupted toast: 'bytes' (payload lost with the old process), 'folderRoot'
@@ -16,6 +23,21 @@ export function resumeEntryFromRow(
   row: UploadSessionRow,
   token: string,
 ): InternalEntry | null {
+  // Drive expires a resumable session URI after one week of inactivity, so a
+  // row whose updatedAt is older than the TTL is a dead session — refuse it
+  // like any other non-resumable row so the caller deletes it and counts it
+  // into the interrupted toast instead of pointlessly querying a dead URI.
+  // Rows missing updatedAt (written before schema v9) are refused the same
+  // way — never trust an absent timestamp. An active upload renews updatedAt
+  // on every persist (persistActiveSession), so in-flight work is renewed
+  // naturally and never falsely expired.
+  if (
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime legacy rows CAN lack updatedAt despite the TS type (schema v9) requiring it; IndexedDB rows from older schemas are not re-typed.
+    row.updatedAt === undefined ||
+    Date.now() - row.updatedAt > UPLOAD_SESSION_TTL_MS
+  ) {
+    return null;
+  }
   if (row.diskPath === undefined) return null;
   if (row.kind === "folderRoot" || row.kind === "folderChild") return null;
   if (row.kind === "folderChildFile" && row.uploadUri === undefined)

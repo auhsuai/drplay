@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import { db } from "../db/db";
+import type { UploadSessionRow } from "../db/db";
 import type { UploadSeed } from "./uploadManager";
 import type { DriveFileItem } from "../utils/driveApi";
 import type {
@@ -24,6 +25,7 @@ import type {
 import type { showErrorToast as showErrorToastImpl } from "./simpleToast";
 import type { captureError as captureErrorImpl } from "./errorLog";
 import { USER_EMAIL_KEY } from "./storageKeys";
+import { UPLOAD_SESSION_TTL_MS } from "./upload/session";
 import enTranslations from "../locales/en/translation.json";
 import viTranslations from "../locales/vi/translation.json";
 
@@ -2722,6 +2724,7 @@ describe("uploadManager", () => {
       uploadUri?: string;
       clientGeneratedId?: string;
       userEmail?: string;
+      updatedAt?: number;
     }): Promise<void> {
       await db.uploadSessions.put({
         id: row.id,
@@ -2738,7 +2741,9 @@ describe("uploadManager", () => {
           : {}),
         status: "active",
         createdAt: 1,
-        updatedAt: 1,
+        // Fresh by default — the TTL guard must never expire the rows of the
+        // existing resume tests (only TTL-specific tests pass an old stamp).
+        updatedAt: row.updatedAt ?? Date.now(),
       });
     }
 
@@ -2997,6 +3002,98 @@ describe("uploadManager", () => {
 
       expect(uploadFileResumableChunked).not.toHaveBeenCalled();
       expect(walkDiskFolder).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(ttl1) diskFile row updatedAt = now - 8 days → expired session → null → interrupted toast + row deleted, no resume", async () => {
+      await insertSessionRow({
+        id: "pending-old-ttl1",
+        name: "old.mp3",
+        kind: "diskFile",
+        diskPath: "C:/old.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+        // 8 days: one full day past the 7-day TTL.
+        updatedAt: Date.now() - (UPLOAD_SESSION_TTL_MS + 24 * 60 * 60 * 1000),
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(ttl2) diskFile row updatedAt = now - (7 days - 1 min) → just under the TTL → resumes with the session URI", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      await insertSessionRow({
+        id: "pending-old-ttl2",
+        name: "fresh.mp3",
+        kind: "diskFile",
+        diskPath: "C:/fresh.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+        updatedAt: Date.now() - (UPLOAD_SESSION_TTL_MS - 60 * 1000),
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      const opts = uploadFileResumableChunked.mock.calls[0]?.[1];
+      expect(opts?.initialUploadUri).toBe(OLD_URI);
+      expect(showErrorToast).not.toHaveBeenCalled();
+
+      d.resolve(makeDriveFile("f1", "fresh.mp3"));
+      await waitIdle();
+    });
+
+    it("(ttl3) row WITHOUT updatedAt (legacy pre-v9 write) → null → interrupted toast + row deleted, no crash", async () => {
+      // UploadSessionRow types updatedAt as required, but rows written before
+      // schema v9 can lack it at runtime — simulate one by omitting the field.
+      const legacyRow = {
+        id: "pending-old-ttl3",
+        userEmail: USER,
+        name: "legacy.mp3",
+        isFolder: false,
+        kind: "diskFile",
+        diskPath: "C:/legacy.mp3",
+        parentId: "root",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+        status: "active",
+        createdAt: 1,
+      } as unknown as UploadSessionRow;
+      await db.uploadSessions.put(legacyRow);
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(ttl4) diskFile row updatedAt = now - (7 days + 1 min) → just over the TTL → expired → null → interrupted", async () => {
+      await insertSessionRow({
+        id: "pending-old-ttl4",
+        name: "old2.mp3",
+        kind: "diskFile",
+        diskPath: "C:/old2.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+        updatedAt: Date.now() - (UPLOAD_SESSION_TTL_MS + 60 * 1000),
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
       expect(showErrorToast).toHaveBeenCalledTimes(1);
       expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
