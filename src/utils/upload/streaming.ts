@@ -89,23 +89,28 @@ async function uploadDiskFileStreaming(
 interface ChunkReaderState {
   stream: DiskReadStream;
   consumed: number;
-  // Tail of a chunk that straddled the requested skip offset, served before
-  // the stream is read again so every returned chunk starts exactly at the
-  // offset the resumable session asked for.
+  // Tail of a disk chunk that straddled the requested skip offset or exceeded
+  // the requested size hint, served before the stream is read again so every
+  // returned chunk starts exactly at the offset the resumable session asked
+  // for and never exceeds the size hint it budgeted.
   remainder: Uint8Array | null;
 }
 
-// Read the chunk starting exactly at `offset`. A 308 resume can ask for bytes
-// we already consumed (server received fewer than sent); the rid-backed handle
-// only reads forward, so the stream is reopened and skipped to the requested
-// offset. When a skipped chunk straddles the offset, its tail (starting
-// exactly at `offset`) is kept instead of discarded — the old
+// Read up to `sizeHint` bytes starting exactly at `offset`. A 308 resume can
+// ask for bytes we already consumed (server received fewer than sent); the
+// rid-backed handle only reads forward, so the stream is reopened and skipped
+// to the requested offset. When a skipped chunk straddles the offset, its tail
+// (starting exactly at `offset`) is kept instead of discarded — the old
 // discard-then-read desynced the stream and uploaded data shifted by
-// `next - offset` bytes, silently corrupting the file.
+// `next - offset` bytes, silently corrupting the file. Disk reads stay at
+// DEFAULT_READ_CHUNK_SIZE regardless of the adapted chunk level, so an
+// oversized read is sliced to `sizeHint` and its tail flows through the SAME
+// remainder mechanism as a straddled chunk — one path, no byte loss.
 async function readChunkFromState(
   state: ChunkReaderState,
   path: string,
   offset: number,
+  sizeHint?: number,
 ): Promise<Uint8Array | null> {
   if (offset < state.consumed) {
     await state.stream.close();
@@ -124,16 +129,64 @@ async function readChunkFromState(
     }
     state.consumed = next;
   }
-  if (state.remainder !== null) {
-    const r = state.remainder;
-    state.remainder = null;
-    state.consumed += r.byteLength;
-    return r;
+  // No sizeHint: the historical contract — serve the straddle remainder, or
+  // exactly ONE disk read, without accumulating (hint-less callers keep the
+  // pre-adaptive behavior).
+  if (sizeHint === undefined) {
+    if (state.remainder !== null) {
+      const r = state.remainder;
+      state.remainder = null;
+      state.consumed += r.byteLength;
+      return r;
+    }
+    const chunk = await state.stream.read();
+    if (chunk === null) return null;
+    state.consumed += chunk.byteLength;
+    return chunk;
   }
-  const chunk = await state.stream.read();
-  if (chunk === null) return null;
-  state.consumed += chunk.byteLength;
-  return chunk;
+  // Serve at most `limit` bytes: the straddle/oversize tail first, then more
+  // disk reads (a short read — nread < requested — also fills in). Only an
+  // end-of-file read may leave the result shorter than the limit.
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  if (state.remainder !== null) {
+    const tail = state.remainder;
+    state.remainder = null;
+    const take = Math.min(tail.byteLength, sizeHint);
+    parts.push(tail.slice(0, take));
+    total += take;
+    state.consumed += take;
+    if (tail.byteLength > take) state.remainder = tail.slice(take);
+  }
+  while (total < sizeHint) {
+    const chunk = await state.stream.read();
+    if (chunk === null) break;
+    const take = Math.min(chunk.byteLength, sizeHint - total);
+    parts.push(chunk.slice(0, take));
+    total += take;
+    state.consumed += take;
+    if (chunk.byteLength > take) {
+      state.remainder = chunk.slice(take);
+      break;
+    }
+  }
+  if (parts.length === 0) return null;
+  return concatBytes(parts);
+}
+
+// Concatenate the reader's parts (straddle/oversize tail + one or more disk
+// reads) — max 2 parts in practice (8 MiB disk read vs ≤ 8 MiB limit), so the
+// allocation cost is trivial.
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const p of parts) total += p.byteLength;
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.byteLength;
+  }
+  return out;
 }
 
 async function uploadDiskPathChunked(
@@ -159,7 +212,8 @@ async function uploadDiskPathChunked(
       name: entry.name,
       parentId: entry.parentId,
       totalSize,
-      readChunk: (offset) => readChunkFromState(reader, path, offset),
+      readChunk: (offset, sizeHint) =>
+        readChunkFromState(reader, path, offset, sizeHint),
       // The entry's cancel controller is wired into the real uploader so a
       // cancelUpload aborts the in-flight Drive request (driveApi rejects
       // with UploadError('aborted')).

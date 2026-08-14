@@ -21,6 +21,36 @@ export const UPLOAD_TIMEOUT_MS = 120_000;
 // a stalled status request must not sit for the full 120s chunk bound.
 export const QUERY_STATUS_TIMEOUT_MS = 20_000;
 
+// Adaptive chunked uploads (see nextChunkLevel in uploadFileResumableChunked.ts):
+// the Drive protocol only requires non-final chunk sizes to be multiples of
+// 256 KiB (manage-uploads, "resumable upload" chunk rules), so slow links step
+// DOWN through these levels instead of failing. All three are 256 KiB
+// multiples. The fixed 8 MiB chunk with the flat 120 s bound made slow links
+// (< ~560 Kbps) fail deterministically: 8 MiB / 120 s ≈ 65 KB/s.
+export const UPLOAD_CHUNK_LEVELS = [
+  8 * 1024 * 1024,
+  2 * 1024 * 1024,
+  512 * 1024,
+] as const;
+
+// Slowest sustained rate the uploader commits to supporting (64 KiB/s): the
+// chunk timeout scales so a full chunk at this rate still finishes inside its
+// bound (8 MiB → 128 s, 2 MiB → 32 s).
+export const UPLOAD_CHUNK_THROUGHPUT_KIB_PER_SEC = 64;
+// Floor for a chunk PUT bound: even a tiny chunk gets a generous minimum so a
+// stalled link is not mistaken for a slow-but-alive one (512 KiB → 8 s by the
+// formula, clamped here to 30 s).
+export const UPLOAD_CHUNK_TIMEOUT_FLOOR_MS = 30_000;
+
+// Per-chunk PUT bound, proportional to the chunk size. The initiate POST and
+// the conflict-GET keep the flat UPLOAD_TIMEOUT_MS above. Rounded UP to an
+// integer: AbortSignal.timeout rejects non-integer delays (Node throws
+// RangeError) and a rounded-down bound could break the 64 KiB/s guarantee.
+export function uploadChunkTimeoutMs(chunkBytes: number): number {
+  const seconds = chunkBytes / 1024 / UPLOAD_CHUNK_THROUGHPUT_KIB_PER_SEC;
+  return Math.max(UPLOAD_CHUNK_TIMEOUT_FLOOR_MS, Math.ceil(seconds * 1000));
+}
+
 // Idempotent retry (developers.google.com/workspace/drive/api/guides/manage-uploads,
 // "Use a pre-generated ID to upload files"): a pre-generated id lets a retry
 // after an indeterminate server error or timeout re-run safely — if the file

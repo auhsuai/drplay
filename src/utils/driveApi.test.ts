@@ -26,6 +26,8 @@ import {
   generateClientId,
 } from "./driveUpload";
 import { queryResumableStatus } from "./resumableStatus";
+import { uploadChunkTimeoutMs } from "./resumableSession";
+import { nextChunkLevel } from "./uploadFileResumableChunked";
 
 // Mock the auth-bound transport so we can simulate Drive API responses and
 // exercise driveFetch's retry/backoff path without real network calls.
@@ -1832,9 +1834,10 @@ describe("uploadFileResumableChunked", () => {
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=chunk-123";
   const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
   const TOTAL_SIZE = 10_000_000;
-  // Mirrors UPLOAD_TIMEOUT_MS in driveApi.ts: each chunk PUT overrides
-  // fetchWithAuth's 15s default with the 120s upload bound.
-  const PUT_TIMEOUT_MS = 120_000;
+  // The chunk PUT bound is now proportional to the chunk size
+  // (uploadChunkTimeoutMs): an 8 MiB chunk gets 128 s. The initiate POST and
+  // the conflict-GET keep the flat 120 s UPLOAD_TIMEOUT_MS.
+  const PUT_TIMEOUT_MS = uploadChunkTimeoutMs(CHUNK_SIZE); // 128_000 for 8 MiB
   // Mirrors QUERY_STATUS_TIMEOUT_MS in driveApi.ts: the empty query-status PUT
   // is cheap, so it gets a shorter bound than the 120s chunk upload.
   const QUERY_STATUS_TIMEOUT_MS = 20_000;
@@ -2036,16 +2039,58 @@ describe("uploadFileResumableChunked", () => {
 
   const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
+  // SizeHint-honoring reader mirroring streaming.ts's readChunkFromState
+  // contract: at most `sizeHint` bytes per call (shorter only at EOF), null
+  // past the end. Records every (offset, sizeHint) call for assertions.
+  function makeHintReader(bytes: Uint8Array): {
+    calls: Array<{ offset: number; sizeHint: number }>;
+    readChunk: (
+      offset: number,
+      sizeHint?: number,
+    ) => Promise<Uint8Array | null>;
+  } {
+    const calls: Array<{ offset: number; sizeHint: number }> = [];
+    return {
+      calls,
+      readChunk: (offset, sizeHint) => {
+        calls.push({ offset, sizeHint: sizeHint ?? bytes.length });
+        if (offset >= bytes.length) return Promise.resolve(null);
+        const end = Math.min(offset + (sizeHint ?? bytes.length), bytes.length);
+        return Promise.resolve(bytes.slice(offset, end));
+      },
+    };
+  }
+
+  // Test-controlled wall clock for the throughput measurement: putChunkWithRetry
+  // reads performance.now() before and after the fetch, so a test can simulate
+  // "this PUT took 80 s" by setting the mock between holding and resolving the
+  // request (real time stays at ~0). Resetting the clock makes later requests
+  // measure ~0 ms (fast) without waiting.
+  function installElapsedClock(): { set: (ms: number) => void } {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    return {
+      set: (ms: number) => {
+        now = ms;
+      },
+    };
+  }
+
   it("upload spanning > UPLOAD_TIMEOUT_MS total time completes (timeouts are per-request, not whole-upload)", async () => {
     const controller = new AbortController();
     const clock = installTimeoutClock();
     const pending = holdFetch();
     try {
-      const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+      // 16 MiB = two FULL 8 MiB chunks: each chunk PUT carries its own
+      // proportional bound (128 s), so the second chunk is still alive after
+      // the first took 60 s. (A small final chunk would get the 30 s floor
+      // bound — that shrink is by design, see uploadChunkTimeoutMs.)
+      const total = 16 * 1024 * 1024;
+      const reader = makeReader(makePayload(total), CHUNK_SIZE);
       const p = uploadFileResumableChunked("tok", {
         name: "big.flac",
         parentId: "p",
-        totalSize: TOTAL_SIZE,
+        totalSize: total,
         readChunk: reader.readChunk,
         signal: controller.signal,
       });
@@ -2053,7 +2098,7 @@ describe("uploadFileResumableChunked", () => {
       await tick();
       nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
       await tick();
-      // Chunk 1 PUT starts at t=0 with its own 120s bound.
+      // Chunk 1 PUT starts at t=0 with its own 8 MiB → 128 s bound.
       const chunk1 = nextHeld(pending);
 
       // Chunk 1 takes 60s — well inside its per-request bound.
@@ -2061,7 +2106,7 @@ describe("uploadFileResumableChunked", () => {
       expect(chunk1.aborted).toBe(false);
       chunk1.resolve(makeRangeResponse(308, "bytes=0-8388607"));
       await tick();
-      // Chunk 2 PUT starts at t=60s and must carry a FRESH 120s bound (a
+      // Chunk 2 PUT starts at t=60s and must carry a FRESH per-chunk bound (a
       // whole-upload signal created at t=0 would fire at t=120s and kill it).
       const chunk2 = nextHeld(pending);
 
@@ -3320,6 +3365,331 @@ describe("uploadFileResumableChunked", () => {
       expect(captureError).toHaveBeenCalledWith(
         expect.objectContaining({ level: "warn" }),
       );
+    });
+  });
+
+  // Adaptive chunk sizing (PA 2026-08-13): a slow link steps the chunk level
+  // DOWN (8 MiB → 2 MiB → 512 KiB) when the measured throughput projects the
+  // next chunk beyond 60% of its own timeout budget. The 2 MiB level is a
+  // TRANSITIONAL level of the stepping loop — the timeout formula scales
+  // linearly with the chunk size, so a measurement that fails the 8 MiB
+  // budget also fails the 2 MiB budget and lands on 512 KiB (see
+  // nextChunkLevel). Fast links keep 8 MiB untouched.
+  describe("adaptive chunk size (slow networks)", () => {
+    const MIB = 1024 * 1024;
+
+    it("uploadChunkTimeoutMs scales with the chunk size (30 s floor)", () => {
+      expect(uploadChunkTimeoutMs(8 * MIB)).toBe(128_000);
+      expect(uploadChunkTimeoutMs(2 * MIB)).toBe(32_000);
+      expect(uploadChunkTimeoutMs(512 * 1024)).toBe(30_000);
+      expect(uploadChunkTimeoutMs(1 * MIB)).toBe(30_000);
+    });
+
+    it("nextChunkLevel keeps 8 MiB on a fast link, steps straight to 512 KiB on a slow one, never up", () => {
+      // 8 MiB in 50 ms: projected duration is nowhere near the budget.
+      expect(nextChunkLevel(0, 8 * MIB, 50)).toBe(0);
+      // 8 MiB in 80 s: 80 s > 0.6·128 s (8 MiB) → 2 MiB: 20 s > 0.6·32 s →
+      // 512 KiB (5 s ≤ 0.6·30 s) — the two transitional steps in one go.
+      expect(nextChunkLevel(0, 8 * MIB, 80_000)).toBe(2);
+      // A 512 KiB chunk re-measured slow stays at the floor (never below).
+      expect(nextChunkLevel(2, 512 * 1024, 25_000)).toBe(2);
+      // A slow 2 MiB measurement steps from the (unreachable-in-practice)
+      // middle level down to the floor.
+      expect(nextChunkLevel(1, 2 * MIB, 25_000)).toBe(2);
+      // A fast link at any level never steps UP.
+      expect(nextChunkLevel(2, 512 * 1024, 50)).toBe(2);
+    });
+
+    it("fast link: 8 MiB hint stays for the whole upload, chunk PUT keeps the 128 s bound", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8388607"))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const total = 10_000_000;
+      const reader = makeHintReader(makePayload(total));
+      const result = await uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: total,
+        readChunk: reader.readChunk,
+      });
+
+      expect(result).toEqual(uploadedFile);
+      expect(reader.calls.map((c) => c.sizeHint)).toEqual([
+        CHUNK_SIZE,
+        CHUNK_SIZE,
+      ]);
+      const [, put1Opts] = fetchCallAt(1);
+      expect(
+        (put1Opts?.headers as Record<string, string>)["Content-Range"],
+      ).toBe("bytes 0-8388607/10000000");
+      expect(put1Opts?.timeoutMs).toBe(uploadChunkTimeoutMs(CHUNK_SIZE));
+    });
+
+    it("slow link: 8 MiB chunk measured at 80 s -> subsequent chunks at 512 KiB with the 30 s floor bound", async () => {
+      const total = 10 * MIB;
+      const clock = installElapsedClock();
+      const pending = holdFetch();
+      try {
+        const reader = makeHintReader(makePayload(total));
+        const p = uploadFileResumableChunked("tok", {
+          name: "big.flac",
+          parentId: "p",
+          totalSize: total,
+          readChunk: reader.readChunk,
+        });
+
+        await tick();
+        nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+        await tick();
+        // Chunk 0 (8 MiB) takes 80 s — past the 0.6·128 s budget.
+        clock.set(80_000);
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8388607"));
+        await tick();
+        // Every following chunk is 512 KiB (4 slices of the remaining 2 MiB).
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8912895"));
+        await tick();
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-9437183"));
+        await tick();
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-9961471"));
+        await tick();
+        nextHeld(pending).resolve(makeJsonResponse(201, uploadedFile));
+
+        await expect(p).resolves.toEqual(uploadedFile);
+        expect(reader.calls.map((c) => c.sizeHint)).toEqual([
+          8 * MIB,
+          512 * 1024,
+          512 * 1024,
+          512 * 1024,
+          512 * 1024,
+        ]);
+        const ranges = mockedFetch.mock.calls
+          .slice(1)
+          .map(
+            ([, o]) => (o?.headers as Record<string, string>)["Content-Range"],
+          );
+        expect(ranges).toEqual([
+          "bytes 0-8388607/10485760",
+          "bytes 8388608-8912895/10485760",
+          "bytes 8912896-9437183/10485760",
+          "bytes 9437184-9961471/10485760",
+          "bytes 9961472-10485759/10485760",
+        ]);
+        // The chunk PUT bound follows the adapted chunk: 128 s for 8 MiB,
+        // 30 s floor for 512 KiB.
+        expect(fetchCallAt(1)[1]?.timeoutMs).toBe(128_000);
+        expect(fetchCallAt(2)[1]?.timeoutMs).toBe(30_000);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("a file smaller than one 8 MiB chunk uploads in a single PUT with the 8 MiB hint", async () => {
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+      const total = 1 * MIB;
+      const reader = makeHintReader(makePayload(total));
+      await uploadFileResumableChunked("tok", {
+        name: "small.flac",
+        parentId: "p",
+        totalSize: total,
+        readChunk: reader.readChunk,
+      });
+
+      expect(reader.calls).toEqual([{ offset: 0, sizeHint: CHUNK_SIZE }]);
+      const [, putOpts] = fetchCallAt(1);
+      expect(
+        (putOpts?.headers as Record<string, string>)["Content-Range"],
+      ).toBe("bytes 0-1048575/1048576");
+      expect((putOpts?.body as Uint8Array).byteLength).toBe(total);
+    });
+
+    it("308 resume mid-chunk after a step-down: readChunk called at the server offset with the adapted 512 KiB hint", async () => {
+      const total = 20 * MIB;
+      const clock = installElapsedClock();
+      const pending = holdFetch();
+      try {
+        const reader = makeHintReader(makePayload(total));
+        const p = uploadFileResumableChunked("tok", {
+          name: "big.flac",
+          parentId: "p",
+          totalSize: total,
+          readChunk: reader.readChunk,
+        });
+
+        await tick();
+        nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+        await tick();
+        // 8 MiB took 80 s (slow) — the step-down is decided BEFORE the 308 is
+        // processed, so the resume reads with the smaller hint.
+        clock.set(80_000);
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-4194303"));
+        await tick();
+        // Resume at 4194304 — a mid-chunk offset that ignores chunk boundaries.
+        const put2 = nextHeld(pending);
+        put2.resolve(makeRangeResponse(308, "bytes=0-4718591"));
+        await tick();
+        nextHeld(pending).resolve(makeJsonResponse(201, uploadedFile));
+
+        await expect(p).resolves.toEqual(uploadedFile);
+        expect(reader.calls).toEqual([
+          { offset: 0, sizeHint: 8 * MIB },
+          { offset: 4194304, sizeHint: 512 * 1024 },
+          { offset: 4718592, sizeHint: 512 * 1024 },
+        ]);
+        const [, put2Opts] = fetchCallAt(2);
+        expect(
+          (put2Opts?.headers as Record<string, string>)["Content-Range"],
+        ).toBe("bytes 4194304-4718591/20971520");
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("caller abort mid-chunk after a step-down → aborted, no retry, no session restart", async () => {
+      const total = 10 * MIB;
+      const controller = new AbortController();
+      const clock = installElapsedClock();
+      const pending = holdFetch();
+      try {
+        const reader = makeHintReader(makePayload(total));
+        const p = uploadFileResumableChunked("tok", {
+          name: "big.flac",
+          parentId: "p",
+          totalSize: total,
+          readChunk: reader.readChunk,
+          signal: controller.signal,
+        });
+
+        await tick();
+        nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+        await tick();
+        clock.set(80_000);
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8388607"));
+        await tick();
+        // The stepped-down 512 KiB chunk is in flight when the caller aborts.
+        const inFlight = nextHeld(pending);
+        // Attach the rejection handler BEFORE aborting: the held fetch rejects
+        // on the abort microtask — an unhandled rejection would trip vitest.
+        const assertion = expect(p).rejects.toMatchObject({ kind: "aborted" });
+        controller.abort();
+        await tick();
+
+        await assertion;
+        expect(inFlight.aborted).toBe(true);
+        // initiate + chunk 0 + the aborted chunk — no retry, no restart.
+        expect(mockedFetch).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("resume from a persisted session: fresh 8 MiB hint, steps down after the first slow resumed chunk", async () => {
+      const total = 10 * MIB;
+      const PERSISTED_URI =
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=persisted-1";
+      const clock = installElapsedClock();
+      const pending = holdFetch();
+      try {
+        const reader = makeHintReader(makePayload(total));
+        const p = uploadFileResumableChunked("tok", {
+          name: "big.flac",
+          parentId: "p",
+          totalSize: total,
+          readChunk: reader.readChunk,
+          initialUploadUri: PERSISTED_URI,
+        });
+
+        await tick();
+        // Query-status on the persisted session: 1 MiB already received.
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-1048575"));
+        await tick();
+        // The resumed chunk starts measuring fresh at 8 MiB...
+        const put1 = nextHeld(pending);
+        clock.set(80_000);
+        put1.resolve(makeRangeResponse(308, "bytes=0-9437183"));
+        await tick();
+        // ...and the remaining tail is read with the stepped-down 512 KiB hint.
+        const put2 = nextHeld(pending);
+        put2.resolve(makeJsonResponse(201, uploadedFile));
+
+        await expect(p).resolves.toEqual(uploadedFile);
+        expect(reader.calls).toEqual([
+          { offset: 1048576, sizeHint: 8 * MIB },
+          { offset: 9437184, sizeHint: 512 * 1024 },
+        ]);
+        expect(fetchCallAt(0)[1]?.timeoutMs).toBe(QUERY_STATUS_TIMEOUT_MS);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("two concurrent uploads keep independent chunk levels (no shared adaptive state)", async () => {
+      const total = 10 * MIB;
+      const clock = installElapsedClock();
+      const pending = holdFetch();
+      try {
+        const readerA = makeHintReader(makePayload(total, 1));
+        const readerB = makeHintReader(makePayload(total, 2));
+        const pA = uploadFileResumableChunked("tok", {
+          name: "a.flac",
+          parentId: "p",
+          totalSize: total,
+          readChunk: readerA.readChunk,
+        });
+        const pB = uploadFileResumableChunked("tok", {
+          name: "b.flac",
+          parentId: "p",
+          totalSize: total,
+          readChunk: readerB.readChunk,
+        });
+
+        await tick();
+        expect(pending).toHaveLength(2); // both initiates in flight
+        nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+        await tick();
+        nextHeld(pending).resolve(makeLocationResponse(200, LOCATION));
+        await tick();
+        // A's 8 MiB chunk is slow (80 s) → steps down; B's chunk is fast →
+        // keeps 8 MiB. The elapsed clock is per-request: A measured its 80 s
+        // window, then the clock is reset so B measures ~0 ms.
+        clock.set(80_000);
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8388607"));
+        await tick();
+        clock.set(0);
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8388607"));
+        await tick();
+        // A sends 512 KiB chunks; B sends its final 2 MiB chunk.
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-8912895"));
+        await tick();
+        nextHeld(pending).resolve(makeJsonResponse(201, uploadedFile));
+        await tick();
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-9437183"));
+        await tick();
+        nextHeld(pending).resolve(makeRangeResponse(308, "bytes=0-9961471"));
+        await tick();
+        nextHeld(pending).resolve(makeJsonResponse(201, uploadedFile));
+
+        await expect(pA).resolves.toEqual(uploadedFile);
+        await expect(pB).resolves.toEqual(uploadedFile);
+        // B never left 8 MiB (fast link), A dropped to 512 KiB (slow link).
+        expect(readerA.calls.map((c) => c.sizeHint)).toEqual([
+          8 * MIB,
+          512 * 1024,
+          512 * 1024,
+          512 * 1024,
+          512 * 1024,
+        ]);
+        expect(readerB.calls.map((c) => c.sizeHint)).toEqual([
+          8 * MIB,
+          8 * MIB,
+        ]);
+      } finally {
+        vi.restoreAllMocks();
+      }
     });
   });
 });

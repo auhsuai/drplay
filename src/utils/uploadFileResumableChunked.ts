@@ -13,11 +13,13 @@ import type { DriveFileItem } from "./driveApi";
 import { authHeaders } from "./driveFiles";
 import {
   RANGE_HEADER_PATTERN,
+  UPLOAD_CHUNK_LEVELS,
   UPLOAD_MIME_TYPE,
   UPLOAD_TIMEOUT_MS,
   asDriveFileItem,
   initiateResumableUpload,
   resolveIdempotentConflict,
+  uploadChunkTimeoutMs,
 } from "./resumableSession";
 import { queryResumableStatus } from "./resumableStatus";
 import {
@@ -38,10 +40,13 @@ export interface ChunkedUploadOptions {
   name: string;
   parentId: string;
   totalSize: number;
-  // Returns the bytes at `offset` (may be shorter than the chunk size for the
-  // final chunk), null at end of file. Called again after a 308 resume at the
-  // server-reported offset — must support arbitrary offsets.
-  readChunk: (offset: number) => Promise<Uint8Array | null>;
+  // Returns the bytes at `offset` — at most `sizeHint` bytes (shorter only
+  // for the final chunk), null at end of file. Called again after a 308
+  // resume at the server-reported offset — must support arbitrary offsets.
+  // sizeHint is the adaptive chunk level (UPLOAD_CHUNK_LEVELS) the uploader
+  // currently sends: the reader may return fewer bytes than the disk stream
+  // read, keeping the rest for the next call.
+  readChunk: (offset: number, sizeHint?: number) => Promise<Uint8Array | null>;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal | undefined;
   // Pre-generated file id (see UploadFileOptions): set ONCE per logical upload
@@ -61,7 +66,9 @@ export interface ChunkedUploadOptions {
 // PUT one chunk with bounded retries for 5xx/429 and 403 rate-limits
 // (backoffDelay: exponential + jitter, honors Retry-After). Exhausted retries
 // throw UploadError('network'); a network rejection (fetch threw) propagates
-// raw as transient.
+// raw as transient. Resolves with the final response and the wall-clock
+// duration of the attempt that produced it (backoff sleeps excluded) so the
+// caller can adapt the chunk size to the measured throughput.
 async function putChunkWithRetry(
   uploadUri: string,
   token: string,
@@ -70,18 +77,24 @@ async function putChunkWithRetry(
   end: number,
   totalSize: number,
   callerSignal: AbortSignal | null | undefined,
-): Promise<Response> {
+): Promise<{ response: Response; elapsedMs: number }> {
   for (let attempt = 0; ; attempt++) {
     let response: Response;
+    let elapsedMs = 0;
     try {
+      // Per-chunk timeout bound: proportional to the chunk size (8 MiB → 128 s,
+      // 2 MiB → 32 s, floor 30 s) so a slow link that stepped its chunk down
+      // gets a bound that still fits its throughput.
+      const chunkTimeoutMs = uploadChunkTimeoutMs(chunk.byteLength);
       // Fresh timeout signal PER attempt (pattern: driveFetch/driveHttp.ts).
       // A single whole-upload signal would fire ONCE at its wall-clock
       // deadline and stay aborted, killing every later request of an upload
-      // longer than UPLOAD_TIMEOUT_MS (the multi-GB slow-link case this file
-      // exists for). Per-request signals bound only the current request — and
-      // a fresh one after each backoff sleep, so the bound excludes sleep
-      // time. The caller's abort still cancels everything via the merge.
-      const signal = mergeWithTimeoutSignal(callerSignal, UPLOAD_TIMEOUT_MS);
+      // longer than the bound (the multi-GB slow-link case this file exists
+      // for). Per-request signals bound only the current request — and a
+      // fresh one after each backoff sleep, so the bound excludes sleep time.
+      // The caller's abort still cancels everything via the merge.
+      const signal = mergeWithTimeoutSignal(callerSignal, chunkTimeoutMs);
+      const startedAt = performance.now();
       response = await fetchWithAuth(uploadUri, {
         method: "PUT",
         headers: {
@@ -93,8 +106,9 @@ async function putChunkWithRetry(
         signal,
         // fetchWithAuth's per-request timeout stays in sync with the merged
         // per-attempt signal (same bound) so neither fires first.
-        timeoutMs: UPLOAD_TIMEOUT_MS,
+        timeoutMs: chunkTimeoutMs,
       });
+      elapsedMs = performance.now() - startedAt;
     } catch (err) {
       if (callerSignal?.aborted) throw abortedUploadError();
       throw err;
@@ -119,8 +133,42 @@ async function putChunkWithRetry(
         "network",
       );
     }
-    return response;
+    return { response, elapsedMs };
   }
+}
+
+// A chunk's projected duration may use at most this share of its own timeout
+// before the level steps down — 60% leaves headroom for slowdown/jitter inside
+// the next chunk without burning the whole bound.
+const CHUNK_TIMEOUT_BUDGET_FRACTION = 0.6;
+
+// Adaptive chunk sizing: measure the throughput of a finished chunk PUT and
+// return the level index for the NEXT chunk (UPLOAD_CHUNK_LEVELS). Steps DOWN
+// (8 MiB → 2 MiB → 512 KiB) while the current level is projected to outlast
+// its timeout budget; never steps up mid-upload — a recovering network keeps
+// its smaller chunk (simpler, and a wrong up-step would re-fail the very
+// chunk that caused the step-down). `chunkBytes` is the size actually sent
+// (the first chunk is always 8 MiB, so its measurement reflects the true
+// link speed even when the next level differs).
+export function nextChunkLevel(
+  levelIndex: number,
+  chunkBytes: number,
+  elapsedMs: number,
+): number {
+  const bytesPerMs = chunkBytes / Math.max(elapsedMs, 1);
+  let idx = levelIndex;
+  while (idx < UPLOAD_CHUNK_LEVELS.length - 1) {
+    const level = UPLOAD_CHUNK_LEVELS[idx];
+    if (level === undefined) break;
+    const projectedMs = level / bytesPerMs;
+    if (
+      projectedMs <=
+      CHUNK_TIMEOUT_BUDGET_FRACTION * uploadChunkTimeoutMs(level)
+    )
+      break;
+    idx++;
+  }
+  return idx;
 }
 
 // Upload one session's worth of chunks. Throws UploadError for fatal errors
@@ -136,11 +184,18 @@ async function uploadChunksInSession(
 ): Promise<DriveFileItem> {
   const { totalSize, readChunk, onProgress, signal } = opts;
   let offset = startOffset;
+  // Adaptive chunk level (UPLOAD_CHUNK_LEVELS index): starts at the largest
+  // (8 MiB) so fast links keep the historical behavior, then steps DOWN when
+  // the measured throughput projects the next chunk beyond its timeout budget
+  // (see nextChunkLevel). Per-upload local state — two concurrent uploads
+  // each keep their own level, never a module-global. A resumed session
+  // starts measuring fresh at 8 MiB (1 upload = 1 level sequence).
+  let levelIndex = 0;
   for (;;) {
     if (signal?.aborted) throw abortedUploadError();
     let chunk: Uint8Array | null;
     try {
-      chunk = await readChunk(offset);
+      chunk = await readChunk(offset, UPLOAD_CHUNK_LEVELS[levelIndex]);
     } catch (err) {
       if (signal?.aborted) throw abortedUploadError();
       await captureError({
@@ -169,7 +224,7 @@ async function uploadChunksInSession(
     }
 
     const end = offset + chunk.byteLength - 1;
-    const response = await putChunkWithRetry(
+    const { response, elapsedMs } = await putChunkWithRetry(
       uploadUri,
       token,
       chunk,
@@ -178,6 +233,9 @@ async function uploadChunksInSession(
       totalSize,
       signal,
     );
+    // Adapt BEFORE handling the response: the level applies to the NEXT read
+    // whether this chunk was fully received, partially (308), or done (2xx).
+    levelIndex = nextChunkLevel(levelIndex, chunk.byteLength, elapsedMs);
     onProgress?.(Math.min(1, (offset + chunk.byteLength) / totalSize));
 
     if (response.status >= 200 && response.status < 300) {
