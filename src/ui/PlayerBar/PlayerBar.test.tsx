@@ -93,6 +93,16 @@ vi.mock("../../utils/metadata", () => ({
   UNKNOWN_ARTIST: "Unknown Artist",
 }));
 
+// Task 12: on mobile the bar shows title only — no cover, no artist, and the
+// TrackInfo metadata fetch is skipped. Hoisted mock toggles the platform
+// flag; the getter keeps the named-export binding live.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const mockedGetTrackMetadata = vi.mocked(getTrackMetadata);
 
 const { fakeController } = vi.hoisted(() => {
@@ -130,6 +140,13 @@ function installFakeOn() {
 
 vi.mock("../../lib/AudioController", () => ({
   AudioController: { getInstance: () => fakeController },
+}));
+
+// Task 12: the mobile gate makes getPlaybackEngine() resolve to the REAL
+// native engine (which would call @tauri-apps/api invoke in jsdom) — route it
+// to the same fake controller so the mobile branch stays hermetic.
+vi.mock("../../lib/nativeAudioBridge", () => ({
+  getPlaybackEngine: () => fakeController,
 }));
 
 function setBuffered(
@@ -1795,5 +1812,36 @@ describe("PlayerBar TrackInfo folds fetched tags into the store (tags fix)", () 
     });
     expect(captureErrorSpy).not.toHaveBeenCalled();
     expect(usePlayerStore.getState().currentTrack?.title).toBe("Song");
+  });
+});
+
+describe("PlayerBar mobile gate (IS_MOBILE) — title only", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    // Reset the fetch mock: earlier desktop describes call it with a token;
+    // a stale call must never trip the "no fetch on mobile" assertion.
+    mockedGetTrackMetadata.mockReset();
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+  });
+
+  it("shows the title but no artist and no cover image", () => {
+    renderPlayer({
+      currentTrack: makeTrack({ title: "Song", artist: "Artist" }),
+    });
+    expect(screen.getByText("Song")).not.toBeNull();
+    expect(screen.queryByText("Artist")).toBeNull();
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("never fetches cover metadata on mobile", async () => {
+    renderPlayer({ currentTrack: makeTrack() });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetTrackMetadata).not.toHaveBeenCalled();
   });
 });

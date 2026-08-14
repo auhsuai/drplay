@@ -20,6 +20,17 @@ vi.mock("../utils/coverStore", () => ({
   buildCoverUrl: vi.fn(),
 }));
 
+// Task 12: mobile must never fetch metadata — the gate lives in the hook
+// effect; this hoisted mock toggles the platform flag per test. The getter
+// keeps the named-export binding live (a plain object snapshot would freeze
+// the value at import time).
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const mockedFetch = vi.mocked(getTrackMetadata);
 const mockedBuildCover = vi.mocked(buildCoverBlobUrl);
 const mockedBuildCoverUrl = vi.mocked(buildCoverUrl);
@@ -424,5 +435,40 @@ describe("useTrackMetadata img cleanup", () => {
     });
     unmount();
     expect(onCleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useTrackMetadata mobile gate (IS_MOBILE)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+  });
+
+  it("skips the fetch entirely: getTrackMetadata is never called", async () => {
+    renderTrackMetadata();
+    await flushMicrotasks();
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps coverUrl null and fires no metadata/error callbacks", async () => {
+    const { result, onMetadata, onError } = renderTrackMetadata();
+    await flushMicrotasks();
+    expect(result.current.coverUrl).toBeNull();
+    expect(onMetadata).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("cleans up without touching the img src or running onCleanup (no setup ran)", async () => {
+    const img = document.createElement("img");
+    const imgRef: RefObject<HTMLImageElement | null> = { current: img };
+    const onCleanup = vi.fn();
+    const { unmount } = renderTrackMetadata({ imgRef, onCleanup });
+    await flushMicrotasks();
+    unmount();
+    expect(img.getAttribute("src")).toBeNull();
+    expect(onCleanup).not.toHaveBeenCalled();
   });
 });

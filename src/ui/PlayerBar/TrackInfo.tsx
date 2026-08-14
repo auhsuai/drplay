@@ -14,6 +14,7 @@ import { useAuthStore } from "../../store/authStore";
 import { usePlayerStore } from "../../store/playerStore";
 import { captureError } from "../../utils/errorLog";
 import { useTrackMetadata } from "../../hooks/useTrackMetadata";
+import { IS_MOBILE } from "../../utils/platform";
 import type { Track } from "../../types";
 
 const PLAYER_BAR_MODULE = "PlayerBar";
@@ -224,36 +225,43 @@ export function TrackInfo({
         title={t("player.view_now_playing")}
         aria-label={t("player.view_now_playing")}
       >
-        <div className="relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400">
-          {currentTrack && coverUrl ? (
-            <img
-              ref={coverImgRef}
-              src={coverUrl}
-              alt={realTitle}
-              onError={() => {
-                // The src is already a blob URL built from the picture
-                // bytes — an error here means those bytes are corrupt, so
-                // drop to the Music icon (no retry chain exists anymore).
-                setCoverUrl(null);
-              }}
-              className="w-full h-full object-cover"
-            />
-          ) : currentTrack ? (
-            <Music className="w-6 h-6 opacity-80 transition-transform duration-300 group-hover:scale-110" />
-          ) : null}
-          {currentTrack && (
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity duration-200">
-              <Maximize2 className="w-5 h-5 text-white" />
-            </div>
-          )}
-        </div>
+        {/* Task 12: mobile shows title only — no cover slot (the metadata
+            hook is gated there, so the box could only ever show the
+            placeholder icon) and no artist line. Desktop untouched. */}
+        {!IS_MOBILE && (
+          <div className="relative w-12 h-12 rounded-lg shrink-0 transition-colors flex items-center justify-center overflow-hidden bg-gray-200 dark:bg-[#121212] text-gray-400">
+            {currentTrack && coverUrl ? (
+              <img
+                ref={coverImgRef}
+                src={coverUrl}
+                alt={realTitle}
+                onError={() => {
+                  // The src is already a blob URL built from the picture
+                  // bytes — an error here means those bytes are corrupt, so
+                  // drop to the Music icon (no retry chain exists anymore).
+                  setCoverUrl(null);
+                }}
+                className="w-full h-full object-cover"
+              />
+            ) : currentTrack ? (
+              <Music className="w-6 h-6 opacity-80 transition-transform duration-300 group-hover:scale-110" />
+            ) : null}
+            {currentTrack && (
+              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity duration-200">
+                <Maximize2 className="w-5 h-5 text-white" />
+              </div>
+            )}
+          </div>
+        )}
         <div className="overflow-hidden flex-1">
           <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-brand-primary transition-colors">
             {realTitle}
           </h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2 overflow-hidden whitespace-nowrap text-ellipsis">
-            <span className="truncate">{currentTrack ? realArtist : ""}</span>
-          </p>
+          {!IS_MOBILE && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2 overflow-hidden whitespace-nowrap text-ellipsis">
+              <span className="truncate">{currentTrack ? realArtist : ""}</span>
+            </p>
+          )}
         </div>
       </div>
       {currentTrack && (

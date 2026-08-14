@@ -26,6 +26,16 @@ vi.mock("../../../utils/metadata", () => ({
   getTrackMetadata: vi.fn(),
 }));
 
+// Task 12: mobile rows must not render metadata/cover — hoisted mock toggles
+// the platform flag. The getter keeps the named-export binding live (a plain
+// object snapshot would freeze the value at import time).
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so stub useTranslation to return the
 // fallback passed to t(), matching every other component test in the repo.
@@ -1444,5 +1454,74 @@ describe("SongCard drag-over folder hover (folder drop target)", () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     announceHover("track-1");
     expect(innerDiv(container)?.className).not.toMatch(hasDragLift);
+  });
+});
+
+describe("SongCard mobile gate (IS_MOBILE)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    mockedFetch.mockReset();
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  it("file row shows only filename + size + modifiedTime: no cover thumb, no music icon", () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({
+          size: 12345,
+          modifiedTime: "2026-08-15T10:00:00.000Z",
+        })}
+      />,
+    );
+    expect(screen.getByText("My Song")).not.toBeNull();
+    expect(screen.getByText("12.1 KB")).not.toBeNull();
+    expect(screen.getByText("2026-08-15")).not.toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".lucide-music")).toBeNull();
+  });
+
+  it("file row falls back to trackInfo.size and omits the date when modifiedTime is missing", () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("My Song")).not.toBeNull();
+    expect(screen.getByText("1000 B")).not.toBeNull();
+    expect(screen.queryByText("2026-08-15")).toBeNull();
+  });
+
+  it("folder rows keep their icon (navigation, not metadata)", () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({ isFolder: true, trackInfo: undefined })}
+      />,
+    );
+    expect(container.querySelector(".lucide-folder")).not.toBeNull();
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("never fetches metadata on mobile (debounce window passes, still no fetch)", async () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+
+  it("click still plays the track with the drive-listing title (filename)", () => {
+    const onPlay = vi.fn();
+    render(<SongCard {...baseProps} item={makeItem()} onPlay={onPlay} />);
+    const card = document.querySelector(".cursor-pointer");
+    expect(card).not.toBeNull();
+    fireEvent.click(card as Element);
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    const played = onPlay.mock.calls[0]?.[0] as
+      | {
+          title?: string;
+        }
+      | undefined;
+    expect(played?.title).toBe("My Song");
   });
 });

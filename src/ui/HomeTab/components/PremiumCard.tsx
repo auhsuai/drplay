@@ -8,6 +8,7 @@ import {
   useTrackMetadata,
   TRACK_METADATA_DEBOUNCE_MS,
 } from "../../../hooks/useTrackMetadata";
+import { IS_MOBILE } from "../../../utils/platform";
 
 const PREMIUM_CARD_MODULE = "PremiumCard";
 const GOOGLE_COLORS = ["#4285F4", "#EA4335", "#FBBC05", "#34A853"];
@@ -80,6 +81,10 @@ export function PremiumCard({
       }}
       className="group cursor-pointer active:scale-[0.98] transition-transform duration-200"
     >
+      {/* Task 12: the cover IMAGE is gone on mobile (hook gated — coverUrl is
+          always null there, so the tile only ever shows the static placeholder
+          glyph; the "View all" overlay keeps working). The artist line is
+          metadata-derived and hidden. Desktop untouched. */}
       <div
         style={!coverUrl ? { background: fillColor } : undefined}
         className="w-full aspect-square rounded-2xl mb-4 relative overflow-hidden flex items-center justify-center shadow-sm"
@@ -117,9 +122,11 @@ export function PremiumCard({
           <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1">
             {title}
           </h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-            {artist || t("unknown_artist")}
-          </p>
+          {!IS_MOBILE && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+              {artist || t("unknown_artist")}
+            </p>
+          )}
         </div>
       )}
     </div>

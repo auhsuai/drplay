@@ -15,6 +15,8 @@ import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
+import { IS_MOBILE } from "../../utils/platform";
+import { formatBytes } from "../../utils/formatBytes";
 
 const PLAYLIST_VIEW_MODULE = "PlaylistView";
 
@@ -362,13 +364,18 @@ export function PlaylistView({
                       />
                     </div>
 
-                    <div
-                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gray-200 dark:bg-gray-800"}`}
-                    >
-                      <Music
-                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-400"}`}
-                      />
-                    </div>
+                    {/* Task 12: mobile hides the icon box and the artist
+                        line; the size comes from the stored track (no extra
+                        call). Desktop untouched. */}
+                    {!IS_MOBILE && (
+                      <div
+                        className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gray-200 dark:bg-gray-800"}`}
+                      >
+                        <Music
+                          className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-400"}`}
+                        />
+                      </div>
+                    )}
 
                     <div className="flex-1 min-w-0 flex flex-col justify-center">
                       <h4
@@ -376,9 +383,17 @@ export function PlaylistView({
                       >
                         {track.title}
                       </h4>
-                      <p className="text-[13px] text-gray-500 truncate leading-tight">
-                        {t("unknown_artist")}
-                      </p>
+                      {IS_MOBILE ? (
+                        track.size != null ? (
+                          <p className="text-[13px] text-gray-500 truncate leading-tight">
+                            {formatBytes(track.size)}
+                          </p>
+                        ) : null
+                      ) : (
+                        <p className="text-[13px] text-gray-500 truncate leading-tight">
+                          {t("unknown_artist")}
+                        </p>
+                      )}
                     </div>
 
                     <button

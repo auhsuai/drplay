@@ -54,6 +54,14 @@ vi.mock("../../utils/simpleToast", () => ({
 vi.mock("../../utils/streamPrefetcher", () => ({
   prefetchVisibleTracks: mocks.prefetchVisibleTracks,
 }));
+// Task 12: mobile rows must not render the artist line / icon box — hoisted
+// mock toggles the platform flag; the getter keeps the binding live.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
 vi.mock("../components/MoreMenu", () => ({ MoreMenu: () => null }));
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(({ count }: { count: number }) => ({
@@ -140,5 +148,31 @@ describe("LikedSongs debug empty trigger", () => {
     expect(() => {
       dispatchLikedEmpty();
     }).not.toThrow();
+  });
+});
+
+describe("LikedSongs mobile gate (IS_MOBILE) — title + size only", () => {
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("hides the artist line and the static icon box; shows the drive size", async () => {
+    platformMock.IS_MOBILE = true;
+    mocks.getFavorites.mockResolvedValue([{ ...TRACK, size: 12345 }]);
+    renderView();
+    await screen.findByText("Liked Track 1");
+    expect(screen.queryByText("Artist 1")).toBeNull();
+    expect(screen.getByText("12.1 KB")).not.toBeNull();
+  });
+
+  it("omits the size line when the stored track carries no size", async () => {
+    platformMock.IS_MOBILE = true;
+    mocks.getFavorites.mockResolvedValue([TRACK]);
+    renderView();
+    await screen.findByText("Liked Track 1");
+    expect(screen.queryByText("Artist 1")).toBeNull();
+    expect(screen.queryByText(/KB|MB|GB|B$/)).toBeNull();
   });
 });

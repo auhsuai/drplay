@@ -6,6 +6,7 @@ import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { SeekBar } from "../components/SeekBar";
+import { IS_MOBILE } from "../../utils/platform";
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -91,31 +92,35 @@ export const NowPlayingView = memo(function NowPlayingView({
       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
         {/* Content group: centered vertically when room, scrolls when not */}
         <div className="w-full flex flex-col items-center pt-24 md:pt-28 pb-24 md:pb-28">
-          {/* Cover Art Container */}
-          <div className="w-full flex items-center justify-center mt-4 md:mt-8">
-            <div
-              className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center relative" : "bg-gray-100 dark:bg-[#202124]"}`}
-            >
-              {coverUrl ? (
-                <img
-                  src={coverUrl}
-                  alt={t("common.cover_alt")}
-                  decoding="async"
-                  // Single always-visible image: no lazy loading needed (it is
-                  // the LCP candidate). A drplay:// miss (204 NoCover) or a
-                  // decode error falls back to the Music icon — no broken img.
-                  onError={() => {
-                    setCoverUrl(null);
-                  }}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <>
-                  <Music className="w-20 h-20 text-brand-primary/40 drop-shadow-sm" />
-                </>
-              )}
+          {/* Cover Art Container — Task 12: mobile shows title only; the
+              metadata hook is gated there so the container could only ever
+              render the placeholder glyph. Desktop untouched. */}
+          {!IS_MOBILE && (
+            <div className="w-full flex items-center justify-center mt-4 md:mt-8">
+              <div
+                className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center relative" : "bg-gray-100 dark:bg-[#202124]"}`}
+              >
+                {coverUrl ? (
+                  <img
+                    src={coverUrl}
+                    alt={t("common.cover_alt")}
+                    decoding="async"
+                    // Single always-visible image: no lazy loading needed (it is
+                    // the LCP candidate). A drplay:// miss (204 NoCover) or a
+                    // decode error falls back to the Music icon — no broken img.
+                    onError={() => {
+                      setCoverUrl(null);
+                    }}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <>
+                    <Music className="w-20 h-20 text-brand-primary/40 drop-shadow-sm" />
+                  </>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="w-full max-w-4xl px-4 shrink-0 mt-6 md:mt-8 pb-8">
             {/* Info */}
@@ -123,9 +128,11 @@ export const NowPlayingView = memo(function NowPlayingView({
               <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-2 truncate tracking-tight">
                 {realTitle}
               </h1>
-              <p className="text-base md:text-lg font-medium text-gray-500 dark:text-gray-400 truncate">
-                {realArtist || t("unknown_artist")}
-              </p>
+              {!IS_MOBILE && (
+                <p className="text-base md:text-lg font-medium text-gray-500 dark:text-gray-400 truncate">
+                  {realArtist || t("unknown_artist")}
+                </p>
+              )}
             </div>
 
             {/* PlayerBar Clone Controls */}

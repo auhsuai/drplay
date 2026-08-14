@@ -23,6 +23,16 @@ import {
 } from "../hooks/useHighlightFlash";
 import { useDragFolderHover } from "../hooks/useDragFolderHover";
 import { useSongCardMetadata } from "../hooks/useSongCardMetadata";
+import { IS_MOBILE } from "../../../utils/platform";
+
+// Task 12 (android port): drive listings already carry modifiedTime — render
+// it as a stable ISO date (locale-independent, same data source the sort
+// column reads). "" hides the date when the listing lacks it.
+function formatDriveDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
 
 interface SongCardProps {
   item: DriveItem;
@@ -197,35 +207,62 @@ export const SongCard = React.memo(
                 )}
               </div>
             )}
-            <div
-              className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}`}
-            >
-              {coverUrl && !item.isFolder ? (
-                <img
-                  ref={imgRef}
-                  src={coverUrl}
-                  alt={meta.title}
-                  loading="lazy"
-                  decoding="async"
-                  width={48}
-                  height={48}
-                  // The src is already a blob URL built from the picture
-                  // bytes — an error here means those bytes are corrupt, so
-                  // drop to the Music icon (no retry chain exists anymore).
-                  onError={clearCover}
-                  className="w-full h-full object-cover"
-                />
-              ) : item.isFolder ? (
-                <Folder className="w-6 h-6" fill="currentColor" />
-              ) : (
-                <Music className="w-6 h-6 opacity-80" />
-              )}
-            </div>
+            {/* Task 12: mobile file rows drop the cover slot entirely — the
+                metadata hook is gated there, so the box could only ever show
+                the placeholder icon. Folder rows keep their icon (navigation,
+                not metadata). Desktop is untouched. */}
+            {(!IS_MOBILE || item.isFolder) && (
+              <div
+                className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}`}
+              >
+                {coverUrl && !item.isFolder ? (
+                  <img
+                    ref={imgRef}
+                    src={coverUrl}
+                    alt={meta.title}
+                    loading="lazy"
+                    decoding="async"
+                    width={48}
+                    height={48}
+                    // The src is already a blob URL built from the picture
+                    // bytes — an error here means those bytes are corrupt, so
+                    // drop to the Music icon (no retry chain exists anymore).
+                    onError={clearCover}
+                    className="w-full h-full object-cover"
+                  />
+                ) : item.isFolder ? (
+                  <Folder className="w-6 h-6" fill="currentColor" />
+                ) : (
+                  <Music className="w-6 h-6 opacity-80" />
+                )}
+              </div>
+            )}
             <div className="overflow-hidden flex-1 flex flex-col justify-center">
               <h3 className={titleClass}>{meta.title}</h3>
               <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
                 {item.isFolder ? (
                   <span className="truncate">{t("drive.folders")}</span>
+                ) : IS_MOBILE ? (
+                  /* Task 12: drive-derived row only — size + modifiedTime
+                     come from the folder listing (no extra call); duration
+                     and artist are metadata-derived and stay off. */
+                  <div className="flex items-center truncate">
+                    {(item.size ?? item.trackInfo?.size) !== undefined && (
+                      <span className="text-[11px] font-medium tracking-wide">
+                        {formatBytes(item.size ?? item.trackInfo?.size ?? 0)}
+                      </span>
+                    )}
+                    {item.size !== undefined && item.modifiedTime && (
+                      <span className="mx-2 text-gray-300 dark:text-gray-600">
+                        •
+                      </span>
+                    )}
+                    {item.modifiedTime && (
+                      <span className="text-[11px] font-medium tracking-wide">
+                        {formatDriveDate(item.modifiedTime)}
+                      </span>
+                    )}
+                  </div>
                 ) : (
                   <div className="flex items-center truncate">
                     {meta.loaded && (

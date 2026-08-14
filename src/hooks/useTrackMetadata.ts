@@ -5,6 +5,7 @@ import { getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
 import { METADATA_UPDATED_EVENT } from "../utils/metadata/constants";
 import { buildCoverBlobUrl, buildCoverUrl } from "../utils/coverStore";
+import { IS_MOBILE } from "../utils/platform";
 
 // Single source of truth for the metadata-fetch debounce window shared by the
 // card-style consumers (SongCard / PremiumCard): fetch only if the consumer
@@ -75,6 +76,12 @@ export function useTrackMetadata({
 
   useEffect(() => {
     if (!enabled || !fileId) return;
+    // Task 12 (android port): on mobile the whole metadata surface is off —
+    // no ID3 parse, no cover fetch, no palette, no metadata-updated listener.
+    // Consumers still mount (TrackInfo / SongCard / NowPlaying / PremiumCard);
+    // their state simply stays at the drive-listing fallback. Desktop is
+    // byte-identical: this constant is false there.
+    if (IS_MOBILE) return;
 
     const controller = new AbortController();
     let isMounted = true;

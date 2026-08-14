@@ -50,9 +50,10 @@ vi.mock("../utils/history", () => ({
   recordPlay: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("../utils/metadata", () => ({
+const metadataMock = vi.hoisted(() => ({
   getTrackMetadata: vi.fn(() => Promise.resolve({ duration: 200 })),
 }));
+vi.mock("../utils/metadata", () => metadataMock);
 
 const getValidTokenMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve("test-token")),
@@ -212,6 +213,7 @@ describe("usePlayer mobile branch (GATE B — native audio is the playback path)
     });
 
     expect(prefetchNextTrackAudioMock).not.toHaveBeenCalled();
+    expect(metadataMock.getTrackMetadata).not.toHaveBeenCalled();
   });
 
   it("handleTogglePlay: paused with no streamUrl -> token + reload without /drive-stream URL", async () => {

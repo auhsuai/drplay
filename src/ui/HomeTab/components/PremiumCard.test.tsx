@@ -25,6 +25,15 @@ vi.mock("../../../utils/metadata", () => ({
   getTrackMetadata: vi.fn(),
 }));
 
+// Task 12: mobile cards must not render the cover image / artist — hoisted
+// mock toggles the platform flag; the getter keeps the binding live.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 vi.mock("../../../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
@@ -311,5 +320,40 @@ describe("PremiumCard metadata rejection handling (abort-skip + captureError)", 
     });
 
     expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+});
+
+describe("PremiumCard mobile gate (IS_MOBILE) — title only", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    mockedFetch.mockReset();
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  it("shows the title and the static placeholder tile, but no cover image and no artist", () => {
+    const { container } = render(
+      <PremiumCard
+        {...baseProps()}
+        track={{
+          id: "track-1",
+          title: "My Song",
+          artist: "Real Artist",
+          streamUrl: "",
+        }}
+      />,
+    );
+    expect(screen.getByText("My Song")).not.toBeNull();
+    expect(screen.queryByText("Real Artist")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("never fetches metadata on mobile (debounce window passes, still no fetch)", async () => {
+    render(<PremiumCard {...baseProps()} />);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(mockedFetch).not.toHaveBeenCalled();
   });
 });
