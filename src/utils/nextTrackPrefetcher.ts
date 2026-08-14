@@ -1,4 +1,5 @@
 import { captureError } from "./errorLog";
+import { IS_MOBILE } from "./platform";
 
 const MAX_CONCURRENT = 3;
 const PREFETCH_TIMEOUT_MS = 15000;
@@ -32,6 +33,10 @@ function classifyError(
 }
 
 export function prefetchNextTrackAudio(streamUrl: string): void {
+  // Mobile (GATE branch B): the /drive-stream SW proxy is dead on Android —
+  // prefetching the SW URL would only fail and spam the error log. Desktop
+  // path unchanged.
+  if (IS_MOBILE) return;
   if (!streamUrl || abortControllers.has(streamUrl)) return;
   if (abortControllers.size >= MAX_CONCURRENT) {
     evictOldest();

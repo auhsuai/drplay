@@ -25,8 +25,10 @@ import type { QueueDriveItem } from "./player/usePlayerQueue";
 import type { TabKey } from "../utils/driveConstants";
 
 import { usePlayerStore } from "../store/playerStore";
-import { AudioController } from "../lib/AudioController";
+import { nativeAudioEngine, getPlaybackEngine } from "../lib/nativeAudioBridge";
+import { IS_MOBILE } from "../utils/platform";
 import { useMediaSession } from "./useMediaSession";
+import { useNativeAudio } from "./useNativeAudio";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
@@ -78,6 +80,11 @@ export const usePlayer = (accessToken: string | null) => {
     setPlayMode,
     triggerReload,
   );
+
+  // GATE branch B: on Android the SW proxy is dead, so playback runs through
+  // the native ExoPlayer engine — this hook only owns the plugin lifecycle
+  // (initialize + notification permission). Desktop: inert.
+  useNativeAudio();
 
   const handlePlayTrackRef = useRef<typeof handlePlayTrack>(undefined);
   const stableHandlePlayTrack = useCallback(
@@ -154,8 +161,9 @@ export const usePlayer = (accessToken: string | null) => {
   useEffect(() => {
     const handleStop = () => {
       // B3: release the real audio elements (buffers, src, pending retry)
-      // before clearing the store state.
-      AudioController.getInstance().release();
+      // before clearing the store state. On mobile the native engine is
+      // released instead (pause + token drop).
+      getPlaybackEngine().release();
       setCurrentTrack(null);
       setIsPlaying(false);
       setOriginalQueue([]);
@@ -264,48 +272,62 @@ export const usePlayer = (accessToken: string | null) => {
           return;
         }
 
-        const streamUrl =
-          prefetchedUrl ||
-          buildStreamUrl(targetTrack.id, targetTrack.originalName);
-        setCurrentTrack({ ...targetTrack, streamUrl });
-        triggerReload();
-        setIsPlaying(true);
-        setIsDownloading(false);
+        if (IS_MOBILE) {
+          // GATE branch B: the /drive-stream SW proxy is dead on Android —
+          // the native engine builds the Drive URL and sends the Authorization
+          // header itself. Playback is still driven by the PlayerBar effect
+          // (setCurrentTrack + triggerReload + isPlaying -> engine.playTrack),
+          // exactly like the desktop path below — only the URL/token plumbing
+          // differs. No metadata fetch, no next-track audio prefetch.
+          nativeAudioEngine.setToken(freshToken);
+          setCurrentTrack(targetTrack);
+          triggerReload();
+          setIsPlaying(true);
+          setIsDownloading(false);
+        } else {
+          const streamUrl =
+            prefetchedUrl ||
+            buildStreamUrl(targetTrack.id, targetTrack.originalName);
+          setCurrentTrack({ ...targetTrack, streamUrl });
+          triggerReload();
+          setIsPlaying(true);
+          setIsDownloading(false);
 
-        recordPlay(targetTrack).catch((e: unknown) => {
+          scheduleNextTrackPrefetch(contextQueue, targetTrack);
+
+          void (async () => {
+            try {
+              const metadata = await getTrackMetadata(
+                targetTrack.id,
+                freshToken,
+                targetTrack.size,
+                targetTrack.originalName,
+                signal,
+              );
+              if (metadata.duration && !signal.aborted) {
+                setCurrentTrack((prev) =>
+                  prev ? { ...prev, restoreDuration: metadata.duration } : prev,
+                );
+              }
+            } catch (e: unknown) {
+              if (!isAbortError(e)) {
+                void captureError({
+                  level: "warn",
+                  source: "usePlayer",
+                  message: `metadata-prefetch-fail: ${e instanceof Error ? e.message : String(e)}`,
+                });
+              }
+            }
+          })();
+        }
+
+        void recordPlay(targetTrack).catch((e: unknown) => {
           void captureError({
             level: "warn",
             source: "usePlayer",
             message: `recordPlay-fail: ${e instanceof Error ? e.message : String(e)}`,
           });
         });
-
-        scheduleNextTrackPrefetch(contextQueue, targetTrack);
-
-        void (async () => {
-          try {
-            const metadata = await getTrackMetadata(
-              targetTrack.id,
-              freshToken,
-              targetTrack.size,
-              targetTrack.originalName,
-              signal,
-            );
-            if (metadata.duration && !signal.aborted) {
-              setCurrentTrack((prev) =>
-                prev ? { ...prev, restoreDuration: metadata.duration } : prev,
-              );
-            }
-          } catch (e: unknown) {
-            if (!isAbortError(e)) {
-              void captureError({
-                level: "warn",
-                source: "usePlayer",
-                message: `metadata-prefetch-fail: ${e instanceof Error ? e.message : String(e)}`,
-              });
-            }
-          }
-        })();
       } catch (e: unknown) {
         if (isAbortError(e)) return;
         void captureError({
@@ -341,6 +363,41 @@ export const usePlayer = (accessToken: string | null) => {
 
   const handleTogglePlay = useCallback(async () => {
     if (currentTrack) {
+      if (IS_MOBILE) {
+        // GATE branch B: mobile tracks never carry a /drive-stream streamUrl —
+        // resume means "re-arm the native engine with a fresh token" (the
+        // PlayerBar effect then calls engine.playTrack, which restores
+        // restoreTime). Pause stays a store flag flip (same effect drives
+        // engine.pause).
+        if (isPlaying) {
+          setIsPlaying(false);
+          return;
+        }
+        const signal = createAbortSignal();
+        setIsDownloading(true);
+        try {
+          const freshToken = await getValidToken(false, signal);
+          if (!freshToken) {
+            setIsDownloading(false);
+            return;
+          }
+          nativeAudioEngine.setToken(freshToken);
+          setCurrentTrack((prev) => (prev ? { ...prev } : prev));
+          triggerReload();
+          setIsPlaying(true);
+        } catch (e: unknown) {
+          if (isAbortError(e)) return;
+          void captureError({
+            level: "error",
+            source: "usePlayer",
+            message: `native-resume-fail: ${e instanceof Error ? e.message : String(e)}`,
+          });
+          showErrorToast(t("player.playback_failed"));
+        } finally {
+          if (!signal.aborted) setIsDownloading(false);
+        }
+        return;
+      }
       if (!currentTrack.streamUrl && !isPlaying) {
         const signal = createAbortSignal();
 

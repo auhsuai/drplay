@@ -1,6 +1,6 @@
 import { memo, useCallback, useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { AudioController } from "../../lib/AudioController";
+import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { usePlayerStore } from "../../store/playerStore";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
@@ -37,7 +37,10 @@ function PlayerBarImpl({
   onExpandNowPlaying,
 }: PlayerBarProps) {
   const { t } = useTranslation();
-  const audio = AudioController.getInstance();
+  // Desktop: HTMLAudioElement controller. Android (GATE branch B): the native
+  // ExoPlayer engine — same event surface, so the storm guard, auto-advance,
+  // seek bar and session save below work unchanged on both.
+  const audio = getPlaybackEngine();
 
   // Local UI state (không gây ảnh hưởng global). Seek/volume/favorite state
   // is owned by SeekBar/VolumeSlider/TrackInfo — this composition layer only

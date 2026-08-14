@@ -28,7 +28,7 @@
     "active": true,
     "targets": "all",
     "android": {
-      "minSdkVersion": 24
+      "minSdkVersion": 26
     },
     "resources": [],
     "icon": [

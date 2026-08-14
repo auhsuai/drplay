@@ -10,7 +10,7 @@ import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { classifyPlayerError, isAbortError } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
-import { AudioController } from "../../lib/AudioController";
+import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { shuffleQueueWithCurrent } from "./usePlayerQueue";
 
 const PLAYER_SESSION_MODULE = "usePlayerSession";
@@ -176,7 +176,9 @@ export function usePlayerSession(
       const { currentTrack } = usePlayerStore.getState();
       if (!currentTrack) return;
 
-      const audio = AudioController.getInstance();
+      // Desktop: HTMLAudio element. Android: native ExoPlayer engine — both
+      // expose getCurrentTime/getDuration, so session persistence is shared.
+      const audio = getPlaybackEngine();
       const time = audio.getCurrentTime();
       const duration = audio.getDuration();
 
@@ -209,7 +211,7 @@ export function usePlayerSession(
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handleBeforeUnload);
 
-    const audio = AudioController.getInstance();
+    const audio = getPlaybackEngine();
     const unsubTime = audio.on("timeupdate", () => {
       saveSession(false);
     });

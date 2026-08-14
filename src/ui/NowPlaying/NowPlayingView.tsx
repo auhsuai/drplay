@@ -2,7 +2,7 @@ import { memo } from "react";
 import type { Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { AudioController } from "../../lib/AudioController";
+import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { SeekBar } from "../components/SeekBar";
@@ -144,7 +144,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                   that) and gates the 4/s timeupdate subscription on isOpen. */}
               <SeekBar
                 currentTrack={currentTrack}
-                audio={AudioController.getInstance()}
+                audio={getPlaybackEngine()}
                 active={isOpen}
                 keyboardSeek={false}
               />

@@ -168,7 +168,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_native_audio::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_keepawake::init());
     let app_result = builder

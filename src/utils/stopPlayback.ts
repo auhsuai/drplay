@@ -1,4 +1,4 @@
-import { AudioController } from "../lib/AudioController";
+import { getPlaybackEngine } from "../lib/nativeAudioBridge";
 import { usePlayerStore } from "../store/playerStore";
 
 /**
@@ -14,7 +14,7 @@ import { usePlayerStore } from "../store/playerStore";
  */
 export function stopPlaybackIfTrack(fileId: string): void {
   if (usePlayerStore.getState().currentTrack?.id !== fileId) return;
-  AudioController.getInstance().release();
+  getPlaybackEngine().release();
   usePlayerStore.getState().setCurrentTrack(null);
   usePlayerStore.getState().setIsPlaying(false);
 }

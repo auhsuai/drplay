@@ -1,0 +1,333 @@
+import { invoke, addPluginListener } from "@tauri-apps/api/core";
+import { captureError } from "../utils/errorLog";
+import { IS_MOBILE } from "../utils/platform";
+import { usePlayerStore } from "../store/playerStore";
+import type { Track } from "../types";
+import { AudioController } from "./AudioController";
+import type { BufferedSource } from "../utils/bufferedRange";
+
+/**
+ * Native (ExoPlayer/Media3) audio engine for Android — the PRIMARY playback
+ * path on mobile (GATE branch B: the SW proxy is dead on Tauri Android,
+ * wry#1710). Desktop playback is 100% untouched: this module is inert unless
+ * IS_MOBILE, and `getPlaybackEngine()` returns the desktop AudioController
+ * singleton on every non-mobile platform.
+ *
+ * The engine mirrors AudioController's public surface (on/playTrack/pause/
+ * seek/getCurrentTime/getDuration/getBuffered/setVolume/toggleMute/release)
+ * so the whole desktop player UI layer (PlayerBar storm guard, SeekBar,
+ * auto-advance, session save) works against it unchanged — only the transport
+ * differs: tauri-plugin-native-audio commands instead of HTMLAudioElement.
+ */
+
+export type NativeAudioStatus =
+  "idle" | "loading" | "playing" | "ended" | "error";
+
+export type NativeAudioState = {
+  status: NativeAudioStatus;
+  currentTime: number;
+  duration: number;
+  isPlaying: boolean;
+  buffering: boolean;
+  rate: number;
+  error?: string;
+};
+
+type NativeAudioEventMap = {
+  timeupdate: { currentTime: number; duration: number };
+  durationchange: { duration: number };
+  buffering: { isBuffering: boolean };
+  progress: undefined;
+  error: { message: string; code: string };
+  ended: undefined;
+  play: undefined;
+  pause: undefined;
+};
+
+type NativeAudioEventHandler<K extends keyof NativeAudioEventMap> = (
+  payload: NativeAudioEventMap[K],
+) => void;
+
+/** Google Drive media download URL (token travels in the Authorization
+ *  header — Google blocked token query params since 2020). */
+export function buildDriveStreamUrl(fileId: string): string {
+  return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
+}
+
+/** Empty TimeRanges for getBuffered(): the plugin exposes no buffered-range
+ *  info, so the buffer bar renders empty on mobile (position fill only). */
+function emptyBuffered(): TimeRanges {
+  return {
+    length: 0,
+    start: () => 0,
+    end: () => 0,
+  };
+}
+
+/** Mirror of the AudioController surface — export the class type so tests
+ *  can type the singleton. */
+export class NativeAudioEngine {
+  private static readonly TIMEUPDATE_THROTTLE_MS = 200;
+
+  private listeners: {
+    [K in keyof NativeAudioEventMap]?: NativeAudioEventHandler<K>[];
+  } = {};
+
+  private initPromise: Promise<void> | undefined;
+  private token: string | null = null;
+  private currentTrackId: string | null = null;
+  private lastState: NativeAudioState | null = null;
+  private lastTimeUpdate = 0;
+  private wasPlaying = false;
+
+  /** Initialize the plugin once (notification permission on Android 13+ is
+   *  requested by the plugin during initialize()). Safe to call repeatedly. */
+  initOnce(): Promise<void> {
+    if (!IS_MOBILE) return Promise.resolve();
+    if (!this.initPromise) {
+      this.initPromise = (async () => {
+        await invoke("plugin:native-audio|initialize");
+        // Listener lives for the whole app session (no per-track teardown).
+        await addPluginListener(
+          "native-audio",
+          "native_audio_state",
+          (state: NativeAudioState) => {
+            this.onNativeState(state);
+          },
+        );
+      })().catch((e: unknown) => {
+        // Reset so a later retry (e.g. after permission grant) can re-init.
+        this.initPromise = undefined;
+        throw e;
+      });
+    }
+    return this.initPromise;
+  }
+
+  /** Access token for the Authorization header — kept in memory only, never
+   *  logged, cleared on release(). */
+  setToken(token: string | null): void {
+    this.token = token;
+  }
+
+  async playTrack(track: Track, startTime?: number): Promise<void> {
+    if (!IS_MOBILE) return;
+    await this.initOnce();
+
+    if (this.currentTrackId === track.id) {
+      const state = this.lastState;
+      if (state && !state.isPlaying) {
+        await this.invokeStateful("plugin:native-audio|play");
+      }
+      return;
+    }
+
+    this.currentTrackId = track.id;
+    await this.invokeStateful("plugin:native-audio|set_source", {
+      src: buildDriveStreamUrl(track.id),
+      title: track.title,
+      headers: this.token
+        ? { Authorization: `Bearer ${this.token}` }
+        : undefined,
+    });
+
+    if (startTime !== undefined && startTime > 0) {
+      await this.invokeStateful("plugin:native-audio|seek_to", {
+        position: startTime,
+      });
+    }
+    await this.invokeStateful("plugin:native-audio|play");
+  }
+
+  async pause(): Promise<void> {
+    if (!IS_MOBILE) return;
+    await this.initOnce().catch(() => undefined);
+    await this.invokeStateful("plugin:native-audio|pause");
+  }
+
+  async togglePlay(): Promise<void> {
+    if (!IS_MOBILE) return;
+    const state = this.lastState;
+    if (state?.isPlaying) {
+      await this.pause();
+    } else {
+      await this.invokeStateful("plugin:native-audio|play");
+    }
+  }
+
+  async seek(time: number): Promise<void> {
+    if (!IS_MOBILE) return;
+    await this.initOnce().catch(() => undefined);
+    await this.invokeStateful("plugin:native-audio|seek_to", {
+      position: time,
+    });
+  }
+
+  getCurrentTime(): number {
+    return this.lastState?.currentTime ?? 0;
+  }
+
+  getDuration(): number {
+    return this.lastState?.duration ?? 0;
+  }
+
+  getBuffered(): BufferedSource {
+    return {
+      duration: this.lastState?.duration ?? 0,
+      currentTime: this.lastState?.currentTime ?? 0,
+      buffered: emptyBuffered(),
+    };
+  }
+
+  /** Volume is not exposed by the plugin — keep the desktop API shape as
+   *  no-ops so VolumeSlider renders unchanged on mobile. */
+  setVolume(): void {}
+  toggleMute(): boolean {
+    return false;
+  }
+  getVolume(): number {
+    return 1;
+  }
+  isMuted(): boolean {
+    return false;
+  }
+
+  /** Logout / player-stop: stop playback and drop the token + track binding.
+   *  The plugin's foreground service is stopped by the OS once playback
+   *  pauses and the notification is dismissed. */
+  async release(): Promise<void> {
+    this.currentTrackId = null;
+    this.token = null;
+    if (!IS_MOBILE) return;
+    try {
+      await this.pause();
+    } catch (e: unknown) {
+      this.report("release-failed", e);
+    }
+  }
+
+  getState(): NativeAudioState | null {
+    return this.lastState;
+  }
+
+  on<K extends keyof NativeAudioEventMap>(
+    event: K,
+    handler: NativeAudioEventHandler<K>,
+  ): () => void {
+    const list = this.getHandlers(event);
+    list.push(handler);
+    return () => {
+      const idx = list.indexOf(handler);
+      if (idx >= 0) list.splice(idx, 1);
+    };
+  }
+
+  private getHandlers<K extends keyof NativeAudioEventMap>(
+    event: K,
+  ): NativeAudioEventHandler<K>[] {
+    return this.listeners[event] ?? (this.listeners[event] = []);
+  }
+
+  private emit<K extends keyof NativeAudioEventMap>(
+    event: K,
+    payload: NativeAudioEventMap[K],
+  ): void {
+    const handlers = this.listeners[event];
+    if (handlers) {
+      handlers.forEach((h) => {
+        h(payload);
+      });
+    }
+  }
+
+  private async invokeStateful(
+    command: string,
+    payload?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const state = await invoke<NativeAudioState | undefined>(
+        command,
+        payload,
+      );
+      if (state) this.onNativeState(state);
+    } catch (e: unknown) {
+      this.report(`${command} failed`, e);
+      throw e;
+    }
+  }
+
+  private report(context: string, e: unknown): void {
+    void captureError({
+      level: "warn",
+      source: "nativeAudioBridge",
+      message: `${context}: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
+  /** Map plugin state events onto the AudioController event surface so the
+   *  desktop UI layer (PlayerBar/SeekBar/session save) behaves identically. */
+  private onNativeState(state: NativeAudioState): void {
+    const prev = this.lastState;
+    this.lastState = state;
+
+    if (state.status === "error") {
+      this.emit("error", {
+        message: state.error ?? "native playback error",
+        code: "format_error",
+      });
+      // Parity with AudioController: error → ended → auto-advance.
+      this.emit("ended", undefined);
+      this.wasPlaying = false;
+      return;
+    }
+
+    if (state.status === "ended") {
+      this.emit("ended", undefined);
+      this.wasPlaying = false;
+      return;
+    }
+
+    if (state.buffering && !prev?.buffering) {
+      this.emit("buffering", { isBuffering: true });
+    } else if (!state.buffering && prev?.buffering) {
+      this.emit("buffering", { isBuffering: false });
+    }
+
+    if (state.isPlaying && !this.wasPlaying) {
+      this.emit("play", undefined);
+      usePlayerStore.getState().setIsPlaying(true);
+    } else if (!state.isPlaying && this.wasPlaying) {
+      this.emit("pause", undefined);
+      usePlayerStore.getState().setIsPlaying(false);
+    }
+    this.wasPlaying = state.isPlaying;
+
+    if (state.duration !== prev?.duration && state.duration > 0) {
+      this.emit("durationchange", { duration: state.duration });
+    }
+
+    // Throttle to ~5/s (desktop THROTTLE_MS parity) — the plugin ticks every
+    // 25ms in foreground.
+    const now = performance.now();
+    if (now - this.lastTimeUpdate >= NativeAudioEngine.TIMEUPDATE_THROTTLE_MS) {
+      this.lastTimeUpdate = now;
+      this.emit("timeupdate", {
+        currentTime: state.currentTime,
+        duration: state.duration,
+      });
+    }
+  }
+}
+
+export const nativeAudioEngine = new NativeAudioEngine();
+
+/**
+ * Single engine selector for the whole app: desktop keeps the HTMLAudio
+ * controller, mobile gets the native ExoPlayer engine. Duck-typed to the
+ * AudioController interface (verified cast — the surface is mirrored above).
+ */
+export function getPlaybackEngine(): AudioController {
+  return IS_MOBILE
+    ? (nativeAudioEngine as unknown as AudioController)
+    : AudioController.getInstance();
+}

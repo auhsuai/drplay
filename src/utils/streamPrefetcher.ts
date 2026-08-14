@@ -1,4 +1,5 @@
 import { PLAYABLE_AUDIO_EXTENSIONS } from "./audioQuery";
+import { IS_MOBILE } from "./platform";
 
 const prefetchedStreams = new Map<string, string>();
 export const DRIVE_STREAM_PREFIX = "/drive-stream/";
@@ -43,6 +44,10 @@ function cacheSet(fileId: string, url: string) {
 export function prefetchVisibleTracks(
   items: ReadonlyArray<{ id: string; originalName?: string }>,
 ): void {
+  // Mobile (GATE branch B): the /drive-stream SW proxy is dead on Android —
+  // URL strings would be cached for nothing (the native engine builds Drive
+  // URLs itself). Desktop path unchanged.
+  if (IS_MOBILE) return;
   for (const item of items) {
     if (item.id && !prefetchedStreams.has(item.id))
       cacheSet(item.id, buildStreamUrl(item.id, item.originalName));

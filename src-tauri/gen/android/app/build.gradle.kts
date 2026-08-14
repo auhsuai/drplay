@@ -19,7 +19,10 @@ android {
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.drplay.app"
-        minSdk = 24
+        // 26: tauri-plugin-native-audio (vendored fork) requires API 26+
+        // (Media3 ExoPlayer + MediaSessionService). Must match
+        // tauri.conf.json bundle.android.minSdkVersion.
+        minSdk = 26
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
