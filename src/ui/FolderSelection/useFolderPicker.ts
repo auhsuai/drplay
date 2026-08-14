@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { db } from "../../db/db";
 import { matchesNormalized } from "../../search/searchEngine";
 import { getValidToken } from "../../utils/apiClient";
-import { getFileParents, getFileName } from "../../utils/driveApi";
+import { FOLDER_MIME, getFileParents, getFileName } from "../../utils/driveApi";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import { searchFolders, listFolderChildren } from "../../utils/drivePagination";
 import { showErrorToast } from "../../utils/simpleToast";
@@ -11,7 +11,6 @@ import { captureError } from "../../utils/errorLog";
 import {
   FOLDER_MODULE,
   SEARCH_DEBOUNCE_MS,
-  DRIVE_FOLDER_MIME_TYPE,
   classifyFolderError,
   isAbortError,
   isAborted,
@@ -163,7 +162,7 @@ export function useFolderPicker({
       setIsSearchingApi(true);
       try {
         const safeQuery = query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-        const q = `name contains '${safeQuery}' and mimeType='${DRIVE_FOLDER_MIME_TYPE}' and trashed=false`;
+        const q = `name contains '${safeQuery}' and mimeType='${FOLDER_MIME}' and trashed=false`;
         const files = await searchFolders(token, q, controller.signal);
         setApiSearchResults(
           files.filter((f: FolderItem) => f.id !== currentFolderId),

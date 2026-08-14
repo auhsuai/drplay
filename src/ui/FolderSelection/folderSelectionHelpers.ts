@@ -1,6 +1,5 @@
 export const FOLDER_MODULE = "FolderSelection";
 export const SEARCH_DEBOUNCE_MS = 300;
-export const DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder";
 
 // Classify a Drive fetch error for observability. Returns name + message only.
 export function classifyFolderError(err: unknown): string {

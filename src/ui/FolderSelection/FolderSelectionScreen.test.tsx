@@ -49,6 +49,7 @@ vi.mock("lucide-react", () => {
 
 const mocks = vi.hoisted(() => ({
   driveApi: {
+    FOLDER_MIME: "application/vnd.google-apps.folder",
     listFolderChildren: vi.fn(),
     searchFolders: vi.fn(),
     getFileParents: vi.fn(),

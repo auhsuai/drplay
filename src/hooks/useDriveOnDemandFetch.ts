@@ -1,13 +1,12 @@
 import { useEffect } from "react";
 import { db } from "../db/db";
-import { driveFetch } from "../utils/driveApi";
+import { driveFetch, FOLDER_MIME } from "../utils/driveApi";
 import type { DriveFileItem, DriveFilesListResponse } from "../utils/driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 
-const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_PAGE_SIZE = 1000;
 
 export function useDriveOnDemandFetch({
@@ -90,7 +89,7 @@ export function useDriveOnDemandFetch({
               size: f.size ? parseInt(f.size, 10) : undefined,
               modifiedTime: f.modifiedTime,
               trashed: false,
-              isFolder: f.mimeType === GOOGLE_FOLDER_MIME,
+              isFolder: f.mimeType === FOLDER_MIME,
             }));
             try {
               await db.files.bulkPut(filesToInsert);
