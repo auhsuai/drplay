@@ -243,7 +243,7 @@ function PlayerBarImpl({
       />
 
       {/* Center: Controls */}
-      <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] px-2 min-w-[200px]">
+      <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] min-w-[200px]">
         <TransportControls
           currentTrack={currentTrack}
           isPlaying={isPlaying}

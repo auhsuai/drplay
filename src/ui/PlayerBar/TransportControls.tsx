@@ -56,7 +56,7 @@ export function TransportControls({
         disabled={!currentTrack || isDownloading}
       >
         {isDownloading || (isBuffering && isPlaying && !hasError) ? (
-          <LoaderCircle className="w-5 h-5 animate-spin" />
+          <LoaderCircle className="w-5 h-5 animate-spin [transform-box:view-box] origin-center" />
         ) : hasError ? (
           <RefreshCw className="w-5 h-5" />
         ) : isPlaying ? (
