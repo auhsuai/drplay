@@ -167,7 +167,10 @@ export function SortDropdown({
               setShowSortMenu(false);
             }}
           ></div>
-          <div className="absolute right-0 mt-2 w-32 bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div
+            data-testid="sort-menu"
+            className="absolute right-0 mt-2 min-w-full w-max bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
+          >
             {options.map((opt) => (
               <button
                 key={opt.id}

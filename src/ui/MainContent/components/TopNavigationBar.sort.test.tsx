@@ -97,7 +97,9 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
   it("opens a menu with exactly 3 options: A-Z / Date / Size", () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
-    const menu = document.querySelector(".w-32") as HTMLElement;
+    const menu = document.querySelector(
+      "[data-testid=sort-menu]",
+    ) as HTMLElement;
     const labels = Array.from(menu.querySelectorAll("button")).map(
       (b) => b.textContent,
     );

@@ -256,7 +256,9 @@ describe("FullRecentView sort UI", () => {
   it("shows exactly 3 sort options in the menu (A-Z / Date / Size)", async () => {
     renderRecent([makeTrack("a", "Alpha")]);
     await openSortMenu();
-    const menu = document.querySelector(".w-32") as HTMLElement;
+    const menu = document.querySelector(
+      "[data-testid=sort-menu]",
+    ) as HTMLElement;
     const labels = Array.from(menu.querySelectorAll("button")).map(
       (b) => b.textContent,
     );
@@ -336,7 +338,9 @@ describe("FullRecentView sort UI", () => {
     renderRecent([]);
     expect(screen.queryAllByTestId("song-card").length).toBe(0);
     await openSortMenu();
-    const menu = document.querySelector(".w-32") as HTMLElement;
+    const menu = document.querySelector(
+      "[data-testid=sort-menu]",
+    ) as HTMLElement;
     expect(menu.querySelectorAll("button").length).toBe(3);
   });
 });
