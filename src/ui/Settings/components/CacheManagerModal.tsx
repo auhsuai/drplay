@@ -191,16 +191,15 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
               </span>
               <span className="w-14 shrink-0 flex items-center justify-end">
                 {sizes[id] === null ? (
-                  // Text placeholder (same text-sm as the real size) instead of
-                  // a small spinner: the size column keeps its exact width in
-                  // both states, so nothing visibly jumps when sizes load.
+                  // Skeleton bar sized to the size column (56px = w-14): the
+                  // column keeps its exact width in both states, so nothing
+                  // visibly jumps when sizes load.
                   <span
                     data-testid="size-placeholder"
-                    className="text-sm text-gray-400 dark:text-gray-500"
+                    className="w-14 h-3.5 rounded bg-gray-200 dark:bg-[#2a2b2f] animate-pulse"
+                    role="status"
                     aria-label={t("loading")}
-                  >
-                    —
-                  </span>
+                  />
                 ) : (
                   <span className="text-sm text-gray-500 dark:text-gray-400">
                     {formatBytes(sizes[id])}
