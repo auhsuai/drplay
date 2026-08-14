@@ -16,7 +16,6 @@ export const PENDING_ID_PREFIX = "pending-";
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
 export const AUDIO_FILE_MIME = "application/octet-stream";
 export const MAX_UPLOAD_ATTEMPTS = 3;
-export const UPLOAD_STATUS_EVENT = "upload-status-changed";
 export const DRIVE_FILES_CHANGED_EVENT = "drive-files-changed";
 export const ERROR_INVALID_SEED = "invalid-seed";
 export const ERROR_QUOTA = "quota";

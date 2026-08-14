@@ -1099,7 +1099,9 @@ describe("uploadManager", () => {
 
     // queued-push + uploading + done = 3 lần
     expect(cb).toHaveBeenCalledTimes(3);
-    expect(firedEvents("upload-status-changed")).toHaveLength(3);
+    // Guard: the legacy 'upload-status-changed' window event was removed
+    // (0 production listeners) — notify() must not re-dispatch it.
+    expect(firedEvents("upload-status-changed")).toHaveLength(0);
 
     unsub();
     um.startUploads([fileSeed("t.mp3")], TOKEN);

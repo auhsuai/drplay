@@ -1,11 +1,6 @@
 import { ROOT_FOLDER_ID } from "../driveConstants";
 import { captureError } from "../errorLog";
-import {
-  MODULE,
-  PROGRESS_NOTIFY_INTERVAL_MS,
-  UPLOAD_STATUS_EVENT,
-  describeError,
-} from "./errors";
+import { MODULE, PROGRESS_NOTIFY_INTERVAL_MS, describeError } from "./errors";
 import type { InternalEntry, UploadEntry } from "./types";
 
 /**
@@ -127,9 +122,8 @@ export function clearUploadedTint(): void {
 
 /**
  * Subscribe to upload-state changes (status flips, progress ticks, cancels).
- * Also re-dispatched as a window 'upload-status-changed' CustomEvent for
- * non-React consumers. The callback must be resilient: a throwing subscriber
- * is caught and logged, never allowed to break the notify loop.
+ * The callback must be resilient: a throwing subscriber is caught and
+ * logged, never allowed to break the notify loop.
  * @param cb Called on every state change after the queue mutates.
  * @returns An unsubscribe function; call it on unmount to stop receiving
  * notifications (and to let the manager drop the reference).
@@ -162,7 +156,7 @@ export function getEntries(): UploadEntry[] {
   }));
 }
 
-// Fire subscribers + window event; a throwing subscriber must not break the loop.
+// Fire subscribers; a throwing subscriber must not break the loop.
 export function notify(): void {
   for (const cb of subscribers) {
     try {
@@ -177,11 +171,6 @@ export function notify(): void {
       });
     }
   }
-  window.dispatchEvent(
-    new CustomEvent<UploadEntry[]>(UPLOAD_STATUS_EVENT, {
-      detail: getEntries(),
-    }),
-  );
 }
 
 // Coalesce: a pending timer is left running (new bursts merge into it). The

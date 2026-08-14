@@ -11,6 +11,7 @@ import {
 import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
+import { DRIVE_FILES_CHANGED_EVENT } from "../../utils/upload/errors";
 import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
 import rawGreetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
@@ -33,9 +34,6 @@ interface GreetingsEntry {
 const greetingsData = rawGreetingsData;
 
 const HOME_TAB_MODULE = "HomeTab";
-// Fired by uploadManager after each completed upload (slice 1) — the delta
-// sync trigger that keeps "Recently Added to Drive" fresh without a reload.
-const DRIVE_FILES_CHANGED_EVENT = "drive-files-changed";
 // Trailing-edge debounce window for the delta refresh (lodash
 // `_.debounce(func, wait)` default semantics — fire once, `wait` ms after
 // the LAST call of a burst; lodash/debounce.js 4.17.21: leading=false,
