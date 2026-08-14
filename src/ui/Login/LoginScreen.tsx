@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { IS_MOBILE } from "../../utils/platform";
 
 const LOGIN_MODULE = "LoginScreen";
 const CANCEL_PROMPT_MS = 5000;
@@ -57,8 +58,11 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
     try {
       setIsLoading(true);
-      // Call Rust backend directly
-      const token = await invoke<LoginResult>("login_google_native");
+      // Mobile (Android) logs in via system browser + custom-scheme deep link
+      // (RFC 8252, login_google_mobile); desktop keeps the localhost loopback
+      // server (login_google_native). Both return the same token payload.
+      const command = IS_MOBILE ? "login_google_mobile" : "login_google_native";
+      const token = await invoke<LoginResult>(command);
       setIsLoading(false);
       // Forward the full token payload — dropping refresh_token here starves
       // the refresh machinery (apiClient.getValidToken), which later triggers
@@ -163,6 +167,15 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             >
               {t("login.cancel_here")}
             </button>
+          </p>
+        )}
+
+        {IS_MOBILE && isLoading && (
+          <p className="mt-4 text-sm text-gray-500 dark:text-gray-400 animate-in fade-in duration-300">
+            {t(
+              "login.mobile_browser_opened",
+              "Đã mở trình duyệt — chờ đăng nhập...",
+            )}
           </p>
         )}
       </div>

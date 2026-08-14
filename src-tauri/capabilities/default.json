@@ -27,6 +27,7 @@
     "fs:allow-open",
     "fs:allow-read",
     "clipboard-manager:allow-write-text",
-    "native-audio:default"
+    "native-audio:default",
+    "deep-link:default"
   ]
 }

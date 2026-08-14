@@ -17,6 +17,16 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+// IS_MOBILE is read inside handleLoginClick (call time), so a getter-backed
+// mock lets individual tests toggle the platform — same pattern as
+// driveFiles.recentlyAdded.test.ts.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
   // shipped copy instead of hard-coded fallbacks.
@@ -60,6 +70,7 @@ describe("LoginScreen invoke login error handling", () => {
     document.body.innerHTML = '<div id="content-area"></div>';
     invokeMock.mockReset();
     captureErrorMock.mockClear();
+    platformMock.IS_MOBILE = false;
   });
 
   afterEach(() => {
@@ -200,5 +211,53 @@ describe("LoginScreen invoke login error handling", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("invokes login_google_mobile on mobile", async () => {
+    platformMock.IS_MOBILE = true;
+    invokeMock.mockResolvedValueOnce({ access_token: "token-123" });
+    renderLogin();
+
+    fireEvent.click(screen.getByRole("button"));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("login_google_mobile");
+    });
+  });
+
+  it("invokes login_google_native on desktop", async () => {
+    invokeMock.mockResolvedValueOnce({ access_token: "token-123" });
+    renderLogin();
+
+    fireEvent.click(screen.getByRole("button"));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("login_google_native");
+    });
+  });
+
+  it("shows the browser-opened hint while waiting on mobile", async () => {
+    platformMock.IS_MOBILE = true;
+    invokeMock.mockImplementation(() => new Promise(() => {}));
+    renderLogin();
+
+    fireEvent.click(screen.getByRole("button"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Đã mở trình duyệt — chờ đăng nhập..."),
+      ).toBeTruthy();
+    });
+  });
+
+  it("does not show the browser-opened hint on desktop", () => {
+    invokeMock.mockImplementation(() => new Promise(() => {}));
+    renderLogin();
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(
+      screen.queryByText("Đã mở trình duyệt — chờ đăng nhập..."),
+    ).toBeNull();
   });
 });

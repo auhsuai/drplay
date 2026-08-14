@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 pub mod protocol;
 mod thumbnail;
 mod auth;
+mod auth_android;
 #[cfg(desktop)]
 mod tray;
 mod memory;
@@ -15,6 +16,7 @@ mod token_store;
 mod seed;
 
 use auth::{login_google_native, refresh_google_token};
+use auth_android::login_google_mobile;
 use memory::{apply_window_activity, WindowActivityEvent};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 #[cfg(desktop)]
@@ -166,6 +168,7 @@ fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivit
 pub fn run() {
     let builder = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -176,6 +179,12 @@ pub fn run() {
     let app_result = builder
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
+
+            // Single process-wide deep-link listener for the Android OAuth
+            // flow (auth_android.rs); inert on desktop (no desktop schemes
+            // configured). Must run after plugin setup — it does, setup
+            // callbacks run after all plugins initialized.
+            auth_android::init_deep_link_listener(app);
 
             if let Ok(cache_dir) = app.path().app_cache_dir() {
                 let access_log = cache_dir.join(".thumbnails").join("access_log.json");
@@ -221,6 +230,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             login_google_native,
+            login_google_mobile,
             refresh_google_token,
             register_download_path,
             register_upload_path,

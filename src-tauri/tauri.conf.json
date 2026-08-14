@@ -38,5 +38,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": ["com.drplay.app"],
+          "appLink": false
+        }
+      ]
+    }
   }
 }
