@@ -235,7 +235,7 @@ function PlayerBarImpl({
     : null;
 
   return (
-    <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
+    <div className="h-20 bg-white dark:bg-[#202124] flex items-center px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
       {/* Left: Track Info */}
       <TrackInfo
         currentTrack={currentTrack}
@@ -243,7 +243,7 @@ function PlayerBarImpl({
       />
 
       {/* Center: Controls */}
-      <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] min-w-[200px]">
+      <div className="flex flex-col items-center justify-center flex-1 max-w-[900px] min-w-[200px]">
         <TransportControls
           currentTrack={currentTrack}
           isPlaying={isPlaying}
