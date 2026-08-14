@@ -19,3 +19,8 @@ export const TABS = {
 } as const;
 
 export type TabKey = (typeof TABS)[keyof typeof TABS] | `playlist_${string}`;
+
+// Google Drive files.list caps each request at 1000 results (docs: values
+// above 1000 are coerced to 1000). Single source of truth for the page size
+// used by the paginated listers in drivePagination.
+export const PAGINATION_PAGE_SIZE = 1000;

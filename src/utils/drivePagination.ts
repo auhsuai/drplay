@@ -1,11 +1,8 @@
 import { driveFetch, FOLDER_MIME } from "./driveApi";
 import type { DriveFileItem, DriveFolderItem } from "./driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "./driveFiles";
+import { PAGINATION_PAGE_SIZE } from "./driveConstants";
 
-// Drive files.list caps each request at 1000 results (docs: values above 1000
-// are coerced to 1000). We aggregate pages so large folders/searches are never
-// silently truncated in the UI.
-const PAGINATION_PAGE_SIZE = 1000;
 // Worst-case safety cap: 10 pages = up to 10,000 results per call. Guards
 // against a misbehaving server that keeps issuing nextPageToken forever.
 const MAX_PAGINATION_PAGES = 10;
