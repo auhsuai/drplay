@@ -48,6 +48,26 @@
 
 ---
 
+## B2. Batch tối ưu lần 2 (user test bản v3 — Task 16-20)
+
+### 16. Media notification có điều khiển (chuẩn app lớn)
+- **Root cause (đọc code plugin):** race service-vs-session (play gọi startService trước ensure → window bỏ lỡ → manager không tạo) + `onUpdateNotification` rỗng → media3 fallback notification TRẦN (không nút) — đúng triệu chứng user báo; action cũ sai (rew/FF thay vì prev/next).
+- **Fix:** ensure() trong lock trước startService; 3 actions prev/play-pause/next + compact [play-pause, next] (media3 1.4.1 API chuẩn — setUsePreviousAction/NextAction/PlayPauseActions + InCompactView); icon play/pause tự swap theo state; tap mở app (launch intent đã đúng); artwork bỏ (scope mobile không metadata — large icon = app icon).
+- **Quyết định:** xin POST_NOTIFICATIONS ở cả initialize + play (đơn giản, notification chắc hiện — app lớn xin lúc play, chấp nhận lệch nhẹ); swipe-dismiss → service dừng nhưng playback tiếp tục (đúng YT Music/Spotify).
+
+### 17. Toast/error không tràn màn hình
+- Toast: `max-w-[85vw] break-words line-clamp-3` + title tooltip full message; ErrorToast banner: max-w-full + truncate + title. Chỉ UI hiển thị — captureError/log không đụng.
+
+### 18. Khôi phục heart + MoreMenu trên mobile
+- Root cause: wrapper `hidden lg:flex` (desktop-pattern cũ) — mobile mất cả 2. Fix: mobile luôn hiện, compact 32px → 28px (Task 19 giảm tiếp); desktop byte-identical. Vị trí: phải TrackInfo, sát transport row.
+
+### 19-20. Compact đợt 2 (user: "vẫn to quá")
+- Nút: transport 36→30px, play 40→34px, heart/menu 32→28px, BottomNav h-16→h-14 + icon 24→20px. Lý do số liệu: mini-player app lớn ~32px (Spotify) / ~36px (YTM) — user muốn nhỏ hơn nữa → 30/34; floor chạm 28px giữ.
+- Font: NowPlaying 20→18, HomeTab greeting 24→20, Settings h1 24→20, Settings rows 14→13. Floor 12px giữ. BottomNav label 10px giữ (floor).
+- **Ghi chú:** NowPlayingView empty-state text-xl (màn hiếm — không có track) giữ nguyên — ghi nhận, không tốn 1 vòng dispatch.
+
+---
+
 ## C. Quyết định kỹ thuật xuyên suốt
 - **Desktop bất biến tuyệt đối** — mọi thay đổi sau `IS_MOBILE`; test desktop path phải xanh từng task.
 - **i18n:** translation.json bị nhánh cover `refactor/cover-image-and-tags` chiếm → mọi key mới dùng `t(key, {defaultValue})`; merge cover xong sẽ thay bằng key thật.
