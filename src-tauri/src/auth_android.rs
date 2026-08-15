@@ -38,10 +38,12 @@ use url::Url;
 /// resolve to the same deep-link intent filter (scheme-only, no host).
 const MOBILE_REDIRECT_URI: &str = "com.drplay.app:/oauth2redirect";
 
-/// GCP OAuth client id for the ANDROID app. Empty until the user completes
-/// the GCP setup in the module docs; the command then fails loudly instead of
-/// opening a consent flow that Google would reject with redirect_uri_mismatch.
-const ANDROID_CLIENT_ID: &str = "";
+/// GCP OAuth client id for the ANDROID app (public client — no secret, per
+/// RFC 8252). Created 2026-08-15 in Google Cloud Console project 72581565914;
+/// must match the client registered with package com.drplay.app + SHA-1
+/// DA:C2:0C:1C:F9:F0:E1:5C:3C:23:D2:D9:04:04:72:C4:11:99:AC:31 and the
+/// "Custom URI schemes" advanced setting enabled.
+const ANDROID_CLIENT_ID: &str = "72581565914-vsdl8b65dutbtrrrtpqf71pirqq4cifp.apps.googleusercontent.com";
 
 /// How long the mobile flow waits for the deep-link redirect — same 5 minutes
 /// as the desktop loopback flow (auth.rs:48).
