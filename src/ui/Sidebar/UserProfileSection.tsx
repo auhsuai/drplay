@@ -1,8 +1,8 @@
-import { useState } from "react";
 import { Settings, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { TABS, type TabKey } from "../../utils/driveConstants";
 import { NavItem } from "./NavItem";
+import { UserAvatar } from "../components/UserAvatar";
 
 interface UserProfileSectionProps {
   userProfile?:
@@ -21,7 +21,6 @@ export function UserProfileSection({
   onTabChange,
 }: UserProfileSectionProps) {
   const { t } = useTranslation();
-  const [avatarFailed, setAvatarFailed] = useState(false);
 
   return (
     <div className="p-4">
@@ -37,29 +36,7 @@ export function UserProfileSection({
 
       <div className="mt-4 pt-4 flex items-center transition-all duration-300">
         <div className="ml-1 shrink-0 flex items-center justify-center">
-          {userProfile ? (
-            avatarFailed ? (
-              <div className="w-10 h-10 rounded-full bg-brand-primary/20 flex items-center justify-center">
-                <span className="text-brand-primary font-bold">
-                  {userProfile.name.charAt(0).toUpperCase()}
-                </span>
-              </div>
-            ) : (
-              <img
-                src={userProfile.picture}
-                alt={t("common.profile_alt")}
-                referrerPolicy="no-referrer"
-                onError={() => {
-                  setAvatarFailed(true);
-                }}
-                className="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-800 object-cover"
-              />
-            )
-          ) : (
-            <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
-              <span className="text-gray-400 font-bold">?</span>
-            </div>
-          )}
+          <UserAvatar userProfile={userProfile} />
         </div>
 
         <div

@@ -186,6 +186,7 @@ export function TabContentRouter({
             setBackgroundPlayback={setBackgroundPlayback}
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
+            userProfile={userProfile}
           />
         ) : (
           <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">

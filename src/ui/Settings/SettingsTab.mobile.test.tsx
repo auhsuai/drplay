@@ -116,6 +116,7 @@ const baseProps = {
   setBackgroundPlayback: vi.fn(),
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
+  userProfile: null,
 };
 
 const IMPORT_SEED_LABEL = "Import metadata backup (seed.zip)";
@@ -330,5 +331,58 @@ describe("SettingsTab font compaction (Task 8)", () => {
     const { container } = render(<SettingsTab {...baseProps} />);
     expect(container.querySelector("h1")?.className).toContain("text-3xl");
     expect(container.querySelector("p.text-base")).not.toBeNull();
+  });
+});
+
+// Task 13 mobile-polish: on mobile the Settings page opens with a user
+// header (avatar + name + email) fed from the SAME userProfile prop the
+// Sidebar renders from (single source of truth — no second fetch). Desktop
+// must stay byte-identical: no header markup at all.
+describe("SettingsTab user header (Task 13)", () => {
+  const USER = {
+    name: "Alice",
+    email: "a@b.c",
+    picture: "https://example.com/pic.jpg",
+  };
+
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  it("renders the avatar image + name + email on mobile when signed in", () => {
+    render(<SettingsTab {...baseProps} userProfile={USER} />);
+    expect(screen.getByAltText("Profile")).toBeTruthy();
+    expect(screen.getByText("Alice")).toBeTruthy();
+    expect(screen.getByText("a@b.c")).toBeTruthy();
+    expect(screen.queryByText("?")).toBeNull();
+  });
+
+  it("falls back to the initial-letter avatar when the picture fails to load", () => {
+    render(<SettingsTab {...baseProps} userProfile={USER} />);
+    const img = screen.getByAltText("Profile");
+    fireEvent.error(img);
+    expect(screen.queryByAltText("Profile")).toBeNull();
+    const letter = screen.getByText("A");
+    expect(letter.className).toContain("text-brand-primary");
+  });
+
+  it("shows the guest avatar + guest labels on mobile when not signed in", () => {
+    render(<SettingsTab {...baseProps} userProfile={null} />);
+    expect(screen.getByText("?")).toBeTruthy();
+    expect(screen.getByText("Guest")).toBeTruthy();
+    expect(screen.getByText("Not signed in")).toBeTruthy();
+  });
+
+  it("renders NO user header on desktop (byte-identical to pre-task)", () => {
+    platformMock.IS_MOBILE = false;
+    render(<SettingsTab {...baseProps} userProfile={USER} />);
+    expect(screen.queryByAltText("Profile")).toBeNull();
+    expect(screen.queryByText("Alice")).toBeNull();
+    expect(screen.queryByText("a@b.c")).toBeNull();
   });
 });

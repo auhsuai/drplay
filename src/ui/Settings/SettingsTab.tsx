@@ -33,6 +33,8 @@ import { useEffect, useState } from "react";
 import { IS_MOBILE } from "../../utils/platform";
 import { subscribe, getEntries, cancelUpload } from "../../utils/uploadManager";
 import type { UploadEntry } from "../../utils/uploadManager";
+import type { UserProfile } from "../../types";
+import { UserAvatar } from "../components/UserAvatar";
 
 interface SettingsTabProps {
   theme: ThemeType;
@@ -43,6 +45,7 @@ interface SettingsTabProps {
   setBackgroundPlayback: (enabled: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
+  userProfile?: UserProfile | null;
 }
 
 // Shown while a queued entry waits for its turn in the sequential upload queue.
@@ -73,6 +76,7 @@ export function SettingsTab({
   setBackgroundPlayback,
   setShowFolderSelection,
   setShowTrashScreen,
+  userProfile,
 }: SettingsTabProps) {
   const { t, i18n } = useTranslation();
   // Task 8: setting rows compact one notch on mobile (16px -> 14px); desktop
@@ -241,6 +245,31 @@ export function SettingsTab({
         >
           {t("settings.title")}
         </h1>
+
+        {/* Task 13 mobile-polish: user identity header on mobile — avatar +
+            name + email, fed from the same userProfile prop the Sidebar
+            renders from (no second fetch). Desktop stays byte-identical:
+            no header markup at all. */}
+        {IS_MOBILE && (
+          <div className="flex items-center gap-4 mb-8">
+            <div className="ml-1 shrink-0 flex items-center justify-center">
+              <UserAvatar userProfile={userProfile} />
+            </div>
+            <div className="overflow-hidden whitespace-nowrap flex flex-col justify-center">
+              <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
+                {userProfile ? userProfile.name : t("sidebar.guest")}
+              </p>
+              <p
+                className="text-xs text-gray-500 truncate"
+                title={userProfile?.email || ""}
+              >
+                {userProfile
+                  ? userProfile.email
+                  : t("sidebar.not_authenticated")}
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-8">
           <div className="flex flex-col gap-2">
