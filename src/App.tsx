@@ -299,9 +299,31 @@ function App() {
 
   // Hardware back button (mobile only): overlay-close handlers run in LIFO
   // order — the LAST registered (highest priority) runs first. Priority:
-  // rate-limit modal > trash > folder selection > sidebar. All handlers are
-  // no-ops on desktop (useHardwareBack skips registration when inactive, and
-  // the popstate effect below early-returns on !IS_MOBILE).
+  // rate-limit modal > trash > folder selection > sidebar > My Drive folder
+  // up. All handlers are no-ops on desktop (useHardwareBack skips
+  // registration when inactive, and the popstate effect below early-returns
+  // on !IS_MOBILE).
+  // Task 14 mobile-polish: My Drive folder drill-down is a navigation layer
+  // ABOVE the exit chain — back on a subfolder pops one history level instead
+  // of jumping straight to double-back-to-exit. Registered FIRST (checked
+  // last) so overlay closes always win; gate is the store's drill-down state
+  // (currentFolderId ≠ root on the My Drive tab).
+  useHardwareBack(
+    () => {
+      if (folderHistory.length > 0) {
+        handleBack();
+      } else {
+        // Restore/deep-link edge: a subfolder with empty history (locate-file
+        // normally rebuilds it) — jump straight to the configured root.
+        setCurrentFolderId(appRootFolder || ROOT_FOLDER_ID);
+        setCurrentFolderName(MY_DRIVE_TAB);
+      }
+      return true;
+    },
+    activeTab === TABS.myDrive &&
+      currentFolderId !== (appRootFolder || ROOT_FOLDER_ID),
+  );
+
   useHardwareBack(() => {
     setIsSidebarOpen(false);
     return true;

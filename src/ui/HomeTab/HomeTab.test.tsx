@@ -15,6 +15,7 @@ import type { DriveFileItem } from "../../utils/driveApi";
 import type { FolderVisitEntry } from "../../utils/history";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
+import { handleGlobalBack } from "../../hooks/useHardwareBack";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -1489,5 +1490,81 @@ describe("HomeTab font compaction (Task 8)", () => {
     const { container } = render(<HomeTab {...baseProps()} />);
     await screen.findByText(/^Good (morning|afternoon|evening)/);
     expect(container.querySelector("h2")?.className).toContain("text-3xl");
+  });
+});
+
+// Task 14 mobile-polish: the full recent view is a LIFO navigation layer —
+// hardware back closes it BEFORE the app-level chain (NowPlaying → tab →
+// double-back-to-exit) can run. The handler is registered inside HomeTab
+// (state is local to it), gated on isActive so a keep-alive-hidden tab never
+// swallows back presses meant for the visible tab.
+describe("HomeTab mobile back closes full views (Task 14)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getHeavyRotation.mockResolvedValue([]);
+    mocks.getRandomDiscoveries.mockResolvedValue([]);
+    mocks.getMostVisitedFolders.mockResolvedValue([]);
+    mocks.getRecentlyAddedAudioFiles.mockReset();
+    mocks.FullRecentViewSpy.mockClear();
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  const sixRecentlyAdded = () =>
+    Array.from({ length: 6 }, (_, i) =>
+      driveFile({ id: `ra-${String(i)}`, name: `Track ${String(i)}.mp3` }),
+    );
+
+  it("consumes the back press and closes the open full view (no fall-through)", async () => {
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue(sixRecentlyAdded());
+    render(<HomeTab {...baseProps()} />);
+
+    await screen.findByText("Track 4.mp3");
+    fireEvent.click(screen.getByTestId("premium-card-overlay"));
+    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
+
+    let handled = false;
+    act(() => {
+      handled = handleGlobalBack();
+    });
+
+    expect(handled).toBe(true);
+    // View closed: grid re-rendered, full view is NOT re-mounted.
+    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("premium-card-overlay")).toBeTruthy();
+  });
+
+  it("does not consume back when no full view is open (chain continues)", () => {
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+    render(<HomeTab {...baseProps()} />);
+
+    let handled = true;
+    act(() => {
+      handled = handleGlobalBack();
+    });
+
+    expect(handled).toBe(false);
+  });
+
+  it("hidden keep-alive tab (isActive=false) never swallows back", async () => {
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue(sixRecentlyAdded());
+    render(<HomeTab {...baseProps({ isActive: false })} />);
+
+    await screen.findByText("Track 4.mp3");
+    fireEvent.click(screen.getByTestId("premium-card-overlay"));
+    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
+
+    let handled = true;
+    act(() => {
+      handled = handleGlobalBack();
+    });
+
+    expect(handled).toBe(false);
+    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
   });
 });

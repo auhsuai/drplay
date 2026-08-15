@@ -40,7 +40,7 @@ const mocks = vi.hoisted(() => {
       setCurrentFolderId: vi.fn(),
       currentFolderName: "My Drive",
       setCurrentFolderName: vi.fn(),
-      folderHistory: [],
+      folderHistory: [] as { id: string; name: string }[],
       setFolderHistory: vi.fn(),
       sortOption: "name",
       setSortOption: vi.fn(),
@@ -652,5 +652,125 @@ describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
     expect(homeWrapper2?.className).not.toContain("hidden");
     expect(mocks.processExit).not.toHaveBeenCalled();
     expect(screen.queryByText(BACK_HINT)).toBeNull();
+  });
+});
+
+// Task 14 mobile-polish: My Drive folder drill-down is a LIFO navigation
+// layer ABOVE NowPlaying/tab/exit — back on a subfolder pops one history
+// level instead of falling straight into the double-back-to-exit chain.
+describe("App mobile back chain (Task 14: My Drive folder layer)", () => {
+  const BACK_HINT = "Nhấn back lần nữa để thoát";
+
+  const defaultDrive = () => ({
+    appRootFolder: "root",
+    setAppRootFolder: vi.fn(),
+    currentFolderId: "root",
+    setCurrentFolderId: vi.fn(),
+    currentFolderName: "My Drive",
+    setCurrentFolderName: vi.fn(),
+    folderHistory: [] as { id: string; name: string }[],
+    setFolderHistory: vi.fn(),
+    sortOption: "name",
+    setSortOption: vi.fn(),
+    handleOpenFolder: vi.fn(),
+    handleBack: vi.fn(),
+    handleBreadcrumbClick: vi.fn(),
+    handleSelectRootFolder: vi.fn(),
+  });
+
+  beforeEach(() => {
+    localStorage.setItem("drplay_sidebar_open", "false");
+  });
+
+  afterEach(() => {
+    mocks.useDrive.mockImplementation(defaultDrive);
+    platformMock.IS_MOBILE = false;
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  const pressBack = () => {
+    act(() => {
+      window.dispatchEvent(new Event("popstate"));
+    });
+  };
+
+  const openMyDrive = async () => {
+    await act(async () => {
+      mocks.sidebarProps.value?.onTabChange(TABS.myDrive);
+      await Promise.resolve();
+    });
+    await screen.findByTestId("main-content");
+  };
+
+  it("mobile: back in a My Drive subfolder pops one history level (no exit, no toast)", async () => {
+    platformMock.IS_MOBILE = true;
+    const drive = defaultDrive();
+    drive.currentFolderId = "folder-1";
+    drive.folderHistory = [{ id: "root", name: "My Drive" }];
+    mocks.useDrive.mockImplementation(() => drive);
+    render(<App />);
+    await screen.findByTestId("home-tab");
+    await openMyDrive();
+
+    pressBack();
+
+    expect(drive.handleBack).toHaveBeenCalledTimes(1);
+    expect(mocks.processExit).not.toHaveBeenCalled();
+    expect(screen.queryByText(BACK_HINT)).toBeNull();
+  });
+
+  it("mobile: back at My Drive root is not consumed (falls to tab layer -> Home)", async () => {
+    platformMock.IS_MOBILE = true;
+    const drive = defaultDrive();
+    mocks.useDrive.mockImplementation(() => drive);
+    render(<App />);
+    await screen.findByTestId("home-tab");
+    await openMyDrive();
+    expect(screen.getByTestId("home-tab").parentElement?.className).toContain(
+      "hidden",
+    );
+
+    pressBack();
+
+    expect(drive.handleBack).not.toHaveBeenCalled();
+    expect(
+      screen.getByTestId("home-tab").parentElement?.className,
+    ).not.toContain("hidden");
+    expect(mocks.processExit).not.toHaveBeenCalled();
+  });
+
+  it("mobile: open sidebar closes before folder-up (overlay layer wins)", async () => {
+    platformMock.IS_MOBILE = true;
+    localStorage.setItem("drplay_sidebar_open", "true");
+    const drive = defaultDrive();
+    drive.currentFolderId = "folder-1";
+    drive.folderHistory = [{ id: "root", name: "My Drive" }];
+    mocks.useDrive.mockImplementation(() => drive);
+    render(<App />);
+    await screen.findByTestId("home-tab");
+    await openMyDrive();
+
+    pressBack();
+
+    expect(drive.handleBack).not.toHaveBeenCalled();
+    expect(mocks.processExit).not.toHaveBeenCalled();
+  });
+
+  it("mobile: subfolder with empty history jumps to root (restore/deep-link edge)", async () => {
+    platformMock.IS_MOBILE = true;
+    const drive = defaultDrive();
+    drive.currentFolderId = "folder-1";
+    drive.folderHistory = [];
+    mocks.useDrive.mockImplementation(() => drive);
+    render(<App />);
+    await screen.findByTestId("home-tab");
+    await openMyDrive();
+
+    pressBack();
+
+    expect(drive.setCurrentFolderId).toHaveBeenCalledWith("root");
+    expect(drive.setCurrentFolderName).toHaveBeenCalledWith("My Drive");
+    expect(mocks.processExit).not.toHaveBeenCalled();
   });
 });

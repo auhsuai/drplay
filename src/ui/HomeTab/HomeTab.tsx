@@ -20,6 +20,7 @@ import { PremiumGrid } from "./components/PremiumGrid";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 import { IS_MOBILE } from "../../utils/platform";
+import { useHardwareBack } from "../../hooks/useHardwareBack";
 import { captureError } from "../../utils/errorLog";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 import {
@@ -92,6 +93,27 @@ export function HomeTab({
   // unmount so a queued refetch can never run after the component is gone.
   const deltaRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
+  );
+
+  // Task 14 mobile-polish: the full recent view is a LIFO navigation layer —
+  // hardware back closes it BEFORE the app-level chain (NowPlaying → tab →
+  // double-back-to-exit). State is local to HomeTab, so the handler registers
+  // here, reusing the same setters as the FullRecentView onBack prop. Gated on
+  // isActive: HomeTab is keep-alive (hidden via display:none on other tabs),
+  // and a hidden view must never swallow back presses meant for the visible
+  // tab. Registered as a CHILD effect it sits BEFORE App's overlay handlers in
+  // the handler array, so handleGlobalBack (LIFO, last-first) still closes
+  // overlays first — matching the Android navigation stack order.
+  useHardwareBack(
+    () => {
+      if (showFullRecent) {
+        setShowFullRecent(false);
+      } else if (showFullRecentlyAdded) {
+        setShowFullRecentlyAdded(false);
+      }
+      return true;
+    },
+    isActive && (showFullRecent || showFullRecentlyAdded),
   );
 
   // Read visit count + pick the random greeting object exactly ONCE per mount.
