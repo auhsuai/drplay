@@ -33,6 +33,7 @@ import { getCurrentUserEmail } from "./utils/storageKeys";
 
 import { useServiceWorker } from "./hooks/useServiceWorker";
 import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
+import { useBackgroundPlayback } from "./hooks/useBackgroundPlayback";
 import { useDriveStore } from "./store/driveStore";
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
@@ -48,8 +49,10 @@ import {
   LS_CURRENT_FOLDER_NAME,
   LS_FOLDER_HISTORY,
   LS_MINIMIZE_TO_TRAY,
+  LS_BACKGROUND_PLAYBACK,
   LS_ROOT_FOLDER,
   loadMinimizeToTrayState,
+  loadBackgroundPlaybackState,
 } from "./appUiState";
 
 export { loadMinimizeToTrayState };
@@ -193,6 +196,13 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
+  // Mobile-only (Task 3 mobile-polish): "Chạy nhạc nền" — when OFF, playback
+  // pauses while the app is hidden. Desktop never reads it (tray path above
+  // stays byte-identical); the key is still persisted on both for symmetry.
+  const [backgroundPlayback, setBackgroundPlayback] = useState(
+    loadBackgroundPlaybackState,
+  );
+  useBackgroundPlayback(backgroundPlayback);
 
   const stableHandleTogglePlay = useCallback(() => {
     void handleTogglePlay();
@@ -246,6 +256,18 @@ function App() {
       );
     }
   }, [minimizeToTray]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_BACKGROUND_PLAYBACK, String(backgroundPlayback));
+    } catch (err) {
+      void captureError({
+        level: "warn",
+        source: "App",
+        message: `background-playback-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
+      });
+    }
+  }, [backgroundPlayback]);
 
   const handleTabChange = useCallback(
     (tab: TabKey) => {
@@ -452,6 +474,8 @@ function App() {
             setTheme={setTheme}
             minimizeToTray={minimizeToTray}
             setMinimizeToTray={setMinimizeToTray}
+            backgroundPlayback={backgroundPlayback}
+            setBackgroundPlayback={setBackgroundPlayback}
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
           />

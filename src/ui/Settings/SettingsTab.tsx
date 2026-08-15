@@ -8,6 +8,7 @@ import {
   Archive,
   Cloud,
   CloudUpload,
+  Headphones,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
@@ -36,6 +37,8 @@ interface SettingsTabProps {
   setTheme: (t: ThemeType) => void;
   minimizeToTray: boolean;
   setMinimizeToTray: (minimize: boolean) => void;
+  backgroundPlayback: boolean;
+  setBackgroundPlayback: (enabled: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
 }
@@ -64,10 +67,12 @@ export function SettingsTab({
   setTheme,
   minimizeToTray,
   setMinimizeToTray,
+  backgroundPlayback,
+  setBackgroundPlayback,
   setShowFolderSelection,
   setShowTrashScreen,
 }: SettingsTabProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [downloadPath, setDownloadPath] = useState<string>("");
   const [showCacheManager, setShowCacheManager] = useState(false);
   const [importingSeed, setImportingSeed] = useState(false);
@@ -95,6 +100,17 @@ export function SettingsTab({
   }, []);
 
   const activeUploads = uploadEntries.filter(isActiveUpload);
+
+  // Background-playback row label (mobile only). The key ships nowhere in
+  // translation.json yet (cover branch owns the file) — fall back per
+  // locale so the toggle reads "Chạy nhạc nền" in Vietnamese and
+  // "Background playback" in English.
+  const backgroundPlaybackLabel = (): string =>
+    t("settings.background_playback", {
+      defaultValue: i18n.language.toLowerCase().startsWith("vi")
+        ? "Chạy nhạc nền"
+        : "Background playback",
+    });
 
   const handlePickDownloadPath = async () => {
     try {
@@ -278,33 +294,66 @@ export function SettingsTab({
               <ThemeDropdown currentTheme={theme} onChange={setTheme} />
             </div>
 
-            {/* Close Behavior Setting */}
-            <div className="flex items-center justify-between py-4 pb-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
-                  <MonitorDown className="w-6 h-6 text-brand-primary" />
+            {/* Close Behavior Setting — desktop: minimize to tray
+                (byte-identical); mobile (Task 3 mobile-polish): "Chạy nhạc
+                nền" background playback toggle — OFF pauses the native
+                engine when the app goes hidden, ON keeps the foreground
+                service playing. translation.json is owned by the cover
+                branch, so the label rides on t(key, defaultValue) with a
+                language-aware fallback. */}
+            {IS_MOBILE ? (
+              <div className="flex items-center justify-between py-4 pb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                    <Headphones className="w-6 h-6 text-brand-primary" />
+                  </div>
+                  <div>
+                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                      {backgroundPlaybackLabel()}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.minimize_to_tray")}
-                  </p>
-                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <span className="sr-only">{backgroundPlaybackLabel()}</span>
+                  <input
+                    type="checkbox"
+                    checked={backgroundPlayback}
+                    onChange={(e) => {
+                      setBackgroundPlayback(e.target.checked);
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
+                </label>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <span className="sr-only">
-                  {t("settings.minimize_to_tray")}
-                </span>
-                <input
-                  type="checkbox"
-                  checked={minimizeToTray}
-                  onChange={(e) => {
-                    setMinimizeToTray(e.target.checked);
-                  }}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
-              </label>
-            </div>
+            ) : (
+              <div className="flex items-center justify-between py-4 pb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                    <MonitorDown className="w-6 h-6 text-brand-primary" />
+                  </div>
+                  <div>
+                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                      {t("settings.minimize_to_tray")}
+                    </p>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <span className="sr-only">
+                    {t("settings.minimize_to_tray")}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={minimizeToTray}
+                    onChange={(e) => {
+                      setMinimizeToTray(e.target.checked);
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
+                </label>
+              </div>
+            )}
 
             {/* Download Location Setting */}
             <div className="flex items-center justify-between py-4 pb-6">

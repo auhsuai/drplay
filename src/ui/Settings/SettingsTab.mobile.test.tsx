@@ -4,7 +4,7 @@
 // button to click, so import_metadata_seed can never be invoked. Desktop
 // keeps the section (regression check below, plus SettingsTab.test.tsx).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
 import en from "../../locales/en/translation.json";
@@ -34,8 +34,19 @@ vi.mock("react-i18next", () => {
   };
   return {
     useTranslation: () => ({
-      t: (key: string, defaultValue?: string) =>
-        resolveKey(key) ?? defaultValue ?? key,
+      i18n: { language: "en" },
+      t: (key: string, options?: Record<string, string | number> | string) => {
+        const fallback =
+          typeof options === "object" ? options.defaultValue : options;
+        const resolved =
+          resolveKey(key) ?? (typeof fallback === "string" ? fallback : key);
+        if (typeof options === "object") {
+          return resolved.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
+            String(options[name] ?? `{{${name}}}`),
+          );
+        }
+        return resolved;
+      },
     }),
   };
 });
@@ -87,11 +98,15 @@ const baseProps = {
   setTheme: vi.fn(),
   minimizeToTray: false,
   setMinimizeToTray: vi.fn(),
+  backgroundPlayback: true,
+  setBackgroundPlayback: vi.fn(),
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
 };
 
 const IMPORT_SEED_LABEL = "Import metadata backup (seed.zip)";
+const TRAY_LABEL = "Minimize to System Tray";
+const BACKGROUND_PLAYBACK_LABEL = "Background playback";
 
 describe("SettingsTab seed import section (mobile hidden)", () => {
   beforeEach(() => {
@@ -120,5 +135,67 @@ describe("SettingsTab seed import section (mobile hidden)", () => {
     expect(
       screen.getByRole("button", { name: IMPORT_SEED_LABEL }),
     ).toBeTruthy();
+  });
+});
+
+// Task 3 mobile-polish: the close-behavior row swaps the tray toggle for the
+// "Chạy nhạc nền" (background playback) toggle on mobile. Desktop keeps the
+// tray row untouched; mobile must never render it (and vice versa).
+describe("SettingsTab close-behavior toggle (mobile vs desktop)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the background playback toggle on mobile, no tray row", () => {
+    render(<SettingsTab {...baseProps} />);
+    // Label appears twice on mobile (row text + sr-only): toggle present.
+    expect(screen.getAllByText(BACKGROUND_PLAYBACK_LABEL)).toHaveLength(2);
+    expect(screen.queryByText(TRAY_LABEL)).toBeNull();
+  });
+
+  it("flips setBackgroundPlayback when the mobile toggle is clicked", () => {
+    const setBackgroundPlayback = vi.fn();
+    render(
+      <SettingsTab
+        {...baseProps}
+        backgroundPlayback={false}
+        setBackgroundPlayback={setBackgroundPlayback}
+      />,
+    );
+    const checkbox = screen.getByRole("checkbox", {
+      name: BACKGROUND_PLAYBACK_LABEL,
+    });
+    expect(checkbox).toBeTruthy();
+    fireEvent.click(checkbox);
+    expect(setBackgroundPlayback).toHaveBeenCalledWith(true);
+  });
+
+  it("renders the tray toggle on desktop, no background playback row", () => {
+    platformMock.IS_MOBILE = false;
+    render(<SettingsTab {...baseProps} />);
+    expect(screen.getAllByText(TRAY_LABEL)).toHaveLength(2);
+    expect(screen.queryByText(BACKGROUND_PLAYBACK_LABEL)).toBeNull();
+  });
+
+  it("flips setMinimizeToTray when the desktop tray toggle is clicked (regression)", () => {
+    platformMock.IS_MOBILE = false;
+    const setMinimizeToTray = vi.fn();
+    render(
+      <SettingsTab
+        {...baseProps}
+        minimizeToTray={false}
+        setMinimizeToTray={setMinimizeToTray}
+      />,
+    );
+    const checkbox = screen.getByRole("checkbox", {
+      name: TRAY_LABEL,
+    });
+    expect(checkbox).toBeTruthy();
+    fireEvent.click(checkbox);
+    expect(setMinimizeToTray).toHaveBeenCalledWith(true);
   });
 });

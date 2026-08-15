@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { loadMinimizeToTrayState } from "./App";
+import { loadBackgroundPlaybackState } from "./appUiState";
 import { TABS } from "./utils/driveConstants";
 import { DEBUG_EVENTS } from "./ui/debug/debugEvents";
 
@@ -207,6 +208,45 @@ describe("loadMinimizeToTrayState", () => {
     });
 
     expect(loadMinimizeToTrayState()).toBe(true);
+  });
+});
+
+// Task 3 mobile-polish: background-playback preference — same lazy-useState
+// contract as loadMinimizeToTrayState, but the DEFAULT is ON (native audio
+// keeps playing in the background via the foreground service; the OFF toggle
+// opts into pause-on-hidden).
+describe("loadBackgroundPlaybackState", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it("defaults to true when the key is missing (first launch — background playback on)", () => {
+    expect(loadBackgroundPlaybackState()).toBe(true);
+  });
+
+  it("returns true when the stored value is exactly 'true'", () => {
+    localStorage.setItem("drplay_background_playback", "true");
+    expect(loadBackgroundPlaybackState()).toBe(true);
+  });
+
+  it("returns false for any other stored value ('false' / corrupt)", () => {
+    localStorage.setItem("drplay_background_playback", "false");
+    expect(loadBackgroundPlaybackState()).toBe(false);
+    localStorage.setItem("drplay_background_playback", "garbage");
+    expect(loadBackgroundPlaybackState()).toBe(false);
+  });
+
+  it("falls back to true when localStorage.getItem throws (SecurityError)", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+
+    expect(loadBackgroundPlaybackState()).toBe(true);
   });
 });
 

@@ -33,8 +33,19 @@ vi.mock("react-i18next", () => {
   };
   return {
     useTranslation: () => ({
-      t: (key: string, defaultValue?: string) =>
-        resolveKey(key) ?? defaultValue ?? key,
+      i18n: { language: "en" },
+      t: (key: string, options?: Record<string, string | number> | string) => {
+        const fallback =
+          typeof options === "object" ? options.defaultValue : options;
+        const resolved =
+          resolveKey(key) ?? (typeof fallback === "string" ? fallback : key);
+        if (typeof options === "object") {
+          return resolved.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
+            String(options[name] ?? `{{${name}}}`),
+          );
+        }
+        return resolved;
+      },
     }),
   };
 });
@@ -81,6 +92,8 @@ const baseProps = {
   setTheme: vi.fn(),
   minimizeToTray: false,
   setMinimizeToTray: vi.fn(),
+  backgroundPlayback: true,
+  setBackgroundPlayback: vi.fn(),
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
 };

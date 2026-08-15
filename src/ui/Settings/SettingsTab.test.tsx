@@ -36,12 +36,15 @@ vi.mock("react-i18next", () => {
   };
   return {
     useTranslation: () => ({
+      i18n: { language: "en" },
       // i18next's t(key, options) shape: the second argument carries the
-      // interpolation vars ({metadata: 5}). A string second arg is the
-      // defaultValue fallback (kept for compatibility with old call sites).
+      // interpolation vars ({metadata: 5}) and/or defaultValue. A string
+      // second arg is the defaultValue fallback (old call sites).
       t: (key: string, options?: Record<string, string | number> | string) => {
+        const fallback =
+          typeof options === "object" ? options.defaultValue : options;
         const resolved =
-          resolveKey(key) ?? (typeof options === "string" ? options : key);
+          resolveKey(key) ?? (typeof fallback === "string" ? fallback : key);
         if (typeof options === "object") {
           return resolved.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
             String(options[name] ?? `{{${name}}}`),
@@ -123,6 +126,8 @@ const baseProps = {
   setTheme: vi.fn(),
   minimizeToTray: false,
   setMinimizeToTray: vi.fn(),
+  backgroundPlayback: true,
+  setBackgroundPlayback: vi.fn(),
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
 };

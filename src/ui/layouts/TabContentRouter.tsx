@@ -55,6 +55,8 @@ interface TabContentRouterProps {
   setTheme: (t: ThemeType) => void;
   minimizeToTray: boolean;
   setMinimizeToTray: (minimize: boolean) => void;
+  backgroundPlayback: boolean;
+  setBackgroundPlayback: (enabled: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
 }
@@ -82,6 +84,8 @@ export function TabContentRouter({
   setTheme,
   minimizeToTray,
   setMinimizeToTray,
+  backgroundPlayback,
+  setBackgroundPlayback,
   setShowFolderSelection,
   setShowTrashScreen,
 }: TabContentRouterProps) {
@@ -178,6 +182,8 @@ export function TabContentRouter({
             setTheme={setTheme}
             minimizeToTray={minimizeToTray}
             setMinimizeToTray={setMinimizeToTray}
+            backgroundPlayback={backgroundPlayback}
+            setBackgroundPlayback={setBackgroundPlayback}
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
           />
