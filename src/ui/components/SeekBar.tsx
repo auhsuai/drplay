@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { formatTime } from "../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from "../../utils/bufferedRange";
+import { IS_MOBILE } from "../../utils/platform";
 import type { AudioController } from "../../lib/AudioController";
 import type { Track } from "../../types";
 import { SeekClock } from "./SeekClock";
@@ -34,6 +35,12 @@ export function SeekBar({
   const bufferFillRef = useRef<HTMLDivElement>(null);
   const currentTimeTextRef = useRef<HTMLSpanElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  // Task 5 mobile full-width seek: on mobile the WHOLE row (clocks + rail +
+  // duration) is the drag surface so the seek gesture spans the entire
+  // PlayerBar width — the rail alone sits between two 52px clocks inside the
+  // 30%-wide TrackInfo column (~1/3 of a phone screen). Desktop keeps the
+  // rail-only surface (pointer events unchanged).
+  const seekRowRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const bufferPreviewRef = useRef<HTMLDivElement>(null);
   // Mirror of the playhead the blue fill is CURRENTLY showing. It is written
@@ -224,6 +231,9 @@ export function SeekBar({
     isDraggingRef,
     duration,
     setFillWidth,
+    // Mobile: the row is the drag surface (full PlayerBar width). Desktop
+    // omits it — the rail stays the only surface, behavior byte-identical.
+    surfaceRef: IS_MOBILE ? seekRowRef : undefined,
   });
   useSeekKeyboard({
     audio,
@@ -233,7 +243,17 @@ export function SeekBar({
   });
 
   return (
-    <div className="w-full flex items-center gap-3">
+    <div
+      ref={seekRowRef}
+      // Task 5 drag fix (2/2): `touch-none` lives on the ROW too — on mobile
+      // the whole row is the drag surface (surfaceRef = seekRowRef), so a
+      // drag that starts over the flanking clocks would still be hijacked by
+      // the WebView without it (the rail-only touch-action dies at the row
+      // edge). Harmless on desktop / outside the fixed bottom bar, same as
+      // the rail.
+      className="w-full flex items-center gap-3 touch-none"
+      onPointerDown={IS_MOBILE ? handlePointerDown : undefined}
+    >
       <SeekClock timeTextRef={currentTimeTextRef} />
       <SeekRail
         progressBarRef={progressBarRef}
@@ -244,7 +264,10 @@ export function SeekBar({
         isHovering={isHovering}
         isDragging={isDragging}
         duration={duration}
-        onPointerDown={handlePointerDown}
+        // Mobile: the row owns pointerdown (bubbling would otherwise run
+        // handlePointerDown twice for a rail tap — the row's handler would
+        // double-wire window listeners and double-seek on release).
+        onPointerDown={IS_MOBILE ? undefined : handlePointerDown}
         onPointerEnter={handlePointerEnter}
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}

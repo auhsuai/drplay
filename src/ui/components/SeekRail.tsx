@@ -10,7 +10,7 @@ export interface SeekRailProps {
   isHovering: boolean;
   isDragging: boolean;
   duration: number;
-  onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerDown?: ((e: ReactPointerEvent<HTMLDivElement>) => void) | undefined;
   onPointerEnter: () => void;
   onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerLeave: () => void;
@@ -33,6 +33,15 @@ export function SeekRail({
   const { t } = useTranslation();
 
   return (
+    // Task 5 drag fix: `touch-none` (touch-action: none) — the WebView
+    // gesture recognizer must NOT hijack the drag for scrolling. With
+    // touch-action: auto (the default) a touch move on the rail fires
+    // pointercancel the moment the browser claims the gesture, so the drag
+    // died at the take-over point — taps (down+up, no move) still worked,
+    // which read as "chi an duoc, khong keo duoc". The rail is inside the
+    // fixed bottom bar (not the scroll container), so blocking
+    // scroll-start-on-rail costs nothing. Harmless on desktop (touch-action
+    // only applies to touch/pen input).
     <div
       ref={progressBarRef}
       role="progressbar"
@@ -40,7 +49,7 @@ export function SeekRail({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
+      className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center touch-none"
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerMove={onPointerMove}

@@ -5,10 +5,14 @@ import {
   RefreshCw,
   Repeat,
   Repeat1,
+  RotateCcw,
+  RotateCw,
   Shuffle,
   SkipBack,
   SkipForward,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { IS_MOBILE } from "../../utils/platform";
 import type { Track } from "../../types";
 
 export interface TransportControlsProps {
@@ -23,6 +27,10 @@ export interface TransportControlsProps {
   onPrevTrack: () => void;
   onNextTrack: (isAutoSkip?: boolean) => void;
   onTogglePlayMode: () => void;
+  /** Task 5 mobile: ±5s seek buttons (desktop has none — keyboard ArrowLeft/
+   *  Right does this there). */
+  onRewind5: () => void;
+  onForward5: () => void;
 }
 
 export function TransportControls({
@@ -37,7 +45,87 @@ export function TransportControls({
   onPrevTrack,
   onNextTrack,
   onTogglePlayMode,
+  onRewind5,
+  onForward5,
 }: TransportControlsProps) {
+  const { t } = useTranslation();
+
+  const playIcon = () =>
+    isDownloading || (isBuffering && isPlaying && !hasError) ? (
+      <LoaderCircle className="w-5 h-5 animate-spin [transform-box:view-box] origin-center" />
+    ) : hasError ? (
+      <RefreshCw className="w-5 h-5" />
+    ) : isPlaying ? (
+      <Pause className="w-5 h-5" />
+    ) : (
+      <Play className="w-5 h-5 ml-0.5" />
+    );
+
+  // Task 5 (ADR 2026-08-15): mobile transport = 5 buttons in the exact
+  // user-chosen order — (back bài)(tua về 5s)(play/pause)(tua lên 5s)(next
+  // bài) — rewind/forward flank the play button, prev/next at the outer
+  // edges. The play-mode toggle is intentionally not part of the 5 (mobile
+  // only; desktop keeps the 4-button layout + playMode byte-identical).
+  if (IS_MOBILE) {
+    return (
+      <div className="flex items-center justify-center gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => {
+            onPrevTrack();
+          }}
+          aria-label={t("player.previous_track", "Previous track")}
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+          disabled={!currentTrack}
+        >
+          <SkipBack className="w-5 h-5" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onRewind5}
+          aria-label={t("player.rewind_5s", "Rewind 5 seconds")}
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+          disabled={!currentTrack}
+        >
+          <RotateCcw className="w-5 h-5" />
+        </button>
+
+        <button
+          type="button"
+          onClick={hasError ? onRetry : onTogglePlay}
+          aria-label={t("player.play_pause", "Play/Pause")}
+          className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-brand-primary hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
+          disabled={!currentTrack || isDownloading}
+        >
+          {playIcon()}
+        </button>
+
+        <button
+          type="button"
+          onClick={onForward5}
+          aria-label={t("player.forward_5s", "Forward 5 seconds")}
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+          disabled={!currentTrack}
+        >
+          <RotateCw className="w-5 h-5" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            onNextTrack(false);
+          }}
+          aria-label={t("player.next_track", "Next track")}
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+          disabled={!currentTrack}
+        >
+          <SkipForward className="w-5 h-5" />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex w-full mb-1 items-center justify-center gap-3 sm:gap-6">
       <button

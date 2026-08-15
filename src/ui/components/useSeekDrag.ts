@@ -20,6 +20,12 @@ export interface UseSeekDragOptions {
   isDraggingRef: RefObject<boolean>;
   duration: number;
   setFillWidth: (percent: number) => void;
+  /** Optional alternate hit surface (Task 5 mobile full-width seek). When set,
+   *  pointerdown may land anywhere on the SURFACE (e.g. over the time clocks
+   *  flanking the rail) and both the percent math and the pointer capture use
+   *  its bounds — the whole row, not just the visual rail. Desktop omits it:
+   *  the rail stays the only surface. */
+  surfaceRef?: RefObject<HTMLDivElement | null> | undefined;
 }
 
 export function useSeekDrag({
@@ -33,6 +39,7 @@ export function useSeekDrag({
   isDraggingRef,
   duration,
   setFillWidth,
+  surfaceRef,
 }: UseSeekDragOptions): {
   isDragging: boolean;
   handlePointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
@@ -67,9 +74,13 @@ export function useSeekDrag({
   // commit on pointerup/cancel (seek + immediate buffer redraw), and a small
   // release delay so stale in-flight timeupdate events cannot jump the thumb.
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!progressBarRef.current || duration === 0) return;
+    // The drag surface is the row (mobile) or the rail (desktop); the fill
+    // refs below always belong to the rail — only the bounds/capture math
+    // switches to the surface.
+    const surface = surfaceRef?.current ?? progressBarRef.current;
+    if (!surface || duration === 0) return;
     try {
-      progressBarRef.current.setPointerCapture(e.pointerId);
+      surface.setPointerCapture(e.pointerId);
     } catch (err) {
       void captureError({
         level: "warn",
@@ -78,7 +89,7 @@ export function useSeekDrag({
       });
     }
 
-    const bounds = progressBarRef.current.getBoundingClientRect();
+    const bounds = surface.getBoundingClientRect();
     const updateTime = (clientX: number) => {
       const percent = clamp01((clientX - bounds.left) / bounds.width);
       const newTime = percent * (durationRef.current || duration);

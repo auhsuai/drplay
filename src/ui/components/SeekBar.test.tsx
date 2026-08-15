@@ -33,6 +33,15 @@ vi.mock("react-i18next", () => {
   };
 });
 
+// Task 5: the mobile full-width drag surface is gated by IS_MOBILE — hoisted
+// toggle mirrors the PlayerBar.test pattern.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const { fakeController } = vi.hoisted(() => {
   type Handler = (payload: unknown) => void;
   const fakeController = {
@@ -685,5 +694,85 @@ describe("SeekBar interleaved layout (time spans on both sides of the bar)", () 
       "SPAN",
     );
     expect(container.firstElementChild?.lastElementChild?.tagName).toBe("SPAN");
+  });
+});
+
+describe("SeekBar mobile full-width drag surface (Task 5 — IS_MOBILE)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+  });
+
+  function mockRowRect(width = 200) {
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const row = rail.parentElement as HTMLElement;
+    const rect = {
+      left: 0,
+      right: width,
+      top: 0,
+      bottom: 10,
+      width,
+      height: 10,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(rect);
+    return row;
+  }
+
+  it("BUG regression (root cause): rail carries touch-none so the WebView gesture recognizer cannot hijack the drag (was: no touch-action -> pointercancel on move -> tap-only)", () => {
+    renderSeekBar();
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    expect(rail.className).toContain("touch-none");
+  });
+
+  it("BUG regression (root cause): the ROW (mobile drag surface) carries touch-none too — a drag started over the flanking clocks would otherwise be hijacked by the WebView (rail-only touch-action dies at the row edge, killing the full-width surface)", () => {
+    renderSeekBar();
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const row = rail.parentElement as HTMLElement;
+    expect(row.className).toContain("touch-none");
+  });
+
+  it("mobile: dragging the full-width row seeks by the ROW bounds (seek surface = whole row, not just the rail)", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const row = mockRowRect();
+
+    act(() => {
+      fireEvent.pointerDown(row, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+  });
+
+  it("mobile: pointerdown over the time clock (outside the rail) still starts a drag (full-width surface)", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const row = mockRowRect();
+
+    act(() => {
+      fireEvent.pointerDown(row, { clientX: 20, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 20, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(24);
   });
 });

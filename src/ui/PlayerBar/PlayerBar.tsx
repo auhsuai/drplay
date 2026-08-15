@@ -2,6 +2,7 @@ import { memo, useCallback, useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { usePlayerStore } from "../../store/playerStore";
+import { seekRelative, SEEK_STEP_SECONDS } from "../../hooks/player/utils";
 import { IS_MOBILE } from "../../utils/platform";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
@@ -89,6 +90,18 @@ function PlayerBarImpl({
     resetAdvanceGuard();
     onTogglePlay();
   }, [onTogglePlay, resetAdvanceGuard]);
+
+  // Task 5 mobile: ±5s seek buttons. Same shared helper as the ArrowLeft/Right
+  // keyboard seek (clamp 0..duration, no-op while duration is unloaded) — NOT
+  // a transport action, so the storm guard is deliberately not reset (same as
+  // the arrow keys).
+  const handleRewind5 = useCallback(() => {
+    seekRelative(audio, -SEEK_STEP_SECONDS);
+  }, [audio]);
+
+  const handleForward5 = useCallback(() => {
+    seekRelative(audio, SEEK_STEP_SECONDS);
+  }, [audio]);
 
   // Replaces the old retryPlayback: retrying from the storm message is a
   // manual action too, so the guard must reset with it.
@@ -240,35 +253,75 @@ function PlayerBarImpl({
 
   return (
     <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
-      {/* Left: Track Info */}
-      <TrackInfo
-        currentTrack={currentTrack}
-        onExpandNowPlaying={onExpandNowPlaying}
-      />
+      {/* Task 5 (ADR 2026-08-15): mobile = 2 rows — track info + 5-button
+          transport on top, FULL-WIDTH SeekBar below. Moving the seek row out
+          of the 30%-wide TrackInfo column is what makes the drag surface span
+          the whole bar (see SeekBar surfaceRef). Desktop below is untouched. */}
+      {IS_MOBILE ? (
+        <div className="flex flex-col h-full w-full min-w-0">
+          <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
+            {/* Left: Track Info */}
+            <TrackInfo
+              currentTrack={currentTrack}
+              onExpandNowPlaying={onExpandNowPlaying}
+            />
 
-      {/* Center: Controls */}
-      <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] min-w-[200px]">
-        <TransportControls
-          currentTrack={currentTrack}
-          isPlaying={isPlaying}
-          isBuffering={isBuffering}
-          isDownloading={isDownloading ?? false}
-          hasError={errorInfo !== null}
-          onRetry={handleManualRetry}
-          playMode={playMode}
-          onTogglePlay={handleManualTogglePlay}
-          onPrevTrack={handleManualPrev}
-          onNextTrack={handleManualNext}
-          onTogglePlayMode={onTogglePlayMode}
-        />
-        <SeekBar currentTrack={currentTrack} audio={audio} />
-      </div>
+            {/* Right: 5-button transport */}
+            <TransportControls
+              currentTrack={currentTrack}
+              isPlaying={isPlaying}
+              isBuffering={isBuffering}
+              isDownloading={isDownloading ?? false}
+              hasError={errorInfo !== null}
+              onRetry={handleManualRetry}
+              playMode={playMode}
+              onTogglePlay={handleManualTogglePlay}
+              onPrevTrack={handleManualPrev}
+              onNextTrack={handleManualNext}
+              onTogglePlayMode={onTogglePlayMode}
+              onRewind5={handleRewind5}
+              onForward5={handleForward5}
+            />
+          </div>
+          <div className="w-full pb-1">
+            <SeekBar currentTrack={currentTrack} audio={audio} />
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Left: Track Info */}
+          <TrackInfo
+            currentTrack={currentTrack}
+            onExpandNowPlaying={onExpandNowPlaying}
+          />
 
-      {/* Right: Volume Controls. Mobile (Task 11 / Task 8B ADR): the on-screen
-          slider is a no-op there — Android uses the hardware volume keys
-          (ExoPlayer handles them natively), so the control is simply not
-          rendered; no logic is rewritten. Desktop is untouched. */}
-      {!IS_MOBILE && <VolumeSlider audio={audio} />}
+          {/* Center: Controls */}
+          <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] min-w-[200px]">
+            <TransportControls
+              currentTrack={currentTrack}
+              isPlaying={isPlaying}
+              isBuffering={isBuffering}
+              isDownloading={isDownloading ?? false}
+              hasError={errorInfo !== null}
+              onRetry={handleManualRetry}
+              playMode={playMode}
+              onTogglePlay={handleManualTogglePlay}
+              onPrevTrack={handleManualPrev}
+              onNextTrack={handleManualNext}
+              onTogglePlayMode={onTogglePlayMode}
+              onRewind5={handleRewind5}
+              onForward5={handleForward5}
+            />
+            <SeekBar currentTrack={currentTrack} audio={audio} />
+          </div>
+
+          {/* Right: Volume Controls. Mobile (Task 11 / Task 8B ADR): the
+              on-screen slider is a no-op there — Android uses the hardware
+              volume keys (ExoPlayer handles them natively), so the control
+              lives only in this desktop branch. */}
+          <VolumeSlider audio={audio} />
+        </>
+      )}
 
       {/* Error Toast */}
       <ErrorToast errorInfo={errorInfo} errorText={errorText} />

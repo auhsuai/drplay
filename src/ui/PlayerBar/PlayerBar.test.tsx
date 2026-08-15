@@ -62,6 +62,8 @@ vi.mock("lucide-react", () => {
     "Maximize2",
     "RefreshCw",
     "Heart",
+    "RotateCcw",
+    "RotateCw",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
@@ -1843,5 +1845,112 @@ describe("PlayerBar mobile gate (IS_MOBILE) — title only", () => {
       await Promise.resolve();
     });
     expect(mockedGetTrackMetadata).not.toHaveBeenCalled();
+  });
+});
+
+describe("PlayerBar mobile transport — 5 buttons (Task 5)", () => {
+  const TRANSPORT_LABELS = [
+    "Previous track",
+    "Rewind 5 seconds",
+    "Play/Pause",
+    "Forward 5 seconds",
+    "Next track",
+  ];
+
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    fakeController.getDuration.mockReturnValue(240);
+    fakeController.getCurrentTime.mockReturnValue(100);
+    fakeController.seek.mockClear();
+    // The file-level beforeEach does not clear playTrack (only this describe
+    // asserts it) — the earlier desktop retry test would leak its call count.
+    fakeController.playTrack.mockClear();
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+  });
+
+  it("renders the 5 transport buttons in user-chosen order: prev / -5s / play / +5s / next", () => {
+    renderPlayer();
+    const labels = screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? "");
+    const transport = labels.filter((l) => TRANSPORT_LABELS.includes(l));
+    expect(transport).toEqual(TRANSPORT_LABELS);
+  });
+
+  it("rewind -5s seeks currentTime - 5 (seekRelative)", () => {
+    renderPlayer();
+    fireEvent.click(screen.getByRole("button", { name: "Rewind 5 seconds" }));
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(95);
+  });
+
+  it("forward +5s seeks currentTime + 5", () => {
+    renderPlayer();
+    fireEvent.click(screen.getByRole("button", { name: "Forward 5 seconds" }));
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(105);
+  });
+
+  it("forward +5s clamps at the track duration", () => {
+    fakeController.getCurrentTime.mockReturnValue(238);
+    renderPlayer();
+    fireEvent.click(screen.getByRole("button", { name: "Forward 5 seconds" }));
+    expect(fakeController.seek).toHaveBeenCalledWith(240);
+  });
+
+  it("rewind -5s clamps at 0", () => {
+    fakeController.getCurrentTime.mockReturnValue(2);
+    renderPlayer();
+    fireEvent.click(screen.getByRole("button", { name: "Rewind 5 seconds" }));
+    expect(fakeController.seek).toHaveBeenCalledWith(0);
+  });
+
+  it("±5s buttons are no-ops while the duration is not loaded (guard: never seek to 0)", () => {
+    fakeController.getDuration.mockReturnValue(0);
+    fakeController.getCurrentTime.mockReturnValue(30);
+    renderPlayer();
+    fireEvent.click(screen.getByRole("button", { name: "Rewind 5 seconds" }));
+    fireEvent.click(screen.getByRole("button", { name: "Forward 5 seconds" }));
+    expect(fakeController.seek).not.toHaveBeenCalled();
+  });
+
+  it("play/pause button toggles playback and retries on error", () => {
+    const onTogglePlay = vi.fn();
+    renderPlayer({ onTogglePlay });
+    fireEvent.click(screen.getByRole("button", { name: "Play/Pause" }));
+    expect(onTogglePlay).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "Mạng không ổn định, đang thử lại...",
+        code: "network_interrupted",
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Play/Pause" }));
+    expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("next/prev wire to onNextTrack(false) / onPrevTrack", () => {
+    const onNext = vi.fn();
+    const onPrev = vi.fn();
+    renderPlayer({ onNextTrack: onNext, onPrevTrack: onPrev });
+    fireEvent.click(screen.getByRole("button", { name: "Next track" }));
+    expect(onNext).toHaveBeenCalledWith(false);
+    fireEvent.click(screen.getByRole("button", { name: "Previous track" }));
+    expect(onPrev).toHaveBeenCalledTimes(1);
+  });
+
+  it("desktop regression: no rewind/forward 5s buttons and no new labels (playMode stays)", () => {
+    platformMock.IS_MOBILE = false;
+    renderPlayer();
+    for (const name of TRANSPORT_LABELS) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    // TrackInfo + prev + play + next + playMode at minimum (heart is
+    // hidden lg:flex -> excluded from the a11y tree in jsdom).
+    expect(screen.getAllByRole("button").length).toBeGreaterThanOrEqual(5);
   });
 });
