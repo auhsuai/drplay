@@ -19,9 +19,11 @@ describe("simpleToast", () => {
   it("showErrorToast appends a .app-toast--error element with the message", () => {
     showErrorToast("boom");
 
-    const el = document.querySelector(".app-toast--error");
+    const el = document.querySelector<HTMLElement>(".app-toast--error");
     expect(el).not.toBeNull();
-    expect(el?.className).toBe("app-toast app-toast--error");
+    expect(el?.className).toBe(
+      "app-toast app-toast--error max-w-[85vw] break-words line-clamp-3",
+    );
     expect(el?.textContent).toBe("boom");
     expect(document.querySelector(".app-toast--success")).toBeNull();
   });
@@ -31,9 +33,28 @@ describe("simpleToast", () => {
 
     const el = document.querySelector(".app-toast--success");
     expect(el).not.toBeNull();
-    expect(el?.className).toBe("app-toast app-toast--success");
+    expect(el?.className).toBe(
+      "app-toast app-toast--success max-w-[85vw] break-words line-clamp-3",
+    );
     expect(el?.textContent).toBe("ok");
     expect(document.querySelector(".app-toast--error")).toBeNull();
+  });
+
+  it("BUG regression: a very long message is clamped/wrapped, never raw-overflowing the screen", () => {
+    // jsdom cannot measure real layout — the contract is asserted on the
+    // classes that carry the clamp (max-width + word-wrap + 3-line clamp)
+    // plus the full message kept in title for tooltip/accessibility.
+    const longMessage = "x".repeat(500);
+    showErrorToast(longMessage);
+
+    const el = document.querySelector<HTMLElement>(".app-toast--error");
+    expect(el).not.toBeNull();
+    const className = el?.className ?? "";
+    expect(className).toContain("max-w-[85vw]");
+    expect(className).toContain("break-words");
+    expect(className).toContain("line-clamp-3");
+    expect(el?.title).toBe(longMessage);
+    expect(el?.textContent).toBe(longMessage);
   });
 
   it("removes the toast after default duration (4000ms) + fade-out (200ms)", () => {

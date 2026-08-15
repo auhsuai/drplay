@@ -47,8 +47,12 @@ function showToast(
   }
 
   const toastEl = document.createElement("div");
-  toastEl.className = `app-toast app-toast--${variant}`;
+  // BUG 2026-08-15: long error messages (raw invoke errors, SAF strings)
+  // overflowed the screen. Contract: never exceed 85vw, wrap long words,
+  // clamp to 3 lines with "…" — full message kept in title for tooltip.
+  toastEl.className = `app-toast app-toast--${variant} max-w-[85vw] break-words line-clamp-3`;
   toastEl.textContent = message;
+  toastEl.title = message;
   root.appendChild(toastEl);
   activeToastEl = toastEl;
 
