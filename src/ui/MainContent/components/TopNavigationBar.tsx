@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, X, Search, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortDropdown } from "../../components/SortDropdown";
 import { MY_DRIVE_TAB } from "../../../utils/driveConstants";
 import { captureError } from "../../../utils/errorLog";
+import { IS_MOBILE } from "../../../utils/platform";
 
 const TOP_NAVIGATION_BAR_MODULE = "TopNavigationBar";
 const DRAG_THRESHOLD_PX = 5;
@@ -46,6 +47,32 @@ export function TopNavigationBar({
   searchInputRef,
 }: TopNavigationBarProps) {
   const { t } = useTranslation();
+
+  // Mobile-only: the search bar collapses to a bare icon; tapping it expands
+  // a full-width row that slides in from the left edge (expand rightward).
+  // Closed again via the close button, blur (tap outside) or Escape — Escape
+  // blurs the input through MainContent's keydown handler, which collapses.
+  const [searchExpanded, setSearchExpanded] = useState(false);
+
+  useEffect(() => {
+    if (searchExpanded) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchExpanded, searchInputRef]);
+
+  // Entering selection mode replaces this nav entirely — reset the expanded
+  // flag so exiting selection mode returns to the collapsed icon, not a
+  // stale full-width search row. State is adjusted during render (React's
+  // documented "adjust state when a prop changes" pattern) instead of an
+  // effect, which the react-hooks/set-state-in-effect rule forbids.
+  const [prevIsSelectionMode, setPrevIsSelectionMode] =
+    useState(isSelectionMode);
+  if (prevIsSelectionMode !== isSelectionMode) {
+    setPrevIsSelectionMode(isSelectionMode);
+    if (isSelectionMode) {
+      setSearchExpanded(false);
+    }
+  }
 
   const breadcrumbRef = useRef<HTMLDivElement | null>(null);
   const dragStartRef = useRef<{
@@ -156,6 +183,38 @@ export function TopNavigationBar({
             {t("drive.items_selected", { count: selectedCount })}
           </span>
         </div>
+      ) : IS_MOBILE && searchExpanded ? (
+        // Mobile expanded search: a full-width row replacing the whole nav
+        // bar, stretching edge-to-edge (the header chrome carries px-8) and
+        // animating in from the left edge — "tràn từ mép trái".
+        <div
+          data-testid="mobile-search-expanded"
+          className="-mx-8 px-8 flex items-center gap-2 text-sm font-medium flex-1 min-w-0 animate-in slide-in-from-left-4 duration-300"
+        >
+          <button
+            onClick={() => {
+              onSearchChange("");
+              setSearchExpanded(false);
+            }}
+            aria-label={t("drive.search_close", "Close search")}
+            className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors shrink-0"
+          >
+            <X className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+          </button>
+          <input
+            ref={searchInputRef}
+            type="text"
+            placeholder={t("search_placeholder")}
+            value={searchQuery}
+            onChange={(e) => {
+              onSearchChange(e.target.value);
+            }}
+            onBlur={() => {
+              setSearchExpanded(false);
+            }}
+            className="flex-1 min-w-0 px-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-brand-primary/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
+          />
+        </div>
       ) : (
         <div className="flex items-center gap-2 text-sm font-medium flex-1 min-w-0">
           <button
@@ -170,61 +229,89 @@ export function TopNavigationBar({
             ref={breadcrumbRef}
             className="flex items-center overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0"
           >
-            {folderHistory.map((folder, index) => (
-              <div key={folder.id} className="flex items-center shrink-0">
-                <span className="text-gray-400 mx-1">/</span>
-                <button
-                  onClick={() => {
-                    onBreadcrumbClick(folder.id, folder.name, index);
-                  }}
-                  className="text-gray-500 dark:text-gray-400 hover:text-brand-primary transition-colors truncate max-w-[150px]"
-                  title={displayFolderName(folder.name)}
-                >
-                  {displayFolderName(folder.name)}
-                </button>
-              </div>
-            ))}
-            <div className="flex items-center shrink-0">
-              {folderHistory.length > 0 && (
-                <span className="text-gray-400 mx-1">/</span>
-              )}
+            {IS_MOBILE ? (
+              // Mobile compact breadcrumb: only the current folder, truncated
+              // so long paths never push the actions off screen.
               <span
-                className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]"
+                className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[120px]"
                 title={displayFolderName(currentFolderName)}
               >
                 {displayFolderName(currentFolderName)}
               </span>
-            </div>
+            ) : (
+              <>
+                {folderHistory.map((folder, index) => (
+                  <div key={folder.id} className="flex items-center shrink-0">
+                    <span className="text-gray-400 mx-1">/</span>
+                    <button
+                      onClick={() => {
+                        onBreadcrumbClick(folder.id, folder.name, index);
+                      }}
+                      className="text-gray-500 dark:text-gray-400 hover:text-brand-primary transition-colors truncate max-w-[150px]"
+                      title={displayFolderName(folder.name)}
+                    >
+                      {displayFolderName(folder.name)}
+                    </button>
+                  </div>
+                ))}
+                <div className="flex items-center shrink-0">
+                  {folderHistory.length > 0 && (
+                    <span className="text-gray-400 mx-1">/</span>
+                  )}
+                  <span
+                    className="text-gray-900 dark:text-white px-2 py-1 font-semibold truncate max-w-[200px]"
+                    title={displayFolderName(currentFolderName)}
+                  >
+                    {displayFolderName(currentFolderName)}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
 
-      {!isSelectionMode && (
+      {!isSelectionMode && !(IS_MOBILE && searchExpanded) && (
         <div className="flex items-center gap-3 shrink-0">
           {/* Search Input */}
-          <div className="relative">
-            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder={t("search_placeholder")}
-              value={searchQuery}
-              onChange={(e) => {
-                onSearchChange(e.target.value);
+          {IS_MOBILE ? (
+            // Mobile collapsed: a bare icon button (size of the SVG) — the
+            // input lives in the expanded full-width row above.
+            <button
+              onClick={() => {
+                setSearchExpanded(true);
               }}
-              className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-brand-primary/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => {
-                  onSearchChange("");
+              aria-label={t("search_placeholder")}
+              data-testid="mobile-search-collapsed"
+              className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            >
+              <Search className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+            </button>
+          ) : (
+            <div className="relative">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder={t("search_placeholder")}
+                value={searchQuery}
+                onChange={(e) => {
+                  onSearchChange(e.target.value);
                 }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
+                className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-brand-primary/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => {
+                    onSearchChange("");
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Sort Dropdown */}
           {token && (
