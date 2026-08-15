@@ -43,7 +43,7 @@ const MOBILE_REDIRECT_URI: &str = "com.drplay.app:/oauth2redirect";
 /// must match the client registered with package com.drplay.app + SHA-1
 /// DA:C2:0C:1C:F9:F0:E1:5C:3C:23:D2:D9:04:04:72:C4:11:99:AC:31 and the
 /// "Custom URI schemes" advanced setting enabled.
-const ANDROID_CLIENT_ID: &str = "72581565914-vsdl8b65dutbtrrrtpqf71pirqq4cifp.apps.googleusercontent.com";
+pub(crate) const ANDROID_CLIENT_ID: &str = "72581565914-vsdl8b65dutbtrrrtpqf71pirqq4cifp.apps.googleusercontent.com";
 
 /// How long the mobile flow waits for the deep-link redirect — same 5 minutes
 /// as the desktop loopback flow (auth.rs:48).
