@@ -6,6 +6,8 @@ interface MoreMenuTriggerProps {
   isDownloadingFile: boolean;
   onToggle: () => void;
   onMeasure: (rect: DOMRect) => void;
+  /** Compact mobile sizing (Task 13): h-8 w-8 target with a 16px icon. */
+  compact?: boolean | undefined;
 }
 
 export function MoreMenuTrigger({
@@ -14,6 +16,7 @@ export function MoreMenuTrigger({
   isDownloadingFile,
   onToggle,
   onMeasure,
+  compact = false,
 }: MoreMenuTriggerProps) {
   return (
     <button
@@ -29,12 +32,14 @@ export function MoreMenuTrigger({
       disabled={isDownloadingFile}
       aria-haspopup="menu"
       aria-expanded={isMenuOpen}
-      className={`relative p-2 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/40 ${isDownloadingFile ? "cursor-default opacity-50" : "text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]"}`}
+      className={`relative rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/40 ${compact ? "h-8 w-8 flex items-center justify-center" : "p-2"} ${isDownloadingFile ? "cursor-default opacity-50" : "text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]"}`}
     >
       {isDownloadingFile ? (
-        <LoaderCircle className="w-5 h-5 animate-spin text-brand-primary" />
+        <LoaderCircle
+          className={`${compact ? "w-4 h-4" : "w-5 h-5"} animate-spin text-brand-primary`}
+        />
       ) : (
-        <Ellipsis className="w-5 h-5" />
+        <Ellipsis className={compact ? "w-4 h-4" : "w-5 h-5"} />
       )}
     </button>
   );

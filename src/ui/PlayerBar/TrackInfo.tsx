@@ -277,7 +277,15 @@ export function TrackInfo({
         </div>
       </div>
       {currentTrack && (
-        <div className="hidden lg:flex items-center gap-1 shrink-0 ml-2">
+        // Task 13: the old `hidden lg:flex` hid heart + MoreMenu below the lg
+        // breakpoint — on mobile the whole group vanished. Mobile now renders
+        // it always, compact (h-8 w-8 / 16px icons, YT-Music-style) and placed
+        // flush against the transport row: TrackInfo is flex-1 min-w-0, so the
+        // title truncates instead of the group overflowing a 360px phone.
+        // Desktop keeps `hidden lg:flex` byte-identical.
+        <div
+          className={`${IS_MOBILE ? "flex ml-1" : "hidden lg:flex ml-2"} items-center gap-1 shrink-0`}
+        >
           <button
             type="button"
             onClick={() => {
@@ -286,14 +294,18 @@ export function TrackInfo({
             aria-label={
               isLiked ? t("player.remove_favorite") : t("player.add_favorite")
             }
-            className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
+            className={`${IS_MOBILE ? "h-8 w-8 flex items-center justify-center" : "p-1"} transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
           >
             <Heart
-              className="w-5 h-5"
+              className={IS_MOBILE ? "w-4 h-4" : "w-5 h-5"}
               fill={isLiked ? "currentColor" : "none"}
             />
           </button>
-          <MoreMenu track={currentTrack} isPlayerBarMode={true} />
+          <MoreMenu
+            track={currentTrack}
+            isPlayerBarMode={true}
+            compact={IS_MOBILE}
+          />
         </div>
       )}
     </div>

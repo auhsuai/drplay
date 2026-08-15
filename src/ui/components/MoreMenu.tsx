@@ -54,6 +54,8 @@ export interface MoreMenuProps {
   onOpenChange?: (isOpen: boolean) => void;
   onSelectMultiple?: () => void;
   isPlayerBarMode?: boolean;
+  /** Compact mobile sizing (Task 13): smaller trigger button (h-8 w-8, 16px icon). */
+  compact?: boolean;
   variant?: MoreMenuVariant | undefined;
   isBulkSelected?: boolean | undefined;
   onBulkMoveClick?: (() => void) | undefined;
@@ -75,6 +77,7 @@ export function MoreMenu({
   onOpenChange,
   onSelectMultiple,
   isPlayerBarMode,
+  compact,
   variant,
   isBulkSelected,
   onBulkMoveClick,
@@ -283,6 +286,7 @@ export function MoreMenu({
         isOpen={isOpen}
         isMenuOpen={isMenuOpen}
         isDownloadingFile={isDownloadingFile}
+        compact={compact}
         onToggle={() => {
           setIsOpen(!isOpen);
         }}

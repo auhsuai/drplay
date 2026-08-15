@@ -527,6 +527,30 @@ describe("MoreMenu upload race guards", () => {
   });
 });
 
+describe("MoreMenu compact trigger (Task 13 mobile sizing)", () => {
+  it("compact renders the smaller trigger (h-8 w-8 target, 16px ellipsis)", () => {
+    render(<MoreMenu isPlayerBarMode compact track={makeTrack()} />);
+    const trigger = document.querySelector(
+      '[aria-haspopup="menu"]',
+    ) as HTMLButtonElement;
+    expect(trigger).not.toBeNull();
+    expect(trigger.className).toContain("h-8");
+    expect(trigger.className).toContain("w-8");
+    expect(trigger.innerHTML).toContain("w-4 h-4");
+  });
+
+  it("keeps the desktop trigger size when compact is absent (p-2, 20px ellipsis)", () => {
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    const trigger = document.querySelector(
+      '[aria-haspopup="menu"]',
+    ) as HTMLButtonElement;
+    expect(trigger).not.toBeNull();
+    expect(trigger.className).toContain("p-2");
+    expect(trigger.className).not.toContain("h-8");
+    expect(trigger.innerHTML).toContain("w-5 h-5");
+  });
+});
+
 describe("MoreMenu debug download toast trigger", () => {
   afterEach(() => {
     cleanup();
