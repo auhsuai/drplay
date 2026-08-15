@@ -51,6 +51,17 @@ vi.mock("lucide-react", () => {
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });
 
+// Task 7: mobile-only horizontal snap scroll — hoisted mock toggles the
+// platform flag; the getter keeps the binding live (same pattern as
+// PremiumCard.test.tsx). Default false so every pre-existing test keeps
+// running the desktop path.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const mocks = vi.hoisted(() => ({
   getRecentlyPlayed: vi.fn(),
   getHeavyRotation: vi.fn(),
@@ -1314,5 +1325,138 @@ describe("HomeTab Ctrl+F guard (browser find dialog must not open on Home)", () 
     } finally {
       remove();
     }
+  });
+});
+
+describe("HomeTab mobile: horizontal snap scroll for non-ViewAll sections (Task 7)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getHeavyRotation.mockResolvedValue([]);
+    mocks.getRandomDiscoveries.mockResolvedValue([]);
+    mocks.getMostVisitedFolders.mockResolvedValue([]);
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+    mocks.captureError.mockReset();
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  const track = (over: Partial<Track> = {}): Track => ({
+    id: "t-1",
+    title: "Track 1",
+    artist: "Artist 1",
+    streamUrl: "stream://t-1",
+    ...over,
+  });
+
+  const folder = (over: Partial<FolderVisitEntry> = {}): FolderVisitEntry => ({
+    id: "v-1",
+    name: "Folder 1",
+    count: 3,
+    lastVisited: Date.now(),
+    ...over,
+  });
+
+  it("1. mobile: heavy rotation + discover (no View All) get overflow-x-auto snap-x with snap-start cards", async () => {
+    mocks.getHeavyRotation.mockResolvedValue([
+      track({ id: "h1", title: "Heavy One" }),
+    ]);
+    mocks.getRandomDiscoveries.mockResolvedValue([
+      track({ id: "d1", title: "Discover One" }),
+    ]);
+    render(<HomeTab {...baseProps()} />);
+
+    await screen.findByText("Heavy Rotation");
+    await screen.findByText("Discover");
+
+    // stub card -> (mobile) snap-start wrapper -> scroll container
+    const heavyCard = screen.getByText("Heavy One");
+    const heavyWrapper = heavyCard.parentElement;
+    const heavyContainer = heavyWrapper?.parentElement;
+    expect(heavyContainer?.className).toContain("overflow-x-auto");
+    expect(heavyContainer?.className).toContain("snap-x");
+    expect(heavyWrapper?.className).toContain("snap-start");
+    expect(heavyWrapper?.className).toContain("shrink-0");
+
+    const discoverCard = screen.getByText("Discover One");
+    expect(discoverCard.parentElement?.parentElement?.className).toContain(
+      "overflow-x-auto",
+    );
+    expect(discoverCard.parentElement?.parentElement?.className).toContain(
+      "snap-x",
+    );
+  });
+
+  it("2. mobile: Recent Files + Recently Added (View All overlay) keep the fixed grid", async () => {
+    mocks.getRecentlyPlayed.mockResolvedValue([
+      track({ id: "r1", title: "Recent One" }),
+      track({ id: "r2", title: "Recent Two" }),
+    ]);
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([
+      driveFile({ id: "a1", name: "Added One.mp3" }),
+    ]);
+    render(<HomeTab {...baseProps()} />);
+
+    await screen.findByText("Recent One");
+    await screen.findByText("Added One.mp3");
+
+    const recentCard = screen.getByText("Recent One");
+    const recentContainer = recentCard.parentElement;
+    expect(recentContainer?.className).toContain("grid");
+    expect(recentContainer?.className).not.toContain("overflow-x-auto");
+
+    const addedCard = screen.getByText("Added One.mp3");
+    expect(addedCard.parentElement?.className).toContain("grid");
+    expect(addedCard.parentElement?.className).not.toContain("overflow-x-auto");
+  });
+
+  it("3. mobile: Jump Back In (folders, no View All) scrolls horizontally with fixed-width items", async () => {
+    mocks.getMostVisitedFolders.mockResolvedValue([
+      folder({ id: "v1", name: "Folder One" }),
+      folder({ id: "v2", name: "Folder Two" }),
+    ]);
+    render(<HomeTab {...baseProps()} />);
+
+    await screen.findByText("Jump Back In");
+
+    const nameEl = screen.getByText("Folder One");
+    const card = nameEl.closest('[role="button"]');
+    expect(card).toBeTruthy();
+    const wrapper = card?.parentElement;
+    expect(wrapper?.className).toContain("snap-start");
+    expect(wrapper?.className).toContain("shrink-0");
+    expect(wrapper?.className).toContain("w-56");
+    const container = wrapper?.parentElement;
+    expect(container?.className).toContain("overflow-x-auto");
+    expect(container?.className).toContain("snap-x");
+  });
+
+  it("4. desktop: non-ViewAll sections keep the fixed grid (no scroll strip)", async () => {
+    platformMock.IS_MOBILE = false;
+    mocks.getHeavyRotation.mockResolvedValue([
+      track({ id: "h1", title: "Heavy One" }),
+    ]);
+    mocks.getMostVisitedFolders.mockResolvedValue([
+      folder({ id: "v1", name: "Folder One" }),
+    ]);
+    render(<HomeTab {...baseProps()} />);
+
+    await screen.findByText("Heavy Rotation");
+    await screen.findByText("Jump Back In");
+
+    const heavyCard = screen.getByText("Heavy One");
+    const heavyContainer = heavyCard.parentElement;
+    expect(heavyContainer?.className).toContain("grid");
+    expect(heavyContainer?.className).not.toContain("overflow-x-auto");
+
+    const folderName = screen.getByText("Folder One");
+    const folderCard = folderName.closest('[role="button"]');
+    const folderContainer = folderCard?.parentElement;
+    expect(folderContainer?.className).toContain("grid");
+    expect(folderContainer?.className).not.toContain("overflow-x-auto");
   });
 });

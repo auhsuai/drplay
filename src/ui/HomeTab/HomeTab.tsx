@@ -19,6 +19,7 @@ import { HomeSection, SectionSkeleton } from "./components/HomeSection";
 import { PremiumGrid } from "./components/PremiumGrid";
 import { FullRecentView } from "./components/FullRecentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
+import { IS_MOBILE } from "../../utils/platform";
 import { captureError } from "../../utils/errorLog";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 import {
@@ -444,36 +445,54 @@ export function HomeTab({
           </SectionSkeleton>
         ) : mostVisitedFolders.length > 0 ? (
           <HomeSection icon={Folder} title={t("home.jump_back_in")}>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {mostVisitedFolders.map((folder) => (
-                <div
-                  key={folder.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    onOpenFolder(folder.id, folder.name);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
+            {/* Task 7: no View All -> mobile horizontal snap strip (fixed
+                touch-width items), desktop keeps the grid untouched. */}
+            <div
+              className={
+                IS_MOBILE
+                  ? "flex overflow-x-auto snap-x snap-mandatory gap-4"
+                  : "grid grid-cols-2 md:grid-cols-4 gap-4"
+              }
+            >
+              {mostVisitedFolders.map((folder) => {
+                const card = (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
                       onOpenFolder(folder.id, folder.name);
-                    }
-                  }}
-                  className="p-3.5 rounded-2xl transition-all duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full bg-[#F8F9FA] dark:bg-[#202124] hover:bg-white dark:hover:bg-[#2a2b2f] hover:shadow-lg hover:shadow-black/5 hover:-translate-y-1"
-                >
-                  <div className="relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
-                    <Folder className="w-6 h-6" fill="currentColor" />
-                  </div>
-                  <div className="overflow-hidden flex-1 flex flex-col justify-center">
-                    <h3 className="font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 text-gray-800 dark:text-gray-200 group-hover:text-brand-primary">
-                      {folder.name}
-                    </h3>
-                    <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
-                      <span className="truncate">{t("drive.folders")}</span>
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onOpenFolder(folder.id, folder.name);
+                      }
+                    }}
+                    className="p-3.5 rounded-2xl transition-all duration-300 cursor-pointer flex items-center gap-4 active:scale-[0.98] group w-full bg-[#F8F9FA] dark:bg-[#202124] hover:bg-white dark:hover:bg-[#2a2b2f] hover:shadow-lg hover:shadow-black/5 hover:-translate-y-1"
+                  >
+                    <div className="relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-amber-100 dark:bg-amber-900/30 text-amber-500">
+                      <Folder className="w-6 h-6" fill="currentColor" />
+                    </div>
+                    <div className="overflow-hidden flex-1 flex flex-col justify-center">
+                      <h3 className="font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 text-gray-800 dark:text-gray-200 group-hover:text-brand-primary">
+                        {folder.name}
+                      </h3>
+                      <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
+                        <span className="truncate">{t("drive.folders")}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+                // IS_MOBILE is a module constant per page load: the wrapper
+                // only exists on mobile — desktop DOM stays byte-identical.
+                return IS_MOBILE ? (
+                  <div key={folder.id} className="shrink-0 snap-start w-56">
+                    {card}
+                  </div>
+                ) : (
+                  card
+                );
+              })}
             </div>
           </HomeSection>
         ) : null}
@@ -486,7 +505,13 @@ export function HomeTab({
           </SectionSkeleton>
         ) : heavyItems.length > 0 ? (
           <HomeSection icon={Repeat} title={t("home.heavy_rotation")}>
-            <PremiumGrid items={heavyItems} onPlay={onPlay} token={token} />
+            {/* Task 7: no View All -> mobile horizontal snap strip. */}
+            <PremiumGrid
+              items={heavyItems}
+              onPlay={onPlay}
+              token={token}
+              scrollable
+            />
           </HomeSection>
         ) : null}
 
@@ -498,7 +523,13 @@ export function HomeTab({
           </SectionSkeleton>
         ) : discoverItems.length > 0 ? (
           <HomeSection icon={Sparkles} title={t("home.discover")}>
-            <PremiumGrid items={discoverItems} onPlay={onPlay} token={token} />
+            {/* Task 7: no View All -> mobile horizontal snap strip. */}
+            <PremiumGrid
+              items={discoverItems}
+              onPlay={onPlay}
+              token={token}
+              scrollable
+            />
           </HomeSection>
         ) : null}
       </div>
