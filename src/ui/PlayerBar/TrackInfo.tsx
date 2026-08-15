@@ -294,7 +294,7 @@ export function TrackInfo({
             aria-label={
               isLiked ? t("player.remove_favorite") : t("player.add_favorite")
             }
-            className={`${IS_MOBILE ? "h-8 w-8 flex items-center justify-center" : "p-1"} transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
+            className={`${IS_MOBILE ? "h-7 w-7 flex items-center justify-center" : "p-1"} transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
           >
             <Heart
               className={IS_MOBILE ? "w-4 h-4" : "w-5 h-5"}

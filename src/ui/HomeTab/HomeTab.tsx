@@ -384,7 +384,7 @@ export function HomeTab({
         ) : (
           <header className="mb-10 mt-4 flex flex-col gap-1">
             <h2
-              className={`${IS_MOBILE ? "text-2xl" : "text-3xl"} font-bold tracking-tight text-gray-900 dark:text-white`}
+              className={`${IS_MOBILE ? "text-xl" : "text-3xl"} font-bold tracking-tight text-gray-900 dark:text-white`}
             >
               {greeting}
               {userProfile?.name

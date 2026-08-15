@@ -122,13 +122,14 @@ describe("TrackInfo mobile heart + MoreMenu (Task 13 — fix hidden lg:flex)", (
     expect(wrapper.className).not.toContain("hidden");
   });
 
-  it("mobile: heart button is compact (h-8 w-8 touch target, 16px icon)", async () => {
+  it("mobile: heart button is compact (h-7 w-7 touch target, 16px icon)", async () => {
     renderTrackInfo();
     const heart = await screen.findByRole("button", {
       name: "Add to favorites",
     });
-    expect(heart.className).toContain("h-8");
-    expect(heart.className).toContain("w-8");
+    expect(heart.className).toContain("h-7");
+    expect(heart.className).toContain("w-7");
+    expect(heart.className).not.toContain("h-8");
     expect(heart.querySelector("svg")?.getAttribute("class")).toContain("w-4");
   });
 

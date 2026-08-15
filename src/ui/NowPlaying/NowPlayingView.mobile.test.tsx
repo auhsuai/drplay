@@ -96,10 +96,11 @@ describe("NowPlayingView mobile gate (IS_MOBILE) — title only", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 
-  it("compacts the title to text-xl on mobile (Task 8)", () => {
+  it("compacts the title to text-lg on mobile (Task 9 second notch)", () => {
     const { container } = renderView();
     const h1 = container.querySelector("h1");
-    expect(h1?.className).toContain("text-xl");
+    expect(h1?.className).toContain("text-lg");
+    expect(h1?.className).not.toContain("text-xl");
     expect(h1?.className).not.toContain("text-2xl");
   });
 

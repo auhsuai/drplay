@@ -46,7 +46,7 @@ export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
   ] as const;
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-20 flex h-16 items-stretch justify-around border-t border-gray-200/50 bg-[#F8F9FA] px-2 pb-[env(safe-area-inset-bottom)] dark:border-gray-800/50 dark:bg-[#121212]">
+    <nav className="fixed bottom-0 left-0 right-0 z-20 flex h-14 items-stretch justify-around border-t border-gray-200/50 bg-[#F8F9FA] px-2 pb-[env(safe-area-inset-bottom)] dark:border-gray-800/50 dark:bg-[#121212]">
       {items.map(({ key, label, icon: Icon, active }) => (
         <button
           key={key}
@@ -58,7 +58,7 @@ export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
           className={`flex flex-1 flex-col items-center justify-center transition-colors ${active ? "text-brand-primary" : "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"}`}
         >
           <Icon
-            className={`h-6 w-6 transition-transform duration-200 ${active ? "scale-110" : ""}`}
+            className={`h-5 w-5 transition-transform duration-200 ${active ? "scale-110" : ""}`}
           />
           <span className="w-full truncate text-center text-[10px] font-medium">
             {label}

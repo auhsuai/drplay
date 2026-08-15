@@ -79,9 +79,10 @@ export function SettingsTab({
   userProfile,
 }: SettingsTabProps) {
   const { t, i18n } = useTranslation();
-  // Task 8: setting rows compact one notch on mobile (16px -> 14px); desktop
-  // keeps text-base — the string is byte-identical to the pre-task markup.
-  const settingsRowTitle = `${IS_MOBILE ? "text-sm" : "text-base"} font-semibold text-gray-900 dark:text-gray-100`;
+  // Task 8 + Task 9: setting rows compact two notches on mobile (16px ->
+  // 14px -> 13px); desktop keeps text-base — the string is byte-identical
+  // to the pre-task markup.
+  const settingsRowTitle = `${IS_MOBILE ? "text-[13px]" : "text-base"} font-semibold text-gray-900 dark:text-gray-100`;
   // Mobile (Task 4 mobile-polish): the download row shows the SAF folder
   // NAME when one is picked, otherwise the app-storage default label — the
   // raw /data path is meaningless on a phone. Lazy initializer (the value
@@ -241,7 +242,7 @@ export function SettingsTab({
 
       <div className="max-w-3xl mx-auto relative z-10">
         <h1
-          className={`${IS_MOBILE ? "text-2xl" : "text-3xl"} font-extrabold text-gray-900 dark:text-white mb-10 tracking-tight`}
+          className={`${IS_MOBILE ? "text-xl" : "text-3xl"} font-extrabold text-gray-900 dark:text-white mb-10 tracking-tight`}
         >
           {t("settings.title")}
         </h1>

@@ -68,4 +68,18 @@ describe("BottomNav", () => {
     fireEvent.click(screen.getByRole("button", { name: "sidebar.home" }));
     expect(onTabChange).toHaveBeenCalledWith(TABS.home);
   });
+
+  it("uses compact sizing (h-14 bar, 20px tab icons, 10px labels)", () => {
+    const { container } = render(
+      <BottomNav activeTab={TABS.home} onTabChange={onTabChange} />,
+    );
+    const nav = container.querySelector("nav");
+    expect(nav?.className).toContain("h-14");
+    expect(nav?.className).not.toContain("h-16");
+    const svg = container.querySelector("svg");
+    expect(svg?.getAttribute("class")).toContain("h-5");
+    expect(svg?.getAttribute("class")).toContain("w-5");
+    const label = container.querySelector("nav span");
+    expect(label?.className).toContain("text-[10px]");
+  });
 });

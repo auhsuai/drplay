@@ -1894,6 +1894,17 @@ describe("PlayerBar mobile transport — 5 buttons (Task 5)", () => {
     expect(transport).toEqual(TRANSPORT_LABELS);
   });
 
+  it("compacts transport buttons on mobile (Task 9: 30px side targets, 34px play)", () => {
+    renderPlayer();
+    const side = screen.getByRole("button", { name: "Rewind 5 seconds" });
+    expect(side.className).toContain("p-1.5");
+    expect(side.className).not.toContain("p-2");
+    const play = screen.getByRole("button", { name: "Play/Pause" });
+    expect(play.className).toContain("w-[34px]");
+    expect(play.className).toContain("h-[34px]");
+    expect(play.className).not.toContain("w-10");
+  });
+
   it("rewind -5s seeks currentTime - 5 (seekRelative)", () => {
     renderPlayer();
     fireEvent.click(screen.getByRole("button", { name: "Rewind 5 seconds" }));

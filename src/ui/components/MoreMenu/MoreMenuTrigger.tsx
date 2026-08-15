@@ -6,7 +6,8 @@ interface MoreMenuTriggerProps {
   isDownloadingFile: boolean;
   onToggle: () => void;
   onMeasure: (rect: DOMRect) => void;
-  /** Compact mobile sizing (Task 13): h-8 w-8 target with a 16px icon. */
+  /** Compact mobile sizing (Task 13, shrunk further in Task 9): h-7 w-7
+   *  target with a 16px icon. */
   compact?: boolean | undefined;
 }
 
@@ -32,7 +33,7 @@ export function MoreMenuTrigger({
       disabled={isDownloadingFile}
       aria-haspopup="menu"
       aria-expanded={isMenuOpen}
-      className={`relative rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/40 ${compact ? "h-8 w-8 flex items-center justify-center" : "p-2"} ${isDownloadingFile ? "cursor-default opacity-50" : "text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]"}`}
+      className={`relative rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/40 ${compact ? "h-7 w-7 flex items-center justify-center" : "p-2"} ${isDownloadingFile ? "cursor-default opacity-50" : "text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]"}`}
     >
       {isDownloadingFile ? (
         <LoaderCircle

@@ -1477,12 +1477,13 @@ describe("HomeTab font compaction (Task 8)", () => {
     vi.clearAllMocks();
   });
 
-  it("compacts the greeting heading to text-2xl on mobile", async () => {
+  it("compacts the greeting heading to text-xl on mobile (Task 9 second notch)", async () => {
     platformMock.IS_MOBILE = true;
     const { container } = render(<HomeTab {...baseProps()} />);
     await screen.findByText(/^Good (morning|afternoon|evening)/);
     const h2 = container.querySelector("h2");
-    expect(h2?.className).toContain("text-2xl");
+    expect(h2?.className).toContain("text-xl");
+    expect(h2?.className).not.toContain("text-2xl");
     expect(h2?.className).not.toContain("text-3xl");
   });
 

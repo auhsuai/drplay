@@ -528,14 +528,15 @@ describe("MoreMenu upload race guards", () => {
 });
 
 describe("MoreMenu compact trigger (Task 13 mobile sizing)", () => {
-  it("compact renders the smaller trigger (h-8 w-8 target, 16px ellipsis)", () => {
+  it("compact renders the smaller trigger (h-7 w-7 target, 16px ellipsis)", () => {
     render(<MoreMenu isPlayerBarMode compact track={makeTrack()} />);
     const trigger = document.querySelector(
       '[aria-haspopup="menu"]',
     ) as HTMLButtonElement;
     expect(trigger).not.toBeNull();
-    expect(trigger.className).toContain("h-8");
-    expect(trigger.className).toContain("w-8");
+    expect(trigger.className).toContain("h-7");
+    expect(trigger.className).toContain("w-7");
+    expect(trigger.className).not.toContain("h-8");
     expect(trigger.innerHTML).toContain("w-4 h-4");
   });
 

@@ -311,18 +311,19 @@ describe("SettingsTab font compaction (Task 8)", () => {
     cleanup();
   });
 
-  it("compacts the h1 title to text-2xl on mobile", () => {
+  it("compacts the h1 title to text-xl on mobile (Task 9 second notch)", () => {
     const { container } = render(<SettingsTab {...baseProps} />);
     const h1 = container.querySelector("h1");
-    expect(h1?.className).toContain("text-2xl");
+    expect(h1?.className).toContain("text-xl");
+    expect(h1?.className).not.toContain("text-2xl");
     expect(h1?.className).not.toContain("text-3xl");
   });
 
-  it("compacts setting row titles to text-sm on mobile", () => {
+  it("compacts setting row titles to text-[13px] on mobile (Task 9 second notch)", () => {
     const { container } = render(<SettingsTab {...baseProps} />);
     expect(container.querySelector("p.text-base")).toBeNull();
     expect(screen.getByText("Google Drive Folder").className).toContain(
-      "text-sm",
+      "text-[13px]",
     );
   });
 
