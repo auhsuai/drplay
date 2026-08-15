@@ -190,12 +190,62 @@
 
 ---
 
+## Bổ sung 2026-08-15 (user báo 3 lỗi sau khi test bản v2)
+
+### Task 12: FIX refresh token trên Android (bug chết sau ~50 phút)
+
+> **Root cause đã xác nhận (đọc code):** `refresh_google_token` (auth.rs:140-151) hardcode client DESKTOP (wa_credential.json + secret) — nhưng token Android được cấp bởi client ANDROID (public, không secret) → refresh bằng client khác = invalid_grant → access token hết hạn là không phát được, phải xóa data.
+
+**Files:**
+- Modify: `src-tauri/src/auth.rs` (refresh_google_token — platform-aware client: `#[cfg(target_os = "android")]` → dùng ANDROID_CLIENT_ID (auth_android.rs:44) KHÔNG secret (public client RFC 8252); desktop giữ nguyên wa_credential.json byte-identical)
+- Tách hàm thuần `build_refresh_client()` test được (client id/secret/url) — unit test đỏ → xanh (chọn client đúng theo flag)
+
+**Behavior contract:** desktop y hệt; Android: refresh bằng đúng client đã cấp token (invalid_grant hết); lỗi vẫn trả Err có ngữ cảnh không token; frontend không đổi (shape JSON giữ nguyên)
+
+- [ ] Verify: `cargo check --target aarch64-linux-android` + desktop + `cargo test --lib`
+- [ ] Commit `fix(android): refresh token with the Android OAuth client (was desktop client -> invalid_grant)`
+
+### Task 13: Settings mobile — hiện tên + avatar (như Sidebar)
+
+**Files:**
+- Đọc trước: Sidebar/UserProfileSection (cách lấy user info + avatar — grep userinfo/avatar/UserProfile trong src/ui/Sidebar + hooks), `src/ui/Settings/SettingsTab.tsx` (đầu trang — chèn header user)
+- Modify: SettingsTab.tsx (mobile: header tên + avatar trên cùng; desktop giữ nguyên — hoặc thêm cả 2 nền tảng nếu desktop Settings chưa có? USER CHỈ ĐỊNH mobile — mặc định mobile-only, report nếu desktop dễ thêm)
+
+**Behavior contract:** desktop y hệt; mobile: Settings hiện avatar + tên (cùng nguồn dữ liệu Sidebar — reuse, không viết lại logic lấy user); avatar CSP `*.googleusercontent.com` đã có
+
+- [ ] TDD test render (mock user data) + tsc + vitest file đụng + eslint
+- [ ] Commit `feat(android): user name + avatar in settings header`
+
+### Task 14: FIX back chain — thêm 2 tầng thiếu (Recent view + My Drive folder)
+
+> **User báo:** vào Recent (FullRecentView) hoặc folder con My Drive → back lập tức hiện "back lần nữa thoát" (nhảy thẳng tới double-back). Chuẩn Android (đã search — LIFO navigation stack, predictive back docs): back phải đóng view hiện tại TRƯỚC (recent view → đóng; folder con → lên folder cha), rồi mới tới chain cũ (NowPlaying → tab → Home → double-back).
+
+**Files:**
+- Modify: `src/App.tsx` (back chain — đăng ký thêm: FullRecentView đang mở → đóng; currentFolderId ≠ root → folderHistory lên 1 cấp)
+- Đọc trước: chỗ mở FullRecentView (HomeTab overlay — state gì, App hay HomeTab giữ), folder navigation state (currentFolderId/folderHistory — useDriveStore? MainContent), useHardwareBack pattern
+- (Nếu dễ) search expanded → back collapse trước (TopNavigationBar) — tùy chọn, báo cáo
+
+**Behavior contract (thứ tự back mobile — chuẩn LIFO):**
+1. Overlay (sidebar/folder-selection/trash/rate-limit) → đóng
+2. **FullRecentView mở → đóng** (MỚI)
+3. **My Drive: currentFolderId ≠ root → lên folder cha** (MỚI — folderHistory pop)
+4. NowPlaying mở → đóng
+5. tab ≠ Home → Home
+6. Home root → double-back-to-exit (giữ nguyên 2s)
+
+**TDD:** test fake: vào recent view → back → đóng view (KHÔNG toast thoát); vào folder con → back → lên cha; root → toast (chain cũ xanh)
+
+- [ ] Verify tsc + vitest file đụng + eslint
+- [ ] Commit `fix(android): back closes recent view and navigates folder up before exit`
+
+---
+
 ## Thứ tự + phụ thuộc
 1. Task 1 → 2 → 3 (Task 3 phụ thuộc Task 1: không gọi invoke tray)
 2. Task 8 độc lập (chạy giữa các task UI)
 3. Task 4-7, 9 độc lập — tuần tự trên cùng tree (5C.4: không song song)
-4. Cuối session: full vitest + build + APK arm64 → ký → gửi `G:\My Drive\tess`
+4. Task 12 (refresh) → 13 (settings user) → 14 (back chain) — 12 ưu tiên cao nhất (bug chết)
 5. Conflict ghi nhận: App.tsx/SettingsTab/PlayerBar/HomeTab/MainContent cover-conflicted — resolve khi merge cover sau (KHÔNG chặn bây giờ)
 
-## Verify cuối (1 lần duy nhất)
-`npx vitest run` full + `npm run build` + `cargo check` desktop + build APK release arm64 + ký + cài emulator + smoke test (login đã có client, phát nhạc, download, back double, search expand) + gửi APK mới.
+## Verify cuối (1 lần duy nhất, sau Task 12-14)
+`npx vitest run` full + `npm run build` + `cargo check` desktop + build APK release arm64 + ký + gửi APK mới vào `G:\My Drive\tess` + smoke test emulator (login, phát nhạc sau 50 phút — refresh token, download, back chain đầy đủ, search expand) + ADR.
