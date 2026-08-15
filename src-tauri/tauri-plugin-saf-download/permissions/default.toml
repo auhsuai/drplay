@@ -1,0 +1,6 @@
+[default]
+description = "Default permissions for the saf-download plugin"
+permissions = [
+  "allow-pick-folder",
+  "allow-save-file",
+]

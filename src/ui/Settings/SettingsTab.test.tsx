@@ -87,6 +87,8 @@ const getEffectiveDownloadPath = vi.fn<() => Promise<string>>();
 vi.mock("../../utils/downloadPath", () => ({
   getEffectiveDownloadPath: () => getEffectiveDownloadPath(),
   setCustomDownloadPath: vi.fn(),
+  getMobileDownloadFolder: vi.fn().mockReturnValue(null),
+  setMobileDownloadFolder: vi.fn(),
 }));
 
 // SettingsTab routes download-path load failures into captureError — mock it

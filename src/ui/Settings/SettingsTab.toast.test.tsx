@@ -66,6 +66,8 @@ vi.mock("../../utils/cache", () => ({
 vi.mock("../../utils/downloadPath", () => ({
   getEffectiveDownloadPath: vi.fn().mockResolvedValue(""),
   setCustomDownloadPath: vi.fn(),
+  getMobileDownloadFolder: vi.fn().mockReturnValue(null),
+  setMobileDownloadFolder: vi.fn(),
 }));
 
 // The uploads section (slice 5.3) imports uploadManager, which transitively

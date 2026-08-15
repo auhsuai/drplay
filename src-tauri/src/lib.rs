@@ -173,7 +173,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_native_audio::init());
+        .plugin(tauri_plugin_native_audio::init())
+        // SAF download folder picker + writer — Android only (Task 4
+        // mobile-polish; the Rust crate registers the Kotlin plugin, no
+        // commands). Desktop init is a no-op.
+        .plugin(tauri_plugin_saf_download::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_keepawake::init());
     let app_result = builder

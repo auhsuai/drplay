@@ -28,6 +28,7 @@
     "fs:allow-read",
     "clipboard-manager:allow-write-text",
     "native-audio:default",
+    "saf-download:default",
     "deep-link:default"
   ]
 }

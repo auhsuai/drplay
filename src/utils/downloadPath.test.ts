@@ -6,6 +6,9 @@ import {
   getCustomDownloadPath,
   getEffectiveDownloadPath,
   setCustomDownloadPath,
+  getMobileDownloadFolder,
+  setMobileDownloadFolder,
+  clearMobileDownloadFolder,
 } from "./downloadPath";
 
 vi.mock("./errorLog", () => ({
@@ -113,5 +116,84 @@ describe("downloadPath mobile (IS_MOBILE)", () => {
     platformMock.IS_MOBILE = true;
     setCustomDownloadPath("E:\\Flac");
     expect(localStorage.getItem("drplay_download_path")).toBeNull();
+  });
+});
+
+describe("downloadPath mobile SAF folder (Task 4)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("getMobileDownloadFolder: returns null on desktop (concepts never bleed)", () => {
+    platformMock.IS_MOBILE = false;
+    localStorage.setItem(
+      "drplay_mobile_download_folder",
+      JSON.stringify({ uri: "content://tree/x", name: "Download" }),
+    );
+    expect(getMobileDownloadFolder()).toBeNull();
+  });
+
+  it("getMobileDownloadFolder: returns the persisted {uri, name} on mobile", () => {
+    platformMock.IS_MOBILE = true;
+    localStorage.setItem(
+      "drplay_mobile_download_folder",
+      JSON.stringify({
+        uri: "content://tree/primary%3ADownload",
+        name: "Download",
+      }),
+    );
+    expect(getMobileDownloadFolder()).toEqual({
+      uri: "content://tree/primary%3ADownload",
+      name: "Download",
+    });
+  });
+
+  it("getMobileDownloadFolder: returns null when nothing is stored", () => {
+    platformMock.IS_MOBILE = true;
+    expect(getMobileDownloadFolder()).toBeNull();
+  });
+
+  it("getMobileDownloadFolder: corrupt JSON → null + warn log (no throw)", () => {
+    platformMock.IS_MOBILE = true;
+    localStorage.setItem("drplay_mobile_download_folder", "{not json");
+    expect(getMobileDownloadFolder()).toBeNull();
+    expect(mockedCaptureError).toHaveBeenCalledWith({
+      level: "warn",
+      source: "downloadPath",
+      message: "mobile-folder-read-failed:SyntaxError",
+    });
+  });
+
+  it("getMobileDownloadFolder: malformed shape (missing name) → null", () => {
+    platformMock.IS_MOBILE = true;
+    localStorage.setItem(
+      "drplay_mobile_download_folder",
+      JSON.stringify({ uri: "content://tree/x" }),
+    );
+    expect(getMobileDownloadFolder()).toBeNull();
+  });
+
+  it("setMobileDownloadFolder: persists the folder JSON on mobile", () => {
+    platformMock.IS_MOBILE = true;
+    setMobileDownloadFolder({
+      uri: "content://tree/primary%3AMusic",
+      name: "Music",
+    });
+    expect(localStorage.getItem("drplay_mobile_download_folder")).toBe(
+      JSON.stringify({ uri: "content://tree/primary%3AMusic", name: "Music" }),
+    );
+  });
+
+  it("setMobileDownloadFolder: no-op on desktop", () => {
+    platformMock.IS_MOBILE = false;
+    setMobileDownloadFolder({ uri: "content://tree/x", name: "X" });
+    expect(localStorage.getItem("drplay_mobile_download_folder")).toBeNull();
+  });
+
+  it("clearMobileDownloadFolder: removes the stored folder on mobile", () => {
+    platformMock.IS_MOBILE = true;
+    setMobileDownloadFolder({ uri: "content://tree/x", name: "X" });
+    clearMobileDownloadFolder();
+    expect(localStorage.getItem("drplay_mobile_download_folder")).toBeNull();
   });
 });

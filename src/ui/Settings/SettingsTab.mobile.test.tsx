@@ -4,10 +4,22 @@
 // button to click, so import_metadata_seed can never be invoked. Desktop
 // keeps the section (regression check below, plus SettingsTab.test.tsx).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import {
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+  waitFor,
+} from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
 import en from "../../locales/en/translation.json";
+import { invoke } from "@tauri-apps/api/core";
+import { showErrorToast } from "../../utils/simpleToast";
+import {
+  getMobileDownloadFolder,
+  setMobileDownloadFolder,
+} from "../../utils/downloadPath";
 
 // Getter-backed platform mock: SettingsTab reads IS_MOBILE at render time,
 // so each test can toggle the platform (same pattern as LoginScreen.test.tsx).
@@ -74,6 +86,8 @@ vi.mock("../../utils/cache", () => ({
 vi.mock("../../utils/downloadPath", () => ({
   getEffectiveDownloadPath: vi.fn().mockResolvedValue(""),
   setCustomDownloadPath: vi.fn(),
+  getMobileDownloadFolder: vi.fn().mockReturnValue(null),
+  setMobileDownloadFolder: vi.fn(),
 }));
 
 vi.mock("../../utils/errorLog", () => ({ captureError: vi.fn() }));
@@ -107,6 +121,13 @@ const baseProps = {
 const IMPORT_SEED_LABEL = "Import metadata backup (seed.zip)";
 const TRAY_LABEL = "Minimize to System Tray";
 const BACKGROUND_PLAYBACK_LABEL = "Background playback";
+const CHANGE_PATH_LABEL = "Change Path";
+const DEFAULT_LOCATION_LABEL = "App storage (default)";
+
+const mockedInvoke = vi.mocked(invoke);
+const mockedGetMobileDownloadFolder = vi.mocked(getMobileDownloadFolder);
+const mockedSetMobileDownloadFolder = vi.mocked(setMobileDownloadFolder);
+const mockedShowErrorToast = vi.mocked(showErrorToast);
 
 describe("SettingsTab seed import section (mobile hidden)", () => {
   beforeEach(() => {
@@ -197,5 +218,84 @@ describe("SettingsTab close-behavior toggle (mobile vs desktop)", () => {
     expect(checkbox).toBeTruthy();
     fireEvent.click(checkbox);
     expect(setMinimizeToTray).toHaveBeenCalledWith(true);
+  });
+});
+
+// Task 4 mobile-polish: the download-location row on mobile drives the SAF
+// folder picker (plugin:saf-download|pick_folder) instead of the desktop
+// dialog (which has NO Android folder support). Picked folder → persisted +
+// name shown; cancel → nothing changes; real failure → error toast.
+describe("SettingsTab download folder pick (mobile SAF)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    mockedGetMobileDownloadFolder.mockReturnValue(null);
+    mockedSetMobileDownloadFolder.mockReset();
+    mockedShowErrorToast.mockReset();
+    mockedInvoke.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows the default app-storage label on mobile when no folder is picked", async () => {
+    render(<SettingsTab {...baseProps} />);
+    expect(await screen.findByText(DEFAULT_LOCATION_LABEL)).toBeTruthy();
+  });
+
+  it("shows the picked folder NAME on mobile instead of the internal path", async () => {
+    mockedGetMobileDownloadFolder.mockReturnValue({
+      uri: "content://tree/primary%3ADownload",
+      name: "Download",
+    });
+    render(<SettingsTab {...baseProps} />);
+    expect(await screen.findByText("Download")).toBeTruthy();
+  });
+
+  it("picking a folder via the SAF plugin persists {uri, name} and updates the row", async () => {
+    mockedInvoke.mockResolvedValue({
+      uri: "content://tree/primary%3AMusic",
+      name: "Music",
+    });
+    render(<SettingsTab {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: CHANGE_PATH_LABEL }));
+
+    await waitFor(() => {
+      expect(mockedInvoke).toHaveBeenCalledWith(
+        "plugin:saf-download|pick_folder",
+      );
+    });
+    expect(mockedSetMobileDownloadFolder).toHaveBeenCalledWith({
+      uri: "content://tree/primary%3AMusic",
+      name: "Music",
+    });
+    expect(await screen.findByText("Music")).toBeTruthy();
+  });
+
+  it("user cancelling the SAF picker changes nothing (no persist, no toast)", async () => {
+    mockedInvoke.mockRejectedValue({ message: "cancelled" });
+    render(<SettingsTab {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: CHANGE_PATH_LABEL }));
+
+    await waitFor(() => {
+      expect(mockedInvoke).toHaveBeenCalledWith(
+        "plugin:saf-download|pick_folder",
+      );
+    });
+    expect(mockedSetMobileDownloadFolder).not.toHaveBeenCalled();
+    expect(mockedShowErrorToast).not.toHaveBeenCalled();
+  });
+
+  it("a real picker failure surfaces the error toast", async () => {
+    mockedInvoke.mockRejectedValue({ message: "pick_failed:no_uri" });
+    render(<SettingsTab {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: CHANGE_PATH_LABEL }));
+
+    await waitFor(() => {
+      expect(mockedShowErrorToast).toHaveBeenCalledWith(
+        "Couldn't select folder. Try again.",
+      );
+    });
+    expect(mockedSetMobileDownloadFolder).not.toHaveBeenCalled();
   });
 });

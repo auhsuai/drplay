@@ -1,0 +1,19 @@
+[package]
+name = "tauri-plugin-saf-download"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+build = "build.rs"
+links = "tauri-plugin-saf-download"
+description = "SAF (Storage Access Framework) download folder picker + file writer for Android (DrPlay mobile)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "tauri_plugin_saf_download"
+path = "src/lib.rs"
+
+[dependencies]
+tauri = { version = "2.10.2", features = [] }
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.3", features = ["build"] }

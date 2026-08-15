@@ -10,6 +10,7 @@ import { getValidToken } from "../utils/apiClient";
 import {
   getEffectiveDownloadPath,
   getCustomDownloadPath,
+  getMobileDownloadFolder,
 } from "../utils/downloadPath";
 import { useMenuDownload } from "./useMenuDownload";
 import en from "../locales/en/translation.json";
@@ -29,6 +30,7 @@ vi.mock("../utils/apiClient", () => ({
 vi.mock("../utils/downloadPath", () => ({
   getEffectiveDownloadPath: vi.fn(),
   getCustomDownloadPath: vi.fn(),
+  getMobileDownloadFolder: vi.fn(),
 }));
 
 // IS_MOBILE is read at call time inside the hook, so a getter-backed mock
@@ -44,6 +46,7 @@ const mockedInvoke = vi.mocked(invoke);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedGetEffectiveDownloadPath = vi.mocked(getEffectiveDownloadPath);
 const mockedGetCustomDownloadPath = vi.mocked(getCustomDownloadPath);
+const mockedGetMobileDownloadFolder = vi.mocked(getMobileDownloadFolder);
 const mockedJoin = vi.mocked(join);
 
 // Minimal TFunction backed by the real en resources: the hook no longer
@@ -134,6 +137,7 @@ beforeEach(() => {
   mockedGetValidToken.mockResolvedValue("test-token");
   mockedGetEffectiveDownloadPath.mockResolvedValue("C:\\Downloads");
   mockedGetCustomDownloadPath.mockReturnValue(null);
+  mockedGetMobileDownloadFolder.mockReturnValue(null);
   // Windows-style separator, matching the pre-upgrade behavior the existing
   // assertions were written against.
   mockedJoin.mockImplementation((dir: string, file: string) =>
@@ -418,5 +422,95 @@ describe("useMenuDownload mobile (IS_MOBILE)", () => {
     const result = await runDownload();
 
     expect(result.current.downloadMessage).toBe("Saved to app storage");
+  });
+});
+
+describe("useMenuDownload mobile SAF folder (Task 4)", () => {
+  const MOBILE_FOLDER = {
+    uri: "content://tree/primary%3ADownload",
+    name: "Download",
+  };
+  const APP_DIR = "/data/user/0/com.drplay/files";
+
+  function setupMobileFolder(): void {
+    platformMock.IS_MOBILE = true;
+    mockedGetEffectiveDownloadPath.mockResolvedValue(APP_DIR);
+    mockedGetMobileDownloadFolder.mockReturnValue(MOBILE_FOLDER);
+    mockedJoin.mockImplementation((dir: string, file: string) =>
+      Promise.resolve(`${dir}/${file}`),
+    );
+  }
+
+  function saveFileCall(): {
+    uri: string;
+    fileName: string;
+    stagedPath: string;
+  } {
+    const call = mockedInvoke.mock.calls.find(
+      (c) => c[0] === "plugin:saf-download|save_file",
+    );
+    expect(call).toBeDefined();
+    if (!call) throw new Error("expected a saf-download save_file invoke call");
+    return call[1] as { uri: string; fileName: string; stagedPath: string };
+  }
+
+  it("stages via fs write then hands the staged path to the SAF plugin when a folder is picked", async () => {
+    setupMobileFolder();
+    fetchResolved();
+
+    const result = await runDownload();
+
+    const writeIdx = mockedInvoke.mock.calls.findIndex(
+      (c) => c[0] === "plugin:fs|write_file",
+    );
+    const saveIdx = mockedInvoke.mock.calls.findIndex(
+      (c) => c[0] === "plugin:saf-download|save_file",
+    );
+    expect(writeIdx).toBeGreaterThanOrEqual(0);
+    expect(saveIdx).toBeGreaterThan(writeIdx);
+    expect(saveFileCall()).toEqual({
+      uri: MOBILE_FOLDER.uri,
+      fileName: "Test Song - Test Artist.mp3",
+      stagedPath: `${APP_DIR}/Test Song - Test Artist.mp3`,
+    });
+    expect(result.current.downloadMessage).toBe("Saved to Download");
+  });
+
+  it("shows the folder-lost message when the persisted SAF permission was revoked", async () => {
+    setupMobileFolder();
+    fetchResolved();
+    mockedInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "plugin:saf-download|save_file") {
+        // Real-world rejections from the SAF plugin arrive as {message}
+        // objects (PluginResult JSON) — deliberately not an Error.
+        return Promise.reject(
+          Object.assign(new Error("save_failed:permission_denied"), {
+            message: "save_failed:permission_denied",
+          }),
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain(
+      "folder access was revoked",
+    );
+  });
+
+  it("shows 'Download failed' for a generic SAF write failure", async () => {
+    setupMobileFolder();
+    fetchResolved();
+    mockedInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "plugin:saf-download|save_file") {
+        return Promise.reject(new Error("save_failed:create_failed"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain("Download failed");
   });
 });

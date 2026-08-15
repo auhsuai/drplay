@@ -5,6 +5,7 @@ import { getValidToken } from "../utils/apiClient";
 import {
   getEffectiveDownloadPath,
   getCustomDownloadPath,
+  getMobileDownloadFolder,
 } from "../utils/downloadPath";
 import { mergeWithTimeoutSignal } from "../utils/driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
@@ -168,15 +169,66 @@ export function useMenuDownload(t: TFunction) {
         headers: { path: encodeURIComponent(savePath) },
       });
 
-      setDownloadMessage(
-        IS_MOBILE
-          ? // Mobile files land in app-private storage the user cannot browse
-            // from a file manager — say so instead of dumping the internal
-            // /data path. defaultValue keeps the string working until the
-            // i18n JSONs carry the key (they are owned by another branch).
-            t("menu.saved_at_app", { defaultValue: "Saved to app storage" })
-          : `${t("menu.saved_at")} ${savePath}`,
-      );
+      // Task 4 mobile-polish (SAF): with a user-picked Android folder, the
+      // file written above is a STAGED copy in app-private storage — hand it
+      // to the saf-download plugin, which streams it into the picked
+      // content-URI tree (DocumentFile + ContentResolver) and deletes the
+      // staged copy. Without a picked folder the fallback below (app dir)
+      // is exactly the pre-Task-4 behavior.
+      if (IS_MOBILE) {
+        const mobileFolder = getMobileDownloadFolder();
+        if (mobileFolder) {
+          try {
+            await invoke("plugin:saf-download|save_file", {
+              uri: mobileFolder.uri,
+              fileName: finalFileName,
+              stagedPath: savePath,
+            });
+          } catch (saveErr: unknown) {
+            const saveMsg =
+              saveErr &&
+              typeof saveErr === "object" &&
+              typeof (saveErr as { message?: unknown }).message === "string"
+                ? (saveErr as { message: string }).message
+                : String(saveErr);
+            // Classify per Luật 4: permission loss on the persisted tree is
+            // the most actionable failure — the user must re-pick the folder.
+            if (saveMsg.includes("permission_denied")) {
+              void captureError({
+                level: "error",
+                source: "useMenuDownload",
+                message: `SAF save failed — write permission lost on the picked folder (${mobileFolder.name}): ${saveMsg}`,
+              });
+              setDownloadMessage(
+                t("menu.saved_folder_lost_permission", {
+                  defaultValue:
+                    "Download failed — folder access was revoked. Re-pick it in Settings.",
+                }),
+              );
+            } else {
+              void captureError({
+                level: "error",
+                source: "useMenuDownload",
+                message: `SAF save failed (${mobileFolder.name}): ${saveMsg}`,
+              });
+              setDownloadMessage(t("menu.download_failed"));
+            }
+            return;
+          }
+          setDownloadMessage(
+            t("menu.saved_at_folder", {
+              defaultValue: `Saved to ${mobileFolder.name}`,
+            }),
+          );
+          return;
+        }
+        // Fallback: no folder picked yet — app-private storage (pre-Task-4).
+        setDownloadMessage(
+          t("menu.saved_at_app", { defaultValue: "Saved to app storage" }),
+        );
+        return;
+      }
+      setDownloadMessage(`${t("menu.saved_at")} ${savePath}`);
     } catch (err: unknown) {
       // Duck-typed name extraction: DOMException is NOT instanceof Error in
       // some environments (jsdom), yet carries a reliable .name. Still needed
