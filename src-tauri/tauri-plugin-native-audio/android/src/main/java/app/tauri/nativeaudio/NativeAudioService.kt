@@ -33,6 +33,9 @@ class NativeAudioService : MediaSessionService() {
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         // PlayerNotificationManager is the single source for media controls in notification shade.
+        // Retry setup if the service started before the runtime session was ready (the manager
+        // is created lazily in onCreate and can miss the window on slow/cold starts).
+        if (notificationManager == null) setupNotificationManager()
     }
 
     override fun onDestroy() {
@@ -96,15 +99,21 @@ class NativeAudioService : MediaSessionService() {
             .build()
             .apply {
                 setMediaSessionToken(mediaSession.platformToken)
+                // Standard media controls (YT Music/Spotify layout): prev +
+                // play/pause + next. Play/pause icon follows player state
+                // automatically; rewind/fast-forward are app-internal and not
+                // part of the notification contract.
                 setUsePlayPauseActions(true)
-                setUsePreviousAction(false)
-                setUseNextAction(false)
-                setUseFastForwardAction(true)
-                setUseRewindAction(true)
+                setUsePreviousAction(true)
+                setUseNextAction(true)
+                setUseFastForwardAction(false)
+                setUseRewindAction(false)
+                // Compact (collapsed) row shows play/pause + next; prev stays
+                // in the expanded view.
                 setUsePreviousActionInCompactView(false)
-                setUseNextActionInCompactView(false)
-                setUseRewindActionInCompactView(true)
-                setUseFastForwardActionInCompactView(true)
+                setUseNextActionInCompactView(true)
+                setUseRewindActionInCompactView(false)
+                setUseFastForwardActionInCompactView(false)
                 setUseStopAction(false)
                 setSmallIcon(resolveNotificationSmallIconResId())
                 setPlayer(player)

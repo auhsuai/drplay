@@ -322,7 +322,9 @@ object NativeAudioRuntime {
     }
 
     fun play(context: Context) {
-        startService(context)
+        // ensure() first: the service's onCreate reads the runtime session to
+        // build the notification manager. Starting the service before the
+        // session exists would leave the notification never posted.
         synchronized(lock) {
             ensure(context)
             val exoPlayer = player ?: return
@@ -335,6 +337,7 @@ object NativeAudioRuntime {
             lastError = null
             syncTickingLocked()
         }
+        startService(context)
         emitState()
     }
 
@@ -636,6 +639,11 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun play(invoke: Invoke) {
+        // Re-request at the moment the user actually wants audio — the
+        // first-launch dialog may have been dismissed/denied. If denied,
+        // playback still runs (foreground service); only the notification
+        // shade entry is hidden (standard Android 13+ behavior).
+        requestNotificationPermission()
         runCatching {
             NativeAudioRuntime.play(activity.applicationContext)
         }.onSuccess {

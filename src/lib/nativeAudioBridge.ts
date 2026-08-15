@@ -126,6 +126,7 @@ export class NativeAudioEngine {
     await this.invokeStateful("plugin:native-audio|set_source", {
       src: buildDriveStreamUrl(track.id),
       title: track.title,
+      artist: track.artist,
       headers: this.token
         ? { Authorization: `Bearer ${this.token}` }
         : undefined,
