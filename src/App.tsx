@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { exit } from "@tauri-apps/plugin-process";
+import { useTranslation } from "react-i18next";
 import { LoginGate } from "./ui/LoginGate";
 import { FolderSelectionGate } from "./ui/FolderSelectionGate";
 import { TrashGate } from "./ui/TrashGate";
@@ -37,8 +38,14 @@ import { useBackgroundPlayback } from "./hooks/useBackgroundPlayback";
 import { useDriveStore } from "./store/driveStore";
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
-import { handleGlobalBack, useHardwareBack } from "./hooks/useHardwareBack";
+import {
+  handleGlobalBack,
+  useHardwareBack,
+  createDoubleBackExit,
+  DOUBLE_BACK_EXIT_MS,
+} from "./hooks/useHardwareBack";
 import { IS_MOBILE } from "./utils/platform";
+import { showSuccessToast } from "./utils/simpleToast";
 
 import type { Track, UserProfile, TabKey } from "./types";
 export type { Track, UserProfile };
@@ -58,6 +65,7 @@ import {
 export { loadMinimizeToTrayState };
 
 function App() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabKey>(TABS.home);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
@@ -315,17 +323,52 @@ function App() {
   // Popstate interception for the Android hardware back button via the
   // History API: push a synthetic entry on mount so the first back press
   // lands here. Back order: registered overlay stack → NowPlaying → any
-  // non-Home tab → Home → exit the app (Android convention: back at root
-  // exits). Runs ONLY on mobile — desktop keeps native window history.
-  const navStateRef = useRef({ isNowPlayingOpen, activeTab, handleTabChange });
+  // non-Home tab → Home → double-back-to-exit (Android convention: hint
+  // toast + 2s window before the root press exits). Runs ONLY on mobile —
+  // desktop keeps native window history.
+  const navStateRef = useRef({
+    isNowPlayingOpen,
+    activeTab,
+    handleTabChange,
+    t,
+  });
   useEffect(() => {
-    navStateRef.current = { isNowPlayingOpen, activeTab, handleTabChange };
-  }, [isNowPlayingOpen, activeTab, handleTabChange]);
+    navStateRef.current = { isNowPlayingOpen, activeTab, handleTabChange, t };
+  }, [isNowPlayingOpen, activeTab, handleTabChange, t]);
 
   useEffect(() => {
     if (!IS_MOBILE) return;
 
     window.history.pushState({ internal: true }, "");
+
+    // Task 9 mobile-polish: Android "Press back again to exit" convention —
+    // at the root the FIRST back press shows a hint toast and arms a 2s
+    // window; a second press inside the window exits. windowMs matches the
+    // platform convention (2000ms). onArm/onExit read live state via the ref
+    // so this mount-once effect never goes stale.
+    const doubleBack = createDoubleBackExit({
+      windowMs: DOUBLE_BACK_EXIT_MS,
+      onArm: () => {
+        showSuccessToast(
+          navStateRef.current.t("back.press_again_to_exit", {
+            defaultValue: "Nhấn back lần nữa để thoát",
+          }),
+        );
+      },
+      onExit: () => {
+        // plugin-process exit(0) is the documented Tauri v2 way to exit on
+        // Android; the WebView's own window.close() would be a no-op there
+        // (Chromium only lets scripts close windows they opened), so it stays
+        // as the last-resort fallback.
+        exit(0).catch(() => {
+          getCurrentWindow()
+            .close()
+            .catch(() => {
+              window.close();
+            });
+        });
+      },
+    });
 
     const onPopState = () => {
       if (handleGlobalBack()) {
@@ -347,24 +390,18 @@ function App() {
       if (handled) {
         // Push state again to intercept the next back press.
         window.history.pushState({ internal: true }, "");
-      } else {
-        // Root (Home): exit the app. plugin-process exit(0) is the documented
-        // Tauri v2 way to exit on Android; the WebView's own window.close()
-        // would be a no-op there (Chromium only lets scripts close windows
-        // they opened), so it stays as the last-resort fallback.
-        exit(0).catch(() => {
-          getCurrentWindow()
-            .close()
-            .catch(() => {
-              window.close();
-            });
-        });
+      } else if (doubleBack.handleBack()) {
+        // Root (Home): the press armed the 2s double-back window — re-push so
+        // the next back press stays intercepted. When the exit path is taken
+        // handleBack returns false and nothing is re-pushed.
+        window.history.pushState({ internal: true }, "");
       }
     };
 
     window.addEventListener("popstate", onPopState);
     return () => {
       window.removeEventListener("popstate", onPopState);
+      doubleBack.disarm();
     };
   }, []);
 

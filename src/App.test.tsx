@@ -79,10 +79,14 @@ const mocks = vi.hoisted(() => {
         onOk: () => void;
       },
     },
+    // Task 9 mobile-polish: plugin-process exit() — mocked so the
+    // double-back-to-exit path can be asserted instead of invoking Tauri.
+    processExit: vi.fn(() => Promise.resolve(undefined)),
   };
 });
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/plugin-process", () => ({ exit: mocks.processExit }));
 
 // IS_MOBILE is read inside effect bodies (run time), so a getter-backed mock
 // lets tests flip the platform mid-suite (pattern: LoginScreen.test.tsx).
@@ -95,10 +99,12 @@ vi.mock("./utils/platform", () => ({
 
 // App now consumes react-i18next (Suspense fallback + unknown-tab label);
 // stub useTranslation to return the fallback passed to t(), matching every
-// other component test in the repo.
+// other component test in the repo. Task 9 passes { defaultValue } (options
+// object) — resolve it like SettingsTab.test.tsx does.
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
+    t: (key: string, fallback?: string | { defaultValue?: string }) =>
+      (typeof fallback === "string" ? fallback : fallback?.defaultValue) ?? key,
   }),
 }));
 
@@ -528,5 +534,123 @@ describe("App debug skeleton trigger (DEV only)", () => {
         );
       });
     }).not.toThrow();
+  });
+});
+
+// Task 9 mobile-polish: Android back chain — non-Home tabs return Home, and
+// back at Home is double-back-to-exit (hint toast + 2s window) instead of
+// exiting immediately. Desktop registers no popstate listener at all.
+describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
+  const BACK_HINT = "Nhấn back lần nữa để thoát";
+
+  beforeEach(() => {
+    mocks.processExit.mockClear();
+    // Sidebar defaults to OPEN (desktop contract) — on mobile it renders
+    // hidden, so the open state would register the sidebar-close back handler
+    // and silently swallow the first press. Realistic mobile state: closed.
+    localStorage.setItem("drplay_sidebar_open", "false");
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  const pressBack = () => {
+    act(() => {
+      window.dispatchEvent(new Event("popstate"));
+    });
+  };
+
+  it("desktop: popstate is a no-op (no exit, no toast)", async () => {
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    pressBack();
+
+    expect(mocks.processExit).not.toHaveBeenCalled();
+    expect(screen.queryByText(BACK_HINT)).toBeNull();
+  });
+
+  it("mobile: first back at Home shows the hint toast and does NOT exit", async () => {
+    platformMock.IS_MOBILE = true;
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    vi.useFakeTimers();
+    pressBack();
+
+    expect(screen.getByText(BACK_HINT)).toBeTruthy();
+    expect(mocks.processExit).not.toHaveBeenCalled();
+  });
+
+  it("mobile: second back within the 2s window exits the app", async () => {
+    platformMock.IS_MOBILE = true;
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    vi.useFakeTimers();
+    pressBack();
+    vi.advanceTimersByTime(1000);
+    expect(mocks.processExit).not.toHaveBeenCalled();
+
+    pressBack();
+
+    expect(mocks.processExit).toHaveBeenCalledWith(0);
+  });
+
+  it("mobile: back after the 2s window expired arms again (toast, no exit)", async () => {
+    platformMock.IS_MOBILE = true;
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    vi.useFakeTimers();
+    pressBack();
+    vi.advanceTimersByTime(2000);
+    pressBack();
+
+    expect(screen.getByText(BACK_HINT)).toBeTruthy();
+    expect(mocks.processExit).not.toHaveBeenCalled();
+  });
+
+  it("mobile: back on Liked Songs returns Home (no exit, no toast)", async () => {
+    platformMock.IS_MOBILE = true;
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    await act(async () => {
+      mocks.sidebarProps.value?.onTabChange(TABS.likedSongs);
+      await Promise.resolve();
+    });
+    const homeWrapper = screen.getByTestId("home-tab").parentElement;
+    expect(homeWrapper?.className).toContain("hidden");
+
+    pressBack();
+
+    const homeWrapper2 = screen.getByTestId("home-tab").parentElement;
+    expect(homeWrapper2?.className).not.toContain("hidden");
+    expect(mocks.processExit).not.toHaveBeenCalled();
+    expect(screen.queryByText(BACK_HINT)).toBeNull();
+  });
+
+  it("mobile: back on Settings returns Home (no exit, no toast)", async () => {
+    platformMock.IS_MOBILE = true;
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    await act(async () => {
+      mocks.sidebarProps.value?.onTabChange(TABS.settings);
+      await Promise.resolve();
+    });
+    const homeWrapper = screen.getByTestId("home-tab").parentElement;
+    expect(homeWrapper?.className).toContain("hidden");
+
+    pressBack();
+
+    const homeWrapper2 = screen.getByTestId("home-tab").parentElement;
+    expect(homeWrapper2?.className).not.toContain("hidden");
+    expect(mocks.processExit).not.toHaveBeenCalled();
+    expect(screen.queryByText(BACK_HINT)).toBeNull();
   });
 });

@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleGlobalBack, useHardwareBack } from "./useHardwareBack";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DOUBLE_BACK_EXIT_MS,
+  createDoubleBackExit,
+  handleGlobalBack,
+  useHardwareBack,
+} from "./useHardwareBack";
 
 // The handler stack is module-level (single per page load, like the old
 // adr_drplay implementation). Every test unmounts its hooks so cleanup
@@ -106,5 +111,81 @@ describe("useHardwareBack handler stack (LIFO)", () => {
     rerender({ active: false });
 
     expect(handleGlobalBack()).toBe(false);
+  });
+});
+
+// Task 9 mobile-polish: Android "Press back again to exit" convention — the
+// first back press at the root shows a hint and arms a 2s window; a second
+// press inside the window exits. Fake timers drive the window expiry.
+describe("createDoubleBackExit (double-back-to-exit, 2s window)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("first back arms the window: hint callback fires, exit does not", () => {
+    const onArm = vi.fn();
+    const onExit = vi.fn();
+    const { handleBack } = createDoubleBackExit({
+      windowMs: DOUBLE_BACK_EXIT_MS,
+      onArm,
+      onExit,
+    });
+
+    expect(handleBack()).toBe(true);
+    expect(onArm).toHaveBeenCalledTimes(1);
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it("second back inside the window exits and consumes the press (no re-arm)", () => {
+    const onArm = vi.fn();
+    const onExit = vi.fn();
+    const { handleBack } = createDoubleBackExit({
+      windowMs: DOUBLE_BACK_EXIT_MS,
+      onArm,
+      onExit,
+    });
+
+    handleBack();
+    vi.advanceTimersByTime(1000);
+    expect(handleBack()).toBe(false);
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(onArm).toHaveBeenCalledTimes(1);
+  });
+
+  it("expired window resets: the next back arms again instead of exiting", () => {
+    const onArm = vi.fn();
+    const onExit = vi.fn();
+    const { handleBack } = createDoubleBackExit({
+      windowMs: DOUBLE_BACK_EXIT_MS,
+      onArm,
+      onExit,
+    });
+
+    handleBack();
+    vi.advanceTimersByTime(DOUBLE_BACK_EXIT_MS);
+    expect(handleBack()).toBe(true);
+    expect(onArm).toHaveBeenCalledTimes(2);
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it("disarm clears the armed window (unmount/cleanup path — no leak)", () => {
+    const onArm = vi.fn();
+    const onExit = vi.fn();
+    const { handleBack, disarm } = createDoubleBackExit({
+      windowMs: DOUBLE_BACK_EXIT_MS,
+      onArm,
+      onExit,
+    });
+
+    handleBack();
+    disarm();
+    vi.advanceTimersByTime(DOUBLE_BACK_EXIT_MS * 2);
+    expect(handleBack()).toBe(true);
+    expect(onArm).toHaveBeenCalledTimes(2);
+    expect(onExit).not.toHaveBeenCalled();
   });
 });
