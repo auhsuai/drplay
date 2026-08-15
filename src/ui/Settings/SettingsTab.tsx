@@ -27,6 +27,7 @@ import {
 } from "../../utils/downloadPath";
 import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useEffect, useState } from "react";
+import { IS_MOBILE } from "../../utils/platform";
 import { subscribe, getEntries, cancelUpload } from "../../utils/uploadManager";
 import type { UploadEntry } from "../../utils/uploadManager";
 
@@ -399,28 +400,33 @@ export function SettingsTab({
               </button>
             </div>
 
-            <div className="flex items-center justify-between py-4 pb-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
-                  <Archive className="w-6 h-6 text-brand-primary" />
+            {/* Seed offline import (desktop-only: Android never reaches the
+                Rust import_metadata_seed command — no folder of covers to
+                restore on-device, and the dialog invoke would fail). */}
+            {!IS_MOBILE && (
+              <div className="flex items-center justify-between py-4 pb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                    <Archive className="w-6 h-6 text-brand-primary" />
+                  </div>
+                  <div className="max-w-[320px]">
+                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                      {t("settings.import_seed")}
+                    </p>
+                  </div>
                 </div>
-                <div className="max-w-[320px]">
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.import_seed")}
-                  </p>
-                </div>
-              </div>
 
-              <button
-                onClick={() => {
-                  void handleImportSeed();
-                }}
-                disabled={importingSeed}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {t("settings.import_seed")}
-              </button>
-            </div>
+                <button
+                  onClick={() => {
+                    void handleImportSeed();
+                  }}
+                  disabled={importingSeed}
+                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {t("settings.import_seed")}
+                </button>
+              </div>
+            )}
           </div>
 
           <CreditsSection />
