@@ -125,6 +125,10 @@ export const usePlayer = (accessToken: string | null) => {
 
   // Keep system awake
   useEffect(() => {
+    // Keepawake plugin is cfg-gated out of the Android build (ACL: command
+    // plugin:keepawake|stop not allowed) — skip entirely on mobile.
+    if (IS_MOBILE) return;
+
     if (isPlaying) {
       keepAwakeStart({ display: false, idle: false, sleep: true }).catch(
         (e: unknown) => {

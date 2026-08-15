@@ -233,14 +233,18 @@ function App() {
         message: `tray-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
       });
     }
-    invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch(
-      (e: unknown) =>
-        void captureError({
-          source: "App",
-          message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`,
-          kind: "minimize-to-tray-failed",
-        }),
-    );
+    // update_minimize_to_tray is only registered in the desktop build (cfg
+    // gate) — invoking it on Android fails with "Command not found".
+    if (!IS_MOBILE) {
+      invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch(
+        (e: unknown) =>
+          void captureError({
+            source: "App",
+            message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`,
+            kind: "minimize-to-tray-failed",
+          }),
+      );
+    }
   }, [minimizeToTray]);
 
   const handleTabChange = useCallback(

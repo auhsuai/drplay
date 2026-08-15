@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { getValidToken } from "../utils/apiClient";
 import { captureError } from "../utils/errorLog";
 import { ACCESS_TOKEN_KEY } from "../utils/storageKeys";
+import { IS_MOBILE } from "../utils/platform";
 
 const SW_SCOPE = "/sw.js";
 const MSG_UPDATE_TOKEN = "UPDATE_TOKEN";
@@ -39,6 +40,10 @@ function safePost(
 // any future hardening should go through the OS keychain/DPAPI/Stronghold.
 export function useServiceWorker(token?: string | null) {
   useEffect(() => {
+    // GATE B: SW registration is dead on Tauri Android (wry#1710) — skip the
+    // whole SW lifecycle on mobile: no attempt, no error log.
+    if (IS_MOBILE) return;
+
     const getToken = () => token ?? localStorage.getItem(ACCESS_TOKEN_KEY);
 
     if ("serviceWorker" in navigator) {
@@ -125,6 +130,7 @@ export function useServiceWorker(token?: string | null) {
   // later different account cannot reuse it. Duplicates with the lifecycle
   // pushes are harmless: the SW's UPDATE_TOKEN handler is idempotent.
   useEffect(() => {
+    if (IS_MOBILE) return;
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.ready
       .then((reg) => {
@@ -142,6 +148,8 @@ export function useServiceWorker(token?: string | null) {
   }, [token]);
 
   useEffect(() => {
+    if (IS_MOBILE) return;
+
     const handleTokenUpdated = (ev: Event) => {
       const detail = (ev as CustomEvent<{ token?: unknown } | null>).detail;
       const t = detail?.token;
@@ -164,6 +172,7 @@ export function useServiceWorker(token?: string | null) {
   // back, which resolves the SW's retry wait. Failure is non-fatal: the SW
   // falls back to the original 401 response.
   useEffect(() => {
+    if (IS_MOBILE) return;
     if (!("serviceWorker" in navigator)) return;
     const handleSwMessage = (event: MessageEvent) => {
       const data = event.data as { type?: unknown } | null;

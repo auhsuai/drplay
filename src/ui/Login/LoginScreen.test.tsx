@@ -43,7 +43,10 @@ vi.mock("react-i18next", () => {
   };
   return {
     useTranslation: () => ({
-      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+      t: (key: string, fallback?: string | { defaultValue?: string }) =>
+        resolveKey(key) ??
+        (typeof fallback === "string" ? fallback : fallback?.defaultValue) ??
+        key,
     }),
   };
 });
@@ -106,6 +109,29 @@ describe("LoginScreen invoke login error handling", () => {
     await waitFor(() => {
       expect(toastRootText()).toContain("Login timed out. Try again.");
     });
+  });
+
+  it("shows setup hint toast and logs login-not-configured when mobile OAuth client is not configured", async () => {
+    platformMock.IS_MOBILE = true;
+    invokeMock.mockRejectedValueOnce(
+      "login_google_mobile: ANDROID_CLIENT_ID is not configured — follow the GCP setup documented in src-tauri/src/auth_android.rs",
+    );
+    renderLogin();
+
+    fireEvent.click(screen.getByRole("button"));
+
+    await waitFor(() => {
+      expect(toastRootText()).toContain(
+        "Google login chưa được cấu hình trên thiết bị này — cần OAuth client Android trên Google Console",
+      );
+    });
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "LoginScreen",
+        kind: "login-not-configured",
+      }),
+    );
   });
 
   it("shows failed toast and logs login-failed on unexpected error", async () => {

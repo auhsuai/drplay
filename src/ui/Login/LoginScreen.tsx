@@ -87,6 +87,22 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           kind: "login-timeout",
           message: `login-timeout: ${classifyLoginError(error)}`,
         });
+      } else if (
+        errStr.includes("ANDROID_CLIENT_ID") ||
+        errStr.includes("not configured")
+      ) {
+        showErrorToast(
+          t("login.mobile_not_configured", {
+            defaultValue:
+              "Google login chưa được cấu hình trên thiết bị này — cần OAuth client Android trên Google Console",
+          }),
+        );
+        void captureError({
+          level: "warn",
+          source: LOGIN_MODULE,
+          kind: "login-not-configured",
+          message: `login-not-configured: ${classifyLoginError(error)}`,
+        });
       } else {
         showErrorToast(t("login.failed"));
         void captureError({

@@ -83,6 +83,15 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 
+// IS_MOBILE is read inside effect bodies (run time), so a getter-backed mock
+// lets tests flip the platform mid-suite (pattern: LoginScreen.test.tsx).
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("./utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 // App now consumes react-i18next (Suspense fallback + unknown-tab label);
 // stub useTranslation to return the fallback passed to t(), matching every
 // other component test in the repo.
@@ -308,6 +317,43 @@ describe("HomeTab keep-alive across tab switches", () => {
     if (homeParent2) {
       expect(homeParent2.className).not.toContain("hidden");
     }
+  });
+});
+
+describe("App minimize-to-tray invoke gate (desktop-only command)", () => {
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  it("does not invoke update_minimize_to_tray on mobile (command not registered)", async () => {
+    platformMock.IS_MOBILE = true;
+    mocks.invoke.mockClear();
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      "update_minimize_to_tray",
+      expect.anything(),
+    );
+  });
+
+  it("invokes update_minimize_to_tray on desktop (unchanged path)", async () => {
+    platformMock.IS_MOBILE = false;
+    mocks.invoke.mockClear();
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const minimizeArg: unknown = expect.anything();
+    expect(mocks.invoke).toHaveBeenCalledWith("update_minimize_to_tray", {
+      minimize: minimizeArg,
+    });
   });
 });
 
