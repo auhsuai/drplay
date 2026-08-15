@@ -21,8 +21,9 @@
 // also requires the ndk-context application-context to be initialized; tauri
 // 2.11/tao 0.35 no longer does that (upstream issue
 // open-source-cooperative/android-native-keyring-store#21), so we initialize
-// it ourselves from Rust via the standard JNI invocation API — no Kotlin
-// changes and no extra .so needed.
+// it ourselves from Rust via `JNI_OnLoad` (ART hands the process JavaVM to
+// it on library load — `JNI_GetCreatedJavaVMs` is not exported on Android)
+// plus reflection, with no Kotlin changes and no extra .so needed.
 #[cfg(not(target_os = "android"))]
 use keyring::Entry;
 
@@ -44,14 +45,39 @@ type VaultEntry = keyring_core::Entry;
 #[cfg(target_os = "android")]
 mod android_keystore {
     use std::ffi::c_void;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
 
     use jni::objects::GlobalRef;
+    use jni::sys::jint;
     use jni::JavaVM;
 
     /// One-time result of the Android Keystore store initialization.
     /// The `Err` never contains credential material (no token).
     static INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
+
+    /// The process JavaVM, captured by `JNI_OnLoad` (see below). ART calls
+    /// `JNI_OnLoad` with the VM pointer the moment `System.loadLibrary`
+    /// succeeds — before any Rust command can run — so this is always set by
+    /// the time a command touches the credential store.
+    static JAVA_VM: Mutex<Option<JavaVM>> = Mutex::new(None);
+
+    /// JNI entry point ART invokes right after `System.loadLibrary` loads this
+    /// .so. It is the only guaranteed way to obtain the process JavaVM on
+    /// Android: `JNI_GetCreatedJavaVMs` is NOT an exported symbol of libart,
+    /// so referencing it makes the dynamic linker fail the entire library with
+    /// `UnsatisfiedLinkError` (`dlopen failed: cannot locate symbol
+    /// "JNI_GetCreatedJavaVMs"`) — the startup crash this module used to
+    /// cause. Returns the minimum JNI version the code supports.
+    #[no_mangle]
+    pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
+        match JAVA_VM.lock() {
+            Ok(mut guard) => *guard = Some(vm),
+            // Poisoning is unreachable (no panic while the lock is held); take
+            // the lock back rather than aborting across the FFI boundary.
+            Err(poisoned) => *poisoned.into_inner() = Some(vm),
+        }
+        jni::sys::JNI_VERSION_1_6
+    }
 
     /// Install the Android Keystore credential store as the keyring default,
     /// exactly once per process. Returns a contextual error on any failure.
@@ -78,24 +104,23 @@ mod android_keystore {
         Ok(())
     }
 
-    /// Grab the process JavaVM via the standard JNI invocation API
-    /// (`JNI_GetCreatedJavaVMs`). The Android runtime creates the VM before
-    /// any Rust code runs, so a single VM is always available.
+    /// Return the process JavaVM captured by `JNI_OnLoad`. The JNI invocation
+    /// API's `JNI_GetCreatedJavaVMs` cannot be used on Android (libart does
+    /// not export the symbol — see `JNI_OnLoad` above). The VM pointer is
+    /// valid for the process lifetime, so re-wrapping it on each call is safe.
     fn find_java_vm() -> Result<JavaVM, String> {
-        let mut vm_ptr: *mut jni::sys::JavaVM = std::ptr::null_mut();
-        let mut vm_count: jni::sys::jsize = 0;
-        // SAFETY: the JVM writes at most `bufLen` VM pointers into vm_ptr and
-        // the actual count into vm_count; both point at valid locals.
-        let code = unsafe { jni::sys::JNI_GetCreatedJavaVMs(&mut vm_ptr, 1, &mut vm_count) };
-        if code != jni::sys::JNI_OK || vm_count == 0 || vm_ptr.is_null() {
-            return Err(format!(
-                "JNI_GetCreatedJavaVMs failed (code {code}, {vm_count} VM(s))"
-            ));
-        }
-        // SAFETY: vm_ptr is a valid, non-null JavaVM returned by the runtime,
-        // and remains valid for the process lifetime.
-        let vm = unsafe { JavaVM::from_raw(vm_ptr) }.map_err(|e| e.to_string())?;
-        Ok(vm)
+        let guard = match JAVA_VM.lock() {
+            Ok(g) => g,
+            // Poisoning is unreachable (no panic while the lock is held).
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let vm = guard.as_ref().ok_or_else(|| {
+            "JNI_OnLoad not called yet (no JavaVM captured by ART)".to_string()
+        })?;
+        // SAFETY: `from_raw` only null-checks (jni-0.21.1
+        // src/wrapper/java_vm/vm.rs:239-244); the captured VM pointer remains
+        // valid for the process lifetime.
+        unsafe { JavaVM::from_raw(vm.get_java_vm_pointer()) }.map_err(|e| e.to_string())
     }
 
     /// Obtain the application `Context` via `ActivityThread.currentApplication()`
