@@ -117,20 +117,20 @@
 - [ ] Step 3: tsc + vitest file đụng + eslint + playwright viewport mobile (kéo seek thử)
 - [ ] Step 4: commit `feat(android): 5-button transport (prev/-5s/play/+5s/next), full-width seek drag fix`
 
-### Task 6: Mobile — ẩn placeholder cover trong danh sách file (chỉ tên)
+### Task 6: Mobile — fix file bị mất icon trong danh sách (hiện icon chuẩn)
 
-> **User chốt:** file không có cover → KHÔNG hiện hình mặc định (placeholder) — chỉ hiện tên.
+> **User chốt (hiệu chỉnh):** BUG hiện tại — folder CÓ icon, file KHÔNG có gì (Task 12 gate `(!IS_MOBILE || item.isFolder)` đã tắt cả icon file). Fix: file cũng hiện icon (music note) như folder — hiển thị đồng bộ chuẩn. KHÔNG phải "ẩn placeholder".
 
 **Files:**
-- Modify: nơi render placeholder cover trên mobile: `src/ui/MainContent/components/SongCard.tsx` (Task 12 đã gate cover box — kiểm tra còn placeholder nào hiện), `src/ui/LikedSongs/LikedSongs.tsx`, `src/ui/Playlist/PlaylistView.tsx`
-- Đọc trước: grep placeholder/icon box trong các list (Task 12 đã ẩn cover — còn icon mặc định nào hiện không)
+- Modify: `src/ui/MainContent/components/SongCard.tsx` (chỗ gate `(!IS_MOBILE || item.isFolder)` — file trên mobile phải hiện icon nhạc placeholder, KHÔNG hiện cover art)
+- Kiểm tra: `src/ui/LikedSongs/LikedSongs.tsx`, `src/ui/Playlist/PlaylistView.tsx` (track có icon placeholder trên mobile không — đồng bộ)
 
-**Behavior contract:** desktop y hệt; mobile: item FILE hiện tên + size (+date) — KHÔNG có khối hình placeholder; folder: GIỮ icon folder (cần phân biệt folder/file — Main Agent chốt giữ)
+**Behavior contract:** desktop y hệt (cover art hoặc placeholder cũ); mobile: file hiện icon nhạc (lucide `Music2`/`Music` — nhất quán bộ icon đã dùng), folder hiện icon folder; KHÔNG hiện cover art trên mobile (scope Task 12 giữ nguyên — chỉ trả lại ICON placeholder cho file)
 
-- [ ] Step 1: grep + đọc các list (report từng placeholder file:dòng)
-- [ ] Step 2: gate ẩn (test đỏ → xanh: render mobile không có img/icon box cho file)
+- [ ] Step 1: đọc các list — report chính xác chỗ gate làm file mất icon (file:dòng)
+- [ ] Step 2: fix (test đỏ → xanh: render mobile → file có icon nhạc, folder có icon folder; desktop cover path cũ xanh)
 - [ ] Step 3: tsc + vitest file đụng + eslint
-- [ ] Step 4: commit `feat(android): no placeholder cover for files in lists (name only)`
+- [ ] Step 4: commit `fix(android): restore file icon in lists on mobile (was gated with cover)`
 
 ### Task 7: Recent sections — ViewAll cố định, phần khác lướt ngang
 
