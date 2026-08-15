@@ -102,4 +102,25 @@ describe("NowPlayingView mobile gate (IS_MOBILE) — title only", () => {
     expect(h1?.className).toContain("text-xl");
     expect(h1?.className).not.toContain("text-2xl");
   });
+
+  it("offsets the back button below the top safe-area (notch) on mobile", () => {
+    const { container } = renderView();
+    const backBtn = container.querySelector("button");
+    expect(backBtn?.parentElement?.className).toContain("safe-area-inset-top");
+    expect(backBtn?.parentElement?.className).not.toContain("top-6");
+  });
+
+  it("keeps the empty-track back button clear of the notch too", () => {
+    const { container } = renderView({ currentTrack: null });
+    const backBtn = container.querySelector("button");
+    expect(backBtn?.className).toContain("safe-area-inset-top");
+    expect(backBtn?.className).not.toContain("top-8");
+  });
+
+  it("pushes the title block below the safe-area on mobile", () => {
+    const { container } = renderView();
+    const contentGroup = container.querySelector('[class*="pb-24"]');
+    expect(contentGroup?.className).toContain("safe-area-inset-top");
+    expect(contentGroup?.className).not.toContain("pt-24");
+  });
 });

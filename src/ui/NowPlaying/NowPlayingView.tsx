@@ -1,8 +1,9 @@
-import { memo } from "react";
+import { memo, useCallback } from "react";
 import type { Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
+import { seekRelative, SEEK_STEP_SECONDS } from "../../hooks/player/utils";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { SeekBar } from "../components/SeekBar";
@@ -38,12 +39,24 @@ export const NowPlayingView = memo(function NowPlayingView({
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
 
+  // Same shared seek engine as the PlayerBar ±5s buttons and the ArrowLeft/
+  // Right keyboard seek (clamp 0..duration, no-op while duration is unloaded).
+  // The engine instance is the SeekBar's audio too — one source of truth.
+  const audio = getPlaybackEngine();
+  const handleRewind5 = useCallback(() => {
+    seekRelative(audio, -SEEK_STEP_SECONDS);
+  }, [audio]);
+
+  const handleForward5 = useCallback(() => {
+    seekRelative(audio, SEEK_STEP_SECONDS);
+  }, [audio]);
+
   if (!currentTrack) {
     return (
       <main className="flex-1 bg-gray-100 dark:bg-[#121212] overflow-hidden flex flex-col items-center justify-center transition-colors duration-300 relative">
         <button
           onClick={onBack}
-          className="absolute top-8 left-8 p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95 z-50"
+          className={`absolute left-8 p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95 z-50 ${IS_MOBILE ? "top-[calc(env(safe-area-inset-top)+2rem)]" : "top-8"}`}
         >
           <ChevronDown className="w-6 h-6" />
         </button>
@@ -79,8 +92,11 @@ export const NowPlayingView = memo(function NowPlayingView({
             }
       }
     >
-      {/* Back Button */}
-      <div className="absolute top-6 left-6 z-50">
+      {/* Back Button — Task: mobile offset below the notch/status bar via
+          env(safe-area-inset-top); desktop stays at the old top-6. */}
+      <div
+        className={`absolute left-6 z-50 ${IS_MOBILE ? "top-[calc(env(safe-area-inset-top)+1.5rem)]" : "top-6"}`}
+      >
         <button
           onClick={onBack}
           className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
@@ -90,8 +106,12 @@ export const NowPlayingView = memo(function NowPlayingView({
       </div>
 
       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
-        {/* Content group: centered vertically when room, scrolls when not */}
-        <div className="w-full flex flex-col items-center pt-24 md:pt-28 pb-24 md:pb-28">
+        {/* Content group: centered vertically when room, scrolls when not.
+            The mobile top padding carries the same safe-area offset as the
+            back button so the title never overlaps it on notch devices. */}
+        <div
+          className={`w-full flex flex-col items-center ${IS_MOBILE ? "pt-[calc(env(safe-area-inset-top)+6rem)]" : "pt-24"} md:pt-28 pb-24 md:pb-28`}
+        >
           {/* Cover Art Container — Task 12: mobile shows title only; the
               metadata hook is gated there so the container could only ever
               render the placeholder glyph. Desktop untouched. */}
@@ -146,6 +166,8 @@ export const NowPlayingView = memo(function NowPlayingView({
                 onPrevTrack={onPrevTrack}
                 playMode={playMode}
                 onTogglePlayMode={onTogglePlayMode}
+                onRewind5={handleRewind5}
+                onForward5={handleForward5}
               />
 
               {/* Shared seekbar: single source of truth with PlayerBar. The
@@ -153,7 +175,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                   that) and gates the 4/s timeupdate subscription on isOpen. */}
               <SeekBar
                 currentTrack={currentTrack}
-                audio={getPlaybackEngine()}
+                audio={audio}
                 active={isOpen}
                 keyboardSeek={false}
               />
