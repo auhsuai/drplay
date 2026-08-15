@@ -1846,6 +1846,20 @@ describe("PlayerBar mobile gate (IS_MOBILE) — title only", () => {
     });
     expect(mockedGetTrackMetadata).not.toHaveBeenCalled();
   });
+
+  it("compacts the track title to text-xs (12px) on mobile (Task 8)", () => {
+    renderPlayer({ currentTrack: makeTrack({ title: "Song" }) });
+    const title = screen.getByText("Song");
+    expect(title.className).toContain("text-xs");
+    expect(title.className).not.toContain("text-sm");
+  });
+});
+
+describe("PlayerBar desktop font (Task 8)", () => {
+  it("keeps the text-sm (14px) track title on desktop (byte-identical)", () => {
+    renderPlayer({ currentTrack: makeTrack({ title: "Song" }) });
+    expect(screen.getByText("Song").className).toContain("text-sm");
+  });
 });
 
 describe("PlayerBar mobile transport — 5 buttons (Task 5)", () => {

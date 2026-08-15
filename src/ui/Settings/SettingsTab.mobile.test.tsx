@@ -299,3 +299,36 @@ describe("SettingsTab download folder pick (mobile SAF)", () => {
     expect(mockedSetMobileDownloadFolder).not.toHaveBeenCalled();
   });
 });
+
+describe("SettingsTab font compaction (Task 8)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  it("compacts the h1 title to text-2xl on mobile", () => {
+    const { container } = render(<SettingsTab {...baseProps} />);
+    const h1 = container.querySelector("h1");
+    expect(h1?.className).toContain("text-2xl");
+    expect(h1?.className).not.toContain("text-3xl");
+  });
+
+  it("compacts setting row titles to text-sm on mobile", () => {
+    const { container } = render(<SettingsTab {...baseProps} />);
+    expect(container.querySelector("p.text-base")).toBeNull();
+    expect(screen.getByText("Google Drive Folder").className).toContain(
+      "text-sm",
+    );
+  });
+
+  it("keeps text-3xl h1 and text-base row titles on desktop (byte-identical)", () => {
+    platformMock.IS_MOBILE = false;
+    const { container } = render(<SettingsTab {...baseProps} />);
+    expect(container.querySelector("h1")?.className).toContain("text-3xl");
+    expect(container.querySelector("p.text-base")).not.toBeNull();
+  });
+});

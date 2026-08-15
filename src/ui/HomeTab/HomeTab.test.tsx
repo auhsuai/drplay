@@ -1460,3 +1460,34 @@ describe("HomeTab mobile: horizontal snap scroll for non-ViewAll sections (Task 
     expect(folderContainer?.className).not.toContain("overflow-x-auto");
   });
 });
+
+describe("HomeTab font compaction (Task 8)", () => {
+  beforeEach(() => {
+    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getHeavyRotation.mockResolvedValue([]);
+    mocks.getRandomDiscoveries.mockResolvedValue([]);
+    mocks.getMostVisitedFolders.mockResolvedValue([]);
+    mocks.getRecentlyAddedAudioFiles.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("compacts the greeting heading to text-2xl on mobile", async () => {
+    platformMock.IS_MOBILE = true;
+    const { container } = render(<HomeTab {...baseProps()} />);
+    await screen.findByText(/^Good (morning|afternoon|evening)/);
+    const h2 = container.querySelector("h2");
+    expect(h2?.className).toContain("text-2xl");
+    expect(h2?.className).not.toContain("text-3xl");
+  });
+
+  it("keeps the text-3xl greeting heading on desktop (byte-identical)", async () => {
+    const { container } = render(<HomeTab {...baseProps()} />);
+    await screen.findByText(/^Good (morning|afternoon|evening)/);
+    expect(container.querySelector("h2")?.className).toContain("text-3xl");
+  });
+});

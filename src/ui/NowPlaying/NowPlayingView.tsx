@@ -125,7 +125,9 @@ export const NowPlayingView = memo(function NowPlayingView({
           <div className="w-full max-w-4xl px-4 shrink-0 mt-6 md:mt-8 pb-8">
             {/* Info */}
             <div className="text-center mb-8">
-              <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-2 truncate tracking-tight">
+              <h1
+                className={`${IS_MOBILE ? "text-xl" : "text-2xl"} md:text-3xl font-bold text-gray-900 dark:text-white mb-2 truncate tracking-tight`}
+              >
                 {realTitle}
               </h1>
               {!IS_MOBILE && (

@@ -75,6 +75,9 @@ export function SettingsTab({
   setShowTrashScreen,
 }: SettingsTabProps) {
   const { t, i18n } = useTranslation();
+  // Task 8: setting rows compact one notch on mobile (16px -> 14px); desktop
+  // keeps text-base — the string is byte-identical to the pre-task markup.
+  const settingsRowTitle = `${IS_MOBILE ? "text-sm" : "text-base"} font-semibold text-gray-900 dark:text-gray-100`;
   // Mobile (Task 4 mobile-polish): the download row shows the SAF folder
   // NAME when one is picked, otherwise the app-storage default label — the
   // raw /data path is meaningless on a phone. Lazy initializer (the value
@@ -233,7 +236,9 @@ export function SettingsTab({
       <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-brand-primary/10 to-transparent pointer-events-none" />
 
       <div className="max-w-3xl mx-auto relative z-10">
-        <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-10 tracking-tight">
+        <h1
+          className={`${IS_MOBILE ? "text-2xl" : "text-3xl"} font-extrabold text-gray-900 dark:text-white mb-10 tracking-tight`}
+        >
           {t("settings.title")}
         </h1>
 
@@ -248,7 +253,7 @@ export function SettingsTab({
                   <Cloud className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div>
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                  <p className={settingsRowTitle}>
                     {t("settings.google_drive_folder")}
                   </p>
                 </div>
@@ -286,7 +291,7 @@ export function SettingsTab({
                       <div className="min-w-0">
                         <p
                           title={entry.name}
-                          className="text-base font-semibold text-gray-900 dark:text-gray-100 truncate"
+                          className={`${settingsRowTitle} truncate`}
                         >
                           {truncatePathMiddle(entry.name)}
                         </p>
@@ -319,9 +324,7 @@ export function SettingsTab({
                   <Globe className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div>
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.language")}
-                  </p>
+                  <p className={settingsRowTitle}>{t("settings.language")}</p>
                 </div>
               </div>
               <LanguageDropdown />
@@ -333,9 +336,7 @@ export function SettingsTab({
                   <Moon className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div>
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.theme")}
-                  </p>
+                  <p className={settingsRowTitle}>{t("settings.theme")}</p>
                 </div>
               </div>
               <ThemeDropdown currentTheme={theme} onChange={setTheme} />
@@ -355,7 +356,7 @@ export function SettingsTab({
                     <Headphones className="w-6 h-6 text-brand-primary" />
                   </div>
                   <div>
-                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                    <p className={settingsRowTitle}>
                       {backgroundPlaybackLabel()}
                     </p>
                   </div>
@@ -380,7 +381,7 @@ export function SettingsTab({
                     <MonitorDown className="w-6 h-6 text-brand-primary" />
                   </div>
                   <div>
-                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                    <p className={settingsRowTitle}>
                       {t("settings.minimize_to_tray")}
                     </p>
                   </div>
@@ -409,7 +410,7 @@ export function SettingsTab({
                   <Download className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                  <p className={settingsRowTitle}>
                     {t("settings.download_location")}
                   </p>
                   <p
@@ -458,9 +459,7 @@ export function SettingsTab({
                   </svg>
                 </div>
                 <div className="max-w-[320px]">
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.trash")}
-                  </p>
+                  <p className={settingsRowTitle}>{t("settings.trash")}</p>
                 </div>
               </div>
 
@@ -480,7 +479,7 @@ export function SettingsTab({
                   <Eraser className="w-6 h-6 text-brand-primary" />
                 </div>
                 <div className="max-w-[320px]">
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                  <p className={settingsRowTitle}>
                     {t("settings.clear_cache")}
                   </p>
                 </div>
@@ -506,7 +505,7 @@ export function SettingsTab({
                     <Archive className="w-6 h-6 text-brand-primary" />
                   </div>
                   <div className="max-w-[320px]">
-                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                    <p className={settingsRowTitle}>
                       {t("settings.import_seed")}
                     </p>
                   </div>

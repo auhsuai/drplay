@@ -144,7 +144,7 @@ export const SongCard = React.memo(
     // flex-1 min-w-0 so the h3 truncates instead of pushing the ring out.
     // Drag-over mirrors the real group-hover accent on the title too — during
     // an OS drag there is no :hover, so the accent must be forced on.
-    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isDragHovered || isFlashOn || isPlaying ? "text-brand-primary!" : "text-gray-800 dark:text-gray-200"} ${isDragHovered ? "" : "group-hover:text-brand-primary"}`;
+    const titleClass = `${IS_MOBILE ? "text-[13px]" : "text-[15px]"} font-semibold transition-colors truncate leading-tight mb-0.5 ${isDragHovered || isFlashOn || isPlaying ? "text-brand-primary!" : "text-gray-800 dark:text-gray-200"} ${isDragHovered ? "" : "group-hover:text-brand-primary"}`;
 
     const handleCardActivate = () => {
       // Upload race guard (UI layer): an item that is still uploading must not

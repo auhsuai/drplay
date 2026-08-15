@@ -1524,4 +1524,18 @@ describe("SongCard mobile gate (IS_MOBILE)", () => {
       | undefined;
     expect(played?.title).toBe("My Song");
   });
+
+  it("compacts the row title to 13px on mobile (Task 8)", () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const h3 = container.querySelector("h3");
+    expect(h3?.className).toContain("text-[13px]");
+    expect(h3?.className).not.toContain("text-[15px]");
+  });
+});
+
+describe("SongCard desktop font (Task 8)", () => {
+  it("keeps the 15px row title on desktop (byte-identical)", () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(container.querySelector("h3")?.className).toContain("text-[15px]");
+  });
 });

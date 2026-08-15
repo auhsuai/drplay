@@ -264,7 +264,9 @@ export function TrackInfo({
           </div>
         )}
         <div className="overflow-hidden flex-1">
-          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-brand-primary transition-colors">
+          <h4
+            className={`${IS_MOBILE ? "text-xs" : "text-sm"} font-medium text-gray-900 dark:text-gray-100 truncate group-hover:text-brand-primary transition-colors`}
+          >
             {realTitle}
           </h4>
           {!IS_MOBILE && (

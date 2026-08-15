@@ -95,4 +95,11 @@ describe("NowPlayingView mobile gate (IS_MOBILE) — title only", () => {
     expect(screen.getByText("player.no_track")).not.toBeNull();
     expect(screen.queryByRole("img")).toBeNull();
   });
+
+  it("compacts the title to text-xl on mobile (Task 8)", () => {
+    const { container } = renderView();
+    const h1 = container.querySelector("h1");
+    expect(h1?.className).toContain("text-xl");
+    expect(h1?.className).not.toContain("text-2xl");
+  });
 });
