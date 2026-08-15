@@ -198,9 +198,11 @@ function App() {
 
   const [showFolderSelection, setShowFolderSelection] = useState(false);
   // Lazy initializer (read once on mount, no default-flash): stored state is
-  // kept across launches; first launch (no key) defaults to OPEN, the opposite
-  // of the old hardcoded collapsed default. 'false' is the only collapsing
-  // value; anything else (missing/corrupt) opens — see sidebarState.
+  // kept across launches; first launch (no key) defaults to OPEN on desktop
+  // and CLOSED on mobile (closed mobile default keeps the hardware-back
+  // sidebar handler from swallowing the first back press). 'false' is the
+  // only collapsing value; anything else (missing/corrupt) opens — see
+  // sidebarState.
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
