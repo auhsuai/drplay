@@ -97,19 +97,42 @@
 - [ ] Step 5: device test (trên)
 - [ ] Step 6: commit `fix(android): working folder picker + download via SAF (was dialog fail)`
 
-### Task 5: SeekBar dính mép trên PlayerBar (mobile)
+### Task 5: PlayerBar mobile — 5 nút điều khiển + SeekBar kéo full-width (fix drag)
+
+> **User chốt (đã ghi ADR 2026-08-15):** giữ vị trí SeekBar hiện tại (bỏ ý "dính mép trên"); SeekBar kéo ngang TOÀN BỘ PlayerBar; FIX bug hiện tại: chỉ ấn (tap) được, KHÔNG kéo được. Nút điều khiển mobile thành 5 nút đúng thứ tự: **(back bài)(tua về 5s)(play/pause)(tua lên 5s)(next bài)** — tua 5s thay vị trí cạnh play, next/back ra 2 bên ngoài cùng.
 
 **Files:**
-- Modify: `src/ui/PlayerBar/PlayerBar.tsx:264` (SeekBar placement)
+- Modify: `src/ui/PlayerBar/PlayerBar.tsx` (layout controls — mobile 5 nút; desktop byte-identical)
+- Modify: `src/ui/components/SeekBar.tsx` (nếu cần — đọc trước: lỗi drag do đâu — pointer events/touch-action/width container; fix tối thiểu đúng root cause)
+- Modify: `src/lib/nativeAudioBridge.ts` + `src/lib/AudioController.ts` (nếu cần seekRelative(±5) — kiểm tra: audio.currentTime += 5 đủ? đọc interface thật)
+- i18n: aria-label `player.rewind_5s`/`player.forward_5s` defaultValue (KHÔNG sửa JSON — cover chiếm)
 
-**Behavior contract:** desktop y hệt; mobile: SeekBar nằm ngay mép TRÊN của PlayerBar (absolute top-0, full width, cao gọn ~ touch target), phần còn lại của bar giữ layout (TrackInfo + controls), padding-top bù cho seekbar
+**Behavior contract:**
+- Desktop: 0 thay đổi (layout cũ giữ nguyên)
+- Mobile: 5 nút đúng thứ tự user chốt; tua 5s = seek(current ± 5) clamp 0..duration; SeekBar kéo được ngang hết bề rộng bar (fix drag — điều tra useSeekDrag pointer events + touch-action)
+- Test: render 5 nút đúng thứ tự (mock IS_MOBILE); tua ±5 gọi seek đúng giá trị; drag simulation → seek theo vị trí
 
-- [ ] Step 1: đọc PlayerBar layout hiện tại (report cấu trúc)
-- [ ] Step 2: điều chỉnh (mobile-only classes `IS_MOBILE ? ... : ...`) + verify render (playwright viewport mobile screenshot)
-- [ ] Step 3: tsc + vitest (PlayerBar tests) + eslint
-- [ ] Step 4: commit `feat(android): seekbar pinned to top edge of player bar on mobile`
+- [ ] Step 1: đọc PlayerBar controls + SeekBar (useSeekDrag/useSeekHover) + engine seek API — report root cause lỗi drag (file:dòng)
+- [ ] Step 2: fix drag + full-width + 5 nút (TDD đỏ → xanh từng món)
+- [ ] Step 3: tsc + vitest file đụng + eslint + playwright viewport mobile (kéo seek thử)
+- [ ] Step 4: commit `feat(android): 5-button transport (prev/-5s/play/+5s/next), full-width seek drag fix`
 
-### Task 6: Recent sections — ViewAll cố định, phần khác lướt ngang
+### Task 6: Mobile — ẩn placeholder cover trong danh sách file (chỉ tên)
+
+> **User chốt:** file không có cover → KHÔNG hiện hình mặc định (placeholder) — chỉ hiện tên.
+
+**Files:**
+- Modify: nơi render placeholder cover trên mobile: `src/ui/MainContent/components/SongCard.tsx` (Task 12 đã gate cover box — kiểm tra còn placeholder nào hiện), `src/ui/LikedSongs/LikedSongs.tsx`, `src/ui/Playlist/PlaylistView.tsx`
+- Đọc trước: grep placeholder/icon box trong các list (Task 12 đã ẩn cover — còn icon mặc định nào hiện không)
+
+**Behavior contract:** desktop y hệt; mobile: item FILE hiện tên + size (+date) — KHÔNG có khối hình placeholder; folder: GIỮ icon folder (cần phân biệt folder/file — Main Agent chốt giữ)
+
+- [ ] Step 1: grep + đọc các list (report từng placeholder file:dòng)
+- [ ] Step 2: gate ẩn (test đỏ → xanh: render mobile không có img/icon box cho file)
+- [ ] Step 3: tsc + vitest file đụng + eslint
+- [ ] Step 4: commit `feat(android): no placeholder cover for files in lists (name only)`
+
+### Task 7: Recent sections — ViewAll cố định, phần khác lướt ngang
 
 **Files:**
 - Modify: `src/ui/HomeTab/HomeTab.tsx` (các section recent — grep ViewAll/See all + grid hiện tại)
@@ -121,7 +144,7 @@
 - [ ] Step 3: tsc + vitest file đụng + eslint
 - [ ] Step 4: commit `feat(android): horizontal snap scroll for non-viewall home sections`
 
-### Task 7: Giảm font chữ (mobile)
+### Task 8: Giảm font chữ (mobile)
 
 **Files:**
 - Modify: các file UI chính (grep `text-lg|text-xl|text-2xl|text-3xl` trong src/ui — PlayerBar, BottomNav, SongCard, HomeTab sections, Settings rows)
@@ -134,7 +157,7 @@
 - [ ] Step 3: tsc + vitest file đụng + eslint + playwright screenshot so sánh
 - [ ] Step 4: commit `style(android): reduce font sizes on mobile`
 
-### Task 8: Back — tab → Home + double-back-to-exit (toast, 2s)
+### Task 9: Back — tab → Home + double-back-to-exit (toast, 2s)
 
 **Files:**
 - Modify: `src/App.tsx` (chỗ exit trong back chain — Task 10 đã có chain)
@@ -153,7 +176,7 @@
 - [ ] Step 3: tsc + vitest file đụng + eslint
 - [ ] Step 4: commit `feat(android): double-back-to-exit with toast (2s window)`
 
-### Task 9: Search bar thu gọn + path compact (mobile)
+### Task 10: Search bar thu gọn + path compact (mobile)
 
 **Files:**
 - Modify: `src/ui/MainContent/MainContent.tsx` (search input + breadcrumb — grep searchQuery/path)
