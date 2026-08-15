@@ -364,18 +364,17 @@ export function PlaylistView({
                       />
                     </div>
 
-                    {/* Task 12: mobile hides the icon box and the artist
-                        line; the size comes from the stored track (no extra
-                        call). Desktop untouched. */}
-                    {!IS_MOBILE && (
-                      <div
-                        className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gray-200 dark:bg-gray-800"}`}
-                      >
-                        <Music
-                          className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-400"}`}
-                        />
-                      </div>
-                    )}
+                    {/* Task 6: the music icon box renders on mobile too
+                        (Task 12 kept the artist line off; the box is the
+                        track's placeholder — size still comes from the
+                        stored track, no extra call). Desktop untouched. */}
+                    <div
+                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gray-200 dark:bg-gray-800"}`}
+                    >
+                      <Music
+                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-400"}`}
+                      />
+                    </div>
 
                     <div className="flex-1 min-w-0 flex flex-col justify-center">
                       <h4

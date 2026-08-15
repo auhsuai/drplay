@@ -158,13 +158,14 @@ describe("LikedSongs mobile gate (IS_MOBILE) — title + size only", () => {
     vi.clearAllMocks();
   });
 
-  it("hides the artist line and the static icon box; shows the drive size", async () => {
+  it("hides the artist line; shows the drive size and the music icon box (Task 6 restores the box on mobile)", async () => {
     platformMock.IS_MOBILE = true;
     mocks.getFavorites.mockResolvedValue([{ ...TRACK, size: 12345 }]);
-    renderView();
+    const { container } = renderView();
     await screen.findByText("Liked Track 1");
     expect(screen.queryByText("Artist 1")).toBeNull();
     expect(screen.getByText("12.1 KB")).not.toBeNull();
+    expect(container.querySelector('[class*="w-10 h-10"]')).not.toBeNull();
   });
 
   it("omits the size line when the stored track carries no size", async () => {

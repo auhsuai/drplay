@@ -1468,7 +1468,7 @@ describe("SongCard mobile gate (IS_MOBILE)", () => {
     cleanup();
   });
 
-  it("file row shows only filename + size + modifiedTime: no cover thumb, no music icon", () => {
+  it("file row shows filename + size + modifiedTime with the music icon placeholder (Task 6: no cover art, icon restored)", () => {
     const { container } = render(
       <SongCard
         {...baseProps}
@@ -1482,7 +1482,7 @@ describe("SongCard mobile gate (IS_MOBILE)", () => {
     expect(screen.getByText("12.1 KB")).not.toBeNull();
     expect(screen.getByText("2026-08-15")).not.toBeNull();
     expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector(".lucide-music")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
   });
 
   it("file row falls back to trackInfo.size and omits the date when modifiedTime is missing", () => {

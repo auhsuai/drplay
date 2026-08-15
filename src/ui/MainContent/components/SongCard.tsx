@@ -207,36 +207,36 @@ export const SongCard = React.memo(
                 )}
               </div>
             )}
-            {/* Task 12: mobile file rows drop the cover slot entirely — the
-                metadata hook is gated there, so the box could only ever show
-                the placeholder icon. Folder rows keep their icon (navigation,
-                not metadata). Desktop is untouched. */}
-            {(!IS_MOBILE || item.isFolder) && (
-              <div
-                className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}`}
-              >
-                {coverUrl && !item.isFolder ? (
-                  <img
-                    ref={imgRef}
-                    src={coverUrl}
-                    alt={meta.title}
-                    loading="lazy"
-                    decoding="async"
-                    width={48}
-                    height={48}
-                    // The src is already a blob URL built from the picture
-                    // bytes — an error here means those bytes are corrupt, so
-                    // drop to the Music icon (no retry chain exists anymore).
-                    onError={clearCover}
-                    className="w-full h-full object-cover"
-                  />
-                ) : item.isFolder ? (
-                  <Folder className="w-6 h-6" fill="currentColor" />
-                ) : (
-                  <Music className="w-6 h-6 opacity-80" />
-                )}
-              </div>
-            )}
+            {/* Task 12 (mobile): cover art stays desktop-only — the metadata
+                hook is gated there, so the box could only ever show the
+                placeholder icon. Task 6: mobile FILE rows keep the box with
+                the Music placeholder too (folder rows keep their Folder icon)
+                so the list renders a consistent icon per row. Desktop is
+                untouched. */}
+            <div
+              className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}`}
+            >
+              {!IS_MOBILE && coverUrl && !item.isFolder ? (
+                <img
+                  ref={imgRef}
+                  src={coverUrl}
+                  alt={meta.title}
+                  loading="lazy"
+                  decoding="async"
+                  width={48}
+                  height={48}
+                  // The src is already a blob URL built from the picture
+                  // bytes — an error here means those bytes are corrupt, so
+                  // drop to the Music icon (no retry chain exists anymore).
+                  onError={clearCover}
+                  className="w-full h-full object-cover"
+                />
+              ) : item.isFolder ? (
+                <Folder className="w-6 h-6" fill="currentColor" />
+              ) : (
+                <Music className="w-6 h-6 opacity-80" />
+              )}
+            </div>
             <div className="overflow-hidden flex-1 flex flex-col justify-center">
               <h3 className={titleClass}>{meta.title}</h3>
               <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
