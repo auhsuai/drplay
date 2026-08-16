@@ -241,14 +241,13 @@ function PlayerBarImpl({
   // Why: AudioController keeps its VI-language strings as-is (not translated);
   // PlayerBar maps the error codes to translated text so the toast matches the
   // active locale, and falls back to the raw message for unmapped codes.
+  const ERROR_TEXT: Partial<Record<string, string>> = {
+    network_interrupted: t("player.network_interrupted"),
+    format_error: t("player.format_error"),
+    advance_stopped: t("player.advance_stopped"),
+  };
   const errorText = errorInfo
-    ? errorInfo.code === "network_interrupted"
-      ? t("player.network_interrupted")
-      : errorInfo.code === "format_error"
-        ? t("player.format_error")
-        : errorInfo.code === "advance_stopped"
-          ? t("player.advance_stopped")
-          : errorInfo.message
+    ? (ERROR_TEXT[errorInfo.code] ?? errorInfo.message)
     : null;
 
   return (
