@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -19,7 +18,6 @@ private const val NOTIFICATION_ICON_NAME = "ic_notification"
 
 class NativeAudioService : MediaSessionService() {
     private var notificationManager: PlayerNotificationManager? = null
-    private var appLargeIcon: Bitmap? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -41,8 +39,6 @@ class NativeAudioService : MediaSessionService() {
     override fun onDestroy() {
         notificationManager?.setPlayer(null)
         notificationManager = null
-        appLargeIcon?.recycle()
-        appLargeIcon = null
         super.onDestroy()
     }
 
@@ -72,11 +68,7 @@ class NativeAudioService : MediaSessionService() {
                         player: androidx.media3.common.Player,
                         callback: PlayerNotificationManager.BitmapCallback,
                     ): Bitmap? {
-                        if (appLargeIcon == null) {
-                            val iconResId = resolveAppIconResId()
-                            if (iconResId != 0) appLargeIcon = BitmapFactory.decodeResource(resources, iconResId)
-                        }
-                        return appLargeIcon
+                        return null
                     }
                 },
             )
@@ -132,11 +124,6 @@ class NativeAudioService : MediaSessionService() {
         val notificationIcon = resources.getIdentifier(NOTIFICATION_ICON_NAME, "drawable", packageName)
         if (notificationIcon != 0) return notificationIcon
         return android.R.drawable.ic_media_play
-    }
-
-    private fun resolveAppIconResId(): Int {
-        val appIcon = applicationInfo.icon
-        return if (appIcon != 0) appIcon else android.R.drawable.sym_def_app_icon
     }
 
     private fun stopForegroundCompat(remove: Boolean) {
