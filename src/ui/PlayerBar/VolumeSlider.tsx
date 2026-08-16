@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Volume, Volume1, Volume2, VolumeX } from "lucide-react";
-import { AudioController } from "../../lib/AudioController";
 import type { PlaybackEngine } from "../../lib/nativeAudioBridge";
 
 const VOLUME_STEP = 0.1;
@@ -19,8 +18,8 @@ export function VolumeSlider({ audio }: VolumeSliderProps) {
   const volumeBarRef = useRef<HTMLDivElement>(null);
 
   const toggleMute = useCallback(() => {
-    setIsMuted(AudioController.getInstance().toggleMute());
-  }, []);
+    setIsMuted(audio.toggleMute());
+  }, [audio]);
 
   const handleVolumePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!volumeBarRef.current) return;
@@ -45,10 +44,12 @@ export function VolumeSlider({ audio }: VolumeSliderProps) {
       setIsVolumeActive(false);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   // ArrowUp/Down nudge the volume, m/M toggles mute. Owned here (not the
