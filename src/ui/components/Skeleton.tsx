@@ -99,10 +99,6 @@ export type SkeletonRowVariant = "audio" | "folder" | "trash";
 
 export interface SkeletonRowListProps {
   rows?: number;
-  // Kept for type compatibility only — no caller passes it anymore and it is
-  // intentionally not destructured (noUnusedLocals). Row content now follows
-  // the `variant` prop instead of the icon flag.
-  showFolderIcon?: boolean;
   className?: string;
   // stretch makes the list and its rows flex-fill the available height so the
   // skeleton covers the whole loading region instead of leaving a blank
