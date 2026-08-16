@@ -25,6 +25,26 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 11 — MainContent UI + components (2026-08-16)
+
+Audit 18 file (MainContent/*, SongCard, DropZone, UploadButton, SortDropdown, BottomNav...): 82 pattern, **1 upgrade APPROVE**.
+
+| # | File | Pattern cũ → mới | Nguồn tra cứu | Trạng thái |
+|---|------|------------------|---------------|------------|
+| 1 | `src/ui/MainContent/components/ProgressRing.tsx` | `role="img"` → `role="progressbar"` + `aria-valuenow/min/max` (determinate upload progress announce live) | W3C APG + MDN progressbar | ✅ xong (commit `2e53c9f`) |
+
+81 pattern giữ nguyên — nhóm đạt chuẩn cao: TanStack Virtual directDomUpdates (3.14.5 verified .d.ts), useSyncExternalStore uploadVersion, Tauri onDragDropEvent native, custom memo comparator SongCard (KHÁC compiler — load-bearing cho stale-prop fix).
+
+## Backlog (Batch 11 — cross-file findings)
+
+| Hạng mục | Chi tiết |
+|----------|----------|
+| Dead prop `isInitialMount` | Chain 3 file (MainContent:342 → TopNavigationBar:27,46,323 → SortDropdown:21,46) + 3 test file — 100% dead, không consumer đọc. Precedent: dead prop token (c7119bb). Skill refactor |
+| APG arrow-key nav cho menu | UploadButton + SortDropdown + MoreMenu/ThemeDropdown/LanguageDropdown thiếu ArrowDown/Up/Home/End — app-wide, cần shared menu primitive |
+| formatDuration vs formatTime | 2 formatter song song khác contract ("HH:MM:SS" vs "M:SS") — giữ, DRY nit |
+| parseInt partial parse | PaginationControls:91-96 — "12abc"→12, nit UX |
+| UploadBadge `<div aria-label>` không role | a11y nit, transient cue, low severity |
+
 ## Batch 10 — Playback UI (2026-08-16)
 
 Audit 18 file (PlayerBar/* + NowPlaying/* + Seek components): 46 pattern, **4 upgrades APPROVE** (3 dispatch).
