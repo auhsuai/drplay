@@ -25,6 +25,29 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 10 — Playback UI (2026-08-16)
+
+Audit 18 file (PlayerBar/* + NowPlaying/* + Seek components): 46 pattern, **4 upgrades APPROVE** (3 dispatch).
+
+| # | File | Pattern cũ → mới | Nguồn tra cứu | Trạng thái |
+|---|------|------------------|---------------|------------|
+| 1 | `src/ui/PlayerBar/PlayerBar.tsx` | nested ternary errorText (4 nhánh) → `ERROR_TEXT` Record + `??` fallback | eslint no-nested-ternary | ✅ xong (commit `bddc723`) |
+| 2 | `src/ui/PlayerBar/TrackInfo.tsx` | `useAuthStore.getState().accessToken` (non-reactive, chỗ duy nhất trong repo) → `useAuthStore((s) => s.accessToken)` — token refresh refetch cover | zustand v5 README | ✅ xong (commit `236dc15`) |
+| 3 | `src/ui/PlayerBar/VolumeSlider.tsx` | `AudioController.getInstance().toggleMute()` (chỗ duy nhất còn singleton) → `audio.toggleMute()` prop; thêm `pointercancel` (trước kẹt isVolumeActive + rò listener) | pattern repo (useSeekDrag) | ✅ xong (commit `650708e`) |
+
+42 pattern giữ nguyên — PlaybackEngine surface 100% khớp sau Batch 8, render-time adjust chuẩn React 19, DOM-direct hot path đúng (useSyncExternalStore KHÔNG áp dụng 4/s tick).
+
+## Backlog (Batch 10 — cross-file findings)
+
+| Hạng mục | Chi tiết | Skill đề xuất |
+|----------|----------|---------------|
+| Input-focus guard lặp ×3 | useKeyboardShortcuts:22-28, useSeekKeyboard:29-35, VolumeSlider:58-64 (activeElement INPUT/TEXTAREA/contentEditable) | extract `isTextInputTarget()` |
+| Transport button + playMode toggle trùng | TransportControls:87-133 vs NowPlayingControls:55-118 | extract shared component |
+| `seekRelative` lặp ×2 | PlayerBar:98-104 vs NowPlayingView:46-52 | extract `useRelativeSeek(audio)` |
+| Dead prop `showFolderIcon` | Skeleton.tsx:105, 0 caller | xoá (như dead prop token LikedSongs) |
+| Cleanup setState lúc unmount | useNowPlayingMetadata:123-128 (no-op React 18+) | defensive dead code |
+| setTimeout không cancel unmount | useSeekDrag:122 | benign (React 18+ no-op) |
+
 ## Batch 9 — Player core hooks (2026-08-16)
 
 Kết luận audit: **4/4 file chuẩn 2026 — 0 upgrade đạt threshold** (zustand v5 API đúng, React 19 race-guard chuẩn, error handling typed-unknown + captureError context).
