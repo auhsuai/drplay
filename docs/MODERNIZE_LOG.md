@@ -25,6 +25,23 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 12 — Android fixes (2026-08-16)
+
+| # | Việc | Kết quả | Commit |
+|---|------|---------|--------|
+| 1 | Sync launcher icons: gen/android đang dùng icon cũ/mặc định (lệch mọi density) → copy icon chuẩn từ src-tauri/icons/android | ✅ | `c12a02f` |
+| 2 | Bug folder: token refresh trên Android → useDriveInit re-run → restore nav cũ ghi đè folder user đang mở. Fix: nav restore chỉ chạy 1 lần (first hydrate), token đổi chỉ re-verify config | ✅ (RED→GREEN 3 test) | `useDriveInit` commit |
+| 3 | Ẩn m4a khỏi library + upload (m4a non-faststart không stream được qua ExoPlayer — androidx/media#1301) | ✅ (139 test pass) | `44ca6b3` |
+| 4 | Xoá icon app làm large icon khỏi media notification (trả null, bỏ decode dead code) | ✅ | `ee3a352` |
+
+## Backlog (Batch 12)
+
+| Hạng mục | Chi tiết |
+|----------|----------|
+| Notification prev/next mờ | Không phải lỗi Media3 — project đã force-add COMMAND_SEEK_TO_PREVIOUS/NEXT đúng chuẩn. Mờ do OEM skin (One UI/MIUI) render theo PlaybackState.activeActions mà Media3 không set. Không có lever app-side đơn giản |
+| Notification seekbar | PlayerNotificationManager KHÔNG hỗ trợ seekbar. Android 13+ SystemUI tự hiện nếu media seekable (đã đủ điều kiện). Android ≤12: muốn có → custom MediaNotification.Provider (RemoteViews + SeekBar + timer) — việc lớn |
+| m4a đã sync cũ | Cleanup pass xoá row khi full-sync kế tiếp (file Drive gốc còn). Playlist/recents chứa m4a cũ vẫn cố play → native flag streamUnplayable skip nhanh |
+
 ## Batch 11 — MainContent UI + components (2026-08-16)
 
 Audit 18 file (MainContent/*, SongCard, DropZone, UploadButton, SortDropdown, BottomNav...): 82 pattern, **1 upgrade APPROVE**.
