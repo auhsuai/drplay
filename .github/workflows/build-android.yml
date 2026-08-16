@@ -9,6 +9,8 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v5
@@ -59,9 +61,17 @@ jobs:
       - name: Build Android APK (arm64 only)
         run: npm run tauri android build -- --apk --target aarch64 --ci
 
-      - name: Upload APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: DrPlay-Android-APKs
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: error
+      - name: Publish APK to GitHub Release (direct download, no zip)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APKS=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -type f)
+          if [ -z "$APKS" ]; then
+            echo "No APK found — build output missing" >&2
+            exit 1
+          fi
+          gh release delete android-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create android-latest \
+            --title "DrPlay Android APK" \
+            --notes "Build ${{ github.sha }} — cài trực tiếp trên điện thoại." \
+            $APKS
