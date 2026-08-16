@@ -17,8 +17,8 @@ const audioMock = vi.hoisted(() => ({
   on: vi.fn<(event: string, handler: () => void) => () => void>(() => vi.fn()),
 }));
 
-vi.mock("../lib/AudioController", () => ({
-  AudioController: { getInstance: () => audioMock },
+vi.mock("../lib/nativeAudioBridge", () => ({
+  getPlaybackEngine: () => audioMock,
 }));
 
 // jsdom does not implement the Media Session API (no navigator.mediaSession,

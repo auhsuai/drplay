@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePlayerStore } from "../store/playerStore";
-import { AudioController } from "../lib/AudioController";
+import { getPlaybackEngine } from "../lib/nativeAudioBridge";
 import { seekRelative, SEEK_STEP_SECONDS } from "./player/utils";
 
 export interface UseMediaSessionOptions {
@@ -38,7 +38,8 @@ function getMediaSession(): MediaSession | null {
 /**
  * Bridges the OS media surface (Windows flyout / SMTC, keyboard media keys)
  * to the existing player stack. Pure React hook: subscribes to the player
- * store and AudioController events, calls only existing public APIs — it
+ * store and engine events (getPlaybackEngine — AudioController on desktop,
+ * native ExoPlayer engine on mobile), calls only existing public APIs — it
  * never starts a new playback pipeline of its own.
  */
 export function useMediaSession(options: UseMediaSessionOptions) {
@@ -53,7 +54,7 @@ export function useMediaSession(options: UseMediaSessionOptions) {
   const updatePositionState = useCallback(() => {
     const session = getMediaSession();
     if (!session) return;
-    const audio = AudioController.getInstance();
+    const audio = getPlaybackEngine();
     const duration = audio.getDuration();
     const position = audio.getCurrentTime();
     // setPositionState throws TypeError when duration <= 0, position < 0 or
@@ -92,7 +93,7 @@ export function useMediaSession(options: UseMediaSessionOptions) {
     });
     register("pause", () => {
       if (usePlayerStore.getState().isPlaying) {
-        AudioController.getInstance().pause();
+        void getPlaybackEngine().pause();
       }
     });
     register("nexttrack", () => {
@@ -103,16 +104,16 @@ export function useMediaSession(options: UseMediaSessionOptions) {
     });
     register("seekto", (details) => {
       if (details.seekTime === undefined) return;
-      AudioController.getInstance().seek(details.seekTime);
+      void getPlaybackEngine().seek(details.seekTime);
       updatePositionState();
     });
     register("seekbackward", (details) => {
-      const audio = AudioController.getInstance();
+      const audio = getPlaybackEngine();
       seekRelative(audio, -(details.seekOffset ?? SEEK_STEP_SECONDS));
       updatePositionState();
     });
     register("seekforward", (details) => {
-      const audio = AudioController.getInstance();
+      const audio = getPlaybackEngine();
       seekRelative(audio, details.seekOffset ?? SEEK_STEP_SECONDS);
       updatePositionState();
     });
@@ -160,12 +161,12 @@ export function useMediaSession(options: UseMediaSessionOptions) {
       : "none";
   }, [currentTrack, isPlaying]);
 
-  // Position state: reuse AudioController's built-in 200ms timeupdate throttle
+  // Position state: reuse the engine's built-in 200ms timeupdate throttle
   // and its post-seek "progress" re-emits (seeked) — no timer of our own.
   // Guarded like the others: no mediaSession → no subscription at all.
   useEffect(() => {
     if (!getMediaSession()) return;
-    const audio = AudioController.getInstance();
+    const audio = getPlaybackEngine();
     const unsubTime = audio.on("timeupdate", updatePositionState);
     const unsubProgress = audio.on("progress", updatePositionState);
     return () => {
