@@ -43,6 +43,7 @@ import {
   useHardwareBack,
   createDoubleBackExit,
   DOUBLE_BACK_EXIT_MS,
+  registerNativeBackHandler,
 } from "./hooks/useHardwareBack";
 import { IS_MOBILE } from "./utils/platform";
 import { showSuccessToast } from "./utils/simpleToast";
@@ -301,8 +302,8 @@ function App() {
   // order — the LAST registered (highest priority) runs first. Priority:
   // rate-limit modal > trash > folder selection > sidebar > My Drive folder
   // up. All handlers are no-ops on desktop (useHardwareBack skips
-  // registration when inactive, and the popstate effect below early-returns
-  // on !IS_MOBILE).
+  // registration when inactive, and the native back subscriber below
+  // early-returns on !IS_MOBILE).
   // Task 14 mobile-polish: My Drive folder drill-down is a navigation layer
   // ABOVE the exit chain — back on a subfolder pops one history level instead
   // of jumping straight to double-back-to-exit. Registered FIRST (checked
@@ -344,12 +345,12 @@ function App() {
     return true;
   }, showRateLimitModal);
 
-  // Popstate interception for the Android hardware back button via the
-  // History API: push a synthetic entry on mount so the first back press
-  // lands here. Back order: registered overlay stack → NowPlaying → any
-  // non-Home tab → Home → double-back-to-exit (Android convention: hint
-  // toast + 2s window before the root press exits). Runs ONLY on mobile —
-  // desktop keeps native window history.
+  // Android hardware back button via Tauri's official onBackButtonPress event
+  // (2.9+) — each native press fires the chain directly, so no synthetic
+  // history entries are pushed anymore. Back order: registered overlay stack →
+  // NowPlaying → any non-Home tab → Home → double-back-to-exit (Android
+  // convention: hint toast + 2s window before the root press exits). Runs
+  // ONLY on mobile — desktop keeps native window history and never subscribes.
   const navStateRef = useRef({
     isNowPlayingOpen,
     activeTab,
@@ -362,8 +363,6 @@ function App() {
 
   useEffect(() => {
     if (!IS_MOBILE) return;
-
-    window.history.pushState({ internal: true }, "");
 
     // Task 9 mobile-polish: Android "Press back again to exit" convention —
     // at the root the FIRST back press shows a hint toast and arms a 2s
@@ -394,11 +393,12 @@ function App() {
       },
     });
 
-    const onPopState = () => {
-      if (handleGlobalBack()) {
-        window.history.pushState({ internal: true }, "");
-        return;
-      }
+    // Task 9 mobile-polish upgrade: back now arrives via the native
+    // onBackButtonPress event instead of a popstate listener. The chain is
+    // identical to the old pushState hack — handleGlobalBack first (registered
+    // overlay stack), then NowPlaying, then tab → Home, then double-back-exit.
+    const unregisterBack = registerNativeBackHandler(() => {
+      if (handleGlobalBack()) return;
 
       const state = navStateRef.current;
       let handled = false;
@@ -411,20 +411,16 @@ function App() {
         handled = true;
       }
 
-      if (handled) {
-        // Push state again to intercept the next back press.
-        window.history.pushState({ internal: true }, "");
-      } else if (doubleBack.handleBack()) {
-        // Root (Home): the press armed the 2s double-back window — re-push so
-        // the next back press stays intercepted. When the exit path is taken
-        // handleBack returns false and nothing is re-pushed.
-        window.history.pushState({ internal: true }, "");
+      if (!handled) {
+        // Root (Home): the press arms the 2s double-back window (onArm fires
+        // the hint toast); a second press inside the window takes the exit
+        // path via onExit.
+        doubleBack.handleBack();
       }
-    };
+    });
 
-    window.addEventListener("popstate", onPopState);
     return () => {
-      window.removeEventListener("popstate", onPopState);
+      unregisterBack();
       doubleBack.disarm();
     };
   }, []);

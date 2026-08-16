@@ -88,6 +88,22 @@ const mocks = vi.hoisted(() => {
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/plugin-process", () => ({ exit: mocks.processExit }));
 
+// Task 9 mobile-polish upgrade: App now subscribes to the official
+// onBackButtonPress event (Tauri 2.9+) instead of the popstate hack. The mock
+// captures the registered handler so tests can fire a native back press; the
+// returned unregister is stubbed for cleanup assertions.
+const appApiMock = vi.hoisted(() => ({
+  onBackButtonPress: vi.fn(),
+  nativeBackHandler: { value: null as null | (() => void) },
+  unregister: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  onBackButtonPress: (handler: () => void) => {
+    appApiMock.nativeBackHandler.value = handler;
+    return Promise.resolve({ unregister: appApiMock.unregister });
+  },
+}));
+
 // IS_MOBILE is read inside effect bodies (run time), so a getter-backed mock
 // lets tests flip the platform mid-suite (pattern: LoginScreen.test.tsx).
 const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
@@ -539,12 +555,16 @@ describe("App debug skeleton trigger (DEV only)", () => {
 
 // Task 9 mobile-polish: Android back chain — non-Home tabs return Home, and
 // back at Home is double-back-to-exit (hint toast + 2s window) instead of
-// exiting immediately. Desktop registers no popstate listener at all.
+// exiting immediately. The chain is now driven by the official
+// onBackButtonPress event; Desktop never wires the native back listener at
+// all.
 describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
   const BACK_HINT = "Nhấn back lần nữa để thoát";
 
   beforeEach(() => {
     mocks.processExit.mockClear();
+    appApiMock.onBackButtonPress.mockClear();
+    appApiMock.nativeBackHandler.value = null;
     // Sidebar defaults to OPEN (desktop contract) — on mobile it renders
     // hidden, so the open state would register the sidebar-close back handler
     // and silently swallow the first press. Realistic mobile state: closed.
@@ -559,16 +579,17 @@ describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
 
   const pressBack = () => {
     act(() => {
-      window.dispatchEvent(new Event("popstate"));
+      appApiMock.nativeBackHandler.value?.();
     });
   };
 
-  it("desktop: popstate is a no-op (no exit, no toast)", async () => {
+  it("desktop: never wires the native back listener (no exit, no toast)", async () => {
     render(<App />);
     await screen.findByTestId("home-tab");
 
     pressBack();
 
+    expect(appApiMock.onBackButtonPress).not.toHaveBeenCalled();
     expect(mocks.processExit).not.toHaveBeenCalled();
     expect(screen.queryByText(BACK_HINT)).toBeNull();
   });
@@ -679,6 +700,8 @@ describe("App mobile back chain (Task 14: My Drive folder layer)", () => {
   });
 
   beforeEach(() => {
+    appApiMock.onBackButtonPress.mockClear();
+    appApiMock.nativeBackHandler.value = null;
     localStorage.setItem("drplay_sidebar_open", "false");
   });
 
@@ -691,7 +714,7 @@ describe("App mobile back chain (Task 14: My Drive folder layer)", () => {
 
   const pressBack = () => {
     act(() => {
-      window.dispatchEvent(new Event("popstate"));
+      appApiMock.nativeBackHandler.value?.();
     });
   };
 

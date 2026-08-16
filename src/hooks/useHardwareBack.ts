@@ -1,4 +1,7 @@
 import { useEffect } from "react";
+import { onBackButtonPress } from "@tauri-apps/api/app";
+import { captureError } from "../utils/errorLog";
+import { IS_MOBILE } from "../utils/platform";
 
 type BackHandler = () => boolean;
 const handlers: BackHandler[] = [];
@@ -69,4 +72,46 @@ export function handleGlobalBack(): boolean {
     }
   }
   return false;
+}
+
+// Task 9 mobile-polish upgrade: Android hardware back now flows through the
+// official Tauri onBackButtonPress event (2.9+) instead of the History-API
+// popstate hack. The handler runs the whole mobile back chain (registered
+// overlay stack → NowPlaying → tab → Home → double-back-to-exit) and the
+// returned unregister tears the native listener down on cleanup. Desktop
+// (IS_MOBILE=false) must NEVER touch the Tauri API — it is a no-op there.
+export function registerNativeBackHandler(handler: () => void): () => void {
+  if (!IS_MOBILE) {
+    return () => {};
+  }
+
+  let disposed = false;
+  let unregister: (() => void) | undefined;
+
+  void onBackButtonPress(() => {
+    handler();
+  })
+    .then((listener) => {
+      if (disposed) {
+        // Cleanup won the race against the async registration: unregister the
+        // native listener immediately so no leak survives an unmount.
+        void listener.unregister();
+      } else {
+        unregister = () => void listener.unregister();
+      }
+    })
+    .catch((err: unknown) => {
+      void captureError({
+        level: "warn",
+        source: "registerNativeBackHandler",
+        message: `onBackButtonPress-registration-failed:${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
+    });
+
+  return () => {
+    disposed = true;
+    unregister?.();
+  };
 }

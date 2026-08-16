@@ -5,8 +5,32 @@ import {
   DOUBLE_BACK_EXIT_MS,
   createDoubleBackExit,
   handleGlobalBack,
+  registerNativeBackHandler,
   useHardwareBack,
 } from "./useHardwareBack";
+
+// Task 9 mobile-polish upgrade: native back now flows through Tauri's
+// official onBackButtonPress event (2.9+) instead of the History-API popstate
+// hack. The app plugin is stubbed so registration can be asserted without the
+// real IPC, and IS_MOBILE is flipped via the same getter pattern the App tests
+// use.
+const appApiMock = vi.hoisted(() => ({
+  onBackButtonPress: vi.fn(),
+  unregister: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  onBackButtonPress: (handler: () => void) => {
+    appApiMock.onBackButtonPress(handler);
+    return Promise.resolve({ unregister: appApiMock.unregister });
+  },
+}));
+
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
 
 // The handler stack is module-level (single per page load, like the old
 // adr_drplay implementation). Every test unmounts its hooks so cleanup
@@ -187,5 +211,59 @@ describe("createDoubleBackExit (double-back-to-exit, 2s window)", () => {
     expect(handleBack()).toBe(true);
     expect(onArm).toHaveBeenCalledTimes(2);
     expect(onExit).not.toHaveBeenCalled();
+  });
+});
+
+// Task 9 mobile-polish upgrade: the Android hardware back button is wired to
+// Tauri's official onBackButtonPress event (2.9+) instead of the popstate
+// hack. The subscriber must (a) only touch the native API on mobile, (b) fire
+// the provided handler on a back press, and (c) tear the native listener down
+// on cleanup — including the async race where unregister() is called before
+// the register promise resolves.
+describe("registerNativeBackHandler (Android native back event)", () => {
+  beforeEach(() => {
+    appApiMock.onBackButtonPress.mockClear();
+    appApiMock.unregister.mockClear();
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+  });
+
+  it("is a no-op on desktop: never calls the Tauri API", () => {
+    platformMock.IS_MOBILE = false;
+    const unregister = registerNativeBackHandler(() => {});
+    unregister();
+    expect(appApiMock.onBackButtonPress).not.toHaveBeenCalled();
+  });
+
+  it("registers onBackButtonPress on mobile and forwards presses to the handler", async () => {
+    platformMock.IS_MOBILE = true;
+    const handler = vi.fn();
+    registerNativeBackHandler(handler);
+
+    expect(appApiMock.onBackButtonPress).toHaveBeenCalledTimes(1);
+    const nativeCb = appApiMock.onBackButtonPress.mock.calls[0]?.[0] as
+      ((payload: { canGoBack: boolean }) => void) | undefined;
+    expect(nativeCb).toBeTypeOf("function");
+    await Promise.resolve();
+    nativeCb?.({ canGoBack: false });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("unregisters the native listener on cleanup (after register resolves)", async () => {
+    platformMock.IS_MOBILE = true;
+    const unregister = registerNativeBackHandler(() => {});
+    await Promise.resolve();
+    unregister();
+    expect(appApiMock.unregister).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles cleanup BEFORE the register promise resolves (no native listener leak)", async () => {
+    platformMock.IS_MOBILE = true;
+    const unregister = registerNativeBackHandler(() => {});
+    unregister();
+    await Promise.resolve();
+    expect(appApiMock.unregister).toHaveBeenCalledTimes(1);
   });
 });
