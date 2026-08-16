@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Volume, Volume1, Volume2, VolumeX } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
+import type { PlaybackEngine } from "../../lib/nativeAudioBridge";
 
 const VOLUME_STEP = 0.1;
 
 export interface VolumeSliderProps {
-  audio: AudioController;
+  audio: PlaybackEngine;
 }
 
 export function VolumeSlider({ audio }: VolumeSliderProps) {

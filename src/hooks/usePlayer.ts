@@ -167,7 +167,7 @@ export const usePlayer = (accessToken: string | null) => {
       // B3: release the real audio elements (buffers, src, pending retry)
       // before clearing the store state. On mobile the native engine is
       // released instead (pause + token drop).
-      getPlaybackEngine().release();
+      void getPlaybackEngine().release();
       setCurrentTrack(null);
       setIsPlaying(false);
       setOriginalQueue([]);

@@ -48,6 +48,57 @@ type NativeAudioEventHandler<K extends keyof NativeAudioEventMap> = (
   payload: NativeAudioEventMap[K],
 ) => void;
 
+/** Events both engines emit, with identical payload shapes — the shared
+ *  contract the desktop UI layer (PlayerBar/SeekBar/session save) listens on. */
+export type PlaybackEngineEventMap = {
+  timeupdate: { currentTime: number; duration: number };
+  durationchange: { duration: number };
+  buffering: { isBuffering: boolean };
+  progress: undefined;
+  error: { message: string; code: string };
+  ended: undefined;
+  play: undefined;
+  pause: undefined;
+};
+
+export type PlaybackEngineEventHandler<K extends keyof PlaybackEngineEventMap> =
+  (payload: PlaybackEngineEventMap[K]) => void;
+
+/** Compile-time contract shared by the desktop AudioController and the native
+ *  ExoPlayer engine. Both classes `implements` this, so a surface drift (a new
+ *  method on one side, a changed signature on the other) fails tsc instead of
+ *  silently diverging at runtime. */
+export interface PlaybackEngine {
+  on<K extends keyof PlaybackEngineEventMap>(
+    event: K,
+    handler: PlaybackEngineEventHandler<K>,
+  ): () => void;
+  playTrack(track: Track, startTime?: number): Promise<void>;
+  /** Transport ops are sync on desktop, async on the native engine — the
+   *  union documents both (consumers may ignore the returned promise). */
+  pause(): void | Promise<void>;
+  togglePlay(): void | Promise<void>;
+  seek(time: number): void | Promise<void>;
+  getCurrentTime(): number;
+  getDuration(): number;
+  getBuffered(): BufferedSource;
+  setVolume(vol: number): void;
+  toggleMute(): boolean;
+  getVolume(): number;
+  isMuted(): boolean;
+  release(): void | Promise<void>;
+}
+
+/** Plugin command names (tauri-plugin-native-audio) — single source of truth;
+ *  the exact strings are asserted in nativeAudioBridge.test.ts. */
+const PLUGIN_COMMAND = {
+  initialize: "plugin:native-audio|initialize",
+  play: "plugin:native-audio|play",
+  pause: "plugin:native-audio|pause",
+  setSource: "plugin:native-audio|set_source",
+  seekTo: "plugin:native-audio|seek_to",
+} as const;
+
 /** Google Drive media download URL (token travels in the Authorization
  *  header — Google blocked token query params since 2020). */
 export function buildDriveStreamUrl(fileId: string): string {
@@ -64,9 +115,9 @@ function emptyBuffered(): TimeRanges {
   };
 }
 
-/** Mirror of the AudioController surface — export the class type so tests
- *  can type the singleton. */
-export class NativeAudioEngine {
+/** Native ExoPlayer engine implementing the shared PlaybackEngine contract —
+ *  export the class type so tests can type the singleton. */
+export class NativeAudioEngine implements PlaybackEngine {
   private static readonly TIMEUPDATE_THROTTLE_MS = 200;
 
   private listeners: {
@@ -86,7 +137,7 @@ export class NativeAudioEngine {
     if (!IS_MOBILE) return Promise.resolve();
     if (!this.initPromise) {
       this.initPromise = (async () => {
-        await invoke("plugin:native-audio|initialize");
+        await invoke(PLUGIN_COMMAND.initialize);
         // Listener lives for the whole app session (no per-track teardown).
         await addPluginListener(
           "native-audio",
@@ -117,13 +168,13 @@ export class NativeAudioEngine {
     if (this.currentTrackId === track.id) {
       const state = this.lastState;
       if (state && !state.isPlaying) {
-        await this.invokeStateful("plugin:native-audio|play");
+        await this.invokeStateful(PLUGIN_COMMAND.play);
       }
       return;
     }
 
     this.currentTrackId = track.id;
-    await this.invokeStateful("plugin:native-audio|set_source", {
+    await this.invokeStateful(PLUGIN_COMMAND.setSource, {
       src: buildDriveStreamUrl(track.id),
       title: track.title,
       artist: track.artist,
@@ -133,17 +184,17 @@ export class NativeAudioEngine {
     });
 
     if (startTime !== undefined && startTime > 0) {
-      await this.invokeStateful("plugin:native-audio|seek_to", {
+      await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
         position: startTime,
       });
     }
-    await this.invokeStateful("plugin:native-audio|play");
+    await this.invokeStateful(PLUGIN_COMMAND.play);
   }
 
   async pause(): Promise<void> {
     if (!IS_MOBILE) return;
     await this.initOnce().catch(() => undefined);
-    await this.invokeStateful("plugin:native-audio|pause");
+    await this.invokeStateful(PLUGIN_COMMAND.pause);
   }
 
   async togglePlay(): Promise<void> {
@@ -152,14 +203,14 @@ export class NativeAudioEngine {
     if (state?.isPlaying) {
       await this.pause();
     } else {
-      await this.invokeStateful("plugin:native-audio|play");
+      await this.invokeStateful(PLUGIN_COMMAND.play);
     }
   }
 
   async seek(time: number): Promise<void> {
     if (!IS_MOBILE) return;
     await this.initOnce().catch(() => undefined);
-    await this.invokeStateful("plugin:native-audio|seek_to", {
+    await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
       position: time,
     });
   }
@@ -324,11 +375,10 @@ export const nativeAudioEngine = new NativeAudioEngine();
 
 /**
  * Single engine selector for the whole app: desktop keeps the HTMLAudio
- * controller, mobile gets the native ExoPlayer engine. Duck-typed to the
- * AudioController interface (verified cast — the surface is mirrored above).
+ * controller, mobile gets the native ExoPlayer engine. Both classes declare
+ * `implements PlaybackEngine`, so their surface can never drift silently —
+ * a signature change on either side fails tsc at compile time.
  */
-export function getPlaybackEngine(): AudioController {
-  return IS_MOBILE
-    ? (nativeAudioEngine as unknown as AudioController)
-    : AudioController.getInstance();
+export function getPlaybackEngine(): PlaybackEngine {
+  return IS_MOBILE ? nativeAudioEngine : AudioController.getInstance();
 }

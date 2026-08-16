@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatTime } from "../../utils/formatTime";
 import { updateBufferBar, clearBufferBar } from "../../utils/bufferedRange";
 import { IS_MOBILE } from "../../utils/platform";
-import type { AudioController } from "../../lib/AudioController";
+import type { PlaybackEngine } from "../../lib/nativeAudioBridge";
 import type { Track } from "../../types";
 import { SeekClock } from "./SeekClock";
 import { SeekRail } from "./SeekRail";
@@ -12,7 +12,7 @@ import { useSeekKeyboard } from "./useSeekKeyboard";
 
 export interface SeekBarProps {
   currentTrack: Track | null;
-  audio: AudioController;
+  audio: PlaybackEngine;
   /** Gate the 4/s timeupdate subscription (NowPlaying passes isOpen). The
    *  progress/durationchange subscriptions stay live while inactive so the
    *  buffer bar and duration pre-populate before the view opens. */

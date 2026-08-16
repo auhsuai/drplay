@@ -234,7 +234,7 @@ function PlayerBarImpl({
     if (isPlaying) {
       void audio.playTrack(currentTrack, currentTrack.restoreTime);
     } else {
-      audio.pause();
+      void audio.pause();
     }
   }, [isPlaying, currentTrack, loadNonce, audio]);
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
-import type { AudioController } from "../../lib/AudioController";
+import type { PlaybackEngine } from "../../lib/nativeAudioBridge";
 import { updateBufferBar } from "../../utils/bufferedRange";
 import { captureError } from "../../utils/errorLog";
 import { formatTime } from "../../utils/formatTime";
@@ -10,7 +10,7 @@ const SEEK_BAR_MODULE = "SeekBar";
 const DRAG_RELEASE_DELAY_MS = 150;
 
 export interface UseSeekDragOptions {
-  audio: AudioController;
+  audio: PlaybackEngine;
   progressBarRef: RefObject<HTMLDivElement | null>;
   progressFillRef: RefObject<HTMLDivElement | null>;
   currentTimeTextRef: RefObject<HTMLSpanElement | null>;
@@ -106,7 +106,7 @@ export function useSeekDrag({
 
     const onMove = (moveEvent: PointerEvent) => updateTime(moveEvent.clientX);
     const commit = (upEvent: PointerEvent) => {
-      audio.seek(updateTime(upEvent.clientX));
+      void audio.seek(updateTime(upEvent.clientX));
       // Redraw immediately (not clear): updateBufferBar drops stale pre-seek
       // ranges, so an immediate redraw shows the real buffer at the new
       // position without the empty-bar blink a clear would cause. The UI

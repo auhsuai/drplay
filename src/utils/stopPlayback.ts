@@ -14,7 +14,7 @@ import { usePlayerStore } from "../store/playerStore";
  */
 export function stopPlaybackIfTrack(fileId: string): void {
   if (usePlayerStore.getState().currentTrack?.id !== fileId) return;
-  getPlaybackEngine().release();
+  void getPlaybackEngine().release();
   usePlayerStore.getState().setCurrentTrack(null);
   usePlayerStore.getState().setIsPlaying(false);
 }

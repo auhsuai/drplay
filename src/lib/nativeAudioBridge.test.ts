@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { NativeAudioEngine } from "./nativeAudioBridge";
+import { describe, expect, it, vi, beforeEach, expectTypeOf } from "vitest";
+import type { NativeAudioEngine, PlaybackEngine } from "./nativeAudioBridge";
 
 // IS_MOBILE is a module-level constant read at import time — the platform
-// mock must be installed BEFORE the bridge module is imported.
+// mock must be installed BEFORE the bridge module is imported. A live getter
+// (instead of a value snapshot) lets tests flip the branch at call time;
+// vitest caches the vi.mock factory result per file, so a snapshot would
+// freeze the value from the very first import.
 const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
-vi.mock("../utils/platform", () => ({ IS_MOBILE: platformMock.IS_MOBILE }));
+vi.mock("../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
 
 const invokeMock = vi.hoisted(() => vi.fn());
 const addPluginListenerMock = vi.hoisted(() => vi.fn());
@@ -264,11 +271,25 @@ describe("nativeAudioBridge", () => {
 
   describe("getPlaybackEngine", () => {
     it("returns the native engine on mobile (IS_MOBILE=true)", () => {
-      expect(bridge.getPlaybackEngine()).toBe(
-        bridge.nativeAudioEngine as unknown as ReturnType<
-          typeof bridge.getPlaybackEngine
-        >,
+      expect(bridge.getPlaybackEngine()).toBe(bridge.nativeAudioEngine);
+    });
+
+    it("returns the desktop AudioController singleton on desktop (IS_MOBILE=false)", async () => {
+      platformMock.IS_MOBILE = false;
+      vi.resetModules();
+      const desktopBridge = await import("./nativeAudioBridge");
+      const { AudioController } = await import("./AudioController");
+      expect(desktopBridge.getPlaybackEngine()).toBe(
+        AudioController.getInstance(),
       );
+    });
+
+    it("getPlaybackEngine() returns a PlaybackEngine (compile-time contract)", () => {
+      expectTypeOf(bridge.getPlaybackEngine()).toEqualTypeOf<PlaybackEngine>();
+    });
+
+    it("nativeAudioEngine satisfies the PlaybackEngine surface (compile-time contract)", () => {
+      expectTypeOf(bridge.nativeAudioEngine).toExtend<PlaybackEngine>();
     });
   });
 });

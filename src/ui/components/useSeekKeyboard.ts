@@ -1,11 +1,11 @@
 import { useEffect } from "react";
 import type { RefObject } from "react";
-import type { AudioController } from "../../lib/AudioController";
+import type { PlaybackEngine } from "../../lib/nativeAudioBridge";
 import { updateBufferBar } from "../../utils/bufferedRange";
 import { seekRelative, SEEK_STEP_SECONDS } from "../../hooks/player/utils";
 
 export interface UseSeekKeyboardOptions {
-  audio: AudioController;
+  audio: PlaybackEngine;
   bufferFillRef: RefObject<HTMLDivElement | null>;
   playheadRef: RefObject<number>;
   enabled: boolean;

@@ -4,6 +4,7 @@ import { captureError } from "../utils/errorLog";
 import { buildStreamUrl } from "../utils/streamPrefetcher";
 import { isAbortError } from "../hooks/player/utils";
 import type { BufferedSource } from "../utils/bufferedRange";
+import type { PlaybackEngine } from "./nativeAudioBridge";
 
 type AudioEventMap = {
   timeupdate: { currentTime: number; duration: number };
@@ -26,7 +27,7 @@ type AudioEventHandler<K extends keyof AudioEventMap> = (
   payload: AudioEventMap[K],
 ) => void;
 
-export class AudioController {
+export class AudioController implements PlaybackEngine {
   private static readonly THROTTLE_MS = 200;
   private static readonly RETRY_DELAY_MS = 2000;
   private static readonly MAX_RETRIES = 3;
