@@ -71,7 +71,6 @@ const EXTENSION_TO_MIME = {
   flac: 'audio/flac',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
-  m4a: 'audio/mp4',
   aac: 'audio/aac',
   opus: 'audio/opus'
 };

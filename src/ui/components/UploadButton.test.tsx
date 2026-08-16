@@ -48,7 +48,7 @@ vi.mock("../../utils/platform", () => ({
 
 const AUDIO_FILTER = {
   name: "upload.audio_files",
-  extensions: ["mp3", "flac", "wav", "m4a", "ogg", "aac", "opus"],
+  extensions: ["mp3", "flac", "wav", "ogg", "aac", "opus"],
 };
 const BUTTON_TITLE = "upload.button_title";
 const MENU_FILE_LABEL = "upload.upload_file";
@@ -109,6 +109,18 @@ describe("UploadButton", () => {
   it("does not render when token is undefined", () => {
     render(<UploadButton />);
     expect(screen.queryByTitle(BUTTON_TITLE)).toBeNull();
+  });
+
+  it("excludes m4a from the file-picker audio filter (m4a cannot stream on Android)", async () => {
+    mocks.open.mockResolvedValue(null);
+    render(<UploadButton token="tok-1" />);
+
+    await selectFileOption();
+
+    await waitFor(() => {
+      expect(mocks.open).toHaveBeenCalled();
+    });
+    expect(AUDIO_FILTER.extensions).not.toContain("m4a");
   });
 
   it("opens a menu with the two upload options on click", async () => {

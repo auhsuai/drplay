@@ -5,8 +5,9 @@
 export type AudioFormat =
   "mp3" | "flac" | "ogg" | "opus" | "m4a" | "wav" | "aac" | "unknown";
 
-// Canonical extension (no leading dot) -> MIME map, mirroring the 7 playable
-// formats in audioQuery.PLAYABLE_AUDIO_EXTENSIONS. public/sw.js carries an
+// Canonical extension (no leading dot) -> MIME map, mirroring the 6 playable
+// formats in audioQuery.PLAYABLE_AUDIO_EXTENSIONS (m4a dropped for Android —
+// ExoPlayer cannot stream non-faststart files). public/sw.js carries an
 // independent copy (the SW cannot import TS); src/utils/swMime.test.ts guards
 // the two in sync.
 export const AUDIO_EXTENSION_TO_MIME = {
@@ -14,7 +15,6 @@ export const AUDIO_EXTENSION_TO_MIME = {
   flac: "audio/flac",
   wav: "audio/wav",
   ogg: "audio/ogg",
-  m4a: "audio/mp4",
   aac: "audio/aac",
   opus: "audio/opus",
 } as const satisfies Record<string, string>;

@@ -8,18 +8,19 @@ import {
   isAudioFile,
 } from "./audioQuery";
 
-// Query contract (Task 1 — hide-unplayable-formats): only formats Chromium /
-// WebView2 can decode may sync (mp3/flac/wav/ogg/m4a/aac/opus). The
+// Query contract (Task 1 — hide-unplayable-formats): only formats the app can
+// decode may sync (mp3/flac/wav/ogg/aac/opus; m4a was dropped when ExoPlayer
+// on Android could not stream non-faststart moov-at-tail files). The
 // `mimeType contains 'audio/'` clause is gone — discrimination is by playable
 // extension only (a .wma reports audio/x-ms-wma but cannot play).
 const AUDIO_QUERY =
-  "trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' or name contains '.flac' or name contains '.wav' or name contains '.ogg' or name contains '.m4a' or name contains '.aac' or name contains '.opus'))";
+  "trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' or name contains '.flac' or name contains '.wav' or name contains '.ogg' or name contains '.aac' or name contains '.opus'))";
 
 const FOLDER_AUDIO_QUERY =
-  "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
+  "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
 
 const AUDIO_FILES_QUERY =
-  "trashed=false and ((name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
+  "trashed=false and ((name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
 
 const NON_PLAYABLE_EXTENSIONS = [
   ".wma",
@@ -30,6 +31,7 @@ const NON_PLAYABLE_EXTENSIONS = [
   ".dff",
   ".wv",
   ".tak",
+  ".m4a",
 ];
 
 describe("getAudioQuery", () => {
@@ -84,18 +86,17 @@ describe("folder/recent query keeps audio/mpeg coverage (regression v2)", () => 
 });
 
 describe("hasAudioExtension", () => {
-  it("recognizes the 7 playable extensions case-insensitively", () => {
+  it("recognizes the 6 playable extensions case-insensitively", () => {
     expect(hasAudioExtension("song.mp3")).toBe(true);
     expect(hasAudioExtension("song.MP3")).toBe(true);
     expect(hasAudioExtension("song.flac")).toBe(true);
     expect(hasAudioExtension("song.wav")).toBe(true);
     expect(hasAudioExtension("song.ogg")).toBe(true);
-    expect(hasAudioExtension("song.m4a")).toBe(true);
     expect(hasAudioExtension("song.aac")).toBe(true);
     expect(hasAudioExtension("song.opus")).toBe(true);
   });
 
-  it("rejects every non-playable audio extension (wma/aiff/alac/ape/dsf/dff/wv/tak)", () => {
+  it("rejects every non-playable audio extension (wma/aiff/alac/ape/dsf/dff/wv/tak/m4a)", () => {
     for (const ext of NON_PLAYABLE_EXTENSIONS) {
       expect(hasAudioExtension(`song${ext}`)).toBe(false);
     }

@@ -11,12 +11,14 @@ import { IS_MOBILE } from "../../utils/platform";
 import { useClickOutside } from "../../hooks/useClickOutside";
 
 const UPLOAD_BUTTON_MODULE = "UploadButton";
-// Extensions the file picker filters to (no leading dot, per DialogFilter docs).
+// Extensions the file picker filters to (no leading dot, per DialogFilter
+// docs). m4a is excluded: the app cannot play it on Android (ExoPlayer cannot
+// stream non-faststart moov-at-tail files) so uploading it would produce an
+// invisible file — the sync queries never match it.
 const AUDIO_FILE_EXTENSIONS: ReadonlyArray<string> = [
   "mp3",
   "flac",
   "wav",
-  "m4a",
   "ogg",
   "aac",
   "opus",

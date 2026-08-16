@@ -1,18 +1,15 @@
 import { FOLDER_MIME } from "./driveTypes";
 
-// Only formats Chromium/WebView2 can decode are playable in this app.
-// Source of truth: chromium.org/audio-video ("Codec and Container Support" —
-// audio codecs: FLAC, MP3, PCM variants, Vorbis, Opus; AAC limited to Chrome
-// builds) + MDN Web audio codec guide (ALAC Chrome=No, MP3/FLAC/Opus/Vorbis
-// Chrome=Yes, AAC Chrome=MP4-only). wma/aiff/alac/ape/dsf/dff/wv/tak are
-// deliberately absent: Chromium's FFmpeg build has no decoder for them
-// (Task 1 — hide-unplayable-formats plan).
+// Only formats this app can decode are playable. On Android the native engine
+// (ExoPlayer) cannot stream non-faststart m4a (moov at tail — androidx/media
+// #1301), so m4a was dropped from the playable set and hidden from the library
+// like wma/aiff/alac/ape/dsf/dff/wv/tak. Source of truth for every sync
+// query, isAudioFile, and the full-sync stale-row cleanup.
 export const PLAYABLE_AUDIO_EXTENSIONS = [
   ".mp3",
   ".flac",
   ".wav",
   ".ogg",
-  ".m4a",
   ".aac",
   ".opus",
 ] as const;

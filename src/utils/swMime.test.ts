@@ -31,7 +31,7 @@ describe("sw.js EXTENSION_TO_MIME guard", () => {
     expect(Object.keys(SW_EXTENSION_TO_MIME).length).toBeGreaterThan(0);
   });
 
-  it("covers exactly the 7 playable extensions", () => {
+  it("covers exactly the 6 playable extensions", () => {
     expect(Object.keys(SW_EXTENSION_TO_MIME).sort()).toEqual(canonicalKeys());
   });
 

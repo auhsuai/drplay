@@ -377,9 +377,9 @@ describe("delay", () => {
 
 // Task 1 (hide-unplayable-formats): the full-sync pass ends with a one-time
 // cleanup that deletes already-synced rows whose extension is NOT in the
-// playable set (wma/aiff/alac/ape/dsf/dff/wv/tak), because Chromium/WebView2
-// cannot decode them. Folders are never touched (folder rows have no playable
-// extension but isFolder=true).
+// playable set (wma/aiff/alac/ape/dsf/dff/wv/tak + m4a dropped for Android),
+// because the app cannot decode them. Folders are never touched (folder rows
+// have no playable extension but isFolder=true).
 describe("full-sync cleanup of non-playable rows", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -394,6 +394,15 @@ describe("full-sync cleanup of non-playable rows", () => {
         mimeType: "audio/x-ms-wma",
         parentId: "root",
         size: 1,
+        trashed: false,
+        isFolder: false,
+      },
+      {
+        id: "m4a1",
+        name: "old-song.m4a",
+        mimeType: "audio/mp4",
+        parentId: "root",
+        size: 4,
         trashed: false,
         isFolder: false,
       },
@@ -453,6 +462,7 @@ describe("full-sync cleanup of non-playable rows", () => {
     } as MessageEvent);
 
     expect(await db.files.get("wma1")).toBeUndefined();
+    expect(await db.files.get("m4a1")).toBeUndefined();
     expect(await db.files.get("flac1")).toBeDefined();
     expect(await db.files.get("flac2")).toBeDefined();
     expect(await db.files.get("folder1")).toBeDefined();
