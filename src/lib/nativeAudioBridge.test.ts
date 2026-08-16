@@ -182,6 +182,58 @@ describe("nativeAudioBridge", () => {
       expect(seen[0]?.code).toBe("format_error");
     });
 
+    it("appends the moov-at-end hint to the error message when the current track is streamUnplayable", async () => {
+      await engine.initOnce();
+      await engine.playTrack({
+        id: "m4a-1",
+        title: "t",
+        artist: "",
+        streamUrl: "",
+        streamUnplayable: true,
+      });
+      const seen: Array<{ message: string; code: string }> = [];
+      engine.on("error", (e) => seen.push(e));
+
+      listener()({
+        status: "error",
+        currentTime: 0,
+        duration: 0,
+        isPlaying: false,
+        buffering: false,
+        rate: 1,
+        error: "boom",
+      });
+
+      // The hint must not change the error code (format_error) or the
+      // auto-advance path (ended) — it only clarifies the raw message.
+      expect(seen[0]?.message).toContain("m4a moov-at-end");
+      expect(seen[0]?.code).toBe("format_error");
+    });
+
+    it("leaves the error message untouched when the current track is not streamUnplayable", async () => {
+      await engine.initOnce();
+      await engine.playTrack({
+        id: "mp3-1",
+        title: "t",
+        artist: "",
+        streamUrl: "",
+      });
+      const seen: Array<{ message: string }> = [];
+      engine.on("error", (e) => seen.push(e));
+
+      listener()({
+        status: "error",
+        currentTime: 0,
+        duration: 0,
+        isPlaying: false,
+        buffering: false,
+        rate: 1,
+        error: "boom",
+      });
+
+      expect(seen[0]?.message).toBe("boom");
+    });
+
     it("maps playing state to a play event and store sync", async () => {
       await engine.initOnce();
       const seen: string[] = [];

@@ -15,6 +15,12 @@ export type Track = {
   parentId?: string;
   parentName?: string;
   queueItemId?: string;
+  // m4a moov-at-end (non-faststart): flagged by the metadata pipeline
+  // (fetchPipeline.ts writes files.metadata.streamUnplayable) because the
+  // container cannot be streamed progressively unless the server honors byte
+  // ranges. Carried best-effort onto the Track so the native bridge can
+  // surface a clear error message instead of an ambiguous format_error.
+  streamUnplayable?: boolean;
 };
 
 /** The signed-in Google account's display profile. */

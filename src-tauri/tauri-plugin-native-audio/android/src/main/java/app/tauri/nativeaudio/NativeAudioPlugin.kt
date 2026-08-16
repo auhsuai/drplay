@@ -186,7 +186,13 @@ object NativeAudioRuntime {
         override fun onPlayerError(error: PlaybackException) {
             Log.e(TAG, "onPlayerError code=${error.errorCodeName} message=${error.message}", error)
             synchronized(lock) {
-                lastError = error.message ?: "unknown"
+                // DrPlay fork: forward the real error code name (e.g.
+                // ERROR_CODE_PARSER_CONTAINER_UNSUPPORTED / ERROR_CODE_IO_*)
+                // instead of a bare message so the JS side can tell a
+                // container/seek failure (m4a moov-at-end) apart from a
+                // network or decoder one. The JS still maps every error to
+                // code "format_error" — only the diagnostics text changes.
+                lastError = "${error.errorCodeName}: ${error.message ?: "unknown"}"
                 pendingSeekState = null
             }
             syncTicking()

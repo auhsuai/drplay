@@ -127,6 +127,10 @@ export class NativeAudioEngine implements PlaybackEngine {
   private initPromise: Promise<void> | undefined;
   private token: string | null = null;
   private currentTrackId: string | null = null;
+  // The full Track bound to the current source — read in the error path to
+  // enrich the emitted message when the track is known-unstreamable (m4a
+  // moov-at-end flagged by the metadata pipeline). Cleared on release().
+  private currentTrack: Track | null = null;
   private lastState: NativeAudioState | null = null;
   private lastTimeUpdate = 0;
   private wasPlaying = false;
@@ -164,6 +168,8 @@ export class NativeAudioEngine implements PlaybackEngine {
   async playTrack(track: Track, startTime?: number): Promise<void> {
     if (!IS_MOBILE) return;
     await this.initOnce();
+
+    this.currentTrack = track;
 
     if (this.currentTrackId === track.id) {
       const state = this.lastState;
@@ -249,6 +255,7 @@ export class NativeAudioEngine implements PlaybackEngine {
    *  pauses and the notification is dismissed. */
   async release(): Promise<void> {
     this.currentTrackId = null;
+    this.currentTrack = null;
     this.token = null;
     if (!IS_MOBILE) return;
     try {
@@ -323,8 +330,16 @@ export class NativeAudioEngine implements PlaybackEngine {
     this.lastState = state;
 
     if (state.status === "error") {
+      const message = state.error ?? "native playback error";
+      // m4a moov-at-end (streamUnplayable): ExoPlayer can only play it if the
+      // server honors byte ranges; when it still fails, say why instead of a
+      // bare format_error. The code stays "format_error" and the ended emit
+      // below (auto-advance parity) is untouched.
+      const hint = this.currentTrack?.streamUnplayable
+        ? " (m4a moov-at-end — file không phát trực tiếp được)"
+        : "";
       this.emit("error", {
-        message: state.error ?? "native playback error",
+        message: `${message}${hint}`,
         code: "format_error",
       });
       // Parity with AudioController: error → ended → auto-advance.

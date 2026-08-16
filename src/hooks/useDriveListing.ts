@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import type { DriveItem } from "../types";
+import type { DriveItem, Track } from "../types";
 import type { DriveFile } from "../db/db";
 import { db } from "../db/db";
 import {
@@ -87,6 +87,34 @@ export function sortDriveItems(
 // re-reads the snapshot right after subscribing.
 let uploadStatusVersion = 0;
 
+// Pure trackInfo builder extracted from the partition memo so it is
+// unit-testable (same pattern as sortDriveItems). Best-effort metadata read:
+// files.metadata.streamUnplayable is written by the metadata pipeline for m4a
+// moov-at-end files, but metadata may not have been fetched yet when the
+// listing renders — an absent/partial metadata object yields undefined, which
+// the player treats as "unknown, try playback anyway".
+export function buildTrackInfo(
+  file: DriveFile,
+  parentName: string,
+  title: string,
+): Track {
+  const metadata = file.metadata as { streamUnplayable?: boolean } | undefined;
+  // exactOptionalPropertyTypes: the flag must not be set to an explicit
+  // undefined — include the key only when it is truthy (the pipeline only
+  // writes it as true anyway).
+  return {
+    id: file.id,
+    title,
+    artist: "",
+    streamUrl: "",
+    size: file.size,
+    originalName: file.name,
+    parentId: file.parentId,
+    parentName,
+    ...(metadata?.streamUnplayable ? { streamUnplayable: true } : {}),
+  };
+}
+
 export function useDriveListing({
   currentFolderId,
   currentFolderName,
@@ -136,16 +164,7 @@ export function useDriveListing({
         modifiedTime: file.modifiedTime,
         trackInfo: file.isFolder
           ? undefined
-          : {
-              id: file.id,
-              title,
-              artist: "",
-              streamUrl: "",
-              size: file.size,
-              originalName: file.name,
-              parentId: file.parentId,
-              parentName: currentFolderName,
-            },
+          : buildTrackInfo(file, currentFolderName, title),
       };
     });
 
