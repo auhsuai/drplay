@@ -43,10 +43,10 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
 
-      - name: Setup Rust with Android targets
+      - name: Setup Rust with Android target
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -56,8 +56,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build Android APKs
-        run: npm run tauri android build -- --apk --split-per-abi --ci
+      - name: Build Android APK (arm64 only)
+        run: npm run tauri android build -- --apk --target aarch64 --ci
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
