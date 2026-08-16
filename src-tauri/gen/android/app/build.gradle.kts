@@ -40,6 +40,11 @@ android {
             }
         }
         getByName("release") {
+            // Sign with the auto-generated debug keystore so the APK is
+            // installable on test devices (unsigned APKs are rejected with
+            // "missing developer certificate"). Replace with a real keystore
+            // + keystore.properties before publishing to Google Play.
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
