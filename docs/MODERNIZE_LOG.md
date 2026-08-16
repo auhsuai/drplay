@@ -25,6 +25,23 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 9 — Player core hooks (2026-08-16)
+
+Kết luận audit: **4/4 file chuẩn 2026 — 0 upgrade đạt threshold** (zustand v5 API đúng, React 19 race-guard chuẩn, error handling typed-unknown + captureError context).
+
+| # | File | Kết luận | Ghi chú |
+|---|------|----------|---------|
+| 1 | `src/hooks/usePlayer.ts` | ✅ giữ nguyên | useShallow v5, handlePlayTrackRef latest-callback (useEffectEvent KHÔNG thay thế được — callback truyền xuống sub-hook), AbortController abort-previous, isAbortError phân loại, clone `{...prev}` mobile resume có chủ đích |
+| 2 | `src/hooks/player/usePlayerQueue.ts` | ✅ giữ nguyên | NEXT_MODE Record type-safe, Fisher-Yates chuẩn, fallbackHead edge case lock, getState() ngoài render đúng zustand v5, flatMap 1-pass |
+| 3 | `src/hooks/player/usePlayerSession.ts` | ✅ giữ nguyên | AbortController + isAborted() sau mọi await, throttle manual SAVE_THROTTLE_MS=5000 named, beforeunload+pagehide dual (Android), getPlaybackEngine đã modernize |
+| 4 | `src/hooks/player/utils.ts` | ✅ giữ nguyên | classifyPlayerError, isAbortError duck-typed (jsdom), seekRelative clamp + SeekableAudio interface tối thiểu |
+
+## Backlog (Batch 9 — cross-file findings)
+
+| Hạng mục | Chi tiết |
+|----------|----------|
+| Dead-write `lastSessionKv` | sessionCleanup:13,35 DELETE + usePlayerSession:57,62 READ, nhưng KHÔNG nơi nào WRITE key này (grep toàn src xác nhận) → fallback kv production luôn `undefined`. Giữ defensive (test D lock). Cần xác minh ý đồ dual-write với user trước khi sửa. |
+
 ## Batch 8 — Android group (2026-08-16)
 
 Audit nhóm Android mới nhất (commit 2026-08-14/15): 5 file, 27 pattern, 3 upgrades APPROVE.
