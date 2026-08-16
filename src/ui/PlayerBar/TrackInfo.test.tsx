@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
 import { TrackInfo } from "./TrackInfo";
+import { useAuthStore } from "../../store/authStore";
+import { getTrackMetadata } from "../../utils/metadata";
 import en from "../../locales/en/translation.json";
 
 vi.mock("react-i18next", () => {
@@ -49,6 +57,8 @@ vi.mock("../../utils/metadata", () => ({
   V_PLACEHOLDER: 9,
   UNKNOWN_ARTIST: "Unknown Artist",
 }));
+
+const mockedGetTrackMetadata = vi.mocked(getTrackMetadata);
 
 // Task 12: on mobile the bar shows title only — no cover, no artist, and the
 // TrackInfo metadata fetch is skipped. Hoisted mock toggles the platform
@@ -156,5 +166,52 @@ describe("TrackInfo mobile heart + MoreMenu (Task 13 — fix hidden lg:flex)", (
     expect(heart.className).not.toContain("h-8");
     expect(heart.className).toContain("p-1");
     expect(heart.querySelector("svg")?.getAttribute("class")).toContain("w-5");
+  });
+});
+
+describe("TrackInfo reactive auth token (getState → selector)", () => {
+  beforeEach(() => {
+    useAuthStore.setState({ accessToken: null });
+    mockedGetTrackMetadata.mockReset();
+    mockedGetTrackMetadata.mockResolvedValue({
+      title: "Song",
+      artist: "Artist",
+      duration: 0,
+      durationEstimated: false,
+      size: 0,
+      pictureData: null,
+      pictureDataFull: null,
+      v: 9,
+    } as never);
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ accessToken: null });
+  });
+
+  it("re-fetches cover metadata with the refreshed token when accessToken changes mid-session", async () => {
+    useAuthStore.setState({ accessToken: "tok-A" });
+    renderTrackInfo();
+
+    await waitFor(() => {
+      expect(mockedGetTrackMetadata).toHaveBeenCalledWith(
+        "track-1",
+        "tok-A",
+        undefined,
+        undefined,
+        expect.any(Object),
+      );
+    });
+
+    useAuthStore.setState({ accessToken: "tok-B" });
+    await waitFor(() => {
+      expect(mockedGetTrackMetadata).toHaveBeenCalledWith(
+        "track-1",
+        "tok-B",
+        undefined,
+        undefined,
+        expect.any(Object),
+      );
+    });
   });
 });

@@ -87,8 +87,11 @@ export function TrackInfo({
   // (parity with useNowPlayingMetadata and the cards). No picture keeps the
   // Music icon. The track box carries no token prop, so it reads the store
   // (the login gate mounts the player only after auth, so the token is
-  // already set by the time the first track renders).
-  const authToken = useAuthStore.getState().accessToken;
+  // already set by the time the first track renders). Subscribing via a
+  // selector (not getState) keeps the token reactive: a mid-session refresh
+  // re-renders here, so the cover effect re-fetches with the new token
+  // instead of holding a stale one (401 on the Authorization header).
+  const authToken = useAuthStore((s) => s.accessToken);
   const onCoverError = useCallback(
     (error: unknown) => {
       // onError only fires while the fetch effect is enabled, i.e. when
