@@ -59,9 +59,19 @@ jobs:
       - name: Build Android APK (arm64 only)
         run: npm run tauri android build -- --apk --target aarch64 --ci
 
-      - name: Upload APKs
+      - name: Collect APK to a flat path
+        run: |
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -type f | head -1)
+          if [ -z "$APK" ]; then
+            echo "No APK found — build output missing" >&2
+            exit 1
+          fi
+          mkdir -p apk-out
+          cp "$APK" apk-out/drplay.apk
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DrPlay-Android-APKs
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          name: DrPlay-Android-APK
+          path: apk-out/drplay.apk
           if-no-files-found: error
