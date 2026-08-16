@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
@@ -48,6 +48,15 @@ export const useDriveInit = ({
   isLoggedIn,
   hydratedRef,
 }: UseDriveInitParams) => {
+  // Nav restore runs EXACTLY once per session: the first time a root folder is
+  // established (the initial hydrate). useDriveInit's effect also re-runs on
+  // every accessToken change (Android proactive token refresh now succeeds),
+  // and a re-run must NOT re-apply the persisted folder — the user may have
+  // navigated meanwhile, and restoring would yank them back to the folder that
+  // was open at app launch. Everything else initApp does (config re-verify,
+  // root check, cache clear on root change) still runs on every re-init.
+  const hasRestoredNavRef = useRef(false);
+
   const {
     setAppRootFolder,
     setCurrentFolderId,
@@ -197,6 +206,11 @@ export const useDriveInit = ({
 
         if (localRoot) {
           setAppRootFolder(localRoot);
+
+          if (hasRestoredNavRef.current) {
+            return;
+          }
+          hasRestoredNavRef.current = true;
 
           const fallbackToRoot = () => {
             setCurrentFolderId(localRoot);
