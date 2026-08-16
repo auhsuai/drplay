@@ -25,6 +25,19 @@ Mỗi batch = 1 nhóm file liên quan, mỗi file = 1 dispatch riêng (TDD).
 | 5 | `src/search/search.worker.ts` | | | chờ audit |
 | 6 | `src/workers/proSync.worker.ts` | | | chờ audit |
 
+## Batch 8 — Android group (2026-08-16)
+
+Audit nhóm Android mới nhất (commit 2026-08-14/15): 5 file, 27 pattern, 3 upgrades APPROVE.
+
+| # | File | Pattern cũ → mới | Nguồn tra cứu | Trạng thái |
+|---|------|------------------|---------------|------------|
+| 1 | `src/lib/nativeAudioBridge.ts` | cast `as unknown as AudioController` → `PlaybackEngine` interface (2 engine `implements`); 9 magic strings → `PLUGIN_COMMAND` constants | TypeScript handbook + MDN | ✅ xong (commit `f5380ee`) |
+| 2 | `src/hooks/useMediaSession.ts` | 6 chỗ `AudioController.getInstance()` → `getPlaybackEngine()` (fix media keys chạm HTMLAudio chết trên Android) | Tauri docs | ✅ xong (commit `3a39f00`) |
+| 3 | `src/App.tsx` + `useHardwareBack.ts` | popstate/pushState hack → `registerNativeBackHandler()` dùng `onBackButtonPress` (Tauri 2.9+) | PR #14133 (merged 15/10/2025) | ✅ xong (commit `7f875cf`) |
+| 4 | `useNativeAudio.ts`, `useBackgroundPlayback.ts`, `useHardwareBack.ts` stack | ✅ giữ nguyên (23 pattern khác) | MDN + Tauri docs | ✅ giữ nguyên |
+
+Lưu ý: config key `app.onBackButtonPress` KHÔNG tồn tại trong schema Tauri 2.11 (deny_unknown_fields) — native side enabled qua codegen TauriActivity.kt, không đổi tauri.conf.json. Verify hạn chế theo yêu cầu user: test files liên quan + tsc + eslint (không full build/vitest). Cần test thiết bị Android thật (back chain, media keys).
+
 ## Batch 7 — Backlog fix + UI core sweep (2026-08-09)
 
 | # | File | Kết luận | Ghi chú |
