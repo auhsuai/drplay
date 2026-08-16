@@ -920,6 +920,23 @@ describe("SongCard upload progress ring + cancel X (slice 2)", () => {
     expect(circle?.getAttribute("transform")).toContain("rotate(-90");
   });
 
+  it("exposes the ring as a determinate progressbar with a bounded ARIA value range", () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem()}
+        uploadState="uploading"
+        uploadProgress={0.42}
+      />,
+    );
+    const svg = ringSvg(container);
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute("role")).toBe("progressbar");
+    expect(svg?.getAttribute("aria-valuenow")).toBe("42");
+    expect(svg?.getAttribute("aria-valuemin")).toBe("0");
+    expect(svg?.getAttribute("aria-valuemax")).toBe("100");
+  });
+
   it("'uploading' → ring renders in the trailing menu slot (NOT beside the title); X cancel sits inside the ring", () => {
     const { container } = render(
       <SongCard

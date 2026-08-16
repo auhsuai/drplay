@@ -30,10 +30,13 @@ export function ProgressRing({
     <svg
       className="w-5 h-5 shrink-0"
       viewBox={RING_VIEWBOX}
-      role="img"
+      role="progressbar"
       // The % is announced to screen readers only — the ring itself stays a
       // pure arc (user design: no number inside the ring next to the title).
       aria-label={`${String(percent)}%`}
+      aria-valuenow={percent}
+      aria-valuemin={0}
+      aria-valuemax={100}
     >
       <circle
         cx={RING_CENTER}
