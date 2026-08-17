@@ -9,6 +9,7 @@ import {
   Cloud,
   CloudUpload,
   Headphones,
+  LogOut,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
@@ -46,6 +47,7 @@ interface SettingsTabProps {
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
   userProfile?: UserProfile | null;
+  onLogout: () => void;
 }
 
 // Shown while a queued entry waits for its turn in the sequential upload queue.
@@ -77,6 +79,7 @@ export function SettingsTab({
   setShowFolderSelection,
   setShowTrashScreen,
   userProfile,
+  onLogout,
 }: SettingsTabProps) {
   const { t, i18n } = useTranslation();
   // Task 8 + Task 9: setting rows compact two notches on mobile (16px ->
@@ -269,6 +272,13 @@ export function SettingsTab({
                   : t("sidebar.not_authenticated")}
               </p>
             </div>
+            <button
+              onClick={onLogout}
+              className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors shrink-0 ml-auto"
+              title={t("sidebar.log_out")}
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         )}
 
@@ -292,7 +302,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowFolderSelection(true);
                 }}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 whitespace-nowrap"
               >
                 <FolderOpen className="w-4 h-4" />
                 {t("settings.change_folder")}
@@ -334,7 +344,7 @@ export function SettingsTab({
                       onClick={() => {
                         cancelUpload(entry.id);
                       }}
-                      className="px-4 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                      className="px-3 py-1.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 whitespace-nowrap"
                     >
                       {t("settings.uploads_cancel")}
                     </button>
@@ -456,7 +466,7 @@ export function SettingsTab({
                   onClick={() => {
                     void handlePickDownloadPath();
                   }}
-                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                  className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 whitespace-nowrap"
                 >
                   <FolderOpen className="w-4 h-4" />
                   {t("settings.change_path")}
@@ -497,7 +507,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowTrashScreen(true);
                 }}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+                className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent whitespace-nowrap"
               >
                 {t("settings.open_trash")}
               </button>
@@ -519,7 +529,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowCacheManager(true);
                 }}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+                className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent whitespace-nowrap"
               >
                 {t("settings.clear_cache_btn")}
               </button>
@@ -546,7 +556,7 @@ export function SettingsTab({
                     void handleImportSeed();
                   }}
                   disabled={importingSeed}
-                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   {t("settings.import_seed")}
                 </button>

@@ -535,6 +535,10 @@ function App() {
             setBackgroundPlayback={setBackgroundPlayback}
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
+            onLogout={() => {
+              // Fire-and-forget: useAuth's handleLogout handles its own errors.
+              void handleLogout();
+            }}
           />
         }
       />

@@ -546,7 +546,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
               <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
                 <button
                   onClick={onClose}
-                  className="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+                  className="px-3.5 py-2 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
                 >
                   {t("folder_selection.cancel")}
                 </button>
@@ -555,7 +555,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                     void handleEmptyTrash();
                   }}
                   disabled={items.length === 0 || isEmptying}
-                  className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
+                  className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white px-3.5 py-2 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto whitespace-nowrap"
                 >
                   {isEmptying ? (
                     <LoaderCircle className="w-4 h-4 animate-spin" />

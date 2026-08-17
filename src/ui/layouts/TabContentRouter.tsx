@@ -59,6 +59,7 @@ interface TabContentRouterProps {
   setBackgroundPlayback: (enabled: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
+  onLogout: () => void;
 }
 
 export function TabContentRouter({
@@ -88,6 +89,7 @@ export function TabContentRouter({
   setBackgroundPlayback,
   setShowFolderSelection,
   setShowTrashScreen,
+  onLogout,
 }: TabContentRouterProps) {
   const { t } = useTranslation();
 
@@ -187,6 +189,7 @@ export function TabContentRouter({
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
             userProfile={userProfile}
+            onLogout={onLogout}
           />
         ) : (
           <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">

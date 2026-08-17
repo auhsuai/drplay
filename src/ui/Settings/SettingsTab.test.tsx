@@ -132,6 +132,7 @@ const baseProps = {
   setBackgroundPlayback: vi.fn(),
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
+  onLogout: vi.fn(),
 };
 
 describe("SettingsTab download path display", () => {

@@ -215,7 +215,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
           <button
             onClick={onClose}
             disabled={clearing}
-            className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
+            className="px-3.5 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
           >
             {t("menu.cancel")}
           </button>
@@ -224,7 +224,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
               void handleClear();
             }}
             disabled={selected.size === 0 || clearing}
-            className="px-5 py-2.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-3.5 py-2 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
           >
             {clearing && <LoaderCircle className="w-4 h-4 animate-spin" />}
             {t("settings.clear_cache_btn")}

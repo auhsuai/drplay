@@ -117,6 +117,7 @@ const baseProps = {
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
   userProfile: null,
+  onLogout: vi.fn(),
 };
 
 const IMPORT_SEED_LABEL = "Import metadata backup (seed.zip)";
@@ -385,5 +386,50 @@ describe("SettingsTab user header (Task 13)", () => {
     expect(screen.queryByAltText("Profile")).toBeNull();
     expect(screen.queryByText("Alice")).toBeNull();
     expect(screen.queryByText("a@b.c")).toBeNull();
+  });
+});
+
+// Task A: the mobile identity header carries the Sign out button (desktop
+// keeps it in the Sidebar only). Click must route through the onLogout prop —
+// the same callback App wires to useAuth's handleLogout.
+describe("SettingsTab logout button (Task A)", () => {
+  const USER = {
+    name: "Alice",
+    email: "a@b.c",
+    picture: "https://example.com/pic.jpg",
+  };
+
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  it("renders the Sign out button in the mobile identity header when signed in", () => {
+    render(<SettingsTab {...baseProps} userProfile={USER} />);
+    expect(screen.getByTitle("Sign out")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+  });
+
+  it("renders the Sign out button for guests too (userProfile null)", () => {
+    render(<SettingsTab {...baseProps} userProfile={null} />);
+    expect(screen.getByTitle("Sign out")).toBeTruthy();
+  });
+
+  it("calls onLogout when the mobile Sign out button is clicked", () => {
+    const onLogout = vi.fn();
+    render(<SettingsTab {...baseProps} onLogout={onLogout} />);
+    fireEvent.click(screen.getByTitle("Sign out"));
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders NO logout button on desktop (the Sidebar owns it)", () => {
+    platformMock.IS_MOBILE = false;
+    render(<SettingsTab {...baseProps} userProfile={USER} />);
+    expect(screen.queryByTitle("Sign out")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
   });
 });

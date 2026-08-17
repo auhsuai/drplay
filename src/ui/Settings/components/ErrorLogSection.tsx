@@ -179,7 +179,7 @@ export function ErrorLogSection() {
           void handleCopy();
         }}
         disabled={logList.length === 0 || busy}
-        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center"
+        className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center whitespace-nowrap"
       >
         <ScrollText className="w-4 h-4" />
         {copied
@@ -193,7 +193,7 @@ export function ErrorLogSection() {
           void handleClear();
         }}
         disabled={logList.length === 0 || busy}
-        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
       >
         {t("settings.error_log_clear")}
       </button>
