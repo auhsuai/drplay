@@ -3,6 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   fetchWithAuth,
   getValidToken,
+  readRefreshToken,
+  writeRefreshToken,
+  deleteRefreshToken,
   TokenRefreshError,
   scheduleProactiveRefresh,
 } from "./apiClient";
@@ -82,7 +85,7 @@ function makeStorage(): Storage {
 
 let storage: Storage;
 
-beforeEach(() => {
+beforeEach(async () => {
   storage = makeStorage();
   (globalThis as unknown as { localStorage: Storage }).localStorage = storage;
   (
@@ -93,6 +96,13 @@ beforeEach(() => {
   getCurrentSessionIdMock.mockReset();
   getCurrentSessionIdMock.mockReturnValue(0);
   captureErrorMock.mockClear();
+  // Reset the module-level in-memory refresh-token fallback between tests so a
+  // failed-keyring write in one test cannot leak into the next. deleteRefreshToken
+  // clears the in-memory variable (plus keyring + localStorage); the default
+  // invoke mock makes the keyring delete a no-op success.
+  invokeMock.mockReset();
+  invokeMock.mockResolvedValue(undefined);
+  await deleteRefreshToken();
 });
 
 afterEach(() => {
@@ -449,7 +459,7 @@ describe("M1b keyring-backed refresh token storage", () => {
     });
   });
 
-  it("(e) keeps the refresh token in localStorage and logs when the keyring write fails", async () => {
+  it("(e) keeps the refresh token in memory (never localStorage) when the keyring write fails", async () => {
     storage.setItem(REFRESH_TOKEN_KEY, "rt-legacy");
     mockInvoke({
       get_refresh_token: null,
@@ -472,7 +482,12 @@ describe("M1b keyring-backed refresh token storage", () => {
         }),
       );
     });
-    expect(storage.getItem(REFRESH_TOKEN_KEY)).toBe("rt-new");
+    // Google OAuth best-practice: a refresh token must never live in
+    // localStorage, even when the keyring write fails.
+    expect(storage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    // The rotated token survives in memory for the current session only.
+    mockInvoke({ get_refresh_token: null });
+    await expect(readRefreshToken()).resolves.toBe("rt-new");
   });
 
   it("(f) times out a hanging keyring read and falls back to localStorage", async () => {
@@ -501,6 +516,72 @@ describe("M1b keyring-backed refresh token storage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Secure-storage upgrade (Google OAuth best-practice 2026-05-20: user tokens,
+// including refresh tokens, must be stored securely — never localStorage). The
+// keyring remains the source of truth; on keyring write failure the token is
+// kept in a module-level in-memory variable for the current session only, and
+// localStorage is only ever read ONCE as a migration path for pre-keyring
+// users (read → write keyring → clear immediately).
+describe("refresh token secure storage (no localStorage fallback)", () => {
+  it("writeRefreshToken never writes to localStorage when the keyring write fails", async () => {
+    mockInvoke({
+      set_refresh_token: () => Promise.reject(new Error("vault denied")),
+    });
+
+    await writeRefreshToken("secret");
+
+    expect(storage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    // The token survives in memory for the current session.
+    mockInvoke({ get_refresh_token: null });
+    await expect(readRefreshToken()).resolves.toBe("secret");
+  });
+
+  it("readRefreshToken returns null when keyring and in-memory are both empty (no localStorage read)", async () => {
+    mockInvoke({ get_refresh_token: null });
+
+    await expect(readRefreshToken()).resolves.toBeNull();
+  });
+
+  it("migrates a legacy localStorage token once: reads it, writes the keyring, clears localStorage", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt-legacy");
+    mockInvoke({
+      get_refresh_token: null,
+      set_refresh_token: undefined,
+    });
+
+    await expect(readRefreshToken()).resolves.toBe("rt-legacy");
+
+    expect(invokeMock).toHaveBeenCalledWith("set_refresh_token", {
+      token: "rt-legacy",
+    });
+    expect(storage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    // Keyring now holds it: a second read comes from the keyring.
+    mockInvoke({
+      get_refresh_token: "rt-legacy",
+      set_refresh_token: undefined,
+    });
+    await expect(readRefreshToken()).resolves.toBe("rt-legacy");
+  });
+
+  it("deleteRefreshToken clears the in-memory fallback in addition to keyring and localStorage", async () => {
+    mockInvoke({
+      set_refresh_token: () => Promise.reject(new Error("vault denied")),
+    });
+    await writeRefreshToken("secret");
+    expect(storage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    // Sanity: the same-session read still recovers it from memory.
+    mockInvoke({ get_refresh_token: null });
+    await expect(readRefreshToken()).resolves.toBe("secret");
+
+    mockInvoke({ delete_refresh_token: undefined });
+    await deleteRefreshToken();
+
+    // Keyring empty + localStorage empty → the in-memory copy is gone too.
+    mockInvoke({ get_refresh_token: null });
+    await expect(readRefreshToken()).resolves.toBeNull();
   });
 });
 

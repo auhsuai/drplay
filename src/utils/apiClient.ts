@@ -41,7 +41,7 @@ const REFRESH_TIMEOUT_MS = 15_000;
 // Keyring (OS credential vault) invokes can stall under lock-screen or DPAPI
 // pressure; bound each one so a hung vault cannot block the refresh flow
 // longer than this. Shorter than REFRESH_TIMEOUT_MS because a vault hiccup is
-// transient and readRefreshToken has a localStorage fallback anyway.
+// transient and readRefreshToken falls back to an in-memory copy.
 const KEYRING_TIMEOUT_MS = 5000;
 
 // Revoke (logout) is best-effort fire-and-forget: bound it so a stalled
@@ -114,6 +114,12 @@ let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
 // successful refresh and whenever the chain is stopped (stopProactiveRefresh),
 // so a later failure always starts a fresh cycle from the base delay.
 let retryAttempt = 0;
+// In-memory fallback for the refresh token when the keyring write fails.
+// Google OAuth best-practice: refresh tokens live ONLY in secure storage —
+// never localStorage — so on a vault failure the token survives for the
+// current session in memory and an app restart drops it (the user must log in
+// again, the correct degraded behavior; the failure is always logged).
+let inMemoryRefreshToken: string | null = null;
 
 export const stopProactiveRefresh = () => {
   if (refreshTimerId) {
@@ -246,12 +252,14 @@ function scheduleRetryRefresh() {
 }
 
 /**
- * Read the long-lived refresh token from the OS credential vault (keyring).
- * The keyring is the source of truth; localStorage only holds a legacy copy
- * from before the keyring migration. Fallback order: keyring → localStorage →
- * null. A keyring failure is non-fatal (warn + fallback), so a vault hiccup
- * can never sign the user out.
- * @returns The refresh token, or null when neither store has one.
+ * Read the long-lived refresh token from the OS credential vault (keyring),
+ * the source of truth. Fallback order: keyring → in-memory copy (set when a
+ * keyring write failed this session) → one-time migration from a legacy
+ * localStorage copy (pre-keyring users: the token is moved into the keyring
+ * and localStorage is cleared immediately — it is never a standing fallback).
+ * A keyring failure is non-fatal (warn + fallback), so a vault hiccup can
+ * never sign the user out.
+ * @returns The refresh token, or null when no store has one.
  */
 export const readRefreshToken = async (): Promise<string | null> => {
   try {
@@ -268,21 +276,43 @@ export const readRefreshToken = async (): Promise<string | null> => {
     await captureError({
       level: "warn",
       source: "apiClient",
-      message: `refresh-token-keyring-read-failed, falling back to localStorage: ${err instanceof Error ? err.message : String(err)}`,
+      message: `refresh-token-keyring-read-failed, using in-memory fallback: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
-  // Migration path: users who logged in before the keyring existed still have
-  // their token here; the next successful write migrates it to the keyring
-  // and removes this copy (see writeRefreshToken).
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
+  if (inMemoryRefreshToken !== null) {
+    return inMemoryRefreshToken;
+  }
+  // One-time migration path: users who logged in before the keyring existed
+  // still have their token here. Move it into secure storage and clear
+  // localStorage right away; after this the token is never read from
+  // localStorage again (our code no longer writes it there).
+  let legacyToken: string | null = null;
+  try {
+    legacyToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+  } catch (err: unknown) {
+    await captureError({
+      level: "warn",
+      source: "apiClient",
+      message: `refresh-token-localstorage-read-failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return null;
+  }
+  if (legacyToken) {
+    await writeRefreshToken(legacyToken);
+    return legacyToken;
+  }
+  return null;
 };
 
 /**
  * Persist the long-lived refresh token in the OS credential vault. Fire-and-
  * forget from the caller's perspective: it must not block the refresh flow
- * (the access token is already valid). On failure the token is kept in
- * localStorage (degraded mode, always logged) so it is never lost silently —
- * the next rotation retries the keyring write. Never rejects.
+ * (the access token is already valid). The token is never written to
+ * localStorage (Google OAuth best-practice: refresh tokens belong in secure
+ * storage only); on a keyring failure it is kept in a module-level in-memory
+ * variable for the current session — an app restart drops it and the user must
+ * log in again, which is the correct degraded behavior (always logged). Never
+ * rejects.
  * @param token The refresh token to persist.
  */
 export const writeRefreshToken = async (token: string): Promise<void> => {
@@ -291,25 +321,28 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
       invoke("set_refresh_token", { token }),
       KEYRING_TIMEOUT_MS,
     );
-    // Success: the keyring is now the single source of truth — drop the
-    // legacy localStorage copy so the credential never exists in two places.
+    // Success: the keyring is now the single source of truth — drop any
+    // legacy localStorage copy and stale in-memory fallback so the credential
+    // never exists in two places.
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    inMemoryRefreshToken = null;
   } catch (err: unknown) {
     await captureError({
       level: "warn",
       source: "apiClient",
-      message: `refresh-token-keyring-write-failed, keeping localStorage fallback: ${err instanceof Error ? err.message : String(err)}`,
+      message: `refresh-token-keyring-write-failed, keeping in-memory fallback: ${err instanceof Error ? err.message : String(err)}`,
     });
+    // Never degrade to localStorage — keep the token in memory for this
+    // session only. Best-effort clear of any legacy localStorage copy so a
+    // refresh token can never live in localStorage.
+    inMemoryRefreshToken = token;
     try {
-      localStorage.setItem(REFRESH_TOKEN_KEY, token);
+      localStorage.removeItem(REFRESH_TOKEN_KEY);
     } catch (storageErr: unknown) {
-      // localStorage unavailable (quota/private mode): nothing left to do —
-      // log, never throw (the caller is fire-and-forget and the access token
-      // is still usable for its ~1h lifetime).
       await captureError({
         level: "warn",
         source: "apiClient",
-        message: `refresh-token-localstorage-write-failed: ${storageErr instanceof Error ? storageErr.message : String(storageErr)}`,
+        message: `refresh-token-localstorage-clear-failed: ${storageErr instanceof Error ? storageErr.message : String(storageErr)}`,
       });
     }
   }
@@ -318,11 +351,12 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
 /**
  * Remove the long-lived refresh token from the OS credential vault. Called by
  * logout so a signed-out shared machine cannot leave the credential behind in
- * the keyring. Fire-and-forget and never rejects: the localStorage copy is
- * always cleared too, so the token cannot survive in either store silently
- * after a logout intent.
+ * the keyring. Fire-and-forget and never rejects: the localStorage copy (legacy
+ * migration residue) and the in-memory fallback are always cleared too, so the
+ * token cannot survive in any store silently after a logout intent.
  */
 export const deleteRefreshToken = async (): Promise<void> => {
+  inMemoryRefreshToken = null;
   try {
     await withTimeout(invoke("delete_refresh_token"), KEYRING_TIMEOUT_MS);
   } catch (err: unknown) {
@@ -442,9 +476,9 @@ export const getValidToken = async (
       if (tokenData.refresh_token) {
         // Fire-and-forget: the access token is already valid, so persisting
         // the rotated refresh token must not delay the refresh flow.
-        // writeRefreshToken never rejects (keyring failure → localStorage
+        // writeRefreshToken never rejects (keyring failure → in-memory
         // fallback with a logged warning), so the credential is never lost
-        // and the next read still finds it.
+        // silently and the next read still finds it this session.
         void writeRefreshToken(tokenData.refresh_token);
       }
 
