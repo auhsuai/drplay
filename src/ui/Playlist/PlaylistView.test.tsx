@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlaylistView } from "./PlaylistView";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 import en from "../../locales/en/translation.json";
 import type { Playlist } from "../../utils/playlists";
+import { handleGlobalBack } from "../../hooks/useHardwareBack";
 
 // Resolve keys against the real en resources so assertions read the shipped
 // copy instead of hard-coded fallbacks (HomeTab.test convention). The second
@@ -67,7 +74,8 @@ vi.mock("../../utils/platform", () => ({
   },
 }));
 vi.mock("../components/ImageCropperModal", () => ({
-  ImageCropperModal: () => null,
+  ImageCropperModal: ({ imageSrc }: { imageSrc: string }) =>
+    imageSrc ? <div data-testid="image-cropper-modal-stub" /> : null,
 }));
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(({ count }: { count: number }) => ({
@@ -194,5 +202,118 @@ describe("PlaylistView mobile gate (IS_MOBILE) — title + size only", () => {
     await screen.findByText("Track 1");
     expect(screen.queryByText("Unknown Artist")).toBeNull();
     expect(screen.queryByText(/KB|MB|GB|B$/)).toBeNull();
+  });
+});
+
+// Batch back-button fix (2026-08-17): PlaylistView owns the ImageCropperModal
+// state — opening it then pressing hardware back must close the cropper
+// instead of letting the press fall through.
+describe("PlaylistView hardware-back closes ImageCropperModal (batch fix 2026-08-17)", () => {
+  // jsdom's FileReader fires onload asynchronously; substitute a sync stub
+  // so the cropper open path completes inside the same act() block.
+  let origFileReader: typeof FileReader;
+  beforeEach(() => {
+    origFileReader = globalThis.FileReader;
+    class MockFileReader {
+      public onload:
+        ((this: FileReader, ev: ProgressEvent<FileReader>) => unknown) | null =
+        null;
+      public onerror:
+        ((this: FileReader, ev: ProgressEvent<FileReader>) => unknown) | null =
+        null;
+      public result: string | ArrayBuffer | null = null;
+      public readAsDataURL(file: Blob): void {
+        // Mirror the real reader: synchronously produce a data URL and fire
+        // onload. The file argument is unused (real reader reads bytes; the
+        // stub doesn't), but referencing it here silences the
+        // strictTypeChecked no-unused-vars lint.
+        void file;
+        this.result = "data:image/png;base64,AAAA";
+        const ev = { target: this } as unknown as ProgressEvent<FileReader>;
+        if (this.onload) this.onload.call(this as unknown as FileReader, ev);
+      }
+      public readAsArrayBuffer(file: Blob): void {
+        void file;
+        this.result = new ArrayBuffer(0);
+        const ev = { target: this } as unknown as ProgressEvent<FileReader>;
+        if (this.onload) this.onload.call(this as unknown as FileReader, ev);
+      }
+      public readAsText(file: Blob): void {
+        void file;
+        this.result = "";
+        const ev = { target: this } as unknown as ProgressEvent<FileReader>;
+        if (this.onload) this.onload.call(this as unknown as FileReader, ev);
+      }
+      public abort(): void {}
+      public addEventListener(): void {}
+      public removeEventListener(): void {}
+      public dispatchEvent(): boolean {
+        return true;
+      }
+    }
+    // Cast through unknown so the global can be swapped without TS friction.
+    (globalThis as unknown as { FileReader: typeof FileReader }).FileReader =
+      MockFileReader as unknown as typeof FileReader;
+  });
+  afterEach(() => {
+    (globalThis as unknown as { FileReader: typeof FileReader }).FileReader =
+      origFileReader;
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function pressBack(): boolean {
+    let consumed = false;
+    act(() => {
+      consumed = handleGlobalBack();
+    });
+    return consumed;
+  }
+
+  // Open the cropper via the file input — the stubbed FileReader fires
+  // onload synchronously, so the rendered stub appears immediately.
+  function openCropper(): void {
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+    const file = new File(["fake"], "cover.png", { type: "image/png" });
+    act(() => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
+  }
+
+  it("closes the ImageCropperModal when open (handleGlobalBack true, then false)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    renderView();
+    await screen.findByText("Track 1");
+    expect(screen.queryByTestId("image-cropper-modal-stub")).toBeNull();
+
+    openCropper();
+    expect(screen.queryByTestId("image-cropper-modal-stub")).not.toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByTestId("image-cropper-modal-stub")).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("does not register the back handler while the cropper is closed (no fall-through)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    renderView();
+    await screen.findByText("Track 1");
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("removes the back handler on unmount (no leak across tests)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    const { unmount } = renderView();
+    await screen.findByText("Track 1");
+    openCropper();
+    expect(screen.queryByTestId("image-cropper-modal-stub")).not.toBeNull();
+    unmount();
+
+    expect(pressBack()).toBe(false);
   });
 });

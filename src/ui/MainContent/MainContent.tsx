@@ -17,6 +17,7 @@ import { NewFolderModal } from "./components/NewFolderModal";
 import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
 import { useEventListener } from "../../hooks/useEventListener";
 import { isUploading, clearUploadedTint } from "../../utils/uploadManager";
+import { useHardwareBack } from "../../hooks/useHardwareBack";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
@@ -291,6 +292,14 @@ export const MainContent = React.memo(function MainContent({
       setDebugTotalPages(2);
     });
   }, []);
+
+  // Hardware back (mobile): closes the NewFolderModal when it owns the
+  // foreground — without this, the back press falls through the App-level
+  // chain to the folder-up handler and pops folder history instead.
+  useHardwareBack(() => {
+    setShowNewFolderModal(false);
+    return true;
+  }, showNewFolderModal);
 
   return (
     <main

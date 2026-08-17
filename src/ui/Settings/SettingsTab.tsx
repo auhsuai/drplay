@@ -23,6 +23,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { useHardwareBack } from "../../hooks/useHardwareBack";
 import {
   setCustomDownloadPath,
   getEffectiveDownloadPath,
@@ -127,6 +128,14 @@ export function SettingsTab({
     });
     return unsubscribeFromUploads;
   }, []);
+
+  // Hardware back (mobile): closes the CacheManagerModal when it owns the
+  // foreground — without this, the back press falls through to the tab →
+  // Home chain and pops the Settings tab off-screen instead.
+  useHardwareBack(() => {
+    setShowCacheManager(false);
+    return true;
+  }, showCacheManager);
 
   const activeUploads = uploadEntries.filter(isActiveUpload);
 

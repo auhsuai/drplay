@@ -11,6 +11,7 @@ import { MainContent } from "./MainContent";
 import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 import type { DriveItem } from "../../types";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
+import { handleGlobalBack } from "../../hooks/useHardwareBack";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(({ count }: { count: number }) => ({
@@ -497,5 +498,68 @@ describe("MainContent bulk dialogs close immediately on confirm (background acti
       "dest-folder",
       expect.any(Function),
     );
+  });
+});
+
+// Batch back-button fix (2026-08-17): MainContent owns the NewFolderModal
+// state — when the user opens it via TopNavigationBar and presses hardware
+// back, the modal must close (previously the press fell through to the
+// folder-up chain). The fix adds a useHardwareBack call gated on
+// showNewFolderModal; the real module-level stack (handleGlobalBack) is
+// exercised here so the same LIFO ordering the production code uses is
+// covered end-to-end.
+describe("MainContent hardware-back closes NewFolderModal (batch fix 2026-08-17)", () => {
+  beforeEach(() => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function pressBack(): boolean {
+    // Wrap in act() so the state updates the back handler triggers flush
+    // through to the DOM before we assert.
+    let consumed = false;
+    act(() => {
+      consumed = handleGlobalBack();
+    });
+    return consumed;
+  }
+
+  function openNewFolderModal(): void {
+    // The real TopNavigationBar exposes a New Folder button when token is
+    // set; the i18n stub in this file returns the key as-is so the visible
+    // label is "drive.new_folder".
+    const btn = screen.getByRole("button", { name: /drive\.new_folder/ });
+    fireEvent.click(btn);
+  }
+
+  it("closes the NewFolderModal when open (handleGlobalBack true, then false)", () => {
+    render(<MainContent {...baseProps} />);
+    expect(screen.queryByText("drive.new_folder_title")).toBeNull();
+
+    openNewFolderModal();
+    expect(screen.getByText("drive.new_folder_title")).not.toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByText("drive.new_folder_title")).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("does not register the back handler while the modal is closed (no fall-through)", () => {
+    render(<MainContent {...baseProps} />);
+    // Modal is closed — pressBack must fall through.
+    expect(pressBack()).toBe(false);
+  });
+
+  it("removes the back handler on unmount (no leak across tests)", () => {
+    const { unmount } = render(<MainContent {...baseProps} />);
+    openNewFolderModal();
+    expect(screen.getByText("drive.new_folder_title")).not.toBeNull();
+    unmount();
+
+    expect(pressBack()).toBe(false);
   });
 });

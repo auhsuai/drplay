@@ -14,6 +14,7 @@ import en from "../../locales/en/translation.json";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
+import { handleGlobalBack } from "../../hooks/useHardwareBack";
 
 const mocks = vi.hoisted(() => ({
   driveApi: {
@@ -691,5 +692,186 @@ describe("MoreMenu debug download toast trigger", () => {
     expect(() => {
       dispatchDownloadToast("Downloaded: debug-test.mp3");
     }).not.toThrow();
+  });
+});
+
+// Batch back-button fix (2026-08-17): MoreMenu's portal-hosted sub-dialogs
+// (DownloadDialog / DeleteConfirmDialog / FolderSelectionScreen) and the menu
+// dropdown itself must all register a hardware-back handler — otherwise the
+// native back falls through the App-level chain to the MyDrive tab layer and
+// jumps Home (or out of the app). The fix calls handleGlobalBack() with the
+// real module-level stack (no mock) so the same LIFO ordering the native
+// listener uses is exercised end-to-end.
+describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
+  // Real-world behavior (verified by reading DefaultMenuItems / useMenuDownload):
+  // every menu item closes the dropdown THEN opens its dialog/screen — so the
+  // back handler never has to peel dialog-off-menu, only dialog-or-menu.
+
+  beforeEach(() => {
+    // Earlier describe blocks (upload race guards) leave isUploading returning
+    // truthy across tests; reset it so the new test renders the live menu.
+    mocks.uploadManager.isUploading.mockReset();
+    mocks.uploadManager.isUploading.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function pressBack(): boolean {
+    // Wrap in act() so the state updates the back handler triggers (e.g.
+    // setIsOpen(false)) flush through to the DOM before we assert.
+    let consumed = false;
+    act(() => {
+      consumed = handleGlobalBack();
+    });
+    return consumed;
+  }
+
+  it("closes the dropdown menu when open (no dialogs) -> handleGlobalBack() true, then false", () => {
+    render(<MoreMenu track={makeTrack()} token="tok" />);
+    openTrigger();
+    expect(menuEl()).toBeTruthy();
+
+    expect(pressBack()).toBe(true);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("closes the DownloadDialog when open (menu auto-closed by item click)", () => {
+    render(<MoreMenu track={makeTrack()} token="tok" />);
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Download Song" }),
+    );
+    expect(screen.getByText("File name")).toBeTruthy();
+    // Menu auto-closed when Download Song was clicked (handleDownloadClick
+    // calls setIsOpen(false) — verified by reading useMenuDownload).
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByText("File name")).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("closes the DeleteConfirmDialog when open (menu auto-closed by item click)", () => {
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
+    openTrigger();
+    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByText("Move to Trash?")).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("closes the Move FolderSelectionScreen when open (menu auto-closed by item click)", () => {
+    render(
+      <MoreMenu
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        currentFolderId="parent-1"
+        currentFolderName="Folder One"
+      />,
+    );
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Move to..." }),
+    );
+    // FolderSelectionScreen renders the title in an <h1>.
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByRole("heading", { name: "Move to..." })).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("prioritizes DownloadDialog > DeleteConfirm > MoveScreen > Menu", () => {
+    // The default-variant menu item order is: Select Multiple / Move to /
+    // Delete / Download Song / Add to Playlist. Each item closes the menu
+    // and opens its own dialog. We re-open the menu between clicks to layer
+    // each dialog on top of the previous one (the real product can't
+    // actually do this because the dialog backdrop blocks further clicks —
+    // this test simulates the layering by re-opening the menu manually).
+    const { rerender } = render(
+      <MoreMenu
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        currentFolderId="parent-1"
+        currentFolderName="Folder One"
+      />,
+    );
+
+    // Layer 1: open Move (menu closes, screen shows).
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Move to..." }),
+    );
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+
+    // Reopen menu + open Delete — Delete sits "above" Move in the
+    // handler's priority (innermost = first peeled).
+    openTrigger();
+    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+
+    // Reopen menu + open Download — Download is the topmost layer.
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Download Song" }),
+    );
+    expect(screen.getByText("File name")).toBeTruthy();
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+
+    // First back peels Download only.
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByText("File name")).toBeNull();
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+
+    // Second back peels Delete.
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByText("Move to Trash?")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+
+    // Third back peels Move.
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByRole("heading", { name: "Move to..." })).toBeNull();
+
+    // Fourth back with everything closed falls through.
+    expect(pressBack()).toBe(false);
+
+    // Touch rerender so the variable is "used" (lint suppression).
+    expect(rerender).toBeDefined();
+  });
+
+  it("calls onClose when back closes the menu itself", () => {
+    const onClose = vi.fn();
+    render(<MoreMenu track={makeTrack()} token="tok" onClose={onClose} />);
+    openTrigger();
+
+    expect(pressBack()).toBe(true);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the back handler on unmount (no leak across tests)", () => {
+    const { unmount } = render(<MoreMenu track={makeTrack()} token="tok" />);
+    openTrigger();
+    unmount();
+
+    expect(pressBack()).toBe(false);
   });
 });

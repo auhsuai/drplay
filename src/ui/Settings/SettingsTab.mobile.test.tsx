@@ -10,6 +10,7 @@ import {
   cleanup,
   fireEvent,
   waitFor,
+  act,
 } from "@testing-library/react";
 import type { ThemeType } from "../../hooks/useTheme";
 import { SettingsTab } from "./SettingsTab";
@@ -20,6 +21,7 @@ import {
   getMobileDownloadFolder,
   setMobileDownloadFolder,
 } from "../../utils/downloadPath";
+import { handleGlobalBack } from "../../hooks/useHardwareBack";
 
 // Getter-backed platform mock: SettingsTab reads IS_MOBILE at render time,
 // so each test can toggle the platform (same pattern as LoginScreen.test.tsx).
@@ -74,7 +76,7 @@ vi.mock("../../utils/simpleToast", () => ({
 
 vi.mock("../../utils/cache", () => ({
   clearAppCache: vi.fn(),
-  getCacheSizes: vi.fn(),
+  getCacheSizes: vi.fn().mockResolvedValue([]),
   CACHE_CATEGORY_LABELS: {
     metadata: "Metadata cache",
     files: "File listing cache",
@@ -431,5 +433,60 @@ describe("SettingsTab logout button (Task A)", () => {
     render(<SettingsTab {...baseProps} userProfile={USER} />);
     expect(screen.queryByTitle("Sign out")).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+  });
+});
+
+// Batch back-button fix (2026-08-17): SettingsTab owns the CacheManagerModal
+// state — opening it then pressing hardware back must close the modal
+// instead of letting the press fall through to the tab → Home chain.
+describe("SettingsTab hardware-back closes CacheManagerModal (batch fix 2026-08-17)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  function pressBack(): boolean {
+    let consumed = false;
+    act(() => {
+      consumed = handleGlobalBack();
+    });
+    return consumed;
+  }
+
+  function openCacheManager(): void {
+    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
+  }
+
+  it("closes the CacheManagerModal when open (handleGlobalBack true, then false)", async () => {
+    render(<SettingsTab {...baseProps} />);
+    expect(screen.queryByTestId("cache-manager-modal")).toBeNull();
+
+    openCacheManager();
+    // The real CacheManagerModal renders via createPortal to document.body;
+    // wait for it to appear after the open state flips.
+    expect(await screen.findByTestId("cache-manager-modal")).not.toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByTestId("cache-manager-modal")).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("does not register the back handler while the modal is closed (no fall-through)", () => {
+    render(<SettingsTab {...baseProps} />);
+    expect(pressBack()).toBe(false);
+  });
+
+  it("removes the back handler on unmount (no leak across tests)", async () => {
+    const { unmount } = render(<SettingsTab {...baseProps} />);
+    openCacheManager();
+    await screen.findByTestId("cache-manager-modal");
+    unmount();
+
+    expect(pressBack()).toBe(false);
   });
 });

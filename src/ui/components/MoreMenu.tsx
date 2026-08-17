@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
@@ -10,6 +10,7 @@ import {
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
+import { useHardwareBack } from "../../hooks/useHardwareBack";
 
 // Custom Hooks and Components
 import { useMenuDownload } from "../../hooks/useMenuDownload";
@@ -184,6 +185,49 @@ export function MoreMenu({
   useEffect(() => {
     onOpenChange?.(isOpen);
   }, [isOpen, onOpenChange]);
+
+  // Hardware back (mobile): closes innermost overlay first — the three portal
+  // dialogs (Download / Delete / Move) and the dropdown itself all sit on top
+  // of App's folder-up handler when mounted. Handler closure includes every
+  // boolean gate in deps so the latest version is always on the LIFO stack
+  // (an inline `if (showDownloadDialog)` read against a stale closure would
+  // re-peel the same dialog twice). Priority: DownloadDialog >
+  // DeleteConfirmDialog > MoveScreen > dropdown menu. Registered ONLY while
+  // at least one is open, so an empty stack on close keeps the chain falling
+  // through to App.
+  const handleBack = useCallback((): boolean => {
+    if (showDownloadDialog) {
+      setShowDownloadDialog(false);
+      return true;
+    }
+    if (showDeleteConfirm) {
+      setShowDeleteConfirm(false);
+      return true;
+    }
+    if (showMoveScreen) {
+      setShowMoveScreen(false);
+      return true;
+    }
+    if (isOpen) {
+      setIsOpen(false);
+      onClose?.();
+      return true;
+    }
+    return false;
+  }, [
+    isOpen,
+    onClose,
+    setShowDownloadDialog,
+    setShowDeleteConfirm,
+    setShowMoveScreen,
+    showDownloadDialog,
+    showDeleteConfirm,
+    showMoveScreen,
+  ]);
+
+  const isAnyOverlayOpen =
+    isOpen || showDownloadDialog || showDeleteConfirm || showMoveScreen;
+  useHardwareBack(handleBack, isAnyOverlayOpen);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Loading / MainContent"):
   // a fake download completion message, rendered through the exact

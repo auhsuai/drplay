@@ -10,6 +10,7 @@ import {
 } from "../../utils/playlists";
 import { ImageCropperModal } from "../components/ImageCropperModal";
 import { useTranslation } from "react-i18next";
+import { useHardwareBack } from "../../hooks/useHardwareBack";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
@@ -81,6 +82,19 @@ export function PlaylistView({
     if (!playlist) return;
     if (playlist.tracks.length > 0) prefetchVisibleTracks(playlist.tracks);
   }, [playlist]);
+
+  // Hardware back (mobile): closes the ImageCropperModal when it owns the
+  // foreground — without this, the back press falls through the App-level
+  // chain (LikedSongs tab is its own layer) and pops the playlist instead.
+  // selectedImage is cleared alongside the modal so the next open starts
+  // from a clean state, matching the in-modal Cancel path. Declared ABOVE
+  // the early `if (!playlist) return null` so the hook order is stable
+  // across the null/non-null re-renders.
+  useHardwareBack(() => {
+    setIsCropperOpen(false);
+    setSelectedImage(null);
+    return true;
+  }, isCropperOpen);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
   // empty state by swapping in a valid Playlist with no tracks. Keeps the

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useHardwareBack } from "../../hooks/useHardwareBack";
 
 export interface SortOption {
   id: string;
@@ -52,6 +53,16 @@ export function SortDropdown({
   const label = fallbackLabel;
   const currentSortLabel =
     options.find((opt) => opt.id === baseSortOption)?.label || label;
+
+  // Hardware back (mobile): closes the sort menu when open — without this,
+  // the press falls through to the folder-up chain.
+  useHardwareBack(
+    useCallback(() => {
+      setShowSortMenu(false);
+      return true;
+    }, []),
+    showSortMenu,
+  );
 
   return (
     <div className="relative">

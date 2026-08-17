@@ -1,9 +1,10 @@
-import { useState, useRef } from "react";
+import { useCallback, useState, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LANGUAGE_KEY } from "../../../utils/storageKeys";
 import { captureError } from "../../../utils/errorLog";
 import { useClickOutside } from "../../../hooks/useClickOutside";
+import { useHardwareBack } from "../../../hooks/useHardwareBack";
 
 export function LanguageDropdown() {
   const { t, i18n } = useTranslation();
@@ -15,6 +16,16 @@ export function LanguageDropdown() {
     () => {
       setIsOpen(false);
     },
+    isOpen,
+  );
+
+  // Hardware back (mobile): closes the dropdown when open — without this,
+  // the press falls through to the tab → Home chain.
+  useHardwareBack(
+    useCallback(() => {
+      setIsOpen(false);
+      return true;
+    }, []),
     isOpen,
   );
 
