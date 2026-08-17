@@ -8,6 +8,8 @@ import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
+import { useFavoriteForTrack } from "./useFavoriteForTrack";
+import { MoreMenu } from "../components/MoreMenu";
 import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
 import { ErrorToast } from "./ErrorToast";
@@ -39,6 +41,10 @@ function PlayerBarImpl({
   onExpandNowPlaying,
 }: PlayerBarProps) {
   const { t } = useTranslation();
+  // Favorite state for the mobile MoreMenu (row reorder 2026-08-17): TrackInfo
+  // keeps its own instance for the desktop heart; this one feeds the
+  // PlayerBar-level menu. Both share the same check/toggle logic via the hook.
+  const { isLiked, toggleFavorite } = useFavoriteForTrack(currentTrack);
   // Desktop: HTMLAudioElement controller. Android (GATE branch B): the native
   // ExoPlayer engine — same event surface, so the storm guard, auto-advance,
   // seek bar and session save below work unchanged on both.
@@ -252,10 +258,11 @@ function PlayerBarImpl({
 
   return (
     <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
-      {/* Task 5 (ADR 2026-08-15): mobile = 2 rows — track info + 5-button
-          transport on top, FULL-WIDTH SeekBar below. Moving the seek row out
-          of the 30%-wide TrackInfo column is what makes the drag surface span
-          the whole bar (see SeekBar surfaceRef). Desktop below is untouched. */}
+      {/* Task 5 + row reorder (ADR 2026-08-17): mobile = 2 rows — on top,
+          from left to right: track info → -5s/play/+5s transport → More options;
+          FULL-WIDTH SeekBar below. Moving the seek row out of the 30%-wide
+          TrackInfo column is what makes the drag surface span the whole bar
+          (see SeekBar surfaceRef). Desktop below is untouched. */}
       {IS_MOBILE ? (
         <div className="flex flex-col h-full w-full min-w-0">
           <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
@@ -265,7 +272,7 @@ function PlayerBarImpl({
               onExpandNowPlaying={onExpandNowPlaying}
             />
 
-            {/* Right: 5-button transport */}
+            {/* Center: 3-button transport (-5s / play / +5s) */}
             <TransportControls
               currentTrack={currentTrack}
               isPlaying={isPlaying}
@@ -281,6 +288,20 @@ function PlayerBarImpl({
               onRewind5={handleRewind5}
               onForward5={handleForward5}
             />
+
+            {/* Right: More options — favorite state moved here from TrackInfo
+                (was embedded in the track info column before the reorder). */}
+            {currentTrack && (
+              <MoreMenu
+                track={currentTrack}
+                isPlayerBarMode
+                compact
+                isFavorite={isLiked}
+                onToggleFavorite={() => {
+                  void toggleFavorite();
+                }}
+              />
+            )}
           </div>
           <div className="w-full pb-1">
             <SeekBar currentTrack={currentTrack} audio={audio} />

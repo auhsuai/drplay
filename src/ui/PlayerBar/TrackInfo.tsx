@@ -1,19 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Heart, Maximize2, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from "../components/MoreMenu";
-import {
-  isFavorite,
-  addFavorite,
-  removeFavorite,
-  FAVORITES_UPDATED_EVENT,
-} from "../../utils/favorites";
 import { V_PLACEHOLDER, UNKNOWN_ARTIST } from "../../utils/metadata";
 import type { CachedMetadata } from "../../utils/metadata";
 import { useAuthStore } from "../../store/authStore";
 import { usePlayerStore } from "../../store/playerStore";
-import { captureError } from "../../utils/errorLog";
 import { useTrackMetadata } from "../../hooks/useTrackMetadata";
+import { captureError } from "../../utils/errorLog";
+import { useFavoriteForTrack } from "./useFavoriteForTrack";
 import { IS_MOBILE } from "../../utils/platform";
 import type { Track } from "../../types";
 
@@ -29,7 +24,10 @@ export function TrackInfo({
   onExpandNowPlaying,
 }: TrackInfoProps) {
   const { t } = useTranslation();
-  const [isLiked, setIsLiked] = useState(false);
+  // Favorite state (isLiked + toggle) now lives in useFavoriteForTrack — shared
+  // with PlayerBar, which renders the mobile MoreMenu (row reorder 2026-08-17).
+  // TrackInfo keeps the desktop heart only.
+  const { isLiked, toggleFavorite } = useFavoriteForTrack(currentTrack);
   const coverImgRef = useRef<HTMLImageElement>(null);
   // Parsed tags shown in the bar. PlayerBar is memoized with a comparator that
   // treats two tracks with the same id as equal, so a store-side title/artist
@@ -118,14 +116,12 @@ export function TrackInfo({
     onError: onCoverError,
   });
 
-  // Reset the liked flag when the track goes away (the heart only renders
-  // while a track exists, so this is a defensive reset on the null track).
-  // Done during render (React "adjusting state during render" pattern) so no
-  // setState happens synchronously inside an effect.
+  // Reset transient track state when the track changes. Done during render
+  // (React "adjusting state during render" pattern) so no setState happens
+  // synchronously inside an effect.
   const prevTrackIdRef = useRef<string | undefined>(undefined);
   if (currentTrack?.id !== prevTrackIdRef.current) {
     prevTrackIdRef.current = currentTrack?.id;
-    if (!currentTrack && isLiked) setIsLiked(false);
     // A new track must never show the previous one's cover even for a frame:
     // the cover effect below re-fetches it asynchronously.
     setCoverUrl(null);
@@ -134,76 +130,6 @@ export function TrackInfo({
     setDisplayTitle(null);
     setDisplayArtist(null);
   }
-
-  // Shared favorite-status check: re-reads the stored status for a track id
-  // and applies it, unless the requesting scope went stale (track changed /
-  // component unmounted) while the check was in flight.
-  const checkFavorite = useCallback(
-    async (trackId: string, isStale: () => boolean) => {
-      try {
-        const liked = await isFavorite(trackId);
-        if (!isStale()) setIsLiked(liked);
-      } catch (e: unknown) {
-        void captureError({
-          level: "warn",
-          source: PLAYER_BAR_MODULE,
-          message: `check-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
-        });
-      }
-    },
-    [],
-  );
-
-  // Check favorite status whenever the current track changes
-  useEffect(() => {
-    if (!currentTrack) return;
-    let cancelled = false;
-    void (async () => {
-      await checkFavorite(currentTrack.id, () => cancelled);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentTrack, checkFavorite]);
-
-  // Re-check the current track when favorites change elsewhere (favorites.ts
-  // dispatches `favorites-updated` on add/remove), so the heart never shows a
-  // stale state while the same track keeps playing.
-  useEffect(() => {
-    const handleFavoritesUpdated = () => {
-      if (!currentTrack) return;
-      void checkFavorite(currentTrack.id, () => false);
-    };
-    window.addEventListener(FAVORITES_UPDATED_EVENT, handleFavoritesUpdated);
-    return () => {
-      window.removeEventListener(
-        FAVORITES_UPDATED_EVENT,
-        handleFavoritesUpdated,
-      );
-    };
-  }, [currentTrack, checkFavorite]);
-
-  const isFavoriteTogglingRef = useRef(false);
-  const handleToggleFavorite = async () => {
-    if (!currentTrack || isFavoriteTogglingRef.current) return;
-    isFavoriteTogglingRef.current = true;
-    try {
-      if (isLiked) {
-        await removeFavorite(currentTrack.id);
-      } else {
-        await addFavorite(currentTrack);
-      }
-      setIsLiked(!isLiked);
-    } catch (e: unknown) {
-      void captureError({
-        level: "error",
-        source: PLAYER_BAR_MODULE,
-        message: `toggle-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
-      });
-    } finally {
-      isFavoriteTogglingRef.current = false;
-    }
-  };
 
   const realTitle =
     (displayTitle ?? currentTrack?.title) || t("player.no_track");
@@ -279,45 +205,34 @@ export function TrackInfo({
           )}
         </div>
       </div>
-      {currentTrack && (
-        // Redesign 2026-08-17: on mobile the standalone heart button is gone
-        // — the favorite toggle moved into the MoreMenu (its item only shows
-        // when isFavorite + onToggleFavorite are passed). Desktop keeps the
-        // heart + plain MoreMenu byte-identical (heart must not duplicate in
-        // the desktop menu). The wrapper keeps `hidden lg:flex` on desktop
-        // (Task 13) and stays always-visible compact on mobile.
-        <div
-          className={`${IS_MOBILE ? "flex ml-1" : "hidden lg:flex ml-2"} items-center gap-1 shrink-0`}
-        >
-          {!IS_MOBILE && (
-            <button
-              type="button"
-              onClick={() => {
-                void handleToggleFavorite();
-              }}
-              aria-label={
-                isLiked ? t("player.remove_favorite") : t("player.add_favorite")
-              }
-              className={`p-1 transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
-            >
-              <Heart
-                className="w-5 h-5"
-                fill={isLiked ? "currentColor" : "none"}
-              />
-            </button>
-          )}
+      {/* Redesign 2026-08-17 + row reorder: on mobile the MoreMenu now lives at
+          PlayerBar level (title → -5s/play/+5s → More options), so TrackInfo
+          renders no menu here. Desktop keeps the heart + plain MoreMenu
+          byte-identical (heart must not duplicate in the desktop menu); the
+          wrapper keeps `hidden lg:flex` (Task 13). */}
+      {!IS_MOBILE && currentTrack && (
+        <div className="hidden lg:flex ml-2 items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              void toggleFavorite();
+            }}
+            aria-label={
+              isLiked ? t("player.remove_favorite") : t("player.add_favorite")
+            }
+            className={`p-1 transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
+          >
+            <Heart
+              className="w-5 h-5"
+              fill={isLiked ? "currentColor" : "none"}
+            />
+          </button>
           <MoreMenu
             track={currentTrack}
             isPlayerBarMode={true}
-            compact={IS_MOBILE}
-            isFavorite={IS_MOBILE ? isLiked : undefined}
-            onToggleFavorite={
-              IS_MOBILE
-                ? () => {
-                    void handleToggleFavorite();
-                  }
-                : undefined
-            }
+            compact={false}
+            isFavorite={undefined}
+            onToggleFavorite={undefined}
           />
         </div>
       )}

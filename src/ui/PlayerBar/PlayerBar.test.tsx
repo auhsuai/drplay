@@ -84,7 +84,36 @@ vi.mock("../../utils/favorites", () => ({
   FAVORITES_UPDATED_EVENT: "favorites-updated",
 }));
 
-vi.mock("../components/MoreMenu", () => ({ MoreMenu: () => null }));
+interface MoreMenuStubProps {
+  track?: Track | undefined;
+  isPlayerBarMode?: boolean;
+  compact?: boolean;
+  isFavorite?: boolean | undefined;
+  onToggleFavorite?: (() => void) | undefined;
+}
+const moreMenuMock = vi.hoisted(() =>
+  vi.fn<(props: MoreMenuStubProps) => void>(),
+);
+vi.mock("../components/MoreMenu", async () => {
+  const React = await import("react");
+  return {
+    MoreMenu: (props: MoreMenuStubProps) => {
+      moreMenuMock(props);
+      // Desktop TrackInfo keeps MoreMenu inside its `hidden lg:flex` wrapper —
+      // the trigger is display:none below the lg breakpoint, so the stub stays
+      // a no-op there to keep the desktop a11y tree byte-identical. The mobile
+      // PlayerBar-level menu is always visible → render a real trigger button
+      // so the row-order and favorite-wiring tests can interact with it.
+      if (!props.compact) return null;
+      return React.createElement("button", {
+        type: "button",
+        "aria-haspopup": "menu",
+        "aria-label": "More options",
+        onClick: () => props.onToggleFavorite?.(),
+      });
+    },
+  };
+});
 
 // TrackInfo fetches cover metadata per track; the real module pulls heavy
 // deps (music-metadata, IndexedDB) not needed here. V_PLACEHOLDER /
@@ -231,6 +260,7 @@ beforeEach(() => {
   isFavorite.mockResolvedValue(false);
   addFavorite.mockResolvedValue(undefined);
   removeFavorite.mockResolvedValue(undefined);
+  moreMenuMock.mockClear();
 });
 
 afterEach(() => {
@@ -1892,6 +1922,59 @@ describe("PlayerBar mobile transport — 3 buttons (redesigned row)", () => {
     expect(transport).toEqual(TRANSPORT_LABELS);
     expect(screen.queryByRole("button", { name: "Previous track" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Next track" })).toBeNull();
+  });
+
+  it("mobile: row order is title → -5s/play/+5s → More options (MoreMenu moved to PlayerBar level)", () => {
+    renderPlayer({ currentTrack: makeTrack({ title: "Song" }) });
+    const labels = screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? "");
+    const idx = (label: string) => labels.indexOf(label);
+    const idxTitle = idx("View Now Playing");
+    const idxRewind = idx("Rewind 5 seconds");
+    const idxPlay = idx("Play/Pause");
+    const idxForward = idx("Forward 5 seconds");
+    const idxMore = idx("More options");
+    expect(idxTitle).toBeGreaterThanOrEqual(0);
+    expect(idxTitle).toBeLessThan(idxRewind);
+    expect(idxRewind).toBeLessThan(idxPlay);
+    expect(idxPlay).toBeLessThan(idxForward);
+    expect(idxForward).toBeLessThan(idxMore);
+  });
+
+  function lastMoreMenuProps() {
+    const calls = moreMenuMock.mock.calls;
+    const last = calls[calls.length - 1];
+    if (last === undefined) {
+      throw new Error("MoreMenu was never rendered");
+    }
+    return last[0];
+  }
+
+  it("mobile: MoreMenu at PlayerBar level receives the favorite state + toggle handler", async () => {
+    renderPlayer();
+    await waitFor(() => {
+      expect(moreMenuMock).toHaveBeenCalled();
+    });
+    const last = lastMoreMenuProps();
+    expect(last.compact).toBe(true);
+    expect(last.isFavorite).toBe(false);
+    expect(typeof last.onToggleFavorite).toBe("function");
+  });
+
+  it("mobile: clicking the PlayerBar-level MoreMenu's favorite toggles the track through addFavorite", async () => {
+    renderPlayer();
+    await waitFor(() => {
+      expect(moreMenuMock).toHaveBeenCalled();
+    });
+    const menu = screen.getByRole("button", { name: "More options" });
+    fireEvent.click(menu);
+    await screen.findByRole("button", { name: "More options" });
+    expect(addFavorite).toHaveBeenCalledTimes(1);
+    expect(removeFavorite).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(lastMoreMenuProps().isFavorite).toBe(true);
+    });
   });
 
   it("mobile: no standalone heart button on the bar (favorite moved into MoreMenu)", () => {

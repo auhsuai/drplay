@@ -77,7 +77,11 @@ export function TransportControls({
   // (mobile only; desktop keeps the 4-button layout + playMode byte-identical).
   if (IS_MOBILE) {
     return (
-      <div className="flex items-center justify-center gap-2 shrink-0">
+      // Row reorder (2026-08-17): the transport group now sits between track
+      // info and More options on the mobile top row. Fixed width +
+      // justify-between spreads the 3 buttons evenly (11px gaps) regardless of
+      // the track title length, without overflowing a 360px phone.
+      <div className="flex items-center justify-between shrink-0 w-[116px]">
         <button
           type="button"
           onClick={onRewind5}

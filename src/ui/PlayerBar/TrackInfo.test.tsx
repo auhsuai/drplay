@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
 import { TrackInfo } from "./TrackInfo";
@@ -132,7 +126,7 @@ afterEach(() => {
   platformMock.IS_MOBILE = false;
 });
 
-describe("TrackInfo mobile heart + MoreMenu (redesigned row — heart moved into menu)", () => {
+describe("TrackInfo mobile (row reorder — MoreMenu moved to PlayerBar level)", () => {
   beforeEach(() => {
     platformMock.IS_MOBILE = true;
   });
@@ -146,46 +140,19 @@ describe("TrackInfo mobile heart + MoreMenu (redesigned row — heart moved into
     return last[0];
   }
 
-  it("mobile: no standalone heart button — MoreMenu receives isFavorite + onToggleFavorite", async () => {
+  it("mobile: renders only the title button — no MoreMenu, no heart (menu now lives at PlayerBar level)", () => {
     renderTrackInfo();
-    await waitFor(() => {
-      expect(moreMenuMock).toHaveBeenCalled();
-    });
+    expect(
+      screen.getByRole("button", { name: "View Now Playing" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "More options" })).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Add to favorites" }),
     ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Remove from favorites" }),
     ).toBeNull();
-    expect(lastMoreMenuProps().isFavorite).toBe(false);
-    expect(typeof lastMoreMenuProps().onToggleFavorite).toBe("function");
-    const menu = screen.getByRole("button", { name: "More options" });
-    const wrapper = menu.parentElement as HTMLElement;
-    expect(wrapper.className).not.toContain("hidden");
-    expect(wrapper.className).toContain("flex");
-  });
-
-  it("mobile: MoreMenu stays compact (Task 13 sizing) in the wrapper", async () => {
-    renderTrackInfo();
-    await waitFor(() => {
-      expect(moreMenuMock).toHaveBeenCalled();
-    });
-    expect(lastMoreMenuProps().compact).toBe(true);
-  });
-
-  it("mobile: clicking the menu's favorite action toggles like through addFavorite (state stays in TrackInfo)", async () => {
-    renderTrackInfo();
-    await waitFor(() => {
-      expect(moreMenuMock).toHaveBeenCalled();
-    });
-    const menu = screen.getByRole("button", { name: "More options" });
-    fireEvent.click(menu);
-    await screen.findByRole("button", { name: "More options" });
-    expect(mocks.addFavorite).toHaveBeenCalledTimes(1);
-    expect(mocks.removeFavorite).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(lastMoreMenuProps().isFavorite).toBe(true);
-    });
+    expect(moreMenuMock).not.toHaveBeenCalled();
   });
 
   it("desktop regression: wrapper keeps hidden lg:flex, heart keeps p-1 + 20px icon", async () => {
