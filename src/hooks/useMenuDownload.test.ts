@@ -88,9 +88,11 @@ const AUDIO_BYTES = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
 
 // Resolve the download fetch with the given bytes (jsdom Response lacks
 // arrayBuffer() reliably, so the mock stands in for the real Response).
+// Headers are included so mobile Content-Length checks work in tests.
 function fetchResolved(bytes: Uint8Array = AUDIO_BYTES): void {
   vi.spyOn(globalThis, "fetch").mockResolvedValue({
     ok: true,
+    headers: { get: () => null },
     arrayBuffer: () => {
       const buf = new ArrayBuffer(bytes.byteLength);
       new Uint8Array(buf).set(bytes);
@@ -280,6 +282,93 @@ describe("useMenuDownload error handling", () => {
     const result = await runDownload();
 
     expect(result.current.downloadMessage).toContain("Download failed");
+  });
+
+  it('shows "Download failed" when arrayBuffer() throws RangeError (large file on Android WebView)', async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => {
+        throw new RangeError("Array buffer allocation failed");
+      },
+    } as unknown as Response);
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain("Download failed");
+    expectNoWriteFile();
+  });
+
+  it("rejects files exceeding the mobile ArrayBuffer limit when Content-Length is known", async () => {
+    platformMock.IS_MOBILE = true;
+    // 300 MiB > MOBILE_ARRAY_BUFFER_LIMIT (200 MiB)
+    const largeSize = 300 * 1024 * 1024;
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (h: string) => (h === "content-length" ? String(largeSize) : null),
+      },
+      arrayBuffer: () => {
+        // Should never be reached — the pre-check should reject first
+        throw new RangeError("should not reach arrayBuffer");
+      },
+    } as unknown as Response);
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain("Download failed");
+    expectNoWriteFile();
+  });
+
+  it("allows files under the mobile ArrayBuffer limit to proceed normally", async () => {
+    platformMock.IS_MOBILE = true;
+    mockedGetEffectiveDownloadPath.mockResolvedValue(
+      "/data/user/0/com.drplay/files",
+    );
+    mockedJoin.mockImplementation((dir: string, file: string) =>
+      Promise.resolve(`${dir}/${file}`),
+    );
+    // 50 MiB < MOBILE_ARRAY_BUFFER_LIMIT (200 MiB)
+    const safeSize = 50 * 1024 * 1024;
+    const safeBytes = new Uint8Array(8);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (h: string) => (h === "content-length" ? String(safeSize) : null),
+      },
+      arrayBuffer: () => {
+        const buf = new ArrayBuffer(safeBytes.byteLength);
+        new Uint8Array(buf).set(safeBytes);
+        return buf;
+      },
+    } as unknown as Response);
+
+    const result = await runDownload();
+
+    // Should succeed — file is under the limit
+    expect(result.current.downloadMessage).toContain("Saved to app storage");
+  });
+
+  it("falls through to arrayBuffer() when Content-Length is absent on mobile (chunked transfer)", async () => {
+    platformMock.IS_MOBILE = true;
+    mockedGetEffectiveDownloadPath.mockResolvedValue(
+      "/data/user/0/com.drplay/files",
+    );
+    mockedJoin.mockImplementation((dir: string, file: string) =>
+      Promise.resolve(`${dir}/${file}`),
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      arrayBuffer: () => {
+        const buf = new ArrayBuffer(AUDIO_BYTES.byteLength);
+        new Uint8Array(buf).set(AUDIO_BYTES);
+        return buf;
+      },
+    } as unknown as Response);
+
+    const result = await runDownload();
+
+    expect(result.current.downloadMessage).toContain("Saved to app storage");
   });
 });
 

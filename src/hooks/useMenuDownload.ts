@@ -25,6 +25,16 @@ import type { TFunction } from "i18next";
 // fetchWithAuth / useDrive.ts.
 const DOWNLOAD_TIMEOUT_MS = 300_000;
 
+// Android WebView allocates ArrayBuffers in a constrained heap (~300 MB on
+// Samsung, lower on budget devices — Chromium issue #472547502). Files near or
+// above this threshold trigger "RangeError: Array buffer allocation failed" at
+// response.arrayBuffer(). We pre-check Content-Length and skip the allocation
+// when the file is known to exceed this platform cap. The constant is conservative
+// (below the lowest observed limit) so legitimate high-quality audio (typically
+// ≤ 100 MB) still works. When Content-Length is absent (chunked transfer) the
+// allocation is attempted and caught below.
+const MOBILE_ARRAY_BUFFER_LIMIT = 200 * 1024 * 1024; // 200 MiB
+
 // Windows forbids these characters in file names; also guard against DOS
 // device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) and trailing dots/spaces.
 // Copied verbatim from the removed GlobalContextMenu.tsx (the last known-good
@@ -124,6 +134,21 @@ export function useMenuDownload(t: TFunction) {
       });
 
       if (!response.ok) throw new Error("Fetch failed");
+
+      // Android WebView throws RangeError when the ArrayBuffer exceeds its
+      // constrained heap (~200–300 MiB depending on device). Pre-check
+      // Content-Length so we fail with a clear message instead of a cryptic
+      // RangeError deep in the catch block. When Content-Length is absent
+      // (chunked transfer) we fall through and let the catch handle it.
+      if (IS_MOBILE) {
+        const contentLength = response.headers.get("content-length");
+        if (contentLength) {
+          const size = Number(contentLength);
+          if (!Number.isNaN(size) && size > MOBILE_ARRAY_BUFFER_LIMIT) {
+            throw new Error("File too large for this device");
+          }
+        }
+      }
 
       const bytes = new Uint8Array(await response.arrayBuffer());
       const dir = await getEffectiveDownloadPath();
@@ -257,6 +282,16 @@ export function useMenuDownload(t: TFunction) {
           level: "error",
           source: "useMenuDownload",
           message: `Download timeout — no response within ${String(DOWNLOAD_TIMEOUT_MS)}ms`,
+        });
+        setDownloadMessage(t("menu.download_failed"));
+        return;
+      }
+      if (errName === "RangeError") {
+        void captureError({
+          level: "error",
+          source: "useMenuDownload",
+          message:
+            "Download failed: file too large for device memory (RangeError at arrayBuffer)",
         });
         setDownloadMessage(t("menu.download_failed"));
         return;
