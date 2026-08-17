@@ -638,3 +638,119 @@ describe("getValidToken single-flight refresh", () => {
     expect(refreshCallCount()).toBe(2);
   });
 });
+
+// Spec-guards for the bounded-retry upgrade (max attempts + exponential
+// backoff, AGENTS.md Luật 4 "không retry vô hạn"): the refresh retry chain
+// must stop after the attempt budget instead of retrying forever, back off
+// exponentially between attempts, reset its budget on a successful refresh,
+// and stay cancellable via stopProactiveRefresh.
+describe("scheduleRetryRefresh bounded retry (max attempts + backoff)", () => {
+  const refreshCallCount = () =>
+    invokeMock.mock.calls.filter((call) => call[0] === "refresh_google_token")
+      .length;
+
+  // The retry timer is the only setTimeout in the 30s..120s window (the
+  // timeout wrappers use 5s/15s and the proactive timer runs at ~55min), so
+  // filtering by delay isolates the retry-timer delays for assertion.
+  const retryTimerDelays = (
+    calls: ReadonlyArray<readonly unknown[]>,
+  ): number[] =>
+    calls
+      .map((call) => call[1] as number)
+      .filter((delay) => delay >= 30_000 && delay <= 120_000);
+
+  const alwaysFailRefresh = () => {
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () => Promise.reject(new Error("Failed to fetch")),
+    });
+  };
+
+  it("stops retrying after the max-attempt budget instead of retrying forever", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    alwaysFailRefresh();
+    vi.useFakeTimers();
+    try {
+      await getValidToken(true); // transient failure → schedules the first retry
+      // Backoff budget: 30s + 60s + 120s + 120s = 330s, then give-up.
+      await vi.advanceTimersByTimeAsync(400_000);
+      expect(refreshCallCount()).toBe(5); // 1 initial + 4 retries (RETRY_MAX_ATTEMPTS)
+      expect(captureErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("giving up") as unknown as string,
+        }),
+      );
+      // Budget exhausted: no timer is scheduled, so more time changes nothing.
+      await vi.advanceTimersByTimeAsync(400_000);
+      expect(refreshCallCount()).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off exponentially between retries (each delay longer than the last, capped)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    alwaysFailRefresh();
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn<typeof globalThis, "setTimeout">(
+      globalThis,
+      "setTimeout",
+    );
+    try {
+      await getValidToken(true); // schedules 30s
+      await vi.advanceTimersByTimeAsync(30_000); // retry 1 fires → schedules 60s
+      await vi.advanceTimersByTimeAsync(60_000); // retry 2 fires → schedules 120s (capped)
+      const delays = retryTimerDelays(setTimeoutSpy.mock.calls);
+      expect(delays).toEqual([30_000, 60_000, 120_000]);
+      expect(delays[1] ?? 0).toBeGreaterThan(delays[0] ?? 0);
+      expect(delays[2] ?? 0).toBeGreaterThan(delays[1] ?? 0);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the retry budget on a successful refresh (next cycle starts at the base delay)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let failRefresh = true;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        failRefresh
+          ? Promise.reject(new Error("Failed to fetch"))
+          : Promise.resolve({ access_token: "ok", expires_in: 3600 }),
+    });
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn<typeof globalThis, "setTimeout">(
+      globalThis,
+      "setTimeout",
+    );
+    try {
+      await getValidToken(true); // fails → schedules retry at 30s
+      failRefresh = false; // the scheduled retry now succeeds
+      await vi.advanceTimersByTimeAsync(30_000); // retry fires and SUCCEEDS → budget resets
+      failRefresh = true;
+      await getValidToken(true); // fails again → must schedule at 30s (fresh cycle), not 60s
+      const delays = retryTimerDelays(setTimeoutSpy.mock.calls);
+      const lastDelay = delays[delays.length - 1];
+      expect(lastDelay).toBe(30_000);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stopProactiveRefresh cancels a pending retry timer", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    alwaysFailRefresh();
+    vi.useFakeTimers();
+    try {
+      await getValidToken(true); // schedules a retry at 30s
+      stopProactiveRefresh(); // cancels the pending retry timer
+      await vi.advanceTimersByTimeAsync(400_000);
+      expect(refreshCallCount()).toBe(1); // no retry ever fired
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -7,6 +7,7 @@ import {
   REFRESH_TOKEN_KEY,
   TOKEN_TIME_KEY,
 } from "./storageKeys";
+import { backoffDelay } from "./retryDelay";
 
 export class TokenRefreshError extends Error {
   readonly kind: "network" | "invalid_grant" | "timeout" | "unknown";
@@ -56,7 +57,13 @@ const PROACTIVE_REFRESH_MIN_MS = 5000;
 // models aligned (see computeProactiveRefreshDelayMs).
 export const TOKEN_EXPIRY_MS = 50 * 60 * 1000;
 const TOKEN_TIME_MAX_FUTURE_MS = 86_400_000;
-const RETRY_DELAY_MS = 30_000;
+// Retry-refresh backoff policy (AGENTS.md Luật 4: never retry forever). A
+// transient refresh failure is retried at most RETRY_MAX_ATTEMPTS times with
+// exponential backoff from RETRY_BASE_DELAY_MS, capped at RETRY_MAX_DELAY_MS;
+// once the budget is exhausted the chain stops until a new refresh cycle.
+const RETRY_BASE_DELAY_MS = 30_000;
+const RETRY_MAX_DELAY_MS = 120_000;
+const RETRY_MAX_ATTEMPTS = 4;
 const DEFAULT_EXPIRES_IN_SEC = 3600;
 
 // Classify a failed Request/fetch rejection. Per spec a timeout via
@@ -103,12 +110,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 // the next refresh starts a fresh flight.
 let refreshPromise: Promise<string | null> | null = null;
 let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
+// Retries already scheduled in the current failed-refresh cycle. Reset on a
+// successful refresh and whenever the chain is stopped (stopProactiveRefresh),
+// so a later failure always starts a fresh cycle from the base delay.
+let retryAttempt = 0;
 
 export const stopProactiveRefresh = () => {
   if (refreshTimerId) {
     clearTimeout(refreshTimerId);
     refreshTimerId = null;
   }
+  retryAttempt = 0;
 };
 
 // Pure computation for the proactive-refresh timer delay. The effective token
@@ -200,7 +212,28 @@ function getStoredTokenTime(): number {
 }
 
 function scheduleRetryRefresh() {
-  if (refreshTimerId) clearTimeout(refreshTimerId);
+  if (refreshTimerId) {
+    clearTimeout(refreshTimerId);
+    refreshTimerId = null;
+  }
+  if (retryAttempt >= RETRY_MAX_ATTEMPTS) {
+    retryAttempt = 0;
+    void captureError({
+      level: "warn",
+      source: "apiClient",
+      message:
+        "Token refresh retry limit reached, giving up until a new refresh cycle",
+    });
+    return;
+  }
+  const delayMs = backoffDelay(retryAttempt, null, {
+    baseMs: RETRY_BASE_DELAY_MS,
+    maxMs: RETRY_MAX_DELAY_MS,
+    // Single-client refresh (no thundering-herd risk), so keep the backoff
+    // deterministic (jitter window 0) for predictable retry spacing.
+    jitterMaxMs: 0,
+  });
+  retryAttempt += 1;
   refreshTimerId = setTimeout(() => {
     getValidToken(true).catch(() =>
       captureError({
@@ -209,7 +242,7 @@ function scheduleRetryRefresh() {
         message: "retry-refresh-failed",
       }),
     );
-  }, RETRY_DELAY_MS);
+  }, delayMs);
 }
 
 /**
