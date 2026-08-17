@@ -301,6 +301,37 @@ export const MainContent = React.memo(function MainContent({
     return true;
   }, showNewFolderModal);
 
+  // Hardware back (mobile): closes the two bulk overlays (BulkDeleteConfirmModal
+  // and bulk-move FolderSelectionScreen) when they own the foreground — without
+  // this, a back press falls through the App-level chain to the folder-up
+  // handler and pops folder history instead. BulkDeleteConfirmModal renders
+  // after FolderSelectionScreen in JSX, so it closes first (MoreMenu pattern:
+  // the later-rendered dialog is handled first). Handler closure includes every
+  // boolean gate in deps so the latest version is always on the LIFO stack (an
+  // inline `if (showBulkDeleteConfirm)` read against a stale closure would
+  // re-peel the same overlay twice — MoreMenu pattern). Registered ONLY while
+  // at least one bulk overlay is open, so an empty stack on close keeps the
+  // chain falling through to App.
+  const handleBulkOverlayBack = useCallback((): boolean => {
+    if (showBulkDeleteConfirm) {
+      setShowBulkDeleteConfirm(false);
+      return true;
+    }
+    if (showBulkMoveScreen) {
+      setShowBulkMoveScreen(false);
+      return true;
+    }
+    return false;
+  }, [
+    setShowBulkDeleteConfirm,
+    setShowBulkMoveScreen,
+    showBulkDeleteConfirm,
+    showBulkMoveScreen,
+  ]);
+
+  const isAnyBulkOverlayOpen = showBulkDeleteConfirm || showBulkMoveScreen;
+  useHardwareBack(handleBulkOverlayBack, isAnyBulkOverlayOpen);
+
   return (
     <main
       ref={mainRef}

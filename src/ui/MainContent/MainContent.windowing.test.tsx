@@ -563,3 +563,77 @@ describe("MainContent hardware-back closes NewFolderModal (batch fix 2026-08-17)
     expect(pressBack()).toBe(false);
   });
 });
+
+// Batch back-button fix (2026-08-17): the two bulk overlays owned by
+// MainContent — FolderSelectionScreen (bulk move) and BulkDeleteConfirmModal —
+// had no useHardwareBack handler, so a hardware back press fell straight
+// through the App-level chain to the folder-up handler and popped folder
+// history instead of closing the overlay. The fix registers ONE handler gated
+// on "at least one bulk overlay open" (MoreMenu pattern), so the stack is
+// empty when both are closed and back keeps falling through as before.
+describe("MainContent hardware-back closes bulk overlays (batch fix 2026-08-17)", () => {
+  beforeEach(() => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function pressBack(): boolean {
+    // Wrap in act() so the state updates the back handler triggers flush
+    // through to the DOM before we assert.
+    let consumed = false;
+    act(() => {
+      consumed = handleGlobalBack();
+    });
+    return consumed;
+  }
+
+  it("bulk delete: back closes the BulkDeleteConfirmModal (true, then false)", () => {
+    render(<MainContent {...baseProps} />);
+    expect(screen.queryByText("drive.bulk_delete_title")).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.BULK_DELETE));
+    });
+    expect(screen.getByText("drive.bulk_delete_title")).not.toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByText("drive.bulk_delete_title")).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("bulk move: back closes the FolderSelectionScreen (true, then false)", () => {
+    const explorer = makeExplorerState(makeItems(3));
+    explorer.isSelectionMode = true;
+    explorer.selectedIds = new Set(["id0"]);
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    fireEvent.click(screen.getByText("drive.bulk_move"));
+    expect(screen.getByTestId("folder-screen-stub")).not.toBeNull();
+
+    expect(pressBack()).toBe(true);
+    expect(screen.queryByTestId("folder-screen-stub")).toBeNull();
+
+    expect(pressBack()).toBe(false);
+  });
+
+  it("does not register a back handler while no bulk overlay is open (no fall-through)", () => {
+    render(<MainContent {...baseProps} />);
+    // Both bulk overlays are closed — pressBack must fall through.
+    expect(pressBack()).toBe(false);
+  });
+
+  it("removes the bulk back handler on unmount (no leak across tests)", () => {
+    const { unmount } = render(<MainContent {...baseProps} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.BULK_DELETE));
+    });
+    expect(screen.getByText("drive.bulk_delete_title")).not.toBeNull();
+    unmount();
+
+    expect(pressBack()).toBe(false);
+  });
+});
