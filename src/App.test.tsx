@@ -82,6 +82,16 @@ const mocks = vi.hoisted(() => {
     // Task 9 mobile-polish: plugin-process exit() — mocked so the
     // double-back-to-exit path can be asserted instead of invoking Tauri.
     processExit: vi.fn(() => Promise.resolve(undefined)),
+    // PlayerBar stub captures onExpandNowPlaying so the NowPlaying overlay
+    // can be opened exactly like a real tap on the track info.
+    playerBarProps: {
+      value: null as null | { onExpandNowPlaying: () => void },
+    },
+    // NowPlayingOverlay stub captures the live isOpen prop for assertions
+    // (same pattern as rateLimitModalProps above).
+    nowPlayingOverlayProps: {
+      value: null as null | { isOpen: boolean },
+    },
   };
 });
 
@@ -153,7 +163,18 @@ vi.mock("./ui/Sidebar/Sidebar", () => ({
 vi.mock("./ui/NowPlaying/NowPlayingView", () => ({
   NowPlayingView: () => null,
 }));
-vi.mock("./ui/PlayerBar/PlayerBar", () => ({ PlayerBar: () => null }));
+vi.mock("./ui/PlayerBar/PlayerBar", () => ({
+  PlayerBar: (props: { onExpandNowPlaying: () => void }) => {
+    mocks.playerBarProps.value = props;
+    return null;
+  },
+}));
+vi.mock("./ui/NowPlayingOverlay", () => ({
+  NowPlayingOverlay: (props: { isOpen: boolean }) => {
+    mocks.nowPlayingOverlayProps.value = props;
+    return null;
+  },
+}));
 vi.mock("./ui/FolderSelection/FolderSelectionScreen", () => ({
   FolderSelectionScreen: () => null,
 }));
@@ -795,5 +816,52 @@ describe("App mobile back chain (Task 14: My Drive folder layer)", () => {
     expect(drive.setCurrentFolderId).toHaveBeenCalledWith("root");
     expect(drive.setCurrentFolderName).toHaveBeenCalledWith("My Drive");
     expect(mocks.processExit).not.toHaveBeenCalled();
+  });
+
+  // Task 15: NowPlaying closes BEFORE the folder-up layer — the handler is
+  // registered last in App (after the rate-limit handler), so LIFO checks it
+  // first even when My Drive drill-down is active (previously the folder-up
+  // handler swallowed the press and NowPlaying never closed).
+  it("mobile: back with NowPlaying open in a subfolder closes NowPlaying, does NOT pop folder history", async () => {
+    platformMock.IS_MOBILE = true;
+    const drive = defaultDrive();
+    drive.currentFolderId = "folder-1";
+    drive.folderHistory = [{ id: "root", name: "My Drive" }];
+    mocks.useDrive.mockImplementation(() => drive);
+    render(<App />);
+    await screen.findByTestId("home-tab");
+    await openMyDrive();
+
+    expect(mocks.nowPlayingOverlayProps.value?.isOpen).toBe(false);
+    await act(async () => {
+      mocks.playerBarProps.value?.onExpandNowPlaying();
+      await Promise.resolve();
+    });
+    expect(mocks.nowPlayingOverlayProps.value?.isOpen).toBe(true);
+
+    pressBack();
+
+    expect(mocks.nowPlayingOverlayProps.value?.isOpen).toBe(false);
+    expect(drive.handleBack).not.toHaveBeenCalled();
+    expect(mocks.processExit).not.toHaveBeenCalled();
+    expect(screen.queryByText(BACK_HINT)).toBeNull();
+  });
+
+  it("mobile: back with NowPlaying open at Home closes NowPlaying (no exit toast)", async () => {
+    platformMock.IS_MOBILE = true;
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    await act(async () => {
+      mocks.playerBarProps.value?.onExpandNowPlaying();
+      await Promise.resolve();
+    });
+    expect(mocks.nowPlayingOverlayProps.value?.isOpen).toBe(true);
+
+    pressBack();
+
+    expect(mocks.nowPlayingOverlayProps.value?.isOpen).toBe(false);
+    expect(mocks.processExit).not.toHaveBeenCalled();
+    expect(screen.queryByText(BACK_HINT)).toBeNull();
   });
 });

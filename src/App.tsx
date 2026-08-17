@@ -345,21 +345,33 @@ function App() {
     return true;
   }, showRateLimitModal);
 
+  // NowPlaying closes ABOVE every other layer. Declared LAST so its effect
+  // flushes after the folder-up handler on every render (effects run in
+  // declaration order inside a component) and LIFO always checks it first —
+  // back with NowPlaying open in a drill-down subfolder closes the overlay
+  // instead of popping folder history. Deliberately NOT memoized: the sibling
+  // handlers are inline too, and re-registering last on each render is what
+  // keeps this handler on top of the stack.
+  useHardwareBack(() => {
+    setIsNowPlayingOpen(false);
+    return true;
+  }, isNowPlayingOpen);
+
   // Android hardware back button via Tauri's official onBackButtonPress event
   // (2.9+) — each native press fires the chain directly, so no synthetic
-  // history entries are pushed anymore. Back order: registered overlay stack →
-  // NowPlaying → any non-Home tab → Home → double-back-to-exit (Android
-  // convention: hint toast + 2s window before the root press exits). Runs
-  // ONLY on mobile — desktop keeps native window history and never subscribes.
+  // history entries are pushed anymore. Back order: registered overlay stack
+  // (incl. NowPlaying, registered last → top of LIFO) → any non-Home tab →
+  // Home → double-back-to-exit (Android convention: hint toast + 2s window
+  // before the root press exits). Runs ONLY on mobile — desktop keeps native
+  // window history and never subscribes.
   const navStateRef = useRef({
-    isNowPlayingOpen,
     activeTab,
     handleTabChange,
     t,
   });
   useEffect(() => {
-    navStateRef.current = { isNowPlayingOpen, activeTab, handleTabChange, t };
-  }, [isNowPlayingOpen, activeTab, handleTabChange, t]);
+    navStateRef.current = { activeTab, handleTabChange, t };
+  }, [activeTab, handleTabChange, t]);
 
   useEffect(() => {
     if (!IS_MOBILE) return;
@@ -396,17 +408,15 @@ function App() {
     // Task 9 mobile-polish upgrade: back now arrives via the native
     // onBackButtonPress event instead of a popstate listener. The chain is
     // identical to the old pushState hack — handleGlobalBack first (registered
-    // overlay stack), then NowPlaying, then tab → Home, then double-back-exit.
+    // overlay stack, NowPlaying included), then tab → Home, then
+    // double-back-exit.
     const unregisterBack = registerNativeBackHandler(() => {
       if (handleGlobalBack()) return;
 
       const state = navStateRef.current;
       let handled = false;
 
-      if (state.isNowPlayingOpen) {
-        setIsNowPlayingOpen(false);
-        handled = true;
-      } else if (state.activeTab !== TABS.home) {
+      if (state.activeTab !== TABS.home) {
         state.handleTabChange(TABS.home);
         handled = true;
       }

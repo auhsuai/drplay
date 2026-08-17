@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, X, Search, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortDropdown } from "../../components/SortDropdown";
 import { MY_DRIVE_TAB } from "../../../utils/driveConstants";
 import { captureError } from "../../../utils/errorLog";
+import { useHardwareBack } from "../../../hooks/useHardwareBack";
 import { IS_MOBILE } from "../../../utils/platform";
 
 const TOP_NAVIGATION_BAR_MODULE = "TopNavigationBar";
@@ -59,6 +60,19 @@ export function TopNavigationBar({
       searchInputRef.current?.focus();
     }
   }, [searchExpanded, searchInputRef]);
+
+  // Task 15 mobile-polish: Android hardware back while the search is expanded
+  // closes it and CONSUMES the press, so the chain never reaches App's My
+  // Drive folder-up handler. TopNavigationBar mounts inside MainContent (a
+  // child of App), so its effect registers the handler AFTER App's folder-up
+  // handler → LIFO checks search first. Memoized with an empty dep list so the
+  // handler identity is stable and registration only toggles with isActive.
+  const handleSearchBack = useCallback(() => {
+    setSearchExpanded(false);
+    return true;
+  }, []);
+
+  useHardwareBack(handleSearchBack, IS_MOBILE && searchExpanded);
 
   // Entering selection mode replaces this nav entirely — reset the expanded
   // flag so exiting selection mode returns to the collapsed icon, not a

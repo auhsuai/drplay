@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+} from "@testing-library/react";
 import type React from "react";
 import { TopNavigationBar } from "./TopNavigationBar";
+import { handleGlobalBack } from "../../../hooks/useHardwareBack";
 import en from "../../../locales/en/translation.json";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
@@ -123,6 +130,35 @@ describe("TopNavigationBar mobile search (IS_MOBILE)", () => {
     fireEvent.click(screen.getByTestId("mobile-search-collapsed"));
     fireEvent.blur(screen.getByRole("textbox"));
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  // Task 15: Android hardware back while the mobile search is expanded must
+  // close the search and CONSUME the press — the search handler has to win
+  // over App's My Drive folder-up handler (registered in a parent component,
+  // so it would otherwise be checked first by LIFO and navigate to the
+  // parent folder instead of collapsing the search).
+  it("hardware back while expanded closes search and consumes the press", () => {
+    platformMock.IS_MOBILE = true;
+    render(<TopNavigationBar {...makeProps()} />);
+    fireEvent.click(screen.getByTestId("mobile-search-collapsed"));
+    expect(screen.getByTestId("mobile-search-expanded")).toBeTruthy();
+
+    let handled = false;
+    act(() => {
+      handled = handleGlobalBack();
+    });
+
+    expect(handled).toBe(true);
+    expect(screen.queryByTestId("mobile-search-expanded")).toBeNull();
+    expect(screen.getByTestId("mobile-search-collapsed")).toBeTruthy();
+  });
+
+  it("hardware back with search collapsed does not consume the press (chain falls through)", () => {
+    platformMock.IS_MOBILE = true;
+    render(<TopNavigationBar {...makeProps()} />);
+
+    expect(handleGlobalBack()).toBe(false);
+    expect(screen.getByTestId("mobile-search-collapsed")).toBeTruthy();
   });
 
   it("breadcrumb shows only the current folder on mobile (path hidden)", () => {
