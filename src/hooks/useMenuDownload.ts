@@ -1,39 +1,24 @@
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { join } from "@tauri-apps/api/path";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { getValidToken } from "../utils/apiClient";
 import {
   getEffectiveDownloadPath,
   getCustomDownloadPath,
   getMobileDownloadFolder,
 } from "../utils/downloadPath";
-import { mergeWithTimeoutSignal } from "../utils/driveApi";
-import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
+import { DRIVE_FILES_URL } from "../utils/driveFiles";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
 import { IS_MOBILE } from "../utils/platform";
-import { isAbortError } from "./player/utils";
 import type { Track } from "../types";
 import type { TFunction } from "i18next";
 
-// The download buffers the ENTIRE file into RAM via arrayBuffer(), so an
-// unresponsive server would hold the bytes (and memory) forever. 5 minutes is
-// generous for legit multi-hundred-MB audio files yet still bounds the
-// pathological case. AbortSignal.timeout rejects with a DOMException named
-// 'TimeoutError' (MDN AbortSignal.timeout, Baseline 2024). Same pattern as
-// fetchWithAuth / useDrive.ts.
-const DOWNLOAD_TIMEOUT_MS = 300_000;
-
-// Android WebView allocates ArrayBuffers in a constrained heap (~300 MB on
-// Samsung, lower on budget devices — Chromium issue #472547502). Files near or
-// above this threshold trigger "RangeError: Array buffer allocation failed" at
-// response.arrayBuffer(). We pre-check Content-Length and skip the allocation
-// when the file is known to exceed this platform cap. The constant is conservative
-// (below the lowest observed limit) so legitimate high-quality audio (typically
-// ≤ 100 MB) still works. When Content-Length is absent (chunked transfer) the
-// allocation is attempted and caught below.
-const MOBILE_ARRAY_BUFFER_LIMIT = 200 * 1024 * 1024; // 200 MiB
+type DownloadEvent =
+  | { event: "Started"; downloadId: number; total: number | null }
+  | { event: "Progress"; downloaded: number }
+  | { event: "Finished" }
+  | { event: "Error"; message: string };
 
 // Windows forbids these characters in file names; also guard against DOS
 // device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) and trailing dots/spaces.
@@ -60,15 +45,22 @@ export function useMenuDownload(t: TFunction) {
   const [downloadFileName, setDownloadFileName] = useState("");
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadTrack, setDownloadTrack] = useState<Track | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    downloaded: number;
+    total: number | null;
+  } | null>(null);
 
-  // Abort the in-flight download when the component unmounts (or a newer
-  // download supersedes it). Without a signal the fetch and its RAM-buffered
-  // bytes survive the component and keep consuming memory.
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const downloadIdRef = useRef<number | null>(null);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      abortControllerRef.current?.abort();
+      mountedRef.current = false;
+      // Cancel any in-flight download on unmount
+      if (downloadIdRef.current !== null) {
+        void invoke("cancel_download", { downloadId: downloadIdRef.current });
+      }
     };
   }, []);
 
@@ -109,48 +101,13 @@ export function useMenuDownload(t: TFunction) {
     if (isDownloadingFile || !downloadTrack) return;
     setIsDownloadingFile(true);
     setShowDownloadDialog(false);
-
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    // Merge the cancel signal with a bounded timeout so a stalled server
-    // cannot hold the RAM-buffered bytes forever (MDN AbortSignal.any /
-    // AbortSignal.timeout; same pattern as useDrive.ts:72).
-    const signal = mergeWithTimeoutSignal(
-      controller.signal,
-      DOWNLOAD_TIMEOUT_MS,
-    );
+    setDownloadProgress(null);
 
     try {
-      const freshToken = await getValidToken(false, signal);
+      const freshToken = await getValidToken(false);
       if (!freshToken) throw new Error("No valid token");
 
       const downloadUrl = `${DRIVE_FILES_URL}/${downloadTrack.id}?alt=media`;
-      const response = await fetch(downloadUrl, {
-        headers: authHeaders(freshToken),
-        signal,
-      });
-
-      if (!response.ok) throw new Error("Fetch failed");
-
-      // Android WebView throws RangeError when the ArrayBuffer exceeds its
-      // constrained heap (~200–300 MiB depending on device). Pre-check
-      // Content-Length so we fail with a clear message instead of a cryptic
-      // RangeError deep in the catch block. When Content-Length is absent
-      // (chunked transfer) we fall through and let the catch handle it.
-      if (IS_MOBILE) {
-        const contentLength = response.headers.get("content-length");
-        if (contentLength) {
-          const size = Number(contentLength);
-          if (!Number.isNaN(size) && size > MOBILE_ARRAY_BUFFER_LIMIT) {
-            throw new Error("File too large for this device");
-          }
-        }
-      }
-
-      const bytes = new Uint8Array(await response.arrayBuffer());
       const dir = await getEffectiveDownloadPath();
       // Mobile downloads go to the app dir (never $DOWNLOAD), which sits
       // outside the fs write scope (capabilities allow $DOWNLOAD/**) — extend
@@ -181,18 +138,31 @@ export function useMenuDownload(t: TFunction) {
         `${base}${ext}`,
         t("menu.untitled"),
       );
-      // join() uses the platform-specific separator (Tauri v2 path API) so a
-      // POSIX build no longer writes a literal backslash into the file name.
-      const savePath = await join(dir, finalFileName);
 
-      // tauri-plugin-fs v2: write_file reads the target path from a request
-      // header and takes the bytes as the raw invoke body. Passing the
-      // Uint8Array as the top-level arg keeps the IPC on the octet-stream
-      // path (no Array.from / JSON number-array, ~8x the file size in peak
-      // memory). See plugin-fs guest-js writeFile() for the identical shape.
-      await invoke("plugin:fs|write_file", bytes, {
-        headers: { path: encodeURIComponent(savePath) },
+      // Rust streaming download: bytes never touch the WebView heap.
+      const onEvent = new Channel<DownloadEvent>();
+      onEvent.onmessage = (msg) => {
+        if (!mountedRef.current) return;
+        if (msg.event === "Started") {
+          downloadIdRef.current = msg.downloadId;
+          setDownloadProgress({ downloaded: 0, total: msg.total });
+        } else if (msg.event === "Progress") {
+          setDownloadProgress((prev) => ({
+            downloaded: msg.downloaded,
+            total: prev?.total ?? null,
+          }));
+        }
+      };
+
+      const savePath = await invoke("download_file", {
+        url: downloadUrl,
+        token: freshToken,
+        destDir: dir,
+        fileName: finalFileName,
+        onProgress: onEvent,
       });
+
+      if (!mountedRef.current) return;
 
       // Task 4 mobile-polish (SAF): with a user-picked Android folder, the
       // file written above is a STAGED copy in app-private storage — hand it
@@ -253,57 +223,36 @@ export function useMenuDownload(t: TFunction) {
         );
         return;
       }
-      setDownloadMessage(`${t("menu.saved_at")} ${savePath}`);
+      setDownloadMessage(`${t("menu.saved_at")} ${String(savePath)}`);
     } catch (err: unknown) {
-      // Duck-typed name extraction: DOMException is NOT instanceof Error in
-      // some environments (jsdom), yet carries a reliable .name. Still needed
-      // here for 'TimeoutError' (AbortSignal.timeout) and the failure log —
-      // the AbortError branch itself uses the shared isAbortError check.
-      const errName =
-        err &&
-        typeof err === "object" &&
-        typeof (err as { name?: unknown }).name === "string"
-          ? (err as { name: string }).name
-          : "";
-      if (isAbortError(err)) {
-        // Deliberate cancel (unmount / superseded download): the component may
-        // already be gone, so do NOT touch state — and do not surface a
-        // failure message for a user-initiated cancel. Log for visibility.
+      // Rust commands reject with a string message, not an Error object.
+      const errMsg =
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+            ? err.message
+            : String(err);
+
+      if (errMsg === "download cancelled") {
         void captureError({
           level: "warn",
           source: "useMenuDownload",
-          message:
-            "Download aborted — download was cancelled (unmount or superseded)",
+          message: "Download cancelled",
         });
         return;
       }
-      if (errName === "TimeoutError") {
-        void captureError({
-          level: "error",
-          source: "useMenuDownload",
-          message: `Download timeout — no response within ${String(DOWNLOAD_TIMEOUT_MS)}ms`,
-        });
-        setDownloadMessage(t("menu.download_failed"));
-        return;
-      }
-      if (errName === "RangeError") {
-        void captureError({
-          level: "error",
-          source: "useMenuDownload",
-          message:
-            "Download failed: file too large for device memory (RangeError at arrayBuffer)",
-        });
-        setDownloadMessage(t("menu.download_failed"));
-        return;
-      }
+
       void captureError({
         level: "error",
         source: "useMenuDownload",
-        message: `Download failed: ${errName || String(err)}`,
+        message: `Download failed: ${errMsg}`,
       });
       setDownloadMessage(t("menu.download_failed"));
     } finally {
-      setIsDownloadingFile(false);
+      if (mountedRef.current) {
+        setIsDownloadingFile(false);
+        downloadIdRef.current = null;
+      }
     }
   };
 
@@ -315,6 +264,7 @@ export function useMenuDownload(t: TFunction) {
     setDownloadFileName,
     downloadMessage,
     setDownloadMessage,
+    downloadProgress,
     handleDownloadClick,
     executeDownload,
   };

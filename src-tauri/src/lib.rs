@@ -15,9 +15,11 @@ mod tray;
 mod memory;
 mod token_store;
 mod seed;
+mod download;
 
 use auth::{login_google_native, refresh_google_token};
 use auth_android::login_google_mobile;
+use download::download_file;
 use memory::{apply_window_activity, WindowActivityEvent};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 #[cfg(desktop)]
@@ -249,6 +251,8 @@ pub fn run() {
             token_store::set_refresh_token,
             token_store::get_refresh_token,
             token_store::delete_refresh_token,
+            download_file,
+            download::cancel_download,
         ])
         .build(tauri::generate_context!());
 

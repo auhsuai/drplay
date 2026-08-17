@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 import { X, Download, LoaderCircle } from "lucide-react";
+import { DownloadProgress } from "../DownloadProgress";
 
 interface DownloadDialogProps {
   show: boolean;
   isDownloadingFile: boolean;
   downloadFileName: string;
   setDownloadFileName: (name: string) => void;
+  downloadProgress: { downloaded: number; total: number | null } | null;
   onClose: () => void;
   onConfirm: () => void;
   t: import("i18next").TFunction;
@@ -16,6 +18,7 @@ export function DownloadDialog({
   isDownloadingFile,
   downloadFileName,
   setDownloadFileName,
+  downloadProgress,
   onClose,
   onConfirm,
   t,
@@ -72,6 +75,14 @@ export function DownloadDialog({
         </div>
 
         <div className="flex items-center justify-end gap-3 mt-2">
+          {isDownloadingFile && downloadProgress && (
+            <div className="flex-1">
+              <DownloadProgress
+                downloaded={downloadProgress.downloaded}
+                total={downloadProgress.total}
+              />
+            </div>
+          )}
           <button
             onClick={() => {
               onClose();

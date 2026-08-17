@@ -137,6 +137,7 @@ export function MoreMenu({
     setDownloadFileName,
     downloadMessage,
     setDownloadMessage,
+    downloadProgress,
     handleDownloadClick,
     executeDownload,
   } = useMenuDownload(t);
@@ -389,6 +390,7 @@ export function MoreMenu({
           isDownloadingFile={isDownloadingFile}
           downloadFileName={downloadFileName}
           setDownloadFileName={setDownloadFileName}
+          downloadProgress={downloadProgress}
           onClose={() => {
             setShowDownloadDialog(false);
           }}
