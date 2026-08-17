@@ -43,6 +43,7 @@
     "search_error": "Không thể tìm kiếm thư mục. Vui lòng thử lại.",
     "folders_error": "Không thể tải thư mục. Vui lòng thử lại.",
     "back_error": "Không thể quay lại. Vui lòng thử lại.",
+    "press_again_to_exit": "Nhấn lại để thoát",
     "bulk_move_title": "Chọn thư mục đích"
   },
   "home": {

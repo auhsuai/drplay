@@ -43,6 +43,7 @@
     "search_error": "Couldn't search folders. Try again.",
     "folders_error": "Couldn't load folders. Try again.",
     "back_error": "Couldn't go back. Try again.",
+    "press_again_to_exit": "Press back again to exit",
     "bulk_move_title": "Choose destination folder"
   },
   "home": {

@@ -384,11 +384,7 @@ function App() {
     const doubleBack = createDoubleBackExit({
       windowMs: DOUBLE_BACK_EXIT_MS,
       onArm: () => {
-        showSuccessToast(
-          navStateRef.current.t("back.press_again_to_exit", {
-            defaultValue: "Nhấn back lần nữa để thoát",
-          }),
-        );
+        showSuccessToast(navStateRef.current.t("back.press_again_to_exit"));
       },
       onExit: () => {
         // plugin-process exit(0) is the documented Tauri v2 way to exit on

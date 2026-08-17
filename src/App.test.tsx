@@ -580,7 +580,7 @@ describe("App debug skeleton trigger (DEV only)", () => {
 // onBackButtonPress event; Desktop never wires the native back listener at
 // all.
 describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
-  const BACK_HINT = "Nhấn back lần nữa để thoát";
+  const BACK_HINT = "back.press_again_to_exit";
 
   beforeEach(() => {
     mocks.processExit.mockClear();
@@ -701,7 +701,7 @@ describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
 // layer ABOVE NowPlaying/tab/exit — back on a subfolder pops one history
 // level instead of falling straight into the double-back-to-exit chain.
 describe("App mobile back chain (Task 14: My Drive folder layer)", () => {
-  const BACK_HINT = "Nhấn back lần nữa để thoát";
+  const BACK_HINT = "back.press_again_to_exit";
 
   const defaultDrive = () => ({
     appRootFolder: "root",
