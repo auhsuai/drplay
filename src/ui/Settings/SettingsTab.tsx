@@ -283,7 +283,7 @@ export function SettingsTab({
             </div>
             <button
               onClick={onLogout}
-              className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors shrink-0 ml-auto"
+              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors shrink-0 ml-auto"
               title={t("sidebar.log_out")}
             >
               <LogOut className="w-4 h-4" />
@@ -311,7 +311,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowFolderSelection(true);
                 }}
-                className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 whitespace-nowrap"
+                className="px-2.5 py-1.5 bg-brand-primary hover:bg-brand-hover text-white text-xs rounded-lg font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-1.5 whitespace-nowrap"
               >
                 <FolderOpen className="w-4 h-4" />
                 {t("settings.change_folder")}
@@ -475,7 +475,7 @@ export function SettingsTab({
                   onClick={() => {
                     void handlePickDownloadPath();
                   }}
-                  className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 whitespace-nowrap"
+                  className="px-2.5 py-1.5 bg-brand-primary hover:bg-brand-hover text-white text-xs rounded-lg font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-1.5 whitespace-nowrap"
                 >
                   <FolderOpen className="w-4 h-4" />
                   {t("settings.change_path")}
@@ -516,7 +516,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowTrashScreen(true);
                 }}
-                className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent whitespace-nowrap"
+                className="px-2.5 py-1.5 bg-brand-primary hover:bg-brand-hover text-white text-xs rounded-lg font-medium transition-all transform active:scale-95 shadow-sm border border-transparent whitespace-nowrap"
               >
                 {t("settings.open_trash")}
               </button>
@@ -538,7 +538,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowCacheManager(true);
                 }}
-                className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent whitespace-nowrap"
+                className="px-2.5 py-1.5 bg-brand-primary hover:bg-brand-hover text-white text-xs rounded-lg font-medium transition-all transform active:scale-95 shadow-sm border border-transparent whitespace-nowrap"
               >
                 {t("settings.clear_cache_btn")}
               </button>
@@ -565,7 +565,7 @@ export function SettingsTab({
                     void handleImportSeed();
                   }}
                   disabled={importingSeed}
-                  className="px-3.5 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                  className="px-2.5 py-1.5 bg-brand-primary hover:bg-brand-hover text-white text-xs rounded-lg font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   {t("settings.import_seed")}
                 </button>
