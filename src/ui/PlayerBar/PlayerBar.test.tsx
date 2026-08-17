@@ -1862,13 +1862,11 @@ describe("PlayerBar desktop font (Task 8)", () => {
   });
 });
 
-describe("PlayerBar mobile transport — 5 buttons (Task 5)", () => {
+describe("PlayerBar mobile transport — 3 buttons (redesigned row)", () => {
   const TRANSPORT_LABELS = [
-    "Previous track",
     "Rewind 5 seconds",
     "Play/Pause",
     "Forward 5 seconds",
-    "Next track",
   ];
 
   beforeEach(() => {
@@ -1885,13 +1883,25 @@ describe("PlayerBar mobile transport — 5 buttons (Task 5)", () => {
     platformMock.IS_MOBILE = false;
   });
 
-  it("renders the 5 transport buttons in user-chosen order: prev / -5s / play / +5s / next", () => {
+  it("renders the 3 transport buttons in user-chosen order: -5s / play / +5s (prev/next removed)", () => {
     renderPlayer();
     const labels = screen
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? "");
     const transport = labels.filter((l) => TRANSPORT_LABELS.includes(l));
     expect(transport).toEqual(TRANSPORT_LABELS);
+    expect(screen.queryByRole("button", { name: "Previous track" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Next track" })).toBeNull();
+  });
+
+  it("mobile: no standalone heart button on the bar (favorite moved into MoreMenu)", () => {
+    renderPlayer();
+    expect(
+      screen.queryByRole("button", { name: "Add to favorites" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Remove from favorites" }),
+    ).toBeNull();
   });
 
   it("compacts transport buttons on mobile (Task 9: 30px side targets, 34px play)", () => {
@@ -1956,16 +1966,6 @@ describe("PlayerBar mobile transport — 5 buttons (Task 5)", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Play/Pause" }));
     expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
-  });
-
-  it("next/prev wire to onNextTrack(false) / onPrevTrack", () => {
-    const onNext = vi.fn();
-    const onPrev = vi.fn();
-    renderPlayer({ onNextTrack: onNext, onPrevTrack: onPrev });
-    fireEvent.click(screen.getByRole("button", { name: "Next track" }));
-    expect(onNext).toHaveBeenCalledWith(false);
-    fireEvent.click(screen.getByRole("button", { name: "Previous track" }));
-    expect(onPrev).toHaveBeenCalledTimes(1);
   });
 
   it("desktop regression: no rewind/forward 5s buttons and no new labels (playMode stays)", () => {

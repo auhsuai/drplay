@@ -73,15 +73,30 @@ vi.mock("../../utils/platform", () => ({
 // The real MoreMenu pulls heavy deps (driveApi, db, playlists, uploads). A
 // stub trigger button keeps this file hermetic while still asserting that
 // TrackInfo places the menu inside the (formerly `hidden lg:flex`) wrapper.
+// The stub captures the props TrackInfo passes (isFavorite / onToggleFavorite
+// on mobile) and acts as the toggle: clicking it runs onToggleFavorite.
+interface TrackInfoMoreMenuProps {
+  track?: Track | undefined;
+  isPlayerBarMode?: boolean;
+  compact?: boolean;
+  isFavorite?: boolean | undefined;
+  onToggleFavorite?: (() => void) | undefined;
+}
+const moreMenuMock = vi.hoisted(() =>
+  vi.fn<(props: TrackInfoMoreMenuProps) => void>(),
+);
 vi.mock("../components/MoreMenu", async () => {
   const React = await import("react");
   return {
-    MoreMenu: () =>
-      React.createElement("button", {
+    MoreMenu: (props: TrackInfoMoreMenuProps) => {
+      moreMenuMock(props);
+      return React.createElement("button", {
         type: "button",
         "aria-haspopup": "menu",
         "aria-label": "More options",
-      }),
+        onClick: () => props.onToggleFavorite?.(),
+      });
+    },
   };
 });
 
@@ -108,6 +123,7 @@ beforeEach(() => {
   mocks.isFavorite.mockResolvedValue(false);
   mocks.addFavorite.mockResolvedValue(undefined);
   mocks.removeFavorite.mockResolvedValue(undefined);
+  moreMenuMock.mockClear();
   platformMock.IS_MOBILE = false;
 });
 
@@ -116,42 +132,60 @@ afterEach(() => {
   platformMock.IS_MOBILE = false;
 });
 
-describe("TrackInfo mobile heart + MoreMenu (Task 13 — fix hidden lg:flex)", () => {
+describe("TrackInfo mobile heart + MoreMenu (redesigned row — heart moved into menu)", () => {
   beforeEach(() => {
     platformMock.IS_MOBILE = true;
   });
 
-  it("mobile: heart + MoreMenu wrapper is VISIBLE (no hidden class) and both controls live in it", async () => {
+  function lastMoreMenuProps() {
+    const calls = moreMenuMock.mock.calls;
+    const last = calls[calls.length - 1];
+    if (last === undefined) {
+      throw new Error("MoreMenu was never rendered");
+    }
+    return last[0];
+  }
+
+  it("mobile: no standalone heart button — MoreMenu receives isFavorite + onToggleFavorite", async () => {
     renderTrackInfo();
-    const heart = await screen.findByRole("button", {
-      name: "Add to favorites",
+    await waitFor(() => {
+      expect(moreMenuMock).toHaveBeenCalled();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Add to favorites" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Remove from favorites" }),
+    ).toBeNull();
+    expect(lastMoreMenuProps().isFavorite).toBe(false);
+    expect(typeof lastMoreMenuProps().onToggleFavorite).toBe("function");
+    const menu = screen.getByRole("button", { name: "More options" });
+    const wrapper = menu.parentElement as HTMLElement;
+    expect(wrapper.className).not.toContain("hidden");
+    expect(wrapper.className).toContain("flex");
+  });
+
+  it("mobile: MoreMenu stays compact (Task 13 sizing) in the wrapper", async () => {
+    renderTrackInfo();
+    await waitFor(() => {
+      expect(moreMenuMock).toHaveBeenCalled();
+    });
+    expect(lastMoreMenuProps().compact).toBe(true);
+  });
+
+  it("mobile: clicking the menu's favorite action toggles like through addFavorite (state stays in TrackInfo)", async () => {
+    renderTrackInfo();
+    await waitFor(() => {
+      expect(moreMenuMock).toHaveBeenCalled();
     });
     const menu = screen.getByRole("button", { name: "More options" });
-    const wrapper = heart.parentElement as HTMLElement;
-    expect(wrapper).toBe(menu.parentElement);
-    expect(wrapper.className).not.toContain("hidden");
-  });
-
-  it("mobile: heart button is compact (h-7 w-7 touch target, 16px icon)", async () => {
-    renderTrackInfo();
-    const heart = await screen.findByRole("button", {
-      name: "Add to favorites",
-    });
-    expect(heart.className).toContain("h-7");
-    expect(heart.className).toContain("w-7");
-    expect(heart.className).not.toContain("h-8");
-    expect(heart.querySelector("svg")?.getAttribute("class")).toContain("w-4");
-  });
-
-  it("mobile: heart click still toggles like through addFavorite", async () => {
-    renderTrackInfo();
-    const heart = await screen.findByRole("button", {
-      name: "Add to favorites",
-    });
-    fireEvent.click(heart);
-    await screen.findByRole("button", { name: "Remove from favorites" });
+    fireEvent.click(menu);
+    await screen.findByRole("button", { name: "More options" });
     expect(mocks.addFavorite).toHaveBeenCalledTimes(1);
     expect(mocks.removeFavorite).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(lastMoreMenuProps().isFavorite).toBe(true);
+    });
   });
 
   it("desktop regression: wrapper keeps hidden lg:flex, heart keeps p-1 + 20px icon", async () => {
@@ -166,6 +200,8 @@ describe("TrackInfo mobile heart + MoreMenu (Task 13 — fix hidden lg:flex)", (
     expect(heart.className).not.toContain("h-8");
     expect(heart.className).toContain("p-1");
     expect(heart.querySelector("svg")?.getAttribute("class")).toContain("w-5");
+    expect(lastMoreMenuProps().isFavorite).toBeUndefined();
+    expect(lastMoreMenuProps().onToggleFavorite).toBeUndefined();
   });
 });
 
@@ -182,7 +218,7 @@ describe("TrackInfo reactive auth token (getState → selector)", () => {
       pictureData: null,
       pictureDataFull: null,
       v: 9,
-    } as never);
+    });
   });
 
   afterEach(() => {

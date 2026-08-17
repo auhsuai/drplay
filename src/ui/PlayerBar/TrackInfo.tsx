@@ -280,34 +280,44 @@ export function TrackInfo({
         </div>
       </div>
       {currentTrack && (
-        // Task 13: the old `hidden lg:flex` hid heart + MoreMenu below the lg
-        // breakpoint — on mobile the whole group vanished. Mobile now renders
-        // it always, compact (h-8 w-8 / 16px icons, YT-Music-style) and placed
-        // flush against the transport row: TrackInfo is flex-1 min-w-0, so the
-        // title truncates instead of the group overflowing a 360px phone.
-        // Desktop keeps `hidden lg:flex` byte-identical.
+        // Redesign 2026-08-17: on mobile the standalone heart button is gone
+        // — the favorite toggle moved into the MoreMenu (its item only shows
+        // when isFavorite + onToggleFavorite are passed). Desktop keeps the
+        // heart + plain MoreMenu byte-identical (heart must not duplicate in
+        // the desktop menu). The wrapper keeps `hidden lg:flex` on desktop
+        // (Task 13) and stays always-visible compact on mobile.
         <div
           className={`${IS_MOBILE ? "flex ml-1" : "hidden lg:flex ml-2"} items-center gap-1 shrink-0`}
         >
-          <button
-            type="button"
-            onClick={() => {
-              void handleToggleFavorite();
-            }}
-            aria-label={
-              isLiked ? t("player.remove_favorite") : t("player.add_favorite")
-            }
-            className={`${IS_MOBILE ? "h-7 w-7 flex items-center justify-center" : "p-1"} transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
-          >
-            <Heart
-              className={IS_MOBILE ? "w-4 h-4" : "w-5 h-5"}
-              fill={isLiked ? "currentColor" : "none"}
-            />
-          </button>
+          {!IS_MOBILE && (
+            <button
+              type="button"
+              onClick={() => {
+                void handleToggleFavorite();
+              }}
+              aria-label={
+                isLiked ? t("player.remove_favorite") : t("player.add_favorite")
+              }
+              className={`p-1 transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
+            >
+              <Heart
+                className="w-5 h-5"
+                fill={isLiked ? "currentColor" : "none"}
+              />
+            </button>
+          )}
           <MoreMenu
             track={currentTrack}
             isPlayerBarMode={true}
             compact={IS_MOBILE}
+            isFavorite={IS_MOBILE ? isLiked : undefined}
+            onToggleFavorite={
+              IS_MOBILE
+                ? () => {
+                    void handleToggleFavorite();
+                  }
+                : undefined
+            }
           />
         </div>
       )}

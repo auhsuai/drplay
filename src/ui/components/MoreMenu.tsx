@@ -60,6 +60,12 @@ export interface MoreMenuProps {
   isBulkSelected?: boolean | undefined;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
+  /** PlayerBar mobile (redesign 2026-08-17): favorite state + toggle handler.
+   *  Both must be provided for the heart item to render in playerbar mode —
+   *  desktop does not pass them, so its menu shows no heart (the bar heart
+   *  stays there). */
+  isFavorite?: boolean | undefined;
+  onToggleFavorite?: (() => void) | undefined;
 }
 
 export function MoreMenu({
@@ -82,6 +88,8 @@ export function MoreMenu({
   isBulkSelected,
   onBulkMoveClick,
   onBulkDeleteClick,
+  isFavorite,
+  onToggleFavorite,
 }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -215,6 +223,8 @@ export function MoreMenu({
           uploadBlockedTitle={uploadBlockedTitle}
           setIsOpen={setIsOpen}
           t={t}
+          isFavorite={isFavorite}
+          onToggleFavorite={onToggleFavorite}
         />
       ) : mode === "recent" ? (
         <RecentMenuItems

@@ -356,6 +356,106 @@ describe("MoreMenu playerbar variant regression", () => {
   });
 });
 
+describe("MoreMenu playerbar favorite item (heart moved into menu)", () => {
+  it("renders an Add to favorites item when isFavorite + onToggleFavorite are both provided", () => {
+    render(
+      <MoreMenu
+        isPlayerBarMode
+        track={makeTrack()}
+        isFavorite={false}
+        onToggleFavorite={vi.fn()}
+      />,
+    );
+    openTrigger();
+    expect(
+      within(menuEl()).getByRole("button", { name: "Add to favorites" }),
+    ).toBeTruthy();
+    expect(menuButtonNames().sort()).toEqual([
+      "Add to Playlist",
+      "Add to favorites",
+      "Download Song",
+      "Locate File",
+    ]);
+  });
+
+  it("switches the label to Remove from favorites when the track is liked", () => {
+    render(
+      <MoreMenu
+        isPlayerBarMode
+        track={makeTrack()}
+        isFavorite={true}
+        onToggleFavorite={vi.fn()}
+      />,
+    );
+    openTrigger();
+    expect(
+      within(menuEl()).getByRole("button", { name: "Remove from favorites" }),
+    ).toBeTruthy();
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Add to favorites" }),
+    ).toBeNull();
+  });
+
+  it("clicking the item calls onToggleFavorite and closes the menu", () => {
+    const onToggleFavorite = vi.fn();
+    render(
+      <MoreMenu
+        isPlayerBarMode
+        track={makeTrack()}
+        isFavorite={false}
+        onToggleFavorite={onToggleFavorite}
+      />,
+    );
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Add to favorites" }),
+    );
+    expect(onToggleFavorite).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("does not render the heart item when only one of the two props is provided", () => {
+    render(
+      <MoreMenu
+        isPlayerBarMode
+        track={makeTrack()}
+        isFavorite={false}
+        onToggleFavorite={undefined}
+      />,
+    );
+    openTrigger();
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Add to favorites" }),
+    ).toBeNull();
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Remove from favorites" }),
+    ).toBeNull();
+  });
+
+  it("does not render the heart item in default mode even with the props provided", () => {
+    render(
+      <MoreMenu
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        isFavorite={false}
+        onToggleFavorite={vi.fn()}
+      />,
+    );
+    openTrigger();
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Add to favorites" }),
+    ).toBeNull();
+    expect(menuButtonNames().sort()).toEqual([
+      "Add to Playlist",
+      "Delete",
+      "Download Song",
+      "Move to...",
+      "Select multiple items",
+    ]);
+  });
+});
+
 describe("MoreMenu upload race guards", () => {
   let notify: (() => void) | undefined;
 

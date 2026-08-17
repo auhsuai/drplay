@@ -70,26 +70,14 @@ export function TransportControls({
       <Play className={`${iconClass} ml-0.5`} />
     );
 
-  // Task 5 (ADR 2026-08-15): mobile transport = 5 buttons in the exact
-  // user-chosen order — (back bài)(tua về 5s)(play/pause)(tua lên 5s)(next
-  // bài) — rewind/forward flank the play button, prev/next at the outer
-  // edges. The play-mode toggle is intentionally not part of the 5 (mobile
-  // only; desktop keeps the 4-button layout + playMode byte-identical).
+  // Task 5 + redesign 2026-08-17: mobile transport = 3 buttons in the exact
+  // user-chosen order — (-5s)(play/pause)(+5s). prev/next were removed from
+  // the bar (heart also moved into MoreMenu) so the row no longer overflows
+  // a 360px phone. The play-mode toggle is intentionally not part of the 3
+  // (mobile only; desktop keeps the 4-button layout + playMode byte-identical).
   if (IS_MOBILE) {
     return (
       <div className="flex items-center justify-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={() => {
-            onPrevTrack();
-          }}
-          aria-label={t("player.previous_track", "Previous track")}
-          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-1.5 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-          disabled={!currentTrack}
-        >
-          <SkipBack className="w-[18px] h-[18px]" />
-        </button>
-
         <button
           type="button"
           onClick={onRewind5}
@@ -118,18 +106,6 @@ export function TransportControls({
           disabled={!currentTrack}
         >
           <RotateCw className="w-[18px] h-[18px]" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            onNextTrack(false);
-          }}
-          aria-label={t("player.next_track", "Next track")}
-          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-1.5 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-          disabled={!currentTrack}
-        >
-          <SkipForward className="w-[18px] h-[18px]" />
         </button>
       </div>
     );
