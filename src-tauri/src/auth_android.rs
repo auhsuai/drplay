@@ -19,8 +19,8 @@
 //    are accepted.
 // 5. Paste the Android client id (ends in .apps.googleusercontent.com) into
 //    ANDROID_CLIENT_ID below.
+use crate::dpop::dpop_http_client;
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::async_http_client;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope,
     TokenResponse, TokenUrl,
@@ -215,7 +215,7 @@ pub async fn login_google_mobile(app: tauri::AppHandle) -> Result<Value, String>
                 let token_result = client
                     .exchange_code(AuthorizationCode::new(code))
                     .set_pkce_verifier(pkce_verifier)
-                    .request_async(async_http_client)
+                    .request_async(dpop_http_client)
                     .await;
                 return match token_result {
                     Ok(token) => Ok(serde_json::json!({

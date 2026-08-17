@@ -1,5 +1,5 @@
+use crate::dpop::dpop_http_client;
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::{async_http_client, http_client};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
     RedirectUrl, Scope, TokenResponse, TokenUrl, RefreshToken
@@ -9,7 +9,11 @@ use tauri::command;
 
 #[command]
 pub async fn login_google_native() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    // The blocking loopback-server wait runs on a worker thread; it returns
+    // the OAuth client + PKCE verifier + authorization code so the token
+    // exchange itself can run in this async context (the DPoP http client
+    // added for RFC 9449 is async).
+    let (client, pkce_verifier, code) = tauri::async_runtime::spawn_blocking(|| {
         const CREDENTIALS_JSON: &str = include_str!("../../wa_credential.json");
         let creds: serde_json::Value = serde_json::from_str(CREDENTIALS_JSON).map_err(|e| format!("Invalid wa_credential.json: {}", e))?;
         let client_id = ClientId::new(creds["installed"]["client_id"].as_str().ok_or("Missing client_id in wa_credential.json")?.to_string());
@@ -103,26 +107,9 @@ pub async fn login_google_native() -> Result<Value, String> {
                         .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
                     let _ = request.respond(response);
 
-                    let token_result = client
-                        .exchange_code(AuthorizationCode::new(code.into_owned()))
-                        .set_pkce_verifier(pkce_verifier)
-                        .request(http_client);
-
-                    match token_result {
-                        Ok(token) => {
-                            let access_token = token.access_token().secret().to_string();
-                            let refresh_token = token.refresh_token().map(|t| t.secret().to_string());
-                            let expires_in = token.expires_in().map(|d| d.as_secs());
-                            return Ok(serde_json::json!({
-                                "access_token": access_token,
-                                "refresh_token": refresh_token,
-                                "expires_in": expires_in
-                            }));
-                        }
-                        Err(e) => {
-                            return Err(format!("Failed to exchange token: {:?}", e));
-                        }
-                    }
+                    // Hand the code + the PKCE verifier back to the async
+                    // caller, which exchanges it with a DPoP proof.
+                    return Ok((client, pkce_verifier, AuthorizationCode::new(code.into_owned())));
                 } else {
                     let response = tiny_http::Response::from_string("No code provided.");
                     let _ = request.respond(response);
@@ -132,7 +119,20 @@ pub async fn login_google_native() -> Result<Value, String> {
         }
 
         Err("Authorization timeout: user did not complete login within 5 minutes.".to_string())
-    }).await.map_err(|e| format!("Task panicked: {}", e))?
+    }).await.map_err(|e| format!("Task panicked: {}", e))??;
+
+    let token_result = client
+        .exchange_code(code)
+        .set_pkce_verifier(pkce_verifier)
+        .request_async(dpop_http_client)
+        .await
+        .map_err(|e| format!("Failed to exchange token: {:?}", e))?;
+
+    Ok(serde_json::json!({
+        "access_token": token_result.access_token().secret().to_string(),
+        "refresh_token": token_result.refresh_token().map(|t| t.secret().to_string()),
+        "expires_in": token_result.expires_in().map(|d| d.as_secs()),
+    }))
 }
 
 /// Google OAuth client identity (client id + optional secret) for token
@@ -194,7 +194,7 @@ pub async fn refresh_google_token(refresh_token: String) -> Result<Value, String
 
     let token_result = client
         .exchange_refresh_token(&RefreshToken::new(refresh_token))
-        .request_async(async_http_client)
+        .request_async(dpop_http_client)
         .await
         .map_err(|e| format!("Failed to refresh token: {:?}", e))?;
 

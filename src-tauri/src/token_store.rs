@@ -27,11 +27,17 @@
 #[cfg(not(target_os = "android"))]
 use keyring::Entry;
 
+use base64::Engine as _;
+
 /// Service name under which the refresh token is stored in the OS keychain.
 const SERVICE_NAME: &str = "drplay";
 /// Entry key (username) under the service: the app uses a single Google
 /// account at a time, so a fixed key is sufficient.
 const REFRESH_TOKEN_USER: &str = "refresh_token";
+/// Entry key for the DPoP (RFC 9449) private key that the refresh token is
+/// bound to (base64url-encoded PKCS#8 DER). Stored under the same service but
+/// a different username so it never collides with the token entry.
+const DPOP_KEY_USER: &str = "dpop_key";
 
 /// The keyring entry type: v1 `keyring::Entry` on desktop, and
 /// `keyring_core::Entry` on Android (v1's `Entry::new` cannot work there —
@@ -150,14 +156,19 @@ mod android_keystore {
     }
 }
 
-fn refresh_token_entry() -> Result<VaultEntry, String> {
-    // On Android the Keystore store must be installed before any entry is
-    // created; desktop resolves to a no-op because this cfg is absent.
+/// Open a vault entry under the app's service for the given user/key name.
+/// On Android the Keystore store must be installed before any entry is
+/// created; desktop resolves to a no-op because this cfg is absent.
+fn vault_entry(user: &str) -> Result<VaultEntry, String> {
     #[cfg(target_os = "android")]
     android_keystore::ensure()?;
-    VaultEntry::new(SERVICE_NAME, REFRESH_TOKEN_USER).map_err(|e| {
+    VaultEntry::new(SERVICE_NAME, user).map_err(|e| {
         format!("failed to open OS credential vault entry (service \"{SERVICE_NAME}\"): {e}")
     })
+}
+
+fn refresh_token_entry() -> Result<VaultEntry, String> {
+    vault_entry(REFRESH_TOKEN_USER)
 }
 
 /// Persist the Google OAuth refresh token in the OS credential vault.
@@ -185,15 +196,64 @@ pub fn get_refresh_token() -> Result<Option<String>, String> {
 }
 
 /// Delete the persisted refresh token; a missing entry is not an error.
+///
+/// Logout must also drop the DPoP key the refresh token was bound to: the
+/// token is gone, so the key is orphaned, and the next login should start
+/// with a fresh pair. A vault hiccup here must NOT fail the logout itself —
+/// the refresh token (the credential that matters) is already deleted by then.
 #[tauri::command]
 pub fn delete_refresh_token() -> Result<(), String> {
     let entry = refresh_token_entry()?;
-    match entry.delete_credential() {
+    let result = match entry.delete_credential() {
         Ok(()) => Ok(()),
         // Deleting a credential that is already gone is idempotent.
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(format!(
             "failed to delete refresh token from the OS credential vault: {e}"
+        )),
+    };
+    if let Err(e) = delete_dpop_key() {
+        eprintln!("[drplay:token_store] failed to delete DPoP key during logout: {e}");
+    }
+    result
+}
+
+/// Persist the DPoP private key (PKCS#8 DER) in the OS credential vault.
+/// The keyring API stores strings, so the binary DER is base64url-encoded.
+pub fn set_dpop_key(der: &[u8]) -> Result<(), String> {
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(der);
+    let entry = vault_entry(DPOP_KEY_USER)?;
+    entry.set_password(&encoded).map_err(|e| {
+        format!("failed to store DPoP key in the OS credential vault: {e}")
+    })
+}
+
+/// Read the persisted DPoP private key (decoded DER), or `None` when nothing
+/// is stored (normal before the first login, or after logout).
+pub fn get_dpop_key() -> Result<Option<Vec<u8>>, String> {
+    let entry = vault_entry(DPOP_KEY_USER)?;
+    match entry.get_password() {
+        Ok(encoded) => base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded.as_bytes())
+            .map(Some)
+            .map_err(|e| format!("failed to decode stored DPoP key: {e}")),
+        // No stored credential is the normal "never logged in / logged out"
+        // state, not an error.
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!(
+            "failed to read DPoP key from the OS credential vault: {e}"
+        )),
+    }
+}
+
+/// Delete the persisted DPoP key; a missing entry is not an error.
+pub fn delete_dpop_key() -> Result<(), String> {
+    let entry = vault_entry(DPOP_KEY_USER)?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!(
+            "failed to delete DPoP key from the OS credential vault: {e}"
         )),
     }
 }
@@ -239,5 +299,38 @@ mod tests {
         set_refresh_token("token-xyz".to_string()).expect("set");
         assert_eq!(delete_refresh_token(), Ok(()));
         assert_eq!(get_refresh_token(), Ok(None));
+    }
+
+    #[test]
+    fn dpop_key_set_then_get_roundtrips_binary_safely() {
+        use_mock_store();
+        // Non-UTF-8 bytes must survive the string-only keyring API intact.
+        let der: Vec<u8> = vec![0x30, 0x81, 0xff, 0x00, 0x80, 0xfe];
+        assert_eq!(set_dpop_key(&der), Ok(()));
+        assert_eq!(get_dpop_key(), Ok(Some(der)));
+    }
+
+    #[test]
+    fn dpop_key_get_without_entry_returns_none() {
+        use_mock_store();
+        assert_eq!(get_dpop_key(), Ok(None));
+    }
+
+    #[test]
+    fn dpop_key_delete_then_get_returns_none() {
+        use_mock_store();
+        set_dpop_key(&[0xaa, 0xbb, 0xcc]).expect("set");
+        assert_eq!(delete_dpop_key(), Ok(()));
+        assert_eq!(get_dpop_key(), Ok(None));
+    }
+
+    #[test]
+    fn delete_refresh_token_also_deletes_dpop_key() {
+        use_mock_store();
+        set_refresh_token("token-rt".to_string()).expect("set rt");
+        set_dpop_key(&[0x11, 0x22, 0x33]).expect("set key");
+        assert_eq!(delete_refresh_token(), Ok(()));
+        assert_eq!(get_refresh_token(), Ok(None));
+        assert_eq!(get_dpop_key(), Ok(None));
     }
 }
