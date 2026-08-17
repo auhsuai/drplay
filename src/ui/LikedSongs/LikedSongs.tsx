@@ -112,16 +112,16 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex flex-col relative transition-colors duration-300"
     >
       {/* Header Gradient */}
-      <div className="h-64 bg-gradient-to-b from-brand-primary to-white dark:to-[#121212] flex items-end p-8 flex-shrink-0">
-        <div className="flex items-end gap-6">
-          <div className="w-48 h-48 bg-gradient-to-br from-brand-primary to-[#66a3ff] shadow-2xl flex items-center justify-center text-white rounded-md">
-            <Heart className="w-20 h-20" fill="currentColor" />
+      <div className="h-48 sm:h-64 bg-gradient-to-b from-brand-primary to-white dark:to-[#121212] flex items-end p-4 sm:p-8 flex-shrink-0">
+        <div className="flex items-end gap-4 sm:gap-6">
+          <div className="w-24 h-24 sm:w-48 sm:h-48 bg-gradient-to-br from-brand-primary to-[#66a3ff] shadow-2xl flex items-center justify-center text-white rounded-md">
+            <Heart className="w-12 h-12 sm:w-20 sm:h-20" fill="currentColor" />
           </div>
           <div className="text-white dark:text-gray-100 mb-2">
-            <p className="text-sm font-medium uppercase tracking-wider mb-2">
+            <p className="text-xs sm:text-sm font-medium uppercase tracking-wider mb-2">
               {t("playlist_name")}
             </p>
-            <h1 className="text-6xl font-bold mb-4 tracking-tight">
+            <h1 className="text-3xl sm:text-6xl font-bold mb-4 tracking-tight">
               {t("liked_songs.title")}
             </h1>
             <p className="text-sm font-medium opacity-80">
@@ -132,7 +132,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       </div>
 
       {/* Action Bar */}
-      <div className="px-8 py-6 flex-shrink-0">
+      <div className="px-4 sm:px-8 py-4 sm:py-6 flex-shrink-0">
         <button
           onClick={() => {
             if (favorites.length > 0) {
@@ -149,7 +149,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       </div>
 
       {/* Track List */}
-      <div className="px-8 pb-24 flex-1 min-h-0">
+      <div className="px-4 sm:px-8 pb-24 flex-1 min-h-0">
         {favorites.length === 0 ? (
           <div className="text-gray-500 dark:text-gray-400 text-center py-20">
             <Music className="w-16 h-16 mx-auto mb-4 opacity-50" />
