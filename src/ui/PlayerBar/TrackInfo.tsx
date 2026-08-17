@@ -144,7 +144,7 @@ export function TrackInfo({
     <div
       className={
         IS_MOBILE
-          ? "flex items-center min-w-0 flex-1 justify-start pr-2"
+          ? "flex items-center min-w-0 shrink justify-start pr-2"
           : "flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2"
       }
     >

@@ -265,7 +265,7 @@ function PlayerBarImpl({
           (see SeekBar surfaceRef). Desktop below is untouched. */}
       {IS_MOBILE ? (
         <div className="flex flex-col h-full w-full min-w-0">
-          <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
+          <div className="flex-1 flex items-center gap-2 min-w-0">
             {/* Left: Track Info */}
             <TrackInfo
               currentTrack={currentTrack}
@@ -292,15 +292,17 @@ function PlayerBarImpl({
             {/* Right: More options — favorite state moved here from TrackInfo
                 (was embedded in the track info column before the reorder). */}
             {currentTrack && (
-              <MoreMenu
-                track={currentTrack}
-                isPlayerBarMode
-                compact
-                isFavorite={isLiked}
-                onToggleFavorite={() => {
-                  void toggleFavorite();
-                }}
-              />
+              <div className="shrink-0">
+                <MoreMenu
+                  track={currentTrack}
+                  isPlayerBarMode
+                  compact
+                  isFavorite={isLiked}
+                  onToggleFavorite={() => {
+                    void toggleFavorite();
+                  }}
+                />
+              </div>
             )}
           </div>
           <div className="w-full pb-1">
