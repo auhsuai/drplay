@@ -53,10 +53,10 @@ fn unregister_cancel(id: u64) {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Serialize)]
-#[serde(tag = "event", rename_all = "camelCase")]
+#[serde(tag = "event")]
 #[allow(dead_code)]
 pub enum DownloadEvent {
-    Started { download_id: u64, total: Option<u64> },
+    Started { #[serde(rename = "downloadId")] download_id: u64, total: Option<u64> },
     Progress { downloaded: u64 },
     Finished,
     Error { message: String },
