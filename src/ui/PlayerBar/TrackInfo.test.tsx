@@ -155,7 +155,7 @@ describe("TrackInfo mobile (row reorder — MoreMenu moved to PlayerBar level)",
     expect(moreMenuMock).not.toHaveBeenCalled();
   });
 
-  it("desktop regression: wrapper keeps hidden lg:flex, heart keeps p-1 + 20px icon", async () => {
+  it("desktop regression: wrapper keeps hidden lg:flex, heart keeps p-2 + 20px icon", async () => {
     platformMock.IS_MOBILE = false;
     renderTrackInfo();
     const heart = await screen.findByRole("button", {
@@ -165,7 +165,7 @@ describe("TrackInfo mobile (row reorder — MoreMenu moved to PlayerBar level)",
     expect(wrapper.className).toContain("hidden");
     expect(wrapper.className).toContain("lg:flex");
     expect(heart.className).not.toContain("h-8");
-    expect(heart.className).toContain("p-1");
+    expect(heart.className).toContain("p-2");
     expect(heart.querySelector("svg")?.getAttribute("class")).toContain("w-5");
     expect(lastMoreMenuProps().isFavorite).toBeUndefined();
     expect(lastMoreMenuProps().onToggleFavorite).toBeUndefined();

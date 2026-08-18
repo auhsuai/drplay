@@ -1877,11 +1877,10 @@ describe("PlayerBar mobile gate (IS_MOBILE) — title only", () => {
     expect(mockedGetTrackMetadata).not.toHaveBeenCalled();
   });
 
-  it("compacts the track title to text-xs (12px) on mobile (Task 8)", () => {
+  it("compacts the track title to text-sm (14px) on mobile (Task 8)", () => {
     renderPlayer({ currentTrack: makeTrack({ title: "Song" }) });
     const title = screen.getByText("Song");
-    expect(title.className).toContain("text-xs");
-    expect(title.className).not.toContain("text-sm");
+    expect(title.className).toContain("text-sm");
   });
 });
 
@@ -1987,14 +1986,13 @@ describe("PlayerBar mobile transport — 3 buttons (redesigned row)", () => {
     ).toBeNull();
   });
 
-  it("compacts transport buttons on mobile (Task 9: 30px side targets, 34px play)", () => {
+  it("compacts transport buttons on mobile (Task 9: 36px side targets, 44px play)", () => {
     renderPlayer();
     const side = screen.getByRole("button", { name: "Rewind 5 seconds" });
-    expect(side.className).toContain("p-1.5");
-    expect(side.className).not.toContain("p-2");
+    expect(side.className).toContain("p-2");
     const play = screen.getByRole("button", { name: "Play/Pause" });
-    expect(play.className).toContain("w-[34px]");
-    expect(play.className).toContain("h-[34px]");
+    expect(play.className).toContain("w-[44px]");
+    expect(play.className).toContain("h-[44px]");
     expect(play.className).not.toContain("w-10");
   });
 

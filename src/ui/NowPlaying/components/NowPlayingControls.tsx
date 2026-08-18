@@ -36,12 +36,12 @@ export function NowPlayingControls({
   onForward5,
 }: NowPlayingControlsProps) {
   const { t } = useTranslation();
-  // Task 9: mobile transport shrinks one notch (30px side targets / 34px play
-  // / 18px icons), mirroring the PlayerBar's compact branch; desktop keeps
-  // the 36/40px sizes byte-identical.
-  const sideBtnClass = IS_MOBILE ? "p-1.5" : "p-2";
-  const iconClass = IS_MOBILE ? "w-[18px] h-[18px]" : "w-5 h-5";
-  const playBtnClass = IS_MOBILE ? "w-[34px] h-[34px]" : "w-10 h-10";
+  // Task 9: mobile transport bumped to meet touch-target standards (36px side
+  // targets / 44px play / 20px icons), mirroring the PlayerBar's compact
+  // branch; desktop keeps the 36/40px sizes byte-identical.
+  const sideBtnClass = "p-2";
+  const iconClass = "w-5 h-5";
+  const playBtnClass = IS_MOBILE ? "w-[44px] h-[44px]" : "w-10 h-10";
   return (
     <div className="w-full flex items-center justify-center mb-4">
       {/* Left spacer for perfect centering */}

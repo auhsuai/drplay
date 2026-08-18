@@ -124,16 +124,16 @@ describe("NowPlayingControls mobile — 5-button transport (prev/-5s/play/+5s/ne
     expect(props.onForward5).toHaveBeenCalledTimes(1);
   });
 
-  it("compacts transport buttons on mobile (Task 9: 30px side, 34px play, 18px icons)", () => {
+  it("compacts transport buttons on mobile (Task 9: 36px side, 44px play, 20px icons)", () => {
     renderControls();
     const playBtn = screen.getByRole("button", { name: "Play/Pause" });
-    expect(playBtn.className).toContain("w-[34px]");
-    expect(playBtn.className).toContain("h-[34px]");
+    expect(playBtn.className).toContain("w-[44px]");
+    expect(playBtn.className).toContain("h-[44px]");
     const rewind = screen.getByRole("button", { name: "Rewind 5 seconds" });
-    expect(rewind.className).toContain("p-1.5");
+    expect(rewind.className).toContain("p-2");
     expect(
       rewind.querySelector("[data-icon]")?.getAttribute("class"),
-    ).toContain("w-[18px]");
+    ).toContain("w-5");
   });
 
   it("desktop: no seek buttons, center group classes byte-identical", async () => {

@@ -50,12 +50,11 @@ export function TransportControls({
 }: TransportControlsProps) {
   const { t } = useTranslation();
 
-  // Task 9: mobile transport shrinks one notch — 30px side targets (18px
-  // icons in p-1.5) and a 34px play button; desktop keeps the 36/40px sizes
-  // byte-identical. Material's 48px guideline is for one-handed primary
-  // actions; in-bar mini-player transports at ~30-34px are the app norm
-  // (Spotify ≈32px, YouTube Music ≈36px) and the user wants smaller.
-  const iconClass = IS_MOBILE ? "w-[18px] h-[18px]" : "w-5 h-5";
+  // Task 9: mobile transport bumped to meet touch-target standards — 36px
+  // side targets (20px icons in p-2) and a 44px play button; desktop keeps
+  // the 36/40px sizes byte-identical. Aligns with Apple HIG 44pt and
+  // Material 3 48dp minimums for primary actions.
+  const iconClass = "w-5 h-5";
 
   const playIcon = () =>
     isDownloading || (isBuffering && isPlaying && !hasError) ? (
@@ -81,22 +80,22 @@ export function TransportControls({
       // info and More options on the mobile top row. Fixed width +
       // justify-between spreads the 3 buttons evenly (11px gaps) regardless of
       // the track title length, without overflowing a 360px phone.
-      <div className="flex items-center justify-between shrink-0 w-[116px]">
+      <div className="flex items-center justify-between shrink-0 w-[140px]">
         <button
           type="button"
           onClick={onRewind5}
           aria-label={t("player.rewind_5s", "Rewind 5 seconds")}
-          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-1.5 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
           disabled={!currentTrack}
         >
-          <RotateCcw className="w-[18px] h-[18px]" />
+          <RotateCcw className="w-5 h-5" />
         </button>
 
         <button
           type="button"
           onClick={hasError ? onRetry : onTogglePlay}
           aria-label={t("player.play_pause", "Play/Pause")}
-          className={`w-[34px] h-[34px] shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-brand-primary hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
+          className={`w-[44px] h-[44px] shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-brand-primary hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
           disabled={!currentTrack || isDownloading}
         >
           {playIcon()}
@@ -106,10 +105,10 @@ export function TransportControls({
           type="button"
           onClick={onForward5}
           aria-label={t("player.forward_5s", "Forward 5 seconds")}
-          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-1.5 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
           disabled={!currentTrack}
         >
-          <RotateCw className="w-[18px] h-[18px]" />
+          <RotateCw className="w-5 h-5" />
         </button>
       </div>
     );
