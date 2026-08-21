@@ -180,6 +180,7 @@ fn classify_seed_entry(name: &str) -> Result<SeedEntryKind, String> {
 /// 2. layout whitelist: only `metadata/{fileId}.json` (validated fileId) and
 ///    `covers/{t|f}/{s1}/{s2}/{fileId}.jpg` (s1/s2 must match shard_pair)
 ///    are accepted.
+///
 /// Pure directory entries are skipped silently (Python's zipfile emits them).
 /// Oversized entries (metadata > 1 MiB, cover > 20 MiB) are SKIPPED and
 /// counted, never fatal — a decompression bomb cannot balloon memory because

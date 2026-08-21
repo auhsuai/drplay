@@ -42,6 +42,8 @@ use sha2::{Digest as _, Sha256};
 
 /// Google's token endpoint (the only URL the oauth2 client sends token
 /// requests to). Kept as the reference htu so proof payloads always match.
+/// Only referenced from unit tests below.
+#[cfg(test)]
 const TOKEN_ENDPOINT_HTU: &str = "https://oauth2.googleapis.com/token";
 
 /// Maximum number of retries when Google challenges a stale/invalid DPoP
@@ -125,7 +127,9 @@ pub fn get_or_create_dpop_key() -> Result<SigningKey, DpopError> {
 /// Delete the persisted DPoP key. Called on logout (via
 /// `token_store::delete_refresh_token`) so the next login starts with a fresh
 /// key pair; the old key is orphaned once the refresh token it protected is
-/// gone.
+/// gone. Production logout clears the key via `token_store::delete_dpop_key`
+/// directly; this wrapper is exercised from the unit tests below.
+#[cfg(test)]
 pub fn delete_dpop_key() -> Result<(), String> {
     crate::token_store::delete_dpop_key()
 }
@@ -137,6 +141,7 @@ pub fn delete_dpop_key() -> Result<(), String> {
 /// Derive the proof `jti` from the token request body. Google requires:
 /// - authorization-code exchange -> base64url(SHA-256(authorization_code))
 /// - refresh-token exchange      -> a unique random value (UUID v4 here)
+///
 /// Any other grant falls back to a fresh UUID.
 fn jti_for_request(body: &[u8]) -> String {
     let params: std::collections::HashMap<String, String> =
