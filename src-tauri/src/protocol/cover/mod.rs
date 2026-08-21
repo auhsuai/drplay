@@ -134,6 +134,13 @@ pub async fn handle_cover_get(
     };
     let result: CoverResult = match disk_result {
         Ok((etag, bytes)) => {
+            // Disk-served covers count as accesses too (same as CACHE_HIT):
+            // keeps the recency access log complete for ids whose covers are
+            // not yet in RAM. Guard is dropped before the .await below
+            // (std::sync::MutexGuard is !Send and must not span await points).
+            if let Ok(mut r) = recorder.lock() {
+                r.record(raw_id);
+            }
             COVER_CACHE
                 .insert(cache_key.clone(), (etag.clone(), bytes.clone()))
                 .await;
@@ -286,8 +293,11 @@ mod tests {
         let data = std::fs::read_to_string(&log_path).expect("flushed access log must exist");
         let map: std::collections::HashMap<String, u64> =
             serde_json::from_str(&data).expect("access log must be valid JSON");
+        // AccessRecorder::record() normalizes ids (drive_ prefix) before they
+        // reach the log, so the assertion must use the normalized key too.
+        let recorded_key = crate::thumbnail::normalize_id(id);
         assert!(
-            map.contains_key(id),
+            map.contains_key(recorded_key.as_str()),
             "a cover served from disk must be recorded in the access log; log={map:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
