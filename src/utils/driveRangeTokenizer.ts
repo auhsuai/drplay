@@ -9,9 +9,40 @@ import { AbstractTokenizer } from "strtok3";
 import type { IFileInfo, IReadChunkOptions, ITokenizerOptions } from "strtok3";
 import { EndOfStreamError } from "strtok3";
 import { createSemaphore, sleep } from "./asyncLimit";
+import {
+  isDriveCircuitOpen,
+  recordDriveFailure,
+  recordDriveSuccess,
+} from "./driveRangeCircuitBreaker";
+import {
+  BudgetExceededError,
+  RangeFetchNetworkError,
+  RangeNotSupportedError,
+  SizeUnknownError,
+} from "./driveRangeErrors";
 import { captureError } from "./errorLog";
 import { backoffDelay, mergeWithTimeoutSignal } from "./retryDelay";
 import { DRIVE_STREAM_PREFIX } from "./streamPrefetcher";
+
+// The circuit-breaker state machine (Fix H) and the typed fetch-error classes
+// live in their own modules (same folder); this file re-exports their whole
+// public surface so every consumer — and the vitest mock specifier
+// "./driveRangeTokenizer" — keeps resolving the exact same names as before.
+export {
+  DRIVE_COOLDOWN_MS,
+  DRIVE_FAILURE_THRESHOLD,
+  DRIVE_FAILURE_WINDOW_MS,
+  isDriveCircuitOpen,
+  recordDriveFailure,
+  recordDriveSuccess,
+  resetDriveCircuitBreakerForTests,
+} from "./driveRangeCircuitBreaker";
+export {
+  BudgetExceededError,
+  RangeFetchNetworkError,
+  RangeNotSupportedError,
+  SizeUnknownError,
+} from "./driveRangeErrors";
 
 export const RANGE_CHUNK = 65_536; // aligned chunk size (64KB)
 export const HEAD_BYTES = 131_072; // head region read before parsing (128KB)
@@ -28,111 +59,6 @@ export const MAX_RETRIES = 2; // extra attempts for 5xx/429 (total 3 tries)
 const TIMEOUT_RETRIES = 1; // extra attempt for timeouts (total 2 tries)
 const MAX_CACHED_CHUNKS = 128; // LRU bound (~8MB at 64KB chunks)
 const TOKENIZER_MODULE = "driveRangeTokenizer";
-
-// ---- Drive throttle circuit breaker (Fix H).
-// When Drive starts throttling an account (429s / timeouts under load), every
-// retry and every cover POST keeps hammering it — the metadata pipeline's
-// 30s timeout + retry (Fix B) actually SUSTAINED the auto-next loop. The
-// breaker trips after DRIVE_FAILURE_THRESHOLD failures inside a sliding
-// DRIVE_FAILURE_WINDOW_MS window, then fails fast for DRIVE_COOLDOWN_MS so the
-// account can recover. State is module-level (shared app-wide, like
-// rangeFetchSemaphore) because the throttle is per-account, not per-file.
-export const DRIVE_FAILURE_THRESHOLD = 3;
-export const DRIVE_FAILURE_WINDOW_MS = 30_000;
-export const DRIVE_COOLDOWN_MS = 60_000;
-const driveFailureTimes: number[] = [];
-let driveCircuitOpenedAt: number | null = null;
-
-function pruneDriveFailures(now: number): void {
-  while (
-    driveFailureTimes.length > 0 &&
-    now - (driveFailureTimes[0] ?? 0) > DRIVE_FAILURE_WINDOW_MS
-  ) {
-    driveFailureTimes.shift();
-  }
-}
-
-/** Records one failed range fetch (timeout / network / 5xx / 429). */
-export function recordDriveFailure(): void {
-  const now = Date.now();
-  pruneDriveFailures(now);
-  driveFailureTimes.push(now);
-  if (
-    driveCircuitOpenedAt === null &&
-    driveFailureTimes.length >= DRIVE_FAILURE_THRESHOLD
-  ) {
-    driveCircuitOpenedAt = now;
-    void captureError({
-      level: "warn",
-      source: TOKENIZER_MODULE,
-      message: `drive-throttle-circuit-opened (failures=${String(driveFailureTimes.length)} in ${String(DRIVE_FAILURE_WINDOW_MS)}ms)`,
-    });
-  }
-}
-
-/**
- * Records one successful range fetch. A success only prunes stale failures
- * — it never closes an open circuit early (a success cannot even happen
- * while the circuit is open, because no fetch runs during the cooldown).
- */
-export function recordDriveSuccess(): void {
-  pruneDriveFailures(Date.now());
-}
-
-/**
- * True when the breaker is open: the circuit stays open for the full
- * DRIVE_COOLDOWN_MS after it tripped, then closes and resets the failure
- * history so the account gets a fresh chance.
- */
-export function isDriveCircuitOpen(): boolean {
-  const now = Date.now();
-  if (driveCircuitOpenedAt !== null) {
-    if (now - driveCircuitOpenedAt < DRIVE_COOLDOWN_MS) return true;
-    driveCircuitOpenedAt = null;
-    driveFailureTimes.length = 0;
-  } else {
-    pruneDriveFailures(now);
-  }
-  return false;
-}
-
-/** Test-only: drops all breaker state (module-level, shared across tests). */
-export function resetDriveCircuitBreakerForTests(): void {
-  driveFailureTimes.length = 0;
-  driveCircuitOpenedAt = null;
-}
-
-export class SizeUnknownError extends Error {
-  constructor(message = "File size is unknown; metadata fetch is skipped") {
-    super(message);
-    this.name = "SizeUnknownError";
-  }
-}
-
-export class RangeNotSupportedError extends Error {
-  constructor(status: number) {
-    super(`Server did not honor the Range request (status ${String(status)})`);
-    this.name = "RangeNotSupportedError";
-  }
-}
-
-export class BudgetExceededError extends Error {
-  constructor(loadedBytes: number, capBytes: number) {
-    super(
-      `Range fetch budget exceeded (loaded ${String(loadedBytes)} bytes, cap ${String(capBytes)} bytes)`,
-    );
-    this.name = "BudgetExceededError";
-  }
-}
-
-export class RangeFetchNetworkError extends Error {
-  readonly kind: "network" | "timeout";
-  constructor(kind: "network" | "timeout", message: string) {
-    super(message);
-    this.name = "RangeFetchNetworkError";
-    this.kind = kind;
-  }
-}
 
 export interface DriveRangeTokenizerOptions extends ITokenizerOptions {
   /** Override the 20MB per-file fetch budget (tests). */
