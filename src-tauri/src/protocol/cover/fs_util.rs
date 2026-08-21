@@ -1,5 +1,7 @@
 /// Total byte size of every regular file under `path` (recursive), or 0 when
 /// the path does not exist. Pure std — no tauri dependency, unit-testable.
+/// Symlink/junction entries are never followed or counted: their target may
+/// live outside the tree, and the GC budget must only reflect owned bytes.
 /// Recursion depth is bounded in practice: the thumbnail dir holds 1-2 levels.
 pub fn directory_size(path: &std::path::Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else {
@@ -7,8 +9,19 @@ pub fn directory_size(path: &std::path::Path) -> u64 {
     };
     let mut total = 0u64;
     for entry in entries.flatten() {
+        // `DirEntry::file_type`/`metadata` do NOT traverse symlinks/junctions
+        // (unlike `Path::is_dir`, stat semantics), so a link pointing outside
+        // is skipped instead of being sized or recursed into. An unreadable
+        // entry contributes nothing — same vanish-mid-scan policy as
+        // `remove_dir_contents`.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
         let entry_path = entry.path();
-        if entry_path.is_dir() {
+        if file_type.is_dir() {
             total = total.saturating_add(directory_size(&entry_path));
         } else if let Ok(meta) = entry.metadata() {
             total = total.saturating_add(meta.len());
