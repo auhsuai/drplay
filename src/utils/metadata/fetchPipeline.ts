@@ -401,6 +401,17 @@ async function getTrackMetadataImpl(
       kind: classifyMetaError(e).name,
     });
     const placeholder = makePlaceholder(safeName, size);
+    // A caller abort (scroll unmounted the card mid-fetch) surfaces here as a
+    // RangeFetchNetworkError — the tokenizer classifies the AbortError as
+    // transient so it skips retries and the circuit breaker — but Drive is
+    // perfectly healthy. Pinning the 60s cooldown for a deliberate
+    // cancellation made the card re-mount as a stuck placeholder for a full
+    // minute despite zero network trouble. Mirror the network branch's
+    // no-pin semantics WITHOUT the cooldown: return the placeholder to THIS
+    // caller only; the next mount re-fetches immediately.
+    if (signal?.aborted === true) {
+      return placeholder;
+    }
     // A transient network/timeout failure must NOT pin the v:9 placeholder
     // into the memory cache — that made every card show 00:00:00 until app
     // reload (the mem entry shadows any later fetch). Deterministic failures

@@ -1027,6 +1027,102 @@ describe("getTrackMetadata per-file network cooldown", () => {
     expect(r.v).toBe(8);
     expect(r.title).toBe("Back Song");
   });
+
+  it("caller abort mid-fetch does NOT pin the cooldown (immediate re-mount re-fetches)", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    // A fetch that stays pending until the caller signal aborts (card
+    // unmounted by a scroll) — then rejects with AbortError exactly like a
+    // real browser fetch would through the merged timeout signal.
+    let abortedFetchCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        abortedFetchCalls += 1;
+        const signal = init?.signal;
+        return new Promise<never>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(
+              new DOMException("This operation was aborted", "AbortError"),
+            );
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(
+                new DOMException("This operation was aborted", "AbortError"),
+              );
+            },
+            { once: true },
+          );
+        });
+      }),
+    );
+
+    const controller = new AbortController();
+    const r1Promise = getTrackMetadata(
+      "cd-abort",
+      "tok",
+      2048,
+      "cd.mp3",
+      controller.signal,
+    );
+    // Abort only once the head request is actually in flight.
+    await vi.waitFor(() => {
+      expect(abortedFetchCalls).toBeGreaterThan(0);
+    });
+    controller.abort();
+    const r1 = await r1Promise;
+    expect(r1.v).toBe(V_PLACEHOLDER);
+
+    // Immediate re-mount with a FRESH controller (every real re-mount creates
+    // its own AbortController — see useTrackMetadata): Drive is healthy, so
+    // the fetch MUST run again and parse real metadata — an abort must never
+    // have pinned the 60s cooldown or cached the placeholder.
+    const fixture = buildMp3Fixture(
+      "Abort Recovery",
+      "Recover Artist",
+      "Recover Album",
+    );
+    const { calls: okCalls } = makeFetchMock(fixture);
+    const r2 = await getTrackMetadata(
+      "cd-abort",
+      "tok",
+      2048,
+      "cd.mp3",
+      new AbortController().signal,
+    );
+    expect(okCalls.length).toBeGreaterThan(0);
+    expect(r2.v).toBe(8);
+    expect(r2.title).toBe("Abort Recovery");
+  });
+
+  it("a REAL network failure still pins the cooldown (no immediate re-fetch)", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    const r1 = await getTrackMetadata(
+      "cd-real-net",
+      "tok",
+      2048,
+      "cd.mp3",
+      new AbortController().signal,
+    );
+    expect(r1.v).toBe(V_PLACEHOLDER);
+    const callsAfterFail = calls.length;
+    expect(callsAfterFail).toBeGreaterThan(0);
+
+    // Immediate re-mount with a live (non-aborted) signal while Drive is
+    // genuinely failing: the 60s cooldown MUST hold — no new fetch.
+    const r2 = await getTrackMetadata(
+      "cd-real-net",
+      "tok",
+      2048,
+      "cd.mp3",
+      new AbortController().signal,
+    );
+    expect(calls.length).toBe(callsAfterFail);
+    expect(r2.v).toBe(V_PLACEHOLDER);
+  });
 });
 
 describe("cover extraction + full picture LRU", () => {
