@@ -540,18 +540,30 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
         }
         return new Uint8Array(body);
       }
-      if (
-        attempt < MAX_RETRIES &&
-        (response.status === 429 || response.status >= 500)
-      ) {
+      if (response.status === 429 || response.status >= 500) {
+        // Every 429/5xx attempt feeds the breaker — including the final
+        // exhausted one (the old guard skipped it, undercounting 2/3).
         recordDriveFailure();
-        // 429/5xx are the throttle signal itself — once they trip the
-        // circuit, do not keep retrying into the cooldown.
-        if (isDriveCircuitOpen()) {
-          this.throwCircuitOpen(chunkStart, chunkEnd);
+        if (attempt < MAX_RETRIES) {
+          // 429/5xx are the throttle signal itself — once they trip the
+          // circuit, do not keep retrying into the cooldown.
+          if (isDriveCircuitOpen()) {
+            this.throwCircuitOpen(chunkStart, chunkEnd);
+          }
+          await sleep(
+            backoffDelay(attempt, response.headers.get("Retry-After")),
+          );
+          continue;
         }
-        await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
-        continue;
+        // A retry budget exhausted on 429/5xx is still a TRANSIENT throttle
+        // failure (RFC 9110 §15.5.5: 429/503 signal a temporary condition).
+        // The old RangeNotSupportedError here made fetchPipeline cache the
+        // placeholder permanently after a throttle storm; RangeFetchNetworkError
+        // keeps the next mount re-fetching instead of pinning v:9.
+        throw new RangeFetchNetworkError(
+          "network",
+          `Drive range fetch throttled (status ${String(response.status)}) after ${String(MAX_RETRIES)} retries`,
+        );
       }
       throw new RangeNotSupportedError(response.status);
     }

@@ -316,13 +316,55 @@ describe("DriveRangeTokenizer", () => {
     expect(vf.calls).toHaveLength(3);
   });
 
-  it("gives up after 2 retries and reports the last error", async () => {
+  // FLIPPED deliberately per approved contract (B1, 2026-08): retry
+  // exhaustion on 429/5xx now surfaces the TRANSIENT RangeFetchNetworkError
+  // (kind network) instead of the deterministic RangeNotSupportedError, so
+  // fetchPipeline stops pinning the placeholder after throttle storms.
+  it("gives up after 2 retries and reports a transient throttled error", async () => {
     const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 500]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "network",
+    });
+    expect(vf.calls).toHaveLength(3);
+  });
+
+  // B1 (contract 2026-08): a retry budget exhausted on 429/5xx is still a
+  // TRANSIENT throttle failure. The old RangeNotSupportedError made
+  // fetchPipeline cache the placeholder permanently after a throttle storm.
+  it("exhausting retries on a persistent 500 throws transient RangeFetchNetworkError kind network", async () => {
+    const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 500]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "network",
+    });
+    expect(vf.calls).toHaveLength(3); // all attempts spent before giving up
+  });
+
+  // B4 (contract 2026-08): EVERY 429/5xx attempt feeds the breaker,
+  // including the final exhausted one — 3 attempts must record 3 failures
+  // (DRIVE_FAILURE_THRESHOLD=3 opens the circuit), not 2.
+  it("feeds the drive breaker once per attempt including the final exhausted one", async () => {
+    const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 500]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+      RangeFetchNetworkError,
+    );
+    expect(vf.calls).toHaveLength(3);
+    // 3 recorded failures >= threshold -> circuit opened.
+    expect(isDriveCircuitOpen()).toBe(true);
+  });
+
+  it("single non-retryable 404 stays deterministic RangeNotSupportedError without feeding the breaker", async () => {
+    const vf = installVirtualFile(1000, (i) => i % 256, [404]);
     const tz = new DriveRangeTokenizer("f1", 1000);
     await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
       RangeNotSupportedError,
     );
-    expect(vf.calls).toHaveLength(3);
+    expect(vf.calls).toHaveLength(1); // no retry on 404
+    expect(isDriveCircuitOpen()).toBe(false); // deterministic: no breaker feed
   });
 
   it("throws SizeUnknownError when size is 0 or negative", () => {
