@@ -6,6 +6,7 @@ import {
   DriveRangeTokenizer,
   RangeFetchNetworkError,
   RangeNotSupportedError,
+  REQUEST_TIMEOUT_MS,
   SizeUnknownError,
   isDriveCircuitOpen,
   resetDriveCircuitBreakerForTests,
@@ -355,6 +356,58 @@ describe("DriveRangeTokenizer", () => {
     expect(vf.calls).toHaveLength(3);
     // 3 recorded failures >= threshold -> circuit opened.
     expect(isDriveCircuitOpen()).toBe(true);
+  });
+
+  // Caller-abort during 429/5xx backoff must mirror the timeout branch:
+  // never sleep the full Retry-After (up to MAX_DELAY_MS = 32s) just to
+  // fire one doomed attempt afterwards — exit immediately via the same
+  // RangeFetchNetworkError path the timeout branch uses for caller-abort.
+  it("caller abort during 429 backoff exits immediately instead of sleeping the Retry-After", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const mock = vi.fn(() => {
+      // Caller cancels exactly when the failed response arrives — the
+      // signal is already aborted at the moment the backoff sleep starts.
+      controller.abort();
+      return Promise.resolve({
+        status: 500,
+        ok: false,
+        headers: new Headers({ "Retry-After": "32" }),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      });
+    });
+    vi.stubGlobal("fetch", mock);
+    const tz = new DriveRangeTokenizer("f1", 1000, {
+      abortSignal: controller.signal,
+    });
+
+    let settled = false;
+    const guarded = tz.readRange(0, 8).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    // Same error path the timeout branch uses for a caller-abort exit.
+    expect(err).toBeInstanceOf(RangeFetchNetworkError);
+    expect(err).toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "timeout",
+      message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+    });
+    expect(mock).toHaveBeenCalledTimes(1); // no doomed second attempt
+    // The 500 was a REAL failure: it still feeds the breaker (B4 contract),
+    // but one failure alone must not open the circuit.
+    expect(isDriveCircuitOpen()).toBe(false);
   });
 
   it("single non-retryable 404 stays deterministic RangeNotSupportedError without feeding the breaker", async () => {

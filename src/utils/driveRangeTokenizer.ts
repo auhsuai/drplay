@@ -550,10 +550,21 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
           if (isDriveCircuitOpen()) {
             this.throwCircuitOpen(chunkStart, chunkEnd);
           }
-          await sleep(
-            backoffDelay(attempt, response.headers.get("Retry-After")),
+          // Mirror the timeout branch's caller-abort handling: never sleep
+          // into a cancelled caller's backoff (a Retry-After can park this
+          // loop for up to MAX_DELAY_MS) just to fire one doomed attempt
+          // afterwards — exit now through the same RangeFetchNetworkError
+          // path that branch throws when the CALLER aborted.
+          if (!(this.callerSignal?.aborted ?? false)) {
+            await sleep(
+              backoffDelay(attempt, response.headers.get("Retry-After")),
+            );
+            continue;
+          }
+          throw new RangeFetchNetworkError(
+            "timeout",
+            `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
           );
-          continue;
         }
         // A retry budget exhausted on 429/5xx is still a TRANSIENT throttle
         // failure (RFC 9110 §15.5.5: 429/503 signal a temporary condition).
