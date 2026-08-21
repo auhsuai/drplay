@@ -47,19 +47,34 @@ export async function getTrackMetadata(
 
   inflightMetadata.set(fileId, promise);
 
-  const cleanup = () => {
+  let settled = false;
+  const removeFromInflight = () => {
+    settled = true;
     if (inflightMetadata.get(fileId) === promise) {
       inflightMetadata.delete(fileId);
     }
   };
-  // Once the timeout fires or the promise settles, cleanup removes the
-  // inflight entry — the guard makes the delete idempotent, so an early
-  // settle followed by the later timer firing is a harmless no-op.
-  setTimeout(cleanup, INFLIGHT_TIMEOUT);
+  // The inflight entry must live for the whole [start → settle] window: a
+  // slow pipeline (getTrackMetadataImpl worst case: timeout x2 tries + backoff
+  // + semaphore) legitimately outlasts INFLIGHT_TIMEOUT, so deleting the entry
+  // on a timer would make late callers spawn a SECOND parallel pipeline for
+  // the same fileId (double range requests + double budget). Instead the
+  // watchdog below only logs once when the promise is still pending past the
+  // window — getTrackMetadataImpl bounds every attempt internally, so hanging
+  // beyond it signals another bug rather than something this map can fix.
+  const warnStillPending = () => {
+    if (settled) return;
+    void captureError({
+      level: "warn",
+      source: META_MODULE,
+      message: `inflight-still-pending (fileId=${fileId}): no settle within ${String(INFLIGHT_TIMEOUT)}ms — keeping dedup entry`,
+    });
+  };
+  setTimeout(warnStillPending, INFLIGHT_TIMEOUT);
 
   promise.then(
     (result) => {
-      cleanup();
+      removeFromInflight();
       return result;
     },
     (e: unknown) => {
@@ -71,7 +86,7 @@ export async function getTrackMetadata(
         source: META_MODULE,
         message: `get-track-metadata-failed (fileId=${fileId}): ${msg}`,
       });
-      cleanup();
+      removeFromInflight();
     },
   );
 
