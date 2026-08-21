@@ -27,18 +27,23 @@ pub(crate) fn covers_root() -> Option<&'static PathBuf> {
     COVERS_ROOT.get()
 }
 
-/// ETag derived from the file's mtime — zero extra deps, changes whenever the
-/// cover is re-written. mtime granularity is coarse (seconds), which is fine:
-/// a rewritten cover with the same second still flips content via the moka
-/// cache TTL and the 304 gate only short-circuits byte-identical responses.
+/// ETag derived from the file's full-precision mtime (secs+nanos since epoch).
+/// Zero extra deps; changes whenever the cover is re-written, including
+/// rewrites inside the same wall-clock second. Sub-second precision matters:
+/// truncating to seconds made two same-second overwrites share an ETag, so
+/// the If-None-Match gate answered 304 with stale bytes. All supported
+/// filesystems carry sub-second mtimes (NTFS stores 100ns FILETIME units,
+/// ext4/f2fs keep nanosecond inode fields); if metadata is unavailable the
+/// value falls back to `"0"`. The string stays opaque — consumers only
+/// compare it verbatim (ETag header / If-None-Match), never parse it.
 fn etag_from_mtime(path: &Path) -> String {
-    let mtime_secs = std::fs::metadata(path)
+    let mtime_nanos = std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("\"{mtime_secs}\"")
+    format!("\"{mtime_nanos}\"")
 }
 
 /// Persists cover bytes for `raw_id`/`thumb` under `covers_root` using the
