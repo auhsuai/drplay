@@ -13,6 +13,7 @@ import {
   METADATA_LRU_KEY,
   META_MODULE,
 } from "./constants";
+import { clearNetworkCooldown } from "./fetchPipeline";
 import type { CacheEntry, CachedMetadata } from "./types";
 
 export function classifyMetaError(err: unknown): {
@@ -262,6 +263,11 @@ export function clearAllMetadataCache(): void {
   lruKeys = [];
   fullPictureCache.clear();
   fullPictureBytes = 0;
+  // A cleared cache is a CLEAN state: the per-file network cooldowns (set by
+  // fetchPipeline on a real network failure) must go too, or files that failed
+  // once stay placeholder-blocked up to METADATA_NETWORK_COOLDOWN_MS despite
+  // the user's explicit full reset.
+  clearNetworkCooldown();
 }
 
 export async function setCache(

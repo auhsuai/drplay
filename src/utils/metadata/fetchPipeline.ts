@@ -64,6 +64,16 @@ import {
 // the map, so it stays tiny and needs no timer.
 const networkCooldownUntil = new Map<string, number>();
 
+/**
+ * Drops every per-file network cooldown. Called by clearAllMetadataCache so a
+ * user-initiated cache clear restores a fully CLEAN state — without this,
+ * files that failed once stay placeholder-blocked for up to
+ * METADATA_NETWORK_COOLDOWN_MS even after the explicit reset.
+ */
+export function clearNetworkCooldown(): void {
+  networkCooldownUntil.clear();
+}
+
 async function getTrackMetadataImpl(
   fileId: string,
   _token?: string,

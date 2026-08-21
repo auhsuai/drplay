@@ -1283,6 +1283,27 @@ describe("getTrackMetadata per-file network cooldown", () => {
     expect(calls.length).toBe(callsAfterFail);
     expect(r2.v).toBe(V_PLACEHOLDER);
   });
+
+  it("clearAllMetadataCache also drops the per-file network cooldown", async () => {
+    const { getTrackMetadata, clearAllMetadataCache } =
+      await import("./metadata");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    // First mount: real network failure pins the 60s per-file cooldown.
+    const r1 = await getTrackMetadata("cd-clear", "tok", 2048, "cd.mp3");
+    expect(r1.v).toBe(V_PLACEHOLDER);
+    const callsAfterFail = calls.length;
+    expect(callsAfterFail).toBeGreaterThan(0);
+
+    // Re-mount inside the cooldown is blocked by design (sanity guard).
+    await getTrackMetadata("cd-clear", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBe(callsAfterFail);
+
+    // Clearing the whole metadata cache must restore a CLEAN state — the
+    // cooldown map included — so the next mount re-fetches immediately.
+    clearAllMetadataCache();
+    await getTrackMetadata("cd-clear", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBeGreaterThan(callsAfterFail);
+  });
 });
 
 describe("cover extraction + full picture LRU", () => {
