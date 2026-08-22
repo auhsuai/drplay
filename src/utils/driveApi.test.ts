@@ -12,6 +12,7 @@ import {
   getFileParents,
   getFileName,
   getRecentlyAddedAudioFiles,
+  permanentlyDeleteFile,
   saveAppConfig,
   shouldRetryDriveResponse,
   withSaveConfigLock,
@@ -954,6 +955,82 @@ describe("driveFiles malformed JSON body", () => {
       "Failed to fetch recently added audio files (invalid response)",
     );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// P1-1: every fileId is interpolated into a URL path segment and must be
+// percent-encoded first. Standard Drive ids ([A-Za-z0-9_-]) are unaffected
+// (encodeURIComponent is a no-op on them — every existing URL assertion stays
+// green); this guard exists so an id containing reserved characters can never
+// split the path or leak into the query string.
+describe("driveFiles encodes fileId path segments (P1-1)", () => {
+  const weirdId = "abc/def?id x";
+  const encodedId = encodeURIComponent(weirdId);
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("deleteFile / restoreFile / permanentlyDeleteFile encode the path segment", async () => {
+    const item = { id: weirdId, name: "n", mimeType: "audio/mpeg" };
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(200, item))
+      .mockResolvedValueOnce(makeJsonResponse(200, item))
+      .mockResolvedValueOnce(makeResponse(204));
+
+    await deleteFile("tok", weirdId);
+    await restoreFile("tok", weirdId);
+    await expect(permanentlyDeleteFile("tok", weirdId)).resolves.toBe(true);
+
+    const expectedUrl = `https://www.googleapis.com/drive/v3/files/${encodedId}`;
+    expect(fetchCallAt(0)[0]).toBe(expectedUrl);
+    expect(fetchCallAt(1)[0]).toBe(expectedUrl);
+    expect(fetchCallAt(2)[0]).toBe(expectedUrl);
+  });
+
+  it("moveFile encodes the path segment on GET + PATCH and encodes addParents/removeParents", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(200, { parents: ["p1"] }))
+      .mockResolvedValueOnce(
+        makeJsonResponse(200, {
+          id: weirdId,
+          name: "n",
+          mimeType: "audio/mpeg",
+        }),
+      );
+
+    await moveFile("tok", weirdId, "old parent", "new/parent");
+
+    expect(fetchCallAt(0)[0]).toBe(
+      `https://www.googleapis.com/drive/v3/files/${encodedId}?fields=parents`,
+    );
+    expect(fetchCallAt(1)[0]).toBe(
+      `https://www.googleapis.com/drive/v3/files/${encodedId}?${new URLSearchParams(
+        {
+          addParents: "new/parent",
+          removeParents: "p1",
+        },
+      ).toString()}`,
+    );
+  });
+
+  it("getFileParents / getFileName encode the path segment", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(200, {}))
+      .mockResolvedValueOnce(makeJsonResponse(200, {}));
+
+    await getFileParents("tok", weirdId);
+    await getFileName("tok", weirdId);
+
+    expect(fetchCallAt(0)[0]).toBe(
+      `https://www.googleapis.com/drive/v3/files/${encodedId}?fields=parents`,
+    );
+    expect(fetchCallAt(1)[0]).toBe(
+      `https://www.googleapis.com/drive/v3/files/${encodedId}?fields=name`,
+    );
   });
 });
 
