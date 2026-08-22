@@ -284,7 +284,7 @@ describe("fetchWithAuth", () => {
     },
   );
 
-  it("keeps the timeout override on the 401 retry (same merged signal)", async () => {
+  it("keeps the timeout override on the 401 retry (fresh per-attempt signal)", async () => {
     storage.setItem(ACCESS_TOKEN_KEY, "old");
     storage.setItem(REFRESH_TOKEN_KEY, "rt");
     invokeMock.mockResolvedValue({ access_token: "new", expires_in: 3600 });
@@ -301,19 +301,148 @@ describe("fetchWithAuth", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const controller = new AbortController();
 
-    const res = await fetchWithAuth("/api/songs", { timeoutMs: 60_000 });
+    const res = await fetchWithAuth("/api/songs", {
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
 
     expect(res.status).toBe(200);
-    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    // Per-attempt deadline: EVERY attempt (main + retry) arms its own full
+    // caller override, never inheriting the budget the previous attempt
+    // already spent on the wire plus the refresh round-trip.
+    expect(timeoutSpy.mock.calls.map((c) => c[0])).toEqual([60_000, 60_000]);
     const firstCall = fetchSpy.mock.calls[0];
     const secondCall = fetchSpy.mock.calls[1];
     if (firstCall === undefined || secondCall === undefined)
       throw new Error("expected fetch calls");
     const firstSignal = (firstCall[1] as RequestInit).signal;
     const retrySignal = (secondCall[1] as RequestInit).signal;
-    expect(retrySignal).toBe(firstSignal);
+    // The retry signal is NOT the spent merged signal from attempt 1...
+    expect(firstSignal).toBeDefined();
+    expect(retrySignal).not.toBe(firstSignal);
+    // ...but caller cancellation still propagates into it instantly.
+    expect(controller.signal.aborted).toBe(false);
+    controller.abort();
+    expect(
+      retrySignal instanceof AbortSignal ? retrySignal.aborted : false,
+    ).toBe(true);
+  });
+
+  it("retry after successful refresh gets a fresh per-attempt deadline but still honors caller cancellation", async () => {
+    storage.setItem(ACCESS_TOKEN_KEY, "old");
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: { access_token: "new", expires_in: 3600 },
+    });
+
+    const controller = new AbortController();
+    // Real AbortSignal.timeout() is implemented natively in Node and does not
+    // fire under vi.useFakeTimers(), so the spy hands out manually-driven
+    // signals: aborting timeoutControllers[0] simulates the FIRST attempt's
+    // original deadline expiring while the retry is already in flight — the
+    // exact production scenario the old reused-signal implementation died on.
+    const timeoutControllers: AbortController[] = [];
+    const timeoutDurations: number[] = [];
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms?: number) => {
+        timeoutDurations.push(ms ?? 0);
+        const ac = new AbortController();
+        timeoutControllers.push(ac);
+        return ac.signal;
+      });
+    type PendingCall = {
+      resolve: (value: Response) => void;
+      reject: (err: unknown) => void;
+      signal: AbortSignal | null | undefined;
+    };
+    const pendingCalls: PendingCall[] = [];
+    const fetchSpy = vi.fn((_url: RequestInfo, init?: RequestInit) => {
+      const entry: PendingCall = {
+        resolve: () => {},
+        reject: () => {},
+        signal: init?.signal,
+      };
+      pendingCalls.push(entry);
+      return new Promise<Response>((resolve, reject) => {
+        entry.resolve = resolve;
+        entry.reject = reject;
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          },
+          { once: true },
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    vi.useFakeTimers();
+    try {
+      const settled: string[] = [];
+      const resPromise = fetchWithAuth("/api/songs", {
+        timeoutMs: 1000,
+        signal: controller.signal,
+      }).then(
+        (r: Response) => {
+          settled.push(`resolved:${String(r.status)}`);
+          return r;
+        },
+        (err: unknown) => {
+          settled.push("rejected");
+          throw err;
+        },
+      );
+      const suppressed = resPromise.catch(() => undefined);
+
+      // t=800 of the 1000ms budget: the first attempt finally answers 401
+      // (the wire was slow), leaving almost nothing of the old deadline.
+      await vi.advanceTimersByTimeAsync(800);
+      pendingCalls[0]?.resolve(new Response("", { status: 401 }));
+
+      // Flush the refresh microtasks; the retry starts around t≈800.
+      await vi.advanceTimersByTimeAsync(50);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      const firstSignal = pendingCalls[0]?.signal;
+      const retrySignal = pendingCalls[1]?.signal;
+      // The retry must NOT reuse the spent merged signal from attempt 1...
+      expect(firstSignal).toBeDefined();
+      expect(retrySignal).not.toBe(firstSignal);
+      // ...and must arm its OWN full per-attempt timeout (1000ms again).
+      expect(timeoutDurations).toEqual([1000, 1000]);
+      expect(settled).toEqual([]);
+
+      // The ORIGINAL deadline expires NOW (t=1150, past the t=1000 mark the
+      // shared signal would have fired at): on the reused-signal
+      // implementation this killed the healthy retry with TimeoutError
+      // before any response arrived. With a fresh per-attempt deadline the
+      // retry (armed at ~t=800) still has until ~t=1800.
+      timeoutControllers[0]?.abort(
+        new DOMException(
+          "The operation was aborted due to timeout",
+          "TimeoutError",
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(150); // t=1300 < fresh retry deadline
+      expect(settled).toEqual([]);
+      expect(retrySignal?.aborted).toBe(false);
+
+      // Caller cancellation still wins instantly on the retry path.
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(retrySignal?.aborted).toBe(true);
+      expect(settled).toEqual(["rejected"]);
+      await expect(resPromise).rejects.toBeInstanceOf(TokenRefreshError);
+      await suppressed;
+    } finally {
+      vi.useRealTimers();
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("merges the caller signal with the timeout override via AbortSignal.any", async () => {

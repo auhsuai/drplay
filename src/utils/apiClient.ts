@@ -654,11 +654,22 @@ export const fetchWithAuth = async (
       const retryHeaders = new Headers(options.headers);
       retryHeaders.set("Authorization", `Bearer ${newToken}`);
       try {
-        // Retry also uses the same bounded signal so it cannot hang either.
+        // The retry gets a FRESH per-attempt deadline: the original merged
+        // signal has already spent most of its budget on the first attempt's
+        // wire time plus the refresh round-trip, so reusing it would abort a
+        // healthy retry almost immediately with TimeoutError. Each attempt
+        // owns its own full effectiveTimeoutMs (same philosophy as the
+        // main request above); the caller signal stays in the merge so a
+        // caller cancel still cancels the retry instantly.
+        const retryTimeoutSignal = AbortSignal.timeout(effectiveTimeoutMs);
+        const retrySignal =
+          options.signal && typeof AbortSignal.any === "function"
+            ? AbortSignal.any([options.signal, retryTimeoutSignal])
+            : retryTimeoutSignal;
         return await fetch(url, {
           ...fetchOptions,
           headers: retryHeaders,
-          signal,
+          signal: retrySignal,
         });
       } catch (err: unknown) {
         // Retry failed: classify and throw a clear, typed error. We do NOT
