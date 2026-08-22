@@ -209,6 +209,54 @@ describe("nativeAudioBridge", () => {
     });
   });
 
+  describe("release", () => {
+    it("invalidates a pending play chain — nothing loads or plays after release", async () => {
+      engine.setToken("tok-1");
+      const commands: string[] = [];
+      let resolveSlowSource: ((v: unknown) => void) | undefined;
+      invokeMock.mockImplementation(
+        (cmd: string, payload?: { src?: string }) => {
+          commands.push(cmd);
+          if (
+            cmd === "plugin:native-audio|set_source" &&
+            payload?.src?.includes("track-A") === true
+          ) {
+            // Slow source: hold the chain suspended on its set_source await
+            // until the test releases it.
+            return new Promise((resolve) => {
+              resolveSlowSource = resolve;
+            });
+          }
+          return Promise.resolve({});
+        },
+      );
+
+      const turn = engine.playTrack(
+        { id: "track-A", title: "A", artist: "", streamUrl: "" },
+        30,
+      );
+      // Wait until the chain has actually dispatched set_source(track-A) and
+      // is suspended on it — only then is the release/resolve ordering sound.
+      await vi.waitFor(() => {
+        expect(commands).toContainEqual(
+          expect.stringContaining("plugin:native-audio|set_source"),
+        );
+      });
+
+      const releaseMarker = commands.length;
+      await engine.release();
+
+      resolveSlowSource?.({});
+      await turn;
+
+      // Only release's own pause may follow the release marker — the resumed
+      // chain must NOT fire seek_to(30)/play onto the released player.
+      expect(commands.slice(releaseMarker)).toEqual([
+        "plugin:native-audio|pause",
+      ]);
+    });
+  });
+
   describe("state mapping", () => {
     const listener = () =>
       addPluginListenerMock.mock.calls[0]?.[2] as (s: unknown) => void;

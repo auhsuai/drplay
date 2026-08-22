@@ -285,6 +285,12 @@ export class NativeAudioEngine implements PlaybackEngine {
    *  The plugin's foreground service is stopped by the OS once playback
    *  pauses and the notification is dismissed. */
   async release(): Promise<void> {
+    // Invalidate every queued/suspended play chain (latest-wins generation
+    // bump): runPlayChain re-checks seq after each await, so no chain may
+    // set_source/seek/play past a release (logout/stop) — same meaning as
+    // usePlayer handleStop's abort guards (7484592). playTrack keeps working:
+    // it assigns itself a fresh, newer seq.
+    this.playSeq++;
     this.currentTrackId = null;
     this.currentTrack = null;
     this.token = null;
