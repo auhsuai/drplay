@@ -2272,6 +2272,49 @@ describe("uploadManager", () => {
       await advanceBackoff(5000);
       expect(uploadFileResumable).toHaveBeenCalledTimes(1);
     });
+
+    it("11b. abort đúng LÚC quyết định retry → thoát NGAY trước backoff (không ngủ trọn Retry-After)", async () => {
+      vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+      // Test 11 aborts mid-backoff, so its second queued
+      // mockRejectedValueOnce ("should never be called") is NEVER consumed —
+      // and clearAllMocks only clears call history, not the once-queue of
+      // this cached vi.fn. Drain it first or call #1 below eats that stale
+      // rejection instead of our implementation.
+      uploadFileResumable.mockReset();
+      uploadFileResumable.mockResolvedValue(makeDriveFile("file-x", "x.mp3"));
+      // Abort lands synchronously INSIDE the attempt — by the time the
+      // rejection reaches uploadWithRetry's catch, signal.aborted is already
+      // true, so the retry decision point must bail BEFORE sleeping.
+      uploadFileResumable.mockImplementationOnce(() => {
+        const e = um.getEntries()[0];
+        if (e) um.cancelUpload(e.id);
+        return Promise.reject(
+          new UploadErrorClass("network down", "network", 429, "3600"),
+        );
+      });
+
+      um.startUploads([fileSeed("r.mp3")], TOKEN);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+
+      // Retry-After "3600" is honored as the backoff sleep; a tiny advance
+      // must suffice when the pre-sleep guard exits immediately.
+      await advanceBackoff(100);
+      await realTick();
+
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1); // không retry sau abort
+      expect(um.getEntries()).toEqual([]); // settled NGAY — không kẹt trong sleep
+      expect(
+        captureError.mock.calls.some((c) =>
+          c[0].message.includes("upload-cancelled"),
+        ),
+      ).toBe(true);
+      expect(showErrorToast).not.toHaveBeenCalled();
+
+      // Even after the full Retry-After elapses: still exactly one attempt.
+      await advanceBackoff(3_600_000);
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("getUploadProgress", () => {
