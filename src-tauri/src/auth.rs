@@ -1,8 +1,9 @@
-use crate::dpop::dpop_http_client;
-use oauth2::basic::BasicClient;
+use crate::dpop::{dpop_http_client, DpopError};
+use oauth2::basic::{BasicClient, BasicErrorResponseType};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    RedirectUrl, Scope, TokenResponse, TokenUrl, RefreshToken
+    RedirectUrl, RequestTokenError, Scope, StandardErrorResponse, TokenResponse, TokenUrl,
+    RefreshToken,
 };
 use serde_json::Value;
 use tauri::command;
@@ -188,6 +189,58 @@ fn build_token_client(use_android_client: bool) -> Result<BasicClient, String> {
     ))
 }
 
+/// Concrete failure type produced by token requests routed through
+/// `dpop_http_client` (RE = DpopError) against the BasicClient Google
+/// endpoint setup.
+type TokenRequestError =
+    RequestTokenError<DpopError, StandardErrorResponse<BasicErrorResponseType>>;
+
+/// Renders a token-refresh failure as a short IPC-safe diagnostic string.
+///
+/// The previous `format!("Failed to refresh token: {:?}", e)` embedded the
+/// raw HTTP response body (`RequestTokenError::Parse(_, Vec<u8>)`) and DPoP/
+/// reqwest internals into the error string, which crosses IPC into errStr
+/// (apiClient.ts) and is persisted in JS-side error logs. Each arm must emit
+/// structural facts only, while preserving the exact substrings that
+/// `src/utils/apiClient.ts` string-matches to classify failures:
+/// `invalid_grant` (revoked/expired bucket), `timeout`/`unreachable`
+/// (network bucket).
+fn format_refresh_error(e: &TokenRequestError) -> String {
+    match e {
+        RequestTokenError::ServerResponse(resp) => {
+            // RFC 6749 §5.2 machine-readable code; Display renders the
+            // snake_case wire form (e.g. "invalid_grant") — the keyword the
+            // JS classifier matches for revoked/expired refresh tokens. The
+            // server-provided error_description is deliberately NOT emitted.
+            format!("server_error:{}", resp.error())
+        }
+        RequestTokenError::Parse(path_err, _) => {
+            // serde_path_to_error reports WHERE parsing failed (field names
+            // only, "." at root). The raw body Vec<u8> is deliberately
+            // dropped: it is untrusted-controlled and leaked via {:?} before.
+            format!("parse_error:{}", path_err.path())
+        }
+        RequestTokenError::Request(dpop_err) => match dpop_err {
+            // Transport facts only. "timeout"/"unreachable" are the exact
+            // substrings apiClient.ts matches to classify network failures.
+            DpopError::Http(reqwest_err) => {
+                if reqwest_err.is_timeout() {
+                    "request_error:timeout".to_string()
+                } else if reqwest_err.is_connect() {
+                    "request_error:unreachable".to_string()
+                } else {
+                    "request_error:http".to_string()
+                }
+            }
+            DpopError::Vault(_) => "other:dpop_vault".to_string(),
+            DpopError::Crypto(_) => "other:dpop_crypto".to_string(),
+            DpopError::Proof(_) => "other:dpop_proof".to_string(),
+            DpopError::HttpConversion(_) => "other:dpop_http_conversion".to_string(),
+        },
+        RequestTokenError::Other(_) => "other".to_string(),
+    }
+}
+
 #[command]
 pub async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
     let client = build_token_client(cfg!(target_os = "android"))?;
@@ -196,7 +249,7 @@ pub async fn refresh_google_token(refresh_token: String) -> Result<Value, String
         .exchange_refresh_token(&RefreshToken::new(refresh_token))
         .request_async(dpop_http_client)
         .await
-        .map_err(|e| format!("Failed to refresh token: {:?}", e))?;
+        .map_err(|e| format_refresh_error(&e))?;
 
     let access_token = token_result.access_token().secret().to_string();
     let new_refresh_token = token_result.refresh_token().map(|t| t.secret().to_string());
@@ -257,5 +310,213 @@ mod tests {
 
         let desktop = build_token_client(false).expect("desktop client must build");
         assert_eq!(desktop.client_id().as_str(), wa_client_id());
+    }
+
+    // ------------------------------------------------------------------
+    // format_refresh_error: IPC-safe rendering of token-refresh failures.
+    //
+    // oauth2's `RequestTokenError::Parse(_, Vec<u8>)` carries the RAW HTTP
+    // response body and derive(Debug) prints it, so the pre-fix
+    // `format!("{:?}", e)` leaked untrusted bodies (captive portal HTML...)
+    // across IPC into JS error logs. These tests drive oauth2's REAL parse
+    // pipeline through canned HTTP responses so every variant is exercised
+    // as the exact concrete type production sees (RE = DpopError because
+    // dpop_http_client fails with DpopError).
+    // ------------------------------------------------------------------
+
+    use oauth2::http::{header::HeaderMap, StatusCode};
+    use oauth2::{HttpRequest, HttpResponse};
+
+    async fn portal_html_client(_request: HttpRequest) -> Result<HttpResponse, DpopError> {
+        Ok(HttpResponse {
+            status_code: StatusCode::OK,
+            headers: HeaderMap::new(),
+            body: b"<html>captive-portal</html>".to_vec(),
+        })
+    }
+
+    async fn invalid_grant_client(_request: HttpRequest) -> Result<HttpResponse, DpopError> {
+        Ok(HttpResponse {
+            status_code: StatusCode::BAD_REQUEST,
+            headers: HeaderMap::new(),
+            body: br#"{"error":"invalid_grant","error_description":"TOPSECRETDESC"}"#.to_vec(),
+        })
+    }
+
+    /// Produces a REAL `RequestTokenError` by running the same
+    /// exchange_refresh_token -> request_async pipeline as production, with
+    /// `portal_html_client` standing in for dpop_http_client.
+    #[test]
+    fn debug_format_of_parse_error_contains_raw_body() {
+        // Documents the vulnerability this task fixes: oauth2's Debug on the
+        // Parse variant embeds the entire raw response body. If a future
+        // oauth2 upgrade stops doing that, the sanitization in
+        // format_refresh_error becomes defense-in-depth rather than required.
+        let err = tokio::runtime::Runtime::new()
+            .expect("tokio runtime")
+            .block_on(async {
+                build_token_client(true)
+                    .expect("client must build")
+                    .exchange_refresh_token(&RefreshToken::new("rt".to_string()))
+                    .request_async(portal_html_client)
+                    .await
+                    .expect_err("portal HTML must fail to parse")
+            });
+        assert!(
+            matches!(err, RequestTokenError::Parse(_, _)),
+            "portal HTML with status 200 must surface as Parse, got {err:?}"
+        );
+        let leaked = format!("{:?}", err);
+        // Vec<u8> Debug-prints as a decimal byte array, not plaintext — the
+        // FULL raw body still crosses IPC verbatim.
+        let byte_dump = b"<html>captive-portal</html>"
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            leaked.contains(&byte_dump),
+            "derive(Debug) is expected to embed every raw body byte: {leaked}"
+        );
+    }
+
+    #[test]
+    fn parse_variant_hides_raw_body_and_keeps_field_path_only() {
+        let formatted = format_refresh_error(
+            &tokio::runtime::Runtime::new()
+                .expect("tokio runtime")
+                .block_on(async {
+                    build_token_client(true)
+                        .expect("client must build")
+                        .exchange_refresh_token(&RefreshToken::new("rt".to_string()))
+                        .request_async(portal_html_client)
+                        .await
+                        .expect_err("portal HTML must fail to parse")
+                }),
+        );
+        assert!(!formatted.contains("<html>"), "leaked body: {formatted}");
+        assert!(!formatted.contains("captive-portal"), "leaked body: {formatted}");
+        assert!(formatted.starts_with("parse_error:"), "got: {formatted}");
+        assert!(formatted.len() < 80, "must stay a short fixed string: {formatted}");
+    }
+
+    #[test]
+    fn server_response_variant_maps_to_code_only() {
+        let err = RequestTokenError::<DpopError, _>::ServerResponse(
+            StandardErrorResponse::new(
+                BasicErrorResponseType::InvalidGrant,
+                Some("secret-description".to_string()),
+                None,
+            ),
+        );
+        let formatted = format_refresh_error(&err);
+        // Keyword contract: apiClient.ts buckets "invalid_grant" as
+        // revoked/expired; the human-readable description must NOT cross IPC.
+        assert_eq!(formatted, "server_error:invalid_grant");
+    }
+
+    #[test]
+    fn server_response_pipeline_variant_keeps_invalid_grant_keyword() {
+        let formatted = format_refresh_error(
+            &tokio::runtime::Runtime::new()
+                .expect("tokio runtime")
+                .block_on(async {
+                    build_token_client(true)
+                        .expect("client must build")
+                        .exchange_refresh_token(&RefreshToken::new("rt".to_string()))
+                        .request_async(invalid_grant_client)
+                        .await
+                        .expect_err("invalid_grant must be an error")
+                }),
+        );
+        assert!(formatted.starts_with("server_error:"), "got: {formatted}");
+        assert!(formatted.contains("invalid_grant"), "got: {formatted}");
+        assert!(
+            !formatted.contains("TOPSECRETDESC"),
+            "description value leaked: {formatted}"
+        );
+    }
+
+    #[test]
+    fn request_variant_connect_refused_maps_to_unreachable_keyword() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let http_err = runtime
+            .block_on(async {
+                reqwest::Client::new()
+                    .post(format!("http://127.0.0.1:{port}/token"))
+                    .body(b"grant_type=refresh_token".to_vec())
+                    .send()
+                    .await
+            })
+            .expect_err("connect to a closed port must fail");
+        assert!(
+            http_err.is_connect(),
+            "expected connect-kind reqwest error, got {http_err:?}"
+        );
+
+        let err: TokenRequestError = RequestTokenError::Request(DpopError::Http(http_err));
+        // apiClient.ts buckets "unreachable" into its network branch.
+        assert_eq!(format_refresh_error(&err), "request_error:unreachable");
+    }
+
+    #[test]
+    fn request_variant_timeout_maps_to_timeout_keyword() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            if let Ok((_stream, _)) = listener.accept() {
+                // Accept but never respond; the client's own timeout fires.
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        });
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let http_err = runtime
+            .block_on(async {
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_millis(500))
+                    .build()
+                    .expect("client builds")
+                    .post(format!("http://127.0.0.1:{port}/token"))
+                    .send()
+                    .await
+            })
+            .expect_err("held connection must time out");
+        assert!(
+            http_err.is_timeout(),
+            "expected timeout-kind reqwest error, got {http_err:?}"
+        );
+
+        let err: TokenRequestError = RequestTokenError::Request(DpopError::Http(http_err));
+        // apiClient.ts buckets "timeout" into its network branch.
+        assert_eq!(format_refresh_error(&err), "request_error:timeout");
+    }
+
+    #[test]
+    fn request_variant_non_network_dpop_errors_emit_fixed_labels_without_details() {
+        let cases: [(DpopError, &str); 4] = [
+            (DpopError::Vault("vault-detail-X".to_string()), "other:dpop_vault"),
+            (DpopError::Crypto("crypto-detail-X".to_string()), "other:dpop_crypto"),
+            (DpopError::Proof("proof-detail-X".to_string()), "other:dpop_proof"),
+            (
+                DpopError::HttpConversion("conv-detail-X".to_string()),
+                "other:dpop_http_conversion",
+            ),
+        ];
+        for (dpop_err, expected) in cases {
+            let err: TokenRequestError = RequestTokenError::Request(dpop_err);
+            assert_eq!(format_refresh_error(&err), expected);
+        }
+    }
+
+    #[test]
+    fn other_variant_emits_bare_other_marker() {
+        let err: TokenRequestError =
+            RequestTokenError::Other("oauth2-internal message".to_string());
+        assert_eq!(format_refresh_error(&err), "other");
     }
 }
