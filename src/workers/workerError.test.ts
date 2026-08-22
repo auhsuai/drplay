@@ -116,4 +116,27 @@ describe("logWorkerError", () => {
     if (firstCall === undefined) throw new Error("expected captureError call");
     expect(firstCall[0].level).toBe("warn");
   });
+
+  it("masks a Google-style refresh_token value (prefix-slash + padding)", () => {
+    const err = new Error("refresh failed: refresh_token=1//secret==");
+    logWorkerError("auth/refresh", {}, err, "error");
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].message).not.toContain("secret");
+    expect(firstCall[0].message).toContain("[REDACTED_TOKEN]");
+  });
+
+  it("masks id values containing slash/plus/padding via message and context", () => {
+    const err = new Error(
+      "fetch failed for fileId=1RoF/abc+def== and ?id=1//xyz-_=",
+    );
+    logWorkerError("scanner/get", { fileId: "1//abc==" }, err, "error");
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].message).not.toContain("1RoF");
+    expect(firstCall[0].message).not.toContain("+def==");
+    expect(firstCall[0].message).not.toContain("//xyz");
+    expect(firstCall[0].message).not.toContain("//abc==");
+    expect(firstCall[0].message).toContain("[REDACTED_ID]");
+  });
 });
