@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePlayer, PLAYER_STOP_EVENT } from "./usePlayer";
 import { usePlayerStore } from "../store/playerStore";
+import { getTrackMetadata } from "../utils/metadata";
 import type { Track } from "../types";
 
 vi.mock("react-i18next", () => ({
@@ -320,5 +321,48 @@ describe("usePlayer broken-track reset on logout (Task D residual)", () => {
     expect(usePlayerStore.getState().currentTrack).toBeNull();
     expect(usePlayerStore.getState().originalQueue).toEqual([]);
     expect(usePlayerStore.getState().playbackQueue).toEqual([]);
+  });
+});
+
+describe("usePlayer lazy-resume abort safety (audit B3)", () => {
+  it("resume X interrupted by clicking Y must not stamp X's streamUrl onto Y", async () => {
+    installSessionMock();
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    act(() => {
+      usePlayerStore.setState({
+        currentTrack: { ...makeTrack("track-X"), streamUrl: "" },
+        isPlaying: false,
+      });
+    });
+
+    let rejectMetadata!: (error: DOMException) => void;
+    vi.mocked(getTrackMetadata).mockImplementationOnce(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectMetadata = reject;
+        }),
+    );
+
+    let lazyResume: Promise<void> | undefined;
+    act(() => {
+      lazyResume = result.current.handleTogglePlay();
+    });
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("track-Y"));
+    });
+
+    await act(async () => {
+      rejectMetadata(
+        new DOMException("The operation was aborted.", "AbortError"),
+      );
+      await lazyResume;
+      await Promise.resolve();
+    });
+
+    const { currentTrack } = usePlayerStore.getState();
+    expect(currentTrack?.id).toBe("track-Y");
+    expect(currentTrack?.streamUrl).toBe("/drive-stream/track-Y");
   });
 });

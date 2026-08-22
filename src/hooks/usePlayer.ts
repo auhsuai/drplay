@@ -164,6 +164,9 @@ export const usePlayer = (accessToken: string | null) => {
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
+      // Abort any in-flight token/stream continuation first so a late
+      // resolve cannot resurrect playback after logout (ghost playback).
+      abortControllerRef.current?.abort();
       // B3: release the real audio elements (buffers, src, pending retry)
       // before clearing the store state. On mobile the native engine is
       // released instead (pause + token drop).
@@ -276,6 +279,8 @@ export const usePlayer = (accessToken: string | null) => {
           return;
         }
 
+        if (signal.aborted) return;
+
         if (IS_MOBILE) {
           // GATE branch B: the /drive-stream SW proxy is dead on Android —
           // the native engine builds the Drive URL and sends the Authorization
@@ -385,6 +390,7 @@ export const usePlayer = (accessToken: string | null) => {
             setIsDownloading(false);
             return;
           }
+          if (signal.aborted) return;
           nativeAudioEngine.setToken(freshToken);
           setCurrentTrack((prev) => (prev ? { ...prev } : prev));
           triggerReload();
@@ -440,6 +446,8 @@ export const usePlayer = (accessToken: string | null) => {
               });
             }
           }
+
+          if (signal.aborted) return;
 
           const url = buildStreamUrl(
             currentTrack.id,

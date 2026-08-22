@@ -282,3 +282,100 @@ describe("usePlayer mobile branch (GATE B — native audio is the playback path)
     expect(keepAwakeMock.stop).not.toHaveBeenCalled();
   });
 });
+
+describe("usePlayer stale-continuation guards (audit B1/B2)", () => {
+  it("handlePlayTrack: stale token continuation must not overwrite a newer selection", async () => {
+    const { result } = renderHook(() => usePlayer("access-token"));
+
+    let releaseStaleToken!: (value: string) => void;
+    getValidTokenMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseStaleToken = resolve;
+        }),
+    );
+
+    let stalePlay: Promise<void> | undefined;
+    act(() => {
+      stalePlay = result.current.handlePlayTrack(makeTrack("file-A"));
+    });
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("file-B"));
+    });
+
+    releaseStaleToken("stale-token");
+    await act(async () => {
+      await stalePlay;
+    });
+
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("file-B");
+    expect(engineMock.setToken).toHaveBeenLastCalledWith("test-token");
+  });
+
+  it("handleTogglePlay mobile-resume: aborted resume must not resurrect isPlaying after PLAYER_STOP_EVENT", async () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack("file-1"),
+      isPlaying: false,
+    });
+    const { result } = renderHook(() => usePlayer("access-token"));
+
+    let releaseResumeToken!: (value: string) => void;
+    getValidTokenMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseResumeToken = resolve;
+        }),
+    );
+
+    let resumePlay: Promise<void> | undefined;
+    act(() => {
+      resumePlay = result.current.handleTogglePlay();
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(PLAYER_STOP_EVENT));
+      await Promise.resolve();
+    });
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+
+    releaseResumeToken("late-resume-token");
+    await act(async () => {
+      await resumePlay;
+    });
+
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    expect(engineMock.setToken).not.toHaveBeenCalledWith("late-resume-token");
+  });
+
+  it("PLAYER_STOP_EVENT during pending token fetch aborts the in-flight playback (no ghost playback)", async () => {
+    const { result } = renderHook(() => usePlayer("access-token"));
+
+    let releaseGhostToken!: (value: string) => void;
+    getValidTokenMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseGhostToken = resolve;
+        }),
+    );
+
+    let ghostPlay: Promise<void> | undefined;
+    act(() => {
+      ghostPlay = result.current.handlePlayTrack(makeTrack("file-ghost"));
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(PLAYER_STOP_EVENT));
+      await Promise.resolve();
+    });
+
+    releaseGhostToken("ghost-token");
+    await act(async () => {
+      await ghostPlay;
+    });
+
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    expect(usePlayerStore.getState().currentTrack).toBeNull();
+    expect(engineMock.setToken).not.toHaveBeenCalledWith("ghost-token");
+  });
+});
