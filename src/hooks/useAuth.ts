@@ -24,7 +24,7 @@ import {
 } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { authHeaders } from "../utils/driveFiles";
-import { clearAllMetadataCache } from "../utils/metadata";
+import { wipePersistedMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
 import { PLAYER_STOP_EVENT } from "./usePlayer";
 import {
@@ -224,7 +224,6 @@ export const useAuth = (onLogoutExt?: () => void) => {
         // clear_stream_token was removed from the backend during the Service
         // Worker migration (commit a134f77) — only clear_local_cache remains.
         await invoke(CLEAR_LOCAL_CACHE_CMD);
-        clearAllMetadataCache();
       } catch (e: unknown) {
         void captureError({
           level: "warn",
@@ -232,6 +231,18 @@ export const useAuth = (onLogoutExt?: () => void) => {
           message: `Failed to clear backend cache (clear_local_cache) — continuing logout: ${classifyError(e)}`,
         });
       }
+
+      // Account-boundary wipe: metadataCache IDB rows carry no userEmail, so
+      // user A's cached title/artist/thumbnails must not survive logout for
+      // user B. Fire-and-forget — IDB latency must not block logout; failures
+      // are logged here and inside the wipe itself, never silent.
+      void wipePersistedMetadataCache().catch((e: unknown) => {
+        void captureError({
+          level: "warn",
+          source: AUTH_MODULE,
+          message: `Metadata persisted-cache wipe failed — continuing logout: ${classifyError(e)}`,
+        });
+      });
 
       if (tokenToRevoke) {
         try {

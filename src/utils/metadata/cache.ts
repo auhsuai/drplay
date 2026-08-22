@@ -254,7 +254,11 @@ export function mergeFullPicture(
 
 let cacheGeneration = 0;
 
-export function clearAllMetadataCache(): void {
+// Mem-layer teardown shared by clearAllMetadataCache (memory-only reset) and
+// wipePersistedMetadataCache (account-boundary wipe). Bumping cacheGeneration
+// also drops any in-flight setCache put/updateLRU, so no stale row can be
+// resurrected into IDB/localStorage after a clear/wipe has started.
+function clearMemMetadataCaches(): void {
   cacheGeneration++;
   for (const k of Object.keys(metadataCache)) {
     // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: must fully drop every key so Object.keys(metadataCache) is 0 after clear (test asserts this; assigning undefined would keep the keys).
@@ -269,6 +273,50 @@ export function clearAllMetadataCache(): void {
   // once stay placeholder-blocked up to METADATA_NETWORK_COOLDOWN_MS despite
   // the user's explicit full reset.
   clearNetworkCooldown();
+}
+
+export function clearAllMetadataCache(): void {
+  clearMemMetadataCaches();
+}
+
+/**
+ * Account-boundary wipe (logout): metadataCache IDB rows carry NO userEmail
+ * (every other per-user table moved to [userEmail+id] in schema v7), so rows
+ * left behind by user A would be served to user B. Metadata is re-fetchable
+ * cache data, so instead of a schema migration this wipes EVERYTHING: the mem
+ * layers (via clearAllMetadataCache semantics) + the persisted localStorage
+ * LRU list + all metadataCache rows in IndexedDB (bulk delete). Best-effort:
+ * individual failures are logged and never reject — logout must proceed.
+ */
+export async function wipePersistedMetadataCache(): Promise<void> {
+  clearMemMetadataCaches();
+
+  // Drop the persisted LRU bookkeeping BEFORE deleting the rows so an
+  // interrupted wipe never leaves a key list pointing at deleted rows.
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(METADATA_LRU_KEY);
+    }
+  } catch (e: unknown) {
+    void captureError({
+      level: "warn",
+      source: META_MODULE,
+      message: `lru-wipe-failed: ${classifyMetaError(e).message}`,
+    });
+  }
+
+  try {
+    const keys = await db.metadataCache.toCollection().primaryKeys();
+    await db.metadataCache.bulkDelete(keys);
+  } catch (e: unknown) {
+    // Logged, not rethrown: fire-and-forget callers treat resolution as "wipe
+    // finished", and a failed bulk delete is recoverable (rows are cache).
+    void captureError({
+      level: "error",
+      source: META_MODULE,
+      message: `metadata-idb-wipe-failed: ${classifyMetaError(e).message}`,
+    });
+  }
 }
 
 // Rank used by setCache to order writes. Raw data.v must NOT be compared

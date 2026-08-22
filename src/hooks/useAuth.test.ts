@@ -13,7 +13,7 @@ import {
   readRefreshToken,
   deleteRefreshToken,
 } from "../utils/apiClient";
-import { clearAllMetadataCache } from "../utils/metadata";
+import { wipePersistedMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
 import { fetchWithAuth } from "../utils/apiClient";
 import {
@@ -81,7 +81,9 @@ vi.mock("../utils/cache", () => ({
 }));
 
 vi.mock("../utils/metadata", () => ({
-  clearAllMetadataCache: vi.fn(),
+  // Mirrors the real async contract: wipePersistedMetadataCache resolves a
+  // Promise, and handleLogout attaches .catch to it.
+  wipePersistedMetadataCache: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../utils/errorLog", () => ({
@@ -101,7 +103,7 @@ const mockedListen = vi.mocked(listen);
 const mockedInvalidateCurrentSession = vi.mocked(invalidateCurrentSession);
 const mockedRevokeGoogleToken = vi.mocked(revokeGoogleToken);
 const mockedStopProactiveRefresh = vi.mocked(stopProactiveRefresh);
-const mockedClearAllMetadataCache = vi.mocked(clearAllMetadataCache);
+const mockedWipePersistedMetadataCache = vi.mocked(wipePersistedMetadataCache);
 const mockedCaptureError = vi.mocked(captureError);
 const mockedFetchWithAuth = vi.mocked(fetchWithAuth);
 const mockedStartProSyncWorker = vi.mocked(startProSyncWorker);
@@ -291,7 +293,7 @@ describe("useAuth handleLogout backend cleanup", () => {
 
     expect(invokedCommands()).not.toContain("clear_stream_token");
     expect(invokedCommands()).toContain("clear_local_cache");
-    expect(mockedClearAllMetadataCache).toHaveBeenCalled();
+    expect(mockedWipePersistedMetadataCache).toHaveBeenCalled();
     expect(mockedInvalidateCurrentSession).toHaveBeenCalled();
     expect(mockedStopProSyncWorker).toHaveBeenCalled();
     expect(mockedStopProactiveRefresh).toHaveBeenCalled();

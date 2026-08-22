@@ -14,5 +14,6 @@ export {
   clearAllMetadataCache,
   getFullPictureData,
   metadataCache,
+  wipePersistedMetadataCache,
 } from "./metadata/cache";
 export { getTrackMetadata, updateTrackDuration } from "./metadata/api";
