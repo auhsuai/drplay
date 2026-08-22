@@ -141,6 +141,72 @@ describe("nativeAudioBridge", () => {
         position: 42,
       });
     });
+
+    // CF-2 regression: two overlapping playTrack() chains used to interleave
+    // their set_source/seek_to/play commands — the stale chain's seek landed
+    // on the newer source (mis-seek / wrong track playing).
+    it("never lets a superseded playTrack chain seek/play over the newer source", async () => {
+      engine.setToken("tok-1");
+      const commands: string[] = [];
+      invokeMock.mockImplementation(
+        (cmd: string, payload?: { src?: string }) => {
+          commands.push(
+            cmd === "plugin:native-audio|set_source"
+              ? `set_source:${String(payload?.src)}`
+              : cmd,
+          );
+          // Tiered delays force the interleaving: A's set_source resolves long
+          // after B's whole chain has completed.
+          const isSlowSourceA =
+            cmd === "plugin:native-audio|set_source" &&
+            payload?.src?.includes("track-A") === true;
+          return new Promise((resolve) => {
+            setTimeout(
+              () => {
+                resolve({});
+              },
+              isSlowSourceA ? 40 : 0,
+            );
+          });
+        },
+      );
+
+      await Promise.allSettled([
+        engine.playTrack(
+          { id: "track-A", title: "A", artist: "", streamUrl: "" },
+          120,
+        ),
+        engine.playTrack({
+          id: "track-B",
+          title: "B",
+          artist: "",
+          streamUrl: "",
+        }),
+      ]);
+
+      let lastSourceIdx = -1;
+      for (let i = commands.length - 1; i >= 0; i--) {
+        if (commands[i]?.startsWith("set_source")) {
+          lastSourceIdx = i;
+          break;
+        }
+      }
+      expect(lastSourceIdx).toBeGreaterThan(-1);
+      expect(commands[lastSourceIdx]).toContain("track-B");
+
+      // The stale chain must never fire seek_to(restoreA) onto source B.
+      const seekCalls = invokeMock.mock.calls.filter(
+        ([cmd]) => cmd === "plugin:native-audio|seek_to",
+      );
+      expect(seekCalls).toEqual([]);
+
+      // After the winning set_source(track-B), only B's own transport ops
+      // may follow (B has no startTime → just play).
+      expect(commands.slice(lastSourceIdx)).toEqual([
+        expect.stringContaining("set_source"),
+        "plugin:native-audio|play",
+      ]);
+    });
   });
 
   describe("state mapping", () => {

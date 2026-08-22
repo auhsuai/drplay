@@ -134,6 +134,15 @@ export class NativeAudioEngine implements PlaybackEngine {
   private lastState: NativeAudioState | null = null;
   private lastTimeUpdate = 0;
   private wasPlaying = false;
+  // CF-2 fix (rapid A→B playTrack interleave): two mechanisms combined.
+  // 1) playChain serializes load chains FIFO so one chain's set_source/
+  //    seek_to/play commands can never interleave with another chain's.
+  // 2) playSeq is a latest-wins generation (desktop parity: AudioController's
+  //    changeToken): a chain that has been superseded while queued or while
+  //    suspended on an await exits without firing its remaining commands,
+  //    so no seek(restoreA)/play(A) ever lands on the newer source.
+  private playSeq = 0;
+  private playChain: Promise<void> = Promise.resolve();
 
   /** Initialize the plugin once (notification permission on Android 13+ is
    *  requested by the plugin during initialize()). Safe to call repeatedly. */
@@ -167,7 +176,27 @@ export class NativeAudioEngine implements PlaybackEngine {
 
   async playTrack(track: Track, startTime?: number): Promise<void> {
     if (!IS_MOBILE) return;
+    const seq = ++this.playSeq;
+    const turn = this.playChain.then(() =>
+      this.runPlayChain(seq, track, startTime),
+    );
+    // A failed load must not poison the queue: its error still reaches THIS
+    // call's caller via `turn`, while later queued chains start settled.
+    this.playChain = turn.catch(() => undefined);
+    return turn;
+  }
+
+  /** One serialized load chain — runs only after every earlier playTrack
+   *  chain has settled. `seq` staleness is re-checked after each await so a
+   *  superseded chain abandons the rest of its commands (latest-wins). */
+  private async runPlayChain(
+    seq: number,
+    track: Track,
+    startTime?: number,
+  ): Promise<void> {
+    if (seq !== this.playSeq) return;
     await this.initOnce();
+    if (seq !== this.playSeq) return;
 
     this.currentTrack = track;
 
@@ -188,11 +217,13 @@ export class NativeAudioEngine implements PlaybackEngine {
         ? { Authorization: `Bearer ${this.token}` }
         : undefined,
     });
+    if (seq !== this.playSeq) return;
 
     if (startTime !== undefined && startTime > 0) {
       await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
         position: startTime,
       });
+      if (seq !== this.playSeq) return;
     }
     await this.invokeStateful(PLUGIN_COMMAND.play);
   }
