@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { MockInstance } from "vitest";
 import {
   prefetchNextTrackAudio,
   clearNextTrackPrefetches,
@@ -21,6 +22,24 @@ async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
+interface DeferredFetch {
+  resolve: (response: Response) => void;
+  reject: (err: unknown) => void;
+}
+
+function makeDeferredFetch(): {
+  spy: MockInstance<typeof fetch>;
+  deferreds: DeferredFetch[];
+} {
+  const deferreds: DeferredFetch[] = [];
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+    return new Promise<Response>((resolve, reject) => {
+      deferreds.push({ resolve, reject });
+    });
+  });
+  return { spy, deferreds };
+}
+
 describe("nextTrackPrefetcher LRU", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -41,6 +60,42 @@ describe("nextTrackPrefetcher LRU", () => {
     // 4 fetches attempted; capacity 3 -> oldest 'a' aborted exactly once
     expect(fetchSpy).toHaveBeenCalledTimes(4);
     expect(abortSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the newer controller's entry when an evicted older fetch settles late", async () => {
+    const { spy: fetchSpy, deferreds } = makeDeferredFetch();
+
+    const urlX = "https://x/same";
+    // Fetch A for urlX in flight (call #1)
+    prefetchNextTrackAudio(urlX);
+    // Fill to capacity MAX=3: {urlX(A), u1, u2}
+    prefetchNextTrackAudio("https://x/u1"); // #2
+    prefetchNextTrackAudio("https://x/u2"); // #3
+    // 4th insert over capacity evicts the oldest == A (aborts it)
+    prefetchNextTrackAudio("https://x/evictor"); // #4
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+
+    // Same tick: caller re-requests urlX -> fetch B created and stored (#5)
+    prefetchNextTrackAudio(urlX);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+
+    // A settles LATE, after B was already inserted into the map
+    const fetchA = deferreds[0];
+    if (fetchA === undefined) throw new Error("expected deferred for fetch A");
+    fetchA.reject(new DOMException("The operation was aborted.", "AbortError"));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // A's finally must NOT remove B's entry. Pending should be:
+    // u2, evictor, urlX(B) — u1 was evicted when B was inserted.
+    expect(getPendingPrefetchCount()).toBe(3);
+
+    // A third caller joins B instead of spawning a duplicate fetch
+    prefetchNextTrackAudio(urlX);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+
+    clearNextTrackPrefetches();
+    fetchSpy.mockRestore();
   });
 
   it("does not refetch an in-flight url", () => {

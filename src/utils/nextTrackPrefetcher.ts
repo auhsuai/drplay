@@ -73,7 +73,12 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
         message: `Prefetch failed (${kind}): ${err instanceof Error ? err.message : String(err)}`,
       });
     } finally {
-      abortControllers.delete(streamUrl);
+      // Identity guard: only remove the entry we own. If this fetch was
+      // evicted and a newer fetch for the same URL re-registered itself,
+      // deleting unconditionally would break dedup for the newer one.
+      if (abortControllers.get(streamUrl) === controller) {
+        abortControllers.delete(streamUrl);
+      }
     }
   })();
 }
