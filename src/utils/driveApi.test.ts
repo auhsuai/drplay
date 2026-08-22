@@ -4199,6 +4199,29 @@ describe("generateClientId", () => {
       kind: "invalid",
     });
   });
+
+  it("ok body whose json() rejects → UploadError invalid `Failed to generate upload id (invalid response)`", async () => {
+    // Regression: a truncated / wrong-content-type ok-body used to leak a raw
+    // SyntaxError out of response.json() instead of the module's classified
+    // UploadError (same malformed-body contract as driveFiles/drivePagination).
+    mockedFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      headers: { get: () => null },
+      json: () => {
+        throw new SyntaxError(
+          "Unexpected token 'n', \"not-json{\" is not valid JSON",
+        );
+      },
+    } as unknown as Response);
+
+    await expect(generateClientId("tok")).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "invalid",
+      message: "Failed to generate upload id (invalid response)",
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("saveAppConfig serialization lock (promise-chain mutex)", () => {
@@ -4632,6 +4655,31 @@ describe("shared transport helpers (dedup)", () => {
       expect(getUrl).toBe(
         "https://www.googleapis.com/drive/v3/files/gen-1?fields=id,name,mimeType,size,modifiedTime",
       );
+    });
+
+    it("bound id but ok body whose json() rejects → UploadError invalid `Failed to fetch conflict file (invalid response)`", async () => {
+      // Regression: the conflict-GET used to leak a raw SyntaxError out of
+      // response.json() instead of a classified UploadError(kind invalid) —
+      // same malformed-body contract as the shape-guard right below it.
+      mockedFetch.mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        headers: { get: () => null },
+        json: () => {
+          throw new SyntaxError(
+            "Unexpected token 'n', \"not-json{\" is not valid JSON",
+          );
+        },
+      } as unknown as Response);
+
+      await expect(
+        resolveConflictOrNull("tok", "gen-1", new AbortController().signal),
+      ).rejects.toMatchObject({
+        name: "UploadError",
+        kind: "invalid",
+        message: "Failed to fetch conflict file (invalid response)",
+      });
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

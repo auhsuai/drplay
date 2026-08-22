@@ -124,6 +124,23 @@ export async function parseUploadResponseJson(
   return file;
 }
 
+// A 200 body that is not JSON (proxy truncation, wrong Content-Type, server
+// bug) would otherwise surface as a raw SyntaxError from json(); classify it
+// the same way as every other invalid upload response here (same wrap pattern
+// as readJsonOrInvalidResponse in driveFiles.ts; this module throws
+// UploadError(kind invalid) instead of a plain Error because its callers
+// branch on that type). Never logs the raw body (may be huge/opaque).
+async function readJsonOrInvalidResponse(
+  response: Response,
+  action: string,
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new UploadError(`Failed to ${action} (invalid response)`, "invalid");
+  }
+}
+
 // Generate ONE pre-generated file id (driveFetch retries transient failures
 // internally). The id is bound into the initiate metadata, so a retried
 // session that hits an already-created file gets a 409 instead of a duplicate.
@@ -147,7 +164,10 @@ export async function generateClientId(
       await readDriveErrorBody(response),
     );
   }
-  const data: unknown = await response.json();
+  const data: unknown = await readJsonOrInvalidResponse(
+    response,
+    "generate upload id",
+  );
   const ids =
     typeof data === "object" && data !== null
       ? (data as { ids?: unknown }).ids
@@ -205,7 +225,9 @@ export async function resolveIdempotentConflict(
       await readDriveErrorBody(response),
     );
   }
-  const item = asDriveFileItem(await response.json());
+  const item = asDriveFileItem(
+    await readJsonOrInvalidResponse(response, "fetch conflict file"),
+  );
   if (item === null) {
     throw new UploadError(
       "conflict file fetch returned invalid JSON",
