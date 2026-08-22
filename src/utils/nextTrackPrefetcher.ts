@@ -54,7 +54,13 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
           AbortSignal.timeout(PREFETCH_TIMEOUT_MS),
         ]),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        void captureError({
+          level: "warn",
+          source: "nextTrackPrefetcher",
+          message: `Prefetch failed: HTTP ${String(response.status)}`,
+        });
+      }
 
       try {
         await response.body?.cancel();
@@ -67,11 +73,15 @@ export function prefetchNextTrackAudio(streamUrl: string): void {
       }
     } catch (err) {
       const kind = classifyError(err);
-      void captureError({
-        level: "warn",
-        source: "nextTrackPrefetcher",
-        message: `Prefetch failed (${kind}): ${err instanceof Error ? err.message : String(err)}`,
-      });
+      // Eviction/clearNextTrackPrefetches aborts are expected control flow —
+      // logging them would spam the error ring buffer (mirror usePlayer).
+      if (kind !== "aborted") {
+        void captureError({
+          level: "warn",
+          source: "nextTrackPrefetcher",
+          message: `Prefetch failed (${kind}): ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
     } finally {
       // Identity guard: only remove the entry we own. If this fetch was
       // evicted and a newer fetch for the same URL re-registered itself,

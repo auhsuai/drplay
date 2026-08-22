@@ -124,6 +124,32 @@ describe("nextTrackPrefetcher LRU", () => {
     fetchSpy.mockRestore();
   });
 
+  it("does not log an aborted prefetch (eviction/clear abort)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) return;
+          signal.addEventListener("abort", () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new DOMException("aborted", "AbortError"),
+            );
+          });
+        }),
+    );
+
+    prefetchNextTrackAudio("https://x/aborted");
+    clearNextTrackPrefetches();
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(captureError).not.toHaveBeenCalled();
+
+    fetchSpy.mockRestore();
+  });
+
   it("classifies and logs fetch failures without full url", async () => {
     const err = new TypeError("Failed to fetch");
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(err);
@@ -165,7 +191,7 @@ describe("nextTrackPrefetcher body release (#7)", () => {
     fetchSpy.mockRestore();
   });
 
-  it("#7 does not cancel the body when response is not ok", async () => {
+  it("#7 cancels the body when response is not ok", async () => {
     const cancel = vi.fn().mockResolvedValue(undefined);
     const body = { cancel } as unknown as ReadableStream<Uint8Array>;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -177,7 +203,31 @@ describe("nextTrackPrefetcher body release (#7)", () => {
     prefetchNextTrackAudio("https://x/missing");
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(cancel).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    fetchSpy.mockRestore();
+  });
+
+  it("#7 logs a short warning without url when response is not ok", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const body = { cancel } as unknown as ReadableStream<Uint8Array>;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 403,
+      body,
+    } as unknown as Response);
+
+    prefetchNextTrackAudio("https://x/notok-secret-98765");
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(captureError).toHaveBeenCalled();
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    const callArg = firstCall[0];
+    expect(callArg.level).toBe("warn");
+    expect(callArg.source).toBe("nextTrackPrefetcher");
+    expect(callArg.message).not.toContain("notok-secret-98765");
 
     fetchSpy.mockRestore();
   });
