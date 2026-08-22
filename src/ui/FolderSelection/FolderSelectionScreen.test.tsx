@@ -129,6 +129,13 @@ function deferredCallAt(index: number): DeferredCall {
   return call;
 }
 
+function searchDeferredCallAt(index: number): DeferredCall {
+  const call = searchDeferredCalls[index];
+  if (call === undefined)
+    throw new Error(`expected deferred api search call ${String(index)}`);
+  return call;
+}
+
 function renderScreen() {
   return render(
     <FolderSelectionScreen
@@ -656,5 +663,119 @@ describe("FolderSelectionScreen debug skeleton trigger", () => {
     expect(() => {
       dispatchSkeleton();
     }).not.toThrow();
+  });
+});
+
+describe("FolderSelectionScreen audit fixes", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    searchDeferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    installSearchFoldersMock();
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("warns via captureError when the parent fetch returns null before falling back to root (no silent fallback)", async () => {
+    // Empty history forces handleBack into navigateToParentFolder (the
+    // popFolderHistory path would never reach getFileParents).
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId="folderB"
+        initialFolderHistory={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    fireEvent.click(backButton());
+
+    // The fallback itself must still happen: root refetch fires.
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
+    expect(mocks.captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "FolderSelection",
+        message: expect.stringContaining(
+          "fetch-parents-null",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("re-opening the current folder is a no-op that does not wedge loading (duplicate-id lock)", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([
+        { id: "folderB", name: "Self" },
+        { id: "other", name: "Other" },
+      ]);
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Self")).not.toBeNull();
+
+    // Clicking the folder that IS the current folder must be a no-op:
+    // no skeleton swap, grid stays interactive.
+    fireEvent.click(screen.getByText("Self"));
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+    expect(screen.getByText("Other")).not.toBeNull();
+
+    // The picker must still open other folders afterward (lock released).
+    fireEvent.click(screen.getByText("Other"));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
+  });
+
+  it("a late-settled aborted search does not kill the newer request's spinner (identity-guarded finally)", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "abc" },
+    });
+    await waitFor(() => {
+      expect(searchDeferredCalls).toHaveLength(1);
+    });
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+
+    // New query: cleanup aborts search #1 (its promise has NOT settled —
+    // the mock settles only when told), then the debounced search #2 starts
+    // while #1 is pending-but-aborted.
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "abd" },
+    });
+    await waitFor(() => {
+      expect(searchDeferredCalls).toHaveLength(2);
+    });
+    expect(searchDeferredCallAt(0).signal?.aborted).toBe(true);
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+
+    // Search #1 settles late with AbortError — its finally must NOT turn
+    // off search #2's spinner.
+    await act(async () => {
+      searchDeferredCallAt(0).reject(
+        new DOMException("The operation was aborted", "AbortError"),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
   });
 });

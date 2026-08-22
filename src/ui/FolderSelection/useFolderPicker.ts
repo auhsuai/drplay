@@ -178,7 +178,11 @@ export function useFolderPicker({
           showErrorToast(t("folder_selection.search_error"));
         }
       } finally {
-        setIsSearchingApi(false);
+        // Identity-guard mirrors fetchFolders: a late-settled aborted
+        // search must not turn off the newer request's spinner.
+        if (apiSearchAbortRef.current === controller) {
+          setIsSearchingApi(false);
+        }
       }
     },
     [token, currentFolderId, t],
@@ -244,6 +248,10 @@ export function useFolderPicker({
   }, []);
 
   const handleOpenFolder = (folderId: string, folderName: string) => {
+    // Re-opening the current folder must be a no-op: setting the same id
+    // would bail out without re-running the fetch effect, wedging
+    // isLoadingRef at true and locking every later open.
+    if (folderId === currentFolderId) return;
     if (isLoadingRef.current) return;
     isLoadingRef.current = true;
     setIsLoading(true);
@@ -281,7 +289,13 @@ export function useFolderPicker({
     try {
       const parents = await getFileParents(token, currentFolderId);
       if (parents === null) {
-        // Drive request failed hard — fall back to root.
+        // Drive request failed hard — fall back to root. Warn telemetry
+        // keeps this fallback observable in the error log.
+        void captureError({
+          level: "warn",
+          source: FOLDER_MODULE,
+          message: "fetch-parents-null: falling back to root",
+        });
         setCurrentFolderId(ROOT_FOLDER_ID);
         setCurrentFolderName(t("drive.my_drive"));
       } else if (parents.length > 0) {
