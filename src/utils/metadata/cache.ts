@@ -145,25 +145,24 @@ export async function putCacheEntry(
   await db.metadataCache.put({ key, entry });
 }
 
-export const metadataCache: Record<string, CachedMetadata> = {};
+export const metadataCache = new Map<string, CachedMetadata>();
 const memCacheKeys: string[] = [];
 
-// The Record type claims every key exists, but a fileId with no cached entry
-// is undefined at runtime — this helper surfaces the true shape so guards
-// below are checked (and lint-visible) instead of lying about nullability.
+// Map.get carries the true nullability in its type (CachedMetadata | undefined)
+// so guards below are checked by the compiler instead of by comment.
 export function getMemCacheEntry(fileId: string): CachedMetadata | undefined {
-  return metadataCache[fileId];
+  return metadataCache.get(fileId);
 }
 
 export function setMetadataCache(fileId: string, entry: CachedMetadata) {
   touchLruKeys(memCacheKeys, fileId);
-  metadataCache[fileId] = entry;
+  metadataCache.set(fileId, entry);
   evictLruKeys(
     memCacheKeys,
     () => memCacheKeys.length > MAX_MEM_CACHE,
     (oldest) => {
-      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: the eviction cap must PHYSICALLY remove the key (assigning undefined would leave it enumerable and defeat the memory bound).
-      delete metadataCache[oldest];
+      // Map.delete physically removes the key, preserving the memory bound.
+      metadataCache.delete(oldest);
     },
   );
 }
@@ -260,10 +259,7 @@ let cacheGeneration = 0;
 // resurrected into IDB/localStorage after a clear/wipe has started.
 function clearMemMetadataCaches(): void {
   cacheGeneration++;
-  for (const k of Object.keys(metadataCache)) {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: must fully drop every key so Object.keys(metadataCache) is 0 after clear (test asserts this; assigning undefined would keep the keys).
-    delete metadataCache[k];
-  }
+  metadataCache.clear();
   memCacheKeys.length = 0;
   lruKeys = [];
   fullPictureCache.clear();

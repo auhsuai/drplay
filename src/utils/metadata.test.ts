@@ -590,8 +590,8 @@ afterEach(() => {
 
 test("cacheTrackMetadata does not persist pictureDataFull in RAM", () => {
   cacheTrackMetadata("fid1", makeEntry());
-  expect(metadataCache["fid1"]?.pictureDataFull).toBeNull();
-  expect(metadataCache["fid1"]?.pictureData).toBeDefined();
+  expect(metadataCache.get("fid1")?.pictureDataFull).toBeNull();
+  expect(metadataCache.get("fid1")?.pictureData).toBeDefined();
 });
 
 test("cacheTrackMetadata still returns full entry for immediate callers (cover repair)", () => {
@@ -602,7 +602,7 @@ test("cacheTrackMetadata still returns full entry for immediate callers (cover r
 test("clearAllMetadataCache empties the in-memory cache", () => {
   cacheTrackMetadata("fid3", makeEntry());
   clearAllMetadataCache();
-  expect(Object.keys(metadataCache).length).toBe(0);
+  expect(metadataCache.size).toBe(0);
 });
 
 describe("getTrackMetadata dedup + real fetch", () => {
@@ -1350,7 +1350,7 @@ describe("cover extraction + full picture LRU", () => {
     // JPEG full ≤ FULL_PERSIST_MAX_BYTES → persisted for post-restart sharpness.
     expect(stored?.data.pictureDataFull).toEqual(new Uint8Array([9, 8, 7]));
     // The memory cache never holds full bytes (the LRU is the single owner).
-    expect(memCache["pic-a"]?.pictureDataFull).toBeNull();
+    expect(memCache.get("pic-a")?.pictureDataFull).toBeNull();
   });
 
   it("serves the full picture from the in-memory LRU after parse", async () => {
@@ -1473,7 +1473,7 @@ describe("cover extraction + full picture LRU", () => {
     expect(r.pictureDataFull).toEqual(fullBytes);
     expect(getFullPictureData("pic-idb-seed")).toEqual(fullBytes);
     // The mem entry itself stays full-free (LRU is the single owner).
-    expect(memCache["pic-idb-seed"]?.pictureDataFull).toBeNull();
+    expect(memCache.get("pic-idb-seed")?.pictureDataFull).toBeNull();
   });
 
   it("skips a picture larger than COVER_MAX_BYTES with a warning but keeps the v:8 text entry", async () => {

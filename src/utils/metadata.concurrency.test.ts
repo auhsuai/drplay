@@ -463,7 +463,7 @@ describe("account-boundary persisted wipe (wipePersistedMetadataCache)", () => {
     cacheTrackMetadata("mem-user-a", makeEntry());
     setFullPictureCache("mem-user-a", new Uint8Array([1, 2, 3, 4]));
     expect(memoryStore.size).toBe(2);
-    expect(Object.keys(metadataCache)).toContain("mem-user-a");
+    expect([...metadataCache.keys()]).toContain("mem-user-a");
     expect(getFullPictureData("mem-user-a")).not.toBeNull();
 
     await wipePersistedMetadataCache();
@@ -471,7 +471,7 @@ describe("account-boundary persisted wipe (wipePersistedMetadataCache)", () => {
 
     expect(memoryStore.size).toBe(0);
     expect(localStorage.getItem(METADATA_LRU_KEY)).toBeNull();
-    expect(Object.keys(metadataCache)).toHaveLength(0);
+    expect(metadataCache.size).toBe(0);
     expect(getFullPictureData("mem-user-a")).toBeNull();
   });
 
