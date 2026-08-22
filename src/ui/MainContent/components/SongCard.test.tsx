@@ -998,6 +998,56 @@ describe("SongCard upload progress ring + cancel X (slice 2)", () => {
     expect(ringTextEl(container)).toBeNull();
   });
 
+  it("rerender with a new token re-renders (memo comparator includes token) so the hook refetches with the live token", async () => {
+    const { rerender } = render(<SongCard {...baseProps} item={makeItem()} />);
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+    mockedFetch.mockClear();
+    rerender(<SongCard {...baseProps} token="tok-2" item={makeItem()} />);
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledWith(
+        "track-1",
+        "tok-2",
+        1000,
+        "my song.mp3",
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("rerender with a new item.modifiedTime updates the mobile date row (memo comparator includes modifiedTime)", () => {
+    platformMock.IS_MOBILE = true;
+    try {
+      const { rerender } = render(
+        <SongCard
+          {...baseProps}
+          item={makeItem({ modifiedTime: "2026-08-15T10:00:00.000Z" })}
+        />,
+      );
+      expect(screen.getByText("2026-08-15")).not.toBeNull();
+      rerender(
+        <SongCard
+          {...baseProps}
+          item={makeItem({ modifiedTime: "2026-08-20T10:00:00.000Z" })}
+        />,
+      );
+      expect(screen.queryByText("2026-08-15")).toBeNull();
+      expect(screen.getByText("2026-08-20")).not.toBeNull();
+    } finally {
+      platformMock.IS_MOBILE = false;
+    }
+  });
+
+  it("rerender with hideMenu=true removes the menu trigger (memo comparator includes hideMenu)", () => {
+    const { rerender, container } = render(
+      <SongCard {...baseProps} item={makeItem()} />,
+    );
+    expect(menuButton(container)).not.toBeNull();
+    rerender(<SongCard {...baseProps} item={makeItem()} hideMenu={true} />);
+    expect(menuButton(container)).toBeNull();
+  });
+
   it("clamps out-of-range progress into 0..1 (progress can overshoot from truncation)", () => {
     const { container } = render(
       <SongCard

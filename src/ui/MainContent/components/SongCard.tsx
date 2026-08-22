@@ -349,7 +349,15 @@ export const SongCard = React.memo(
       prev.isHighlighted === next.isHighlighted &&
       prev.highlightTrigger === next.highlightTrigger &&
       prev.uploadState === next.uploadState &&
-      prev.uploadProgress === next.uploadProgress
+      prev.uploadProgress === next.uploadProgress &&
+      // Token rotation must re-render: the metadata hook refetches with the
+      // live token and MoreMenu issues API calls with it.
+      prev.token === next.token &&
+      // Mobile renders modifiedTime directly from the drive listing.
+      prev.item.modifiedTime === next.item.modifiedTime &&
+      // Future-proofing: hideMenu toggles the whole menu slot (no consumer
+      // passes it yet).
+      prev.hideMenu === next.hideMenu
     );
   },
 );
