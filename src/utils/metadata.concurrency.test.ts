@@ -172,6 +172,29 @@ function makeEntry(): CachedMetadata {
   };
 }
 
+function makeRealEntry(
+  overrides: Partial<CachedMetadata> = {},
+): CachedMetadata {
+  return {
+    title: "Real Title",
+    artist: "Real Artist",
+    album: "Real Album",
+    duration: 60,
+    durationEstimated: false,
+    pictureData: null,
+    pictureDataFull: null,
+    v: 8,
+    ...overrides,
+  };
+}
+
+function storedData(key: string): CachedMetadata | undefined {
+  const row = memoryStore.get(key);
+  if (!row) return undefined;
+  if (typeof row.entry !== "object" || row.entry === null) return undefined;
+  return (row.entry as { data: CachedMetadata }).data;
+}
+
 const flushPromises = () =>
   new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -290,5 +313,65 @@ describe("lruKeys + cache invalidation hardening", () => {
     const parsed = JSON.parse(stored || "") as unknown[];
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed).toContain("metadata_corrupt-1");
+  });
+});
+
+describe("setCache score polarity guard (real vs placeholder)", () => {
+  beforeEach(() => {
+    localStorage.removeItem(METADATA_LRU_KEY);
+    clearAllMetadataCache();
+    memoryStore.clear();
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("(a) a real parse overwrites an existing v9 placeholder row", async () => {
+    // Legacy/future caller left a v9 placeholder in IDB: a subsequent real
+    // parse (v8) must win — raw-v comparison (9 > 8) would skip forever.
+    memoryStore.set("metadata_polarity-a", {
+      key: "metadata_polarity-a",
+      entry: { version: 2, data: makeEntry(), ts: Date.now() },
+    });
+
+    cacheTrackMetadata(
+      "polarity-a",
+      makeRealEntry({ title: "Real A", duration: 42 }),
+    );
+    await flushPromises();
+
+    const data = storedData("metadata_polarity-a");
+    expect(data?.title).toBe("Real A");
+    expect(data?.duration).toBe(42);
+    expect(data?.v).toBe(8);
+  });
+
+  it("(b) a placeholder never overwrites an existing real row", async () => {
+    // Real parsed entry (v8) already persisted: an incoming placeholder (v9)
+    // must be skipped — raw-v comparison lets it clobber the real row.
+    memoryStore.set("metadata_polarity-b", {
+      key: "metadata_polarity-b",
+      entry: {
+        version: 2,
+        data: makeRealEntry({ title: "Real B" }),
+        ts: Date.now(),
+      },
+    });
+
+    cacheTrackMetadata("polarity-b", makeEntry());
+    await flushPromises();
+
+    const data = storedData("metadata_polarity-b");
+    expect(data?.title).toBe("Real B");
+    expect(data?.v).toBe(8);
+  });
+
+  it("(c) fresh-window gap-fill keeps the first of two same-rank writes", async () => {
+    // Guard for the existing contract: two writes of equal rank inside
+    // FRESH_WRITE_WINDOW_MS keep the first one (gap-fill protection).
+    cacheTrackMetadata("polarity-c", { ...makeEntry(), title: "First" });
+    await flushPromises();
+    cacheTrackMetadata("polarity-c", { ...makeEntry(), title: "Second" });
+    await flushPromises();
+
+    expect(storedData("metadata_polarity-c")?.title).toBe("First");
   });
 });

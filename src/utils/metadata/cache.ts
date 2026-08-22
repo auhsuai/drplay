@@ -12,6 +12,7 @@ import {
   METADATA_KEY_PREFIX,
   METADATA_LRU_KEY,
   META_MODULE,
+  V_PLACEHOLDER,
 } from "./constants";
 import { clearNetworkCooldown } from "./fetchPipeline";
 import type { CacheEntry, CachedMetadata } from "./types";
@@ -270,6 +271,19 @@ export function clearAllMetadataCache(): void {
   clearNetworkCooldown();
 }
 
+// Rank used by setCache to order writes. Raw data.v must NOT be compared
+// directly: placeholders (v >= V_PLACEHOLDER) sort numerically above real
+// parses (v = REAL_METADATA_VERSION), so a placeholder could clobber a real
+// row and a stored v9 row could block real parses forever. Real always wins
+// over placeholder; among same-rank entries the fresh-write window decides.
+const PLACEHOLDER_RANK = -1;
+
+function scoreOf(entry: CachedMetadata): number {
+  // Parity with searchEngine.isRealCacheEntry: any v < V_PLACEHOLDER is a
+  // real parse, everything else is a placeholder.
+  return entry.v < V_PLACEHOLDER ? entry.v : PLACEHOLDER_RANK;
+}
+
 export async function setCache(
   key: string,
   newEntry: CachedMetadata,
@@ -278,8 +292,8 @@ export async function setCache(
   const existing = await getCacheEntry(key);
   if (genAtStart !== cacheGeneration) return;
 
-  const newScore = newEntry.v;
-  const oldScore = existing?.data.v ?? 0;
+  const newScore = scoreOf(newEntry);
+  const oldScore = existing ? scoreOf(existing.data) : PLACEHOLDER_RANK;
 
   if (existing && oldScore > newScore) return;
   if (
