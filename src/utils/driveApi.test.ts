@@ -9,6 +9,8 @@ import {
   restoreFile,
   getAppConfig,
   getDriveStorageQuota,
+  getFileParents,
+  getFileName,
   getRecentlyAddedAudioFiles,
   saveAppConfig,
   shouldRetryDriveResponse,
@@ -848,6 +850,99 @@ describe("single-item response narrowing", () => {
   it("restoreFile throws on a malformed body", async () => {
     mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, {}));
     await expect(restoreFile("tok", "f1")).rejects.toThrow(/invalid response/);
+  });
+});
+
+// Same upgrade as drivePagination: a 200 response whose body is not valid JSON
+// (proxy truncation, wrong Content-Type, server bug) must reject with a
+// classified error instead of a raw SyntaxError leaking out of response.json()
+// — for the single-item actions AND the null-contract getters (which still
+// return null on non-ok; only an unreadable ok-body becomes a thrown error).
+describe("driveFiles malformed JSON body", () => {
+  function makeNonJsonResponse(): Response {
+    return {
+      status: 200,
+      ok: true,
+      headers: { get: () => null },
+      json: () => {
+        throw new SyntaxError(
+          "Unexpected token 'n', \"not-json{\" is not valid JSON",
+        );
+      },
+    } as unknown as Response;
+  }
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("createFolder throws `Failed to create folder (invalid response)` when json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
+
+    await expect(createFolder("tok", "Album", "root")).rejects.toThrow(
+      "Failed to create folder (invalid response)",
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("deleteFile throws `Failed to delete file (invalid response)` when json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
+
+    await expect(deleteFile("tok", "f1")).rejects.toThrow(
+      "Failed to delete file (invalid response)",
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("moveFile throws `Failed to move file (invalid response)` when the parents GET json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
+
+    await expect(moveFile("tok", "f1", "root", "target")).rejects.toThrow(
+      "Failed to move file (invalid response)",
+    );
+    // The GET failed to parse — the PATCH move request must not be fired.
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("moveFile throws `Failed to move file (invalid response)` when the move PATCH json() rejects", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(200, { parents: ["root"] }))
+      .mockResolvedValueOnce(makeNonJsonResponse());
+
+    await expect(moveFile("tok", "f1", "root", "target")).rejects.toThrow(
+      "Failed to move file (invalid response)",
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("restoreFile throws `Failed to restore file (invalid response)` when json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
+
+    await expect(restoreFile("tok", "f1")).rejects.toThrow(
+      "Failed to restore file (invalid response)",
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("getFileParents throws `Failed to get file parents (invalid response)` when json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
+
+    await expect(getFileParents("tok", "f1")).rejects.toThrow(
+      "Failed to get file parents (invalid response)",
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("getFileName throws `Failed to get file name (invalid response)` when json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
+
+    await expect(getFileName("tok", "f1")).rejects.toThrow(
+      "Failed to get file name (invalid response)",
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 });
 

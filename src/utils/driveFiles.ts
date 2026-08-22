@@ -31,6 +31,21 @@ function assertDriveOk(response: Response, action: string): void {
   }
 }
 
+// A 200 body that is not JSON (proxy truncation, wrong Content-Type, server
+// bug) would otherwise surface as a raw SyntaxError from json(); classify it
+// so callers can show a meaningful message (same pattern as fetchAllPages in
+// drivePagination.ts). Never logs the raw body (may be huge/opaque).
+async function readJsonOrInvalidResponse(
+  response: Response,
+  action: string,
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`Failed to ${action} (invalid response)`);
+  }
+}
+
 // Drive API JSON responses are untyped at the wire level — narrow a parsed
 // body's `parents` field to a string[]. Anything malformed → [] (same runtime
 // fallback as the previous any-typed reads).
@@ -108,7 +123,10 @@ export async function createFolder(
   });
 
   assertDriveOk(response, "create folder");
-  const data: unknown = await response.json();
+  const data: unknown = await readJsonOrInvalidResponse(
+    response,
+    "create folder",
+  );
   const item = parseDriveFileItem(data);
   if (item === null)
     throw new Error("Failed to create folder (invalid response)");
@@ -143,7 +161,10 @@ export async function deleteFile(
   });
 
   assertDriveOk(response, "delete file");
-  const data: unknown = await response.json();
+  const data: unknown = await readJsonOrInvalidResponse(
+    response,
+    "delete file",
+  );
   const item = parseDriveFileItem(data);
   if (item === null)
     throw new Error("Failed to delete file (invalid response)");
@@ -179,7 +200,10 @@ export async function moveFile(
 
   let removeParents = currentParentId;
   if (getResponse.ok) {
-    const data: unknown = await getResponse.json();
+    const data: unknown = await readJsonOrInvalidResponse(
+      getResponse,
+      "move file",
+    );
     const parents = parseParentsList(data);
     if (parents.length > 0) {
       removeParents = parents.join(",");
@@ -211,7 +235,7 @@ export async function moveFile(
     });
     throw new Error(`Failed to move file (${String(response.status)})`);
   }
-  const data: unknown = await response.json();
+  const data: unknown = await readJsonOrInvalidResponse(response, "move file");
   const item = parseDriveFileItem(data);
   if (item === null) throw new Error("Failed to move file (invalid response)");
   return item;
@@ -242,7 +266,10 @@ export async function restoreFile(
   });
 
   assertDriveOk(response, "restore file");
-  const data: unknown = await response.json();
+  const data: unknown = await readJsonOrInvalidResponse(
+    response,
+    "restore file",
+  );
   const item = parseDriveFileItem(data);
   if (item === null)
     throw new Error("Failed to restore file (invalid response)");
@@ -360,7 +387,10 @@ export async function getFileParents(
   if (!response.ok) {
     return null;
   }
-  const data: unknown = await response.json();
+  const data: unknown = await readJsonOrInvalidResponse(
+    response,
+    "get file parents",
+  );
   return parseParentsList(data);
 }
 
@@ -385,6 +415,9 @@ export async function getFileName(
   if (!response.ok) {
     return null;
   }
-  const data: unknown = await response.json();
+  const data: unknown = await readJsonOrInvalidResponse(
+    response,
+    "get file name",
+  );
   return parseName(data);
 }
