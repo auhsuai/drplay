@@ -151,6 +151,25 @@ export async function resumeInterruptedUploads(
       if (entry === null) interruptedCount += 1;
       else resumed.push(entry);
     }
+    // Ghost sweep (P1-B1b): a pending db.files row from a dead process whose
+    // uploadSessions row no longer exists renders forever as a dimmed card.
+    // Runs AFTER the loop above consumed this user's session rows (their ids
+    // are already gone from uploadSessions, so their stale same-id rows count
+    // as ghosts) and BEFORE enqueuePendingRows publishes fresh rows for the
+    // resumed entries below, so those new ids survive the sweep. The keep-set
+    // spans ALL users' remaining sessions — a pending row backed by another
+    // user's still-active session must be kept untouched.
+    await dbRowOp(async () => {
+      const liveSessionIds = new Set(
+        (await db.uploadSessions.toArray()).map((row) => row.id),
+      );
+      const ghostRows = (
+        await db.files.where("id").startsWith(PENDING_ID_PREFIX).toArray()
+      ).filter((row) => !liveSessionIds.has(row.id));
+      if (ghostRows.length > 0) {
+        await db.files.bulkDelete(ghostRows.map((row) => row.id));
+      }
+    }, "ghost-pending-sweep");
   } finally {
     resumeRunning = false;
   }

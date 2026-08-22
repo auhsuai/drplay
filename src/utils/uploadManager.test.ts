@@ -2853,6 +2853,60 @@ describe("uploadManager", () => {
       await waitIdle();
     });
 
+    it("(sweep) ghost pending rows swept at resume: orphan deleted, live-session row replaced by the fresh resumed card", async () => {
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      await insertSessionRow({
+        id: "pending-live-1",
+        name: "a.mp3",
+        kind: "diskFile",
+        diskPath: "C:/a.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+      });
+      // Two pending db.files rows: the live session's card (id === session id)
+      // and an ORPHAN with no uploadSessions row anywhere — the app died
+      // between the enqueue-time bulkPut and persistActiveSession. The orphan
+      // is a permanent dimmed card unless the resume sweep removes it.
+      await db.files.bulkPut([
+        {
+          id: "pending-live-1",
+          name: "a.mp3",
+          mimeType: AUDIO_MIME,
+          parentId: "root",
+          trashed: false,
+          isFolder: false,
+          modifiedTime: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "pending-orphan-1",
+          name: "ghost.mp3",
+          mimeType: AUDIO_MIME,
+          parentId: "root",
+          trashed: false,
+          isFolder: false,
+          modifiedTime: "2026-01-01T00:00:00Z",
+        },
+      ]);
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      const ids = (await db.files.toArray()).map((r) => r.id);
+      expect(ids).not.toContain("pending-orphan-1");
+      // The live entry keeps its dimmed card: its old-id row is stale once the
+      // session was consumed (the resumed entry carries a FRESH id), so the
+      // sweep may drop it as long as the replacement card is present.
+      const rows = await db.files.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.name).toBe("a.mp3");
+      expect(rows[0]?.id).toMatch(/^pending-/);
+
+      d.resolve(makeDriveFile("f1", "a.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
     it("(f) stat null on resume (file deleted/moved/renamed) → entry failed + toast upload.resume_not_found + old row deleted", async () => {
       statDiskPath.mockResolvedValue(null);
       const snapshots = captureSnapshots();
