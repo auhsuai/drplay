@@ -579,7 +579,19 @@ export const fetchWithAuth = async (
 
   // Nếu gặp lỗi 401 Unauthorized
   if (response.status === 401) {
-    const newToken = await getValidToken(true);
+    let newToken: string | null;
+    try {
+      newToken = await getValidToken(true);
+    } catch (err: unknown) {
+      // This call was a FOLLOWER of an in-flight refresh whose shared
+      // promise rejected: getValidToken's lead caller already ran the error
+      // side-effects exactly once (auth-logout for invalid_grant / retry
+      // scheduling otherwise), so mirror its null-return outcome and return
+      // the original 401 response per the JSDoc above. Any non-
+      // TokenRefreshError failure keeps the reject contract.
+      if (!(err instanceof TokenRefreshError)) throw err;
+      return response;
+    }
     if (newToken) {
       const retryHeaders = new Headers(options.headers);
       retryHeaders.set("Authorization", `Bearer ${newToken}`);

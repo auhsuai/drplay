@@ -177,6 +177,61 @@ describe("fetchWithAuth", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1); // no retry attempted
   });
 
+  it("a follower whose shared refresh fails receives the original 401 response, not TokenRefreshError", async () => {
+    storage.setItem(ACCESS_TOKEN_KEY, "old");
+    let rejectRefresh!: (err: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    });
+    const refreshCallCount = () =>
+      invokeMock.mock.calls.filter((call) => call[0] === "refresh_google_token")
+        .length;
+
+    // Another caller puts a refresh in flight and keeps it pending, so
+    // fetchWithAuth's force-refresh below joins it as a FOLLOWER instead of
+    // starting its own flight.
+    void getValidToken(true);
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 401 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const fwPromise = fetchWithAuth("/api/songs");
+    // One macrotask flush guarantees the follower has attached to the shared
+    // promise before the failure fires (attachment only needs microtasks).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    rejectRefresh(new Error("invalid_grant: revoked"));
+
+    // JSDoc contract: when the refresh cannot produce a token the ORIGINAL
+    // 401 response is returned — for followers too. Before the fix the
+    // follower's shared-promise rejection escaped as TokenRefreshError.
+    const res = await fwPromise;
+
+    expect(res.status).toBe(401);
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // no retry without a new token
+    expect(refreshCallCount()).toBe(1); // no second refresh started
+    // Side-effects fire exactly once (by the lead inside getValidToken),
+    // never duplicated per follower.
+    const dispatchMock = (
+      globalThis as unknown as {
+        window: { dispatchEvent: ReturnType<typeof vi.fn> };
+      }
+    ).window.dispatchEvent;
+    const authLogoutCalls = dispatchMock.mock.calls.filter(
+      ([e]) => (e as Event).type === "auth-logout",
+    );
+    expect(authLogoutCalls).toHaveLength(1);
+  });
+
   it("applies AbortSignal.timeout to the request", async () => {
     storage.setItem(ACCESS_TOKEN_KEY, "tok");
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
