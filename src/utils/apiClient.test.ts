@@ -6,6 +6,7 @@ import {
   readRefreshToken,
   writeRefreshToken,
   deleteRefreshToken,
+  revokeGoogleToken,
   TokenRefreshError,
   scheduleProactiveRefresh,
 } from "./apiClient";
@@ -638,6 +639,36 @@ describe("refresh token secure storage (no localStorage fallback)", () => {
     mockInvoke({ get_refresh_token: null });
     await expect(readRefreshToken()).resolves.toBeNull();
   });
+
+  it("reports a localStorage clear failure (not a keyring-write failure) when removeItem throws after a successful keyring write", async () => {
+    mockInvoke({ set_refresh_token: undefined });
+    vi.spyOn(storage, "removeItem").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+
+    await writeRefreshToken("rt-clear-secret");
+
+    // The KEYRING write succeeded, so exactly one warning must be logged and
+    // it must name the localStorage clear — never misclassify it as a
+    // keyring-write failure (which would imply the vault lost the token).
+    expect(captureErrorMock).toHaveBeenCalledTimes(1);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining(
+          "refresh-token-localstorage-clear-failed",
+        ) as unknown as string,
+      }),
+    );
+    const logged = JSON.stringify(captureErrorMock.mock.calls);
+    expect(logged).not.toContain("keyring-write-failed");
+    expect(logged).not.toContain("rt-clear-secret");
+    // Keyring flow semantics preserved: the vault holds the credential, so
+    // no in-memory fallback may be created by a storage-clear hiccup.
+    mockInvoke({ get_refresh_token: null });
+    await expect(readRefreshToken()).resolves.toBeNull();
+  });
 });
 
 // Spec-guards for the single-flight refresh upgrade: every one of these
@@ -984,5 +1015,34 @@ describe("getValidToken tolerates localStorage failures", () => {
     if (firstCall === undefined) throw new Error("expected fetch call");
     const h = new Headers((firstCall[1] as RequestInit).headers);
     expect(h.get("Authorization")).toBeNull();
+  });
+});
+
+// Observability upgrade: a non-OK HTTP status from the Google revoke endpoint
+// used to be dropped silently. Logout still proceeds (revoke is best-effort),
+// but the failure must be logged with the status code only — never the token
+// or the response body.
+describe("revokeGoogleToken observability", () => {
+  it("warns with the HTTP status (never the token) when the revoke endpoint responds non-OK", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 400 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(revokeGoogleToken("revk-secret")).resolves.toBeUndefined();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(captureErrorMock).toHaveBeenCalledTimes(1);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining("400") as unknown as string,
+      }),
+    );
+    // The token must never appear in the log payload.
+    expect(JSON.stringify(captureErrorMock.mock.calls)).not.toContain(
+      "revk-secret",
+    );
   });
 });

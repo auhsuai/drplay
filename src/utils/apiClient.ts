@@ -182,12 +182,22 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
 export async function revokeGoogleToken(token: string): Promise<void> {
   if (!token) return;
   try {
-    await fetch("https://oauth2.googleapis.com/revoke", {
+    const res = await fetch("https://oauth2.googleapis.com/revoke", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: `token=${encodeURIComponent(token)}`,
       signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
     });
+    if (!res.ok) {
+      // Best-effort revoke: a rejected status is logged with the HTTP status
+      // code only — never the token or the response body — and logout
+      // proceeds regardless.
+      await captureError({
+        level: "warn",
+        source: "apiClient",
+        message: `refresh-token-revoke-failed: HTTP ${String(res.status)}`,
+      });
+    }
   } catch (err: unknown) {
     await captureError({
       level: "warn",
@@ -331,8 +341,19 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
     );
     // Success: the keyring is now the single source of truth — drop any
     // legacy localStorage copy and stale in-memory fallback so the credential
-    // never exists in two places.
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    // never exists in two places. The clear is wrapped separately: a
+    // localStorage failure here must NOT escape into the keyring-failure
+    // catch below (the vault write already succeeded) nor skip the
+    // in-memory cleanup.
+    try {
+      localStorage.removeItem(REFRESH_TOKEN_KEY);
+    } catch (storageErr: unknown) {
+      await captureError({
+        level: "warn",
+        source: "apiClient",
+        message: `refresh-token-localstorage-clear-failed: ${storageErr instanceof Error ? storageErr.message : String(storageErr)}`,
+      });
+    }
     inMemoryRefreshToken = null;
   } catch (err: unknown) {
     await captureError({
