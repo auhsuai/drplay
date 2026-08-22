@@ -210,7 +210,6 @@ export const useDriveInit = ({
           if (hasRestoredNavRef.current) {
             return;
           }
-          hasRestoredNavRef.current = true;
 
           const fallbackToRoot = () => {
             setCurrentFolderId(localRoot);
@@ -295,6 +294,14 @@ export const useDriveInit = ({
             });
             fallbackToRoot();
           }
+
+          // Consume the once-per-session flag ONLY after the restore block
+          // finished without cancellation. A run cancelled mid-restore
+          // (StrictMode remount / auth flip on cold start) must not burn the
+          // flag, otherwise the next run skips the restore entirely and the
+          // persisted nav state is lost for the whole session.
+          if (isCancelled()) return;
+          hasRestoredNavRef.current = true;
         } else {
           setAppRootFolder(null);
         }

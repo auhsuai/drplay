@@ -192,4 +192,61 @@ describe("useDriveInit nav-restore-once guard (bug: token refresh reverts folder
     expect(hydratedRef.current).toBe(true);
     expect(useDriveStore.getState().currentFolderId).toBe("folder-B");
   });
+
+  it("restores the persisted folder in a re-run after the first run was cancelled mid-restore (cold-start auth-flip race)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-A" });
+    await db.syncState.put({
+      key: DB_NAV_STATE_KEY,
+      value: { id: "folder-C", name: "Folder C", history: [] },
+    });
+    const hydratedRef: RefObject<boolean> = { current: false };
+
+    // Gate the nav-state read so run #1 can be cancelled while parked INSIDE
+    // the restore block (between the once-guard and the restore completing).
+    let releaseNavRead!: () => void;
+    const navReadGate = new Promise<void>((resolve) => {
+      releaseNavRead = resolve;
+    });
+    // Dexie's Table.get returns PromiseExtended (adds a required timeout()
+    // method), so the plain gated promise needs this one-way cast.
+    const getSpy = vi.spyOn(db.syncState, "get").mockImplementation(
+      () =>
+        navReadGate.then(() => ({
+          key: DB_NAV_STATE_KEY,
+          value: { id: "folder-C", name: "Folder C", history: [] },
+        })) as ReturnType<typeof db.syncState.get>,
+    );
+
+    const { rerender } = renderHook(
+      ({ isLoggedIn }: { isLoggedIn: boolean }) => {
+        useDriveInit({
+          accessToken: isLoggedIn ? "tok1" : null,
+          isLoggedIn,
+          hydratedRef,
+        });
+      },
+      { initialProps: { isLoggedIn: false } },
+    );
+
+    // Run #1 (logged-out): root exists in localStorage, restore has started
+    // and is suspended on the gated nav read.
+    await waitFor(() => {
+      expect(getSpy).toHaveBeenCalled();
+    });
+
+    // Cold-start auth flip: deps change → cleanup cancels run #1 BEFORE it
+    // restored anything; run #2 starts from scratch.
+    act(() => {
+      rerender({ isLoggedIn: true });
+    });
+    releaseNavRead();
+
+    // Cancelled run #1 must NOT consume the once-per-session restore flag:
+    // run #2 must perform the full restore itself.
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("folder-C");
+    });
+    expect(useDriveStore.getState().currentFolderName).toBe("Folder C");
+  });
 });
