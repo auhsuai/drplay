@@ -116,8 +116,19 @@ export async function queryResumableStatus(
       )
     ) {
       if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-        await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
-        continue;
+        // Mirror driveFetch's caller-abort guard (driveHttp.ts) and this
+        // function's own catch path above: never sleep into a cancelled
+        // caller's backoff — a long Retry-After can park the status query for
+        // up to MAX_DELAY_MS just to fire one doomed attempt afterwards (the
+        // merged signal would reject it instantly). Exit now through the same
+        // aborted-upload error the catch path throws.
+        if (!(callerSignal?.aborted ?? false)) {
+          await sleep(
+            backoffDelay(attempt, response.headers.get("Retry-After")),
+          );
+          continue;
+        }
+        throw abortedUploadError();
       }
       // Exhausted — transient, NOT fatal (no UploadError): the caller must
       // still be able to upload, so it falls back to a fresh session from 0.

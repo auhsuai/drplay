@@ -654,6 +654,53 @@ describe("driveFetch caller abort (Bug 1b)", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
+  // Mirror of driveRangeTokenizer's "caller abort during 429 backoff exits
+  // immediately" regression: a retryable-status response (429/5xx + Retry-After)
+  // that resolves AFTER the caller cancelled must not park the loop in the
+  // full backoff sleep (up to MAX_DELAY_MS = 32s) just to fire one doomed
+  // attempt afterwards.
+  it("caller abort when a retryable-status response resolves exits immediately instead of sleeping", async () => {
+    const controller = new AbortController();
+    const retryAfterResponse = {
+      status: 500,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "32" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch.mockImplementationOnce(() => {
+      // Caller cancels exactly when the failed response arrives — the signal
+      // is already aborted the moment the backoff sleep would start.
+      controller.abort();
+      return Promise.resolve(retryAfterResponse);
+    });
+
+    let settled = false;
+    const guarded = driveFetch("https://www.googleapis.com/drive/v3/files", {
+      signal: controller.signal,
+    }).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened
+    // with NO second fetch attempt queued behind the sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    expect(err).toBeInstanceOf(DOMException);
+    expect(err).toMatchObject({ name: "AbortError" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1); // no doomed second attempt
+  });
+
   // Variation guard: only a USER abort stops the retry chain. An AbortError
   // fired by our own merged timeout (caller signal still NOT aborted) must
   // keep retrying as a transient failure — otherwise the 1b fix would also
@@ -4152,6 +4199,76 @@ describe("queryResumableStatus per-attempt timeout signals", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+// Mirror of driveFetch's caller-abort guard regression ("caller abort when a
+// retryable-status response resolves exits immediately instead of sleeping"):
+// a 429/5xx response with Retry-After resolving AFTER the caller cancelled
+// must not park the status query in the full backoff sleep (up to MAX_DELAY_MS
+// = 32s) just to fire one doomed attempt afterwards.
+describe("queryResumableStatus caller abort during retry backoff", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  const UPLOAD_URI =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=query-abort-1";
+
+  it("caller abort when a retryable-status response resolves exits immediately instead of sleeping", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const retryAfterResponse = {
+      status: 500,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "32" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch.mockImplementationOnce(() => {
+      // Caller cancels exactly when the failed response arrives — the signal
+      // is already aborted the moment the backoff sleep would start.
+      controller.abort();
+      return Promise.resolve(retryAfterResponse);
+    });
+
+    let settled = false;
+    const guarded = queryResumableStatus(
+      UPLOAD_URI,
+      "tok",
+      1000,
+      controller.signal,
+    ).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened
+    // with NO second fetch attempt queued behind the sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    // Same aborted-upload error path as this module's fetch-rejection catch:
+    // UploadError kind 'aborted' (never a fresh type).
+    expect(err).toBeInstanceOf(UploadError);
+    expect(err).toMatchObject({
+      kind: "aborted",
+      message: "upload aborted by caller",
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1); // no doomed second attempt
   });
 });
 

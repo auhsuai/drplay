@@ -123,8 +123,17 @@ export async function driveFetch(
           isDriveFetchRetryableStatus,
         ))
       ) {
-        await sleep(backoffDelay(attempt, res.headers.get("Retry-After")));
-        continue;
+        // Mirror driveRangeTokenizer's caller-abort guard (and this catch
+        // path below): never sleep into a cancelled caller's backoff — a
+        // long Retry-After can park this loop for up to MAX_DELAY_MS just
+        // to fire one doomed attempt afterwards. The AbortError thrown here
+        // lands in the catch block, which rethrows it because
+        // options.signal.aborted is true (same exit as a mid-fetch abort).
+        if (!(options.signal?.aborted ?? false)) {
+          await sleep(backoffDelay(attempt, res.headers.get("Retry-After")));
+          continue;
+        }
+        throw new DOMException("aborted", "AbortError");
       }
       return res;
     } catch (err) {
