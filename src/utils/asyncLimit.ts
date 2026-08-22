@@ -68,7 +68,6 @@ export function createSemaphore(maxConcurrent: number): Semaphore {
   };
 }
 
-/** Resolves after `ms` milliseconds (setTimeout-based). */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// sleep's single source of truth is ./retryDelay; re-exported so existing
+// consumers of this module keep their import path unchanged.
+export { sleep } from "./retryDelay";
