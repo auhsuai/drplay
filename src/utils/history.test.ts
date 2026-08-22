@@ -501,12 +501,12 @@ describe("history (Dexie-backed)", () => {
     expect(top[0]?.id).toBe("f_new");
   });
 
-  it("recordPlay runs inside a single rw transaction over recentTracks+playCounts", async () => {
+  it("recordPlay runs inside a single rw transaction over recentTracks+playCounts+errorLogs", async () => {
     const txSpy = vi.spyOn(db, "transaction");
     await recordPlay(TRACK);
     expect(txSpy).toHaveBeenCalledWith(
       "rw",
-      [db.recentTracks, db.playCounts],
+      [db.recentTracks, db.playCounts, db.errorLogs],
       expect.any(Function),
     );
   });
@@ -541,6 +541,57 @@ describe("history (Dexie-backed)", () => {
     const call = firstCall[0] as { message: string };
     expect(call.message).toContain("recordPlay-failed");
     expect(call.message).toContain("Error: boom");
+  });
+
+  function tableWhereFailsOnce<T extends object>(table: T): T {
+    return new Proxy(table, {
+      get(target, prop) {
+        if (prop === "where") {
+          return () => {
+            throw new Error("simulated-prune-query-failure");
+          };
+        }
+        const value = Reflect.get(target, prop);
+        return typeof value === "function"
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+  }
+
+  it("P0 prune-fail regression: recordPlay survives a failing recentTracks prune query and persists the error to errorLogs", async () => {
+    await db.errorLogs.clear();
+    const real = db.recentTracks;
+    db.recentTracks = tableWhereFailsOnce(real);
+    try {
+      await recordPlay(TRACK);
+    } finally {
+      db.recentTracks = real;
+    }
+
+    expect(await db.recentTracks.get(["default", TRACK.id])).toBeDefined();
+    expect((await db.playCounts.get(["default", TRACK.id]))?.count).toBe(1);
+    const logs = await db.errorLogs.toArray();
+    expect(
+      logs.some((l) => l.message.includes("recentTracks-prune-failed")),
+    ).toBe(true);
+  });
+
+  it("P0 prune-fail regression: recordFolderVisit survives a failing folderVisits prune query and persists the error to errorLogs", async () => {
+    await db.errorLogs.clear();
+    const real = db.folderVisits;
+    db.folderVisits = tableWhereFailsOnce(real);
+    try {
+      await recordFolderVisit("f1", "Folder One");
+    } finally {
+      db.folderVisits = real;
+    }
+
+    expect(await db.folderVisits.get(["default", "f1"])).toBeDefined();
+    const logs = await db.errorLogs.toArray();
+    expect(
+      logs.some((l) => l.message.includes("folderVisits-prune-failed")),
+    ).toBe(true);
   });
 });
 
