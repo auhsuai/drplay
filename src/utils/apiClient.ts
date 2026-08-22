@@ -6,6 +6,8 @@ import {
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
   TOKEN_TIME_KEY,
+  safeLocalStorageGet,
+  safeLocalStorageSet,
 } from "./storageKeys";
 import { backoffDelay } from "./retryDelay";
 
@@ -196,7 +198,13 @@ export async function revokeGoogleToken(token: string): Promise<void> {
 }
 
 function getStoredTokenTime(): number {
-  const raw = localStorage.getItem(TOKEN_TIME_KEY);
+  // Storage-failure safe: a read failure degrades to null → parsed as invalid
+  // → forces a refresh (the correct degraded behavior), never throws.
+  const raw = safeLocalStorageGet(
+    TOKEN_TIME_KEY,
+    "token-time-read",
+    "apiClient",
+  );
   const parsed = parseInt(raw || "", 10);
 
   if (
@@ -406,7 +414,13 @@ export const getValidToken = async (
 ): Promise<string | null> => {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  // Storage-failure safe: an unreadable token (privacy mode / quota) degrades
+  // to null → the refresh path runs, instead of rejecting with a raw error.
+  const token = safeLocalStorageGet(
+    ACCESS_TOKEN_KEY,
+    "access-token-read",
+    "apiClient",
+  );
   const issueTime = getStoredTokenTime();
   const isExpired = Date.now() - issueTime > TOKEN_EXPIRY_MS;
 
@@ -471,8 +485,24 @@ export const getValidToken = async (
         return "";
       }
 
-      localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-      localStorage.setItem(TOKEN_TIME_KEY, Date.now().toString());
+      // Persistence is best-effort: a storage failure here (quota / privacy
+      // mode) is logged and ignored. It must NEVER reject this IIFE — a raw
+      // rejection is not a TokenRefreshError, so the lead caller's catch
+      // would dispatch 'auth-logout' and sign the user out over a transient
+      // environment problem. The access token stays valid in memory and the
+      // token-updated broadcast below still fires.
+      safeLocalStorageSet(
+        ACCESS_TOKEN_KEY,
+        accessToken,
+        "access-token-persist",
+        "apiClient",
+      );
+      safeLocalStorageSet(
+        TOKEN_TIME_KEY,
+        Date.now().toString(),
+        "token-time-persist",
+        "apiClient",
+      );
       if (tokenData.refresh_token) {
         // Fire-and-forget: the access token is already valid, so persisting
         // the rotated refresh token must not delay the refresh flow.
@@ -544,7 +574,14 @@ export const fetchWithAuth = async (
   options: FetchWithAuthOptions = {},
 ): Promise<Response> => {
   const { timeoutMs, ...fetchOptions } = options;
-  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  // Storage-failure safe: an unreadable token degrades to null → the request
+  // goes out without an Authorization header (likely a 401 → refresh retry)
+  // instead of crashing before the request is even sent.
+  const token = safeLocalStorageGet(
+    ACCESS_TOKEN_KEY,
+    "access-token-read",
+    "apiClient",
+  );
 
   // Ensure headers exist and attach token
   const headers = new Headers(options.headers);

@@ -890,3 +890,99 @@ describe("scheduleRetryRefresh bounded retry (max attempts + backoff)", () => {
     }
   });
 });
+
+// Storage-failure resilience: a localStorage failure inside the refresh flow
+// is a transient environment problem (quota / privacy mode), NOT an auth
+// failure. It must be logged as a warning and the flow must continue — the
+// access token stays valid in memory/broadcast; persistence is best-effort.
+// A storage error must NEVER dispatch 'auth-logout'.
+describe("getValidToken tolerates localStorage failures", () => {
+  const dispatchEventMock = () =>
+    (
+      globalThis as unknown as {
+        window: { dispatchEvent: ReturnType<typeof vi.fn> };
+      }
+    ).window.dispatchEvent;
+
+  const eventCount = (type: string) =>
+    dispatchEventMock().mock.calls.filter(([e]) => (e as Event).type === type)
+      .length;
+
+  it("a localStorage quota failure during token persistence does NOT sign the user out", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: {
+        access_token: "tok-storage-fail-secret",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("exceeded quota", "QuotaExceededError");
+    });
+
+    const result = await getValidToken(true);
+
+    expect(result).toBe("tok-storage-fail-secret");
+    expect(eventCount("auth-logout")).toBe(0);
+    expect(eventCount("token-updated")).toBe(1);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining(
+          "access-token-persist-failed:QuotaExceededError",
+        ) as unknown as string,
+      }),
+    );
+    for (const call of captureErrorMock.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("tok-storage-fail-secret");
+    }
+  });
+
+  it("a failing localStorage read degrades to the refresh path instead of crashing", async () => {
+    mockInvoke({
+      get_refresh_token: "rt-keyring",
+      refresh_google_token: {
+        access_token: "tok-read-fail-secret",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+
+    const result = await getValidToken(true);
+
+    expect(result).toBe("tok-read-fail-secret");
+    expect(eventCount("auth-logout")).toBe(0);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining(
+          "-failed:SecurityError",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("fetchWithAuth sends the request without an Authorization header when localStorage reads fail", async () => {
+    vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const res = await fetchWithAuth("/api/songs");
+
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const firstCall = fetchSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected fetch call");
+    const h = new Headers((firstCall[1] as RequestInit).headers);
+    expect(h.get("Authorization")).toBeNull();
+  });
+});
