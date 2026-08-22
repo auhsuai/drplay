@@ -95,6 +95,12 @@ export function useDriveExplorer(
       setSearchQuery("");
     }
     setCurrentPage(1);
+    // Selection is folder-scoped UI state: bulk ops run on raw selectedIds
+    // with no per-folder validation, so a stale set surviving navigation would
+    // delete/move folder A's files while the user views folder B. Clear it on
+    // every reset trigger (folder/search/sort), same key as the page reset.
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
   }
 
   // Whitespace-only queries count as empty: the worker answers [] for them,
