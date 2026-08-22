@@ -80,6 +80,22 @@ function wrapError(prefix: string, err: unknown): Error {
   return new Error(`${prefix}: ${describeError(err)}`);
 }
 
+// Shared failure path for every disk operation: emit the exact warn-level
+// captureError payload each site logged before this extraction (level/source/
+// message/kind byte-identical), then rethrow an Error carrying that same
+// message. Returns Promise<never>, so catch blocks can simply `return
+// fail(...)`. close() suppresses the guaranteed rejection locally — its
+// failures are logged, never rethrown (see close()).
+async function fail(message: string, kind: string): Promise<never> {
+  await captureError({
+    level: "warn",
+    source: "diskFs",
+    message,
+    kind,
+  });
+  throw new Error(message);
+}
+
 /**
  * Extend the fs plugin's runtime read scope so the given path (file or
  * directory tree) may be read from the webview. The webview must first have
@@ -90,17 +106,10 @@ export async function registerUploadPath(path: string): Promise<void> {
   try {
     await invoke(REGISTER_UPLOAD_PATH_CMD, { path });
   } catch (err: unknown) {
-    const wrapped = wrapError(
-      `Failed to extend fs read scope for "${path}"`,
-      err,
+    return fail(
+      wrapError(`Failed to extend fs read scope for "${path}"`, err).message,
+      "scope",
     );
-    await captureError({
-      level: "warn",
-      source: "diskFs",
-      message: wrapped.message,
-      kind: "scope",
-    });
-    throw wrapped;
   }
 }
 
@@ -115,14 +124,7 @@ export async function statDiskPath(path: string): Promise<DiskEntry | null> {
     info = await invoke<StatInfoDto>(FS_STAT_CMD, { path });
   } catch (err: unknown) {
     if (NOT_FOUND_PATTERN.test(describeError(err))) return null;
-    const wrapped = wrapError(`Failed to stat "${path}"`, err);
-    await captureError({
-      level: "warn",
-      source: "diskFs",
-      message: wrapped.message,
-      kind: "stat",
-    });
-    throw wrapped;
+    return fail(wrapError(`Failed to stat "${path}"`, err).message, "stat");
   }
   const name = basename(path);
   return {
@@ -165,14 +167,10 @@ export async function openDiskReadStream(
   try {
     rid = await invoke<number>(FS_OPEN_CMD, { path, options: { read: true } });
   } catch (err: unknown) {
-    const wrapped = wrapError(`Failed to open file "${path}"`, err);
-    await captureError({
-      level: "warn",
-      source: "diskFs",
-      message: wrapped.message,
-      kind: "stream-open",
-    });
-    throw wrapped;
+    return fail(
+      wrapError(`Failed to open file "${path}"`, err).message,
+      "stream-open",
+    );
   }
 
   async function read(): Promise<Uint8Array | null> {
@@ -183,14 +181,10 @@ export async function openDiskReadStream(
         len: chunkSize,
       });
     } catch (err: unknown) {
-      const wrapped = wrapError(`Failed to read file "${path}"`, err);
-      await captureError({
-        level: "warn",
-        source: "diskFs",
-        message: wrapped.message,
-        kind: "stream-read",
-      });
-      throw wrapped;
+      return fail(
+        wrapError(`Failed to read file "${path}"`, err).message,
+        "stream-read",
+      );
     }
     const arr =
       payload instanceof ArrayBuffer
@@ -199,16 +193,10 @@ export async function openDiskReadStream(
     // The plugin guarantees ≥8 elements; anything shorter is a protocol
     // violation and would misparse nread into silently wrong chunk data.
     if (arr.byteLength < NREAD_BYTES) {
-      const wrapped = new Error(
+      return fail(
         `Failed to read file "${path}": malformed stream response`,
+        "stream-read",
       );
-      await captureError({
-        level: "warn",
-        source: "diskFs",
-        message: wrapped.message,
-        kind: "stream-read",
-      });
-      throw wrapped;
     }
     const nread = fromBigEndian(arr.slice(arr.byteLength - NREAD_BYTES));
     if (nread === 0) return null; // end of file
@@ -221,13 +209,13 @@ export async function openDiskReadStream(
     try {
       await invoke(FS_CLOSE_CMD, { rid });
     } catch (err: unknown) {
-      const wrapped = wrapError(`Failed to close file "${path}"`, err);
-      await captureError({
-        level: "warn",
-        source: "diskFs",
-        message: wrapped.message,
-        kind: "stream-close",
-      });
+      // fail() always rejects after logging; swallow that guaranteed
+      // rejection here so close() still resolves (the failure itself is
+      // already captured to the error log by fail(), payload unchanged).
+      await fail(
+        wrapError(`Failed to close file "${path}"`, err).message,
+        "stream-close",
+      ).catch(() => undefined);
     }
   }
 
