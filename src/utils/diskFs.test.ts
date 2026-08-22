@@ -4,6 +4,7 @@ import {
   openDiskReadStream,
   registerUploadPath,
   statDiskPath,
+  toForwardSlashRelative,
   walkDiskFolder,
 } from "./diskFs";
 import { captureError } from "./errorLog";
@@ -14,6 +15,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("./errorLog", () => ({
   captureError: vi.fn(),
+}));
+
+// Mutable IS_MOBILE for joinPath separator tests; the getter re-reads the
+// value on every access so diskFs sees live changes mid-test file.
+const platformState = vi.hoisted(() => ({ isMobile: false }));
+vi.mock("./platform", () => ({
+  get IS_MOBILE(): boolean {
+    return platformState.isMobile;
+  },
 }));
 
 const invokeMock = vi.mocked(invoke);
@@ -30,6 +40,12 @@ function nonNull<T>(value: T | null, what: string): T {
 // Shape mirrors the real plugin:fs|read_dir response (DirEntry, camelCase).
 function dirEntry(name: string, isDirectory: boolean) {
   return { name, isDirectory, isFile: !isDirectory, isSymlink: false };
+}
+
+// Junction/symlinked directory: real read_dir reports these with BOTH
+// isDirectory and isSymlink set — the walk must list but never descend.
+function symlinkDirEntry(name: string) {
+  return { name, isDirectory: true, isFile: false, isSymlink: true };
 }
 
 // The mock receives InvokeArgs (Record | raw-body union); read_dir is always
@@ -50,6 +66,7 @@ const NOT_FOUND_UNIX_MSG =
 beforeEach(() => {
   invokeMock.mockReset();
   captureErrorMock.mockReset();
+  platformState.isMobile = false;
 });
 
 afterEach(() => {
@@ -386,6 +403,70 @@ describe("walkDiskFolder", () => {
       invokeMock.mock.calls.filter((c) => c[0] === "plugin:fs|read_dir"),
     ).toHaveLength(2);
     expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("lists but does NOT descend into a symlinked directory (junction loop guard)", async () => {
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "plugin:fs|read_dir") {
+        const path = pathOf(args);
+        if (path === "C:\\Music") {
+          return Promise.resolve([
+            dirEntry("sub", true),
+            symlinkDirEntry("loop"),
+          ]);
+        }
+        if (path === "C:\\Music\\sub") {
+          return Promise.resolve([symlinkDirEntry("uplink")]);
+        }
+        return Promise.resolve([]);
+      }
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+
+    const entries = await walkDiskFolder("C:\\Music");
+
+    const readDirs = invokeMock.mock.calls
+      .filter((c) => c[0] === "plugin:fs|read_dir")
+      .map((c) => pathOf(c[1]));
+    expect(readDirs.sort()).toEqual(["C:\\Music", "C:\\Music\\sub"]);
+    expect(entries.map((e) => e.relativePath).sort()).toEqual([
+      "loop",
+      "sub",
+      "sub/uplink",
+    ]);
+  });
+
+  it("joins child paths with '/' on mobile (POSIX-shaped Android SAF root)", async () => {
+    platformState.isMobile = true;
+
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "plugin:fs|read_dir") {
+        const path = pathOf(args);
+        if (path === "/music") return Promise.resolve([dirEntry("sub", true)]);
+        if (path === "/music/sub")
+          return Promise.resolve([dirEntry("a.mp3", false)]);
+        return Promise.reject(new Error(`unknown dir: ${path}`));
+      }
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+
+    const entries = await walkDiskFolder("/music");
+
+    expect(entries.map((e) => e.path)).toEqual([
+      "/music/sub",
+      "/music/sub/a.mp3",
+    ]);
+    expect(entries.map((e) => e.relativePath)).toEqual(["sub", "sub/a.mp3"]);
+  });
+
+  it("toForwardSlashRelative keeps a sibling prefix-collision path intact", () => {
+    expect(toForwardSlashRelative("C:\\Music", "C:\\MusicExtra\\a.mp3")).toBe(
+      "C:/MusicExtra/a.mp3",
+    );
+    // Boundary itself must still be stripped (no behavior change for real children).
+    expect(toForwardSlashRelative("C:\\Music", "C:\\Music\\a.mp3")).toBe(
+      "a.mp3",
+    );
   });
 });
 

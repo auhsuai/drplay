@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { captureError } from "./errorLog";
 import { basename } from "./pathUtils";
+import { IS_MOBILE } from "./platform";
 
 // tauri-plugin-fs v2 command names, verified against the plugins-workspace v2
 // guest-js (raw.githubusercontent.com/tauri-apps/plugins-workspace/v2/plugins/fs/guest-js/index.ts,
@@ -306,25 +307,41 @@ async function walkDirRecursive(
       isDirectory: entry.isDirectory,
       size: 0,
     });
-    if (entry.isDirectory) {
+    // A symlinked "directory" (junction/symlink) is listed but never
+    // descended: following it can loop forever on cycles and read outside
+    // the picked root (OS guards like ELOOP/SYMLOOP only fire per-call,
+    // after the walk has already left the root).
+    if (entry.isDirectory && !entry.isSymlink) {
       await walkDirRecursive(childPath, rootPath, out, signal);
     }
   }
 }
 
+// Separator follows the platform root shape: Android SAF paths are
+// POSIX-style ("/storage/..."), Windows paths use "\". The trailing-separator
+// branch already accepts either separator.
 function joinPath(dirPath: string, name: string): string {
-  return /[\\/]$/.test(dirPath) ? `${dirPath}${name}` : `${dirPath}\\${name}`;
+  const sep = IS_MOBILE ? "/" : "\\";
+  return /[\\/]$/.test(dirPath)
+    ? `${dirPath}${name}`
+    : `${dirPath}${sep}${name}`;
 }
 
 // Strip the walked root and normalize separators: "C:\Music\sub\a.mp3" with
 // root "C:\Music" becomes "sub/a.mp3" (no leading slash). Forward slashes
 // are valid on Windows and keep relativePath portable to the Drive API.
-function toForwardSlashRelative(
+// Exported for unit testing only; internal callers unchanged.
+export function toForwardSlashRelative(
   rootPath: string,
   absolutePath: string,
 ): string {
-  const rel = absolutePath.startsWith(rootPath)
-    ? absolutePath.slice(rootPath.length)
-    : absolutePath;
+  // Only strip when absolutePath is genuinely UNDER rootPath: the remainder
+  // must be empty, start with a separator, or the root itself must end with
+  // one. A bare startsWith() would let a sibling sharing a string prefix
+  // ("C:\MusicExtra") match root "C:\Music" and corrupt its relativePath.
+  const rest = absolutePath.slice(rootPath.length);
+  const underRoot =
+    rest === "" || /^[\\/]/.test(rest) || /[\\/]$/.test(rootPath);
+  const rel = underRoot ? rest : absolutePath;
   return rel.replace(/^[\\/]+/, "").replace(/\\/g, "/");
 }
