@@ -21,6 +21,11 @@ let uploadVersion = 0;
 // offsets and scrollToIndex jumps to the wrong position.
 const ROW_ESTIMATED_SIZE_PX = 92;
 
+// Overscan of 15 rows (other lists use 3): this list renders SongCards with
+// cover images on a slow Android WebView, so the larger buffer prevents blank
+// flashes when fast scrolling outpaces image decode/layout.
+const OVERSCAN_ROWS = 15;
+
 export type VirtualizedSongListHandle = {
   scrollToIndex: (index: number, options?: ScrollToOptions) => void;
 };
@@ -70,7 +75,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
     count: items.length,
     getScrollElement: () => scrollElementRef.current,
     estimateSize: () => ROW_ESTIMATED_SIZE_PX,
-    overscan: 15,
+    overscan: OVERSCAN_ROWS,
     getItemKey: (index: number) => items[index]?.id ?? index,
     useFlushSync: false,
     directDomUpdates: true,
@@ -81,9 +86,11 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   // its own uploadState via getUploadState(item.id) and the SongCard memo
   // comparator skips cards whose state did not change.
   // Stable subscribe identity: useSyncExternalStore re-subscribes every time a
-  // different subscribe function is passed on a re-render (react.dev caveat) —
-  // this list re-renders on every scroll frame, so memoize the wrapper to keep
-  // the subscription stable.
+  // different subscribe function is passed on a re-render (react.dev caveat).
+  // With directDomUpdates: true, scroll-only updates skip React re-renders —
+  // the list re-renders only when the visible index range or isScrolling
+  // changes — so memoize the wrapper to keep the subscription stable across
+  // those re-renders.
   const subscribeUploadsStable = React.useCallback(
     (onStoreChange: () => void) =>
       subscribeUploads(() => {
@@ -133,7 +140,6 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
       ref={rowVirtualizer.containerRef}
       style={{
         position: "relative",
-        width: "100%",
         pointerEvents: rowVirtualizer.isScrolling ? "none" : "auto",
       }}
     >
