@@ -74,11 +74,11 @@ const UPLOAD_CONCURRENCY = 2;
 bindEntries(() => entries);
 
 /**
- * Enqueue uploads and start pumping the queue. The manager runs uploads
- * strictly sequentially (one at a time) and publishes a pending db.files row
- * per entry so the UI can render dimmed cards immediately, long before Drive
- * confirms anything. Invalid seeds (folder without a disk path, file without
- * bytes/path) surface as error entries instead of throwing.
+ * Enqueue uploads and start pumping the queue. The manager runs up to
+ * UPLOAD_CONCURRENCY uploads in parallel (see pump()) and publishes a pending
+ * db.files row per entry so the UI can render dimmed cards immediately, long
+ * before Drive confirms anything. Invalid seeds (folder without a disk path,
+ * file without bytes/path) surface as error entries instead of throwing.
  * @param seeds The items to upload (bytes payloads or disk paths).
  * @param token Drive access token for this batch's requests.
  */

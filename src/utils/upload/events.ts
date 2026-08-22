@@ -26,14 +26,49 @@ const recentlyDoneIds = new Set<string>();
 // subscriber must not break the loop).
 const subscribers = new Set<() => void>();
 
-// Progress notify is coalesced through a single trailing-edge timer: pending
-// onProgress bursts leave the timer running (at most one notify per
-// PROGRESS_NOTIFY_INTERVAL_MS), and a notify only fires when the value
-// actually changed since the last one. The queue is strictly sequential, so
-// one shared timer + last-notified value covers every entry.
-let pendingProgressTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingProgressEntry: InternalEntry | null = null;
-let lastNotifiedProgress = 0;
+// Progress notify is coalesced PER ENTRY through trailing-edge timers: the
+// queue pumps UPLOAD_CONCURRENCY entries in parallel, so each entry owns its
+// own timer and last-notified baseline. A single shared pair would drop a
+// sibling's tick while one timer is pending, wrongly suppress a sibling whose
+// fraction matched another entry's last-notified value, and let a
+// start-of-upload reset leak across in-flight entries. A pending timer keeps
+// absorbing that entry's burst (at most one notify per entry per
+// PROGRESS_NOTIFY_INTERVAL_MS), and fires only when THAT entry's value
+// changed since ITS own last notify.
+interface ProgressCoalescer {
+  timer: ReturnType<typeof setTimeout> | null;
+  lastNotifiedProgress: number;
+}
+const progressCoalescers = new Map<string, ProgressCoalescer>();
+
+function coalescerFor(entryId: string): ProgressCoalescer {
+  let state = progressCoalescers.get(entryId);
+  if (!state) {
+    state = { timer: null, lastNotifiedProgress: 0 };
+    progressCoalescers.set(entryId, state);
+  }
+  return state;
+}
+
+// Records must never outlive their entry or the map would grow with every
+// upload. Entry ids are never reused, so any record whose id is no longer a
+// queued/uploading entry in the live list is dead — cancel its pending timer
+// (if any) and drop it. Cheap sweep: records only exist for entries that have
+// reported progress, and every progress path funnels through here-adjacent
+// entry points below.
+function pruneDeadCoalescers(): void {
+  if (progressCoalescers.size === 0) return;
+  const activeIds = new Set(
+    entriesRef()
+      .filter((e) => e.status === "queued" || e.status === "uploading")
+      .map((e) => e.id),
+  );
+  for (const [id, state] of progressCoalescers) {
+    if (activeIds.has(id)) continue;
+    if (state.timer !== null) clearTimeout(state.timer);
+    progressCoalescers.delete(id);
+  }
+}
 
 // Read-only view of the queue's live entries, injected by queue.ts at module
 // load (bindEntries). The entries array itself stays owned and mutated by
@@ -173,37 +208,42 @@ export function notify(): void {
   }
 }
 
-// Coalesce: a pending timer is left running (new bursts merge into it). The
-// callback re-checks the entry (still queued/uploading? progress changed?)
-// because the entry may have gone terminal while the timer was pending.
+// Coalesce per entry: a pending timer is left running (new bursts from the
+// SAME entry merge into it — bursts from a sibling get their own timer). The
+// callback re-checks the entry (still queued/uploading? progress changed
+// since this entry's last notify?) because the entry may have gone terminal
+// while its timer was pending.
 export function scheduleProgressNotify(entry: InternalEntry): void {
-  if (pendingProgressTimer !== null) return;
-  pendingProgressEntry = entry;
-  pendingProgressTimer = setTimeout(() => {
-    pendingProgressTimer = null;
-    const target = pendingProgressEntry;
-    pendingProgressEntry = null;
-    if (!target) return;
-    const active = target.status === "queued" || target.status === "uploading";
-    if (!active || target.progress === undefined) return;
-    if (target.progress === lastNotifiedProgress) return;
-    lastNotifiedProgress = target.progress;
+  pruneDeadCoalescers();
+  const state = coalescerFor(entry.id);
+  if (state.timer !== null) return;
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    const active = entry.status === "queued" || entry.status === "uploading";
+    if (!active || entry.progress === undefined) return;
+    if (entry.progress === state.lastNotifiedProgress) return;
+    state.lastNotifiedProgress = entry.progress;
     notify();
   }, PROGRESS_NOTIFY_INTERVAL_MS);
 }
 
-// Terminal transitions notify immediately themselves, so a pending progress
-// timer must not fire a stale notify afterwards (and must not leak).
+// Terminal transitions notify immediately themselves, so no pending progress
+// timer may fire a stale notify afterwards. Every terminal transition calls
+// this without an entry argument, so it clears ALL pending timers + records —
+// the same global scope the pre-concurrency singleton version had. A sibling
+// entry merely loses its current throttled window: its next chunk tick
+// re-schedules within PROGRESS_NOTIFY_INTERVAL_MS.
 export function clearProgressNotifyTimer(): void {
-  if (pendingProgressTimer !== null) {
-    clearTimeout(pendingProgressTimer);
-    pendingProgressTimer = null;
-    pendingProgressEntry = null;
+  for (const state of progressCoalescers.values()) {
+    if (state.timer !== null) clearTimeout(state.timer);
   }
+  progressCoalescers.clear();
 }
 
-// Reset the coalescing baseline when the queue starts a new upload, so the
-// first progress tick of the next upload always fires a notify.
+// Kept for processEntry's start-of-upload call. With per-entry state keyed by
+// never-reused ids, a starting entry has no record yet (baseline 0 by
+// construction), so no shared baseline needs resetting anymore — the call now
+// only sweeps records left behind by entries that already went terminal.
 export function resetProgressNotify(): void {
-  lastNotifiedProgress = 0;
+  pruneDeadCoalescers();
 }

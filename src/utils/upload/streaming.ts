@@ -31,8 +31,9 @@ export async function handleDiskFile(
 export async function handleChildFile(
   entry: InternalEntry,
 ): Promise<DriveFileItem> {
-  // The parent's drive id is only known once its own folder entry completed
-  // (the queue is sequential, so it always has by the time a child runs).
+  // The parent's drive id is only known once its own folder entry completed:
+  // nextQueued() keeps a folderChildFile blocked while the parent's batchMemo
+  // lacks it, under any UPLOAD_CONCURRENCY (not because of sequencing).
   const dir = entry.relativeDir ?? "";
   const parentId = entry.batchMemo?.get(dir);
   if (!parentId) throw new ParentFolderMissingError(dir);
