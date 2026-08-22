@@ -20,11 +20,21 @@ const DEFAULT_TIMEOUT_MS = 20000;
 export { backoffDelay, mergeWithTimeoutSignal, sleep };
 
 /**
- * Derive a short, safe classification tag from an error's message ONLY.
+ * Derive a short, safe classification tag from an error's name and message.
  * We never log the error object or its stack — those can leak file ids, user
  * data, or (in theory) auth material into logs. Callers use this for observability.
  */
 export function classifyDriveError(err: unknown): string {
+  // Name check first (same pattern as apiClient.classifyRequestError): a
+  // caller abort rejects with DOMException("aborted", "AbortError") — its
+  // message carries no "aborterror" text — and AbortSignal.timeout()
+  // rejects with name "TimeoutError" (only some engines put "timeout" in
+  // the message), so both would otherwise land in "unknown".
+  if (
+    (err instanceof DOMException || err instanceof Error) &&
+    (err.name === "AbortError" || err.name === "TimeoutError")
+  )
+    return "timeout";
   const msg =
     err instanceof Error
       ? err.message

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   backoffDelay,
+  classifyDriveError,
   createFolder,
   deleteFile,
   driveFetch,
@@ -272,6 +273,20 @@ describe("backoffDelay", () => {
   it("caps exponential backoff at MAX_DELAY_MS", () => {
     expect(backoffDelay(5)).toBe(32000);
     expect(backoffDelay(10)).toBe(32000);
+  });
+});
+
+describe("classifyDriveError name-based classification", () => {
+  it('classifies a caller-abort DOMException ("AbortError") as "timeout"', () => {
+    expect(classifyDriveError(new DOMException("aborted", "AbortError"))).toBe(
+      "timeout",
+    );
+  });
+
+  it('classifies an error named "TimeoutError" as "timeout" even without "timeout" in the message', () => {
+    expect(
+      classifyDriveError(new DOMException("signal timed out", "TimeoutError")),
+    ).toBe("timeout");
   });
 });
 
