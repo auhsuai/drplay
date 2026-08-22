@@ -85,6 +85,22 @@ bindEntries(() => entries);
 export function startUploads(seeds: UploadSeed[], token: string): void {
   const queued: InternalEntry[] = [];
   for (const seed of seeds) {
+    // P2-B4 duplicate-seed guard: a seed whose (diskPath, parentId) matches an
+    // ACTIVE (queued/uploading) entry would upload a second identical Drive
+    // copy (double-click menu / double-drop). Skip it — terminal entries are
+    // pruned from `entries`, so done/error files stay re-uploadable on purpose.
+    if (
+      seed.diskPath !== undefined &&
+      hasActiveDuplicate(seed.diskPath, seed.parentId)
+    ) {
+      // Basename only in the log — never the user's full disk path.
+      void captureError({
+        level: "warn",
+        source: MODULE,
+        message: `duplicate-seed-skipped name=${seed.name}`,
+      });
+      continue;
+    }
     const entry = createEntry(seed, token);
     entries.push(entry);
     // Invalid seeds are terminal 'error' entries — they never touch the DB.
@@ -295,6 +311,18 @@ function failSeed(entry: InternalEntry, reason: string): void {
     source: MODULE,
     message: `invalid-seed name=${entry.name}: ${reason}`,
   });
+}
+
+// P2-B4 duplicate-seed guard: does a live entry with the same
+// (diskPath, parentId) still sit in queued/uploading? Only disk-path seeds
+// carry the stable identity this check needs (bytes seeds have no key).
+function hasActiveDuplicate(diskPath: string, parentId: string): boolean {
+  return entries.some(
+    (e) =>
+      e.diskPath === diskPath &&
+      e.parentId === parentId &&
+      (e.status === "queued" || e.status === "uploading"),
+  );
 }
 
 // A queued entry's placeholder db.files row (the dimmed card in the live

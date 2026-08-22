@@ -3195,4 +3195,81 @@ describe("uploadManager", () => {
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });
   });
+
+  describe("duplicate seed guard (P2-B4)", () => {
+    it("(d1) seed trùng diskPath+parentId khi entry còn active → bỏ qua, chỉ 1 entry + warn log không chứa path", async () => {
+      const gate = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValue(gate.promise);
+
+      um.startUploads([diskFileSeed("x.mp3", "C:/Music/x.mp3")], TOKEN);
+      await flush();
+      expect(um.getEntries()).toHaveLength(1);
+      expect(um.getEntries()[0]?.status).toBe("uploading");
+
+      // Double-click / drop lần 2 cùng diskPath+parentId.
+      um.startUploads([diskFileSeed("x.mp3", "C:/Music/x.mp3")], TOKEN);
+      await flush();
+
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      expect(um.getEntries()).toHaveLength(1);
+      expect(await db.files.toArray()).toHaveLength(1); // chỉ 1 pending row
+      const dupLog = captureError.mock.calls.find((c) =>
+        c[0].message.includes("duplicate-seed-skipped"),
+      );
+      expect(dupLog?.[0].level).toBe("warn");
+      // Log không được chứa đường dẫn người dùng — chỉ basename.
+      expect(dupLog?.[0].message).not.toContain("C:/Music");
+      expect(dupLog?.[0].message).toContain("name=x.mp3");
+
+      gate.resolve(makeDriveFile("f-dup", "x.mp3"));
+      await waitIdle();
+    });
+
+    it("(d2) seed trùng nhưng entry đầu đã error (đã prune) → vẫn tạo entry mới (retry chủ ý)", async () => {
+      uploadFileResumableChunked
+        .mockRejectedValueOnce(new UploadErrorClass("boom", "network"))
+        .mockResolvedValueOnce(makeDriveFile("f-retry", "x.mp3"));
+
+      um.startUploads([diskFileSeed("x.mp3", "C:/x.mp3")], TOKEN);
+      await waitIdle();
+      expect(um.getEntries()).toEqual([]); // entry lỗi đã prune
+
+      um.startUploads([diskFileSeed("x.mp3", "C:/x.mp3")], TOKEN);
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(2);
+      const rows = await db.files.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe("f-retry");
+    });
+
+    it("(d3) cùng diskPath khác parentId → KHÔNG bị chặn (key gồm cả parentId)", async () => {
+      uploadFileResumableChunked
+        .mockResolvedValueOnce(makeDriveFile("f-a", "x.mp3"))
+        .mockResolvedValueOnce(makeDriveFile("f-b", "x.mp3"));
+
+      um.startUploads(
+        [
+          {
+            name: "x.mp3",
+            isFolder: false,
+            parentId: "root",
+            diskPath: "C:/x.mp3",
+          },
+          {
+            name: "x.mp3",
+            isFolder: false,
+            parentId: "folder-other",
+            diskPath: "C:/x.mp3",
+          },
+        ],
+        TOKEN,
+      );
+      await waitIdle();
+
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(2);
+      const rows = await db.files.toArray();
+      expect(rows.map((r) => r.id).sort()).toEqual(["f-a", "f-b"]);
+    });
+  });
 });
