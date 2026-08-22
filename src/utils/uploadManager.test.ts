@@ -2820,6 +2820,122 @@ describe("uploadManager", () => {
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });
 
+    it("(b1a) persist của entry mới fail giữa resume → row cũ còn nguyên status 'interrupted' + card cũ chưa xoá, lần resume sau phục hồi đúng session", async () => {
+      // Crash simulation: every FRESH write is rejected (enqueue bulkPut +
+      // processEntry put + session persist) and the pump hangs on a never-
+      // resolving upload — exactly the dead-process moment between the resume
+      // scan and the successor's own persisted rows. The OLD session row must
+      // survive this moment marked 'interrupted' (deleting it beforehand loses
+      // card + position forever), ready for the next launch's scan.
+      const gate = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValue(gate.promise);
+      const freshDb = await import("../db/db");
+      const putSpy = vi
+        .spyOn(freshDb.db.files, "put")
+        .mockRejectedValue(new Error("db closed"));
+      const bulkPutSpy = vi
+        .spyOn(freshDb.db.files, "bulkPut")
+        .mockRejectedValue(new Error("db closed"));
+      const sessionPutSpy = vi
+        .spyOn(freshDb.db.uploadSessions, "put")
+        .mockRejectedValue(new Error("db closed"));
+      await insertSessionRow({
+        id: "pending-old-b1a",
+        name: "crash.mp3",
+        kind: "diskFile",
+        diskPath: "C:/crash.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+        clientGeneratedId: "gen-b1a",
+      });
+      // The dimmed card the dead process left behind (id === old session id).
+      await db.files.bulkPut([
+        {
+          id: "pending-old-b1a",
+          name: "crash.mp3",
+          mimeType: AUDIO_MIME,
+          parentId: "root",
+          trashed: false,
+          isFolder: false,
+          modifiedTime: "2026-01-01T00:00:00Z",
+        },
+      ]);
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      putSpy.mockRestore();
+      bulkPutSpy.mockRestore();
+      sessionPutSpy.mockRestore();
+
+      // THE contract: the source row survived the dead-persist moment.
+      const survivors = await db.uploadSessions.toArray();
+      expect(survivors).toHaveLength(1);
+      expect(survivors[0]?.status).toBe("interrupted");
+      expect(survivors[0]?.uploadUri).toBe(OLD_URI);
+      // The old dimmed card must not have been swept either.
+      const cards = await db.files.toArray();
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.id).toBe("pending-old-b1a");
+
+      // Next launch: the scan picks the interrupted row back up and finishes
+      // the upload with the SAME server session (URI + position preserved).
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+      const recoveryCalls = uploadFileResumableChunked.mock.calls;
+      const opts = recoveryCalls[recoveryCalls.length - 1]?.[1];
+      expect(opts?.initialUploadUri).toBe(OLD_URI);
+
+      gate.resolve(makeDriveFile("f-recovered", "crash.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(b1c) row session mới của resumed entry kế thừa ngay uploadUri (+totalSize/clientGeneratedId) tại persist đầu", async () => {
+      // Freeze the pipeline right AFTER processEntry's first persist (hanging
+      // stat) — the exact crash window this contract covers. The NEW active
+      // row must already carry the inherited server session URI, otherwise a
+      // crash here restarts from byte 0 despite the server still holding the
+      // resumable session (7-day TTL).
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      const statGate =
+        deferred<NonNullable<Awaited<ReturnType<typeof statDiskPathImpl>>>>();
+      statDiskPath.mockReturnValueOnce(statGate.promise);
+      await insertSessionRow({
+        id: "pending-old-b1c",
+        name: "uri.mp3",
+        kind: "diskFile",
+        diskPath: "C:/uri.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+        clientGeneratedId: "gen-b1c",
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      const rows = await db.uploadSessions.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).not.toBe("pending-old-b1c"); // fresh successor row
+      expect(rows[0]?.status).toBe("active");
+      expect(rows[0]?.uploadUri).toBe(OLD_URI);
+      expect(rows[0]?.totalSize).toBe(2);
+      expect(rows[0]?.clientGeneratedId).toBe("gen-b1c");
+
+      // Unfreeze: the resumed upload runs to completion and clears its row.
+      statGate.resolve({
+        path: "x",
+        name: "x",
+        relativePath: "x",
+        isDirectory: false,
+        size: 2,
+      });
+      d.resolve(makeDriveFile("f-uri", "uri.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
     it("R5. resumed diskFile nhận pending row ngay tại enqueue (qua bulkPut, không chờ pump xử lý)", async () => {
       // vi.resetModules() in beforeEach gives the queue a FRESH DriveDatabase
       // instance — spy the freshly-imported one (same pattern as slice-5.1 (e)).

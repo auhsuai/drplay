@@ -62,6 +62,12 @@ let resumeRunning = false;
 //    it, because the filter copy shifts every later index left by one.
 let nextScanIndex = 0;
 
+// P2-B1a/B1c: resumed entry id -> interrupted SOURCE session row id. The
+// source row is marked 'interrupted' at scan time and deleted only once the
+// successor's own rows exist — deleting it earlier loses card + position on a
+// mid-resume crash.
+const resumedPredecessors = new Map<string, string>();
+
 // Uploads run at most UPLOAD_CONCURRENCY entries in parallel. Google Drive's
 // per-user quota (325,000 units/min, units model since 2026-05-01) allows this
 // generously; 2 is the safe default against 429 storms on weak links — raise
@@ -157,21 +163,37 @@ export async function resumeInterruptedUploads(
     rows.sort((a, b) => a.createdAt - b.createdAt);
     for (const row of rows) {
       const entry = resumeEntryFromRow(row, token);
-      // Delete the OLD row before the new entry can persist its own row under
-      // a fresh id (best-effort — a failed delete is logged and the scan
-      // continues; the stale row would just be re-scanned next launch).
+      if (entry === null) {
+        // Non-resumable row: no successor row will EVER be created from it, so
+        // keeping it would resurrect a dead session on every future launch.
+        // Delete now (best-effort — a failed delete is logged and the stale
+        // row would just be re-scanned next launch).
+        await dbRowOp(
+          () => db.uploadSessions.delete(row.id),
+          "session-resume-delete",
+        );
+        interruptedCount += 1;
+        continue;
+      }
+      // P2-B1a: mark instead of delete — a crash before the successor's own
+      // row persists must leave this source intact so the next scan rebuilds
+      // card + position. update() patches ONLY the status: refreshing
+      // updatedAt would extend the 7-day TTL clock across repeated failed
+      // resumes.
       await dbRowOp(
-        () => db.uploadSessions.delete(row.id),
-        "session-resume-delete",
+        () => db.uploadSessions.update(row.id, { status: "interrupted" }),
+        "session-resume-mark",
       );
-      if (entry === null) interruptedCount += 1;
-      else resumed.push(entry);
+      resumedPredecessors.set(entry.id, row.id);
+      resumed.push(entry);
     }
     // Ghost sweep (P1-B1b): a pending db.files row from a dead process whose
     // uploadSessions row no longer exists renders forever as a dimmed card.
-    // Runs AFTER the loop above consumed this user's session rows (their ids
-    // are already gone from uploadSessions, so their stale same-id rows count
-    // as ghosts) and BEFORE enqueuePendingRows publishes fresh rows for the
+    // Runs AFTER the loop above consumed this user's non-resumable rows (their
+    // ids are gone from uploadSessions, so their stale same-id rows count as
+    // ghosts; a resumed source KEEPS its id as 'interrupted' until the
+    // successor's rows land, so its old card survives the sweep on purpose —
+    // P2-B1a) and BEFORE enqueuePendingRows publishes fresh rows for the
     // resumed entries below, so those new ids survive the sweep. The keep-set
     // spans ALL users' remaining sessions — a pending row backed by another
     // user's still-active session must be kept untouched.
@@ -261,6 +283,10 @@ function cancelQueuedEntry(entry: InternalEntry): void {
   void dbRowOp(() => db.files.delete(entry.id), "pending-row-delete");
   // Sync path: fire-and-forget — clearSession swallows its own failures.
   void clearSession(entry);
+  // A cancelled resume is a definitive end: drop the interrupted source pair
+  // unconditionally, or every future launch would resurrect the cancelled
+  // work (P2-B1a).
+  void settleResumedPredecessor(entry.id, false);
   clearProgressNotifyTimer();
   notify();
   pruneEntry(entry);
@@ -443,8 +469,14 @@ async function processEntry(entry: InternalEntry): Promise<void> {
   // pipeline.
   await Promise.all([
     dbRowOp(() => db.files.put(pendingRow(entry)), "pending-row"),
-    persistActiveSession(entry),
+    // P2-B1c: a resumed entry re-persists its INHERITED session metadata at
+    // the first write — otherwise a crash before the chunked uploader reports
+    // a fresh URI drops the still-valid server session and restarts at byte 0.
+    persistActiveSession(entry, inheritedResumeExtras(entry)),
   ]);
+  // P2-B1a: both successor rows were attempted — retire the marked source
+  // pair, but only if the successor's own session row really landed.
+  await settleResumedPredecessor(entry.id, true);
   try {
     const driveItem = await handleByKind(entry);
     await markDone(entry, driveItem);
@@ -535,6 +567,10 @@ async function markDone(
   markRecentlyDone(driveItem.id);
   // Terminal: the active session row is stale the moment the upload is done.
   await clearSession(entry);
+  // P2-B1a terminal net: normally retired at processEntry already; if that
+  // persist failed, a completed upload means the real Drive row exists — the
+  // source is safe to drop (no-op when nothing is pending).
+  await settleResumedPredecessor(entry.id, false);
   await finishEntry(entry);
   window.dispatchEvent(
     new CustomEvent<{ count: number }>(DRIVE_FILES_CHANGED_EVENT, {
@@ -610,6 +646,11 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
   // Terminal (error/cancel): the active session row is stale — drop it so a
   // future resume never retries a dead entry.
   await clearSession(entry);
+  // P2-B1a terminal net: if the successor's first persist failed and this
+  // entry still ended terminally, drop the source pair anyway — a permanently
+  // failed resume must not resurrect on every launch (no-op when already
+  // retired).
+  await settleResumedPredecessor(entry.id, false);
   await finishEntry(entry);
 }
 
@@ -630,6 +671,75 @@ function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
     modifiedTime: driveItem.modifiedTime ?? new Date().toISOString(),
   };
 }
+// P2-B1a: delete the interrupted source pair — the OLD session row plus its
+// stale same-id dimmed card (the successor publishes its rows under a fresh
+// id, so both old copies are garbage the moment retirement is safe).
+async function deleteInterruptedPredecessor(oldRowId: string): Promise<void> {
+  await dbRowOp(
+    () => db.uploadSessions.delete(oldRowId),
+    "session-resume-delete",
+  );
+  await dbRowOp(() => db.files.delete(oldRowId), "pending-row-delete");
+}
+
+// P2-B1a: retire an entry's interrupted source row once it is safe. With
+// requireSuccessorRow the deletion happens only when the successor's OWN
+// session row exists — a failed persist keeps the source recoverable for the
+// next scan. Without it the entry reached a definitive end (done / error /
+// cancel), where keeping the source would only resurrect dead work.
+async function settleResumedPredecessor(
+  successorId: string,
+  requireSuccessorRow: boolean,
+): Promise<void> {
+  const oldRowId = resumedPredecessors.get(successorId);
+  if (oldRowId === undefined) return;
+  if (requireSuccessorRow) {
+    try {
+      if ((await db.uploadSessions.get(successorId)) === undefined) {
+        // Successor persist never landed — keep the source untouched.
+        return;
+      }
+    } catch (err) {
+      // Read failure is transient/local: conservative fallback KEEPS the
+      // source (never destroy the last remaining copy blindly).
+      await captureError({
+        level: "warn",
+        source: MODULE,
+        message: `resume-predecessor-check-failed: ${describeError(err)}`,
+      });
+      return;
+    }
+  }
+  resumedPredecessors.delete(successorId);
+  await deleteInterruptedPredecessor(oldRowId);
+}
+
+// P2-B1c: resume metadata carried onto the successor's first session snapshot
+// (shape mirrors session.ts SessionPersistExtra). undefined for fresh entries,
+// so their persisted rows stay byte-identical to before.
+function inheritedResumeExtras(
+  entry: InternalEntry,
+):
+  | { uploadUri?: string; totalSize?: number; clientGeneratedId?: string }
+  | undefined {
+  if (
+    entry.resumeUri === undefined &&
+    entry.resumeTotalSize === undefined &&
+    entry.resumeClientGeneratedId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(entry.resumeUri !== undefined ? { uploadUri: entry.resumeUri } : {}),
+    ...(entry.resumeTotalSize !== undefined
+      ? { totalSize: entry.resumeTotalSize }
+      : {}),
+    ...(entry.resumeClientGeneratedId !== undefined
+      ? { clientGeneratedId: entry.resumeClientGeneratedId }
+      : {}),
+  };
+}
+
 // Shared best-effort DB capture (see session.withDbCapture): swallow failures
 // and log `${label}-db-failed` — the same message the old inline try/catch
 // produced.
