@@ -103,13 +103,24 @@ export function useDriveExplorer(
   const filteredItems = searchQuery.trim() !== "" ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);
 
+  // Clamp when the list shrinks below the current page (e.g. bulk delete
+  // wiped the last page): currentPage > totalPages slices an empty window and
+  // the view looks blank until the user paginates manually. Same render-time
+  // adjustment pattern as the reset block above; the max(…, 1) floor parks an
+  // emptied list on page 1. Mobile's single MAX_SAFE_INTEGER page makes this
+  // a no-op there.
+  const safeCurrentPage = Math.min(currentPage, Math.max(totalPages, 1));
+  if (safeCurrentPage !== currentPage) {
+    setCurrentPage(safeCurrentPage);
+  }
+
   const currentItems = useMemo(
     () =>
       filteredItems.slice(
-        (currentPage - 1) * ITEMS_PER_PAGE,
-        currentPage * ITEMS_PER_PAGE,
+        (safeCurrentPage - 1) * ITEMS_PER_PAGE,
+        safeCurrentPage * ITEMS_PER_PAGE,
       ),
-    [filteredItems, currentPage],
+    [filteredItems, safeCurrentPage],
   );
 
   return {

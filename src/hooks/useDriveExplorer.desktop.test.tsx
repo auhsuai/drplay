@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { db } from "../db/db";
 import { useDriveExplorer } from "./useDriveExplorer";
 
@@ -49,5 +49,40 @@ describe("useDriveExplorer — desktop: pagination unchanged", () => {
     expect(result.current.currentItems).toHaveLength(50);
     expect(result.current.totalPages).toBe(3);
     expect(result.current.currentPage).toBe(1);
+  });
+
+  it("clamps currentPage back into range when bulk delete empties the last page", async () => {
+    await seedFolder(120);
+
+    const { result } = renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", null, () => {}),
+    );
+
+    await waitFor(() => {
+      expect(result.current.filteredItems).toHaveLength(120);
+    });
+
+    // User pages to the last page (items d-100..d-119).
+    act(() => {
+      result.current.setCurrentPage(3);
+    });
+    expect(result.current.currentPage).toBe(3);
+    expect(result.current.currentItems).toHaveLength(20);
+
+    // Bulk delete wipes every item on that page — the local Dexie mirror
+    // loses the rows exactly as handleBulkDelete + refresh would leave them.
+    await act(async () => {
+      await db.files.bulkDelete(
+        Array.from({ length: 20 }, (_, i) => `d-${String(100 + i)}`),
+      );
+    });
+
+    // The explorer must land back on a page that still has items instead of
+    // showing an empty page until the user clicks pagination manually.
+    await waitFor(() => {
+      expect(result.current.totalPages).toBe(2);
+      expect(result.current.currentItems.length).toBeGreaterThan(0);
+      expect(result.current.currentPage).toBe(2);
+    });
   });
 });
