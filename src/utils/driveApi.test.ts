@@ -944,6 +944,17 @@ describe("driveFiles malformed JSON body", () => {
     );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
+
+  it("getRecentlyAddedAudioFiles throws `Failed to fetch recently added audio files (invalid response)` when json() rejects", async () => {
+    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
+
+    // Desktop path (IS_MOBILE is false in this suite's environment): single
+    // page fetch, so a non-JSON ok-body must reject as a classified error.
+    await expect(getRecentlyAddedAudioFiles("tok")).rejects.toThrow(
+      "Failed to fetch recently added audio files (invalid response)",
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 // Regression: pagination must aggregate nextPageToken pages (Bug 1c).

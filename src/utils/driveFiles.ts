@@ -322,7 +322,10 @@ export async function getRecentlyAddedAudioFiles(
 
     assertDriveOk(response, "fetch recently added audio files");
 
-    const data: unknown = await response.json();
+    const data: unknown = await readJsonOrInvalidResponse(
+      response,
+      "fetch recently added audio files",
+    );
     return parseFilesList(data);
   }
 
@@ -349,7 +352,10 @@ export async function getRecentlyAddedAudioFiles(
 
     assertDriveOk(response, "fetch recently added audio files");
 
-    const data = (await response.json()) as DriveFilesListResponse | null;
+    const data = (await readJsonOrInvalidResponse(
+      response,
+      "fetch recently added audio files",
+    )) as DriveFilesListResponse | null;
     if (data && Array.isArray(data.files)) all.push(...data.files);
     pageToken = data?.nextPageToken;
     if (!pageToken) break;
