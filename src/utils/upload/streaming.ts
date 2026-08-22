@@ -76,7 +76,16 @@ async function uploadDiskFileStreaming(
   }
   // Persist the freshly-statted size so a FUTURE resume can run the same
   // size-change check (best-effort — persistActiveSession logs its own warn).
-  await persistActiveSession(entry, { totalSize: stat.size });
+  // This is a FULL-ROW put: it must RE-CARRY the inherited session URI
+  // (undefined for fresh entries and after the size-change drop above) or it
+  // wipes `uploadUri` from the row a few ms after processEntry's first
+  // persist — and the 308-resume path never fires onSessionUpdate, so nothing
+  // would write it back: a crash mid-upload loses a server-side session with
+  // days of TTL left and silently restarts the file from byte 0.
+  await persistActiveSession(entry, {
+    totalSize: stat.size,
+    ...(entry.resumeUri !== undefined ? { uploadUri: entry.resumeUri } : {}),
+  });
   if (!(await quotaAllows(entry, stat.size))) {
     throw new UploadError(ERROR_QUOTA_EXCEEDED, "quota");
   }

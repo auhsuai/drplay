@@ -437,3 +437,71 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
     }
   });
 });
+
+// B1c follow-up residual window: the stat-size persist at the top of
+// uploadDiskFileStreaming is a FULL-ROW put — without re-passing the entry's
+// inherited session URI it wipes `uploadUri` from the active row a few ms
+// after processEntry's first snapshot. The 308-resume path never fires
+// onSessionUpdate (see driveApi.test.ts "resume from persisted session"), so
+// nothing ever writes it back: a mid-upload crash then loses the server-side
+// session (up to 7 days of TTL left) and restarts the file from byte 0.
+describe("resumed entry keeps its inherited uploadUri in the active row", () => {
+  const RESUMED_URI =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=persisted-9";
+
+  it("resumed 308 path: every active-row persist carries the inherited URI", async () => {
+    const data = makeData(10 * 1024 * 1024);
+    mockedOpenStream.mockImplementation(() =>
+      Promise.resolve(makeFakeStream(data)),
+    );
+    mockedStat.mockResolvedValue(statResult(data.length));
+    // Query-status on the inherited URI → 308 → tail PUT → 201: this path
+    // NEVER grants a new session URI, so the row's uploadUri can only come
+    // from the persists made inside streaming itself.
+    mockedFetch
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8388607"))
+      .mockResolvedValueOnce(makeJsonResponse(201, UPLOADED_FILE));
+
+    const result = await handleDiskFile({
+      ...makeEntry("C:\\Music\\big.flac"),
+      resumeUri: RESUMED_URI,
+      resumeTotalSize: data.length,
+    });
+
+    expect(result.id).toBe("file-9");
+    // Zero initiates: the first call is the query-status PUT on the
+    // inherited URI, not a fresh session.
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    const [queryUrl, queryOpts] = mockedFetch.mock.calls[0] ?? [];
+    expect(queryUrl).toBe(RESUMED_URI);
+    expect(
+      (queryOpts?.headers as Record<string, string>)["Content-Range"],
+    ).toBe(`*/${String(data.length)}`);
+
+    // THE CONTRACT: the stat-size full-row put must re-carry the inherited
+    // URI — and since no new URI is ever granted on this path, EVERY persist
+    // of this entry must keep it.
+    expect(mockedPersist).toHaveBeenCalled();
+    for (const [, extra] of mockedPersist.mock.calls) {
+      expect(extra?.uploadUri).toBe(RESUMED_URI);
+    }
+  });
+
+  it("fresh entry unchanged: the stat-size persist extras stay exactly { totalSize }", async () => {
+    const data = makeData(4 * 1024 * 1024);
+    mockedOpenStream.mockImplementation(() =>
+      Promise.resolve(makeFakeStream(data)),
+    );
+    mockedStat.mockResolvedValue(statResult(data.length));
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, UPLOADED_FILE));
+
+    await handleDiskFile(makeEntry("C:\\Music\\big.flac"));
+
+    // First persist is the stat-size one (before any session exists); for a
+    // fresh entry its extras must stay byte-identical to the old behavior.
+    const [, extra] = mockedPersist.mock.calls[0] ?? [];
+    expect(extra).toEqual({ totalSize: data.length });
+  });
+});
