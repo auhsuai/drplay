@@ -123,8 +123,19 @@ async function putChunkWithRetry(
       )
     ) {
       if (attempt < UPLOAD_CHUNK_MAX_RETRIES) {
-        await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
-        continue;
+        // Mirror resumableStatus's caller-abort guard (and this function's own
+        // catch path above): never sleep into a cancelled caller's backoff —
+        // a long Retry-After can park the chunk upload for up to MAX_DELAY_MS
+        // just to fire one doomed attempt afterwards (the merged signal would
+        // reject it instantly). Exit now through the same aborted-upload error
+        // the catch path throws.
+        if (!(callerSignal?.aborted ?? false)) {
+          await sleep(
+            backoffDelay(attempt, response.headers.get("Retry-After")),
+          );
+          continue;
+        }
+        throw abortedUploadError();
       }
       throw new UploadError(
         `upload failed (status=${String(response.status)})`,

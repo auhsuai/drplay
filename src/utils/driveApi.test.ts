@@ -2727,6 +2727,71 @@ describe("uploadFileResumableChunked", () => {
     expect(mockedFetch).not.toHaveBeenCalled();
   });
 
+  // Mirror of driveFetch's and queryResumableStatus's caller-abort guards,
+  // now for the CHUNK PUT retry loop (putChunkWithRetry): a 429/5xx response
+  // with Retry-After resolving AFTER the caller cancelled must not park the
+  // chunk upload in the full backoff sleep (up to MAX_DELAY_MS = 32s) just to
+  // fire one doomed attempt afterwards (the merged signal would reject it
+  // instantly). Distinct from "caller abort mid-upload" above: there the fetch
+  // itself REJECTS mid-flight (catch path); here the response RESOLVES
+  // successfully and the gap was the backoff sleep.
+  it("caller abort when a retryable-status chunk response resolves exits immediately instead of sleeping", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const retryAfterResponse = {
+      status: 500,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "32" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockImplementationOnce(() => {
+        // Caller cancels exactly when the failed chunk response arrives —
+        // the signal is already aborted the moment the backoff sleep would
+        // start.
+        controller.abort();
+        return Promise.resolve(retryAfterResponse);
+      });
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    let settled = false;
+    const guarded = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+      signal: controller.signal,
+    }).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened
+    // with NO second fetch attempt queued behind the sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    // Same aborted-upload error path as putChunkWithRetry's fetch-rejection
+    // catch: UploadError kind 'aborted' (never a fresh type).
+    expect(err).toBeInstanceOf(UploadError);
+    expect(err).toMatchObject({
+      kind: "aborted",
+      message: "upload aborted by caller",
+    });
+    // Initiate POST + the one failed PUT; no doomed second attempt.
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("totalSize 0 → invalid, no network calls", async () => {
     await expect(
       uploadFileResumableChunked("tok", {
