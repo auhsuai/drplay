@@ -1,21 +1,15 @@
-import { PLAYABLE_AUDIO_EXTENSIONS } from "./audioQuery";
+import { playableExtensionOf } from "./audioQuery";
 import { IS_MOBILE } from "./platform";
 
 const prefetchedStreams = new Map<string, string>();
 export const DRIVE_STREAM_PREFIX = "/drive-stream/";
-const MAX_CACHE = 200; // cache URL string ngắn (~20 byte/URL), KHÔNG prefetch data — việc prefetch thật do nextTrackPrefetcher đảm nhiệm
-
-// Playable extension of a file name (no leading dot), or undefined. Uses
-// PLAYABLE_AUDIO_EXTENSIONS as the single source of truth for the extension
-// list (audioQuery.ts).
-function playableExtensionOf(name: string | undefined): string | undefined {
-  if (!name) return undefined;
-  const lower = name.toLowerCase();
-  for (const ext of PLAYABLE_AUDIO_EXTENSIONS) {
-    if (lower.endsWith(ext)) return ext.slice(1);
-  }
-  return undefined;
-}
+// Query param carrying the file extension to the SW proxy (sw.js never sees
+// the file name — see buildStreamUrl below).
+const EXT_QUERY_PARAM = "?ext=";
+// cache URL strings ngắn (~30 chars/URL, ~128 bytes/entry gồm cả Map overhead
+// — khớp PREFETCH_ENTRY_ESTIMATED_BYTES trong cache.ts), KHÔNG prefetch data —
+// việc prefetch thật do nextTrackPrefetcher đảm nhiệm
+const MAX_CACHE = 200;
 
 // Single source of truth for every stream URL the app builds. The SW proxy
 // (public/sw.js) overrides Drive's application/octet-stream Content-Type for
@@ -24,7 +18,7 @@ function playableExtensionOf(name: string | undefined): string | undefined {
 export function buildStreamUrl(fileId: string, name?: string): string {
   const base = `${DRIVE_STREAM_PREFIX}${encodeURIComponent(fileId)}`;
   const ext = playableExtensionOf(name);
-  return ext ? `${base}?ext=${ext}` : base;
+  return ext ? `${base}${EXT_QUERY_PARAM}${ext}` : base;
 }
 
 export function getPrefetchedStreamUrl(fileId: string): string | undefined {

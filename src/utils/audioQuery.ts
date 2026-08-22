@@ -42,9 +42,23 @@ function buildAudioCondition(
   return includeFolders ? `(mimeType='${FOLDER_MIME}' or ${ext})` : `(${ext})`;
 }
 
-export function hasAudioExtension(name: string): boolean {
+// Playable extension of a file name without the leading dot ("song.flac" →
+// "flac"), or undefined. Single source of truth for extension logic alongside
+// hasAudioExtension; streamPrefetcher reuses this to thread the extension
+// through the ?ext= URL query param for the SW proxy.
+export function playableExtensionOf(
+  name: string | undefined,
+): string | undefined {
+  if (!name) return undefined;
   const lower = name.toLowerCase();
-  return PLAYABLE_AUDIO_EXTENSIONS.some((ext) => lower.endsWith(ext));
+  for (const ext of PLAYABLE_AUDIO_EXTENSIONS) {
+    if (lower.endsWith(ext)) return ext.slice(1);
+  }
+  return undefined;
+}
+
+export function hasAudioExtension(name: string): boolean {
+  return playableExtensionOf(name) !== undefined;
 }
 
 // Playable-extension-only: a file is audio iff its name ends in a playable
