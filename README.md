@@ -24,7 +24,7 @@ DrPlay is a **Windows desktop app** (Windows 10 and later) that turns your **Goo
 
 ## Features
 
-- **Stream directly from Drive** — playback proxies straight to `googleapis.com` through an in-app service worker (`/drive-stream/`), with buffer + prefetch for shaky connections
+- **Stream directly from Drive** — desktop playback proxies straight to `googleapis.com` through an in-app service worker (`/drive-stream/`), with buffer + prefetch for shaky connections; on Android the service worker is unavailable, so playback streams via the native audio plugin (ExoPlayer) directly from Drive instead
 - **Home for your library** — greeting, Recent Files, Recently Added, Heavy Rotation, Discover, Jump Back In (`src/ui/HomeTab/`)
 - **Full My Drive explorer** — virtualized list (smooth even with thousands of files), folder navigation, breadcrumbs, search, sort, pagination
 - **Selection & bulk ops** — multi-select, bulk move / delete, create folder, upload files & folders (drag-drop), download (`src/ui/MainContent/`, `src/hooks/useMenuDownload.ts`)
