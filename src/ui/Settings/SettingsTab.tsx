@@ -190,7 +190,12 @@ export function SettingsTab({
         setCustomDownloadPath(selected);
         setDownloadPath(selected);
       }
-    } catch {
+    } catch (err: unknown) {
+      void captureError({
+        level: "warn",
+        source: "SettingsTab",
+        message: `desktop-folder-pick-failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
       showErrorToast(t("settings.select_folder_error"));
     }
   };

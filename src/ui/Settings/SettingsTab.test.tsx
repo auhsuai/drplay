@@ -193,6 +193,40 @@ describe("SettingsTab download path display", () => {
   });
 });
 
+describe("SettingsTab download path pick failure logging", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    vi.mocked(open).mockReset();
+    getEffectiveDownloadPath.mockReset();
+    captureErrorMocks.captureError.mockReset();
+    showErrorToast.mockReset();
+    getEffectiveDownloadPath.mockResolvedValue("");
+  });
+
+  it("logs a warn via captureError when the folder picker dialog fails", async () => {
+    vi.mocked(open).mockRejectedValue(new Error("dialog exploded"));
+    render(<SettingsTab {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "Change Path" }));
+    await waitFor(() => {
+      expect(captureErrorMocks.captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          source: "SettingsTab",
+          message: expect.stringContaining(
+            "desktop-folder-pick-failed",
+          ) as unknown as string,
+        }),
+      );
+    });
+    expect(showErrorToast).toHaveBeenCalledWith(
+      "Couldn't select folder. Try again.",
+    );
+  });
+});
+
 describe("SettingsTab clear cache button", () => {
   afterEach(() => {
     cleanup();
