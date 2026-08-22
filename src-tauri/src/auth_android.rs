@@ -19,6 +19,7 @@
 //    are accepted.
 // 5. Paste the Android client id (ends in .apps.googleusercontent.com) into
 //    ANDROID_CLIENT_ID below.
+use crate::auth_errors::format_exchange_error;
 use crate::dpop::dpop_http_client;
 use oauth2::basic::BasicClient;
 use oauth2::{
@@ -36,7 +37,11 @@ use url::Url;
 /// registered for the Android OAuth client in GCP exactly (see module docs).
 /// Both `com.drplay.app:/oauth2redirect` and `com.drplay.app://oauth2redirect`
 /// resolve to the same deep-link intent filter (scheme-only, no host).
-const MOBILE_REDIRECT_URI: &str = "com.drplay.app:/oauth2redirect";
+///
+/// `pub(crate)` so the moved pipeline tests in auth_errors can build a
+/// client shaped exactly like `login_google_mobile` without duplicating the
+/// literal.
+pub(crate) const MOBILE_REDIRECT_URI: &str = "com.drplay.app:/oauth2redirect";
 
 /// GCP OAuth client id for the ANDROID app (public client — no secret, per
 /// RFC 8252). Created 2026-08-15 in Google Cloud Console project 72581565914;
@@ -223,7 +228,7 @@ pub async fn login_google_mobile(app: tauri::AppHandle) -> Result<Value, String>
                         "refresh_token": token.refresh_token().map(|t| t.secret().to_string()),
                         "expires_in": token.expires_in().map(|d| d.as_secs()),
                     })),
-                    Err(e) => Err(format!("Failed to exchange token: {e:?}")),
+                    Err(e) => Err(format_exchange_error(&e)),
                 };
             }
             Err(OAuthError::CsrfMismatch) | Err(OAuthError::MissingState) | Err(OAuthError::MalformedUrl) => {

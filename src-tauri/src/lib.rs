@@ -9,6 +9,7 @@ pub mod protocol;
 mod thumbnail;
 mod auth;
 mod auth_android;
+mod auth_errors;
 mod dpop;
 #[cfg(desktop)]
 mod tray;
