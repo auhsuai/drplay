@@ -2238,13 +2238,14 @@ describe("uploadManager", () => {
 
     it("11. cancel bytes-upload đang retry giữa backoff → không retry tiếp, error aborted", async () => {
       vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
-      uploadFileResumable
-        .mockRejectedValueOnce(
-          new UploadErrorClass("network hiccup", "network"),
-        )
-        .mockRejectedValueOnce(
-          new UploadErrorClass("should never be called", "network"),
-        );
+      uploadFileResumable.mockRejectedValueOnce(
+        new UploadErrorClass("network hiccup", "network"),
+      );
+      // Exactly ONE queued rejection: cancel-during-backoff must prevent
+      // attempt #2 entirely. An unconsumed second mockRejectedValueOnce here
+      // used to survive vi.clearAllMocks() (which clears call history only,
+      // never the once-queue of this cached vi.fn) and hijack call #1 of the
+      // next test — see 11b history.
 
       um.startUploads([fileSeed("r.mp3")], TOKEN);
       await realTick();
@@ -2275,13 +2276,9 @@ describe("uploadManager", () => {
 
     it("11b. abort đúng LÚC quyết định retry → thoát NGAY trước backoff (không ngủ trọn Retry-After)", async () => {
       vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
-      // Test 11 aborts mid-backoff, so its second queued
-      // mockRejectedValueOnce ("should never be called") is NEVER consumed —
-      // and clearAllMocks only clears call history, not the once-queue of
-      // this cached vi.fn. Drain it first or call #1 below eats that stale
-      // rejection instead of our implementation.
-      uploadFileResumable.mockReset();
-      uploadFileResumable.mockResolvedValue(makeDriveFile("file-x", "x.mp3"));
+      // Test 11 queues exactly ONE once-rejection and consumes it, so nothing
+      // stale leaks across clearAllMocks into this test's first call — the
+      // beforeEach default (mockResolvedValue file-x) applies here directly.
       // Abort lands synchronously INSIDE the attempt — by the time the
       // rejection reaches uploadWithRetry's catch, signal.aborted is already
       // true, so the retry decision point must bail BEFORE sleeping.
