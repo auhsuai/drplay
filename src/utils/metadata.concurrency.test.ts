@@ -262,6 +262,48 @@ describe("lruKeys + cache invalidation hardening", () => {
     }
   });
 
+  it("generation guard: a clear during the IDB put does not resurrect the LRU key", async () => {
+    // Companion to the guard above: there the clear landed during the GET
+    // (caught by the pre-put check). Here the get resolves cleanly and setCache
+    // suspends inside the awaited PUT when clearAllMetadataCache() bumps the
+    // generation. Releasing the put afterwards must NOT run updateLRU — on
+    // unguarded code it re-added the key to localStorage AFTER the user's
+    // clear, resurrecting stale bookkeeping.
+    localStorage.removeItem(METADATA_LRU_KEY);
+    clearAllMetadataCache();
+
+    const metadataCacheTable = db.metadataCache as unknown as {
+      put: (row: unknown) => Promise<unknown>;
+    };
+    const originalPut = metadataCacheTable.put;
+    let releasePut!: () => void;
+    const pendingPut = new Promise<void>((resolve) => {
+      releasePut = resolve;
+    });
+    const putMock = vi.fn(() => pendingPut);
+    metadataCacheTable.put = putMock;
+
+    try {
+      cacheTrackMetadata("gen-put-guard", makeEntry());
+      await flushPromises();
+      // The get resolved and passed the first generation check; setCache is
+      // now suspended on the pending put.
+      expect(putMock).toHaveBeenCalledTimes(1);
+
+      clearAllMetadataCache();
+      releasePut();
+      await flushPromises();
+
+      const stored = JSON.parse(
+        localStorage.getItem(METADATA_LRU_KEY) || "[]",
+      ) as string[];
+      expect(stored).not.toContain("metadata_gen-put-guard");
+      expect(localStorage.getItem(METADATA_LRU_KEY)).toBeNull();
+    } finally {
+      metadataCacheTable.put = originalPut;
+    }
+  });
+
   it("getCacheEntry treats entries with a stale CACHE_VERSION as a miss", async () => {
     localStorage.removeItem(METADATA_LRU_KEY);
     clearAllMetadataCache();

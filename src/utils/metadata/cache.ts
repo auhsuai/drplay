@@ -308,5 +308,11 @@ export async function setCache(
     data: newEntry,
     ts: Date.now(),
   });
+  // Same TOCTOU as the get-side guard: clearAllMetadataCache() may bump the
+  // generation while this put is in flight. Touching the LRU now would
+  // resurrect the key into localStorage/bookkeeping AFTER the user's clear,
+  // so re-check before updateLRU (the stale row itself, if it landed past the
+  // clear's IDB delete, stays orphaned bookkeeping-wise until the next clear).
+  if (genAtStart !== cacheGeneration) return;
   updateLRU(key);
 }
