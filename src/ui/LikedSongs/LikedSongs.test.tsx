@@ -151,6 +151,28 @@ describe("LikedSongs debug empty trigger", () => {
   });
 });
 
+describe("LikedSongs load failure handling", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("shows an error toast (not a silent empty state) when loading favorites fails", async () => {
+    mocks.getFavorites.mockRejectedValueOnce(new Error("db-boom"));
+    renderView();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.showErrorToast).toHaveBeenCalledTimes(1);
+    expect(mocks.showErrorToast).toHaveBeenCalledWith(
+      "Couldn't load liked songs. Try again.",
+    );
+    expect(mocks.captureError).toHaveBeenCalled();
+  });
+});
+
 describe("LikedSongs mobile gate (IS_MOBILE) — title + size only", () => {
   afterEach(() => {
     platformMock.IS_MOBILE = false;

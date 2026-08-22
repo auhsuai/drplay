@@ -18,6 +18,12 @@ import { formatBytes } from "../../utils/formatBytes";
 
 const LIKED_SONGS_MODULE = "LikedSongs";
 
+// Shared error-message formatter (name-free, message-only) for every
+// try/catch in this file.
+function formatErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 interface LikedSongsProps {
   onPlay: (track: Track, context: Track[], startIndex?: number) => void;
   currentTrack?: Track | null;
@@ -29,24 +35,11 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    loadFavorites().catch(
-      (err: unknown) =>
-        void captureError({
-          level: "error",
-          source: LIKED_SONGS_MODULE,
-          message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
-        }),
-    );
+    // loadFavorites never throws (it owns the single real catch below).
+    void loadFavorites();
 
     const handleUpdate = () => {
-      void loadFavorites().catch(
-        (err: unknown) =>
-          void captureError({
-            level: "error",
-            source: LIKED_SONGS_MODULE,
-            message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-      );
+      void loadFavorites();
     };
     window.addEventListener(FAVORITES_UPDATED_EVENT, handleUpdate);
     window.addEventListener("user-changed", handleUpdate);
@@ -61,10 +54,13 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       const favs = await getFavorites();
       setFavorites(favs);
     } catch (e) {
+      // getFavorites propagates DB failures; surface them instead of letting
+      // the empty state lie ("No liked songs yet" after a real error).
+      showErrorToast(t("liked_songs.load_failed"));
       void captureError({
-        level: "error",
+        level: "warn",
         source: LIKED_SONGS_MODULE,
-        message: `failed-to-load-favorites: ${e instanceof Error ? e.message : String(e)}`,
+        message: `failed-to-load-favorites: ${formatErrorMessage(e)}`,
       });
     }
   };
@@ -101,7 +97,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
       void captureError({
         level: "error",
         source: LIKED_SONGS_MODULE,
-        message: `remove-favorite-failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `remove-favorite-failed: ${formatErrorMessage(e)}`,
       });
     }
   };

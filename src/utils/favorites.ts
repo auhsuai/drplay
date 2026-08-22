@@ -19,20 +19,14 @@ function classifyFavoriteError(err: unknown): string {
   return `${name}: ${message}`;
 }
 
+// Propagates read failures to the caller (no catch-all): a swallowed error
+// resolving [] made the LikedSongs screen show "No liked songs yet" after a
+// DB failure as if the user had nothing saved.
 export async function getFavorites(): Promise<Track[]> {
-  try {
-    const email = getCurrentUserEmail();
-    const favs = await db.favorites.where("userEmail").equals(email).toArray();
-    // Sort descending by createdAt to simulate unshift
-    return favs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: FAV_MODULE,
-      message: `get-failed: ${classifyFavoriteError(e)}`,
-    });
-    return [];
-  }
+  const email = getCurrentUserEmail();
+  const favs = await db.favorites.where("userEmail").equals(email).toArray();
+  // Sort descending by createdAt to simulate unshift
+  return favs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
 export async function addFavorite(track: Track): Promise<void> {

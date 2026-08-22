@@ -92,7 +92,8 @@
     "empty_title": "No liked songs yet",
     "empty_subtitle": "Tap the heart on any song to save it.",
     "add_failed": "Couldn't add to favorites. Try again.",
-    "remove_failed": "Couldn't remove from favorites. Try again."
+    "remove_failed": "Couldn't remove from favorites. Try again.",
+    "load_failed": "Couldn't load liked songs. Try again."
   },
   "now_playing": {
     "progress": "Playback progress"

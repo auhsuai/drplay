@@ -92,7 +92,8 @@
     "empty_title": "Chưa có bài hát nào",
     "empty_subtitle": "Nhấn trái tim trên bài hát để lưu vào đây.",
     "add_failed": "Không thể thêm vào yêu thích. Vui lòng thử lại.",
-    "remove_failed": "Không thể bỏ khỏi yêu thích. Vui lòng thử lại."
+    "remove_failed": "Không thể bỏ khỏi yêu thích. Vui lòng thử lại.",
+    "load_failed": "Không thể tải bài hát đã thích. Vui lòng thử lại."
   },
   "now_playing": {
     "progress": "Tiến độ phát"

@@ -139,6 +139,19 @@ beforeEach(() => {
 });
 
 describe("favorites (Dexie-backed)", () => {
+  it("getFavorites propagates the read failure instead of resolving []", async () => {
+    setUser(EMAIL_A);
+    const whereSpy = vi.spyOn(db.favorites, "where").mockReturnValue({
+      equals: () => ({
+        toArray: () => Promise.reject(new Error("idb-boom")),
+      }),
+    } as unknown as ReturnType<typeof db.favorites.where>);
+
+    await expect(getFavorites()).rejects.toThrow("idb-boom");
+
+    whereSpy.mockRestore();
+  });
+
   it("addFavorite wraps the read-modify-write in a readwrite transaction and puts the track", async () => {
     setUser(EMAIL_A);
     const txnSpy = vi.spyOn(store, "transaction");
