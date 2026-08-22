@@ -51,10 +51,30 @@ pub fn validate_file_id(raw: &str) -> Result<(), String> {
     if raw.len() > 128 {
         return Err("file_id too long (max 128)".into());
     }
-    if !raw.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return Err(format!("file_id contains invalid characters: {:?}", raw));
+    if let Some((idx, bad)) = raw
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '-' || *c == '_'))
+    {
+        return Err(format!(
+            "file_id contains invalid characters (len {}, first invalid at byte {}, char class {})",
+            raw.len(),
+            idx,
+            classify_char(bad),
+        ));
     }
     Ok(())
+}
+
+fn classify_char(c: char) -> &'static str {
+    if c.is_control() {
+        "control"
+    } else if c.is_whitespace() {
+        "whitespace"
+    } else if c.is_ascii_graphic() {
+        "printable ascii"
+    } else {
+        "non-ascii"
+    }
 }
 
 pub struct AccessRecorder {
@@ -105,5 +125,28 @@ impl AccessRecorder {
             }
         }
         self.last_flush = Instant::now();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_file_id_error_does_not_echo_raw_input() {
+        let hostile = "abc<script>alert(1)</script>";
+        let err = validate_file_id(hostile).unwrap_err();
+        assert!(
+            !err.contains("script") && !err.contains('<'),
+            "error string must not echo raw input fragments, got: {err}"
+        );
+        assert!(err.contains("invalid characters"));
+    }
+
+    #[test]
+    fn validate_file_id_contract_unchanged() {
+        assert_eq!(validate_file_id("drive_1a2B-3c_4d"), Ok(()));
+        assert!(validate_file_id("").is_err());
+        assert!(validate_file_id(&"x".repeat(129)).is_err());
     }
 }
