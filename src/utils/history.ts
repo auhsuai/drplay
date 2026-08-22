@@ -217,19 +217,19 @@ export async function getHeavyRotation(): Promise<Track[]> {
  */
 export async function getRandomDiscoveries(): Promise<Track[]> {
   try {
-    const rows = await db.metadataCache.toArray();
-    const keys = rows
-      .filter((r) => {
-        const entry = r.entry as { data?: { v: number } } | undefined;
-        return entry && entry.data && entry.data.v < V_PLACEHOLDER;
-      })
-      .map((r) => r.key)
-      .filter(
-        (k) => typeof k === "string" && k.startsWith(METADATA_KEY_PREFIX),
-      );
-    if (keys.length === 0) return [];
+    // Key-only scan: the metadata-key prefix is applied to the primary key
+    // inside IndexedDB (':id'), so building the candidate list deserializes
+    // no entry payloads. The v predicate lives inside each entry value, so
+    // candidate rows are validated lazily while walking the shuffled keys —
+    // the walk stops as soon as RANDOM_DISCOVERIES_LIMIT real entries are
+    // collected and the whole table never materializes in memory at once.
+    const candidateKeys = await db.metadataCache
+      .where(":id")
+      .startsWith(METADATA_KEY_PREFIX)
+      .primaryKeys();
+    if (candidateKeys.length === 0) return [];
 
-    const shuffled = [...keys];
+    const shuffled = [...candidateKeys];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       const a = shuffled[i];
@@ -237,13 +237,21 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
       if (a === undefined || b === undefined) continue;
       [shuffled[i], shuffled[j]] = [b, a];
     }
-    const selectedKeys = shuffled.slice(0, RANDOM_DISCOVERIES_LIMIT);
 
     const tracks: Track[] = [];
-    for (const key of selectedKeys) {
-      const id = key.replace(METADATA_KEY_PREFIX, "");
+    for (const key of shuffled) {
+      if (tracks.length >= RANDOM_DISCOVERIES_LIMIT) break;
+      // A row can vanish between the key scan and this get — skip it.
+      const row = await db.metadataCache.get(key);
+      if (!row) continue;
+      const entry = row.entry as { data?: { v: number } } | undefined;
+      const isValid =
+        entry !== undefined &&
+        entry.data !== undefined &&
+        entry.data.v < V_PLACEHOLDER;
+      if (!isValid) continue;
       tracks.push({
-        id,
+        id: key.replace(METADATA_KEY_PREFIX, ""),
         title: "Audio Track",
         artist: "",
         streamUrl: "",

@@ -2,7 +2,12 @@
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { db } from "../db/db";
-import type { RecentTrackRow, PlayCountRow, FolderVisitRow } from "../db/db";
+import type {
+  RecentTrackRow,
+  PlayCountRow,
+  FolderVisitRow,
+  MetadataCacheRow,
+} from "../db/db";
 import type { PlayCountEntry, FolderVisitEntry } from "./history";
 import type { Track } from "../types";
 import {
@@ -135,6 +140,68 @@ describe("history (Dexie-backed)", () => {
     const discoveries = await getRandomDiscoveries();
     const ids = discoveries.map((t) => t.id).sort();
     expect(ids).toEqual(["a"]);
+  });
+
+  it("getRandomDiscoveries caps at limit with unique entries when table has more valid rows", async () => {
+    const rows: MetadataCacheRow[] = [];
+    for (let i = 0; i < 20; i++) {
+      rows.push({
+        key: `metadata_${String(i)}`,
+        entry: { version: 2, data: { v: 8 }, ts: i },
+      });
+    }
+    await db.metadataCache.bulkPut(rows);
+
+    const discoveries = await getRandomDiscoveries();
+    expect(discoveries.length).toBeLessThanOrEqual(12);
+    expect(discoveries.length).toBe(12);
+    const ids = discoveries.map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      expect(rows.some((r) => r.key === `metadata_${id}`)).toBe(true);
+    }
+  });
+
+  it("getRandomDiscoveries picks only real entries in a placeholder-heavy table", async () => {
+    const rows: MetadataCacheRow[] = [];
+    for (let i = 0; i < 15; i++) {
+      rows.push({
+        key: `metadata_real_${String(i)}`,
+        entry: { version: 2, data: { v: 8 }, ts: i },
+      });
+    }
+    for (let i = 0; i < 40; i++) {
+      rows.push({
+        key: `metadata_ph_${String(i)}`,
+        entry: { version: 2, data: { v: 9 }, ts: 1000 + i },
+      });
+    }
+    await db.metadataCache.bulkPut(rows);
+
+    const discoveries = await getRandomDiscoveries();
+    expect(discoveries.length).toBeLessThanOrEqual(12);
+    const validIds = new Set(
+      rows
+        .filter((r) => (r.entry as { data?: { v?: number } }).data?.v === 8)
+        .map((r) => r.key.replace("metadata_", "")),
+    );
+    const ids = discoveries.map((t) => t.id);
+    for (const id of ids) {
+      expect(validIds.has(id)).toBe(true);
+    }
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("getRandomDiscoveries does not materialize the whole metadataCache table (no toArray full scan)", async () => {
+    for (let i = 0; i < 5; i++) {
+      await db.metadataCache.put({
+        key: `metadata_${String(i)}`,
+        entry: { version: 2, data: { v: 8 }, ts: i },
+      });
+    }
+    const toArraySpy = vi.spyOn(db.metadataCache, "toArray");
+    await getRandomDiscoveries();
+    expect(toArraySpy).not.toHaveBeenCalled();
   });
 
   it("recordFolderVisit tracks counts and name", async () => {
