@@ -133,3 +133,29 @@ describe("logger sanitizeArg — upgrade circular handling", () => {
     expect(String(san)).not.toContain("supersecret");
   });
 });
+
+describe("logger sanitizeString — widened token/id value charset", () => {
+  it("regression: refresh_token with slash-prefixed base64 value is fully masked", () => {
+    const out = sanitizeString("refresh_token=1//secret==");
+    expect(out).toBe("[REDACTED_TOKEN]");
+    expect(out).not.toContain("secret");
+  });
+
+  it("masks access_token / token / Bearer values containing / + =", () => {
+    expect(sanitizeString("access_token=ya29.a0Af+1/bC==")).toBe(
+      "[REDACTED_TOKEN]",
+    );
+    expect(sanitizeString("?token=1//abc-_=")).toBe("[REDACTED_TOKEN]");
+    expect(sanitizeString("Bearer 1//abc-_==")).toBe("Bearer [REDACTED_TOKEN]");
+  });
+
+  it("masks id-key values containing / - _ =", () => {
+    expect(sanitizeString("driveFileId=1//abc-_")).toBe("[REDACTED_ID]");
+    expect(sanitizeString("?id=1//abc-_")).toBe("?id=[REDACTED_ID]");
+  });
+
+  it("leaves non-sensitive messages untouched (charset widening adds no new keys)", () => {
+    const plain = "user has 3 playlists and 12 tracks";
+    expect(sanitizeString(plain)).toBe(plain);
+  });
+});
