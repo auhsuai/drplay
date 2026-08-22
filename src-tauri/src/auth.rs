@@ -127,7 +127,7 @@ pub async fn login_google_native() -> Result<Value, String> {
         .set_pkce_verifier(pkce_verifier)
         .request_async(dpop_http_client)
         .await
-        .map_err(|e| format!("Failed to exchange token: {:?}", e))?;
+        .map_err(|e| format_exchange_error(&e))?;
 
     Ok(serde_json::json!({
         "access_token": token_result.access_token().secret().to_string(),
@@ -195,17 +195,21 @@ fn build_token_client(use_android_client: bool) -> Result<BasicClient, String> {
 type TokenRequestError =
     RequestTokenError<DpopError, StandardErrorResponse<BasicErrorResponseType>>;
 
-/// Renders a token-refresh failure as a short IPC-safe diagnostic string.
+/// Renders an OAuth token-request failure (refresh-token flow OR login
+/// code-exchange) as a short IPC-safe diagnostic string.
 ///
-/// The previous `format!("Failed to refresh token: {:?}", e)` embedded the
-/// raw HTTP response body (`RequestTokenError::Parse(_, Vec<u8>)`) and DPoP/
-/// reqwest internals into the error string, which crosses IPC into errStr
-/// (apiClient.ts) and is persisted in JS-side error logs. Each arm must emit
-/// structural facts only, while preserving the exact substrings that
-/// `src/utils/apiClient.ts` string-matches to classify failures:
-/// `invalid_grant` (revoked/expired bucket), `timeout`/`unreachable`
-/// (network bucket).
-fn format_refresh_error(e: &TokenRequestError) -> String {
+/// Both `exchange_refresh_token` (refresh_google_token) and
+/// `exchange_code` (login_google_native) fail with the same
+/// `RequestTokenError`, whose derive(Debug) embeds the raw HTTP response
+/// body (`RequestTokenError::Parse(_, Vec<u8>)`) and DPoP/reqwest internals.
+/// Those strings cross IPC into errStr (apiClient.ts / LoginScreen.tsx) and
+/// are persisted in JS-side error logs. Each arm must emit structural facts
+/// only, while preserving the exact substrings that JS string-matching
+/// classifies on: `invalid_grant` (revoked/expired bucket in apiClient.ts),
+/// `timeout`/`unreachable` (network bucket in apiClient.ts). The login
+/// exchange call site prefixes this with "Failed to exchange token: " — no
+/// consumer matches on "exchange", so the prefix is diagnostic-only.
+fn format_token_request_error(e: &TokenRequestError) -> String {
     match e {
         RequestTokenError::ServerResponse(resp) => {
             // RFC 6749 §5.2 machine-readable code; Display renders the
@@ -241,6 +245,16 @@ fn format_refresh_error(e: &TokenRequestError) -> String {
     }
 }
 
+/// Exchange-flow wrapper: keeps the pre-existing "Failed to exchange
+/// token:" context prefix around the sanitized diagnostics (no consumer
+/// string-matches the prefix; it is diagnostic-only).
+fn format_exchange_error(e: &TokenRequestError) -> String {
+    format!(
+        "Failed to exchange token: {}",
+        format_token_request_error(e)
+    )
+}
+
 #[command]
 pub async fn refresh_google_token(refresh_token: String) -> Result<Value, String> {
     let client = build_token_client(cfg!(target_os = "android"))?;
@@ -249,7 +263,7 @@ pub async fn refresh_google_token(refresh_token: String) -> Result<Value, String
         .exchange_refresh_token(&RefreshToken::new(refresh_token))
         .request_async(dpop_http_client)
         .await
-        .map_err(|e| format_refresh_error(&e))?;
+        .map_err(|e| format_token_request_error(&e))?;
 
     let access_token = token_result.access_token().secret().to_string();
     let new_refresh_token = token_result.refresh_token().map(|t| t.secret().to_string());
@@ -313,7 +327,8 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // format_refresh_error: IPC-safe rendering of token-refresh failures.
+    // format_token_request_error: IPC-safe rendering of token-request
+    // failures (refresh flow AND login code-exchange).
     //
     // oauth2's `RequestTokenError::Parse(_, Vec<u8>)` carries the RAW HTTP
     // response body and derive(Debug) prints it, so the pre-fix
@@ -325,7 +340,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     use oauth2::http::{header::HeaderMap, StatusCode};
-    use oauth2::{HttpRequest, HttpResponse};
+    use oauth2::{HttpRequest, HttpResponse, PkceCodeVerifier};
 
     async fn portal_html_client(_request: HttpRequest) -> Result<HttpResponse, DpopError> {
         Ok(HttpResponse {
@@ -351,7 +366,8 @@ mod tests {
         // Documents the vulnerability this task fixes: oauth2's Debug on the
         // Parse variant embeds the entire raw response body. If a future
         // oauth2 upgrade stops doing that, the sanitization in
-        // format_refresh_error becomes defense-in-depth rather than required.
+        // format_token_request_error becomes defense-in-depth rather than
+        // required.
         let err = tokio::runtime::Runtime::new()
             .expect("tokio runtime")
             .block_on(async {
@@ -382,7 +398,7 @@ mod tests {
 
     #[test]
     fn parse_variant_hides_raw_body_and_keeps_field_path_only() {
-        let formatted = format_refresh_error(
+        let formatted = format_token_request_error(
             &tokio::runtime::Runtime::new()
                 .expect("tokio runtime")
                 .block_on(async {
@@ -409,7 +425,7 @@ mod tests {
                 None,
             ),
         );
-        let formatted = format_refresh_error(&err);
+        let formatted = format_token_request_error(&err);
         // Keyword contract: apiClient.ts buckets "invalid_grant" as
         // revoked/expired; the human-readable description must NOT cross IPC.
         assert_eq!(formatted, "server_error:invalid_grant");
@@ -417,7 +433,7 @@ mod tests {
 
     #[test]
     fn server_response_pipeline_variant_keeps_invalid_grant_keyword() {
-        let formatted = format_refresh_error(
+        let formatted = format_token_request_error(
             &tokio::runtime::Runtime::new()
                 .expect("tokio runtime")
                 .block_on(async {
@@ -460,7 +476,7 @@ mod tests {
 
         let err: TokenRequestError = RequestTokenError::Request(DpopError::Http(http_err));
         // apiClient.ts buckets "unreachable" into its network branch.
-        assert_eq!(format_refresh_error(&err), "request_error:unreachable");
+        assert_eq!(format_token_request_error(&err), "request_error:unreachable");
     }
 
     #[test]
@@ -493,7 +509,7 @@ mod tests {
 
         let err: TokenRequestError = RequestTokenError::Request(DpopError::Http(http_err));
         // apiClient.ts buckets "timeout" into its network branch.
-        assert_eq!(format_refresh_error(&err), "request_error:timeout");
+        assert_eq!(format_token_request_error(&err), "request_error:timeout");
     }
 
     #[test]
@@ -509,7 +525,7 @@ mod tests {
         ];
         for (dpop_err, expected) in cases {
             let err: TokenRequestError = RequestTokenError::Request(dpop_err);
-            assert_eq!(format_refresh_error(&err), expected);
+            assert_eq!(format_token_request_error(&err), expected);
         }
     }
 
@@ -517,6 +533,72 @@ mod tests {
     fn other_variant_emits_bare_other_marker() {
         let err: TokenRequestError =
             RequestTokenError::Other("oauth2-internal message".to_string());
-        assert_eq!(format_refresh_error(&err), "other");
+        assert_eq!(format_token_request_error(&err), "other");
+    }
+
+    // ------------------------------------------------------------------
+    // Exchange flow (login_google_native): the SAME RequestTokenError type
+    // crosses IPC from the login command. The pre-fix
+    // `format!("Failed to exchange token: {:?}", e)` leaked the raw body /
+    // internals exactly like the refresh path did. LoginScreen.tsx buckets
+    // errors by substring ("cancel", /timeout|timed out/) — none of those
+    // keywords may appear spuriously, and no consumer matches "exchange".
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn exchange_parse_variant_hides_raw_body_and_keeps_field_path_only() {
+        let formatted = format_exchange_error(
+            &tokio::runtime::Runtime::new()
+                .expect("tokio runtime")
+                .block_on(async {
+                    build_token_client(true)
+                        .expect("client must build")
+                        .exchange_code(AuthorizationCode::new("ac".to_string()))
+                        .set_pkce_verifier(PkceCodeVerifier::new("pv".to_string()))
+                        .request_async(portal_html_client)
+                        .await
+                        .expect_err("portal HTML must fail to parse")
+                }),
+        );
+        assert!(
+            formatted.starts_with("Failed to exchange token: parse_error:"),
+            "got: {formatted}"
+        );
+        assert!(!formatted.contains("<html>"), "leaked body: {formatted}");
+        assert!(
+            !formatted.contains("captive-portal"),
+            "leaked body: {formatted}"
+        );
+        assert!(
+            formatted.len() < 100,
+            "must stay a short fixed string: {formatted}"
+        );
+        // A parse failure must never be misread as user cancellation by the
+        // LoginScreen `includes("cancel")` bucket.
+        assert!(!formatted.contains("cancel"), "got: {formatted}");
+    }
+
+    #[test]
+    fn exchange_server_response_variant_keeps_invalid_grant_keyword_only() {
+        let err = RequestTokenError::<DpopError, _>::ServerResponse(
+            StandardErrorResponse::new(
+                BasicErrorResponseType::InvalidGrant,
+                Some("secret-description".to_string()),
+                None,
+            ),
+        );
+        let formatted = format_exchange_error(&err);
+        assert!(
+            formatted.starts_with("Failed to exchange token:"),
+            "got: {formatted}"
+        );
+        assert!(
+            formatted.contains("server_error:invalid_grant"),
+            "got: {formatted}"
+        );
+        assert!(
+            !formatted.contains("secret-description"),
+            "leaked description value: {formatted}"
+        );
     }
 }
