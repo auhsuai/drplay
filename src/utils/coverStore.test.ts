@@ -215,7 +215,9 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
   // ORDER MATTERS from here on: the two tests below both flip the module-level
   // schemeUnavailable flag on the SHARED module instance, so they must stay at
   // the end of this file — any test declared after them would see the scheme
-  // as permanently disabled and fail with 0 fetch calls.
+  // as permanently disabled and fail with 0 fetch calls. The transient-offline
+  // tests after them import FRESH module copies (resetModules) and are immune
+  // to that shared state, but stay in the tail region for readability.
   it("logs a warn and resolves on a network-level failure (no retry)", async () => {
     const fetchMock = vi.fn(() =>
       Promise.reject(new TypeError("Failed to fetch")),
@@ -239,7 +241,7 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
     );
   });
 
-  it("disables future POSTs after the first fetch failure (scheme blocked once)", async () => {
+  it("disables future POSTs after a scheme-dead failure (TypeError while the browser is online)", async () => {
     // The disable-once flag is module state, so this test imports a FRESH
     // module copy (cache cleared) — the shared instance may already be
     // disabled by the "network-level failure" test above.
@@ -247,6 +249,11 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
     const { postCoverToCache: freshPost } = await import("./coverStore");
     const { captureError: freshCaptureError } = await import("./errorLog");
     const freshMockedCaptureError = vi.mocked(freshCaptureError);
+
+    // Contract (audit B.1): ONLY a TypeError observed while ONLINE marks the
+    // scheme dead forever. Pin onLine=true explicitly so this test keeps
+    // asserting exactly that case regardless of the runtime's own navigator.
+    vi.stubGlobal("navigator", { onLine: true });
 
     const fetchMock = vi
       .fn()
@@ -265,6 +272,58 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
     await freshPost("blocked-2", false, new Uint8Array([3]));
     await freshPost("blocked-3", true, new Uint8Array([4]));
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(freshMockedCaptureError).toHaveBeenCalledTimes(1);
+  });
+
+  it("transient offline failure does not permanently disable uploads", async () => {
+    // Fresh module copy: earlier tests latch schemeUnavailable on the SHARED
+    // instance; the transient-offline contract needs an untouched copy.
+    vi.resetModules();
+    const { postCoverToCache: freshPost } = await import("./coverStore");
+    const { captureError: freshCaptureError } = await import("./errorLog");
+    const freshMockedCaptureError = vi.mocked(freshCaptureError);
+
+    // Failure happens while the browser reports OFFLINE -> transient: warn +
+    // drop as always, but the path must NOT latch off for the whole session.
+    vi.stubGlobal("navigator", { onLine: false });
+    const failingFetch = vi.fn(() =>
+      Promise.reject(new TypeError("Failed to fetch")),
+    );
+    vi.stubGlobal("fetch", failingFetch);
+    await expect(
+      freshPost("offline-1", true, new Uint8Array([1])),
+    ).resolves.toBeUndefined();
+    expect(failingFetch).toHaveBeenCalledTimes(1);
+    expect(freshMockedCaptureError).toHaveBeenCalledTimes(1);
+
+    // Connection back (onLine=true) -> the very next POST must retry for real.
+    vi.stubGlobal("navigator", { onLine: true });
+    const okFetch = vi.fn(() => Promise.resolve(okResponse()));
+    vi.stubGlobal("fetch", okFetch);
+    await freshPost("back-online", true, new Uint8Array([2]));
+
+    expect(okFetch).toHaveBeenCalledTimes(1);
+    expect(freshMockedCaptureError).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays paused without fetching while still offline after a transient failure", async () => {
+    vi.resetModules();
+    const { postCoverToCache: freshPost } = await import("./coverStore");
+    const { captureError: freshCaptureError } = await import("./errorLog");
+    const freshMockedCaptureError = vi.mocked(freshCaptureError);
+
+    vi.stubGlobal("navigator", { onLine: false });
+    const fetchMock = vi.fn(() =>
+      Promise.reject(new TypeError("Failed to fetch")),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await freshPost("offline-pause-1", true, new Uint8Array([1]));
+    await freshPost("offline-pause-2", true, new Uint8Array([2]));
+
+    // Still offline -> uploads stay paused: exactly one attempt total, no
+    // per-track warn spam until connectivity returns.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(freshMockedCaptureError).toHaveBeenCalledTimes(1);
   });
