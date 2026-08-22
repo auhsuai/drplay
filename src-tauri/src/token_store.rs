@@ -28,6 +28,54 @@
 use keyring::Entry;
 
 use base64::Engine as _;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+/// One-time initialization cache shared by the Android Keystore setup
+/// (audit B-1): a SUCCESS is remembered exactly once per process, while a
+/// failure is never stored — the very next caller retries, so a transient
+/// startup race or Keystore hiccup cannot poison the vault until restart.
+///
+/// Extracted as a platform-independent type so its caching policy is
+/// unit-testable off-device; production only uses it on Android, hence the
+/// dead_code allowance on other targets.
+#[allow(dead_code)]
+struct RetryableInit {
+    /// Published once `init` has succeeded; Acquire/Release pairs make the
+    /// completion visible to every later caller (see std::sync::atomic docs).
+    completed_ok: AtomicBool,
+    /// Serializes attempts so concurrent callers cannot double-run `init`
+    /// while a success has not been published yet.
+    lock: Mutex<()>,
+}
+
+#[allow(dead_code)]
+impl RetryableInit {
+    const fn new() -> Self {
+        Self {
+            completed_ok: AtomicBool::new(false),
+            lock: Mutex::new(()),
+        }
+    }
+
+    fn ensure(&self, init: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        // Fast path: a completed init stays published for all later callers.
+        if self.completed_ok.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        // Re-check under the lock: another thread may have finished `init`
+        // between the fast path and acquiring the lock.
+        if !self.completed_ok.load(Ordering::Acquire) {
+            match init() {
+                Ok(()) => self.completed_ok.store(true, Ordering::Release),
+                // Deliberately NOT remembered: the next call retries `init`.
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+}
 
 /// Service name under which the refresh token is stored in the OS keychain.
 const SERVICE_NAME: &str = "drplay";
@@ -51,15 +99,26 @@ type VaultEntry = keyring_core::Entry;
 #[cfg(target_os = "android")]
 mod android_keystore {
     use std::ffi::c_void;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
 
     use jni::objects::GlobalRef;
     use jni::sys::jint;
     use jni::JavaVM;
 
-    /// One-time result of the Android Keystore store initialization.
-    /// The `Err` never contains credential material (no token).
-    static INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
+    use super::RetryableInit;
+
+    /// One-time cache for the Android Keystore store initialization: only a
+    /// success is remembered; failures stay retryable (audit B-1). The `Err`
+    /// never contains credential material (no token).
+    static INIT_CACHE: RetryableInit = RetryableInit::new();
+
+    /// Set once `ndk_context::initialize_android_context` has run. That
+    /// function asserts it is never called twice (ndk-context 0.1.1
+    /// src/lib.rs:82-88), so a retried init attempt — allowed since audit
+    /// B-1 after an earlier attempt failed later in the pipeline — must skip
+    /// this step instead of panicking.
+    static NDK_CONTEXT_READY: AtomicBool = AtomicBool::new(false);
 
     /// The process JavaVM, captured by `JNI_OnLoad` (see below). ART calls
     /// `JNI_OnLoad` with the VM pointer the moment `System.loadLibrary`
@@ -88,21 +147,27 @@ mod android_keystore {
     /// Install the Android Keystore credential store as the keyring default,
     /// exactly once per process. Returns a contextual error on any failure.
     pub fn ensure() -> Result<(), String> {
-        INIT_RESULT.get_or_init(initialize).clone()
+        INIT_CACHE.ensure(initialize)
     }
 
     fn initialize() -> Result<(), String> {
         let vm = find_java_vm()?;
         let context = find_application_context(&vm)?;
-        // SAFETY: `initialize_android_context` is called exactly once (guarded
-        // by INIT_RESULT above); the VM pointer stays valid for the process
-        // lifetime, and the context is a global ref we deliberately leak so it
-        // outlives any activity recreation.
-        unsafe {
-            ndk_context::initialize_android_context(
-                vm.get_java_vm_pointer().cast(),
-                context,
-            );
+        // SAFETY: `initialize_android_context` asserts it is called at most
+        // once (ndk-context 0.1.1 src/lib.rs:82-88); NDK_CONTEXT_READY keeps
+        // a retried attempt from re-running it when an earlier attempt got
+        // past this point and then failed (e.g. Store::new()). The VM pointer
+        // stays valid for the process lifetime, and the context is a global
+        // ref we deliberately leak so it outlives any activity recreation.
+        // INIT_CACHE serializes attempts, so no two threads race this check.
+        if !NDK_CONTEXT_READY.load(Ordering::Acquire) {
+            unsafe {
+                ndk_context::initialize_android_context(
+                    vm.get_java_vm_pointer().cast(),
+                    context,
+                );
+            }
+            NDK_CONTEXT_READY.store(true, Ordering::Release);
         }
         let store = android_native_keyring_store::Store::new()
             .map_err(|e| format!("Android Keystore store creation failed: {e}"))?;
@@ -172,7 +237,10 @@ fn refresh_token_entry() -> Result<VaultEntry, String> {
 }
 
 /// Persist the Google OAuth refresh token in the OS credential vault.
-#[tauri::command]
+///
+/// `(async)` keeps the synchronous body but moves execution off the main
+/// thread (Tauri v2 docs, "Async Commands"): keyring IO must never block UI.
+#[tauri::command(async)]
 pub fn set_refresh_token(token: String) -> Result<(), String> {
     let entry = refresh_token_entry()?;
     entry.set_password(&token).map_err(|e| {
@@ -182,7 +250,9 @@ pub fn set_refresh_token(token: String) -> Result<(), String> {
 }
 
 /// Read the persisted refresh token, or `None` when nothing is stored.
-#[tauri::command]
+///
+/// Runs off the main thread via `#[tauri::command(async)]` (keyring IO).
+#[tauri::command(async)]
 pub fn get_refresh_token() -> Result<Option<String>, String> {
     let entry = refresh_token_entry()?;
     match entry.get_password() {
@@ -201,7 +271,9 @@ pub fn get_refresh_token() -> Result<Option<String>, String> {
 /// token is gone, so the key is orphaned, and the next login should start
 /// with a fresh pair. A vault hiccup here must NOT fail the logout itself —
 /// the refresh token (the credential that matters) is already deleted by then.
-#[tauri::command]
+///
+/// Runs off the main thread via `#[tauri::command(async)]` (keyring IO).
+#[tauri::command(async)]
 pub fn delete_refresh_token() -> Result<(), String> {
     let entry = refresh_token_entry()?;
     let result = match entry.delete_credential() {
@@ -332,5 +404,54 @@ mod tests {
         assert_eq!(delete_refresh_token(), Ok(()));
         assert_eq!(get_refresh_token(), Ok(None));
         assert_eq!(get_dpop_key(), Ok(None));
+    }
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod init_cache_tests {
+    use std::cell::Cell;
+
+    use super::RetryableInit;
+
+    /// Regression test for audit B-1: a transient Keystore init failure (e.g.
+    /// `JNI_OnLoad` not yet run / `currentApplication()` null during startup
+    /// race) must NOT be cached — the next caller retries — while a success IS
+    /// cached so `initialize` still runs exactly once per process.
+    #[test]
+    fn failed_init_retries_on_next_call_and_success_is_cached() {
+        let cache = RetryableInit::new();
+        let attempts = Cell::new(0u32);
+
+        // Attempt 1: transient failure (no credential material in the error).
+        let first = cache.ensure(|| {
+            attempts.set(attempts.get() + 1);
+            Err("transient keystore hiccup".to_string())
+        });
+        assert_eq!(first, Err("transient keystore hiccup".to_string()));
+
+        // Attempt 2 MUST re-run init; caching the Err would fail this call
+        // forever with the stale error.
+        let second = cache.ensure(|| {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        });
+        assert_eq!(second, Ok(()));
+        assert_eq!(
+            attempts.get(),
+            2,
+            "second ensure() call must retry after a failed attempt"
+        );
+
+        // After success, init is cached: no further runs, exactly-once kept.
+        let third = cache.ensure(|| {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        });
+        assert_eq!(third, Ok(()));
+        assert_eq!(
+            attempts.get(),
+            2,
+            "a successful init must be cached (exactly-once preserved)"
+        );
     }
 }
