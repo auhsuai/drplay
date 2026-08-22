@@ -65,18 +65,20 @@ type DeferredCall = {
     value: Array<{ id: string; name: string; mimeType: string }>,
   ) => void;
   reject: (err: unknown) => void;
+  signal?: AbortSignal | undefined;
 };
 
 let deferredCalls: DeferredCall[] = [];
 
 // Keep the fetch pending until the test resolves it, so isLoading stays true
-// and the skeleton branch remains on screen.
+// and the skeleton branch remains on screen. Captures the AbortSignal arg so
+// cancellation tests can assert abort behavior.
 function installGetTrashedFilesMock() {
   mocks.getTrashedFiles.mockImplementation(
-    () =>
+    (_token: string, _query: string, signal?: AbortSignal) =>
       new Promise<Array<{ id: string; name: string; mimeType: string }>>(
         (resolve, reject) => {
-          deferredCalls.push({ resolve, reject });
+          deferredCalls.push({ resolve, reject, signal });
         },
       ),
   );
@@ -282,6 +284,8 @@ describe("TrashScreen bulk operations", () => {
     fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
     fireEvent.click(screen.getByRole("button", { name: "Track 2" }));
 
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
     mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
     mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
       new Error("drive 500"),
@@ -306,6 +310,94 @@ describe("TrashScreen bulk operations", () => {
       .map((call) => call[0].message)
       .join("\n");
     expect(loggedMessages).toContain("bulk-delete-item-failed");
+  });
+
+  it("restore success -> no refresh-drive dispatch (dead event removed)", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    mocks.driveApi.restoreFile.mockResolvedValueOnce({ id: "f1" });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("settings.restore"));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mocks.driveApi.restoreFile).toHaveBeenCalledTimes(1);
+    });
+
+    const refreshDispatches = dispatchSpy.mock.calls.filter(
+      ([ev]) => ev instanceof Event && ev.type === "refresh-drive",
+    );
+    expect(refreshDispatches).toHaveLength(0);
+  });
+
+  it("bulk restore success -> no refresh-drive dispatch (dead event removed)", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+    enterSelectionMode();
+    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    mocks.driveApi.restoreFile.mockResolvedValueOnce({ id: "f1" });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("settings.restore"));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mocks.driveApi.restoreFile).toHaveBeenCalledTimes(1);
+    });
+
+    const refreshDispatches = dispatchSpy.mock.calls.filter(
+      ([ev]) => ev instanceof Event && ev.type === "refresh-drive",
+    );
+    expect(refreshDispatches).toHaveLength(0);
+  });
+
+  it("bulk delete asks for confirmation: cancel aborts, ok proceeds", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+    enterSelectionMode();
+    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await act(async () => {
+      fireEvent.click(screen.getByText("common.delete"));
+      await Promise.resolve();
+    });
+    expect(confirmSpy).toHaveBeenCalledWith("settings.confirm_bulk_delete");
+    expect(mocks.driveApi.permanentlyDeleteFile).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
+    await act(async () => {
+      fireEvent.click(screen.getByText("common.delete"));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("Track 1")).toBeNull();
+  });
+
+  it("unmount mid-fetch aborts the getTrashedFiles signal", async () => {
+    const { unmount } = renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    const call = deferredCalls[0];
+    if (call === undefined) throw new Error("expected deferred call");
+    expect(call.signal).toBeInstanceOf(AbortSignal);
+    expect(call.signal?.aborted).toBe(false);
+
+    act(() => {
+      unmount();
+    });
+    expect(call.signal?.aborted).toBe(true);
   });
 
   it("empty trash: partial failure -> no onClose + succeeded items removed", async () => {

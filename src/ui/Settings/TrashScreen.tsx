@@ -66,12 +66,20 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     isMoreMenuOpen,
   );
 
+  const fetchAbortRef = useRef<AbortController | null>(null);
+
   const fetchTrashed = async () => {
+    // A new fetch cycle supersedes any in-flight one: abort the previous
+    // controller so its late response can never clobber the fresh state.
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     try {
       // Fetch trashed audio files and folders that were deleted by DrPlay
       const q =
         "trashed=true and appProperties has { key='deletedByDrPlay' and value='true' }";
-      const files = await getTrashedFiles(token, q);
+      const files = await getTrashedFiles(token, q, controller.signal);
+      if (controller.signal.aborted) return;
       setItems(
         files.map((f: TrashedItem) => ({
           id: f.id,
@@ -80,6 +88,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         })),
       );
     } catch (e) {
+      // Deliberate cancellation (unmount / token change) is not an error:
+      // skip captureError and the toast for it.
+      if (controller.signal.aborted) return;
       void captureError({
         level: "error",
         source: TRASH_MODULE,
@@ -87,7 +98,10 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       });
       showErrorToast(t("settings.trash_load_error"));
     } finally {
-      setIsLoading(false);
+      // An aborted cycle must stay inert — the superseding cycle owns loading.
+      if (!controller.signal.aborted) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -97,6 +111,11 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     // through the try/catch exception edges, so the disable stays.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchTrashed();
+    return () => {
+      // Unmount / token change: cancel the in-flight request.
+      fetchAbortRef.current?.abort();
+      fetchAbortRef.current = null;
+    };
     // fetchTrashed only closes over token (already in deps); its identity
     // changes every render but the effect must only run on token change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,7 +150,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     try {
       await restoreFile(token, id);
       setItems((prev) => prev.filter((item) => item.id !== id));
-      window.dispatchEvent(new CustomEvent("refresh-drive"));
+      // NOTE: no "refresh-drive" event here — its last listener was removed in
+      // 632f797 when the store architecture took over; views now fetch
+      // on-demand, so a global refresh ping has no receiver.
     } catch (e) {
       void captureError({
         level: "error",
@@ -217,7 +238,6 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         }
       });
       setItems((prev) => prev.filter((item) => !succeededIds.has(item.id)));
-      window.dispatchEvent(new CustomEvent("refresh-drive"));
       if (failedCount > 0) {
         showErrorToast(
           t("settings.bulk_restore_error_count", { count: failedCount }),
@@ -245,6 +265,11 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
 
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
+    // Permanent deletion of the selection mirrors handleEmptyTrash's confirm
+    // guard — both are irreversible, so both must ask first.
+    if (!window.confirm(t("settings.confirm_bulk_delete"))) {
+      return;
+    }
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);

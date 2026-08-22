@@ -213,6 +213,7 @@
     "empty_trash": "Empty Trash",
     "items_in_trash": "items in trash",
     "confirm_empty_trash": "Permanently delete all items in Trash? This can't be undone.",
+    "confirm_bulk_delete": "Permanently delete the selected items? This can't be undone.",
     "empty_trash_success": "Trash emptied",
     "empty_trash_error": "Couldn't empty trash. Try again.",
     "restore_error": "Couldn't restore file. Try again.",

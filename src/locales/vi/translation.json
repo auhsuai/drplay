@@ -213,6 +213,7 @@
     "empty_trash": "Dọn sạch thùng rác",
     "items_in_trash": "mục trong thùng rác",
     "confirm_empty_trash": "Xóa vĩnh viễn toàn bộ mục trong thùng rác? Hành động này không thể hoàn tác.",
+    "confirm_bulk_delete": "Xóa vĩnh viễn các mục đã chọn? Hành động này không thể hoàn tác.",
     "empty_trash_success": "Đã dọn sạch thùng rác",
     "empty_trash_error": "Không thể dọn thùng rác. Vui lòng thử lại.",
     "restore_error": "Không thể khôi phục tệp. Vui lòng thử lại.",
