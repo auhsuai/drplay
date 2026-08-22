@@ -85,14 +85,15 @@ vi.mock("../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
 
-vi.mock("../utils/sessionCleanup", () => ({
-  SESSION_CLEANUP_KEYS: {
-    playModeKv: "drplay_playmode",
-    queueKv: "drplay_queue",
-    lastSessionLocalStorage: "drplay_last_session",
-    lastSessionKv: "drplay_last_session_kv",
-  },
-}));
+vi.mock(
+  "../utils/sessionCleanup",
+  async (importOriginal) =>
+    await importOriginal<typeof import("../utils/sessionCleanup")>().then(
+      (actual) => ({
+        SESSION_CLEANUP_KEYS: { ...actual.SESSION_CLEANUP_KEYS },
+      }),
+    ),
+);
 
 const queueMock = vi.hoisted(() => ({
   handleNextTrack: vi.fn(),

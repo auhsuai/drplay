@@ -66,6 +66,13 @@ describe("clearSessionState", () => {
     ).toBeNull();
   });
 
+  it("pins the shared last-session storage contract (localStorage key === kv key)", () => {
+    expect(SESSION_CLEANUP_KEYS.lastSessionLocalStorage).toBe(
+      "drplay_last_session",
+    );
+    expect(SESSION_CLEANUP_KEYS.lastSessionKv).toBe("drplay_last_session");
+  });
+
   it("calls kvDel for last_session, playmode and queue", () => {
     clearSessionState();
 
@@ -88,6 +95,7 @@ describe("clearSessionState", () => {
 
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        level: "warn",
         source: "sessionCleanup",
         kind: "logout-cleanup-failed",
         message: expect.stringContaining(
