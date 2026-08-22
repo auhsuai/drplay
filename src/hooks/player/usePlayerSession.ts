@@ -7,6 +7,7 @@ import {
   buildStreamUrl,
 } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
+import { IS_MOBILE } from "../../utils/platform";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { classifyPlayerError, isAbortError } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
@@ -71,7 +72,11 @@ export function usePlayerSession(
           const freshToken = await getValidToken(false, signal);
           if (isAborted()) return;
 
-          if (freshToken) {
+          // Mobile (GATE branch B): prefetch is desktop-only, so the fallback
+          // below would always embed a /drive-stream URL the SW proxy can
+          // never serve on Android — restored track carries streamUrl="" and
+          // usePlayer resolves it lazily on play. Desktop path unchanged.
+          if (freshToken && !IS_MOBILE) {
             try {
               streamUrl = getPrefetchedStreamUrl(lastSession.track.id) || "";
               if (!streamUrl) {

@@ -47,6 +47,16 @@ vi.mock("../../store/playerStore", () => ({
   usePlayerStore: { getState: vi.fn(() => ({ currentTrack: null })) },
 }));
 
+// Getter-backed platform mock (pattern: useBackgroundPlayback.test.tsx) —
+// IS_MOBILE được đọc lúc call-time trong loadSession, nên flip qua getter.
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 const mockedGet = vi.mocked(get);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedGetPrefetchedStreamUrl = vi.mocked(getPrefetchedStreamUrl);
@@ -101,6 +111,7 @@ async function flushMicrotasks() {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  platformMock.IS_MOBILE = false;
   mockedGet.mockResolvedValue(undefined);
   mockedGetValidToken.mockResolvedValue("test-token");
   mockedGetPrefetchedStreamUrl.mockReturnValue(undefined);
@@ -389,5 +400,27 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
         ) as unknown as string,
       }),
     );
+  });
+});
+
+describe("usePlayerSession restore mobile gate (IS_MOBILE)", () => {
+  it("K: mobile restore does not embed a dead /drive-stream url → streamUrl rỗng", async () => {
+    platformMock.IS_MOBILE = true;
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 12, duration: 240 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+
+    const { setCurrentTrack, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    const restored = setCurrentTrack.mock.calls[0]?.[0] as Track;
+    expect(restored.id).toBe("t1");
+    expect(restored.streamUrl).toBe("");
+    expect(mockedGetPrefetchedStreamUrl).not.toHaveBeenCalled();
+    expect(mockedBuildStreamUrl).not.toHaveBeenCalled();
+    // Restore vẫn hoạt động trên mobile — chỉ URL chết bị loại.
+    expect(triggerReload).toHaveBeenCalledTimes(1);
   });
 });
