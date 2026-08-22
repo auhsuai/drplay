@@ -1034,6 +1034,78 @@ describe("driveFiles encodes fileId path segments (P1-1)", () => {
   });
 });
 
+// P1-1 cross-finding mirror: driveConfig interpolates the config fileId into
+// an upload URL path segment and must percent-encode it first (same guard as
+// driveFiles above). Standard Drive ids ([A-Za-z0-9_-]) are unaffected —
+// encodeURIComponent is a no-op on them; a reserved-char id must never split
+// the path or leak into the query string.
+describe("driveConfig encodes config fileId in upload URL (P1-1 mirror)", () => {
+  const weirdId = "abc/def?id x";
+  const encodedId = encodeURIComponent(weirdId);
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("saveAppConfig PATCHes the existing config at an encoded upload path segment", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(
+        makeJsonResponse(200, { files: [{ id: weirdId }] }),
+      ) // search finds existing config
+      .mockResolvedValueOnce(makeResponse(200)); // PATCH upload
+
+    await expect(saveAppConfig("tok-1", { a: 1 })).resolves.toBe(true);
+
+    expect(fetchCallAt(0)[0]).toContain("spaces=appDataFolder");
+    expect(fetchCallAt(1)[0]).toBe(
+      `https://www.googleapis.com/upload/drive/v3/files/${encodedId}?uploadType=multipart`,
+    );
+  });
+
+  it("saveAppConfig first save POSTs the standard query-only upload URL", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(200, { files: [] })) // search: no file yet
+      .mockResolvedValueOnce(makeResponse(200)); // POST upload
+
+    await expect(saveAppConfig("tok-1", { a: 1 })).resolves.toBe(true);
+
+    expect(fetchCallAt(1)[0]).toBe(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+    );
+  });
+});
+
+// Mirror of commit 17cdaec for the READ path: getAppConfig interpolates the
+// config fileId into a download URL path segment and must percent-encode it
+// first (same guard as the saveAppConfig upload URL above). Standard Drive ids
+// ([A-Za-z0-9_-]) are unaffected — encodeURIComponent is a no-op on them; a
+// reserved-char id must never split the path or leak into the query string.
+describe("driveConfig encodes config fileId in download URL (getAppConfig mirror)", () => {
+  const weirdId = "abc/def?id x";
+  const encodedId = encodeURIComponent(weirdId);
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("getAppConfig downloads the config at an encoded path segment", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(
+        makeJsonResponse(200, { files: [{ id: weirdId }] }),
+      ) // search finds existing config
+      .mockResolvedValueOnce(makeJsonResponse(200, { ok: true })); // alt=media download
+
+    await expect(getAppConfig("tok-1")).resolves.toEqual({ ok: true });
+
+    expect(fetchCallAt(0)[0]).toContain("spaces=appDataFolder");
+    expect(fetchCallAt(1)[0]).toBe(
+      `https://www.googleapis.com/drive/v3/files/${encodedId}?alt=media`,
+    );
+  });
+});
+
 // Regression: pagination must aggregate nextPageToken pages (Bug 1c).
 describe("searchFolders / listFolderChildren pagination (Bug 1c)", () => {
   beforeEach(() => {
