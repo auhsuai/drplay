@@ -10,6 +10,7 @@ import {
 } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useLocateFile } from "./useLocateFile";
+import { captureError } from "../utils/errorLog";
 import type { DriveFile } from "../db/db";
 
 const fetchWithAuthMock = vi.hoisted(() => vi.fn());
@@ -320,5 +321,135 @@ describe("useLocateFile — regressions", () => {
         vi.advanceTimersByTime(6000);
       });
     }).not.toThrow();
+  });
+});
+
+describe("useLocateFile — F4/F5 regressions", () => {
+  function captureErrorLevels(): Array<string | undefined> {
+    return (captureError as unknown as Mock).mock.calls.map(
+      (call) => (call[0] as { level?: string } | undefined)?.level,
+    );
+  }
+
+  function sentSignalOf(callIndex: number): AbortSignal | undefined {
+    return (
+      mockedFetch.mock.calls[callIndex]?.[1] as
+        { signal?: AbortSignal } | undefined
+    )?.signal;
+  }
+
+  it("F4: keeps locating with Unknown Folder when the main-path parent-name fetch fails", async () => {
+    seedDb({ fc: { id: "fc", name: "File C", parentId: "parent-c" } });
+    mockedFetch
+      .mockResolvedValueOnce(apiResp({ parents: ["parent-c"] }))
+      .mockRejectedValueOnce(new TypeError("Fetch failed"))
+      .mockResolvedValue(apiResp({ parents: ["root"] }));
+    mountLocate(TOKEN, "elsewhere");
+
+    await act(async () => {
+      fireLocate({ fileId: "fc" });
+      await flushAsyncWork();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    await act(async () => {
+      await flushAsyncWork();
+    });
+
+    expect(captureErrorLevels()).not.toContain("error");
+    expect(setters.setCurrentFolderId).toHaveBeenCalledWith("parent-c");
+    expect(setters.setCurrentFolderName).toHaveBeenCalledWith("Unknown Folder");
+    expect(setters.setFolderHistory).toHaveBeenCalledWith([
+      { id: "root", name: "My Drive" },
+    ]);
+    expect(setters.setIsLoadingTracks.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("F5: wires an AbortSignal into every Drive fetch it issues", async () => {
+    seedDb({ fd: { id: "fd", name: "File D", parentId: "pe" } });
+    mockedFetch
+      .mockResolvedValueOnce(apiResp({ parents: ["pe"] }))
+      .mockResolvedValueOnce(apiResp({ name: "Parent E" }))
+      .mockResolvedValue(apiResp({ parents: ["root"] }));
+    mountLocate(TOKEN, "elsewhere");
+
+    await locateAndWait({ fileId: "fd" });
+
+    expect(mockedFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (let i = 0; i < mockedFetch.mock.calls.length; i += 1) {
+      expect(sentSignalOf(i)).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it("F5: unmounting mid-flight aborts the request signal and logs no error-level entry", async () => {
+    let rejectGate!: (err: unknown) => void;
+    const gate = new Promise<Response>((_resolve, reject) => {
+      rejectGate = reject;
+    });
+    mockedFetch.mockImplementationOnce(() => gate);
+    mountLocate(TOKEN, CURRENT);
+
+    await act(async () => {
+      fireLocate({ fileId: "fa" });
+      await flushAsyncWork();
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    unmountHook?.();
+    unmountHook = undefined;
+
+    await act(async () => {
+      rejectGate(new DOMException("aborted", "AbortError"));
+      await flushAsyncWork();
+    });
+
+    const signal = sentSignalOf(0);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(true);
+    expect(captureErrorLevels()).not.toContain("error");
+    expect(setters.setCurrentFolderId).not.toHaveBeenCalled();
+  });
+
+  it("F5: changing deps mid-flight aborts the in-flight request signal", async () => {
+    let rejectGate!: (err: unknown) => void;
+    const gate = new Promise<Response>((_resolve, reject) => {
+      rejectGate = reject;
+    });
+    mockedFetch.mockImplementationOnce(() => gate);
+    const utils = renderHook(
+      ({ token, folder }: { token: string | null; folder: string }) =>
+        useLocateFile(
+          token,
+          folder,
+          setters.setCurrentFolderId,
+          setters.setCurrentFolderName,
+          setters.setFolderHistory,
+          setters.setActiveTab,
+          setters.setIsLoadingTracks,
+        ),
+      { initialProps: { token: TOKEN, folder: CURRENT } },
+    );
+    unmountHook = utils.unmount;
+
+    await act(async () => {
+      fireLocate({ fileId: "fa" });
+      await flushAsyncWork();
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    utils.rerender({ token: TOKEN, folder: "folder-elsewhere" });
+
+    await act(async () => {
+      rejectGate(new DOMException("aborted", "AbortError"));
+      await flushAsyncWork();
+    });
+
+    const signal = sentSignalOf(0);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(true);
+    expect(captureErrorLevels()).not.toContain("error");
+    expect(setters.setCurrentFolderId).not.toHaveBeenCalled();
   });
 });
