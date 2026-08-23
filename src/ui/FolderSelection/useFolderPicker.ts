@@ -64,6 +64,21 @@ export function useFolderPicker({
     return folders.filter((f) => matchesNormalized(f.name, searchQuery));
   }, [folders, searchQuery]);
 
+  // B-K1: the deeper Drive search spans sublevels, so its hits can repeat a
+  // direct child that already matched locally — rendering the same id in
+  // both sections duplicated the card and tripped React's duplicate-key
+  // warning (FolderGrid keys both sections by folder.id). The visible API
+  // section drops every id the local listing already shows (plus the current
+  // folder itself); deriving at render keeps the filter immune to stale
+  // snapshots even when the folder list lands after the search resolved.
+  const visibleApiResults = useMemo(() => {
+    if (apiSearchResults.length === 0) return apiSearchResults;
+    const localIds = new Set(folders.map((f) => f.id));
+    return apiSearchResults.filter(
+      (f) => f.id !== currentFolderId && !localIds.has(f.id),
+    );
+  }, [apiSearchResults, folders, currentFolderId]);
+
   // React "adjusting state during render" pattern: instead of resetting the
   // search in an effect (react-hooks/set-state-in-effect), reset it right
   // here when the active folder changes — state is adjusted synchronously
@@ -163,10 +178,15 @@ export function useFolderPicker({
       try {
         const safeQuery = query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const q = `name contains '${safeQuery}' and mimeType='${FOLDER_MIME}' and trashed=false`;
-        const files = await searchFolders(token, q, controller.signal);
-        setApiSearchResults(
-          files.filter((f: FolderItem) => f.id !== currentFolderId),
-        );
+        // Same fresh-token source as fetchFolders: the raw prop token can be
+        // expired while getValidToken() refreshes (falling back to the prop
+        // when no token is available). Rejection is caught below like any
+        // other search failure.
+        const freshToken = (await getValidToken()) || token;
+        const files = await searchFolders(freshToken, q, controller.signal);
+        // Overlap filtering lives in visibleApiResults (single source of
+        // truth, recomputed against the current local listing at render).
+        setApiSearchResults(files);
       } catch (e: unknown) {
         if (!isAbortError(e)) {
           setApiSearchResults([]);
@@ -185,7 +205,10 @@ export function useFolderPicker({
         }
       }
     },
-    [token, currentFolderId, t],
+    // currentFolderId left the deps when overlap filtering moved to the
+    // visibleApiResults derivation; a folder change resets the query during
+    // render anyway, which re-runs the debounce effect below.
+    [token, t],
   );
 
   useEffect(() => {
@@ -356,7 +379,7 @@ export function useFolderPicker({
     searchQuery,
     setSearchQuery,
     filteredFolders,
-    apiSearchResults,
+    apiSearchResults: visibleApiResults,
     isSearchingApi,
     currentFolderId,
     currentFolderName,

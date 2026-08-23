@@ -778,4 +778,73 @@ describe("FolderSelectionScreen audit fixes", () => {
 
     expect(screen.getByText("Searching deeper...")).not.toBeNull();
   });
+
+  it("drops API search hits whose id already renders in the local section (B-K1 duplicate card + key)", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([
+        { id: "dup", name: "ABC Local" },
+        { id: "other", name: "Other" },
+      ]);
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "abc" },
+    });
+    await waitFor(() => {
+      expect(searchDeferredCalls).toHaveLength(1);
+    });
+
+    const apiCall = searchDeferredCallAt(0);
+    await act(async () => {
+      // The deeper Drive search can repeat a direct child that already
+      // matched locally (same id) alongside genuinely deeper folders.
+      apiCall.resolve([
+        { id: "dup", name: "ABC Local" },
+        { id: "deep", name: "Deep ABC" },
+      ]);
+      await Promise.resolve();
+    });
+
+    // The overlapping id renders exactly ONCE — the local section keeps it,
+    // only the API section drops it — and section order is untouched.
+    expect(screen.getAllByText("ABC Local")).toHaveLength(1);
+    expect(screen.getByText("Deep ABC")).not.toBeNull();
+    const text = document.body.textContent ?? "";
+    expect(text.indexOf("ABC Local")).toBeLessThan(
+      text.indexOf("From subfolders"),
+    );
+    expect(text.indexOf("From subfolders")).toBeLessThan(
+      text.indexOf("Deep ABC"),
+    );
+  });
+
+  it("passes the refreshed getValidToken token to the deeper search (token symmetry with fetchFolders)", async () => {
+    mocks.getValidToken.mockResolvedValue("fresh-token");
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([]);
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "abc" },
+    });
+    await waitFor(() => {
+      expect(searchDeferredCalls).toHaveLength(1);
+    });
+
+    expect(mocks.driveApi.searchFolders).toHaveBeenCalledWith(
+      "fresh-token",
+      expect.stringContaining("name contains 'abc'"),
+      expect.anything(),
+    );
+  });
 });
