@@ -1,11 +1,28 @@
-export const LS_ROOT_FOLDER = "drplay_root_folder";
-export const LS_CURRENT_FOLDER_ID = "drplay_current_folder_id";
-export const LS_CURRENT_FOLDER_NAME = "drplay_current_folder_name";
-export const LS_FOLDER_HISTORY = "drplay_folder_history";
-export const LS_SORT_OPTION = "drplay_sort_option";
-export const LS_MINIMIZE_TO_TRAY = "drplay_minimize_to_tray";
-export const LS_BACKGROUND_PLAYBACK = "drplay_background_playback";
-export const DB_NAV_STATE_KEY = "drplay_nav_state";
+// Single source of truth: every localStorage key is defined ONCE in
+// utils/storageKeys.ts. The LS_* exports below are kept as stable aliases
+// so existing consumers (App.tsx, TabContentRouter) need no change — they
+// now resolve to the storageKeys definitions instead of duplicated
+// literals. A drift between the two names would be caught by the dedup
+// lock test (appUiState.test.ts).
+import {
+  BACKGROUND_PLAYBACK_KEY,
+  CURRENT_FOLDER_ID_KEY,
+  CURRENT_FOLDER_NAME_KEY,
+  DB_NAV_STATE_KEY,
+  FOLDER_HISTORY_KEY,
+  MINIMIZE_TO_TRAY_KEY,
+  ROOT_FOLDER_KEY,
+  SORT_OPTION_KEY,
+} from "./utils/storageKeys";
+
+export const LS_ROOT_FOLDER = ROOT_FOLDER_KEY;
+export const LS_CURRENT_FOLDER_ID = CURRENT_FOLDER_ID_KEY;
+export const LS_CURRENT_FOLDER_NAME = CURRENT_FOLDER_NAME_KEY;
+export const LS_FOLDER_HISTORY = FOLDER_HISTORY_KEY;
+export const LS_SORT_OPTION = SORT_OPTION_KEY;
+export const LS_MINIMIZE_TO_TRAY = MINIMIZE_TO_TRAY_KEY;
+export const LS_BACKGROUND_PLAYBACK = BACKGROUND_PLAYBACK_KEY;
+export { DB_NAV_STATE_KEY };
 
 // Lazy-useState-compatible reader for the tray-minimize preference: missing
 // key (first launch) defaults to minimized; only the literal 'true' means

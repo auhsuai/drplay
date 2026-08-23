@@ -9,12 +9,12 @@ import {
 } from "../utils/driveConstants";
 import { captureError } from "../utils/errorLog";
 import { getFileName, getFileParents } from "../utils/driveFiles";
+import { ROOT_FOLDER_KEY as STORAGE_KEY_ROOT } from "../utils/storageKeys";
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
 const DRIVE_ID_PREFIX = "drive_";
 const EVENT_LOCATE_FILE = "locate-file";
-const STORAGE_KEY_ROOT = "drplay_root_folder";
 // Kept as the fallback for t('drive.unknown_folder'): the breadcrumb name is
 // computed inside an async event handler, and the English default guarantees a
 // readable label even if a locale key is missing.
