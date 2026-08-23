@@ -33,6 +33,7 @@ vi.mock("../utils/driveApi", () => ({
   moveFile: vi.fn(),
   createFolder: vi.fn(),
   driveFetch: vi.fn(),
+  FOLDER_MIME: "application/vnd.google-apps.folder",
 }));
 vi.mock("../utils/simpleToast", () => ({
   showErrorToast: vi.fn(),
@@ -251,8 +252,12 @@ describe("useDriveBulkOps logs bulk failures with source useDriveBulkOps", () =>
       useDriveExplorer(FOLDER_ID, "Folder", TOKEN, () => {}),
     );
 
+    // Since the B4 fix the handler rethrows after its capture/toast, so the
+    // awaiting modal can keep the typed name — assert via rejects.
     await act(async () => {
-      await result.current.handleCreateFolder("New Folder", vi.fn());
+      await expect(
+        result.current.handleCreateFolder("New Folder", vi.fn()),
+      ).rejects.toThrow("boom");
     });
 
     expect(mockedCaptureError).toHaveBeenCalledWith(
@@ -517,5 +522,116 @@ describe("useDriveExplorer: stale selection never survives a folder/search/sort 
 
     expect(result.current.selectedIds.size).toBe(0);
     expect(result.current.isSelectionMode).toBe(false);
+  });
+});
+
+// Regression guards for the B4/B3/B5 fix batch: the create-folder handler must
+// propagate failures (so NewFolderModal can keep the typed name for a retry),
+// and both bulk handlers need a synchronous in-flight guard so a same-tick
+// double invoke (double click / Enter bypassing the disabled button) cannot
+// fire the API twice.
+describe("useDriveBulkOps failure contract and same-tick race guards", () => {
+  it("create-folder failure REJECTS after toasting so callers can keep the typed name", async () => {
+    mockedCreateFolder.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", TOKEN, () => {}),
+    );
+    const onComplete = vi.fn();
+
+    await act(async () => {
+      await expect(
+        result.current.handleCreateFolder("New Folder", onComplete),
+      ).rejects.toThrow("boom");
+    });
+
+    // Error UX stays owned by the hook (capture + toast); the caller only
+    // learns about the failure through the rejection.
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "useDriveBulkOps",
+        message: "create-folder failed: boom",
+      }),
+    );
+    expect(mockedShowErrorToast).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("double-invoke same-tick bulk delete hits the API exactly once", async () => {
+    const resolvers: Array<(value: DriveFileItem) => void> = [];
+    mockedDeleteFile.mockImplementation(
+      () =>
+        new Promise<DriveFileItem>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const result = setupSelection(["a"]);
+    const onComplete = vi.fn();
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.handleBulkDelete(onComplete);
+      second = result.current.handleBulkDelete(onComplete);
+    });
+
+    // Same tick: the second invocation must bail on the in-flight guard
+    // before issuing another deleteFile (and before re-firing onComplete).
+    expect(mockedDeleteFile).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      for (let i = 0; i < 10 && resolvers.length > 0; i++) {
+        resolvers.shift()?.({
+          id: "x",
+          name: "x",
+          mimeType: "audio/mpeg",
+          parents: [FOLDER_ID],
+        });
+        await Promise.resolve();
+      }
+      await Promise.all([first.catch(() => {}), second.catch(() => {})]);
+    });
+
+    expect(mockedDeleteFile).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(result.current.isBulkOperating).toBe(false);
+  });
+
+  it("double-invoke same-tick create folder calls createFolder exactly once", async () => {
+    let resolveCreate!: (value: DriveFileItem) => void;
+    mockedCreateFolder.mockImplementation(
+      () =>
+        new Promise<DriveFileItem>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const { result } = renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", TOKEN, () => {}),
+    );
+    const onComplete = vi.fn();
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.handleCreateFolder("New Folder", onComplete);
+      second = result.current.handleCreateFolder("New Folder", onComplete);
+    });
+
+    expect(mockedCreateFolder).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveCreate({
+        id: "new-folder",
+        name: "New Folder",
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [FOLDER_ID],
+      });
+      await Promise.all([first, second]);
+    });
+
+    expect(mockedCreateFolder).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(result.current.isCreatingFolder).toBe(false);
   });
 });

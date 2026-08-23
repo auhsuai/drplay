@@ -637,3 +637,85 @@ describe("MainContent hardware-back closes bulk overlays (batch fix 2026-08-17)"
     expect(pressBack()).toBe(false);
   });
 });
+
+// B4 regression: MainContent must hand NewFolderModal the REAL promise from
+// explorer.handleCreateFolder. The old wiring void-ed it, so the modal's
+// `await onCreate(name)` resolved immediately and cleared the typed name even
+// when the create failed — contradicting the hook's "keep the modal open so
+// the name survives for a retry" intent.
+describe("MainContent passes the real create-folder promise to NewFolderModal", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function openNewFolderModal(): void {
+    fireEvent.click(screen.getByRole("button", { name: /drive\.new_folder/ }));
+  }
+
+  function getNameInput() {
+    return screen.getByPlaceholderText("drive.folder_name_placeholder");
+  }
+
+  it("keeps the typed name when the create fails (onCreate rejects)", async () => {
+    const explorer = makeExplorerState(makeItems(3));
+    let rejectCreate!: (e: Error) => void;
+    explorer.handleCreateFolder.mockImplementation(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectCreate = reject;
+        }),
+    );
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    openNewFolderModal();
+    fireEvent.change(getNameInput(), { target: { value: "My Folder" } });
+    fireEvent.click(screen.getByRole("button", { name: "menu.create" }));
+    // Flush the microtask chain so any premature clear (the bug) has happened.
+    await act(async () => {});
+
+    // The create is still pending here — nothing may have been cleared yet.
+    expect(getNameInput()).toHaveValue("My Folder");
+
+    // Settle the failure: the modal must catch it and keep the name.
+    act(() => {
+      rejectCreate(new Error("boom"));
+    });
+    await act(async () => {});
+
+    expect(getNameInput()).toHaveValue("My Folder");
+    expect(screen.getByText("drive.new_folder_title")).not.toBeNull();
+    expect(explorer.handleCreateFolder).toHaveBeenCalledWith(
+      "My Folder",
+      expect.any(Function),
+    );
+  });
+
+  it("clears the name and closes the modal when the create succeeds", async () => {
+    const explorer = makeExplorerState(makeItems(3));
+    let resolveCreate!: () => void;
+    explorer.handleCreateFolder.mockImplementation(
+      (_name: string, onComplete: () => void) =>
+        new Promise<void>((resolve) => {
+          resolveCreate = () => {
+            onComplete();
+            resolve();
+          };
+        }),
+    );
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    openNewFolderModal();
+    fireEvent.change(getNameInput(), { target: { value: "My Folder" } });
+    fireEvent.click(screen.getByRole("button", { name: "menu.create" }));
+
+    act(() => {
+      resolveCreate();
+    });
+    await act(async () => {});
+
+    // Success flow is unchanged: the hook's onComplete closes the modal
+    // (unmounting the input), so closure itself is the observable outcome.
+    expect(explorer.handleCreateFolder).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("drive.new_folder_title")).toBeNull();
+  });
+});

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { db } from "../db/db";
 import {
@@ -65,12 +65,21 @@ export function useDriveBulkOps({
 } {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isBulkOperating, setIsBulkOperating] = useState(false);
+  // Same-tick race guards (mirror useMenuDelete's isDeletingRef /
+  // useMenuDownload's isDownloadingRef): a double invoke in the same tick —
+  // double click, or Enter firing while the disabled button state is still
+  // stale — runs before React commits the is* boolean, so only a synchronous
+  // check-and-set ref can stop the second call from reaching the API.
+  const isCreatingFolderRef = useRef(false);
+  const isBulkDeletingRef = useRef(false);
 
   const handleCreateFolder = async (
     folderName: string,
     onComplete: () => void,
   ) => {
     if (!token) return;
+    if (isCreatingFolderRef.current) return;
+    isCreatingFolderRef.current = true;
     setIsCreatingFolder(true);
     try {
       const res = await createFolder(token, folderName, currentFolderId);
@@ -98,7 +107,13 @@ export function useDriveBulkOps({
         message: `create-folder failed: ${e instanceof Error ? e.message : String(e)}`,
       });
       showErrorToast(t("drive.create_folder_error"));
+      // Rethrow AFTER the capture/toast above (controlled rethrow — the hook
+      // stays the single owner of error UX): the awaiting caller (the modal
+      // via onCreate) can then tell failure from success and keep the typed
+      // folder name for a retry.
+      throw e;
     } finally {
+      isCreatingFolderRef.current = false;
       setIsCreatingFolder(false);
     }
   };
@@ -108,6 +123,12 @@ export function useDriveBulkOps({
 
     const itemsToDelete = prepareBulkSelection(selectedIds, showErrorToast);
     if (itemsToDelete === null) return;
+
+    // Same-tick race guard (see the refs above): must run before any state
+    // mutation so a second invocation cannot re-clear the selection or issue
+    // duplicate deleteFile calls.
+    if (isBulkDeletingRef.current) return;
+    isBulkDeletingRef.current = true;
 
     setSelectedIds(new Set());
     setIsSelectionMode(false);
@@ -156,6 +177,7 @@ export function useDriveBulkOps({
       });
       showErrorToast(t("drive.delete_error"));
     } finally {
+      isBulkDeletingRef.current = false;
       setIsBulkOperating(false);
     }
   };

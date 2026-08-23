@@ -39,8 +39,17 @@ export function NewFolderModal({
       );
       return;
     }
-    await onCreate(name);
-    setNewFolderName(""); // Reset only on success
+    // onCreate now carries the real outcome (the hook rethrows after its
+    // toast/capture), so a failed create keeps the modal open with the typed
+    // name for a retry; only a resolved promise clears it.
+    try {
+      await onCreate(name);
+    } catch {
+      // Intentional controlled swallow: the hook already captured + toasted
+      // the error. Keeping the typed name IS the retry affordance here.
+      return;
+    }
+    setNewFolderName(""); // Reset only after a real success
   };
 
   return (

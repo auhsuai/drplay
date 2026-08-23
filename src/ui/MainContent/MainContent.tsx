@@ -504,11 +504,14 @@ export const MainContent = React.memo(function MainContent({
         onClose={() => {
           setShowNewFolderModal(false);
         }}
-        onCreate={(name) => {
-          void explorer.handleCreateFolder(name, () => {
+        onCreate={(name) =>
+          // Return the REAL promise (do not void it): NewFolderModal awaits
+          // it to tell success from failure — on failure the hook rethrows
+          // after its toast, so the modal stays open with the typed name.
+          explorer.handleCreateFolder(name, () => {
             setShowNewFolderModal(false);
-          });
-        }}
+          })
+        }
         isCreating={explorer.isCreatingFolder}
       />
     </main>
