@@ -26,9 +26,10 @@ import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 import { SkeletonRowList } from "../components/Skeleton";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
-// How long to wait after switching to the target page before scrolling the
-// highlighted item into view — the new page must render first; 50ms is just
-// enough for React to flush and the virtualizer to lay out the new rows.
+// Fallback delay for the cross-page highlight scroll: normally the page
+// commit itself re-runs the highlight effect, whose cleanup cancels this
+// timer before it fires; the timeout only performs the scroll when the new
+// page renders slower than the delay (slow devices/commits).
 const SCROLL_HIGHLIGHT_DELAY_MS = 50;
 
 // Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar)
@@ -206,33 +207,44 @@ export const MainContent = React.memo(function MainContent({
   // Virtualizer is now isolated inside VirtualizedSongList
   const virtualizedListRef = useRef<VirtualizedSongListHandle>(null);
 
-  // Handle highlight scrolling
+  // Consume-once latch for highlight scrolling: the ts of the last locate we
+  // actually scrolled to. Data churn (upload ticks, search, Dexie writes)
+  // keeps re-creating filteredItems while the SAME highlight is active — the
+  // effect re-runs on every new identity but must not re-yank the viewport:
+  // one locate = one scroll.
+  const lastScrolledTsRef = useRef<number | null>(null);
+
+  // Handle highlight scrolling — consume-once per locate (keyed by ts). The
+  // latch is written ONLY where a scrollToIndex actually executes, never at
+  // effect entry. The cross-page path relies on this: Run 1 only switches
+  // pages and schedules the fallback timer; committing the new page re-runs
+  // this effect and its cleanup cancels that timer — an entry-latch would
+  // make Run 2 skip and lose the scroll entirely.
   useEffect(() => {
-    if (highlightedFileId && explorer.filteredItems.length > 0) {
-      const index = explorer.filteredItems.findIndex(
-        (item) => item.id === highlightedFileId.id,
+    if (!highlightedFileId || explorer.filteredItems.length === 0) return;
+    if (lastScrolledTsRef.current === highlightedFileId.ts) return;
+    const index = explorer.filteredItems.findIndex(
+      (item) => item.id === highlightedFileId.id,
+    );
+    if (index === -1) return;
+    const scrollToHighlightedRow = () => {
+      virtualizedListRef.current?.scrollToIndex(index % ITEMS_PER_PAGE, {
+        align: "center",
+      });
+      lastScrolledTsRef.current = highlightedFileId.ts;
+    };
+    const targetPage = Math.floor(index / ITEMS_PER_PAGE) + 1;
+    if (targetPage !== explorer.currentPage) {
+      explorer.setCurrentPage(targetPage);
+      const timerId = setTimeout(
+        scrollToHighlightedRow,
+        SCROLL_HIGHLIGHT_DELAY_MS,
       );
-      if (index !== -1) {
-        const targetPage = Math.floor(index / ITEMS_PER_PAGE) + 1;
-        if (targetPage !== explorer.currentPage) {
-          explorer.setCurrentPage(targetPage);
-          const timerId = setTimeout(() => {
-            const pageIndex = index % ITEMS_PER_PAGE;
-            virtualizedListRef.current?.scrollToIndex(pageIndex, {
-              align: "center",
-            });
-          }, SCROLL_HIGHLIGHT_DELAY_MS);
-          return () => {
-            clearTimeout(timerId);
-          };
-        } else {
-          const pageIndex = index % ITEMS_PER_PAGE;
-          virtualizedListRef.current?.scrollToIndex(pageIndex, {
-            align: "center",
-          });
-        }
-      }
+      return () => {
+        clearTimeout(timerId);
+      };
     }
+    scrollToHighlightedRow();
     // The effect only reads the enumerated explorer members (adding the whole
     // explorer object would re-run the highlight-scroll on every render since
     // useDriveExplorer returns a fresh object each render).
