@@ -1665,6 +1665,28 @@ describe("uploadFileResumable", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 
+  // Regression (F1): a 5xx that survives driveFetch's WHOLE retry budget
+  // (×4 backoff) is transient, not fatal-invalid — it must surface as kind
+  // 'network' (+status) so uploadWithRetry, the single bytes-path retry
+  // layer, retries with backoff instead of killing the entry.
+  it("POST initiate 500 after exhausting driveFetch retries → kind network + status 500 (manager-retryable), not invalid", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(makeErrorBodyResponse(500, "Backend Error"));
+
+    const p = uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
+    const assertion = expect(p).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "network",
+      status: 500,
+    });
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await assertion;
+    // driveFetch's full budget: 1 original POST + 4 backoff retries.
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
+    expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
+  });
+
   it("POST initiate 403 with quota message → UploadError kind quota", async () => {
     mockedFetch.mockResolvedValueOnce(
       makeErrorBodyResponse(
@@ -2712,13 +2734,60 @@ describe("uploadFileResumableChunked", () => {
     );
   });
 
-  it("chunk 500 → retried twice with backoff [1s, 3s], then network UploadError", async () => {
+  // Regression (F2): exhausting the per-chunk retry budget (500 ×3) is
+  // TRANSIENT — the session-restart layer must run query-status and resume
+  // the SAME session at the confirmed offset instead of failing the whole
+  // multi-GB file (same recovery as a raw network reset; mirrors how
+  // query-status treats its own exhausted retries).
+  it("chunk PUT 500 ×3 exhausts the budget → query-status resumes the SAME session at the confirmed offset (no new initiate)", async () => {
     vi.useFakeTimers();
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeRangeResponse(500, null))
       .mockResolvedValueOnce(makeRangeResponse(500, null))
-      .mockResolvedValueOnce(makeRangeResponse(500, null));
+      .mockResolvedValueOnce(makeRangeResponse(500, null))
+      // Query-status after the exhausted budget: Drive still holds chunk 1.
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8388607"))
+      // The tail continues on the SAME session and completes.
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+    const p = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: TOTAL_SIZE,
+      readChunk: reader.readChunk,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await p).toEqual(uploadedFile);
+    // 1 initiate + 3 PUT attempts (budget) + 1 query-status + 1 final PUT.
+    expect(mockedFetch).toHaveBeenCalledTimes(6);
+    // The surviving session was resumed — NEVER re-initiated.
+    expect(
+      mockedFetch.mock.calls.filter((c) => c[0] === INITIATE_URL),
+    ).toHaveLength(1);
+    // Chunks continue from the server-confirmed byte (8388607 + 1).
+    expect(reader.offsets).toEqual([0, 8388608]);
+    const [queryUrl, queryOpts] = fetchCallAt(4);
+    expect(queryUrl).toBe(LOCATION);
+    expect(queryOpts?.method).toBe("PUT");
+    expect(
+      (queryOpts?.headers as Record<string, string>)["Content-Range"],
+    ).toBe("*/10000000");
+    const [, finalPutOpts] = fetchCallAt(5);
+    expect(
+      (finalPutOpts?.headers as Record<string, string>)["Content-Range"],
+    ).toBe("bytes 8388608-9999999/10000000");
+  });
+
+  // Regression (F1, chunked path): initiate POST answered 5xx on EVERY
+  // driveFetch attempt (budget ×4) → transient, NOT fatal-invalid. The
+  // uploader must try a fresh session (attempt 2); only after the LAST
+  // session also fails does it surface the generic network exhaustion error.
+  it("initiate 500 exhausts driveFetch's budget → second session attempted; final error transient network, never invalid", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(makeErrorBodyResponse(500, "Backend Error"));
 
     const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
     const p = uploadFileResumableChunked("tok", {
@@ -2727,13 +2796,21 @@ describe("uploadFileResumableChunked", () => {
       totalSize: CHUNK_SIZE,
       readChunk: reader.readChunk,
     });
-    const assertion = expect(p).rejects.toMatchObject({ kind: "network" });
-    await vi.advanceTimersByTimeAsync(10_000);
+    const assertion = expect(p).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "network",
+      message: "upload failed after 2 attempts",
+    });
+    await vi.advanceTimersByTimeAsync(300_000);
 
     await assertion;
-    // 1 original PUT + 2 retries = 3 PUT calls, no session restart.
-    expect(mockedFetch).toHaveBeenCalledTimes(4);
-    expect(reader.offsets).toEqual([0]);
+    // Both sessions ran their own full initiate budget (5 POSTs each).
+    expect(mockedFetch).toHaveBeenCalledTimes(10);
+    // Session 2 was actually initiated (the restart path ran).
+    expect(fetchCallAt(5)[0]).toBe(INITIATE_URL);
+    expect(mockedFetch.mock.calls.every((c) => c[0] === INITIATE_URL)).toBe(
+      true,
+    );
   });
 
   it("chunk 429 → retried, succeeds on the second attempt", async () => {

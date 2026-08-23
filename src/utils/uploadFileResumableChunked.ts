@@ -29,6 +29,7 @@ import {
   UploadError,
   UPLOAD_CHUNK_MAX_RETRIES,
   abortedUploadError,
+  isTransientUploadStatus,
   mapResumableSessionError,
   surfaceSessionUploadError,
   uploadAttemptsExhaustedError,
@@ -137,9 +138,15 @@ async function putChunkWithRetry(
         }
         throw abortedUploadError();
       }
-      throw new UploadError(
-        `upload failed (status=${String(response.status)})`,
-        "network",
+      // Exhausted budget: TRANSIENT, not an UploadError — mirror
+      // queryResumableStatus's own exhaustion (resumableStatus.ts throws a
+      // plain "query-status retries exhausted" Error): a plain Error here
+      // reaches the session-restart layer (query-status → continue at the
+      // confirmed offset / fresh session), exactly like a raw network reset.
+      // An UploadError would hit both outer `instanceof UploadError` catches
+      // and kill the whole multi-GB file after 3 server hiccups.
+      throw new Error(
+        `chunk PUT retries exhausted (status=${String(response.status)})`,
       );
     }
     return { response, elapsedMs };
@@ -418,7 +425,13 @@ export async function uploadFileResumableChunked(
     } catch (err) {
       if (err instanceof IdempotentConflictError) return err.file;
       if (opts.signal?.aborted) throw abortedUploadError();
-      if (err instanceof UploadError) throw err;
+      // Fatal UploadErrors exit here (auth/quota, 'invalid' 4xx like
+      // 400/404/409-without-id…). A 429/5xx that survived driveFetch's whole
+      // retry budget is TRANSIENT — fall through and restart the session
+      // exactly like the raw transient failures below.
+      if (err instanceof UploadError && !isTransientUploadStatus(err.status)) {
+        throw err;
+      }
       // Initiate exhausted its own retries with a transient failure — try a fresh session (bounded by CHUNKED_SESSION_MAX_ATTEMPTS).
       if (attempt + 1 < CHUNKED_SESSION_MAX_ATTEMPTS) {
         await captureError({

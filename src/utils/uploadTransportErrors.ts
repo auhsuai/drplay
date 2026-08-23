@@ -2,6 +2,7 @@ import { captureError } from "./errorLog";
 import { sanitizeString } from "./logger";
 import { DRIVE_MODULE } from "./driveApi";
 import type { DriveErrorBody, DriveFileItem } from "./driveApi";
+import { isTransientDriveStatus } from "./driveTypes";
 
 // Google forbids re-sending a completed PUT (it creates a NEW upload); a
 // transient PUT failure re-initiates the session at most once — never after
@@ -167,6 +168,18 @@ export class SessionExpiredError extends Error {
 
 export function abortedUploadError(): UploadError {
   return new UploadError(ABORTED_UPLOAD_MESSAGE, "aborted");
+}
+
+// Band-map for EXHAUSTED transport retries: when even the last attempt answered
+// 429/5xx (isTransientDriveStatus — Google handle-errors guidance: these are
+// worth retrying later), the failure is TRANSIENT, not fatal. Consumers route
+// it to the same recovery paths as raw network errors (the manager's retry
+// layer / session restart + query-status) instead of killing the upload as
+// 'invalid'. auth/quota and the other 4xx keep their fatal kinds, and an
+// undefined status means a local failure (parse/no-Location/read…) — never
+// classified transient here.
+export function isTransientUploadStatus(status: number | undefined): boolean {
+  return status !== undefined && isTransientDriveStatus(status);
 }
 
 export function uploadAttemptsExhaustedError(): UploadError {
