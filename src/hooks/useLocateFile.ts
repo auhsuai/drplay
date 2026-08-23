@@ -51,11 +51,14 @@ export function useLocateFile(
     ts: number;
   } | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
+  const locateInFlightRef = useRef(false);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let mounted = true;
     const stillMounted = () => mounted;
     const handleLocateFile = async (ev: Event) => {
+      if (locateInFlightRef.current) return;
       // Duck-typed event payload: locate-file is dispatched internally with
       // { fileId }, but a corrupt/malformed event must not crash the listener.
       const detail = (ev as CustomEvent<{ fileId?: unknown } | null>).detail;
@@ -157,6 +160,22 @@ export function useLocateFile(
         return newHistory;
       };
 
+      const clearHighlightTimer = () => {
+        if (highlightTimerRef.current !== null) {
+          clearTimeout(highlightTimerRef.current);
+          highlightTimerRef.current = null;
+        }
+      };
+
+      const scheduleHighlightClear = () => {
+        clearHighlightTimer();
+        highlightTimerRef.current = setTimeout(() => {
+          highlightTimerRef.current = null;
+          setHighlightedFileId(null);
+        }, HIGHLIGHT_DURATION_MS);
+      };
+
+      locateInFlightRef.current = true;
       setIsLoadingTracks(true);
       setActiveTab(MY_DRIVE_TAB);
 
@@ -227,9 +246,7 @@ export function useLocateFile(
 
         if (parentId === currentFolderId) {
           setHighlightedFileId({ id: fileId, ts: Date.now() });
-          setTimeout(() => {
-            setHighlightedFileId(null);
-          }, HIGHLIGHT_DURATION_MS);
+          scheduleHighlightClear();
           return;
         }
 
@@ -241,10 +258,7 @@ export function useLocateFile(
         setCurrentFolderId(parentId);
         setCurrentFolderName(folderName);
         setHighlightedFileId({ id: fileId, ts: Date.now() });
-
-        setTimeout(() => {
-          setHighlightedFileId(null);
-        }, HIGHLIGHT_DURATION_MS);
+        scheduleHighlightClear();
       } catch (err: unknown) {
         void captureError({
           level: "error",
@@ -252,6 +266,7 @@ export function useLocateFile(
           message: `Locate file failed: ${classifyDriveError(err)}`,
         });
       } finally {
+        locateInFlightRef.current = false;
         if (mounted) setIsLoadingTracks(false);
       }
     };
@@ -264,6 +279,10 @@ export function useLocateFile(
     return () => {
       mounted = false;
       window.removeEventListener(EVENT_LOCATE_FILE, handleLocateListener);
+      if (highlightTimerRef.current !== null) {
+        clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
     };
   }, [
     accessToken,
