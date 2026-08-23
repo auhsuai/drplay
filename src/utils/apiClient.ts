@@ -106,6 +106,43 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+// Let ONE caller escape an await as soon as its signal fires, WITHOUT
+// touching the awaited promise itself — the shared single-flight refresh must
+// keep running for every other caller (abort is per-caller, never a cancel of
+// the shared work). An already-aborted signal rejects immediately; the abort
+// listener is always removed once the race settles, so no listener leaks.
+function raceWithAbortSignal<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (err: unknown) => {
+        cleanup();
+        // Same normalization as withTimeout above: the shared flight always
+        // rejects with Error instances, but never propagate a non-Error raw.
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
+
 // Single-flight guard for concurrent token refresh: while a refresh is in
 // flight, later getValidToken callers await the SAME promise instead of each
 // firing their own refresh. Nulled in a finally once the refresh settles, so
@@ -270,16 +307,29 @@ function scheduleRetryRefresh() {
 }
 
 /**
- * Read the long-lived refresh token from the OS credential vault (keyring),
- * the source of truth. Fallback order: keyring → in-memory copy (set when a
- * keyring write failed this session) → one-time migration from a legacy
- * localStorage copy (pre-keyring users: the token is moved into the keyring
- * and localStorage is cleared immediately — it is never a standing fallback).
+ * Read the long-lived refresh token. True precedence order:
+ * 1. In-memory copy — when present it is ALWAYS the newest token: it is set
+ *    only by a FAILED keyring write holding the rotated token, and cleared to
+ *    null by every successful keyring write (see writeRefreshToken). A stale
+ *    keyring value must therefore never win over a non-null memory value.
+ * 2. OS credential vault (keyring) — the standing source of truth.
+ * 3. One-time migration from a legacy localStorage copy (pre-keyring users:
+ *    the token is moved into the keyring and localStorage is cleared
+ *    immediately — it is never a standing fallback).
  * A keyring failure is non-fatal (warn + fallback), so a vault hiccup can
  * never sign the user out.
  * @returns The refresh token, or null when no store has one.
  */
 export const readRefreshToken = async (): Promise<string | null> => {
+  // Memory-first: a non-null inMemoryRefreshToken means the last keyring
+  // write failed while holding the NEWEST token, so whatever the vault still
+  // holds is older. Skip the vault read entirely and serve memory. Snapshot
+  // into a local so the async body below cannot observe a torn mid-flight
+  // rotation write.
+  const memoryToken: string | null = inMemoryRefreshToken;
+  if (memoryToken !== null) {
+    return memoryToken;
+  }
   try {
     const keyringToken = await withTimeout(
       invoke<string | null>("get_refresh_token"),
@@ -296,9 +346,6 @@ export const readRefreshToken = async (): Promise<string | null> => {
       source: "apiClient",
       message: `refresh-token-keyring-read-failed, using in-memory fallback: ${err instanceof Error ? err.message : String(err)}`,
     });
-  }
-  if (inMemoryRefreshToken !== null) {
-    return inMemoryRefreshToken;
   }
   // One-time migration path: users who logged in before the keyring existed
   // still have their token here. Move it into secure storage and clear
@@ -423,8 +470,10 @@ export const deleteRefreshToken = async (): Promise<void> => {
  * as signed out (dispatch 'auth-logout' + return null).
  * @param forceRefresh Skip the staleness check and refresh unconditionally
  * (used on 401 retries and proactive/worker refreshes).
- * @param signal Optional caller cancellation — aborting rejects with an
- * AbortError and the refresh continues to completion for other callers.
+ * @param signal Optional caller cancellation. Aborting rejects THIS caller
+ * with an AbortError as soon as the signal fires (entry, mid-wait on a joined
+ * flight) — the shared refresh itself is NEVER cancelled and keeps running
+ * for other callers; only the aborting caller escapes early.
  * @returns The valid access token, or null when no token is available (signed
  * out / refresh impossible). An empty string means the session changed while
  * refreshing (logout raced the refresh).
@@ -459,8 +508,10 @@ export const getValidToken = async (
       // promise. Success delivers the same token (or "" when the session
       // changed) to everyone; failure rejects so every follower throws, while
       // the lead caller (the one that created the promise, below) converts
-      // the failure into a null return.
-      return refreshPromise;
+      // the failure into a null return. A caller signal only rescues THIS
+      // caller from the wait (AbortError) — the shared flight keeps running
+      // for everyone else (single-flight is never cancelled by one aborter).
+      return raceWithAbortSignal(refreshPromise, signal);
     }
 
     refreshPromise = (async (): Promise<string | null> => {
@@ -582,8 +633,10 @@ export interface FetchWithAuthOptions extends RequestInit {
  * never hang the caller; a caller signal and the timeout are merged, neither
  * wins. On a 401 the token is force-refreshed once and the request retried
  * with the new token; when the refresh cannot produce a token the original
- * 401 response is returned. Network/timeout failures reject (the caller
- * decides retry vs. surface) — nothing is swallowed.
+ * 401 response is returned. A caller cancel while waiting for that refresh
+ * rejects THIS call immediately with an AbortError (the shared single-flight
+ * refresh keeps running for other callers). Network/timeout failures reject
+ * (the caller decides retry vs. surface) — nothing is swallowed.
  * @param url The request target (Drive API or any authed endpoint).
  * @param options Fetch options, plus an optional `timeoutMs` override for
  * long-running bodies (e.g. large upload PUTs) that outlast the 15s default.
@@ -639,7 +692,18 @@ export const fetchWithAuth = async (
   if (response.status === 401) {
     let newToken: string | null;
     try {
-      newToken = await getValidToken(true);
+      // The caller signal is forwarded so a cancel during the refresh wait
+      // escapes immediately: getValidToken races the signal at its entry
+      // checks and at the follower join, and the outer race here covers the
+      // lead-wait too. Either way only THIS request aborts (AbortError) —
+      // the shared single-flight refresh continues for every other caller.
+      // RequestInit.signal is nullable; normalize to undefined so both the
+      // parameter and the race helper see one consistent type.
+      const callerSignal = options.signal ?? undefined;
+      newToken = await raceWithAbortSignal(
+        getValidToken(true, callerSignal),
+        callerSignal,
+      );
     } catch (err: unknown) {
       // This call was a FOLLOWER of an in-flight refresh whose shared
       // promise rejected: getValidToken's lead caller already ran the error

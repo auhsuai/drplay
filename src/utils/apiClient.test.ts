@@ -42,6 +42,21 @@ const invokeMock = vi.mocked(invoke);
 const getCurrentSessionIdMock = vi.mocked(getCurrentSessionId);
 const captureErrorMock = vi.mocked(captureError);
 
+// Bounds an await so a permanently-pending promise (e.g. a caller that the
+// code under test forgot to wake on abort) fails FAST with a named error
+// instead of eating the whole 15s vitest timeout. Losing races are absorbed
+// by Promise.race internals — no unhandled rejection.
+function withPendingGuard<T>(promise: Promise<T>, ms = 1_500): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`still pending after ${String(ms)}ms`));
+      }, ms);
+    }),
+  ]);
+}
+
 // Command-aware invoke mock: maps each Tauri command name to a value or
 // handler. Always returns a promise (like the real invoke) so withTimeout
 // receives a thenable; unknown commands reject loudly to surface typos.
@@ -231,6 +246,56 @@ describe("fetchWithAuth", () => {
       ([e]) => (e as Event).type === "auth-logout",
     );
     expect(authLogoutCalls).toHaveLength(1);
+  });
+
+  it("fetchWithAuth exits immediately with AbortError when aborted while waiting for the shared refresh", async () => {
+    storage.setItem(ACCESS_TOKEN_KEY, "old");
+    let releaseRefresh!: (value: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    });
+
+    // A lead caller puts a refresh in flight so fetchWithAuth's 401 handler
+    // JOINS it as a follower instead of starting its own.
+    const lead = getValidToken(true);
+    await vi.waitFor(() => {
+      expect(
+        invokeMock.mock.calls.filter((c) => c[0] === "refresh_google_token")
+          .length,
+      ).toBe(1);
+    });
+
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 401 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const controller = new AbortController();
+    const fwPromise = fetchWithAuth("/api/songs", {
+      signal: controller.signal,
+    });
+    // One macrotask flush guarantees the 401 came back and fetchWithAuth has
+    // entered (and joined) the shared refresh before we abort.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    controller.abort();
+
+    // Must not hang until the shared flight settles — abort escapes NOW.
+    // finally: settle the flight either way so no pending refreshPromise
+    // leaks into the next test (module state persists between tests).
+    try {
+      await expect(withPendingGuard(fwPromise)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    } finally {
+      // The shared flight keeps running for everyone else; the lead completes.
+      releaseRefresh({ access_token: "after-abort-token", expires_in: 3600 });
+      await expect(lead).resolves.toBe("after-abort-token");
+    }
   });
 
   it("applies AbortSignal.timeout to the request", async () => {
@@ -675,6 +740,47 @@ describe("M1b keyring-backed refresh token storage", () => {
     await expect(readRefreshToken()).resolves.toBe("rt-new");
   });
 
+  it("(g) prefers the newer in-memory token over a stale keyring token after a failed rotation write", async () => {
+    // Cycle 1: keyring still holds the ORIGINAL rt-A; refreshing WITH rt-A
+    // succeeds and rotates to rt-B, whose keyring write FAILS → rt-B must
+    // survive in memory.
+    mockInvoke({
+      get_refresh_token: "rt-A",
+      refresh_google_token: (args?: Record<string, unknown>) =>
+        args?.refreshToken === "rt-A"
+          ? { access_token: "acc-2", refresh_token: "rt-B", expires_in: 3600 }
+          : Promise.reject(new Error("unexpected refresh token")),
+      set_refresh_token: () =>
+        Promise.reject(new Error("credential vault write denied")),
+    });
+
+    await expect(getValidToken(true)).resolves.toBe("acc-2");
+    await vi.waitFor(() => {
+      expect(captureErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "keyring-write-failed",
+          ) as unknown as string,
+        }),
+      );
+    });
+
+    // Cycle 2: the vault STILL serves stale rt-A while memory holds the
+    // newest rt-B (write failed above). The next refresh MUST use rt-B —
+    // using rt-A would fail with invalid_grant and sign the user out.
+    mockInvoke({
+      get_refresh_token: "rt-A",
+      refresh_google_token: (args?: Record<string, unknown>) =>
+        args?.refreshToken === "rt-B"
+          ? { access_token: "acc-3", expires_in: 3600 }
+          : Promise.reject(new Error("invalid_grant: revoked")),
+    });
+    await expect(getValidToken(true)).resolves.toBe("acc-3");
+    expect(invokeMock).toHaveBeenCalledWith("refresh_google_token", {
+      refreshToken: "rt-B",
+    });
+  });
+
   it("(f) times out a hanging keyring read and falls back to localStorage", async () => {
     storage.setItem(REFRESH_TOKEN_KEY, "rt-legacy");
     vi.useFakeTimers();
@@ -838,6 +944,44 @@ describe("getValidToken single-flight refresh", () => {
     await expect(lead).resolves.toBe("shared-token");
     await expect(follower).resolves.toBe("shared-token");
     expect(refreshCallCount()).toBe(1);
+  });
+
+  it("a follower whose caller signal aborts mid-flight rejects AbortError immediately while the shared flight continues", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let releaseRefresh!: (value: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    });
+
+    const lead = getValidToken(true);
+    const controller = new AbortController();
+    const follower = getValidToken(true, controller.signal);
+
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    controller.abort();
+
+    // JSDoc contract: aborting rejects THIS caller with an AbortError right
+    // away instead of keeping it pending until the shared flight settles.
+    // finally: settle the shared flight either way so a pending refreshPromise
+    // can never leak across tests (module state persists between tests).
+    try {
+      await expect(withPendingGuard(follower)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    } finally {
+      // Single-flight preserved: the shared refresh was NOT cancelled — the
+      // lead still receives the token once it lands.
+      releaseRefresh({ access_token: "late-token", expires_in: 3600 });
+      await expect(lead).resolves.toBe("late-token");
+      expect(refreshCallCount()).toBe(1);
+    }
   });
 
   it("concurrent callers all reject when the refresh fails", async () => {
