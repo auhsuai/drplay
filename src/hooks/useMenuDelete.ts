@@ -43,12 +43,6 @@ export function useMenuDelete(t: TFunction) {
       // away — never keep playing audio that no longer exists. Only after a
       // successful Drive delete (a failed delete falls to catch, no stop).
       stopPlaybackIfTrack(deleteDriveItem.id);
-      await db.files.delete(deleteDriveItem.id);
-      setShowDeleteConfirm(false);
-      setIsOpen(false);
-      onClose?.();
-      if (onRemoveItem) onRemoveItem(deleteDriveItem.id);
-      else if (onRefresh) onRefresh();
     } catch (e: unknown) {
       void captureError({
         level: "error",
@@ -56,9 +50,27 @@ export function useMenuDelete(t: TFunction) {
         message: `Failed to delete item: ${e instanceof Error ? e.message : String(e)}`,
       });
       showErrorToast(t("drive.delete_error"));
+      return;
     } finally {
       setIsDeleting(false);
     }
+    // Remote delete succeeded — a local cache failure must never surface as
+    // a failed delete (Drive holds the source of truth). Log it as a warn,
+    // then keep the success-path UI updates so no ghost item remains.
+    try {
+      await db.files.delete(deleteDriveItem.id);
+    } catch (e: unknown) {
+      void captureError({
+        level: "warn",
+        source: "useMenuDelete",
+        message: `Failed to remove local cache entry: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+    setShowDeleteConfirm(false);
+    setIsOpen(false);
+    onClose?.();
+    if (onRemoveItem) onRemoveItem(deleteDriveItem.id);
+    else if (onRefresh) onRefresh();
   };
 
   const openDeleteConfirm = (item: DriveItem) => {

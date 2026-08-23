@@ -52,8 +52,6 @@ export function useMenuMove({
 
     try {
       await moveFile(token, itemId, oldParentId, newParentId);
-      await db.files.update(itemId, { parentId: newParentId });
-      if (onRemoveItem) onRemoveItem(itemId);
     } catch (e) {
       void captureError({
         level: "error",
@@ -62,7 +60,24 @@ export function useMenuMove({
       });
       showErrorToast(t("drive.move_error"));
       if (onRefresh) onRefresh();
+      return;
     }
+    // Remote move succeeded — a local cache failure must never surface as a
+    // failed move (Drive holds the source of truth). Log it as a warn and
+    // keep the UI reflecting the remote state.
+    let localCacheUpdated = true;
+    try {
+      await db.files.update(itemId, { parentId: newParentId });
+    } catch (e) {
+      localCacheUpdated = false;
+      void captureError({
+        level: "warn",
+        source: MORE_MENU_MODULE,
+        message: `move-local-cache-failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+    if (onRemoveItem) onRemoveItem(itemId);
+    else if (!localCacheUpdated && onRefresh) onRefresh();
   };
 
   return { showMoveScreen, setShowMoveScreen, handleMove };
