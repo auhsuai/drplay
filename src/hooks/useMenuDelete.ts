@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { deleteFile } from "../utils/driveApi";
 import { db } from "../db/db";
 import { stopPlaybackIfTrack } from "../utils/stopPlayback";
@@ -10,6 +10,12 @@ import type { TFunction } from "i18next";
 
 export function useMenuDelete(t: TFunction) {
   const [isDeleting, setIsDeleting] = useState(false);
+  // Race guard (2nd layer behind the disabled Confirm button): a double-click
+  // fires twice in the same tick, before React re-renders — the isDeleting
+  // state read below is still stale false for the second click. The ref
+  // check-and-set closes that window (same pattern as useMenuDownload's
+  // isDownloadingRef).
+  const isDeletingRef = useRef(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteDriveItem, setDeleteDriveItem] = useState<DriveItem | null>(
     null,
@@ -36,6 +42,8 @@ export function useMenuDelete(t: TFunction) {
       setShowDeleteConfirm(false);
       return;
     }
+    if (isDeletingRef.current || isDeleting) return;
+    isDeletingRef.current = true;
     setIsDeleting(true);
     try {
       await deleteFile(token, deleteDriveItem.id);
@@ -52,6 +60,7 @@ export function useMenuDelete(t: TFunction) {
       showErrorToast(t("drive.delete_error"));
       return;
     } finally {
+      isDeletingRef.current = false;
       setIsDeleting(false);
     }
     // Remote delete succeeded — a local cache failure must never surface as
