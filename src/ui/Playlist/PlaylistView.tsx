@@ -97,8 +97,9 @@ export function PlaylistView({
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
   // empty state by swapping in a valid Playlist with no tracks. Keeps the
   // real playlist's identity when it is already loaded; otherwise builds a
-  // minimal fake from the mount-time playlistId (the view only mounts while a
-  // playlist_* tab is active, so playlistId is stable for the mounted view).
+  // minimal fake from the mount-time playlistId. The router remounts this
+  // view for every playlist_ tab via key (TabContentRouter), so playlistId
+  // never changes under a mounted view.
   // onDebugEvent no-ops in production builds; the listener never runs there.
   useEffect(() => {
     return onDebugEvent(DEBUG_EVENTS.PLAYLIST_EMPTY, () => {
@@ -114,7 +115,7 @@ export function PlaylistView({
             },
       );
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once debug listener; re-subscribing on playlistId change would only matter after a direct playlist-to-playlist switch (no remount), and the real load effect overwrites the fake on that switch anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once debug listener; a playlist-to-playlist switch remounts the view (router key), which re-runs this effect naturally, and the real load effect overwrites any fake on that switch anyway.
   }, []);
 
   const tracks = playlist?.tracks ?? [];

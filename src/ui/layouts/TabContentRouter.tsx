@@ -169,6 +169,12 @@ export function TabContentRouter({
           />
         ) : activeTab.startsWith("playlist_") ? (
           <PlaylistView
+            // Remount per playlist (key = raw id): same position+type would
+            // otherwise let React REUSE the playlist_A instance for
+            // playlist_B, showing A's data until B's refetch lands — and
+            // forever if that fetch rejects. Fresh instance per id is the
+            // intended behavior; the old scroll position reset is accepted.
+            key={activeTab.replace("playlist_", "")}
             playlistId={activeTab.replace("playlist_", "")}
             onPlay={(t: Track, c?: Track[]) => {
               onPlayTrack(t, c);
