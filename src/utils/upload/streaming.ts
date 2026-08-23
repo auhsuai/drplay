@@ -85,6 +85,9 @@ async function uploadDiskFileStreaming(
   await persistActiveSession(entry, {
     totalSize: stat.size,
     ...(entry.resumeUri !== undefined ? { uploadUri: entry.resumeUri } : {}),
+    ...(entry.resumeClientGeneratedId !== undefined
+      ? { clientGeneratedId: entry.resumeClientGeneratedId }
+      : {}),
   });
   if (!(await quotaAllows(entry, stat.size))) {
     throw new UploadError(ERROR_QUOTA_EXCEEDED, "quota");

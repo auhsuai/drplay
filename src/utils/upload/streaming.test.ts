@@ -448,6 +448,7 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
 describe("resumed entry keeps its inherited uploadUri in the active row", () => {
   const RESUMED_URI =
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=persisted-9";
+  const RESUMED_GEN_ID = "gen-id-persisted-9";
 
   it("resumed 308 path: every active-row persist carries the inherited URI", async () => {
     const data = makeData(10 * 1024 * 1024);
@@ -484,6 +485,36 @@ describe("resumed entry keeps its inherited uploadUri in the active row", () => 
     expect(mockedPersist).toHaveBeenCalled();
     for (const [, extra] of mockedPersist.mock.calls) {
       expect(extra?.uploadUri).toBe(RESUMED_URI);
+    }
+  });
+
+  it("resumed 308 path: stat-persist also carries clientGeneratedId", async () => {
+    const data = makeData(10 * 1024 * 1024);
+    mockedOpenStream.mockImplementation(() =>
+      Promise.resolve(makeFakeStream(data)),
+    );
+    mockedStat.mockResolvedValue(statResult(data.length));
+    // Same never-grants-a-new-URI path as above: query-status → 308 → tail
+    // PUT → 201, so onSessionUpdate never fires and the stat-size persist is
+    // the ONLY write that can keep the inherited pre-generated id in the row.
+    mockedFetch
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8388607"))
+      .mockResolvedValueOnce(makeJsonResponse(201, UPLOADED_FILE));
+
+    await handleDiskFile({
+      ...makeEntry("C:\\Music\\big.flac"),
+      resumeUri: RESUMED_URI,
+      resumeTotalSize: data.length,
+      resumeClientGeneratedId: RESUMED_GEN_ID,
+    });
+
+    // THE CONTRACT: the stat-size full-row put must re-carry the inherited
+    // pre-generated id alongside the URI — a wiped clientGeneratedId never
+    // comes back on this path, and a later retry after a lost response loses
+    // its idempotent 409-resolve-DONE binding (duplicate-file risk).
+    expect(mockedPersist).toHaveBeenCalled();
+    for (const [, extra] of mockedPersist.mock.calls) {
+      expect(extra?.clientGeneratedId).toBe(RESUMED_GEN_ID);
     }
   });
 
