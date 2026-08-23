@@ -19,6 +19,13 @@ export function useKeyboardShortcuts({
 }: UseKeyboardShortcutsParams) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // F2 fix: ignore held-key auto-repeat (one physical press = one action;
+      // a held key would machine-gun transport skips/toggles) and Ctrl/Meta/Alt
+      // chords (app/browser shortcuts like Ctrl+S must neither trigger the
+      // player nor get preventDefault-swallowed here). Plain keys and the
+      // INPUT/TEXTAREA/contentEditable exclusion below are unchanged.
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+
       const activeEl = document.activeElement as HTMLElement | null;
       if (
         activeEl?.tagName === "INPUT" ||
