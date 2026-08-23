@@ -201,11 +201,18 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     }
     const data = await this.fetchChunk(0, fetchLen - 1);
     // Populate the aligned chunk cache so parse-time reads inside the head
-    // region are served without extra requests. A trailing partial chunk is
-    // safe: the prefetched region always ends at min(headBytes, fileSize), so
-    // any later read lands either inside it or in a fully-fetched chunk beyond.
+    // region are served without extra requests. Same invariant as
+    // prefetchRange below: a trailing PARTIAL chunk may be cached only when
+    // it ends at EOF (no bytes exist beyond it); elsewhere it is left
+    // uncached so a later read past the prefetched region re-fetches the
+    // full chunk instead of being silently truncated at the short entry's
+    // edge (possible once headBytes is not a multiple of RANGE_CHUNK, or
+    // the server returns a short body mid-file).
+    const reachedEof = data.length >= fileSize;
     for (let start = 0; start < data.length; start += RANGE_CHUNK) {
-      this.chunkCache.set(start, data.subarray(start, start + RANGE_CHUNK));
+      const slice = data.subarray(start, start + RANGE_CHUNK);
+      if (slice.length < RANGE_CHUNK && !reachedEof) continue;
+      this.chunkCache.set(start, slice);
     }
     this.evictOldestChunks();
     return data.subarray(0, fetchLen);
@@ -451,6 +458,19 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
           // record it for the circuit breaker and surface it as
           // RangeFetchNetworkError so the metadata caller treats it as
           // transient (never pins the v:9 placeholder).
+          // A CALLER abort mid-body (unmount/navigation while the body is
+          // still downloading) is deliberate cancellation, not a Drive
+          // failure: mirror the fetch-reject catch above (commit bd1abdb) —
+          // no recordDriveFailure, no warn, and exit through the same
+          // RangeFetchNetworkError("timeout") shape every other abort path
+          // uses.
+          const callerAborted = this.callerSignal?.aborted === true;
+          if (callerAborted) {
+            throw new RangeFetchNetworkError(
+              "timeout",
+              `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+            );
+          }
           recordDriveFailure();
           void captureError({
             level: "warn",

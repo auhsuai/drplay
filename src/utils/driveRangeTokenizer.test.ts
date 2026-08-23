@@ -4,6 +4,7 @@ import {
   DRIVE_COOLDOWN_MS,
   DRIVE_FAILURE_WINDOW_MS,
   DriveRangeTokenizer,
+  HEAD_BYTES,
   RangeFetchNetworkError,
   RangeNotSupportedError,
   REQUEST_TIMEOUT_MS,
@@ -507,6 +508,65 @@ describe("DriveRangeTokenizer", () => {
     expect(chunk0Fetches).toBe(1);
   });
 
+  // Invariant anchor (mirror of prefetchRange's seed guard): a partially
+  // covered chunk may only be cached when it ends at EOF. The old seed loop
+  // cached every chunk unconditionally, so a head that is not a multiple of
+  // RANGE_CHUNK left a short cache entry mid-file and later reads past it
+  // were silently truncated at that entry's edge.
+  describe("prefetchHead (single-request head region)", () => {
+    it("a partial seed chunk below EOF is NOT cached: reads past the head re-fetch the full chunk", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      // Head smaller than one 64KB chunk on a much longer file: the only
+      // covered chunk [0, 30000) is partial and does NOT end at EOF.
+      const data = await tz.prefetchHead(30_000);
+      expect(data).toHaveLength(30_000);
+      expect(vf.calls).toHaveLength(1);
+      expect(vf.calls[0]?.range).toBe("bytes=0-29999");
+      // A read beyond the prefetched region (same aligned chunk) must hit
+      // the network for the FULL chunk — never serve the short seed's edge
+      // as a silent truncation (the old code returned 0 bytes here).
+      const tail = await tz.readRange(35_000, 35_100);
+      expect(tail).toHaveLength(100);
+      expect(tail[0]).toBe(35_000 % 256);
+      expect(tail[99]).toBe(35_099 % 256);
+      expect(vf.calls).toHaveLength(2);
+      expect(vf.calls[1]?.range).toBe("bytes=0-65535");
+    });
+
+    it("seeds full chunks normally; only the partial below-EOF trailing chunk is skipped", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      const data = await tz.prefetchHead(70_000); // 1 full chunk + 4464 bytes
+      expect(data).toHaveLength(70_000);
+      expect(vf.calls).toHaveLength(1);
+      // Inside the fully-covered chunk 0: cache-served, no extra request.
+      await tz.readRange(0, 100);
+      expect(vf.calls).toHaveLength(1);
+      // Inside the partially-covered chunk 1: normal aligned re-fetch, no
+      // shadowing by a short entry.
+      const tail = await tz.readRange(75_536, 75_636);
+      expect(tail).toHaveLength(100);
+      expect(tail[0]).toBe(75_536 % 256);
+      expect(vf.calls).toHaveLength(2);
+      expect(vf.calls[1]?.range).toBe("bytes=65536-131071");
+    });
+
+    it("a partial trailing chunk AT EOF is still cached (the invariant's allowed case)", async () => {
+      const vf = installVirtualFile(100_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 100_000);
+      const data = await tz.prefetchHead(HEAD_BYTES); // clamps to fileSize
+      expect(data).toHaveLength(100_000);
+      expect(vf.calls).toHaveLength(1);
+      expect(vf.calls[0]?.range).toBe("bytes=0-99999");
+      // The EOF-ending partial chunk stays cache-served: no extra request.
+      const end = await tz.readRange(90_000, 90_100);
+      expect(end).toHaveLength(100);
+      expect(end[0]).toBe(90_000 % 256);
+      expect(vf.calls).toHaveLength(1);
+    });
+  });
+
   describe("prefetchRange (single-request arbitrary region)", () => {
     it("fetches [start, end) in exactly one request and returns the region bytes", async () => {
       const vf = installVirtualFile(200_000, (i) => i % 256);
@@ -775,6 +835,57 @@ describe("DriveRangeTokenizer", () => {
         expect.objectContaining({
           message: expect.stringContaining(
             "range-fetch-timeout",
+          ) as unknown as string,
+        }),
+      );
+    });
+
+    // bd1abdb mirror for the body-read catch after a 206: an AbortError
+    // from arrayBuffer() while the caller signal is already aborted is
+    // deliberate cancellation (unmount mid-download), never a Drive
+    // failure — it must not feed the app-wide circuit breaker, exactly
+    // like the fetch-reject catch above it.
+    it("caller abort during body read (arrayBuffer rejects) does not feed the circuit breaker either", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const captureSpy = vi
+        .spyOn(errorLogModule, "captureError")
+        .mockResolvedValue();
+      const mock = vi.fn(() => ({
+        status: 206,
+        ok: true,
+        arrayBuffer: () =>
+          Promise.reject(
+            new DOMException("The user aborted a request", "AbortError"),
+          ),
+      }));
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000, {
+        abortSignal: controller.signal,
+      });
+
+      // Same exit shape as every other caller-abort path (kind timeout,
+      // the exact message the timeout/429-abort branches throw).
+      for (let i = 0; i < 3; i += 1) {
+        await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+          name: "RangeFetchNetworkError",
+          kind: "timeout",
+          message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+        });
+      }
+      // 3 deliberate cancels inside the failure window must NOT open the
+      // app-wide circuit...
+      expect(isDriveCircuitOpen()).toBe(false);
+      // ...so the 4th read still issues a real fetch (no fail-fast pinning).
+      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+        RangeFetchNetworkError,
+      );
+      expect(mock).toHaveBeenCalledTimes(4);
+      // Silent per the file's cancellation convention: no body-failed warn.
+      expect(captureSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "range-fetch-body-failed",
           ) as unknown as string,
         }),
       );
