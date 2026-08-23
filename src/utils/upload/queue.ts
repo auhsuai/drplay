@@ -219,9 +219,18 @@ export async function resumeInterruptedUploads(
       const liveSessionIds = new Set(
         (await db.uploadSessions.toArray()).map((row) => row.id),
       );
+      // F1: a seed enqueued between this round's scan and this sweep owns a
+      // pending card but NO session row yet (its processEntry persist has not
+      // run). The pending files-row id IS the entry id verbatim (pendingRow
+      // writes id: entry.id), so any row owned by a LIVE in-process entry is
+      // not a ghost regardless of session state — any-status matching mirrors
+      // the scan-time layer 2a guard above.
+      const liveEntryIds = new Set(entries.map((e) => e.id));
       const ghostRows = (
         await db.files.where("id").startsWith(PENDING_ID_PREFIX).toArray()
-      ).filter((row) => !liveSessionIds.has(row.id));
+      ).filter(
+        (row) => !liveSessionIds.has(row.id) && !liveEntryIds.has(row.id),
+      );
       if (ghostRows.length > 0) {
         await db.files.bulkDelete(ghostRows.map((row) => row.id));
       }

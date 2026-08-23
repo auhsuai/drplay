@@ -3444,6 +3444,63 @@ describe("uploadManager", () => {
       await waitIdle();
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });
+
+    it("(F1) ghost sweep giữ card của entry đang sống chưa kịp persist session row, vẫn xoá orphan không chủ", async () => {
+      // Race F1: card của seed mới (queued khi 2 slot concurrency đã đầy) tồn
+      // tại trong db.files nhưng CHƯA có uploadSessions row (processEntry chưa
+      // chạy tới nó). Snapshot keep-set của sweep không chứa id này → code cũ
+      // bulkDelete nhầm card của entry đang sống. Orphan THẬT (không có chủ ở
+      // đâu cả) vẫn phải bị xoá — nhiệm vụ gốc của sweep giữ nguyên.
+      const da = deferred<DriveFileItem>();
+      const dbB = deferred<DriveFileItem>();
+      uploadFileResumable
+        .mockReturnValueOnce(da.promise)
+        .mockReturnValueOnce(dbB.promise);
+
+      // Lấp đầy 2 slot: a + b uploading (đã persist session rows).
+      um.startUploads([fileSeed("a.mp3"), fileSeed("b.mp3")], TOKEN);
+      await flush();
+      expect(await db.uploadSessions.toArray()).toHaveLength(2);
+
+      // Seed mới → queued (hết slot): card đã publish qua enqueue-time
+      // bulkPut, nhưng session row CHƯA tồn tại cho đến khi pump tới nó.
+      um.startUploads([fileSeed("c-live.mp3")], TOKEN);
+      await flush();
+      const cEntry = um.getEntries().find((e) => e.name === "c-live.mp3");
+      if (!cEntry) throw new Error("expected queued entry c-live.mp3");
+      expect(cEntry.status).toBe("queued");
+      expect((await db.files.toArray()).some((r) => r.id === cEntry.id)).toBe(
+        true,
+      );
+      expect(await db.uploadSessions.toArray()).toHaveLength(2); // c chưa có row
+
+      // Orphan thật: app chết giữa enqueue bulkPut và persistActiveSession.
+      await db.files.bulkPut([
+        {
+          id: "pending-orphan-f1",
+          name: "ghost.mp3",
+          mimeType: AUDIO_MIME,
+          parentId: "root",
+          trashed: false,
+          isFolder: false,
+          modifiedTime: "2026-01-01T00:00:00Z",
+        },
+      ]);
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      const idsAfter = (await db.files.toArray()).map((r) => r.id);
+      // Contract F1: card của entry đang sống KHÔNG bị xoá dù chưa có session row.
+      expect(idsAfter).toContain(cEntry.id);
+      // Sweep vẫn làm đúng nhiệm vụ gốc: orphan bị xoá.
+      expect(idsAfter).not.toContain("pending-orphan-f1");
+
+      da.resolve(makeDriveFile("f-a", "a.mp3"));
+      dbB.resolve(makeDriveFile("f-b", "b.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
   });
 
   describe("duplicate seed guard (P2-B4)", () => {
