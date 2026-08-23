@@ -134,6 +134,12 @@ async function performFullSync() {
     }
 
     let pageToken: string | undefined = undefined;
+    // Set when a mid-pagination failure must be reported honestly instead of
+    // falling through to the tail: the tail persists the fresh startPageToken
+    // and posts SYNC_COMPLETE, which would brand a partially synced library
+    // as complete AND permanently skip the unsynced pages (the next run would
+    // delta-sync from the advanced token).
+    let filesFailed = false;
     try {
       do {
         const url = new URL(DRIVE_FILES_URL);
@@ -145,19 +151,27 @@ async function performFullSync() {
         url.searchParams.append("pageSize", "1000");
         if (pageToken) url.searchParams.append("pageToken", pageToken);
 
-        const res = await fetchDrive("files", currentToken, url);
+        // Retry the SAME request after a successful token refresh — Drive
+        // rejects the 401 request without advancing its page cursor, so the
+        // identical URL (same pageToken) is correct. A bare `continue` here
+        // would jump straight to `while (pageToken)` and, when the 401 hit
+        // the very first full-sync page (pageToken still undefined), silently
+        // end the sync with zero pages fetched yet still report completion.
+        let res = await fetchDrive("files", currentToken, url);
+        while (!res.ok && res.status === 401) {
+          if (
+            !(await refreshTokenAndRetry(
+              syncRetry,
+              syncRetryDeps,
+              "full-sync/files",
+            ))
+          ) {
+            break;
+          }
+          res = await fetchDrive("files", currentToken, url);
+        }
 
         if (!res.ok) {
-          if (res.status === 401) {
-            if (
-              await refreshTokenAndRetry(
-                syncRetry,
-                syncRetryDeps,
-                "full-sync/files",
-              )
-            )
-              continue;
-          }
           // Non-ok with no retry left (refresh refused/failed or a non-401
           // status): say so instead of breaking silently — the poller would
           // otherwise wait for a SYNC_COMPLETE that never comes.
@@ -205,6 +219,9 @@ async function performFullSync() {
               err,
               "error",
             );
+            // Partial failure: stop paginating; the filesFailed guard below
+            // reports SYNC_ERROR instead of saving the fresh start token.
+            filesFailed = true;
             break;
           }
         }
@@ -214,6 +231,18 @@ async function performFullSync() {
     } catch (err) {
       if (err instanceof WorkerAbortError) return;
       logWorkerError("proSync/full-sync", { phase: "files" }, err, "error");
+      // Parse/pagination failure: partial data must not be reported as a
+      // completed sync nor advance the delta cursor (guard below).
+      filesFailed = true;
+    }
+
+    if (filesFailed) {
+      // Exactly one terminal signal per exit path: report the failure and
+      // skip the success tail entirely — no startPageToken save, no
+      // cleanup, no SYNC_COMPLETE. The next run redoes this pass from the
+      // previously stored token.
+      self.postMessage({ type: "SYNC_ERROR" });
+      return;
     }
   }
 
@@ -270,7 +299,25 @@ async function performDeltaSync(startPageToken: string) {
         `nextPageToken,newStartPageToken,changes(fileId,removed,file(${FILES_FIELDS},trashed))`,
       );
 
-      const res = await fetchDrive("changes", currentToken, url);
+      // Retry the SAME changes page after a successful token refresh. The old
+      // `continue` only worked by accident: it jumped to `while (pageToken)`,
+      // which stayed truthy solely because pageToken === startPageToken on
+      // entry. The explicit loop makes the same-page retry independent from
+      // that truthiness invariant and never advances pagination on a retry
+      // (Drive leaves its cursor untouched when it rejects with 401).
+      let res = await fetchDrive("changes", currentToken, url);
+      while (!res.ok && res.status === 401) {
+        if (
+          !(await refreshTokenAndRetry(
+            syncRetry,
+            syncRetryDeps,
+            "delta-sync/changes",
+          ))
+        ) {
+          break;
+        }
+        res = await fetchDrive("changes", currentToken, url);
+      }
 
       if (!res.ok) {
         if (res.status === 410) {
@@ -287,16 +334,6 @@ async function performDeltaSync(startPageToken: string) {
           }
           await performFullSync();
           return;
-        }
-        if (res.status === 401) {
-          if (
-            await refreshTokenAndRetry(
-              syncRetry,
-              syncRetryDeps,
-              "delta-sync/changes",
-            )
-          )
-            continue;
         }
         // Non-ok with no retry left (refresh refused/failed or a status other
         // than 410/401): say so instead of breaking silently — the poller
@@ -392,5 +429,10 @@ async function performDeltaSync(startPageToken: string) {
   } catch (err) {
     if (err instanceof WorkerAbortError) return;
     logWorkerError("proSync/delta-sync", { phase: "changes" }, err, "error");
+    // Parse/pagination failure mid-run used to end with NO terminal signal at
+    // all (the poller kept waiting). Report honestly instead; the stored
+    // startPageToken is untouched — the save block above was skipped by the
+    // throw — so the next sync replays the same window.
+    self.postMessage({ type: "SYNC_ERROR" });
   }
 }
