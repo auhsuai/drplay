@@ -50,6 +50,9 @@ let entries: InternalEntry[] = [];
 let busy = false;
 // Slice 5.2: re-entrancy guard for resumeInterruptedUploads — set synchronously
 // before the first await so a second concurrent call returns immediately.
+// P2-F2: held for the ENTIRE function (scan → ghost sweep → enqueue + pump
+// kick) and released only by the single final finally, so no phase of an
+// in-flight round lets a second call slip through.
 let resumeRunning = false;
 // Monotonic scan head for pump: the first queued entry is searched from here
 // instead of from index 0 on every iteration (a batch of N uploads was
@@ -161,7 +164,22 @@ export async function resumeInterruptedUploads(
     }
     // Oldest first — the queue processes in the original order.
     rows.sort((a, b) => a.createdAt - b.createdAt);
+    // P2-F2 layer 2b helper: row ids already claimed by an earlier resume
+    // round whose successor has not settled yet (map value = predecessor id).
+    const claimedPredecessorIds = new Set<string>(resumedPredecessors.values());
     for (const row of rows) {
+      // P2-F2 layer 2a: this row is the in-process identity of a LIVE entry —
+      // startUploads persists each entry's own session row under the entry id,
+      // and any-status matching also covers the terminal-but-unpruned window.
+      // Rebuilding it would clone a running upload (two writers racing one
+      // server session URI) and would flip a flying entry's own row from
+      // 'active' to 'interrupted'.
+      if (entries.some((e) => e.id === row.id)) continue;
+      // P2-F2 layer 2b: an earlier, still-unsettled resume round already
+      // claimed this row (its successor lives in `entries` under a fresh id).
+      // Skip WITHOUT deleting or re-marking: the rightful owner's settle
+      // retires the row when its upload reaches a terminal state.
+      if (claimedPredecessorIds.has(row.id)) continue;
       const entry = resumeEntryFromRow(row, token);
       if (entry === null) {
         // Non-resumable row: no successor row will EVER be created from it, so
@@ -208,32 +226,38 @@ export async function resumeInterruptedUploads(
         await db.files.bulkDelete(ghostRows.map((row) => row.id));
       }
     }, "ghost-pending-sweep");
+    if (interruptedCount > 0) {
+      // ONE aggregated toast for every non-resumable row — never one per file.
+      showErrorToast(t("upload.interrupted"));
+    }
+    if (resumed.length > 0) {
+      entries.push(...resumed);
+      // Publish pending rows for resumed entries the same way fresh seeds do, so
+      // the list shows them immediately instead of when their pump turn starts.
+      // resumeEntryFromRow only ever returns diskFile / folderChildFile entries
+      // (folderRoot / folderChild / bytes rows are not resumable), and BOTH kinds
+      // carry a REAL parentId when resumed: diskFile keeps the seed's parent, and
+      // a folderChildFile's parent was resolved by handleChildFile BEFORE its
+      // session URI was persisted (resumeEntryFromRow refuses URI-less rows), so
+      // its row.parentId is the actual Drive folder. The kind filter below is
+      // defensive — if resumeEntryFromRow ever resumes a placeholder-parented
+      // entry, that entry keeps getting its row at processEntry as before.
+      void enqueuePendingRows(
+        resumed.filter(
+          (e) => e.kind === "diskFile" || e.kind === "folderChildFile",
+        ),
+      );
+      notify();
+      void pump();
+    }
   } finally {
+    // P2-F2: the ONLY release point — every exit path (the early read-failure
+    // return above included) funnels here AFTER every successor has been
+    // enqueued, so no phase of an in-flight round admits a second call. The
+    // pump is fire-and-forget on purpose: successors that outlive this function
+    // are covered by the scan-time skips (layers 2a/2b), so the guard need not
+    // wait for the queue to drain.
     resumeRunning = false;
-  }
-  if (interruptedCount > 0) {
-    // ONE aggregated toast for every non-resumable row — never one per file.
-    showErrorToast(t("upload.interrupted"));
-  }
-  if (resumed.length > 0) {
-    entries.push(...resumed);
-    // Publish pending rows for resumed entries the same way fresh seeds do, so
-    // the list shows them immediately instead of when their pump turn starts.
-    // resumeEntryFromRow only ever returns diskFile / folderChildFile entries
-    // (folderRoot / folderChild / bytes rows are not resumable), and BOTH kinds
-    // carry a REAL parentId when resumed: diskFile keeps the seed's parent, and
-    // a folderChildFile's parent was resolved by handleChildFile BEFORE its
-    // session URI was persisted (resumeEntryFromRow refuses URI-less rows), so
-    // its row.parentId is the actual Drive folder. The kind filter below is
-    // defensive — if resumeEntryFromRow ever resumes a placeholder-parented
-    // entry, that entry keeps getting its row at processEntry as before.
-    void enqueuePendingRows(
-      resumed.filter(
-        (e) => e.kind === "diskFile" || e.kind === "folderChildFile",
-      ),
-    );
-    notify();
-    void pump();
   }
 }
 

@@ -3310,6 +3310,140 @@ describe("uploadManager", () => {
       expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });
+
+    it("(F2-r1) resume lần 2 khi predecessor lần 1 còn bị claim (successor chưa settle) → không nhân bản", async () => {
+      const gate = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValue(gate.promise);
+      // Block the round-1 successor's own session persist — exactly the crash
+      // window P2-B1a covers: the source row stays 'interrupted' and the map
+      // keeps claiming it while the successor is still uploading in-process.
+      const freshDb = await import("../db/db");
+      const sessionPutSpy = vi
+        .spyOn(freshDb.db.uploadSessions, "put")
+        .mockRejectedValue(new Error("db closed"));
+      await insertSessionRow({
+        id: "pending-old-f2r1",
+        name: "twin.mp3",
+        kind: "diskFile",
+        diskPath: "C:/twin.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+      expect(um.getEntries()).toHaveLength(1);
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      const survivors = await db.uploadSessions.toArray();
+      expect(survivors).toHaveLength(1);
+      expect(survivors[0]?.status).toBe("interrupted"); // claim alive (settle kept it)
+
+      sessionPutSpy.mockRestore();
+
+      // Round 2 while round-1's successor is still uploading: the claimed row
+      // must be SKIPPED, never rebuilt into a clone.
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      expect(um.getEntries()).toHaveLength(1);
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      const sessions = await db.uploadSessions.toArray();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.id).toBe("pending-old-f2r1");
+      expect(sessions[0]?.status).toBe("interrupted"); // không mark lại, không xoá
+
+      gate.resolve(makeDriveFile("f-twin", "twin.mp3"));
+      await waitIdle();
+      // Successor's terminal net retires the claimed predecessor.
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(F2-r2) resume khi entry đang bay có row 'active' riêng (id trùng entry) → bỏ qua, row giữ nguyên", async () => {
+      const gate = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockImplementation(async (_t, opts) => {
+        opts.onSessionUpdate?.(OLD_URI);
+        return gate.promise;
+      });
+
+      um.startUploads([diskFileSeed("live.mp3", "C:/live.mp3")], TOKEN);
+      await flush();
+      const live = um.getEntries()[0];
+      if (!live) throw new Error("expected live entry");
+      expect(live.status).toBe("uploading");
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      expect(um.getEntries()).toHaveLength(1);
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      const liveRow = (await db.uploadSessions.toArray()).find(
+        (r) => r.id === live.id,
+      );
+      expect(liveRow?.status).toBe("active");
+      expect((await db.files.toArray()).some((r) => r.id === live.id)).toBe(
+        true,
+      );
+
+      gate.resolve(makeDriveFile("f-live", "live.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(F2-r3) guard giữ suốt vòng đời: gọi chồng giữa vòng 1 no-op sớm; kế nhiệm còn sống → lời gọi sau cũng không nhân bản", async () => {
+      const freshDb = await import("../db/db");
+      const realUpdate = freshDb.db.uploadSessions.update.bind(
+        freshDb.db.uploadSessions,
+      );
+      let releaseScan!: () => void;
+      const scanGate = new Promise<boolean>((resolve) => {
+        releaseScan = () => {
+          resolve(true);
+        };
+      });
+      const updateSpy = vi
+        .spyOn(freshDb.db.uploadSessions, "update")
+        .mockImplementation(
+          (key, changes) =>
+            scanGate.then(() =>
+              realUpdate(key, changes),
+            ) as unknown as ReturnType<typeof realUpdate>,
+        );
+      const gate = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValue(gate.promise);
+      await insertSessionRow({
+        id: "pending-old-f2r3",
+        name: "guard.mp3",
+        kind: "diskFile",
+        diskPath: "C:/guard.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+      });
+
+      const p1 = um.resumeInterruptedUploads(TOKEN, USER);
+      await realTick(6); // p1 now parked inside the gated mark-interrupted write
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled();
+
+      const p2 = um.resumeInterruptedUploads(TOKEN, USER);
+      await realTick(4);
+      expect(uploadFileResumableChunked).not.toHaveBeenCalled(); // overlap → early no-op
+
+      releaseScan();
+      await Promise.all([p1, p2]);
+      await flush();
+      updateSpy.mockRestore();
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      expect(um.getEntries()).toHaveLength(1);
+
+      // Successor still alive (hung on gate) → a third call must also no-op.
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      expect(um.getEntries()).toHaveLength(1);
+
+      gate.resolve(makeDriveFile("f-guard", "guard.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
   });
 
   describe("duplicate seed guard (P2-B4)", () => {
