@@ -62,13 +62,19 @@ export function useFavoriteForTrack(currentTrack: Track | null) {
   // Re-check the current track when favorites change elsewhere (favorites.ts
   // dispatches `favorites-updated` on add/remove), so the heart never shows a
   // stale state while the same track keeps playing.
+  // F3 fix: same cancelled-guard as the track-change effect above — an event
+  // fired for track A can still be in flight when the user moves to track B;
+  // without the guard its response lands on B and shows the WRONG liked
+  // state (the fixed `() => false` stale-check applied A's result to B).
   useEffect(() => {
+    let cancelled = false;
     const handleFavoritesUpdated = () => {
       if (!currentTrack) return;
-      void checkFavorite(currentTrack.id, () => false);
+      void checkFavorite(currentTrack.id, () => cancelled);
     };
     window.addEventListener(FAVORITES_UPDATED_EVENT, handleFavoritesUpdated);
     return () => {
+      cancelled = true;
       window.removeEventListener(
         FAVORITES_UPDATED_EVENT,
         handleFavoritesUpdated,

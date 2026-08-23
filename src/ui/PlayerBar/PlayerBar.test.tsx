@@ -1196,6 +1196,64 @@ describe("PlayerBar favorite (heart) button", () => {
     await screen.findByRole("button", { name: "Remove from favorites" });
   });
 
+  it("drops an in-flight favorites-updated re-check when the track changed (no cross-track heart race)", async () => {
+    // Desktop hides the PlayerBar-level favorite inside MoreMenu; run the
+    // mobile branch so the hook instance under test (PlayerBar's own) is the
+    // one whose liked-state is observable via the MoreMenu stub props.
+    platformMock.IS_MOBILE = true;
+    try {
+      const { rerender } = renderPlayer();
+      let resolveStale!: (liked: boolean) => void;
+      isFavorite.mockImplementation((trackId: string) =>
+        trackId === "track-1"
+          ? new Promise<boolean>((res) => {
+              resolveStale = res;
+            })
+          : Promise.resolve(false),
+      );
+
+      // favorites-updated fires while track-1 is still current → the hook
+      // starts a re-check whose response we hold back in flight.
+      act(() => {
+        window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
+      });
+      // Sanity: the deferred re-check really started.
+      expect(resolveStale).toBeTypeOf("function");
+
+      // The user moves on to track-2 while the track-1 re-check is pending.
+      rerender(
+        <PlayerBar
+          currentTrack={makeTrack({ id: "track-2" })}
+          isPlaying={false}
+          onTogglePlay={vi.fn()}
+          onNextTrack={vi.fn()}
+          onPrevTrack={vi.fn()}
+          playMode="normal"
+          onTogglePlayMode={vi.fn()}
+          onExpandNowPlaying={vi.fn()}
+        />,
+      );
+      // Flush track-2's own checks (resolve false → menu shows unliked).
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // When the LATE track-1 response finally lands, it must NOT be applied
+      // to track-2 (the old fixed `() => false` stale-check flipped the heart
+      // here even though track-2 was never favorited).
+      await act(async () => {
+        resolveStale(true);
+        await Promise.resolve();
+      });
+
+      const lastMenuProps = moreMenuMock.mock.lastCall?.[0] as
+        { isFavorite?: boolean } | undefined;
+      expect(lastMenuProps?.isFavorite).toBe(false);
+    } finally {
+      platformMock.IS_MOBILE = false;
+    }
+  });
+
   it("does not crash when favorites-updated fires with no current track", async () => {
     const { rerender } = renderPlayer();
     await screen.findByRole("button", { name: "Add to favorites" });
