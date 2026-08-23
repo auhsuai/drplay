@@ -181,6 +181,15 @@ export function MoreMenu({
     menuRef,
     dropdownRef,
     setShowPlaylistsSubmenu,
+    // Same dialog state sources handleBack reads, so Escape mirrors the
+    // hardware-back overlay priority instead of closing the dropdown under
+    // an open dialog.
+    showDownloadDialog,
+    showDeleteConfirm,
+    showMoveScreen,
+    setShowDownloadDialog,
+    setShowDeleteConfirm,
+    setShowMoveScreen,
   });
 
   useEffect(() => {

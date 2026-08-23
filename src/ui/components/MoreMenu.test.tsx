@@ -877,6 +877,104 @@ describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
   });
 });
 
+// Bugfix (2026-08-23): the document-level Escape listener in useMoreMenuEvents
+// closed the dropdown even when a portal dialog was stacked above it,
+// orphaning the dialog. Escape must mirror the exact LIFO priority of the
+// hardware-back handler in MoreMenu.tsx (Download > Delete > Move > menu).
+describe("MoreMenu Escape respects overlay priority (bugfix 2026-08-23)", () => {
+  beforeEach(() => {
+    mocks.uploadManager.isUploading.mockReset();
+    mocks.uploadManager.isUploading.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function pressEscape(): void {
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+  }
+
+  function layerAllThreeOverlays(): void {
+    render(
+      <MoreMenu
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        currentFolderId="parent-1"
+        currentFolderName="Folder One"
+      />,
+    );
+
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Move to..." }),
+    );
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+
+    openTrigger();
+    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Download Song" }),
+    );
+    expect(screen.getByText("File name")).toBeTruthy();
+
+    // Re-open the dropdown on top of all three dialogs (the real product
+    // cannot do this because the dialog backdrop blocks clicks — same
+    // simulated-layering trick as the hardware-back priority test above).
+    openTrigger();
+    expect(menuEl()).toBeTruthy();
+  }
+
+  it("peels DownloadDialog > DeleteConfirm > MoveScreen > menu, one per Escape", () => {
+    layerAllThreeOverlays();
+
+    // First Escape peels only Download; menu and lower layers stay.
+    pressEscape();
+    expect(screen.queryByText("File name")).toBeNull();
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+
+    // Second Escape peels Delete; menu still open.
+    pressEscape();
+    expect(screen.queryByText("Move to Trash?")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+
+    // Third Escape peels Move; menu still open.
+    pressEscape();
+    expect(screen.queryByRole("heading", { name: "Move to..." })).toBeNull();
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+
+    // Fourth Escape finally closes the dropdown itself.
+    pressEscape();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("closes the DeleteConfirmDialog when the menu is already closed (real item-click flow)", () => {
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
+    openTrigger();
+    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
+    // Real flow: clicking Delete closes the menu THEN opens its dialog, so
+    // the keydown listener must stay armed while only a dialog is open.
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    pressEscape();
+    expect(screen.queryByText("Move to Trash?")).toBeNull();
+  });
+});
+
 describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
   const originalVw = window.innerWidth;
   const originalVh = window.innerHeight;
