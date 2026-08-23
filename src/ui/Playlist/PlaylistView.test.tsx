@@ -2,6 +2,7 @@
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -202,6 +203,119 @@ describe("PlaylistView mobile gate (IS_MOBILE) — title + size only", () => {
     await screen.findByText("Track 1");
     expect(screen.queryByText("Unknown Artist")).toBeNull();
     expect(screen.queryByText(/KB|MB|GB|B$/)).toBeNull();
+  });
+});
+
+// Batch fix 2026-08-23 (audit F3 + F5): keyboard activation of the nested
+// remove button must not be hijacked by the row's role="button" handler, and
+// play-all must hand the full playlist to onPlay as the context queue.
+describe("PlaylistView batch fixes 2026-08-23 (F3 keyboard guard + F5 play-all queue)", () => {
+  const TRACK_2 = {
+    ...TRACK,
+    id: "t2",
+    title: "Track 2",
+    streamUrl: "https://example.com/t2.mp3",
+  };
+  const TRACK_3 = {
+    ...TRACK,
+    id: "t3",
+    title: "Track 3",
+    streamUrl: "https://example.com/t3.mp3",
+  };
+  const MULTI_PLAYLIST: Playlist = {
+    id: "pl-multi",
+    userEmail: "u@example.com",
+    name: "Multi Mix",
+    createdAt: 2000,
+    tracks: [TRACK, TRACK_2, TRACK_3],
+  };
+
+  function renderWithSpies(playlist: Playlist) {
+    mocks.getPlaylistById.mockResolvedValue(playlist);
+    const onPlay = vi.fn();
+    const onDelete = vi.fn();
+    render(
+      <PlaylistView
+        playlistId={playlist.id}
+        onPlay={onPlay}
+        onDelete={onDelete}
+      />,
+    );
+    return { onPlay };
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function getRemoveButton(): HTMLButtonElement {
+    // The X button is the only button in this view carrying a title attr.
+    const btn = document.querySelector("button[title]");
+    expect(btn).not.toBeNull();
+    return btn as HTMLButtonElement;
+  }
+
+  function getRow(trackTitle: string): HTMLElement {
+    const row = screen.getByText(trackTitle).closest('div[role="button"]');
+    expect(row).not.toBeNull();
+    return row as HTMLElement;
+  }
+
+  it("F5: play-all passes the whole playlist as the context queue", async () => {
+    const { onPlay } = renderWithSpies(MULTI_PLAYLIST);
+    await screen.findByText("Track 1");
+    const playAll = document.querySelector("button.w-14.h-14");
+    expect(playAll).not.toBeNull();
+
+    act(() => {
+      fireEvent.click(playAll as HTMLButtonElement);
+    });
+
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    expect(onPlay).toHaveBeenCalledWith(TRACK, MULTI_PLAYLIST.tracks);
+  });
+
+  it("F3: Enter on the focused remove button removes the track and does NOT play", async () => {
+    const { onPlay } = renderWithSpies(MULTI_PLAYLIST);
+    await screen.findByText("Track 1");
+
+    const removeBtn = getRemoveButton();
+    removeBtn.focus();
+    expect(document.activeElement).toBe(removeBtn);
+
+    // jsdom does not run default actions; emulate the browser contract:
+    // an uncanceled Enter keydown activates the focused control.
+    const keyEvent = createEvent.keyDown(removeBtn, { key: "Enter" });
+    act(() => {
+      fireEvent(removeBtn, keyEvent);
+      if (!keyEvent.defaultPrevented) {
+        fireEvent.click(removeBtn);
+      }
+    });
+
+    expect(keyEvent.defaultPrevented).toBe(false);
+    expect(mocks.removeTrackFromPlaylist).toHaveBeenCalledWith(
+      MULTI_PLAYLIST.id,
+      TRACK.id,
+    );
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("F3 lock: Enter on the row itself still plays the track", async () => {
+    const { onPlay } = renderWithSpies(MULTI_PLAYLIST);
+    await screen.findByText("Track 1");
+
+    const row = getRow("Track 1");
+    const keyEvent = createEvent.keyDown(row, { key: "Enter" });
+    act(() => {
+      fireEvent(row, keyEvent);
+    });
+
+    expect(keyEvent.defaultPrevented).toBe(true);
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    expect(onPlay).toHaveBeenCalledWith(TRACK, MULTI_PLAYLIST.tracks);
+    expect(mocks.removeTrackFromPlaylist).not.toHaveBeenCalled();
   });
 });
 

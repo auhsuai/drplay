@@ -292,7 +292,7 @@ export function PlaylistView({
             onClick={() => {
               const first = tracks[0];
               if (first === undefined) return;
-              onPlay(first);
+              onPlay(first, tracks);
             }}
             className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg mb-8 flex-shrink-0"
           >
@@ -337,6 +337,10 @@ export function PlaylistView({
                       onPlay(track, tracks);
                     }}
                     onKeyDown={(e) => {
+                      // Only the row itself responds to Enter/Space; key
+                      // events from nested focusable controls (the remove
+                      // button) must reach their own default activation.
+                      if (e.target !== e.currentTarget) return;
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         onPlay(track, tracks);
