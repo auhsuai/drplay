@@ -127,11 +127,15 @@ vi.mock("./utils/platform", () => ({
 // stub useTranslation to return the fallback passed to t(), matching every
 // other component test in the repo. Task 9 passes { defaultValue } (options
 // object) — resolve it like SettingsTab.test.tsx does.
+// initReactI18next is stubbed too: ErrorBoundary (in this graph via AppShell)
+// imports src/i18n, whose module scope calls i18n.use(initReactI18next)
+// (same transitive-import case as SongCard.test.tsx).
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string | { defaultValue?: string }) =>
       (typeof fallback === "string" ? fallback : fallback?.defaultValue) ?? key,
   }),
+  initReactI18next: { type: "3rdParty", init: () => {} },
 }));
 
 vi.mock("./hooks/useAuth", () => ({ useAuth: mocks.useAuth }));
