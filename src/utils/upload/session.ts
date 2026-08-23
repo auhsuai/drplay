@@ -17,8 +17,11 @@ export const UPLOAD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // interrupted toast: 'bytes' (payload lost with the old process), 'folderRoot'
 // (re-walking would create a DUPLICATE Drive folder) and 'folderChild'
 // (no diskPath ever persisted) are never resumed; a 'folderChildFile' whose
-// session never initiated has a placeholder parentId (the batch root's, not a
-// resolved Drive id) and cannot resolve its parent without the lost batch memo.
+// session never initiated AND was never stat-persisted still carries the
+// batch-root placeholder as parentId (not a resolved Drive id) and cannot
+// resolve its parent without the lost batch memo. Once the stat persist has
+// landed (totalSize present), row.parentId IS the resolved Drive folder (F3):
+// the row resumes like a diskFile — an absent URI means a fresh initiate.
 export function resumeEntryFromRow(
   row: UploadSessionRow,
   token: string,
@@ -40,7 +43,19 @@ export function resumeEntryFromRow(
   }
   if (row.diskPath === undefined) return null;
   if (row.kind === "folderRoot" || row.kind === "folderChild") return null;
-  if (row.kind === "folderChildFile" && row.uploadUri === undefined)
+  if (
+    row.kind === "folderChildFile" &&
+    row.uploadUri === undefined &&
+    // F3: refuse ONLY a child whose parent was never resolved. Persist order
+    // guarantees this gate: processEntry's first persist writes the PLACEHOLDER
+    // parentId with no totalSize; the stat persist (uploadDiskFileStreaming)
+    // runs AFTER handleChildFile stored the resolved Drive folder into
+    // entry.parentId and is the first write carrying totalSize. So a row
+    // without totalSize still holds the unresumable placeholder, while a row
+    // WITH totalSize persists the real destination folder — equivalent to a
+    // diskFile of the same crash window: resume it, no URI = fresh initiate.
+    row.totalSize === undefined
+  )
     return null;
   const entry: InternalEntry = {
     // Fresh id — the old row (same id) was deleted by the caller first, so
@@ -60,10 +75,11 @@ export function resumeEntryFromRow(
       : {}),
   };
   if (row.kind === "folderChildFile") {
-    // The parent Drive folder id was resolved BEFORE the session initiated
-    // (handleChildFile runs before the chunked upload), so row.parentId is the
-    // real destination. Feed it back through a single-entry batch memo so
-    // handleChildFile resolves it without a live batch.
+    // The parent Drive folder id was resolved BEFORE the stat persist landed
+    // (handleChildFile runs before uploadDiskFileStreaming), and the totalSize
+    // gate above guarantees every accepted row carries that resolution, so
+    // row.parentId is the real destination. Feed it back through a single-entry
+    // batch memo so handleChildFile resolves it without a live batch.
     entry.relativeDir = "";
     entry.batchMemo = new Map<string, string>([["", row.parentId]]);
   }

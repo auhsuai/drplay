@@ -3201,6 +3201,50 @@ describe("uploadManager", () => {
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });
 
+    it("(F3) folderChildFile crash SAU khi resolve parent (W2 persist: parentId thật + totalSize, chưa có URI) → resume như diskFile (fresh initiate đúng parent), KHÔNG bị refuse", async () => {
+      // Crash window F3: handleChildFile đã resolve parent và
+      // uploadDiskFileStreaming đã persist W2 (parentId thật + totalSize),
+      // nhưng chunked uploader CHƯA kịp báo session URI → row không có
+      // uploadUri. Row này tương đương diskFile cùng cửa sổ: diskPath có thật,
+      // parent đã là Drive folder thật → phải được resume (không URI = fresh
+      // initiate vào ĐÚNG parent đã persist), không bị xoá + toast interrupted.
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      await insertSessionRow({
+        id: "pending-old-f3",
+        name: "child3.flac",
+        kind: "folderChildFile",
+        diskPath: "C:/fold/child3.flac",
+        parentId: "drive-folder-9", // real Drive id — do W2 persist sau khi resolve
+        totalSize: 2, // dấu vết W2 (stat đã chạy SAU khi resolve parent)
+        // không uploadUri — session chưa initiate
+      });
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      // Được resume: chunked uploader chạy đúng 1 lần cho entry này.
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+      const opts = uploadFileResumableChunked.mock.calls[0]?.[1];
+      // Upload vào ĐÚNG parent đã resolve (không phải placeholder).
+      expect(opts?.parentId).toBe("drive-folder-9");
+      // Không URI = fresh initiate (semantics giống diskFile cùng cửa sổ).
+      expect(opts?.initialUploadUri).toBeUndefined();
+      // Không bị đếm là interrupted.
+      expect(showErrorToast).not.toHaveBeenCalled();
+      // Row cũ đã settle (successor có row riêng, kế thừa parent thật).
+      const rows = await db.uploadSessions.toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).not.toBe("pending-old-f3");
+      expect(rows[0]?.kind).toBe("folderChildFile");
+      expect(rows[0]?.parentId).toBe("drive-folder-9");
+      expect(rows[0]?.uploadUri).toBeUndefined();
+
+      d.resolve(makeDriveFile("f-f3", "child3.flac"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
     it("(k3) folderRoot rows are NOT re-uploaded (re-walking would duplicate the Drive folder) → interrupted", async () => {
       await insertSessionRow({
         id: "pending-old-fr",
@@ -3498,6 +3542,56 @@ describe("uploadManager", () => {
 
       da.resolve(makeDriveFile("f-a", "a.mp3"));
       dbB.resolve(makeDriveFile("f-b", "b.mp3"));
+      await waitIdle();
+      expect(await db.uploadSessions.toArray()).toHaveLength(0);
+    });
+
+    it("(F4) crash: 1 entry đang bay + 1 card chưa kịp start (không có session row) → card bị sweep NHƯNG phải được đếm vào toast interrupted", async () => {
+      // Crash scenario F4: lúc app chết, entry flying.mp3 đang bay (có session
+      // row resumable), queued.mp3 mới được enqueue (card đã publish qua
+      // enqueue-time bulkPut) nhưng CHƯA kịp start nên không có uploadSessions
+      // row. Ghost sweep phải VẪN XOÁ card chưa-start này (giữ nguyên hành vi
+      // xoá — tránh hồi sinh ghost), nhưng sự mất mát đó phải được ĐẾM vào
+      // aggregated toast interrupted — code cũ để item biến mất im lặng.
+      const d = deferred<DriveFileItem>();
+      uploadFileResumableChunked.mockReturnValueOnce(d.promise);
+      // Entry đang bay lúc crash: row resumable (URI + totalSize).
+      await insertSessionRow({
+        id: "pending-old-f4",
+        name: "flying.mp3",
+        kind: "diskFile",
+        diskPath: "C:/flying.mp3",
+        totalSize: 2,
+        uploadUri: OLD_URI,
+      });
+      // Card của seed CHƯA kịp start: chỉ có pending files-row, KHÔNG có
+      // uploadSessions row ở bất kỳ đâu.
+      await db.files.bulkPut([
+        {
+          id: "pending-unstarted-f4",
+          name: "queued.mp3",
+          mimeType: AUDIO_MIME,
+          parentId: "root",
+          trashed: false,
+          isFolder: false,
+          modifiedTime: "2026-01-01T00:00:00Z",
+        },
+      ]);
+
+      await um.resumeInterruptedUploads(TOKEN, USER);
+      await flush();
+
+      // Hành vi xoá GIỮ NGUYÊN: card chưa-start vẫn bị sweep.
+      const cardIds = (await db.files.toArray()).map((r) => r.id);
+      expect(cardIds).not.toContain("pending-unstarted-f4");
+      // Contract F4: mất mát này phải được báo qua aggregated toast interrupted
+      // (trước đây: im lặng vì interruptedCount không đếm card chưa-start).
+      expect(showErrorToast).toHaveBeenCalledTimes(1);
+      expect(showErrorToast).toHaveBeenCalledWith("upload.interrupted");
+      // Entry đang bay vẫn resume bình thường.
+      expect(uploadFileResumableChunked).toHaveBeenCalledTimes(1);
+
+      d.resolve(makeDriveFile("f-f4", "flying.mp3"));
       await waitIdle();
       expect(await db.uploadSessions.toArray()).toHaveLength(0);
     });

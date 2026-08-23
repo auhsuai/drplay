@@ -146,6 +146,12 @@ export async function resumeInterruptedUploads(
   if (resumeRunning) return;
   resumeRunning = true;
   let interruptedCount = 0;
+  // F4: ids of rows consumed as non-resumable THIS round. Their stale same-id
+  // pending cards are ghosts too, but the item is ALREADY counted via
+  // interruptedCount above — excluding them here prevents a double count when
+  // the sweep tallies the remaining (never-started) ghosts.
+  const consumedNonResumableIds = new Set<string>();
+  let unstartedGhostCount = 0;
   const resumed: InternalEntry[] = [];
   try {
     let rows: UploadSessionRow[];
@@ -186,6 +192,7 @@ export async function resumeInterruptedUploads(
         // keeping it would resurrect a dead session on every future launch.
         // Delete now (best-effort — a failed delete is logged and the stale
         // row would just be re-scanned next launch).
+        consumedNonResumableIds.add(row.id);
         await dbRowOp(
           () => db.uploadSessions.delete(row.id),
           "session-resume-delete",
@@ -234,7 +241,19 @@ export async function resumeInterruptedUploads(
       if (ghostRows.length > 0) {
         await db.files.bulkDelete(ghostRows.map((row) => row.id));
       }
+      // F4: a ghost that is NOT the stale card of a row consumed this round is
+      // the pending card of a seed that never started (crashed before its
+      // processEntry persist — it has no uploadSessions row by definition).
+      // Deletion stays unconditional (deleting is what prevents ghost
+      // revival), but the silent loss must surface: count these into the same
+      // aggregated interrupted toast.
+      unstartedGhostCount = ghostRows.filter(
+        (row) => !consumedNonResumableIds.has(row.id),
+      ).length;
     }, "ghost-pending-sweep");
+    // F4: never-started cards join the non-resumable rows in ONE aggregated
+    // toast — never one per file.
+    interruptedCount += unstartedGhostCount;
     if (interruptedCount > 0) {
       // ONE aggregated toast for every non-resumable row — never one per file.
       showErrorToast(t("upload.interrupted"));
@@ -246,11 +265,12 @@ export async function resumeInterruptedUploads(
       // resumeEntryFromRow only ever returns diskFile / folderChildFile entries
       // (folderRoot / folderChild / bytes rows are not resumable), and BOTH kinds
       // carry a REAL parentId when resumed: diskFile keeps the seed's parent, and
-      // a folderChildFile's parent was resolved by handleChildFile BEFORE its
-      // session URI was persisted (resumeEntryFromRow refuses URI-less rows), so
-      // its row.parentId is the actual Drive folder. The kind filter below is
-      // defensive — if resumeEntryFromRow ever resumes a placeholder-parented
-      // entry, that entry keeps getting its row at processEntry as before.
+      // a folderChildFile's parent was resolved before its stat persist landed —
+      // the totalSize gate in resumeEntryFromRow refuses any row still carrying
+      // the batch-root placeholder, so row.parentId here is the actual Drive
+      // folder. The kind filter below is defensive — if resumeEntryFromRow ever
+      // resumes a placeholder-parented entry, that entry keeps getting its row
+      // at processEntry as before.
       void enqueuePendingRows(
         resumed.filter(
           (e) => e.kind === "diskFile" || e.kind === "folderChildFile",
