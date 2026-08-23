@@ -415,3 +415,26 @@ describe("MainContent scroll-to-top folder-awareness (B3 fix 2026-08-23)", () =>
     expect(scrollTopSpy).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
   });
 });
+
+// GUARD (Phase B removal 2026-08-23): the producer of "enable-selection-mode"
+// (GlobalContextMenu.tsx) was deleted in commit 0cdd5d7 ("chore: remove dead
+// GlobalContextMenu component (replaced by MoreMenu)"); the MainContent
+// listener it fed was orphaned dead code and has been removed alongside.
+// This test pins the removal: dispatching that event must NOT enable
+// selection mode, so a reintroduced producer-less listener fails here.
+describe("MainContent 'enable-selection-mode' dead-listener guard (Phase B removal 2026-08-23)", () => {
+  it("dispatching 'enable-selection-mode' does not enable selection mode (producer removed in 0cdd5d7)", () => {
+    const explorer = makeExplorerState(makeItems(3));
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("enable-selection-mode", { detail: { id: "id1" } }),
+      );
+    });
+
+    expect(explorer.setIsSelectionMode).not.toHaveBeenCalled();
+    expect(explorer.setSelectedIds).not.toHaveBeenCalled();
+  });
+});

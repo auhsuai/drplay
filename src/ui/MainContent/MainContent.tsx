@@ -177,21 +177,6 @@ export const MainContent = React.memo(function MainContent({
   };
   useEventListener("keydown", handleKeyDown, [explorer.setSearchQuery]);
 
-  // Enable selection mode from events
-  const handleEnableSelection = (e: Event) => {
-    // detail is typed | null because a CustomEvent constructed without the
-    // detail option defaults to null at runtime.
-    const customEvent = e as CustomEvent<{ id?: string } | null>;
-    if (customEvent.detail?.id) {
-      explorer.setIsSelectionMode(true);
-      explorer.setSelectedIds(new Set([customEvent.detail.id]));
-    }
-  };
-  useEventListener("enable-selection-mode", handleEnableSelection, [
-    explorer.setIsSelectionMode,
-    explorer.setSelectedIds,
-  ]);
-
   // Scroll to top on folder change — unless a LIVE locate highlight belongs
   // to the destination folder itself (the highlight effect will land on the
   // row anyway). The highlight carries the folderId it was produced for, so a
