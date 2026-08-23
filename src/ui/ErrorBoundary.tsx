@@ -18,6 +18,15 @@ import i18n from "../i18n";
  * (initialized in src/i18n.ts, imported before App in main.tsx). Fallbacks stay
  * English so the boundary renders readable text even if a locale key is missing.
  *
+ * variant="compact": region-scoped fallback (short title + Reload button) for
+ * boundaries that only own a SUBTREE — e.g. the tab content area in AppShell.
+ * A tab-level chunk/render failure must not blank out the whole app: the
+ * compact fallback keeps the surrounding chrome alive. It deliberately offers
+ * ONLY a full page reload, never retry-in-place: React.lazy caches rejections
+ * for the document's lifetime (react.dev/reference/react/lazy), so remounting
+ * would just replay the cached failure. Default (no prop) stays the original
+ * fullscreen overlay used at app-root (main.tsx).
+ *
  * Error-handling standard (AGENTS.md Luật 4):
  * - componentDidCatch logs with context ([ErrorBoundary]) but ONLY the error and
  *   React's errorInfo (component stack). It never logs secrets, tokens, cookies,
@@ -31,6 +40,8 @@ interface ErrorBoundaryState {
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
+  /** Omit at app-root (fullscreen overlay); "compact" scopes the fallback to a subtree. */
+  variant?: "compact";
 }
 
 export class ErrorBoundary extends React.Component<
@@ -71,6 +82,25 @@ export class ErrorBoundary extends React.Component<
 
   override render(): React.ReactNode {
     if (this.state.hasError) {
+      if (this.props.variant === "compact") {
+        return (
+          <div
+            role="alert"
+            className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center"
+          >
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {i18n.t("error.title")}
+            </h2>
+            <button
+              type="button"
+              onClick={this.handleReload}
+              className="rounded-full bg-brand-primary px-4 py-2 text-sm font-medium text-white shadow-md shadow-blue-500/20 transition-colors hover:bg-blue-600"
+            >
+              {i18n.t("error.reload")}
+            </button>
+          </div>
+        );
+      }
       return (
         <div
           role="alert"

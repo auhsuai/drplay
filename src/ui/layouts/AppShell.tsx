@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
 import type { Track, TabKey, UserProfile } from "../../types";
 import { IS_MOBILE } from "../../utils/platform";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { Sidebar } from "../Sidebar/Sidebar";
 import { PlayerBar } from "../PlayerBar/PlayerBar";
 import { BottomNav } from "../components/BottomNav";
@@ -87,19 +88,26 @@ export function AppShell({
             (the familiar pre-skeleton loading) instead of a heavy skeleton
             list: settings and other non-list tabs have no file rows to
             mirror, so a skeleton would just sit there unrelated. */}
-        <Suspense
-          fallback={
-            <div
-              role="status"
-              aria-label={t("loading")}
-              className="flex-1 flex items-center justify-center"
-            >
-              <LoaderCircle className="animate-spin h-10 w-10 text-brand-primary stroke-[1.5]" />
-            </div>
-          }
-        >
-          {tabContent}
-        </Suspense>
+        {/* Tab-level error containment: a render/chunk failure of ONE tab
+            must not bubble to the app-root boundary (fullscreen overlay,
+            chrome gone). The compact fallback swaps in here while Sidebar/
+            PlayerBar stay alive; it offers only Reload because React.lazy
+            caches rejections, so retry-in-place would replay the failure. */}
+        <ErrorBoundary variant="compact">
+          <Suspense
+            fallback={
+              <div
+                role="status"
+                aria-label={t("loading")}
+                className="flex-1 flex items-center justify-center"
+              >
+                <LoaderCircle className="animate-spin h-10 w-10 text-brand-primary stroke-[1.5]" />
+              </div>
+            }
+          >
+            {tabContent}
+          </Suspense>
+        </ErrorBoundary>
 
         <div
           className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? "h-0 overflow-hidden pointer-events-none opacity-0" : ""}`}

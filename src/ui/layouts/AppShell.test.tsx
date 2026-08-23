@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TABS, type TabKey } from "../../utils/driveConstants";
 
@@ -9,6 +16,17 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string) => fallback ?? key,
   }),
+}));
+
+// ErrorBoundary (tab-level containment) reads the shared i18n instance and
+// routes caught errors into Dexie via captureError — mock both so the test
+// stays hermetic and asserts on key names.
+vi.mock("../../i18n", () => ({
+  default: { t: (key: string) => key },
+}));
+
+vi.mock("../../utils/errorLog", () => ({
+  captureError: vi.fn(),
 }));
 
 vi.mock("../Sidebar/Sidebar", () => ({
@@ -24,6 +42,7 @@ const MOBILE_PADDING = "pb-[calc(env(safe-area-inset-bottom)+4rem)]";
 interface RenderOptions {
   isMobile: boolean;
   activeTab?: TabKey;
+  tabContent?: ReactNode;
 }
 
 // IS_MOBILE is a module-level constant evaluated at import time, so each
@@ -31,6 +50,7 @@ interface RenderOptions {
 async function renderAppShell({
   isMobile,
   activeTab = TABS.home,
+  tabContent = <div data-testid="tab-content" />,
 }: RenderOptions) {
   vi.resetModules();
   vi.doMock("../../utils/platform", () => ({ IS_MOBILE: isMobile }));
@@ -59,7 +79,7 @@ async function renderAppShell({
       playMode={"normal" as const}
       onTogglePlayMode={vi.fn()}
       onExpandNowPlaying={vi.fn()}
-      tabContent={<div data-testid="tab-content" />}
+      tabContent={tabContent}
     />,
   );
   return { ...utils, onTabChange };
@@ -106,5 +126,47 @@ describe("AppShell mobile (IS_MOBILE=true)", () => {
     const { onTabChange } = await renderAppShell({ isMobile: true });
     fireEvent.click(screen.getByRole("button", { name: "sidebar.my_drive" }));
     expect(onTabChange).toHaveBeenCalledWith(TABS.myDrive);
+  });
+});
+
+describe("AppShell tab-error containment (F1)", () => {
+  // Render-time crash simulating a broken tab view / failed lazy chunk.
+  function ThrowingTabContent(): ReactNode {
+    throw new Error("tab-render-boom");
+  }
+
+  it("shows the compact fallback inside #content-area while chrome survives", async () => {
+    // React mirrors every boundary-catch to console.error; silence only this
+    // expected noise so real failures elsewhere stay visible.
+    const consoleSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    try {
+      const { container } = await renderAppShell({
+        isMobile: false,
+        tabContent: <ThrowingTabContent />,
+      });
+
+      // Compact fallback lives INSIDE #content-area…
+      const contentArea = container.querySelector("#content-area");
+      expect(contentArea).not.toBeNull();
+      const alert = contentArea?.querySelector('[role="alert"]');
+      expect(alert).not.toBeNull();
+      // …is COMPACT (not the fullscreen app-root overlay)…
+      expect(alert?.className).not.toContain("fixed");
+      expect(screen.queryByText("error.description")).not.toBeInTheDocument();
+      // …and offers Reload (never retry-in-place — lazy rejections are cached).
+      expect(
+        within(alert as HTMLElement).getByRole("button", {
+          name: "error.reload",
+        }),
+      ).toBeInTheDocument();
+
+      // Chrome (Sidebar + PlayerBar) must survive the tab-level crash.
+      expect(screen.getByTestId("mock-sidebar")).toBeInTheDocument();
+      expect(screen.getByTestId("mock-playerbar")).toBeInTheDocument();
+    } finally {
+      consoleSpy.mockRestore();
+    }
   });
 });
