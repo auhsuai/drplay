@@ -48,6 +48,7 @@ export function useLocateFile(
   const [highlightedFileId, setHighlightedFileId] = useState<{
     id: string;
     ts: number;
+    folderId: string;
   } | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
   const locateInFlightRef = useRef(false);
@@ -230,7 +231,11 @@ export function useLocateFile(
         }
 
         if (parentId === currentFolderId) {
-          setHighlightedFileId({ id: fileId, ts: Date.now() });
+          setHighlightedFileId({
+            id: fileId,
+            ts: Date.now(),
+            folderId: parentId,
+          });
           scheduleHighlightClear();
           return;
         }
@@ -242,7 +247,11 @@ export function useLocateFile(
         pendingEnsuredFileId.current = fileId;
         setCurrentFolderId(parentId);
         setCurrentFolderName(folderName);
-        setHighlightedFileId({ id: fileId, ts: Date.now() });
+        setHighlightedFileId({
+          id: fileId,
+          ts: Date.now(),
+          folderId: parentId,
+        });
         scheduleHighlightClear();
       } catch (err: unknown) {
         if (isCallerAborted(err)) return;

@@ -453,3 +453,39 @@ describe("useLocateFile — F4/F5 regressions", () => {
     expect(setters.setCurrentFolderId).not.toHaveBeenCalled();
   });
 });
+
+describe("useLocateFile — B3 highlight payload contract (folderId)", () => {
+  it("navigate path: highlight payload carries folderId === parentId", async () => {
+    seedDb({
+      fa: { id: "fa", name: "File A", parentId: "parent-a" },
+      "parent-a": { id: "parent-a", name: "Parent A", parentId: "root" },
+    });
+    mockedFetch.mockResolvedValue(apiResp({ parents: ["parent-a"] }));
+    const { result } = mountLocate(TOKEN, "elsewhere");
+
+    await locateAndWait({ fileId: "fa" });
+
+    const { highlightedFileId } = result.current;
+    expect(highlightedFileId).toEqual({
+      id: "fa",
+      ts: highlightedFileId?.ts,
+      folderId: "parent-a",
+    });
+    expect(typeof highlightedFileId?.ts).toBe("number");
+  });
+
+  it("same-folder path: highlight payload carries folderId === currentFolderId", async () => {
+    mockedFetch.mockResolvedValue(apiResp({ parents: [CURRENT] }));
+    const { result } = mountLocate(TOKEN, CURRENT);
+
+    await locateAndWait({ fileId: "hl" });
+
+    const { highlightedFileId } = result.current;
+    expect(highlightedFileId).toEqual({
+      id: "hl",
+      ts: highlightedFileId?.ts,
+      folderId: CURRENT,
+    });
+    expect(typeof highlightedFileId?.ts).toBe("number");
+  });
+});

@@ -66,7 +66,7 @@ interface MainContentProps {
   onBreadcrumbClick: (id: string, name: string, index: number) => void;
   token: string | null;
   currentFolderId: string;
-  highlightedFileId?: { id: string; ts: number } | null;
+  highlightedFileId?: { id: string; ts: number; folderId: string } | null;
   onRefresh: () => void;
   onRemoveItem?: (id: string) => void;
   currentTrack?: Track | null;
@@ -192,12 +192,20 @@ export const MainContent = React.memo(function MainContent({
     explorer.setSelectedIds,
   ]);
 
-  // Scroll to top on folder change
+  // Scroll to top on folder change — unless a LIVE locate highlight belongs
+  // to the destination folder itself (the highlight effect will land on the
+  // row anyway). The highlight carries the folderId it was produced for, so a
+  // highlight from another folder no longer suppresses this scroll when the
+  // user navigates manually within the 5s window (audit B3: the old check was
+  // folder-blind and skipped scroll-to-top unfairly).
   const prevFolderRef = useRef(currentFolderId);
   useEffect(() => {
     if (mainRef.current) {
       const isFolderChange = currentFolderId !== prevFolderRef.current;
-      if (isFolderChange && !highlightedFileId) {
+      const isLiveHighlightForDestination =
+        highlightedFileId != null &&
+        highlightedFileId.folderId === currentFolderId;
+      if (isFolderChange && !isLiveHighlightForDestination) {
         mainRef.current.scrollTo({ top: 0, behavior: "smooth" });
       }
       prevFolderRef.current = currentFolderId;

@@ -1,5 +1,13 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  type Mock,
+} from "vitest";
 import { render, cleanup, act } from "@testing-library/react";
 import { MainContent } from "./MainContent";
 import type { DriveItem } from "../../types";
@@ -140,7 +148,7 @@ const baseProps = {
 // resolvable — only the array identity is new, like real Dexie/upload ticks.
 function simulateDataChurn(
   rerender: (ui: React.ReactElement) => void,
-  highlight: { id: string; ts: number },
+  highlight: { id: string; ts: number; folderId: string },
   itemCount = 3,
 ): void {
   useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(itemCount)));
@@ -181,7 +189,7 @@ describe("MainContent highlight-scroll consume-once latch (Phase B fix 2026-08-2
   });
 
   it("B2: scrolls once for a locate, then ignores data churn carrying the same ts (new filteredItems identities)", () => {
-    const highlight = { id: "id1", ts: 1000 };
+    const highlight = { id: "id1", ts: 1000, folderId: "root" };
     useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
     const { rerender } = render(
       <MainContent {...baseProps} highlightedFileId={highlight} />,
@@ -201,7 +209,7 @@ describe("MainContent highlight-scroll consume-once latch (Phase B fix 2026-08-2
     const items12 = makeItems(12);
     const explorerPage1 = makeExplorerState(items12);
     useDriveExplorerMock.mockReturnValue(explorerPage1);
-    const highlight = { id: "id11", ts: 2000 };
+    const highlight = { id: "id11", ts: 2000, folderId: "root" };
 
     const { rerender } = render(
       <MainContent {...baseProps} highlightedFileId={highlight} />,
@@ -237,14 +245,14 @@ describe("MainContent highlight-scroll consume-once latch (Phase B fix 2026-08-2
   });
 
   it("a NEW locate (fresh ts) scrolls again after the previous one was consumed", () => {
-    const firstLocate = { id: "id1", ts: 1000 };
+    const firstLocate = { id: "id1", ts: 1000, folderId: "root" };
     useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
     const { rerender } = render(
       <MainContent {...baseProps} highlightedFileId={firstLocate} />,
     );
     expect(scrollToIndexSpy).toHaveBeenCalledTimes(1);
 
-    const secondLocate = { id: "id2", ts: 2000 };
+    const secondLocate = { id: "id2", ts: 2000, folderId: "root" };
     rerender(
       <MainContent
         {...baseProps}
@@ -264,7 +272,7 @@ describe("MainContent highlight-scroll consume-once latch (Phase B fix 2026-08-2
     const items12 = makeItems(12);
     const explorerPage1 = makeExplorerState(items12);
     useDriveExplorerMock.mockReturnValue(explorerPage1);
-    const highlight = { id: "id11", ts: 3000 };
+    const highlight = { id: "id11", ts: 3000, folderId: "root" };
 
     const { rerender } = render(
       <MainContent {...baseProps} highlightedFileId={highlight} />,
@@ -302,7 +310,7 @@ describe("MainContent highlight-scroll consume-once latch (Phase B fix 2026-08-2
     const missingId = render(
       <MainContent
         {...baseProps}
-        highlightedFileId={{ id: "missing", ts: 4000 }}
+        highlightedFileId={{ id: "missing", ts: 4000, folderId: "root" }}
       />,
     );
     expect(scrollToIndexSpy).not.toHaveBeenCalled();
@@ -313,9 +321,97 @@ describe("MainContent highlight-scroll consume-once latch (Phase B fix 2026-08-2
     render(
       <MainContent
         {...baseProps}
-        highlightedFileId={{ id: "id1", ts: 5000 }}
+        highlightedFileId={{ id: "id1", ts: 5000, folderId: "root" }}
       />,
     );
     expect(scrollToIndexSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("MainContent scroll-to-top folder-awareness (B3 fix 2026-08-23)", () => {
+  // jsdom ships no Element.scrollTo — install an assertable prototype stub
+  // for each test and remove it afterwards so other suites stay untouched.
+  let scrollTopSpy: Mock;
+
+  beforeEach(() => {
+    scrollTopSpy = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      writable: true,
+      value: scrollTopSpy,
+    });
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    const proto = HTMLElement.prototype as unknown as { scrollTo?: unknown };
+    delete proto.scrollTo;
+  });
+
+  it("B3 fix: manual navigation to folder Z while ANOTHER folder's highlight is alive still scrolls to top", () => {
+    const highlight = { id: "id1", ts: 1000, folderId: "folder-y" };
+    const { rerender } = render(
+      <MainContent
+        {...baseProps}
+        currentFolderId="folder-y"
+        highlightedFileId={highlight}
+      />,
+    );
+    expect(scrollTopSpy).not.toHaveBeenCalled();
+
+    rerender(
+      <MainContent
+        {...baseProps}
+        currentFolderId="folder-z"
+        highlightedFileId={highlight}
+      />,
+    );
+
+    expect(scrollTopSpy).toHaveBeenCalledTimes(1);
+    expect(scrollTopSpy).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
+  });
+
+  it("B3 lock: destination-folder highlight still suppresses scroll-to-top (locate flow owns the viewport)", () => {
+    const highlight = { id: "id1", ts: 1000, folderId: "folder-z" };
+    const { rerender } = render(
+      <MainContent
+        {...baseProps}
+        currentFolderId="root"
+        highlightedFileId={highlight}
+      />,
+    );
+    expect(scrollTopSpy).not.toHaveBeenCalled();
+
+    rerender(
+      <MainContent
+        {...baseProps}
+        currentFolderId="folder-z"
+        highlightedFileId={highlight}
+      />,
+    );
+
+    expect(scrollTopSpy).not.toHaveBeenCalled();
+  });
+
+  it("B3 lock: cleared (expired) highlight no longer suppresses scroll-to-top", () => {
+    const { rerender } = render(
+      <MainContent
+        {...baseProps}
+        currentFolderId="root"
+        highlightedFileId={null}
+      />,
+    );
+    expect(scrollTopSpy).not.toHaveBeenCalled();
+
+    rerender(
+      <MainContent
+        {...baseProps}
+        currentFolderId="folder-z"
+        highlightedFileId={null}
+      />,
+    );
+
+    expect(scrollTopSpy).toHaveBeenCalledTimes(1);
+    expect(scrollTopSpy).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
   });
 });
