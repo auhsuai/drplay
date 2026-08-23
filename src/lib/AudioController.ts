@@ -56,6 +56,12 @@ export class AudioController implements PlaybackEngine {
   // previous track can never touch the current track.
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private changeToken = 0;
+  // B-A1: one-shot seek handlers still waiting for loadedmetadata. Retained
+  // so a track switch / release can detach them deterministically — the
+  // event itself may NEVER fire when a track is skipped before metadata
+  // loads (DECODE / SRC_NOT_SUPPORTED), leaving the handler alive on the
+  // recycled element where it would corrupt a LATER track's playhead.
+  private readonly pendingSeekDetachers = new Set<() => void>();
   private volume = 1;
   private muted = false;
   private listeners: { [K in keyof AudioEventMap]?: AudioEventHandler<K>[] } =
@@ -121,15 +127,37 @@ export class AudioController implements PlaybackEngine {
   // One-shot loadedmetadata listener: set currentTime once metadata arrives,
   // then detach itself (MDN pattern). Prevents the listener from leaking and
   // from re-applying the position on later metadata events.
+  // B-A1: the handler captures the track id it was created for. If metadata
+  // arrives after the controller moved to another track (the old track was
+  // skipped before loadedmetadata, or was released), the handler removes
+  // itself WITHOUT touching currentTime — applying the old track's saved
+  // position to the recycled element would jump the new track.
   private seekOnLoadedMetadata(
     audio: HTMLAudioElement,
     position: number,
   ): void {
-    const onMetadata = () => {
-      audio.currentTime = position;
+    const trackId = this.currentTrackId;
+    const detach = () => {
+      this.pendingSeekDetachers.delete(detach);
       audio.removeEventListener("loadedmetadata", onMetadata);
     };
+    const onMetadata = () => {
+      detach();
+      if (this.currentTrackId !== trackId) return;
+      audio.currentTime = position;
+    };
+    this.pendingSeekDetachers.add(detach);
     audio.addEventListener("loadedmetadata", onMetadata);
+  }
+
+  // B-A1: proactively drop every pending one-shot seek. Called when the
+  // track identity changes (playTrack full path) and on release() — the same
+  // points that already invalidate retries via changeToken. The same-track
+  // resume path (early return) intentionally does NOT call this: a pending
+  // seek for the still-current track must survive pause/resume clicks.
+  private detachPendingSeeks(): void {
+    for (const detach of [...this.pendingSeekDetachers]) detach();
+    this.pendingSeekDetachers.clear();
   }
 
   // Buffer-bar reliability beyond `progress`: for a small/fast file the LAST
@@ -359,6 +387,10 @@ export class AudioController implements PlaybackEngine {
       return;
     }
 
+    // B-A1: the previous track's pending seek (if any) must never land on
+    // this track's element. Placed AFTER the same-track early-return so a
+    // resume click cannot cancel a seek that is still pending for this track.
+    this.detachPendingSeeks();
     this.currentTrackId = track.id;
     this.retryCount = 0;
 
@@ -516,6 +548,9 @@ export class AudioController implements PlaybackEngine {
   // path (if one is ever introduced) can remove them.
   public release() {
     this.clearRetryTimer();
+    // B-A1: a pending seek must not survive a release (logout / player-stop)
+    // and fire on whatever loads after the next login.
+    this.detachPendingSeeks();
     this.changeToken++;
     this.currentTrackId = null;
     this.retryCount = 0;

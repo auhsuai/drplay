@@ -599,6 +599,70 @@ describe("AudioController retry lifecycle", () => {
     });
   });
 
+  describe("AudioController one-shot seek lifecycle (B-A1)", () => {
+    it("B-A1 regression: a pending seek whose track was skipped BEFORE loadedmetadata never leaks onto later metadata", async () => {
+      const ctrl = AudioControllerClass.getInstance();
+
+      await ctrl.playTrack(trackA, 100); // one-shot seek @100s attached
+      const audioA = audioEl(1);
+
+      // Track A dies with an unrecoverable decode error -> skipped WITHOUT
+      // loadedmetadata ever firing on it.
+      audioA.error = { code: MEDIA_ERR_DECODE, message: "decode" };
+      fireError(audioA);
+
+      // Next track starts with NO startTime — nothing may move its playhead.
+      await ctrl.playTrack(trackB);
+      const audioB = audioEl(0);
+      audioB.currentTime = 7;
+
+      // Metadata arrives while B is current. The stale handler physically
+      // lives on A's recycled element (elements alternate per playTrack), so
+      // fire loadedmetadata on every live element like a real load cycle.
+      fireLoadedMetadata(audioB);
+      fireLoadedMetadata(audioA);
+
+      expect(ctrl.getCurrentTime()).toBe(7); // active (B) playhead untouched
+      expect(audioB.currentTime).toBe(7);
+      expect(audioA.currentTime).not.toBe(100); // stale position never applied
+      expect(audioA.removeEventListener).toHaveBeenCalled(); // self-detached
+    });
+
+    it("B-A1 contract: seek-on-metadata still applies for the track it was requested for", async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      await ctrl.playTrack(trackA, 42);
+      const audio = audioEl(1);
+
+      fireLoadedMetadata(audio);
+
+      expect(audio.currentTime).toBe(42);
+      expect(audio.removeEventListener).toHaveBeenCalled();
+    });
+
+    it("B-A1 contract: a same-track resume (playTrack without startTime) does NOT kill the still-pending seek", async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      await ctrl.playTrack(trackA, 100);
+      const audio = audioEl(1);
+
+      audio.paused = true;
+      await ctrl.playTrack(trackA); // resume path — early return
+
+      fireLoadedMetadata(audio);
+      expect(audio.currentTime).toBe(100);
+    });
+
+    it("B-A1 variant: release() invalidates any pending one-shot seek", async () => {
+      const ctrl = AudioControllerClass.getInstance();
+      await ctrl.playTrack(trackA, 100);
+      const audio = audioEl(1);
+
+      ctrl.release();
+      fireLoadedMetadata(audio);
+
+      expect(audio.currentTime).not.toBe(100);
+    });
+  });
+
   describe("AudioController buffer progress events", () => {
     beforeEach(() => {
       // progress-throttle assertions compare real wall-clock deltas between
