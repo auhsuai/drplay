@@ -1,23 +1,22 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Track } from "../../types";
-import { Music, Play, X, Trash2, Camera } from "lucide-react";
+import { Music, Play } from "lucide-react";
 import type { Playlist } from "../../utils/playlists";
 import {
   getPlaylistById,
   removeTrackFromPlaylist,
   deletePlaylist,
-  updatePlaylist,
 } from "../../utils/playlists";
 import { ImageCropperModal } from "../components/ImageCropperModal";
 import { useTranslation } from "react-i18next";
-import { useHardwareBack } from "../../hooks/useHardwareBack";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
-import { IS_MOBILE } from "../../utils/platform";
-import { formatBytes } from "../../utils/formatBytes";
+import { PlaylistHeader } from "./components/PlaylistHeader";
+import { TrackRow } from "./components/TrackRow";
+import { usePlaylistCover } from "./hooks/usePlaylistCover";
 
 const PLAYLIST_VIEW_MODULE = "PlaylistView";
 
@@ -36,9 +35,21 @@ export function PlaylistView({
 }: PlaylistViewProps) {
   const { t } = useTranslation();
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [isCropperOpen, setIsCropperOpen] = useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Cover/cropper state + handlers live in usePlaylistCover. Its internal
+  // useHardwareBack registration must run unconditionally, so this call sits
+  // ABOVE the early `if (!playlist) return null` — keeping hook order stable
+  // across the null/non-null re-renders (rationale continues in the hook).
+  const {
+    fileInputRef,
+    selectedImage,
+    isCropperOpen,
+    setIsCropperOpen,
+    setSelectedImage,
+    handleFileChange,
+    handleSaveCover,
+  } = usePlaylistCover({ playlistId, onPlaylistUpdated: setPlaylist });
+
   const scrollRef = useRef<HTMLElement>(null);
 
   const loadPlaylist = useCallback(async () => {
@@ -82,19 +93,6 @@ export function PlaylistView({
     if (!playlist) return;
     if (playlist.tracks.length > 0) prefetchVisibleTracks(playlist.tracks);
   }, [playlist]);
-
-  // Hardware back (mobile): closes the ImageCropperModal when it owns the
-  // foreground — without this, the back press falls through the App-level
-  // chain (LikedSongs tab is its own layer) and pops the playlist instead.
-  // selectedImage is cleared alongside the modal so the next open starts
-  // from a clean state, matching the in-modal Cancel path. Declared ABOVE
-  // the early `if (!playlist) return null` so the hook order is stable
-  // across the null/non-null re-renders.
-  useHardwareBack(() => {
-    setIsCropperOpen(false);
-    setSelectedImage(null);
-    return true;
-  }, isCropperOpen);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
   // empty state by swapping in a valid Playlist with no tracks. Keeps the
@@ -161,130 +159,17 @@ export function PlaylistView({
     }
   };
 
-  const MAX_COVER_BYTES = 5 * 1024 * 1024;
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      showErrorToast(t("playlist.cover_invalid_type"));
-      return;
-    }
-    if (file.size > MAX_COVER_BYTES) {
-      showErrorToast(t("playlist.cover_too_large"));
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setSelectedImage(event.target?.result as string);
-      setIsCropperOpen(true);
-    };
-    reader.onerror = () => {
-      void captureError({
-        level: "error",
-        source: PLAYLIST_VIEW_MODULE,
-        message: `read-cover-failed: name=${file.name}, size=${String(file.size)}`,
-      });
-      showErrorToast(t("playlist.cover_read_error"));
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleSaveCover = async (base64Img: string) => {
-    setIsCropperOpen(false);
-    setSelectedImage(null);
-    try {
-      const updated = await updatePlaylist(playlistId, {
-        coverImage: base64Img,
-      });
-      if (updated) {
-        setPlaylist(updated);
-      }
-    } catch (err) {
-      void captureError({
-        level: "error",
-        source: PLAYLIST_VIEW_MODULE,
-        message: `update-cover-failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
-      showErrorToast(t("playlist.cover_save_error"));
-    }
-  };
-
   return (
     <main
       ref={scrollRef}
       className="flex-1 overflow-y-auto bg-white dark:bg-[#121212] flex flex-col relative transition-colors duration-300"
     >
-      {/* Header Gradient */}
-      <div className="absolute top-0 left-0 right-0 h-80 bg-gradient-to-b from-brand-primary/40 to-transparent pointer-events-none opacity-50 dark:opacity-20" />
-
-      <div className="relative z-10 px-8 pt-20 pb-8 flex items-end gap-6 flex-shrink-0">
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => fileInputRef.current?.click()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              fileInputRef.current?.click();
-            }
-          }}
-          className="relative w-48 h-48 rounded-xl shadow-2xl shrink-0 group overflow-hidden cursor-pointer"
-        >
-          {playlist.coverImage ? (
-            <img
-              src={playlist.coverImage}
-              className="w-full h-full object-cover"
-              alt={playlist.name}
-            />
-          ) : (
-            <div className="w-full h-full bg-gradient-to-br from-brand-primary to-[#34A853] flex items-center justify-center">
-              <Music className="w-20 h-20 text-white opacity-80" />
-            </div>
-          )}
-
-          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center transition-opacity duration-200">
-            <Camera className="w-8 h-8 text-white mb-2" />
-            <span className="text-white text-sm font-medium">
-              {t("playlist.change_cover")}
-            </span>
-          </div>
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileChange}
-            accept="image/*"
-            className="hidden"
-          />
-        </div>
-        <div className="flex-1 pb-2">
-          <span className="text-sm font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400">
-            {t("playlist_name")}
-          </span>
-          <h1
-            className="text-5xl font-black mt-2 mb-6 text-gray-900 dark:text-white truncate"
-            title={playlist.name}
-          >
-            {playlist.name}
-          </h1>
-          <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-300 font-medium">
-            <span>{t("song", { count: playlist.tracks.length })}</span>
-            <button
-              onClick={() => {
-                void handleDelete();
-              }}
-              className="text-red-500 hover:text-red-600 flex items-center gap-1 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" /> {t("delete")}
-            </button>
-          </div>
-        </div>
-      </div>
+      <PlaylistHeader
+        playlist={playlist}
+        fileInputRef={fileInputRef}
+        handleFileChange={handleFileChange}
+        handleDelete={handleDelete}
+      />
 
       <div className="px-8 pb-24 flex-1 min-h-0">
         {tracks.length > 0 && (
@@ -316,116 +201,16 @@ export function PlaylistView({
               contain: "strict",
             }}
           >
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const track = tracks[virtualRow.index];
-              if (track === undefined) return null;
-              return (
-                <div
-                  key={virtualRow.key}
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    width: "100%",
-                    height: `${String(virtualRow.size)}px`,
-                    transform: `translateY(${String(virtualRow.start)}px)`,
-                  }}
-                >
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => {
-                      onPlay(track, tracks);
-                    }}
-                    onKeyDown={(e) => {
-                      // Only the row itself responds to Enter/Space; key
-                      // events from nested focusable controls (the remove
-                      // button) must reach their own default activation.
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onPlay(track, tracks);
-                      }
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      window.dispatchEvent(
-                        new CustomEvent("locate-file", {
-                          detail: {
-                            fileId: track.id,
-                            parentId: track.parentId,
-                            parentName: track.parentName,
-                          },
-                        }),
-                      );
-                    }}
-                    className={`flex items-center gap-4 p-2 rounded-lg group cursor-pointer transition-all active:scale-[0.99] ${
-                      currentTrack?.id === track.id
-                        ? "bg-gray-100 dark:bg-[#2A2A2A]"
-                        : "hover:bg-gray-100 dark:hover:bg-[#2A2A2A]"
-                    }`}
-                  >
-                    <div
-                      className={`w-8 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-primary hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
-                    >
-                      {currentTrack?.id === track.id ? (
-                        <Music className="w-4 h-4 mx-auto" />
-                      ) : (
-                        virtualRow.index + 1
-                      )}
-                    </div>
-                    <div
-                      className={`w-8 text-center items-center justify-center ${currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
-                    >
-                      <Play
-                        className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white"}`}
-                        fill="currentColor"
-                      />
-                    </div>
-
-                    {/* Task 6: the music icon box renders on mobile too
-                        (Task 12 kept the artist line off; the box is the
-                        track's placeholder — size still comes from the
-                        stored track, no extra call). Desktop untouched. */}
-                    <div
-                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gray-200 dark:bg-gray-800"}`}
-                    >
-                      <Music
-                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-400"}`}
-                      />
-                    </div>
-
-                    <div className="flex-1 min-w-0 flex flex-col justify-center">
-                      <h4
-                        className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white group-hover:text-brand-primary"}`}
-                      >
-                        {track.title}
-                      </h4>
-                      {IS_MOBILE ? (
-                        track.size != null ? (
-                          <p className="text-[13px] text-gray-500 truncate leading-tight">
-                            {formatBytes(track.size)}
-                          </p>
-                        ) : null
-                      ) : (
-                        <p className="text-[13px] text-gray-500 truncate leading-tight">
-                          {t("unknown_artist")}
-                        </p>
-                      )}
-                    </div>
-
-                    <button
-                      onClick={(e) => {
-                        void handleRemove(e, track.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all text-gray-400 hover:text-red-500"
-                      title={t("remove_from_playlist")}
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => (
+              <TrackRow
+                key={virtualRow.key}
+                virtualRow={virtualRow}
+                tracks={tracks}
+                currentTrack={currentTrack}
+                onPlay={onPlay}
+                onRemove={handleRemove}
+              />
+            ))}
           </div>
         )}
       </div>
