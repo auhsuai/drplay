@@ -211,18 +211,44 @@ function App() {
   );
   useBackgroundPlayback(backgroundPlayback);
 
+  // F1 fix — TRUE ref-delegate wrappers (pattern: usePlayer.ts
+  // stableHandlePlayTrack/handlePlayTrackRef). The PlayerBar memo comparator
+  // intentionally ignores handler props (it compares only currentTrack.id /
+  // isPlaying / playMode / isDownloading / loadNonce), so a plain useCallback
+  // here changes identity WITHOUT ever reaching the memoized child when only
+  // the playback queue mutates: the bar keeps firing a closure over the OLD
+  // queue (plays deleted tracks / skips newly added ones). The wrapper below
+  // keeps a STABLE identity across every render while delegating to the
+  // freshest handler through the ref (re-assigned after each commit), so the
+  // comparator's shortcut can no longer pin stale queue logic into the bar.
+  const handleTogglePlayRef = useRef<typeof handleTogglePlay>(undefined);
   const stableHandleTogglePlay = useCallback(() => {
-    void handleTogglePlay();
-  }, [handleTogglePlay]);
+    void handleTogglePlayRef.current?.();
+  }, []);
+  const handleNextTrackRef = useRef<typeof handleNextTrack>(undefined);
   const stableHandleNextTrack = useCallback(() => {
-    handleNextTrack();
-  }, [handleNextTrack]);
+    handleNextTrackRef.current?.();
+  }, []);
+  const handlePrevTrackRef = useRef<typeof handlePrevTrack>(undefined);
   const stableHandlePrevTrack = useCallback(() => {
-    handlePrevTrack();
-  }, [handlePrevTrack]);
+    handlePrevTrackRef.current?.();
+  }, []);
+  const handleTogglePlayModeRef =
+    useRef<typeof handleTogglePlayMode>(undefined);
   const stableHandleTogglePlayMode = useCallback(() => {
-    handleTogglePlayMode();
-  }, [handleTogglePlayMode]);
+    handleTogglePlayModeRef.current?.();
+  }, []);
+  useEffect(() => {
+    handleTogglePlayRef.current = handleTogglePlay;
+    handleNextTrackRef.current = handleNextTrack;
+    handlePrevTrackRef.current = handlePrevTrack;
+    handleTogglePlayModeRef.current = handleTogglePlayMode;
+  }, [
+    handleTogglePlay,
+    handleNextTrack,
+    handlePrevTrack,
+    handleTogglePlayMode,
+  ]);
   const onExpandNowPlaying = useCallback(() => {
     setIsNowPlayingOpen((prev) => !prev);
   }, []);
