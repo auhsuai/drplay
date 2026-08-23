@@ -2,6 +2,15 @@ import { logWorkerError } from "./workerError";
 
 const TOKEN_REFRESH_TIMEOUT_MS = 15000;
 
+// Wire type of the main-thread reply meaning "I cannot refresh the token"
+// (no handler registered / refresh returned null / refresh threw). The worker
+// message router resolves a pending 401 wait as false immediately on this
+// message instead of letting the caller stall until TOKEN_REFRESH_TIMEOUT_MS.
+// The main thread carries the same literal in proSyncManager's
+// WORKER_MSG_TYPES.refreshFailed (identical runtime protocol, duplicated per
+// that file's header comment).
+export const REFRESH_FAILED_TYPE = "refresh_failed";
+
 let tokenRefreshResolver: ((value: boolean) => void) | null = null;
 
 export function resolveTokenRefresh(ok: boolean): void {

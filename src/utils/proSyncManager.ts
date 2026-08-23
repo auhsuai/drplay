@@ -19,6 +19,11 @@ const WORKER_MSG_TYPES = {
   busy: "SYNC_BUSY",
   noToken: "SYNC_NO_TOKEN",
   error: "SYNC_ERROR",
+  // Main->worker REPLY to TOKEN_EXPIRED meaning "the refresh cannot be done"
+  // (handler missing / returned null / threw). Mirrors the worker-side
+  // REFRESH_FAILED_TYPE literal in src/workers/tokenRefresh.ts so the runtime
+  // protocol stays identical on both ends.
+  refreshFailed: "refresh_failed",
 } as const;
 
 // Main->worker request types (the worker's isWorkerRequestMessage matches
@@ -75,6 +80,9 @@ export interface ProSyncHandlerDeps {
   updateToken: (token: string) => void;
   dispatch: (name: SyncEventName) => void;
   logError: (msg: string) => void;
+  // Replies {type:"refresh_failed"} to the worker so a pending 401 wait
+  // resolves immediately instead of stalling for the worker-side timeout.
+  notifyRefreshFailed: () => void;
 }
 
 // Routes every worker->main message. Previously SYNC_BUSY / SYNC_NO_TOKEN /
@@ -86,16 +94,25 @@ export async function handleWorkerMessage(
 ): Promise<void> {
   switch (msg.type) {
     case WORKER_MSG_TYPES.tokenExpired: {
-      if (!deps.onTokenRefreshRequest) break;
+      // Every path that cannot produce a refreshed token must answer the
+      // worker with {type:"refresh_failed"} so it stops waiting right away.
+      // Silence here used to stall the worker until its internal 15s timeout.
+      if (!deps.onTokenRefreshRequest) {
+        deps.notifyRefreshFailed();
+        break;
+      }
       try {
         const newToken = await deps.onTokenRefreshRequest();
         if (newToken) {
           deps.updateToken(newToken);
+        } else {
+          deps.notifyRefreshFailed();
         }
       } catch (err) {
         deps.logError(
           `pro-sync: token refresh failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+        deps.notifyRefreshFailed();
       }
       break;
     }
@@ -143,6 +160,11 @@ export function startProSyncWorker(token: string) {
           source: "proSyncManager",
           message: msg,
           level: "error",
+        });
+      },
+      notifyRefreshFailed: () => {
+        globalWorker?.postMessage({
+          type: WORKER_MSG_TYPES.refreshFailed,
         });
       },
     };
