@@ -29,7 +29,7 @@ describe("useAppGlobalEvents focus refresh guard (M1c)", () => {
   it("refreshes on focus when only an access token exists (keyring user has no refresh token in localStorage)", () => {
     localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
     renderHook(() => {
-      useAppGlobalEvents(() => {});
+      useAppGlobalEvents();
     });
 
     window.dispatchEvent(new Event("focus"));
@@ -39,11 +39,23 @@ describe("useAppGlobalEvents focus refresh guard (M1c)", () => {
 
   it("skips the refresh on focus when signed out (no access token)", () => {
     renderHook(() => {
-      useAppGlobalEvents(() => {});
+      useAppGlobalEvents();
     });
 
     window.dispatchEvent(new Event("focus"));
 
     expect(mockedGetValidToken).not.toHaveBeenCalled();
+  });
+
+  it("never registers an 'auth-logout' listener (logout event path lives solely in useAuth)", () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    renderHook(() => {
+      useAppGlobalEvents();
+    });
+
+    const authLogoutRegistrations = addSpy.mock.calls.filter(
+      ([type]) => type === "auth-logout",
+    );
+    expect(authLogoutRegistrations).toHaveLength(0);
   });
 });

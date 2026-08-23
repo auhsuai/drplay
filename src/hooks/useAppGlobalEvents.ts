@@ -3,7 +3,7 @@ import { getValidToken } from "../utils/apiClient";
 import { captureError } from "../utils/errorLog";
 import { ACCESS_TOKEN_KEY } from "../utils/storageKeys";
 
-export function useAppGlobalEvents(handleLogout: () => void) {
+export function useAppGlobalEvents() {
   useEffect(() => {
     const handleFocus = () => {
       // The proactive-refresh setTimeout is frozen while the OS sleeps / the app
@@ -26,12 +26,13 @@ export function useAppGlobalEvents(handleLogout: () => void) {
         });
       }
       if (hasTokens) {
-        getValidToken().catch((e: unknown) =>
-          void captureError({
-            level: "warn",
-            source: "useAppGlobalEvents",
-            message: `Focus refresh failed: ${e instanceof Error ? e.message : String(e)}`,
-          }),
+        getValidToken().catch(
+          (e: unknown) =>
+            void captureError({
+              level: "warn",
+              source: "useAppGlobalEvents",
+              message: `Focus refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+            }),
         );
       }
     };
@@ -48,15 +49,4 @@ export function useAppGlobalEvents(handleLogout: () => void) {
       document.removeEventListener("contextmenu", preventContextMenu);
     };
   }, []);
-
-  // Listen to apiClient logout event
-  useEffect(() => {
-    const handleAuthLogout = () => {
-      handleLogout();
-    };
-    window.addEventListener("auth-logout", handleAuthLogout);
-    return () => {
-      window.removeEventListener("auth-logout", handleAuthLogout);
-    };
-  }, [handleLogout]);
 }

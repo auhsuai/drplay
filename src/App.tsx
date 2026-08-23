@@ -127,13 +127,9 @@ function App() {
   // login/refresh/logout (it keeps its own in-memory copy, see useServiceWorker).
   useServiceWorker(accessToken);
 
-  // Global window events (Focus, blur, contextmenu, auth-logout). handleLogout
-  // is async; errors are handled internally by useAuth (each step is wrapped),
-  // so this stays fire-and-forget via the stable wrapper below.
-  const onGlobalLogout = useCallback(() => {
-    void handleLogout();
-  }, [handleLogout]);
-  useAppGlobalEvents(onGlobalLogout);
+  // Global window events (focus refresh, contextmenu). Logout via the
+  // 'auth-logout' event is handled internally by useAuth.
+  useAppGlobalEvents();
 
   const {
     appRootFolder,
