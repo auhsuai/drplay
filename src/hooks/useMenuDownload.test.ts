@@ -597,3 +597,73 @@ describe("useMenuDownload mobile SAF folder", () => {
     expect(result.current.downloadMessage).toContain("Download failed");
   });
 });
+
+describe("useMenuDownload double-click race guard", () => {
+  it("invokes download_file exactly once when Confirm fires twice in the same tick", async () => {
+    const { result } = renderHook(() => useMenuDownload(t));
+    act(() => {
+      result.current.handleDownloadClick(
+        { stopPropagation: () => {} } as unknown as MouseEvent,
+        makeTrack(),
+        () => {},
+      );
+    });
+
+    // Keep the first download in flight so the second synchronous call hits
+    // the busy-guard while invoke has not resolved yet (real double-click:
+    // both clicks land before React re-renders).
+    let resolveDownload!: (path: string) => void;
+    mockedInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "download_file") {
+        return new Promise<string>((resolve) => {
+          resolveDownload = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const calls: Array<Promise<void>> = [];
+    act(() => {
+      calls.push(result.current.executeDownload());
+      calls.push(result.current.executeDownload());
+    });
+
+    // Flush microtasks so both invocations reach their invoke call.
+    await act(async () => {});
+
+    expect(
+      mockedInvoke.mock.calls.filter((c) => c[0] === "download_file"),
+    ).toHaveLength(1);
+
+    resolveDownload("C:\\Downloads\\Test Song - Test Artist.mp3");
+    await Promise.all(calls);
+  });
+
+  it("allows a new download after the previous one finishes", async () => {
+    const result = await runDownload();
+    expect(
+      mockedInvoke.mock.calls.filter((c) => c[0] === "download_file"),
+    ).toHaveLength(1);
+
+    mockedInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "download_file") {
+        return Promise.resolve("C:\\Downloads\\second.mp3");
+      }
+      return Promise.resolve(undefined);
+    });
+    act(() => {
+      result.current.handleDownloadClick(
+        { stopPropagation: () => {} } as unknown as MouseEvent,
+        makeTrack({ id: "file-456", title: "Second Song" }),
+        () => {},
+      );
+    });
+    await act(async () => {
+      await result.current.executeDownload();
+    });
+
+    expect(
+      mockedInvoke.mock.calls.filter((c) => c[0] === "download_file"),
+    ).toHaveLength(2);
+  });
+});

@@ -52,6 +52,10 @@ export function useMenuDownload(t: TFunction) {
 
   const mountedRef = useRef(true);
   const downloadIdRef = useRef<number | null>(null);
+  // Sync busy-guard for executeDownload: state updates land only after
+  // re-render, so two clicks in the same tick both read isDownloadingFile
+  // as false and would start two download_file invocations for one file.
+  const isDownloadingRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -98,7 +102,13 @@ export function useMenuDownload(t: TFunction) {
   };
 
   const executeDownload = async () => {
-    if (isDownloadingFile || !downloadTrack) return;
+    // Race guard (2nd layer behind the disabled Confirm button): a
+    // double-click fires twice in the same tick, before React re-renders —
+    // the isDownloadingFile state read below is still stale false for the
+    // second click. The ref check-and-set below closes that window (same
+    // pattern as useFolderPicker's isLoadingRef).
+    if (isDownloadingRef.current || isDownloadingFile || !downloadTrack) return;
+    isDownloadingRef.current = true;
     setIsDownloadingFile(true);
     setShowDownloadDialog(false);
     setDownloadProgress(null);
@@ -249,6 +259,7 @@ export function useMenuDownload(t: TFunction) {
       });
       setDownloadMessage(t("menu.download_failed"));
     } finally {
+      isDownloadingRef.current = false;
       if (mountedRef.current) {
         setIsDownloadingFile(false);
         downloadIdRef.current = null;
