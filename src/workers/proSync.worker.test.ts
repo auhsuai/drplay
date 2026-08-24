@@ -768,6 +768,26 @@ function stubSelfWithTokenReply(freshToken: string): Array<{ type: string }> {
   return posted;
 }
 
+// Stubs the worker-global `self` so posted messages are collected and replies
+// to TOKEN_EXPIRED with refresh_failed (the main thread's "cannot refresh"
+// production role — refreshTokenAndRetry resolves false, no fresh token).
+function stubSelfWithRefreshFailedReply(): Array<{ type: string }> {
+  const posted: Array<{ type: string }> = [];
+  vi.stubGlobal("self", {
+    postMessage: (msg: { type: string }) => {
+      posted.push(msg);
+      if (msg.type === "TOKEN_EXPIRED") {
+        setTimeout(() => {
+          void handleWorkerMessage({
+            data: { type: "refresh_failed" },
+          } as MessageEvent);
+        }, 0);
+      }
+    },
+  });
+  return posted;
+}
+
 describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
@@ -935,6 +955,193 @@ describe("full-sync reports SYNC_ERROR when bulkPut fails mid-sync", () => {
     } as MessageEvent);
 
     expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
+  });
+});
+
+describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP failure", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("mid-pagination 400: posts SYNC_ERROR (never COMPLETE), does NOT persist the fresh start token, keeps page-1 rows", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-1" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [audioFileRow("p1a")],
+            nextPageToken: "pg2",
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-mid400" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    // A partially synced library must not be branded complete: persisting
+    // start-1 here would permanently skip the un-fetched [pg2…] pages.
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
+    // Already-persisted page-1 rows stay (the replay is idempotent bulkPut).
+    expect(await db.files.get("p1a")).toBeDefined();
+  });
+
+  it("first-page 400: posts SYNC_ERROR, does NOT save the token and does NOT run the non-playable cleanup", async () => {
+    await resetSyncTables();
+    await db.files.bulkPut([
+      {
+        id: "wma-old",
+        name: "old.wma",
+        mimeType: "audio/x-ms-wma",
+        parentId: "root",
+        size: 1,
+        trashed: false,
+        isFolder: false,
+      },
+    ]);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-2" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-first400" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
+    // Cleanup only ever runs at full-sync COMPLETION — a failed pass with a
+    // zero-page library must not mass-delete rows it never refreshed.
+    expect(await db.files.get("wma-old")).toBeDefined();
+  });
+});
+
+describe("delta-sync reports SYNC_ERROR instead of advancing or stalling on an HTTP failure", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("mid-pagination 400 after a newStartPageToken: posts SYNC_ERROR (never COMPLETE), keeps the OLD stored token and the applied changes", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [
+              {
+                fileId: "fb1",
+                file: { id: "fb1", name: "fb1.mp3", mimeType: "audio/mpeg" },
+              },
+            ],
+            newStartPageToken: "start-new",
+            nextPageToken: "pg2",
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-delta-mid" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    // The un-fetched [pg2…] window must stay addressable: Drive only issues
+    // newStartPageToken once the whole list has been consumed, so advancing
+    // past changes we never fetched would skip them forever.
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+    // Changes already applied from page 1 stay (idempotent upsert on replay).
+    expect(await db.files.get("fb1")).toBeDefined();
+  });
+
+  it("first-page 400: posts SYNC_ERROR (was: no terminal signal at all) and keeps the stored token", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-delta-first" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+});
+
+describe("full-sync reports SYNC_ERROR when the main thread cannot refresh on 401", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("401 + refresh_failed: posts exactly one SYNC_ERROR from syncRunner (never COMPLETE) and does NOT persist the fresh start token", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithRefreshFailedReply();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-7" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-no-refresh" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    // Exactly one terminal signal: refresh REFUSED (vs retries exhausted)
+    // makes tokenRefresh return false WITHOUT posting, so syncRunner's
+    // failure guard is the only emitter here.
+    expect(posted.filter((m) => m.type === "SYNC_ERROR")).toHaveLength(1);
     expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
   });

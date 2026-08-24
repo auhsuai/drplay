@@ -173,14 +173,19 @@ async function performFullSync() {
 
         if (!res.ok) {
           // Non-ok with no retry left (refresh refused/failed or a non-401
-          // status): say so instead of breaking silently — the poller would
-          // otherwise wait for a SYNC_COMPLETE that never comes.
+          // status): flag the failure so the tail guard below reports
+          // SYNC_ERROR. logWorkerError above only records an error-log line,
+          // it is NOT a terminal signal — breaking without the flag would
+          // fall through to the success tail and persist the fresh
+          // startPageToken over a partially synced library (permanently
+          // skipping the un-fetched pages) AND brand the pass complete.
           logWorkerError(
             "proSync/full-sync",
             { phase: "files", status: res.status },
             new Error(`Failed to fetch files (${String(res.status)})`),
             "warn",
           );
+          filesFailed = true;
           break;
         }
 
@@ -336,15 +341,23 @@ async function performDeltaSync(startPageToken: string) {
           return;
         }
         // Non-ok with no retry left (refresh refused/failed or a status other
-        // than 410/401): say so instead of breaking silently — the poller
-        // would otherwise wait for a SYNC_COMPLETE that never comes.
+        // than 410/401): report the failure and stop WITHOUT touching stored
+        // state. logWorkerError above only records an error-log line, it is
+        // NOT a terminal signal — returning here is what makes this exit path
+        // honest: no SYNC_COMPLETE, and the save block below never runs, so
+        // the stored startPageToken stays put (even when an earlier page of
+        // this run already delivered a newStartPageToken) and the next sync
+        // replays the exact same window. Breaking silently instead would
+        // either advance the cursor past changes we never fetched or leave
+        // the poller waiting for a terminal signal that never comes.
         logWorkerError(
           "proSync/delta-sync",
           { phase: "changes", status: res.status },
           new Error(`Failed to fetch changes (${String(res.status)})`),
           "warn",
         );
-        break;
+        self.postMessage({ type: "SYNC_ERROR" });
+        return;
       }
 
       const data = await parseDriveJson<DriveChangesList>("changes", res);
