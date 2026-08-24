@@ -206,6 +206,18 @@ export function TopNavigationBar({
           className="-mx-8 px-8 flex items-center gap-2 text-sm font-medium flex-1 min-w-0 animate-in slide-in-from-left-4 duration-300"
         >
           <button
+            // Why: a touch tap blurs the focused input before the click
+            // lands, and onBlur collapses this row — the click then dies on
+            // a detached node and the stale query keeps filtering silently.
+            // Cancelling both down-events' default blocks the focus shift
+            // (pointerdown also suppresses the compatibility mousedown)
+            // while the click still fires (w3.org/TR/pointerevents4 §11).
+            onPointerDown={(e) => {
+              e.preventDefault();
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+            }}
             onClick={() => {
               onSearchChange("");
               setSearchExpanded(false);

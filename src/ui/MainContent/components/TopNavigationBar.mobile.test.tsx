@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   act,
+  createEvent,
   render,
   screen,
   fireEvent,
@@ -130,6 +131,41 @@ describe("TopNavigationBar mobile search (IS_MOBILE)", () => {
     fireEvent.click(screen.getByTestId("mobile-search-collapsed"));
     fireEvent.blur(screen.getByRole("textbox"));
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  // Blur-vs-click race: a touch tap on the close button blurs the focused
+  // input BEFORE the click lands; the onBlur collapse unmounts the row and
+  // the click dies on a detached node, so the stale query keeps filtering.
+  // Cancelling the down-events' default stops the focus shift while click
+  // still fires (w3.org/TR/pointerevents4 §11), so the query must be cleared.
+  it("tap close while focused still clears the query (mousedown default cancelled)", () => {
+    platformMock.IS_MOBILE = true;
+    const onSearchChange = vi.fn();
+    render(
+      <TopNavigationBar
+        {...makeProps({ searchQuery: "abc", onSearchChange })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("mobile-search-collapsed"));
+    const input = screen.getByRole("textbox");
+    const btn = screen.getByRole("button", { name: "Close search" });
+    const ev = createEvent.mouseDown(btn);
+    const pd = vi.spyOn(ev, "preventDefault");
+    fireEvent(btn, ev);
+    if (pd.mock.calls.length === 0) fireEvent.blur(input); // real browser would blur here
+    fireEvent.click(btn);
+    expect(onSearchChange).toHaveBeenLastCalledWith("");
+  });
+
+  it("mouseDown on the close button calls preventDefault", () => {
+    platformMock.IS_MOBILE = true;
+    render(<TopNavigationBar {...makeProps()} />);
+    fireEvent.click(screen.getByTestId("mobile-search-collapsed"));
+    const btn = screen.getByRole("button", { name: "Close search" });
+    const ev = createEvent.mouseDown(btn);
+    const pd = vi.spyOn(ev, "preventDefault");
+    fireEvent(btn, ev);
+    expect(pd).toHaveBeenCalled();
   });
 
   // Task 15: Android hardware back while the mobile search is expanded must
