@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { db } from "../db/db";
+import { db, type DriveFile } from "../db/db";
 import {
   delay,
   fetchDrive,
@@ -14,6 +14,7 @@ import {
 } from "./proSync.worker";
 import type { SyncRetryState } from "./proSync.worker";
 import { syncRetryDeps } from "./tokenRefresh";
+import { DEFAULT_USER_EMAIL } from "../utils/storageKeys";
 
 describe("isValidDriveFile", () => {
   it("returns true for a file with a non-empty string id", () => {
@@ -381,6 +382,11 @@ describe("delay", () => {
 // playable set (wma/aiff/alac/ape/dsf/dff/wv/tak + m4a dropped for Android),
 // because the app cannot decode them. Folders are never touched (folder rows
 // have no playable extension but isFolder=true).
+// Wire owner used by every pre-existing sync fixture: schema v10 requires a
+// REAL account email on the frame and on every persisted row ("default" is
+// now a rejected sentinel), so fixtures state their expected owner explicitly.
+const FIXTURE_EMAIL = "sync-owner@example.com";
+
 describe("full-sync cleanup of non-playable rows", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -397,7 +403,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         size: 1,
         trashed: false,
         isFolder: false,
-        userEmail: "default",
+        userEmail: FIXTURE_EMAIL,
       },
       {
         id: "m4a1",
@@ -407,7 +413,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         size: 4,
         trashed: false,
         isFolder: false,
-        userEmail: "default",
+        userEmail: FIXTURE_EMAIL,
       },
       {
         id: "flac1",
@@ -417,7 +423,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         size: 2,
         trashed: false,
         isFolder: false,
-        userEmail: "default",
+        userEmail: FIXTURE_EMAIL,
       },
       {
         id: "folder1",
@@ -426,7 +432,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         parentId: "root",
         trashed: false,
         isFolder: true,
-        userEmail: "default",
+        userEmail: FIXTURE_EMAIL,
       },
     ]);
 
@@ -463,14 +469,14 @@ describe("full-sync cleanup of non-playable rows", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await handleWorkerMessage({
-      data: { type: "sync", token: "test-token" },
+      data: { type: "sync", token: "test-token", userEmail: FIXTURE_EMAIL },
     } as MessageEvent);
 
-    expect(await db.files.get(["default", "wma1"])).toBeUndefined();
-    expect(await db.files.get(["default", "m4a1"])).toBeUndefined();
-    expect(await db.files.get(["default", "flac1"])).toBeDefined();
-    expect(await db.files.get(["default", "flac2"])).toBeDefined();
-    expect(await db.files.get(["default", "folder1"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "wma1"])).toBeUndefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "m4a1"])).toBeUndefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "flac1"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "flac2"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "folder1"])).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
   });
 });
@@ -829,11 +835,11 @@ describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await handleWorkerMessage({
-      data: { type: "sync", token: "tok-a" },
+      data: { type: "sync", token: "tok-a", userEmail: FIXTURE_EMAIL },
     } as MessageEvent);
 
-    expect(await db.files.get(["default", "p1a"])).toBeDefined();
-    expect(await db.files.get(["default", "p2a"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "p1a"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "p2a"])).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_PROGRESS" });
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
     // startPageToken lookup + page 1 twice (401 then same-page retry) + page 2.
@@ -870,7 +876,7 @@ describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await handleWorkerMessage({
-      data: { type: "sync", token: "tok-b" },
+      data: { type: "sync", token: "tok-b", userEmail: FIXTURE_EMAIL },
     } as MessageEvent);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -879,7 +885,7 @@ describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
       new URL(String(call[0])).searchParams.get("pageToken"),
     );
     expect(pageTokens).toEqual(["start-old", "start-old"]);
-    expect(await db.files.get(["default", "dx1"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "dx1"])).toBeDefined();
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toEqual(
       expect.objectContaining({ value: "start-new" }),
     );
@@ -994,7 +1000,7 @@ describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP fa
     vi.stubGlobal("fetch", fetchMock);
 
     await handleWorkerMessage({
-      data: { type: "sync", token: "tok-mid400" },
+      data: { type: "sync", token: "tok-mid400", userEmail: FIXTURE_EMAIL },
     } as MessageEvent);
 
     expect(posted).toContainEqual({ type: "SYNC_ERROR" });
@@ -1003,7 +1009,7 @@ describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP fa
     // start-1 here would permanently skip the un-fetched [pg2…] pages.
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
     // Already-persisted page-1 rows stay (the replay is idempotent bulkPut).
-    expect(await db.files.get(["default", "p1a"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "p1a"])).toBeDefined();
   });
 
   it("first-page 400: posts SYNC_ERROR, does NOT save the token and does NOT run the non-playable cleanup", async () => {
@@ -1079,7 +1085,7 @@ describe("delta-sync reports SYNC_ERROR instead of advancing or stalling on an H
     vi.stubGlobal("fetch", fetchMock);
 
     await handleWorkerMessage({
-      data: { type: "sync", token: "tok-delta-mid" },
+      data: { type: "sync", token: "tok-delta-mid", userEmail: FIXTURE_EMAIL },
     } as MessageEvent);
 
     expect(posted).toContainEqual({ type: "SYNC_ERROR" });
@@ -1091,7 +1097,7 @@ describe("delta-sync reports SYNC_ERROR instead of advancing or stalling on an H
       expect.objectContaining({ value: "start-old" }),
     );
     // Changes already applied from page 1 stay (idempotent upsert on replay).
-    expect(await db.files.get(["default", "fb1"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "fb1"])).toBeDefined();
   });
 
   it("first-page 400: posts SYNC_ERROR (was: no terminal signal at all) and keeps the stored token", async () => {
@@ -1175,4 +1181,146 @@ describe("worker releases its 401 wait when the main thread cannot refresh", () 
     await expect(pending).resolves.toBe(false);
     expect(state.count).toBe(1);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Schema v10 per-account stamping (step 3 of the parent-normalization plan):
+// the sync wire frame carries the owning account's email and EVERY persisted
+// row is keyed [userEmail+id]. A sync frame without a real account email
+// (missing, empty, or the shared "default" sentinel) must be rejected with
+// SYNC_ERROR BEFORE any write — stamping the library with "default" is the
+// exact cross-account-leak shape schema v10 exists to prevent.
+// ---------------------------------------------------------------------------
+const WIRE_EMAIL = "user-a@x";
+
+function ownedRow(id: string): DriveFile {
+  return {
+    id,
+    name: `${id}.mp3`,
+    mimeType: "audio/mpeg",
+    parentId: "root",
+    size: 10,
+    trashed: false,
+    isFolder: false,
+    userEmail: WIRE_EMAIL,
+  };
+}
+
+describe("sync stamps every row with the userEmail from the wire frame", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("full-sync persists rows under [userEmail+id] from the message, never under 'default'", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-a" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ files: [audioFileRow("ua1")] }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-owner", userEmail: WIRE_EMAIL },
+    } as MessageEvent);
+
+    expect(await db.files.get([WIRE_EMAIL, "ua1"])).toBeDefined();
+    expect(await db.files.get([DEFAULT_USER_EMAIL, "ua1"])).toBeUndefined();
+    expect(await db.files.count()).toBe(1);
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+
+  it("delta-sync applies changes under the message email (put) and deletes by [userEmail+id]", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY,
+      value: "start-old",
+    });
+    await db.files.bulkPut([ownedRow("del-me")]);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          changes: [
+            {
+              fileId: "dx9",
+              file: { id: "dx9", name: "dx9.mp3", mimeType: "audio/mpeg" },
+            },
+            { fileId: "del-me", removed: true },
+          ],
+          newStartPageToken: "start-new",
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-delta-owner", userEmail: WIRE_EMAIL },
+    } as MessageEvent);
+
+    // Put landed under the real account...
+    expect(await db.files.get([WIRE_EMAIL, "dx9"])).toBeDefined();
+    expect(await db.files.get([DEFAULT_USER_EMAIL, "dx9"])).toBeUndefined();
+    // ...and the removal deleted by the SAME account's compound key.
+    expect(await db.files.get([WIRE_EMAIL, "del-me"])).toBeUndefined();
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+});
+
+describe("sync without a usable owner email is rejected before any write", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it.each([
+    ["missing userEmail", undefined],
+    ["empty userEmail", ""],
+    ["sentinel userEmail", DEFAULT_USER_EMAIL],
+  ])(
+    "%s: posts SYNC_ERROR (never COMPLETE) and writes ZERO rows",
+    async (_label, userEmail) => {
+      await resetSyncTables();
+      const posted = stubSelfWithTokenReply("fresh-token");
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ startPageToken: "start-z" }), {
+            status: 200,
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ files: [audioFileRow("uz1")] }), {
+            status: 200,
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await handleWorkerMessage({
+        data:
+          userEmail === undefined
+            ? { type: "sync", token: "tok-gate" }
+            : { type: "sync", token: "tok-gate", userEmail },
+      } as MessageEvent);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+      expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+      expect(await db.files.count()).toBe(0);
+      // The gate must not consume the run either — no cursor was advanced.
+      expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
+    },
+  );
 });

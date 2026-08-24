@@ -1,4 +1,5 @@
 import type { DriveFile as DriveFileRow } from "../db/db";
+import type { UpsertableFileRow } from "../db/fileRows";
 import { ROOT_FOLDER_ID } from "../utils/driveConstants";
 
 export interface DriveFile {
@@ -51,6 +52,36 @@ export function toDriveFileRow(
       f.parents && f.parents.length > 0
         ? (f.parents[0] ?? ROOT_FOLDER_ID)
         : ROOT_FOLDER_ID,
+    size: toSize(f.size),
+    modifiedTime: f.modifiedTime,
+    trashed: false,
+    isFolder,
+  };
+}
+
+// Canonical-parent write path (schema v10): rows written through
+// upsertFileRows derive parentId from parents[0] INSIDE the helper, so this
+// mapper passes the raw `parents` array through untouched instead of
+// pre-deriving it. toDriveFileRow above stays for its existing consumers —
+// new writers must go through THIS shape so the single-write-path rule in
+// src/db/fileRows.ts holds. `parents` passthrough keeps the response's own
+// truth; the helper owns the ?? ROOT_FOLDER_ID fallback.
+//
+// The returned row is intentionally WITHOUT userEmail: mapping a response is
+// account-agnostic. The writer composes the final UpsertableFileRow with the
+// account it validated ({...row, userEmail}) — upsertFileRows stamps its
+// ownerEmail parameter authoritatively regardless.
+export function toUpsertableFileRow(
+  f: DriveFile & { id: string },
+  isFolder: boolean,
+): Omit<UpsertableFileRow, "userEmail"> {
+  return {
+    id: f.id,
+    name: f.name as string,
+    mimeType: f.mimeType as string,
+    // exactOptionalPropertyTypes: omit `parents` entirely when absent — an
+    // explicit undefined assignment is illegal for `parents?: readonly string[]`.
+    ...(f.parents !== undefined ? { parents: f.parents } : {}),
     size: toSize(f.size),
     modifiedTime: f.modifiedTime,
     trashed: false,

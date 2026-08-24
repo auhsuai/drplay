@@ -1,4 +1,5 @@
-import { db, type DriveFile } from "../db/db";
+import { db } from "../db/db";
+import { upsertFileRows } from "../db/fileRows";
 import {
   getAudioQuery,
   hasAudioExtension,
@@ -9,7 +10,7 @@ import { DEFAULT_USER_EMAIL } from "../utils/storageKeys";
 import {
   isValidDriveFile,
   partitionValidFiles,
-  toDriveFileRow,
+  toUpsertableFileRow,
 } from "./driveMapping";
 import type {
   DriveChangesList,
@@ -28,18 +29,19 @@ let currentToken: string | null = null;
 const MAX_SYNC_RETRIES = 3;
 const syncRetry = { count: 0, max: MAX_SYNC_RETRIES };
 
-// Schema v10 stamps every files row with the owning account. The worker wire
-// protocol ({type:"sync"|"token", token}) carries no account yet — wiring the
-// real email through is step 3 of the parent-normalization plan. Until then
-// rows are stamped with the same sentinel getCurrentUserEmail() yields when
-// no account is stored (and the value the v10 upgrade used for legacy rows).
-// TODO(step 3): receive the real account email over the worker wire.
-const SYNC_OWNER_EMAIL = DEFAULT_USER_EMAIL;
-
-// Stamp a mapped Drive row with the owning account so its compound
-// [userEmail+id] primary key resolves inside IndexedDB.
-function stampedFileRow(row: Omit<DriveFile, "userEmail">): DriveFile {
-  return { ...row, userEmail: SYNC_OWNER_EMAIL };
+// Schema v10 keys every files row by [userEmail+id]. The owning account now
+// travels on each wire frame ({type:"sync", token, userEmail}) and is
+// validated per run below — a run never reads a mutable module-level email,
+// so a mid-run rotation (sentinel → real once the userinfo lands) can never
+// split one pass across two owners.
+export function isValidSyncOwnerEmail(
+  email: string | null | undefined,
+): email is string {
+  return (
+    typeof email === "string" &&
+    email.trim().length > 0 &&
+    email !== DEFAULT_USER_EMAIL
+  );
 }
 
 // Dexie syncState key holding the Drive changes start-page token.
@@ -56,9 +58,13 @@ const DRIVE_START_PAGE_TOKEN_URL = `${DRIVE_CHANGES_URL}/startPageToken`;
 const FILES_FIELDS = "id,name,mimeType,parents,size,modifiedTime";
 
 // Entry-point bridge for the "sync" message branch: guards against a sync
-// already in progress, records the token, and runs the sync pass (busy flag
-// cleared in a finally so a throwing pass never wedges the worker).
-export async function runSync(token: string): Promise<void> {
+// already in progress, records the token, validates the owner email, and runs
+// the sync pass (busy flag cleared in a finally so a throwing pass never
+// wedges the worker).
+export async function runSync(
+  token: string,
+  userEmail?: string,
+): Promise<void> {
   if (isBusy) {
     self.postMessage({ type: "SYNC_BUSY" });
     return;
@@ -67,11 +73,29 @@ export async function runSync(token: string): Promise<void> {
     self.postMessage({ type: "SYNC_NO_TOKEN" });
     return;
   }
+  // Defensive owner gate — this path intentionally carries a comment. Schema
+  // v10 keys rows by [userEmail+id]; running a pass without a REAL account
+  // email would stamp the whole library with the shared "default" sentinel,
+  // the exact cross-account-leak shape v10 exists to prevent. The main thread
+  // already refuses to FIRE such syncs (proSyncManager reads the same
+  // sentinel at send time); this second gate protects against any other
+  // producer or a frame missing the field. Rejected BEFORE any fetch or
+  // write; the 60s poller retries with the real email once it has landed.
+  if (!isValidSyncOwnerEmail(userEmail)) {
+    logWorkerError(
+      "proSync/owner-gate",
+      { phase: "runSync", receivedType: typeof userEmail },
+      new Error("sync rejected: no usable owner email on the wire frame"),
+      "warn",
+    );
+    self.postMessage({ type: "SYNC_ERROR" });
+    return;
+  }
 
   currentToken = token;
   isBusy = true;
   try {
-    await startProSync();
+    await startProSync(userEmail);
   } finally {
     isBusy = false;
   }
@@ -85,15 +109,15 @@ export function pushToken(token: string): void {
   resolveTokenRefresh(true);
 }
 
-async function startProSync() {
+async function startProSync(ownerEmail: string) {
   if (!currentToken) return;
   try {
     const tokenState = await db.syncState.get(START_PAGE_TOKEN_KEY);
 
     if (!tokenState || !tokenState.value) {
-      await performFullSync();
+      await performFullSync(ownerEmail);
     } else {
-      await performDeltaSync(tokenState.value as string);
+      await performDeltaSync(tokenState.value as string, ownerEmail);
     }
   } catch (err) {
     // Safety net for the Dexie read above and any error that escaped the
@@ -103,7 +127,7 @@ async function startProSync() {
   }
 }
 
-async function performFullSync() {
+async function performFullSync(ownerEmail: string) {
   if (!currentToken) return;
   let startToken = "";
 
@@ -227,18 +251,23 @@ async function performFullSync() {
           );
         }
 
-        const filesToInsert = validFiles.map((f) =>
-          stampedFileRow(toDriveFileRow(f, f.mimeType === FOLDER_MIME)),
-        );
+        // Canonical-parent rule: parentId is derived INSIDE upsertFileRows
+        // from parents[0] of this very response; the helper stamps
+        // ownerEmail authoritatively (the composed userEmail below is the
+        // type-required provisional value the helper overwrites).
+        const filesToUpsert = validFiles.map((f) => ({
+          ...toUpsertableFileRow(f, f.mimeType === FOLDER_MIME),
+          userEmail: ownerEmail,
+        }));
 
-        if (filesToInsert.length > 0) {
+        if (filesToUpsert.length > 0) {
           try {
-            await db.files.bulkPut(filesToInsert);
+            await upsertFileRows(filesToUpsert, ownerEmail);
             self.postMessage({ type: "SYNC_PROGRESS" });
           } catch (err) {
             logWorkerError(
               "proSync/full-sync",
-              { phase: "bulkPut", count: filesToInsert.length },
+              { phase: "upsertFileRows", count: filesToUpsert.length },
               err,
               "error",
             );
@@ -305,7 +334,7 @@ async function performFullSync() {
   self.postMessage({ type: "SYNC_COMPLETE" });
 }
 
-async function performDeltaSync(startPageToken: string) {
+async function performDeltaSync(startPageToken: string, ownerEmail: string) {
   if (!currentToken) return;
   let pageToken = startPageToken;
   let newStartPageToken = startPageToken;
@@ -355,7 +384,7 @@ async function performDeltaSync(startPageToken: string) {
               "error",
             );
           }
-          await performFullSync();
+          await performFullSync(ownerEmail);
           return;
         }
         // Non-ok with no retry left (refresh refused/failed or a status other
@@ -390,7 +419,9 @@ async function performDeltaSync(startPageToken: string) {
             // the explicit assertion mirrors the previous `!` with identical
             // runtime semantics (a missing fileId still throws inside the
             // per-change try/catch below).
-            await db.files.delete([SYNC_OWNER_EMAIL, change.fileId as string]);
+            // Delete by THIS run's owner key — the compound [userEmail+id]
+            // primary key only addresses rows of the account being synced.
+            await db.files.delete([ownerEmail, change.fileId as string]);
             hasValidChanges = true;
           } else if (change.file) {
             const file = change.file;
@@ -405,8 +436,17 @@ async function performDeltaSync(startPageToken: string) {
             const isFolder = file.mimeType === FOLDER_MIME;
 
             if (isFolder || isAudioFile(file.mimeType, file.name as string)) {
-              await db.files.put(
-                stampedFileRow(toDriveFileRow(file, isFolder)),
+              // Per-change helper call keeps the one-bad-change isolation of
+              // the previous per-change put (a batched page-wide upsert would
+              // let one poisoned row abort its valid siblings).
+              await upsertFileRows(
+                [
+                  {
+                    ...toUpsertableFileRow(file, isFolder),
+                    userEmail: ownerEmail,
+                  },
+                ],
+                ownerEmail,
               );
               hasValidChanges = true;
             }
