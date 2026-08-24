@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { HardDrive, LoaderCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
@@ -31,6 +31,20 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
+  // Monotonic id of the in-flight login attempt. Anything that makes the
+  // pending attempt obsolete — user cancel, unmount — bumps the counter, and
+  // a newer attempt captures its own id on click, so every late resolution
+  // of an abandoned attempt is dropped below (intentionally silent: an
+  // OAuth session nobody is waiting for must never reach onLogin or state).
+  const attemptRef = useRef(0);
+
+  useEffect(() => {
+    // Unmount invalidates the pending attempt — its late resolve/reject
+    // would otherwise still fire onLogin after this screen is gone.
+    return () => {
+      attemptRef.current += 1;
+    };
+  }, []);
 
   // The cancel prompt resets the moment loading stops — adjusted during
   // render (React "adjusting state during render" pattern) instead of
@@ -48,6 +62,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   }, [isLoading]);
 
   const handleCancel = () => {
+    // Invalidate the pending attempt — its late resolution is dropped below.
+    attemptRef.current += 1;
     setIsLoading(false);
     setShowCancel(false);
     showErrorToast(t("login.cancelled_by_user"));
@@ -55,6 +71,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
   const handleLoginClick = async () => {
     if (isLoading) return;
+    const myAttempt = ++attemptRef.current;
 
     try {
       setIsLoading(true);
@@ -63,12 +80,21 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       // server (login_google_native). Both return the same token payload.
       const command = IS_MOBILE ? "login_google_mobile" : "login_google_native";
       const token = await invoke<LoginResult>(command);
+      if (myAttempt !== attemptRef.current) {
+        // Superseded/cancelled/unmounted — drop silently ON PURPOSE: no state
+        // change, no onLogin, no extra toast, no error log for a stale result.
+        return;
+      }
       setIsLoading(false);
       // Forward the full token payload — dropping refresh_token here starves
       // the refresh machinery (apiClient.getValidToken), which later triggers
       // an 'auth-logout' ~50 min after login (regression from 80c2984).
       onLogin(token);
     } catch (error) {
+      if (myAttempt !== attemptRef.current) {
+        // Stale attempt — same silent drop as the success path above.
+        return;
+      }
       setIsLoading(false);
       const errStr = String(error);
       if (errStr.includes("cancel")) {

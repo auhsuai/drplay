@@ -286,4 +286,140 @@ describe("LoginScreen invoke login error handling", () => {
       screen.queryByText("Đã mở trình duyệt — chờ đăng nhập..."),
     ).toBeNull();
   });
+
+  interface DeferredToken {
+    access_token: string;
+  }
+
+  function deferToken(): {
+    promise: Promise<DeferredToken>;
+    resolve: (value: DeferredToken) => void;
+    reject: (error: unknown) => void;
+  } {
+    let resolve!: (value: DeferredToken) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<DeferredToken>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("supersedes a cancelled attempt: its late success never reaches onLogin", async () => {
+    const CANCEL_DELAY_MS = 5000;
+    const first = deferToken();
+    const second = deferToken();
+    vi.useFakeTimers();
+    try {
+      invokeMock.mockImplementationOnce(() => first.promise);
+      invokeMock.mockImplementationOnce(() => second.promise);
+      const { onLogin } = renderLogin();
+
+      // Attempt A starts and stays pending while the user cancels it.
+      fireEvent.click(screen.getByRole("button"));
+      act(() => {
+        vi.advanceTimersByTime(CANCEL_DELAY_MS);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(toastRootText()).toContain("Connection cancelled.");
+
+      // Attempt B starts while A's invoke promise is still unresolved.
+      fireEvent.click(screen.getByRole("button"));
+
+      // Late success of superseded attempt A must be dropped silently.
+      await act(async () => {
+        first.resolve({ access_token: "token-A" });
+        await Promise.resolve();
+      });
+      expect(onLogin).not.toHaveBeenCalled();
+      expect(screen.getByRole("button").hasAttribute("disabled")).toBe(true);
+
+      // Attempt B completes normally.
+      await act(async () => {
+        second.resolve({ access_token: "token-B" });
+        await Promise.resolve();
+      });
+      expect(onLogin).toHaveBeenCalledTimes(1);
+      expect(onLogin).toHaveBeenCalledWith({ access_token: "token-B" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a late successful resolution after the user cancels", async () => {
+    const CANCEL_DELAY_MS = 5000;
+    const deferred = deferToken();
+    vi.useFakeTimers();
+    try {
+      invokeMock.mockImplementationOnce(() => deferred.promise);
+      const { onLogin } = renderLogin();
+
+      fireEvent.click(screen.getByRole("button"));
+      act(() => {
+        vi.advanceTimersByTime(CANCEL_DELAY_MS);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const toastAfterCancel = toastRootText();
+      expect(toastAfterCancel).toContain("Connection cancelled.");
+
+      await act(async () => {
+        deferred.resolve({ access_token: "late-token" });
+        await Promise.resolve();
+      });
+      expect(onLogin).not.toHaveBeenCalled();
+      expect(toastRootText()).toBe(toastAfterCancel);
+      expect(captureErrorMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a late error rejection after the user cancels", async () => {
+    const CANCEL_DELAY_MS = 5000;
+    const deferred = deferToken();
+    vi.useFakeTimers();
+    try {
+      invokeMock.mockImplementationOnce(() => deferred.promise);
+      const { onLogin } = renderLogin();
+
+      fireEvent.click(screen.getByRole("button"));
+      act(() => {
+        vi.advanceTimersByTime(CANCEL_DELAY_MS);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const toastAfterCancel = toastRootText();
+      expect(toastAfterCancel).toContain("Connection cancelled.");
+
+      await act(async () => {
+        deferred.reject(new Error("User cancelled authorization"));
+        await Promise.resolve();
+      });
+      expect(onLogin).not.toHaveBeenCalled();
+      expect(toastRootText()).toBe(toastAfterCancel);
+      expect(captureErrorMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a pending attempt resolution that arrives after unmount", async () => {
+    const deferred = deferToken();
+    invokeMock.mockImplementationOnce(() => deferred.promise);
+    const { onLogin } = renderLogin();
+
+    fireEvent.click(screen.getByRole("button"));
+    cleanup();
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await act(async () => {
+        deferred.resolve({ access_token: "late-token" });
+        await Promise.resolve();
+      });
+      expect(onLogin).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });
