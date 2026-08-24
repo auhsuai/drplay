@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { db } from "../db/db";
+import { upsertFileRows } from "../db/fileRows";
 import {
   deleteFile,
   moveFile,
@@ -85,16 +86,31 @@ export function useDriveBulkOps({
     try {
       const res = await createFolder(token, folderName, currentFolderId);
       if (res.id) {
-        await db.files.put({
-          id: res.id,
-          name: res.name || folderName,
-          parentId: currentFolderId,
-          mimeType: FOLDER_MIME,
-          isFolder: true,
-          trashed: false,
-          modifiedTime: new Date().toISOString(),
-          userEmail: getCurrentUserEmail(),
-        });
+        // Parent truth: the created folder's own Drive response parents when
+        // the API echoes them back (files.create returns a File resource with
+        // parents[]); otherwise the operation's own target — the request
+        // itself placed the folder under currentFolderId. Either way the row
+        // goes through the single write helper (canonical parent rule).
+        await upsertFileRows(
+          [
+            {
+              id: res.id,
+              name: res.name || folderName,
+              mimeType: FOLDER_MIME,
+              isFolder: true,
+              trashed: false,
+              modifiedTime: new Date().toISOString(),
+              parents:
+                res.parents !== undefined && res.parents.length > 0
+                  ? res.parents
+                  : [currentFolderId],
+              // Provisional userEmail (type-required) — the helper stamps its
+              // own ownerEmail argument authoritatively.
+              userEmail: getCurrentUserEmail(),
+            },
+          ],
+          getCurrentUserEmail(),
+        );
       }
       onRefresh();
       // onComplete only on success (not in finally): keep the modal open on

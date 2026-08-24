@@ -1,6 +1,12 @@
 import { t } from "i18next";
 import { db } from "../../db/db";
-import type { DriveFile, UploadSessionRow } from "../../db/db";
+import type { UploadSessionRow } from "../../db/db";
+import {
+  upsertFileRows,
+  upsertPendingCardRows,
+  type PendingFileCard,
+  type UpsertableFileRow,
+} from "../../db/fileRows";
 import type { DriveFileItem } from "../driveApi";
 import { UploadError } from "../driveUpload";
 import { captureError } from "../errorLog";
@@ -229,8 +235,8 @@ export async function resumeInterruptedUploads(
       );
       // F1: a seed enqueued between this round's scan and this sweep owns a
       // pending card but NO session row yet (its processEntry persist has not
-      // run). The pending files-row id IS the entry id verbatim (pendingRow
-      // writes id: entry.id), so any row owned by a LIVE in-process entry is
+      // run). The pending files-row id IS the entry id verbatim (pendingCard
+      // carries id: entry.id), so any row owned by a LIVE in-process entry is
       // not a ghost regardless of session state — any-status matching mirrors
       // the scan-time layer 2a guard above.
       const liveEntryIds = new Set(entries.map((e) => e.id));
@@ -417,17 +423,16 @@ function hasActiveDuplicate(diskPath: string, parentId: string): boolean {
 
 // A queued entry's placeholder db.files row (the dimmed card in the live
 // list) — same shape whether written at enqueue or by processEntry; putting
-// the same id + content is idempotent, so both writes coexist safely.
-function pendingRow(entry: InternalEntry): DriveFile {
+// the same id + content is idempotent, so both writes coexist safely. The
+// card is NOT a Drive resource: its self-managed parentId passes through
+// upsertPendingCardRows verbatim (no canonical root fallback).
+function pendingCard(entry: InternalEntry): PendingFileCard {
   return {
     id: entry.id,
     name: entry.name,
     mimeType: entry.isFolder ? FOLDER_MIME : AUDIO_FILE_MIME,
     parentId: entry.parentId,
-    trashed: false,
     isFolder: entry.isFolder,
-    modifiedTime: new Date().toISOString(),
-    userEmail: getCurrentUserEmail(), // compound PK part (schema v10)
   };
 }
 
@@ -438,7 +443,7 @@ function pendingRow(entry: InternalEntry): DriveFile {
 function enqueuePendingRows(batch: InternalEntry[]): Promise<void> {
   if (batch.length === 0) return Promise.resolve();
   return dbRowOp(
-    () => db.files.bulkPut(batch.map((e) => pendingRow(e))),
+    () => upsertPendingCardRows(batch.map(pendingCard), getCurrentUserEmail()),
     "enqueue-pending-rows",
   );
 }
@@ -533,7 +538,10 @@ async function processEntry(entry: InternalEntry): Promise<void> {
   // exists before handleByKind without adding a DB roundtrip to the upload
   // pipeline.
   await Promise.all([
-    dbRowOp(() => db.files.put(pendingRow(entry)), "pending-row"),
+    dbRowOp(
+      () => upsertPendingCardRows([pendingCard(entry)], getCurrentUserEmail()),
+      "pending-row",
+    ),
     // P2-B1c: a resumed entry re-persists its INHERITED session metadata at
     // the first write — otherwise a crash before the chunked uploader reports
     // a fresh URI drops the still-valid server session and restarts at byte 0.
@@ -627,7 +635,27 @@ async function markDone(
   ) {
     entry.batchMemo.set(entry.relativeDir, driveItem.id);
   }
-  await dbRowOp(() => db.files.put(realRow(entry, driveItem)), "real-row");
+  await dbRowOp(
+    () =>
+      upsertFileRows(
+        [
+          {
+            // Provisional userEmail (type-required) — the helper stamps its
+            // own ownerEmail argument authoritatively.
+            ...realUploadRow(entry, driveItem),
+            userEmail: getCurrentUserEmail(),
+          },
+        ],
+        getCurrentUserEmail(),
+        // The resumable-upload response never echoes parents[] back (narrowed
+        // by asDriveFileItem), so the canonical source here is the parent THIS
+        // entry itself sent in the upload request — for folder children that
+        // is the resolved Drive folder id (entry.parentId was set from the
+        // batch memo before initiating).
+        [entry.parentId],
+      ),
+    "real-row",
+  );
   entry.status = "done";
   // The row shows a green check for a short while after finishing — a driveId
   // is the id the live list knows the item by, so mark that one. Notify runs
@@ -723,7 +751,15 @@ async function markError(entry: InternalEntry, err: unknown): Promise<void> {
   await finishEntry(entry);
 }
 
-function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
+// Map the settled upload into the helper's raw-row shape. The parent is NOT
+// set here — markDone passes entry.parentId as upsertFileRows' knownParents
+// (the request's own target), so a future response that DOES carry parents[]
+// automatically wins via the row's own parents. Same as driveMapping, the row
+// is WITHOUT userEmail (the call site composes the provisional value).
+function realUploadRow(
+  entry: InternalEntry,
+  driveItem: DriveFileItem,
+): Omit<UpsertableFileRow, "userEmail"> {
   let size: number | undefined;
   if (driveItem.size !== undefined) {
     const n = Number(driveItem.size);
@@ -733,12 +769,10 @@ function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
     id: driveItem.id,
     name: entry.name,
     mimeType: entry.isFolder ? FOLDER_MIME : driveItem.mimeType,
-    parentId: entry.parentId,
     size,
     trashed: false,
     isFolder: entry.isFolder,
     modifiedTime: driveItem.modifiedTime ?? new Date().toISOString(),
-    userEmail: getCurrentUserEmail(), // compound PK part (schema v10)
   };
 }
 // P2-B1a: delete the interrupted source pair — the OLD session row plus its
