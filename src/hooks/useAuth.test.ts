@@ -28,6 +28,7 @@ import {
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
   TOKEN_TIME_KEY,
+  USER_EMAIL_KEY,
 } from "../utils/storageKeys";
 
 const authState = vi.hoisted(() => ({
@@ -37,6 +38,16 @@ const authState = vi.hoisted(() => ({
   setIsLoggedIn: vi.fn(),
   setAccessToken: vi.fn(),
   setUserProfile: vi.fn(),
+}));
+
+// Logout DB-teardown mocks (hoisted so the vi.mock factories below can close
+// over them; direct method references like db.syncState.delete would trip
+// @typescript-eslint/unbound-method).
+const { mockedSyncStateDelete, mockedWipeFileRowsForUser } = vi.hoisted(() => ({
+  mockedSyncStateDelete: vi.fn(() => Promise.resolve()),
+  mockedWipeFileRowsForUser: vi.fn<(email: string) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -84,6 +95,16 @@ vi.mock("../utils/metadata", () => ({
   // Mirrors the real async contract: wipePersistedMetadataCache resolves a
   // Promise, and handleLogout attaches .catch to it.
   wipePersistedMetadataCache: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../db/db", () => ({
+  db: {
+    syncState: { delete: mockedSyncStateDelete },
+  },
+}));
+
+vi.mock("../db/fileRows", () => ({
+  wipeFileRowsForUser: mockedWipeFileRowsForUser,
 }));
 
 vi.mock("../utils/errorLog", () => ({
@@ -497,5 +518,60 @@ describe("useAuth profile fetch abort handling (isAbortError unified)", () => {
         c.message.includes("Failed to fetch user profile (best-effort)"),
       ),
     ).toBe(true);
+  });
+});
+
+// Logout account-boundary teardown (schema v10): db.files rows are keyed
+// [userEmail+id], so logout wipes ONLY the logged-out account's mirror, and
+// the Drive changes cursor (db.syncState "startPageToken") must never survive
+// a logout — otherwise the NEXT account's first sync delta-applies another
+// account's change window onto its own mirror.
+describe("useAuth logout DB wipes (per-user files + sync cursor)", () => {
+  it("wipes the logged-out account's file rows AND deletes the sync cursor on logout", async () => {
+    localStorage.setItem(USER_EMAIL_KEY, "out@example.com");
+    const { result } = renderHook(() => useAuth());
+
+    await act(async () => {
+      await result.current.handleLogout();
+    });
+
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledWith("out@example.com");
+    expect(mockedSyncStateDelete).toHaveBeenCalledWith("startPageToken");
+  });
+
+  it("deletes the sync cursor EVEN WHEN the files wipe fails (independence) and logout still resolves", async () => {
+    localStorage.setItem(USER_EMAIL_KEY, "out@example.com");
+    mockedWipeFileRowsForUser.mockRejectedValueOnce(new Error("idb down"));
+    const onLogoutExt = vi.fn();
+    const { result } = renderHook(() => useAuth(onLogoutExt));
+
+    await expect(
+      act(async () => {
+        await result.current.handleLogout();
+      }),
+    ).resolves.toBeUndefined();
+
+    // The two teardowns are independent: a failed file wipe must not skip
+    // the cursor delete nor abort the rest of logout.
+    expect(mockedSyncStateDelete).toHaveBeenCalledWith("startPageToken");
+    expect(onLogoutExt).toHaveBeenCalled();
+    expect(
+      mockedCaptureError.mock.calls.some(([c]) =>
+        c.message.includes("Files persisted-wipe failed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the file-row wipe when no real account email was ever known, but STILL deletes the cursor", async () => {
+    // beforeEach cleared localStorage — no USER_EMAIL_KEY, so no account is
+    // reliably identified and there is nothing owned to wipe.
+    const { result } = renderHook(() => useAuth());
+
+    await act(async () => {
+      await result.current.handleLogout();
+    });
+
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+    expect(mockedSyncStateDelete).toHaveBeenCalledWith("startPageToken");
   });
 });

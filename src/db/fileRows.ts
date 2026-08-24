@@ -1,5 +1,10 @@
 import { db, type DriveFile } from "./db";
+import Dexie from "dexie";
+import { captureError } from "../utils/errorLog";
 import { ROOT_FOLDER_ID } from "../utils/driveConstants";
+
+// Log source label for this module's fire-and-forget error reports.
+const FILE_ROWS_MODULE = "db/fileRows";
 
 /**
  * Canonical parent rule: a file's parentId ALWAYS comes from the `parents`
@@ -122,4 +127,51 @@ export async function upsertPendingCardRows(
   }));
 
   await db.files.bulkPut(ownedRows);
+}
+
+/**
+ * Account-boundary wipe (logout): deletes EVERY filesV2 row owned by
+ * `ownerEmail` by ranging over the compound primary key [userEmail+id] —
+ * Dexie supports range queries on the leading part of a compound key via
+ * between([email, minKey], [email, maxKey]) (dexie.org/docs/Compound-Index,
+ * "Matching First Part Only"). Rows of OTHER accounts are never touched.
+ *
+ * NEVER-REJECT contract mirrors wipePersistedMetadataCache: a Dexie failure
+ * is logged and RESOLVED — a fire-and-forget caller treats resolution as
+ * "wipe finished", so logout must proceed. Only an invalid ownerEmail
+ * (empty/whitespace/non-string) rejects eagerly with a named TypeError BEFORE
+ * touching the database, mirroring the upsert helpers above.
+ */
+export async function wipeFileRowsForUser(ownerEmail: string): Promise<void> {
+  if (typeof ownerEmail !== "string" || ownerEmail.trim().length === 0) {
+    throw new TypeError(
+      `Expected wipeFileRowsForUser ownerEmail to be a non-empty account email identifying the rows to wipe, got \`${ownerEmail}\``,
+    );
+  }
+
+  try {
+    // includeUpper must be explicit: WhereClause.between defaults it to false
+    // (dexie.org/docs/WhereClause/WhereClause.between()), and an upper bound
+    // of Dexie.maxKey only matches every row when inclusive.
+    await db.files
+      .where("[userEmail+id]")
+      .between(
+        [ownerEmail, Dexie.minKey],
+        [ownerEmail, Dexie.maxKey],
+        true,
+        true,
+      )
+      .delete();
+  } catch (e: unknown) {
+    // Logged, not rethrown: fire-and-forget callers treat resolution as "wipe
+    // finished", and a failed delete is recoverable (the next full sync after
+    // login re-mirrors the account anyway).
+    void captureError({
+      level: "warn",
+      source: FILE_ROWS_MODULE,
+      message: `files-wipe-failed: ${
+        e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+      }`,
+    });
+  }
 }

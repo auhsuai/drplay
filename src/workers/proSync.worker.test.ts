@@ -479,6 +479,75 @@ describe("full-sync cleanup of non-playable rows", () => {
     expect(await db.files.get([FIXTURE_EMAIL, "folder1"])).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
   });
+
+  // Schema v10 keys filesV2 by [userEmail+id]: the table is shared across
+  // accounts, so the completion cleanup MUST be scoped to the account being
+  // synced. Another account's stale-but-real non-playable rows belong to THEIR
+  // mirror — deleting them here would corrupt their library until their own
+  // next full sync re-fetches everything.
+  it("deletes ONLY the synced account's non-playable rows; another account's rows survive", async () => {
+    await resetSyncTables();
+    const OTHER_EMAIL = "other-account@example.com";
+    await db.files.bulkPut([
+      {
+        id: "wma-A",
+        name: "mine.wma",
+        mimeType: "audio/x-ms-wma",
+        parentId: "root",
+        size: 1,
+        trashed: false,
+        isFolder: false,
+        userEmail: FIXTURE_EMAIL,
+      },
+      {
+        id: "folder-A",
+        name: "Mine Folder",
+        mimeType: "application/vnd.google-apps.folder",
+        parentId: "root",
+        trashed: false,
+        isFolder: true,
+        userEmail: FIXTURE_EMAIL,
+      },
+      {
+        id: "wma-B",
+        name: "theirs.wma",
+        mimeType: "audio/x-ms-wma",
+        parentId: "root",
+        size: 1,
+        trashed: false,
+        isFolder: false,
+        userEmail: OTHER_EMAIL,
+      },
+    ]);
+
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-scope" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ files: [audioFileRow("flac-A")] }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-scope", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+    // Account A: its stale non-playable row goes...
+    expect(await db.files.get([FIXTURE_EMAIL, "wma-A"])).toBeUndefined();
+    // ...its folder and freshly synced playable row stay.
+    expect(await db.files.get([FIXTURE_EMAIL, "folder-A"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "flac-A"])).toBeDefined();
+    // Account B was NOT being synced — its identical non-playable row survives.
+    expect(await db.files.get([OTHER_EMAIL, "wma-B"])).toBeDefined();
+  });
 });
 
 describe("fetchDrive transient retry", () => {

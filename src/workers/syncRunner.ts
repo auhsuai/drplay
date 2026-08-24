@@ -318,9 +318,23 @@ async function performFullSync(ownerEmail: string) {
   // exempts them even though their names have no audio extension). Runs only
   // at full-sync completion (delta sync never mass-deletes) and is
   // best-effort: a cleanup failure must not fail the whole sync.
+  //
+  // Per-user scoping (schema v10): filesV2 is now keyed [userEmail+id], so
+  // the table is shared across accounts and this sweep MUST be scoped to the
+  // account being synced — another account's stale-but-real non-playable row
+  // belongs to THEIR mirror, and deleting it here would corrupt their library
+  // until their own next full sync re-fetches everything. Rows with NO
+  // userEmail are deliberately KEPT (undefined never equals ownerEmail):
+  // safer to leave an unknown-owner legacy row than to mass-delete rows whose
+  // ownership cannot be proven.
   try {
     await db.files
-      .filter((f) => !f.isFolder && !hasAudioExtension(f.name))
+      .filter(
+        (f) =>
+          f.userEmail === ownerEmail &&
+          !f.isFolder &&
+          !hasAudioExtension(f.name),
+      )
       .delete();
   } catch (err) {
     logWorkerError(

@@ -1,10 +1,11 @@
 import "fake-indexeddb/auto";
-import { afterEach, describe, expect, it } from "vitest";
-import { db } from "./db";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { db, type DriveFile } from "./db";
 import {
   canonicalParent,
   upsertFileRows,
   upsertPendingCardRows,
+  wipeFileRowsForUser,
   type PendingFileCard,
   type UpsertableFileRow,
 } from "./fileRows";
@@ -239,5 +240,87 @@ describe("upsertPendingCardRows", () => {
     expect(
       await db.files.get(["ok@example.com", "keep-pending"]),
     ).toBeDefined();
+  });
+});
+
+// Logout account-boundary wipe (schema v10): filesV2 rows are keyed
+// [userEmail+id], so a logout wipes ONLY the logged-out account's mirror by
+// ranging over the compound primary key. Contract mirrors
+// wipePersistedMetadataCache: Dexie failures are logged and RESOLVED (a
+// fire-and-forget caller treats resolution as "wipe finished"), while an
+// invalid ownerEmail rejects eagerly with a named TypeError BEFORE any query.
+describe("wipeFileRowsForUser", () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await db.files.clear();
+  });
+
+  function ownedRow(id: string, email: string): DriveFile {
+    return {
+      id,
+      name: `${id}.mp3`,
+      mimeType: "audio/mpeg",
+      parentId: "root",
+      trashed: false,
+      isFolder: false,
+      userEmail: email,
+    };
+  }
+
+  it("wipes EVERY row of the target account (playable, non-playable, folder) and keeps other accounts' rows", async () => {
+    await db.files.bulkPut([
+      ownedRow("mp3-A", "a@x"),
+      {
+        ...ownedRow("wma-A", "a@x"),
+        name: "old.wma",
+        mimeType: "audio/x-ms-wma",
+      },
+      {
+        ...ownedRow("folder-A", "a@x"),
+        name: "Folder",
+        mimeType: "application/vnd.google-apps.folder",
+        isFolder: true,
+      },
+      ownedRow("mp3-B", "b@x"),
+      {
+        ...ownedRow("wma-B", "b@x"),
+        name: "theirs.wma",
+        mimeType: "audio/x-ms-wma",
+      },
+    ]);
+
+    await expect(wipeFileRowsForUser("a@x")).resolves.toBeUndefined();
+
+    expect(await db.files.get(["a@x", "mp3-A"])).toBeUndefined();
+    expect(await db.files.get(["a@x", "wma-A"])).toBeUndefined();
+    expect(await db.files.get(["a@x", "folder-A"])).toBeUndefined();
+    // The other account's mirror is untouched.
+    expect(await db.files.get(["b@x", "mp3-B"])).toBeDefined();
+    expect(await db.files.get(["b@x", "wma-B"])).toBeDefined();
+    expect(await db.files.count()).toBe(2);
+  });
+
+  it("throws a named TypeError on empty/whitespace ownerEmail BEFORE touching any row", async () => {
+    await upsertFileRows([ownedRow("keep", "ok@x")], "ok@x");
+
+    await expect(wipeFileRowsForUser("")).rejects.toThrow(TypeError);
+    await expect(wipeFileRowsForUser("   ")).rejects.toThrow(/ownerEmail/);
+    await expect(
+      wipeFileRowsForUser(undefined as unknown as string),
+    ).rejects.toThrow(/ownerEmail/);
+
+    // Fail fast: the invalid calls must not have deleted anything.
+    expect(await db.files.get(["ok@x", "keep"])).toBeDefined();
+  });
+
+  it("NEVER rejects when Dexie fails: logs a warn and resolves instead", async () => {
+    await upsertFileRows([ownedRow("survivor", "a@x")], "a@x");
+    vi.spyOn(db.files, "where").mockImplementation(() => {
+      throw new Error("simulated IDB failure");
+    });
+
+    await expect(wipeFileRowsForUser("a@x")).resolves.toBeUndefined();
+    // Best-effort contract: the failed wipe must not have half-deleted data.
+    expect(await db.files.get(["a@x", "survivor"])).toBeDefined();
   });
 });
