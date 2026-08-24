@@ -103,9 +103,10 @@ body {
 
 /* Toast Styles */
 .app-toast {
-  position: absolute;
+  position: fixed;
   bottom: 80px;
-  left: 0;
+  right: 16px;
+  left: auto;
   z-index: 9999;
   padding: 12px 20px;
   border-radius: 8px;
