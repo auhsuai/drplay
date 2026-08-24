@@ -10,6 +10,7 @@ import { MAX_PAGINATION_PAGES } from "../utils/driveConstants";
 import { showSuccessToast } from "../utils/simpleToast";
 import i18n from "../i18n";
 import { getCurrentUserEmail } from "../utils/storageKeys";
+import { upsertFileRows, type UpsertableFileRow } from "../db/fileRows";
 
 const DRIVE_PAGE_SIZE = 1000;
 
@@ -95,28 +96,35 @@ export function useDriveOnDemandFetch({
             Array.isArray(data.files) &&
             data.files.length > 0
           ) {
-            // Schema v10: rows carry the owning account (compound
-            // [userEmail+id] PK). parentId stays the browsed folder for now —
-            // switching to parents[0] via the shared helper is step 4.
+            // Canonical-parent rule: parentId is derived INSIDE upsertFileRows
+            // from parents[0] of this very response — never from the folder
+            // being browsed (Drive's own parents is the single source of
+            // truth; a file returned by the query may report an ancestor).
+            // `parents` is omitted entirely when absent (not set to undefined)
+            // because UpsertableFileRow declares it as a plain optional prop.
+            // The composed userEmail is the type-required provisional value
+            // the helper overwrites with its own ownerEmail argument.
             const ownerEmail = getCurrentUserEmail();
-            const filesToInsert = data.files.map((f: DriveFileItem) => ({
-              id: f.id,
-              name: f.name,
-              mimeType: f.mimeType,
-              parentId: currentFolderId,
-              size: f.size ? parseInt(f.size, 10) : undefined,
-              modifiedTime: f.modifiedTime,
-              trashed: false,
-              isFolder: f.mimeType === FOLDER_MIME,
-              userEmail: ownerEmail,
-            }));
+            const rowsToUpsert: UpsertableFileRow[] = data.files.map(
+              (f: DriveFileItem) => ({
+                id: f.id,
+                name: f.name,
+                mimeType: f.mimeType,
+                ...(f.parents !== undefined ? { parents: f.parents } : {}),
+                size: f.size ? parseInt(f.size, 10) : undefined,
+                modifiedTime: f.modifiedTime,
+                trashed: false,
+                isFolder: f.mimeType === FOLDER_MIME,
+                userEmail: ownerEmail,
+              }),
+            );
             try {
-              await db.files.bulkPut(filesToInsert);
+              await upsertFileRows(rowsToUpsert, ownerEmail);
             } catch (dbErr) {
               void captureError({
                 level: "error",
                 source: "useDriveExplorer",
-                message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${String(filesToInsert.length)}): ${String(dbErr)}`,
+                message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${String(rowsToUpsert.length)}): ${String(dbErr)}`,
               });
               break;
             }
