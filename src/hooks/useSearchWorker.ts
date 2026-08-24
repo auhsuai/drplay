@@ -11,6 +11,7 @@ import {
   type SearchWorkerRequest,
   type SearchWorkerResponse,
 } from "../search/search.worker";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 
 const DEBOUNCE_MS = 150;
 const INVALIDATE_THROTTLE_MS = 300;
@@ -73,8 +74,22 @@ function createWorkerExecutor(): SearchExecutor {
 
 function createInlineExecutor(): SearchExecutor {
   const listeners = new Set<(r: SearchWorkerResponse) => void>();
+  // Main-thread boundary scoping (schema v10): the index only sees the active
+  // account's rows here. The real worker path reads all rows for now — it has
+  // no email channel until step 3 wires one through the message protocol
+  // (see performRebuild in search.worker.ts).
   const deps: SearchWorkerDeps = {
-    db,
+    db: {
+      files: {
+        toArray: async () => {
+          const owner = getCurrentUserEmail();
+          return (await db.files.toArray()).filter(
+            (row) => row.userEmail === owner,
+          );
+        },
+      },
+      metadataCache: db.metadataCache,
+    },
     build: buildSearchIndex,
     query: queryIndex,
     post: (r) => {

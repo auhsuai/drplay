@@ -16,6 +16,7 @@ function makeRow(
     mimeType: "audio/mpeg",
     trashed: false,
     isFolder: false,
+    userEmail: "user@example.com",
     ...overrides,
   };
 }
@@ -45,7 +46,7 @@ describe("upsertFileRows", () => {
       "user@example.com",
     );
 
-    const row = await db.files.get("f1");
+    const row = await db.files.get(["user@example.com", "f1"]);
     expect(row).toMatchObject({
       id: "f1",
       name: "Đổi thay.mp3",
@@ -82,14 +83,14 @@ describe("upsertFileRows", () => {
     await expect(upsertFileRows([makeRow({ id: "nope" })], "")).rejects.toThrow(
       TypeError,
     );
-    expect(await db.files.get("nope")).toBeUndefined();
-    expect(await db.files.get("keep")).toBeDefined();
+    expect(await db.files.get(["ok@example.com", "nope"])).toBeUndefined();
+    expect(await db.files.get(["ok@example.com", "keep"])).toBeDefined();
   });
 
   it("persists rows missing optional fields (undefined passthrough) and roots their parent", async () => {
     await upsertFileRows([makeRow({ id: "bare" })], "user@example.com");
 
-    const row = await db.files.get("bare");
+    const row = await db.files.get(["user@example.com", "bare"]);
     expect(row?.size).toBeUndefined();
     expect(row?.modifiedTime).toBeUndefined();
     expect(row?.metadata).toBeUndefined();

@@ -1,6 +1,7 @@
 import type { Table } from "dexie";
 import Dexie from "dexie";
 import type { Track } from "../types";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 
 export interface DriveFile {
   id: string;
@@ -12,6 +13,7 @@ export interface DriveFile {
   trashed: boolean;
   isFolder: boolean;
   metadata?: unknown; // For future ID3 tag caching
+  userEmail: string; // Owning account (schema v10 per-user scoping)
 }
 
 export interface SyncState {
@@ -92,12 +94,15 @@ export interface UploadSessionRow {
  * favorites, play history, play counts, folder visits, error logs, app
  * config). The UI reads from here so browsing is instant, while Drive stays
  * the source of truth that gets fetched on demand. Every per-user table is
- * keyed by [userEmail+id] (schema v7) so multiple Google accounts never
+ * keyed by [userEmail+id] (schema v7, `files` followed in schema v10) so
+ * multiple Google accounts never
  * overwrite each other's rows. Schema changes are forward-only: never alter a
  * table's primary key in place — add a new version with new tables and copy.
  */
 export class DriveDatabase extends Dexie {
-  files!: Table<DriveFile, string>; // Primary key is 'id'
+  // Compound PK [userEmail+id] (schema v10) — rebound to filesV2 below so app
+  // code keeps talking to db.files.
+  files!: Table<DriveFile, [string, string]>;
   syncState!: Table<SyncState, string>; // Primary key is 'key'
   favorites!: Table<
     Track & { userEmail: string; createdAt?: number },
@@ -119,9 +124,19 @@ export class DriveDatabase extends Dexie {
     Track & { userEmail: string; createdAt?: number },
     [string, string]
   >;
+  filesV2!: Table<DriveFile, [string, string]>; // [userEmail+id] PK (schema v10)
 
   constructor() {
     super("DrPlayDriveDB");
+
+    // Version 1 as shipped (restored verbatim from 480d43d): Dexie requires
+    // every historical version to stay declared so devices whose DB still
+    // sits at an old version keep a complete upgrade path.
+    this.version(1).stores({
+      // Primary key 'id', indexes on 'parentId', 'name', 'isFolder'
+      files: "id, parentId, name, isFolder",
+      syncState: "key",
+    });
 
     // Keep old schema intact so existing data is preserved on upgrade.
     this.version(2).stores({
@@ -261,8 +276,43 @@ export class DriveDatabase extends Dexie {
       uploadSessions: "id, userEmail, status",
     });
 
+    // Version 10 fixes the same cross-user collision for `files` that v7
+    // fixed for the per-user tables above: rows were keyed by RAW Drive id,
+    // so two accounts' mirrors of the same file overwrote each other. Dexie
+    // cannot change an existing table's primary key in place (UpgradeError),
+    // so — same precedent as v7 — this version adds filesV2 with a compound
+    // [userEmail+id] primary key and copies the old rows into it. The
+    // standalone "id" index is kept ON PURPOSE even though id is part of the
+    // compound PK: upload/queue.ts ghost sweep reads
+    // where("id").startsWith("pending-") across owners, and
+    // [userEmail+parentId] gives the listing its per-user folder query.
+    this.version(10)
+      .stores({
+        filesV2:
+          "[userEmail+id], id, parentId, name, isFolder, [userEmail+parentId]",
+      })
+      .upgrade(async (tx) => {
+        // Plan A1.3: every legacy row belongs to whichever account was active
+        // at the first launch after the upgrade (accepted one-time assignment;
+        // other accounts re-mirror on their next sync). getCurrentUserEmail()
+        // never throws — its internal try/catch returns DEFAULT_USER_EMAIL —
+        // which is exactly the worker-realm safety net: proSync.worker opens
+        // its own connection where localStorage does not exist, and a throw
+        // here would abort the whole upgrade transaction.
+        const owner = getCurrentUserEmail();
+        const legacyRows = (await tx.table("files").toArray()) as DriveFile[];
+        await tx.table("filesV2").bulkPut(
+          legacyRows.map((row) => ({
+            ...row,
+            userEmail: owner,
+          })),
+        );
+      });
+
     // Bind the public table names to the new compound-key tables so app code
-    // (history.ts / favorites.ts) keeps talking to db.recentTracks etc.
+    // (history.ts / favorites.ts / every db.files consumer) keeps talking to
+    // the current tables.
+    this.files = this.filesV2;
     this.recentTracks = this.recentTracksV2;
     this.playCounts = this.playCountsV2;
     this.folderVisits = this.folderVisitsV2;

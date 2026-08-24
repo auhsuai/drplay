@@ -114,6 +114,16 @@ function errorMessage(prefix: string, err: unknown): string {
 
 // Reads the full library + real metadata and builds a fresh index. Only the
 // rebuild path touches the DB, so idle workers cost nothing.
+//
+// Per-user scoping (schema v10): this read stays UNSCOPED for now because the
+// real worker realm has no channel carrying the active account's email (the
+// wire protocol only passes query/invalidate/init, and workers have no
+// localStorage). Scoping happens at the main-thread boundary instead
+// (createInlineExecutor in useSearchWorker.ts); wiring the email through the
+// message protocol lands with the sync-worker email work in step 3 of the
+// parent-normalization plan. Until then a multi-account local mirror would be
+// indexed across owners — accepted for this step, same as the sync worker
+// stamping rows with the default sentinel.
 async function performRebuild(deps: SearchWorkerDeps): Promise<void> {
   const generation = rebuildGeneration;
   const [files, metaRows] = await Promise.all([

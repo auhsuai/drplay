@@ -427,6 +427,7 @@ describe("useDriveExplorer: stale selection never survives a folder/search/sort 
         modifiedTime: "2024-01-01T00:00:00.000Z",
         trashed: false,
         isFolder: false,
+        userEmail: "default", // compound PK part (schema v10)
       },
       {
         id: "b1",
@@ -437,6 +438,7 @@ describe("useDriveExplorer: stale selection never survives a folder/search/sort 
         modifiedTime: "2024-01-02T00:00:00.000Z",
         trashed: false,
         isFolder: false,
+        userEmail: "default", // compound PK part (schema v10)
       },
     ]);
   }

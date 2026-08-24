@@ -3,6 +3,7 @@ import type { IAudioMetadata } from "music-metadata";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../../db/db";
 import { captureError } from "../errorLog";
+import { getCurrentUserEmail } from "../storageKeys";
 import {
   BudgetExceededError,
   BUDGET_CAP,
@@ -389,7 +390,8 @@ async function getTrackMetadataImpl(
     //    can avoid streaming it (schema field is pre-existing, untouched).
     if (streamUnplayable) {
       try {
-        await db.files.update(fileId, {
+        // Compound PK (schema v10): [userEmail, id].
+        await db.files.update([getCurrentUserEmail(), fileId], {
           metadata: { format, streamUnplayable: true },
         });
       } catch (e: unknown) {

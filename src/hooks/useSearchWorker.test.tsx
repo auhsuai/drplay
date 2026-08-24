@@ -48,6 +48,7 @@ function makeFile(id: string, name: string): DriveFile {
     isFolder: false,
     modifiedTime: "2024-01-01T00:00:00.000Z",
     size: 1000,
+    userEmail: "default", // compound PK part (schema v10)
   };
 }
 

@@ -55,6 +55,7 @@ function makeFile(id: string, name: string, isFolder = false) {
     modifiedTime: "2024-01-01T00:00:00.000Z",
     trashed: false,
     isFolder,
+    userEmail: "default", // compound PK part (schema v10)
   };
 }
 

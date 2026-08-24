@@ -9,7 +9,10 @@ import {
 } from "../utils/driveConstants";
 import { captureError } from "../utils/errorLog";
 import { getFileName, getFileParents } from "../utils/driveFiles";
-import { ROOT_FOLDER_KEY as STORAGE_KEY_ROOT } from "../utils/storageKeys";
+import {
+  getCurrentUserEmail,
+  ROOT_FOLDER_KEY as STORAGE_KEY_ROOT,
+} from "../utils/storageKeys";
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
@@ -94,7 +97,11 @@ export function useLocateFile(
           limit--;
 
           let pId: string | undefined;
-          const folderInfo = await db.files.get(current);
+          // Compound PK (schema v10): [userEmail, id].
+          const folderInfo = await db.files.get([
+            getCurrentUserEmail(),
+            current,
+          ]);
 
           if (!folderInfo || !folderInfo.parentId) {
             try {
@@ -122,7 +129,7 @@ export function useLocateFile(
             break;
           }
 
-          const parentInfo = await db.files.get(pId);
+          const parentInfo = await db.files.get([getCurrentUserEmail(), pId]);
           if (!parentInfo) {
             try {
               const parentName = await getFileName(accessToken, pId, signal);
@@ -188,7 +195,7 @@ export function useLocateFile(
         }
 
         if (!parentId) {
-          const fileInfo = await db.files.get(fileId);
+          const fileInfo = await db.files.get([getCurrentUserEmail(), fileId]);
           if (!mounted) return;
           if (fileInfo && fileInfo.parentId) {
             parentId = fileInfo.parentId;
@@ -203,7 +210,10 @@ export function useLocateFile(
         if (parentId === rootId || parentId === ROOT_FOLDER_ID) {
           folderName = MY_DRIVE_TAB;
         } else {
-          const parentInfo = await db.files.get(parentId);
+          const parentInfo = await db.files.get([
+            getCurrentUserEmail(),
+            parentId,
+          ]);
           if (!mounted) return;
           if (parentInfo) {
             folderName = parentInfo.name;

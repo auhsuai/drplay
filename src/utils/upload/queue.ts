@@ -5,6 +5,7 @@ import type { DriveFileItem } from "../driveApi";
 import { UploadError } from "../driveUpload";
 import { captureError } from "../errorLog";
 import { showErrorToast } from "../simpleToast";
+import { getCurrentUserEmail } from "../storageKeys";
 import {
   clearControllerFor,
   controllerFor,
@@ -239,7 +240,13 @@ export async function resumeInterruptedUploads(
         (row) => !liveSessionIds.has(row.id) && !liveEntryIds.has(row.id),
       );
       if (ghostRows.length > 0) {
-        await db.files.bulkDelete(ghostRows.map((row) => row.id));
+        // Compound PK (schema v10): delete this user's ghosts by
+        // [userEmail, id]; other owners' cards are swept when their own
+        // account runs the resume scan.
+        const ownerEmail = getCurrentUserEmail();
+        await db.files.bulkDelete(
+          ghostRows.map((row) => [ownerEmail, row.id] as [string, string]),
+        );
       }
       // F4: a ghost that is NOT the stale card of a row consumed this round is
       // the pending card of a seed that never started (crashed before its
@@ -333,7 +340,11 @@ export function cancelUpload(id: string): void {
 function cancelQueuedEntry(entry: InternalEntry): void {
   entry.status = "error";
   entry.error = ERROR_ABORTED;
-  void dbRowOp(() => db.files.delete(entry.id), "pending-row-delete");
+  // Compound PK (schema v10): [userEmail, id].
+  void dbRowOp(
+    () => db.files.delete([getCurrentUserEmail(), entry.id]),
+    "pending-row-delete",
+  );
   // Sync path: fire-and-forget — clearSession swallows its own failures.
   void clearSession(entry);
   // A cancelled resume is a definitive end: drop the interrupted source pair
@@ -416,6 +427,7 @@ function pendingRow(entry: InternalEntry): DriveFile {
     trashed: false,
     isFolder: entry.isFolder,
     modifiedTime: new Date().toISOString(),
+    userEmail: getCurrentUserEmail(), // compound PK part (schema v10)
   };
 }
 
@@ -590,7 +602,11 @@ function pruneEntry(entry: InternalEntry): void {
 // does not share this — a queued entry never touched the network and must turn
 // terminal synchronously within cancelUpload (the pump only picks 'queued').
 async function finishEntry(entry: InternalEntry): Promise<void> {
-  await dbRowOp(() => db.files.delete(entry.id), "pending-row-delete");
+  // Compound PK (schema v10): [userEmail, id].
+  await dbRowOp(
+    () => db.files.delete([getCurrentUserEmail(), entry.id]),
+    "pending-row-delete",
+  );
   notify();
   pruneEntry(entry);
   clearControllerFor(entry);
@@ -722,6 +738,7 @@ function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
     trashed: false,
     isFolder: entry.isFolder,
     modifiedTime: driveItem.modifiedTime ?? new Date().toISOString(),
+    userEmail: getCurrentUserEmail(), // compound PK part (schema v10)
   };
 }
 // P2-B1a: delete the interrupted source pair — the OLD session row plus its
@@ -732,7 +749,11 @@ async function deleteInterruptedPredecessor(oldRowId: string): Promise<void> {
     () => db.uploadSessions.delete(oldRowId),
     "session-resume-delete",
   );
-  await dbRowOp(() => db.files.delete(oldRowId), "pending-row-delete");
+  await dbRowOp(
+    // Compound PK (schema v10): [userEmail, id].
+    () => db.files.delete([getCurrentUserEmail(), oldRowId]),
+    "pending-row-delete",
+  );
 }
 
 // P2-B1a: retire an entry's interrupted source row once it is safe. With

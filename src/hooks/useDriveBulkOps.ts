@@ -12,6 +12,7 @@ import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { t } from "i18next";
 import { captureError } from "../utils/errorLog";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 
 // Bulk ops must never touch items that are still uploading (a pending row can
 // not be deleted/moved — it has no Drive id yet). Excluded ids get a toast and
@@ -92,6 +93,7 @@ export function useDriveBulkOps({
           isFolder: true,
           trashed: false,
           modifiedTime: new Date().toISOString(),
+          userEmail: getCurrentUserEmail(),
         });
       }
       onRefresh();
@@ -160,7 +162,11 @@ export function useDriveBulkOps({
         }
       }
       if (deletedIds.length > 0) {
-        await db.files.bulkDelete(deletedIds);
+        // Compound PK (schema v10): delete by [userEmail, id] pairs.
+        const ownerEmail = getCurrentUserEmail();
+        await db.files.bulkDelete(
+          deletedIds.map((id) => [ownerEmail, id] as [string, string]),
+        );
         if (onRemoveItem)
           deletedIds.forEach((id) => {
             onRemoveItem(id);
@@ -215,10 +221,12 @@ export function useDriveBulkOps({
         }
       }
       // Single transaction for the whole batch (vs. one update() per item);
-      // missing keys are skipped without throwing, same as update().
+      // missing keys are skipped without throwing, same as update(). Keys are
+      // compound [userEmail, id] pairs (schema v10).
+      const ownerEmail = getCurrentUserEmail();
       await db.files.bulkUpdate(
         movedIds.map((id) => ({
-          key: id,
+          key: [ownerEmail, id] as [string, string],
           changes: { parentId: destinationFolderId },
         })),
       );

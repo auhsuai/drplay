@@ -397,6 +397,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         size: 1,
         trashed: false,
         isFolder: false,
+        userEmail: "default",
       },
       {
         id: "m4a1",
@@ -406,6 +407,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         size: 4,
         trashed: false,
         isFolder: false,
+        userEmail: "default",
       },
       {
         id: "flac1",
@@ -415,6 +417,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         size: 2,
         trashed: false,
         isFolder: false,
+        userEmail: "default",
       },
       {
         id: "folder1",
@@ -423,6 +426,7 @@ describe("full-sync cleanup of non-playable rows", () => {
         parentId: "root",
         trashed: false,
         isFolder: true,
+        userEmail: "default",
       },
     ]);
 
@@ -462,11 +466,11 @@ describe("full-sync cleanup of non-playable rows", () => {
       data: { type: "sync", token: "test-token" },
     } as MessageEvent);
 
-    expect(await db.files.get("wma1")).toBeUndefined();
-    expect(await db.files.get("m4a1")).toBeUndefined();
-    expect(await db.files.get("flac1")).toBeDefined();
-    expect(await db.files.get("flac2")).toBeDefined();
-    expect(await db.files.get("folder1")).toBeDefined();
+    expect(await db.files.get(["default", "wma1"])).toBeUndefined();
+    expect(await db.files.get(["default", "m4a1"])).toBeUndefined();
+    expect(await db.files.get(["default", "flac1"])).toBeDefined();
+    expect(await db.files.get(["default", "flac2"])).toBeDefined();
+    expect(await db.files.get(["default", "folder1"])).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
   });
 });
@@ -828,8 +832,8 @@ describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
       data: { type: "sync", token: "tok-a" },
     } as MessageEvent);
 
-    expect(await db.files.get("p1a")).toBeDefined();
-    expect(await db.files.get("p2a")).toBeDefined();
+    expect(await db.files.get(["default", "p1a"])).toBeDefined();
+    expect(await db.files.get(["default", "p2a"])).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_PROGRESS" });
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
     // startPageToken lookup + page 1 twice (401 then same-page retry) + page 2.
@@ -875,7 +879,7 @@ describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
       new URL(String(call[0])).searchParams.get("pageToken"),
     );
     expect(pageTokens).toEqual(["start-old", "start-old"]);
-    expect(await db.files.get("dx1")).toBeDefined();
+    expect(await db.files.get(["default", "dx1"])).toBeDefined();
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toEqual(
       expect.objectContaining({ value: "start-new" }),
     );
@@ -999,7 +1003,7 @@ describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP fa
     // start-1 here would permanently skip the un-fetched [pg2…] pages.
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
     // Already-persisted page-1 rows stay (the replay is idempotent bulkPut).
-    expect(await db.files.get("p1a")).toBeDefined();
+    expect(await db.files.get(["default", "p1a"])).toBeDefined();
   });
 
   it("first-page 400: posts SYNC_ERROR, does NOT save the token and does NOT run the non-playable cleanup", async () => {
@@ -1013,6 +1017,7 @@ describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP fa
         size: 1,
         trashed: false,
         isFolder: false,
+        userEmail: "default",
       },
     ]);
     const posted = stubSelfWithTokenReply("fresh-token");
@@ -1035,7 +1040,7 @@ describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP fa
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
     // Cleanup only ever runs at full-sync COMPLETION — a failed pass with a
     // zero-page library must not mass-delete rows it never refreshed.
-    expect(await db.files.get("wma-old")).toBeDefined();
+    expect(await db.files.get(["default", "wma-old"])).toBeDefined();
   });
 });
 
@@ -1086,7 +1091,7 @@ describe("delta-sync reports SYNC_ERROR instead of advancing or stalling on an H
       expect.objectContaining({ value: "start-old" }),
     );
     // Changes already applied from page 1 stay (idempotent upsert on replay).
-    expect(await db.files.get("fb1")).toBeDefined();
+    expect(await db.files.get(["default", "fb1"])).toBeDefined();
   });
 
   it("first-page 400: posts SYNC_ERROR (was: no terminal signal at all) and keeps the stored token", async () => {

@@ -17,6 +17,7 @@ function makeFile(overrides: Partial<DriveFile> = {}): DriveFile {
     parentId: "p1",
     trashed: false,
     isFolder: false,
+    userEmail: "default", // compound PK part (schema v10)
     ...overrides,
   };
 }

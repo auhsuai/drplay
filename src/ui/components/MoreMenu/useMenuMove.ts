@@ -5,6 +5,7 @@ import { moveFile } from "../../../utils/driveApi";
 import { db } from "../../../db/db";
 import { captureError } from "../../../utils/errorLog";
 import { showErrorToast } from "../../../utils/simpleToast";
+import { getCurrentUserEmail } from "../../../utils/storageKeys";
 import { MORE_MENU_MODULE } from "./constants";
 
 interface UseMenuMoveParams {
@@ -67,7 +68,10 @@ export function useMenuMove({
     // keep the UI reflecting the remote state.
     let localCacheUpdated = true;
     try {
-      await db.files.update(itemId, { parentId: newParentId });
+      // Compound PK (schema v10): [userEmail, id].
+      await db.files.update([getCurrentUserEmail(), itemId], {
+        parentId: newParentId,
+      });
     } catch (e) {
       localCacheUpdated = false;
       void captureError({

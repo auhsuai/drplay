@@ -1,16 +1,20 @@
-import { db } from "../db/db";
+import { db, type DriveFile } from "../db/db";
 import {
   getAudioQuery,
   hasAudioExtension,
   isAudioFile,
 } from "../utils/audioQuery";
 import { FOLDER_MIME } from "../utils/driveApi";
+import { DEFAULT_USER_EMAIL } from "../utils/storageKeys";
 import {
   isValidDriveFile,
   partitionValidFiles,
   toDriveFileRow,
 } from "./driveMapping";
-import type { DriveChangesList, DriveFile } from "./driveMapping";
+import type {
+  DriveChangesList,
+  DriveFile as DriveFileItem,
+} from "./driveMapping";
 import { fetchDrive, parseDriveJson } from "./driveFetch";
 import {
   refreshTokenAndRetry,
@@ -23,6 +27,20 @@ let isBusy = false;
 let currentToken: string | null = null;
 const MAX_SYNC_RETRIES = 3;
 const syncRetry = { count: 0, max: MAX_SYNC_RETRIES };
+
+// Schema v10 stamps every files row with the owning account. The worker wire
+// protocol ({type:"sync"|"token", token}) carries no account yet — wiring the
+// real email through is step 3 of the parent-normalization plan. Until then
+// rows are stamped with the same sentinel getCurrentUserEmail() yields when
+// no account is stored (and the value the v10 upgrade used for legacy rows).
+// TODO(step 3): receive the real account email over the worker wire.
+const SYNC_OWNER_EMAIL = DEFAULT_USER_EMAIL;
+
+// Stamp a mapped Drive row with the owning account so its compound
+// [userEmail+id] primary key resolves inside IndexedDB.
+function stampedFileRow(row: Omit<DriveFile, "userEmail">): DriveFile {
+  return { ...row, userEmail: SYNC_OWNER_EMAIL };
+}
 
 // Dexie syncState key holding the Drive changes start-page token.
 const START_PAGE_TOKEN_KEY = "startPageToken";
@@ -190,7 +208,7 @@ async function performFullSync() {
         }
 
         const data = await parseDriveJson<{
-          files?: DriveFile[];
+          files?: DriveFileItem[];
           nextPageToken?: string;
         }>("files", res);
 
@@ -210,7 +228,7 @@ async function performFullSync() {
         }
 
         const filesToInsert = validFiles.map((f) =>
-          toDriveFileRow(f, f.mimeType === FOLDER_MIME),
+          stampedFileRow(toDriveFileRow(f, f.mimeType === FOLDER_MIME)),
         );
 
         if (filesToInsert.length > 0) {
@@ -372,7 +390,7 @@ async function performDeltaSync(startPageToken: string) {
             // the explicit assertion mirrors the previous `!` with identical
             // runtime semantics (a missing fileId still throws inside the
             // per-change try/catch below).
-            await db.files.delete(change.fileId as string);
+            await db.files.delete([SYNC_OWNER_EMAIL, change.fileId as string]);
             hasValidChanges = true;
           } else if (change.file) {
             const file = change.file;
@@ -387,7 +405,9 @@ async function performDeltaSync(startPageToken: string) {
             const isFolder = file.mimeType === FOLDER_MIME;
 
             if (isFolder || isAudioFile(file.mimeType, file.name as string)) {
-              await db.files.put(toDriveFileRow(file, isFolder));
+              await db.files.put(
+                stampedFileRow(toDriveFileRow(file, isFolder)),
+              );
               hasValidChanges = true;
             }
           }

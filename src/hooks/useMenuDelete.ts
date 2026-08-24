@@ -5,6 +5,7 @@ import { stopPlaybackIfTrack } from "../utils/stopPlayback";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 import type { DriveItem } from "../types";
 import type { TFunction } from "i18next";
 
@@ -67,7 +68,8 @@ export function useMenuDelete(t: TFunction) {
     // a failed delete (Drive holds the source of truth). Log it as a warn,
     // then keep the success-path UI updates so no ghost item remains.
     try {
-      await db.files.delete(deleteDriveItem.id);
+      // Compound PK (schema v10): [userEmail, id].
+      await db.files.delete([getCurrentUserEmail(), deleteDriveItem.id]);
     } catch (e: unknown) {
       void captureError({
         level: "warn",

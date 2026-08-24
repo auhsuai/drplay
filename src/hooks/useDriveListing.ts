@@ -9,6 +9,7 @@ import {
 import { useLiveQuery } from "dexie-react-hooks";
 import { metadataCache } from "../utils/metadata";
 import { stripAudioExtension } from "../utils/pathUtils";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 
 // Module-level so the items useMemo sort (re-run on every dbFiles change or
 // uploadStatusVersion bump) never re-initializes the collator — locale data
@@ -145,7 +146,11 @@ export function useDriveListing({
 
   const dbFiles = useLiveQuery(() => {
     if (!currentFolderId) return Promise.resolve<DriveFile[]>([]);
-    return db.files.where("parentId").equals(currentFolderId).toArray();
+    // Per-user scoping (schema v10): only the signed-in account's rows.
+    return db.files
+      .where("[userEmail+parentId]")
+      .equals([getCurrentUserEmail(), currentFolderId])
+      .toArray();
   }, [currentFolderId]);
 
   // Partition memo: maps rows to DriveItems and buckets them by upload state.

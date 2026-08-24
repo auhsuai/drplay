@@ -36,10 +36,13 @@ function toSize(raw: string | undefined | null): number | undefined {
 // the post-guard shape (id guaranteed by isValidDriveFile); name/mimeType are
 // guaranteed by the Drive fields= query, hence the explicit `as string`
 // (mirrors the previous non-null assertions with identical runtime semantics).
+// Returns the row WITHOUT the owning account — schema v10 requires every
+// stored row to carry userEmail, and only the writer knows the account, so
+// callers stamp it (syncRunner.stampedFileRow).
 export function toDriveFileRow(
   f: DriveFile & { id: string },
   isFolder: boolean,
-): DriveFileRow {
+): Omit<DriveFileRow, "userEmail"> {
   return {
     id: f.id,
     name: f.name as string,

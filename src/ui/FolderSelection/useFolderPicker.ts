@@ -8,6 +8,7 @@ import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import { searchFolders, listFolderChildren } from "../../utils/drivePagination";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { getCurrentUserEmail } from "../../utils/storageKeys";
 import { isAbortError } from "../../hooks/player/utils";
 import {
   FOLDER_MODULE,
@@ -129,9 +130,10 @@ export function useFolderPicker({
     setIsLoading(true);
     setFolders([]);
     try {
+      // Per-user scoping (schema v10): only the signed-in account's folders.
       const dbFolders = await db.files
-        .where("parentId")
-        .equals(folderId)
+        .where("[userEmail+parentId]")
+        .equals([getCurrentUserEmail(), folderId])
         .filter((f) => f.isFolder)
         .toArray();
       if (isAborted(controller)) return;

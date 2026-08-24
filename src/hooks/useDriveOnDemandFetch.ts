@@ -9,6 +9,7 @@ import { captureError } from "../utils/errorLog";
 import { MAX_PAGINATION_PAGES } from "../utils/driveConstants";
 import { showSuccessToast } from "../utils/simpleToast";
 import i18n from "../i18n";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 
 const DRIVE_PAGE_SIZE = 1000;
 
@@ -94,6 +95,10 @@ export function useDriveOnDemandFetch({
             Array.isArray(data.files) &&
             data.files.length > 0
           ) {
+            // Schema v10: rows carry the owning account (compound
+            // [userEmail+id] PK). parentId stays the browsed folder for now —
+            // switching to parents[0] via the shared helper is step 4.
+            const ownerEmail = getCurrentUserEmail();
             const filesToInsert = data.files.map((f: DriveFileItem) => ({
               id: f.id,
               name: f.name,
@@ -103,6 +108,7 @@ export function useDriveOnDemandFetch({
               modifiedTime: f.modifiedTime,
               trashed: false,
               isFolder: f.mimeType === FOLDER_MIME,
+              userEmail: ownerEmail,
             }));
             try {
               await db.files.bulkPut(filesToInsert);

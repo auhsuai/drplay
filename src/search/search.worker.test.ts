@@ -32,6 +32,7 @@ function makeFile(
     parentId: ROOT_ID,
     trashed: false,
     isFolder: opts.isFolder ?? false,
+    userEmail: "default", // compound PK part (schema v10)
   };
 }
 

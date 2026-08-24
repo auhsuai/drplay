@@ -2858,6 +2858,7 @@ describe("uploadManager", () => {
           trashed: false,
           isFolder: false,
           modifiedTime: "2026-01-01T00:00:00Z",
+          userEmail: USER,
         },
       ]);
 
@@ -2993,6 +2994,7 @@ describe("uploadManager", () => {
           trashed: false,
           isFolder: false,
           modifiedTime: "2026-01-01T00:00:00Z",
+          userEmail: USER,
         },
         {
           id: "pending-orphan-1",
@@ -3002,6 +3004,7 @@ describe("uploadManager", () => {
           trashed: false,
           isFolder: false,
           modifiedTime: "2026-01-01T00:00:00Z",
+          userEmail: USER,
         },
       ]);
 
@@ -3528,6 +3531,7 @@ describe("uploadManager", () => {
           trashed: false,
           isFolder: false,
           modifiedTime: "2026-01-01T00:00:00Z",
+          userEmail: USER,
         },
       ]);
 
@@ -3575,6 +3579,7 @@ describe("uploadManager", () => {
           trashed: false,
           isFolder: false,
           modifiedTime: "2026-01-01T00:00:00Z",
+          userEmail: USER,
         },
       ]);
 
