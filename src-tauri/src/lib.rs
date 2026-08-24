@@ -239,6 +239,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             login_google_native,
             login_google_mobile,
+            auth_android::cancel_google_login,
             refresh_google_token,
             register_download_path,
             register_upload_path,

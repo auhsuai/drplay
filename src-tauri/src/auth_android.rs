@@ -60,6 +60,80 @@ const MOBILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 /// from an earlier login can never abort a newer one.
 static DEEP_LINK_TX: OnceLock<tokio::sync::broadcast::Sender<tauri::Url>> = OnceLock::new();
 
+/// Error returned when a mobile login attempt is cancelled by the user or
+/// superseded by a newer attempt. The frontend classifier matches errors by
+/// substring, checking the cancellation family FIRST: this message must keep
+/// containing "cancel" and must NOT contain "timeout"/"timed out" (guarded by
+/// a test below).
+const LOGIN_CANCELLED: &str = "Login cancelled";
+
+/// Generation counter shared by every mobile login attempt (`watch` retains
+/// the last value and wakes all receivers on change, and `send_replace`
+/// updates it even with zero receivers — docs.rs/tokio watch::Sender). Each
+/// `login_google_mobile` claims one generation; a later claim (cancel command
+/// or newer attempt) makes every older claim stale, and the stale loops exit
+/// immediately instead of riding out their 5-minute deadline.
+static LOGIN_GENERATION_TX: OnceLock<tokio::sync::watch::Sender<u64>> = OnceLock::new();
+
+fn login_generation_tx() -> &'static tokio::sync::watch::Sender<u64> {
+    LOGIN_GENERATION_TX.get_or_init(|| tokio::sync::watch::Sender::new(0))
+}
+
+/// Advance the shared generation counter and return the new value. Monotonic
+/// (wrapping); each caller treats the returned value as its claim ticket.
+fn bump_generation() -> u64 {
+    let tx = login_generation_tx();
+    // Scope the borrow guard so the read lock is released before send_replace
+    // takes the write side (long-lived borrows can deadlock the sender).
+    let next = tx.borrow().wrapping_add(1);
+    tx.send_replace(next);
+    next
+}
+
+/// Why `wait_for_redirect` stopped waiting. Mapped 1:1 onto the exact error
+/// strings `login_google_mobile` has always returned.
+#[derive(Debug, PartialEq)]
+enum WaitFailure {
+    /// Deadline elapsed — same condition as the previous timeout branches.
+    Timeout,
+    /// Deep-link broadcast receiver errored (closed/lagged) — preserved from
+    /// the previous `Ok(Err(_))` arm.
+    ChannelClosed,
+    /// A newer generation was claimed (user cancel or newer login attempt).
+    Cancelled,
+}
+
+/// Wait for exactly one of: the next deep-link URL, generation invalidation,
+/// or the deadline. Pure move of the previous per-iteration wait logic — the
+/// only change is the new `generation_rx.changed()` select arm, which exits
+/// the moment this attempt stops being current. Both `broadcast::recv()` and
+/// `watch::changed()` are documented cancel-safe, so dropping the losing
+/// branch loses nothing.
+async fn wait_for_redirect(
+    deep_link_rx: &mut tokio::sync::broadcast::Receiver<tauri::Url>,
+    generation_rx: &mut tokio::sync::watch::Receiver<u64>,
+    expected_generation: u64,
+    remaining: std::time::Duration,
+) -> Result<tauri::Url, WaitFailure> {
+    // Catch bumps that landed between iterations (e.g. while the caller was
+    // parsing the previous URL): cheaper and more deterministic than waiting
+    // for the next poll of changed().
+    if *generation_rx.borrow() != expected_generation {
+        return Err(WaitFailure::Cancelled);
+    }
+    tokio::select! {
+        // The generation sender lives in a static for the whole process, so
+        // this arm fires only on an actual bump — i.e. we are no longer
+        // current. Any outcome means "this attempt is dead".
+        _ = generation_rx.changed() => Err(WaitFailure::Cancelled),
+        received = tokio::time::timeout(remaining, deep_link_rx.recv()) => match received {
+            Err(_) => Err(WaitFailure::Timeout),
+            Ok(Err(_)) => Err(WaitFailure::ChannelClosed),
+            Ok(Ok(url)) => Ok(url),
+        },
+    }
+}
+
 /// A parsed OAuth redirect, validated against the expected CSRF state.
 #[derive(Debug, PartialEq)]
 pub struct OAuthRedirect {
@@ -178,6 +252,20 @@ pub async fn login_google_mobile(app: tauri::AppHandle) -> Result<Value, String>
     // Subscribe BEFORE opening the browser so a redirect can never race past us.
     let mut rx = tx.subscribe();
 
+    // Claim this attempt's generation slot: bump the shared counter, then
+    // subscribe and verify nothing newer claimed while we were setting up
+    // (a concurrent cancel or a newer login must win over us). From here on,
+    // any generation change aborts this attempt through the select arm in
+    // wait_for_redirect.
+    let my_generation = bump_generation();
+    let mut generation_rx = login_generation_tx().subscribe();
+    if *generation_rx.borrow_and_update() != my_generation {
+        eprintln!(
+            "[drplay:auth] login attempt abandoned before opening browser (superseded or cancelled)"
+        );
+        return Err(LOGIN_CANCELLED.to_string());
+    }
+
     app.opener()
         .open_url(auth_url.as_str(), None::<&str>)
         .map_err(|e| format!("Failed to open browser: {e}"))?;
@@ -185,23 +273,20 @@ pub async fn login_google_mobile(app: tauri::AppHandle) -> Result<Value, String>
     let deadline = tokio::time::Instant::now() + MOBILE_TIMEOUT;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return Err(
-                "Authorization timeout: user did not complete login within 5 minutes.".to_string(),
-            );
-        }
-        let received = tokio::time::timeout(remaining, rx.recv()).await;
-        let url = match received {
-            Err(_) => {
+        let url = match wait_for_redirect(&mut rx, &mut generation_rx, my_generation, remaining)
+            .await
+        {
+            Ok(url) => url,
+            Err(WaitFailure::Cancelled) => return Err(LOGIN_CANCELLED.to_string()),
+            Err(WaitFailure::ChannelClosed) => {
+                return Err("Deep-link channel closed unexpectedly".to_string())
+            }
+            Err(WaitFailure::Timeout) => {
                 return Err(
                     "Authorization timeout: user did not complete login within 5 minutes."
                         .to_string(),
-                );
+                )
             }
-            Ok(Err(_)) => {
-                return Err("Deep-link channel closed unexpectedly".to_string());
-            }
-            Ok(Ok(url)) => url,
         };
 
         match parse_oauth_redirect(url.as_str(), csrf_token.secret()) {
@@ -240,6 +325,19 @@ pub async fn login_google_mobile(app: tauri::AppHandle) -> Result<Value, String>
             }
         }
     }
+}
+
+/// Cancel the in-flight mobile Google login: bumps the shared generation
+/// counter so every waiting `login_google_mobile` loop exits within
+/// milliseconds with "Login cancelled" (the frontend classifier treats it as
+/// a user cancellation, not an error). Idempotent and side-effect free when
+/// no login is pending. A newer `login_google_mobile` also bumps the counter,
+/// which supersedes any older attempt still waiting.
+#[command]
+pub async fn cancel_google_login() -> Result<(), String> {
+    bump_generation();
+    eprintln!("[drplay:auth] google login cancelled or superseded");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -348,5 +446,236 @@ mod tests {
             parse_oauth_redirect("not a url at all", STATE),
             Err(OAuthError::MalformedUrl)
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Generation-based cancellation tests. The wait seam takes channels as
+    // parameters, so every expectation-of-success test builds LOCAL channels
+    // and stays immune to unrelated generation bumps from tests running in
+    // parallel against the process-global channel. Only tests that exercise
+    // the real global path expect Cancelled (any bump kills them).
+    // -------------------------------------------------------------------
+
+    use std::time::Duration;
+    use std::time::Instant;
+    use tokio::sync::broadcast;
+    use tokio::sync::watch;
+
+    fn redirect_url(query: &str) -> Url {
+        Url::parse(&format!("com.drplay.app:/oauth2redirect?{query}"))
+            .expect("test redirect URL must parse")
+    }
+
+    /// Mirror of the claim sequence `login_google_mobile` performs against the
+    /// process-global generation channel: bump + capture + subscribe +
+    /// staleness check.
+    fn claim_global_generation() -> (watch::Receiver<u64>, u64) {
+        let my_gen = bump_generation();
+        let mut gen_rx = login_generation_tx().subscribe();
+        assert_eq!(
+            *gen_rx.borrow_and_update(),
+            my_gen,
+            "freshly claimed attempt must observe its own generation"
+        );
+        (gen_rx, my_gen)
+    }
+
+    #[tokio::test]
+    async fn wait_delivers_matching_redirect() {
+        let (gen_tx, mut gen_rx) = watch::channel(1u64);
+        let (deep_link_tx, _) = broadcast::channel::<Url>(16);
+        let mut deep_link_rx = deep_link_tx.subscribe();
+
+        deep_link_tx
+            .send(redirect_url("code=ABC&state=csrf-123"))
+            .expect("local channel has capacity");
+
+        let delivered = wait_for_redirect(
+            &mut deep_link_rx,
+            &mut gen_rx,
+            *gen_tx.borrow(),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("deep link arriving while generation is current must be delivered");
+        assert!(delivered.as_str().contains("code=ABC"));
+    }
+
+    #[tokio::test]
+    async fn cancel_while_waiting_returns_cancelled_quickly() {
+        let (gen_tx, mut gen_rx) = watch::channel(1u64);
+        let expected_gen = *gen_tx.borrow();
+        let (deep_link_tx, _) = broadcast::channel::<Url>(16);
+        let mut deep_link_rx = deep_link_tx.subscribe();
+
+        let bumper = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            gen_tx.send_replace(2u64);
+        });
+
+        let started = Instant::now();
+        let result = wait_for_redirect(
+            &mut deep_link_rx,
+            &mut gen_rx,
+            expected_gen,
+            Duration::from_secs(60),
+        )
+        .await;
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "cancellation must exit in milliseconds, not wait out the deadline"
+        );
+        assert_eq!(result, Err(WaitFailure::Cancelled));
+        bumper.await.expect("bumper task must not panic");
+    }
+
+    #[tokio::test]
+    async fn second_generation_supersedes_first_wait() {
+        let (gen_tx, _) = watch::channel(1u64);
+        // Attempt 1 claims generation 1.
+        let first_gen = *gen_tx.borrow();
+        let mut first_deep_link_rx;
+        let mut first_gen_rx = gen_tx.subscribe();
+
+        // Attempt 2 bumps the shared generation — supersedes attempt 1.
+        gen_tx.send_replace(2u64);
+        let second_gen = *gen_tx.borrow();
+        let mut second_gen_rx = gen_tx.subscribe();
+        assert_eq!(*second_gen_rx.borrow_and_update(), second_gen);
+
+        let (deep_link_tx, _) = broadcast::channel::<Url>(16);
+        first_deep_link_rx = deep_link_tx.subscribe();
+        let mut second_deep_link_rx = deep_link_tx.subscribe();
+
+        let started = Instant::now();
+        let first_result = wait_for_redirect(
+            &mut first_deep_link_rx,
+            &mut first_gen_rx,
+            first_gen,
+            Duration::from_secs(60),
+        )
+        .await;
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "superseded attempt must die quickly, not ride out its deadline"
+        );
+        assert_eq!(first_result, Err(WaitFailure::Cancelled));
+
+        deep_link_tx
+            .send(redirect_url("code=NEW&state=csrf-123"))
+            .expect("local channel has capacity");
+        let second_result = wait_for_redirect(
+            &mut second_deep_link_rx,
+            &mut second_gen_rx,
+            second_gen,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("current attempt keeps receiving redirects");
+        assert!(second_result.as_str().contains("code=NEW"));
+    }
+
+    #[tokio::test]
+    async fn generation_bump_before_wait_is_detected_without_awaiting() {
+        // Covers the staleness pre-check: a bump landing between claiming the
+        // generation and entering the select loop must abort immediately even
+        // though changed() was never polled mid-wait.
+        let (gen_tx, mut gen_rx) = watch::channel(1u64);
+        let claimed = *gen_tx.borrow();
+        gen_tx.send_replace(2u64);
+
+        let (_, mut silent_deep_link_rx) = broadcast::channel::<Url>(16);
+        let result =
+            wait_for_redirect(&mut silent_deep_link_rx, &mut gen_rx, claimed, Duration::from_secs(60))
+                .await;
+        assert_eq!(result, Err(WaitFailure::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn wait_times_out_when_deadline_elapses() {
+        let (gen_tx, mut gen_rx) = watch::channel(1u64);
+        let expected_gen = *gen_tx.borrow();
+        // Hold the sender for the whole wait so the channel stays open —
+        // dropping it would surface as ChannelClosed before any timeout.
+        let (deep_link_tx, mut idle_deep_link_rx) = broadcast::channel::<Url>(16);
+        let _keep_channel_open = deep_link_tx;
+
+        let result = wait_for_redirect(
+            &mut idle_deep_link_rx,
+            &mut gen_rx,
+            expected_gen,
+            Duration::from_millis(30),
+        )
+        .await;
+        assert_eq!(result, Err(WaitFailure::Timeout));
+    }
+
+    #[tokio::test]
+    async fn closed_deep_link_channel_surfaces_as_channel_closed() {
+        let (gen_tx, mut gen_rx) = watch::channel(1u64);
+        let expected_gen = *gen_tx.borrow();
+        let (deep_link_tx, mut deep_link_rx) = broadcast::channel::<Url>(16);
+        drop(deep_link_tx);
+
+        let result = wait_for_redirect(
+            &mut deep_link_rx,
+            &mut gen_rx,
+            expected_gen,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(result, Err(WaitFailure::ChannelClosed));
+    }
+
+    #[tokio::test]
+    async fn cancel_google_login_kills_in_flight_waiter() {
+        let (mut gen_rx, my_gen) = claim_global_generation();
+        let (deep_link_tx, _) = broadcast::channel::<Url>(16);
+        let mut deep_link_rx = deep_link_tx.subscribe();
+
+        let canceller = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel_google_login()
+                .await
+                .expect("cancel must always succeed");
+        });
+
+        let started = Instant::now();
+        let result = wait_for_redirect(
+            &mut deep_link_rx,
+            &mut gen_rx,
+            my_gen,
+            Duration::from_secs(60),
+        )
+        .await;
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "cancel command must wake the waiter in milliseconds"
+        );
+        assert_eq!(result, Err(WaitFailure::Cancelled));
+        canceller.await.expect("canceller task must not panic");
+    }
+
+    #[tokio::test]
+    async fn cancel_without_active_login_is_ok_noop() {
+        // No receiver waits on the global channel here — the command must
+        // still succeed and never panic.
+        cancel_google_login()
+            .await
+            .expect("cancel without a pending login is an idempotent no-op");
+        cancel_google_login()
+            .await
+            .expect("repeat cancels stay no-ops");
+    }
+
+    #[test]
+    fn cancelled_message_satisfies_frontend_classifier_contract() {
+        // TS classifier matches cancel-first by substring; the cancelled
+        // message must contain "cancel" and must NOT collide with the
+        // timeout family ("timeout"/"timed out").
+        let lowered = LOGIN_CANCELLED.to_lowercase();
+        assert!(lowered.contains("cancel"), "must classify as cancellation");
+        assert!(!lowered.contains("timeout"), "must not classify as timeout");
+        assert!(!lowered.contains("timed out"), "must not classify as timeout");
     }
 }
