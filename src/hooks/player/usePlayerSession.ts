@@ -16,6 +16,7 @@ import { shuffleQueueWithCurrent } from "./usePlayerQueue";
 
 const PLAYER_SESSION_MODULE = "usePlayerSession";
 const SAVE_THROTTLE_MS = 5000;
+const SESSION_RESTORE_SUPERSEDED_MESSAGE = "session-restore-superseded-by-user";
 
 // Shape of the persisted session payload (localStorage + kv). Optional fields
 // mirror the defensive `if (lastSession && lastSession.track)` guards below;
@@ -35,11 +36,29 @@ export function usePlayerSession(
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
   setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void,
   triggerReload: () => void,
+  hasUserInteracted?: () => boolean,
 ) {
   useEffect(() => {
     const controller = new AbortController();
     const isAborted = () => controller.signal.aborted;
     const loadSession = async (signal: AbortSignal) => {
+      // user-wins contract: nếu user tương tác trong cửa sổ restore (giữa các
+      // await), phiên lưu cũ phải nhường đường toàn phần — không ghi đè
+      // queue/track user vừa chọn. Warn đúng 1 lần mỗi run (mirror style
+      // session-corrupt).
+      let supersededLogged = false;
+      const userHasActed = () => {
+        const acted = hasUserInteracted?.() === true;
+        if (acted && !supersededLogged) {
+          supersededLogged = true;
+          void captureError({
+            level: "warn",
+            source: PLAYER_SESSION_MODULE,
+            message: SESSION_RESTORE_SUPERSEDED_MESSAGE,
+          });
+        }
+        return acted;
+      };
       try {
         const lastSessionStr = localStorage.getItem(
           SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
@@ -65,12 +84,12 @@ export function usePlayerSession(
         }
 
         if (lastSession && lastSession.track) {
-          if (isAborted()) {
+          if (isAborted() || userHasActed()) {
             return;
           }
           let streamUrl = "";
           const freshToken = await getValidToken(false, signal);
-          if (isAborted()) return;
+          if (isAborted() || userHasActed()) return;
 
           // Mobile (GATE branch B): prefetch is desktop-only, so the fallback
           // below would always embed a /drive-stream URL the SW proxy can
@@ -93,13 +112,13 @@ export function usePlayerSession(
               });
             }
           }
-          if (isAborted()) return;
+          if (isAborted() || userHasActed()) return;
 
           const savedQueue = await get<Track[]>(SESSION_CLEANUP_KEYS.queueKv);
           // unknown (the default get<T>): a corrupt/older persisted value must
           // still hit the corrupt-log branch below instead of crashing.
           const savedPlayMode = await get(SESSION_CLEANUP_KEYS.playModeKv);
-          if (isAborted()) return;
+          if (isAborted() || userHasActed()) return;
 
           const restoredTrack: Track = {
             ...lastSession.track,
@@ -167,6 +186,7 @@ export function usePlayerSession(
     setPlaybackQueue,
     setPlayMode,
     triggerReload,
+    hasUserInteracted,
   ]);
 
   // Save session event-driven (Industry Standard)

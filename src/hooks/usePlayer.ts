@@ -72,6 +72,14 @@ export const usePlayer = (accessToken: string | null) => {
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // user-wins guard for session restore: flipped true by real user actions
+  // (play a track / toggle play with a track present) so a pending restore
+  // stands down instead of overwriting the user's fresh state. Lives on this
+  // hook's ref so it survives StrictMode double-mount; read through a stable
+  // callback so usePlayerSession's effect never re-runs.
+  const userActedRef = useRef(false);
+  const hasUserInteracted = useCallback(() => userActedRef.current, []);
+
   // Load session from IDB
   usePlayerSession(
     setCurrentTrack,
@@ -79,6 +87,7 @@ export const usePlayer = (accessToken: string | null) => {
     setPlaybackQueue,
     setPlayMode,
     triggerReload,
+    hasUserInteracted,
   );
 
   // GATE branch B: on Android the SW proxy is dead, so playback runs through
@@ -215,6 +224,7 @@ export const usePlayer = (accessToken: string | null) => {
       activeTab?: TabKey,
     ) => {
       if (!accessToken) return;
+      userActedRef.current = true;
 
       const { currentTrack } = usePlayerStore.getState();
 
@@ -372,6 +382,9 @@ export const usePlayer = (accessToken: string | null) => {
 
   const handleTogglePlay = useCallback(async () => {
     if (currentTrack) {
+      // Toggle với track hiện có là tương tác thật; toggle khi chưa có track
+      // là no-op nên KHÔNG tính (restore vẫn phải chạy đủ).
+      userActedRef.current = true;
       if (IS_MOBILE) {
         // GATE branch B: mobile tracks never carry a /drive-stream streamUrl —
         // resume means "re-arm the native engine with a fresh token" (the

@@ -77,7 +77,7 @@ function makeTrack(id: string, queueItemId?: string): Track {
   };
 }
 
-function makeHook() {
+function makeHook(opts?: { hasUserInteracted?: () => boolean }) {
   const setCurrentTrack = vi.fn();
   const setOriginalQueue = vi.fn();
   const setPlaybackQueue = vi.fn();
@@ -90,6 +90,7 @@ function makeHook() {
       setPlaybackQueue,
       setPlayMode,
       triggerReload,
+      opts?.hasUserInteracted,
     );
   });
   return {
@@ -421,6 +422,101 @@ describe("usePlayerSession restore mobile gate (IS_MOBILE)", () => {
     expect(mockedGetPrefetchedStreamUrl).not.toHaveBeenCalled();
     expect(mockedBuildStreamUrl).not.toHaveBeenCalled();
     // Restore vẫn hoạt động trên mobile — chỉ URL chết bị loại.
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("usePlayerSession user-wins guard (session-restore-superseded-by-user)", () => {
+  it("L: user interact TRƯỚC restore bắt đầu (kv session) → 0/5 setter gọi + warn đúng 1 lần", async () => {
+    // localStorage rỗng → session đến từ kv get (await đầu tiên của cửa sổ
+    // restore), gate user-wins đầu tiên chặn trước cả getValidToken.
+    const session = { track: makeTrack("t1", "q1"), time: 12, duration: 240 };
+    mockedGet.mockImplementation((key: string) => {
+      if (key === SESSION_STORAGE_KEY) return Promise.resolve(session);
+      if (key === QUEUE_STORAGE_KEY)
+        return Promise.resolve([makeTrack("t1", "q1"), makeTrack("t2")]);
+      return Promise.resolve(undefined);
+    });
+
+    const {
+      setCurrentTrack,
+      setOriginalQueue,
+      setPlaybackQueue,
+      setPlayMode,
+      triggerReload,
+    } = makeHook({ hasUserInteracted: () => true });
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).not.toHaveBeenCalled();
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(triggerReload).not.toHaveBeenCalled();
+    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "usePlayerSession",
+        message: "session-restore-superseded-by-user",
+      }),
+    );
+  });
+
+  it("M: user interact chen giữa cửa sổ (trong lúc getValidToken) → bail trước burst ghi + warn đúng 1 lần", async () => {
+    let acted = false;
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        track: makeTrack("t1", "q1"),
+        time: 5,
+        duration: 100,
+      }),
+    );
+    mockedGetValidToken.mockImplementation(() => {
+      acted = true;
+      return Promise.resolve("tok");
+    });
+
+    const {
+      setCurrentTrack,
+      setOriginalQueue,
+      setPlaybackQueue,
+      setPlayMode,
+      triggerReload,
+    } = makeHook({ hasUserInteracted: () => acted });
+    await flushMicrotasks();
+
+    expect(acted).toBe(true);
+    expect(setCurrentTrack).not.toHaveBeenCalled();
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(triggerReload).not.toHaveBeenCalled();
+    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "usePlayerSession",
+        message: "session-restore-superseded-by-user",
+      }),
+    );
+  });
+
+  it("N: không truyền hasUserInteracted → restore chạy đủ như cũ (guard mặc định false)", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 7, duration: 70 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+
+    const { setCurrentTrack, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(mockedCaptureError).not.toHaveBeenCalled();
+    expect(setCurrentTrack.mock.calls[0]?.[0]).toMatchObject({
+      id: "t1",
+      restoreTime: 7,
+    });
     expect(triggerReload).toHaveBeenCalledTimes(1);
   });
 });
