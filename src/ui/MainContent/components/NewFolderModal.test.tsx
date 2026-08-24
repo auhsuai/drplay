@@ -79,3 +79,53 @@ describe("NewFolderModal input retention on failed create", () => {
     expect(screen.getByText("drive.new_folder_title")).not.toBeNull();
   });
 });
+
+// F4 ModalShell migration: the folder dialog must be a labelled WAI-ARIA APG
+// dialog whose Escape dismissal is blocked while a create request is pending.
+describe("NewFolderModal WAI-ARIA APG dialog semantics", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderAria(
+    over: Partial<Parameters<typeof NewFolderModal>[0]> = {},
+  ) {
+    const props = {
+      isOpen: true,
+      onClose: vi.fn(),
+      onCreate: vi.fn(),
+      isCreating: false,
+      ...over,
+    };
+    const view = render(<NewFolderModal {...props} />);
+    return { ...view, props };
+  }
+
+  it('exposes role="dialog" aria-modal="true" aria-labelledby pointing to visible title', () => {
+    const { container } = renderAria();
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute("aria-modal")).toBe("true");
+    expect(dialog?.getAttribute("aria-labelledby")).toBe("new-folder-title");
+    expect(container.querySelector("#new-folder-title")).not.toBeNull();
+  });
+
+  it("moves focus into the name input on open", () => {
+    renderAria();
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText("drive.folder_name_placeholder"),
+    );
+  });
+
+  it("closes on Escape keydown while idle", () => {
+    const { props } = renderAria({ isCreating: false });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores Escape while a create is pending (isCreating)", () => {
+    const { props } = renderAria({ isCreating: true });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+});
