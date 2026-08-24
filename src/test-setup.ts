@@ -15,7 +15,11 @@ if (typeof globalThis !== "undefined") {
 // here is node (no document).
 if (typeof document !== "undefined") {
   afterEach(() => {
-    document.querySelectorAll(".app-toast").forEach((el) => {
+    const doc = document as {
+      querySelectorAll?: (selector: string) => ArrayLike<Element>;
+    };
+    if (typeof doc.querySelectorAll !== "function") return;
+    Array.from(doc.querySelectorAll(".app-toast")).forEach((el) => {
       el.remove();
     });
   });
