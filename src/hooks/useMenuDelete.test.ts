@@ -73,7 +73,7 @@ describe("useMenuDelete happy path", () => {
 
     expect(deleteFileMock).toHaveBeenCalledWith("tok", "file-1");
     expect(stopPlaybackIfTrackMock).toHaveBeenCalledWith("file-1");
-    expect(dbMock.files.delete).toHaveBeenCalledWith("file-1");
+    expect(dbMock.files.delete).toHaveBeenCalledWith(["default", "file-1"]);
     expect(onRemoveItem).toHaveBeenCalledWith("file-1");
     expect(onRefresh).not.toHaveBeenCalled();
     expect(setIsOpen).toHaveBeenCalledWith(false);

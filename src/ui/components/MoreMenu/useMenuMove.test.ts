@@ -71,7 +71,7 @@ describe("useMenuMove happy path", () => {
       "root",
       "folder-b",
     );
-    expect(dbMock.files.update).toHaveBeenCalledWith("file-1", {
+    expect(dbMock.files.update).toHaveBeenCalledWith(["default", "file-1"], {
       parentId: "folder-b",
     });
     expect(onRemoveItem).toHaveBeenCalledWith("file-1");

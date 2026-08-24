@@ -111,7 +111,14 @@ async function locateAndWait(detail: unknown) {
 }
 
 function seedDb(map: Record<string, Partial<DriveFile> | undefined>) {
-  filesGet.mockImplementation((id: string) => Promise.resolve(map[id]));
+  filesGet.mockImplementation((key: unknown) => {
+    // Compound PK (schema v10): production calls get([userEmail, id]).
+    // Match by the trailing id so the id→row mapping above stays authoritative.
+    const id = Array.isArray(key)
+      ? (key[key.length - 1] as string)
+      : (key as string);
+    return Promise.resolve(map[id]);
+  });
 }
 
 function apiResp(body: unknown, ok = true): Response {
