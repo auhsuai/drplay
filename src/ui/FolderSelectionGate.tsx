@@ -18,10 +18,11 @@ export function FolderSelectionGate({
   onSelectFolder,
   onCancel,
 }: FolderSelectionGateProps) {
-  if (!(isLoggedIn && (!appRootFolder || showFolderSelection))) return null;
+  if (!(isLoggedIn && token && (!appRootFolder || showFolderSelection)))
+    return null;
   return (
     <FolderSelectionScreen
-      token={token ?? ""}
+      token={token}
       onSelectFolder={onSelectFolder}
       onCancel={onCancel}
       initialFolderId={ROOT_FOLDER_ID}
