@@ -27,7 +27,10 @@ export function UploadBadge({
         <button
           type="button"
           aria-label={t("upload.cancel_upload")}
-          className="pointer-events-auto absolute inset-0 flex items-center justify-center rounded-full opacity-0 group-hover/upload:opacity-100 hover:text-red-500 transition-opacity text-gray-500"
+          // Tailwind v4 gates hover: behind @media (hover:hover), so on
+          // touch devices group-hover never fires — force-reveal the X via
+          // focus-visible/active and an explicit hover:none query.
+          className="pointer-events-auto absolute inset-0 flex items-center justify-center rounded-full opacity-0 group-hover/upload:opacity-100 hover:text-red-500 focus-visible:opacity-100 focus-visible:text-red-500 active:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity text-gray-500"
           onClick={(e) => {
             e.stopPropagation();
             cancelUpload(itemId);

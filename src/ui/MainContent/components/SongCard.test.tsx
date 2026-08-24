@@ -1095,6 +1095,9 @@ describe("SongCard upload progress ring + cancel X (slice 2)", () => {
     const x = cancelButton(container) as Element;
     expect(x.className).toContain("absolute inset-0");
     expect(x.className).toContain("opacity-0");
+    // Touch devices never trigger group-hover (Tailwind v4 gates hover:
+    // behind @media (hover:hover)) — the X must also be force-visible there.
+    expect(x.className).toContain("[@media(hover:none)]");
     // jsdom exposes svg.className as SVGAnimatedString — read the class
     // attribute instead (same for the ring svg assertions below).
     const icon = x.querySelector(".lucide-x");
