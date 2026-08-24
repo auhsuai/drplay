@@ -57,6 +57,10 @@ export function useFolderPicker({
   const isLoadingRef = useRef(false);
   const apiSearchAbortRef = useRef<AbortController | null>(null);
   const foldersAbortRef = useRef<AbortController | null>(null);
+  // Separate controller lane for navigateToParentFolder: cancelling the
+  // folder listing fetch must not kill an in-flight parents lookup and
+  // vice versa (the two races settle on different state).
+  const parentNavAbortRef = useRef<AbortController | null>(null);
 
   const filteredFolders = useMemo(() => {
     if (!searchQuery.trim()) return folders;
@@ -119,6 +123,14 @@ export function useFolderPicker({
   const cancelFolderFetch = useCallback(() => {
     foldersAbortRef.current?.abort();
     foldersAbortRef.current = null;
+  }, []);
+
+  // Mirrors cancelFolderFetch but only for the parent-navigation lane.
+  // Nulling the ref is what makes the aborted attempt's finally skip the
+  // loading reset (identity guard) — the canceller owns loading from here on.
+  const cancelParentNav = useCallback(() => {
+    parentNavAbortRef.current?.abort();
+    parentNavAbortRef.current = null;
   }, []);
 
   const fetchFolders = async (folderId: string) => {
@@ -240,6 +252,7 @@ export function useFolderPicker({
     void fetchFolders(currentFolderId);
     return () => {
       cancelFolderFetch();
+      cancelParentNav();
     };
     // fetchFolders/cancelFolderFetch are local functions whose identity
     // changes every render; the effect only needs to refetch when the
@@ -278,6 +291,10 @@ export function useFolderPicker({
     // isLoadingRef at true and locking every later open.
     if (folderId === currentFolderId) return;
     if (isLoadingRef.current) return;
+    // Placed AFTER the guards on purpose: a no-op open must not orphan an
+    // in-flight parent nav (its identity-guarded finally would skip the
+    // loading reset and wedge isLoadingRef at true).
+    cancelParentNav();
     isLoadingRef.current = true;
     setIsLoading(true);
     setFolderHistory((prev) => [
@@ -290,6 +307,7 @@ export function useFolderPicker({
 
   const popFolderHistory = (): boolean => {
     if (folderHistory.length === 0) return false;
+    cancelParentNav();
     cancelFolderFetch();
     const newHistory = [...folderHistory];
     const prevFolder = newHistory.pop();
@@ -308,11 +326,26 @@ export function useFolderPicker({
     )
       return;
 
-    cancelFolderFetch();
+    // A newer Back supersedes the older in-flight navigation: abort it so
+    // its late response cannot yank the folder state after the user has
+    // already moved on (same race discipline as fetchFolders).
+    cancelParentNav();
+    const controller = new AbortController();
+    parentNavAbortRef.current = controller;
+
     isLoadingRef.current = true;
     setIsLoading(true);
     try {
-      const parents = await getFileParents(token, currentFolderId);
+      // Token symmetry with fetchFolders/searchSubfolders: the raw prop
+      // token can be expired by navigation time; getValidToken() refreshes.
+      const freshToken = (await getValidToken()) || token;
+      if (isAborted(controller)) return;
+      const parents = await getFileParents(
+        freshToken,
+        currentFolderId,
+        controller.signal,
+      );
+      if (isAborted(controller)) return;
       if (parents === null) {
         // Drive request failed hard — fall back to root. Warn telemetry
         // keeps this fallback observable in the error log.
@@ -321,28 +354,46 @@ export function useFolderPicker({
           source: FOLDER_MODULE,
           message: "fetch-parents-null: falling back to root",
         });
-        setCurrentFolderId(ROOT_FOLDER_ID);
-        setCurrentFolderName(t("drive.my_drive"));
+        setCurrentFolderId(resolvedAppRoot || ROOT_FOLDER_ID);
+        setCurrentFolderName(initialFolderName || t("drive.my_drive"));
       } else if (parents.length > 0) {
-        const fetchedParentId = parents[0];
+        // Drive returns plain id strings here, but tolerate richer {id}
+        // entries too — either way a missing id is malformed input.
+        const rawParent: unknown = parents[0];
+        const fetchedParentId =
+          typeof rawParent === "string"
+            ? rawParent
+            : (rawParent as { id?: string } | undefined)?.id;
+        // Malformed payload — bail WITHOUT wedging loading: the identity-
+        // guarded finally below still releases the spinner/lock.
         if (fetchedParentId === undefined) return;
         setCurrentFolderId(fetchedParentId);
         if (fetchedParentId === ROOT_FOLDER_ID) {
           setCurrentFolderName(t("drive.my_drive"));
         } else {
           try {
-            const name = await getFileName(token, fetchedParentId);
-            if (name) setCurrentFolderName(name);
+            const name = await getFileName(freshToken, fetchedParentId);
+            if (isAborted(controller)) return;
+            if (name) {
+              setCurrentFolderName(name);
+            } else {
+              // Never keep the previous (child) folder's name — it would
+              // mislabel the parent we just navigated into.
+              setCurrentFolderName(initialFolderName || t("drive.my_drive"));
+            }
           } catch (e) {
             void captureError({
               level: "warn",
               source: FOLDER_MODULE,
               message: `fetch-parent-name-failed: ${classifyFolderError(e)}`,
             });
+            if (!isAborted(controller)) {
+              setCurrentFolderName(initialFolderName || t("drive.my_drive"));
+            }
           }
         }
       } else {
-        setCurrentFolderId(ROOT_FOLDER_ID);
+        setCurrentFolderId(resolvedAppRoot || ROOT_FOLDER_ID);
       }
     } catch (e) {
       void captureError({
@@ -351,8 +402,16 @@ export function useFolderPicker({
         message: `fetch-parent-failed: ${classifyFolderError(e)}`,
       });
       showErrorToast(t("folder_selection.back_error"));
-      setCurrentFolderId(ROOT_FOLDER_ID);
-      setCurrentFolderName(t("drive.my_drive"));
+      setCurrentFolderId(resolvedAppRoot || ROOT_FOLDER_ID);
+      setCurrentFolderName(initialFolderName || t("drive.my_drive"));
+    } finally {
+      // Identity-guard mirrors fetchFolders: a superseded/aborted attempt
+      // must not release the newer navigation's loading lock. This finally
+      // is also what un-wedges the `undefined` parent-id early return.
+      if (parentNavAbortRef.current === controller) {
+        isLoadingRef.current = false;
+        setIsLoading(false);
+      }
     }
   };
 
@@ -362,6 +421,7 @@ export function useFolderPicker({
   };
 
   const handleBreadcrumbClick = (index: number) => {
+    cancelParentNav();
     if (index === -1) {
       setFolderHistory([]);
       setCurrentFolderId(resolvedAppRoot || ROOT_FOLDER_ID);
