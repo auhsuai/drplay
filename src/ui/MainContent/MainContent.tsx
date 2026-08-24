@@ -318,6 +318,10 @@ export const MainContent = React.memo(function MainContent({
   // at least one bulk overlay is open, so an empty stack on close keeps the
   // chain falling through to App.
   const handleBulkOverlayBack = useCallback((): boolean => {
+    // While a bulk operation is running the overlays must not be dismissible
+    // by hardware back (CacheManagerModal/ImageCropperModal precedent): only
+    // consume the event so it does not fall through to folder-up.
+    if (explorer.isBulkOperating) return true;
     if (showBulkDeleteConfirm) {
       setShowBulkDeleteConfirm(false);
       return true;
@@ -328,6 +332,7 @@ export const MainContent = React.memo(function MainContent({
     }
     return false;
   }, [
+    explorer.isBulkOperating,
     setShowBulkDeleteConfirm,
     setShowBulkMoveScreen,
     showBulkDeleteConfirm,

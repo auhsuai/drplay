@@ -605,6 +605,22 @@ describe("MainContent hardware-back closes bulk overlays (batch fix 2026-08-17)"
     expect(pressBack()).toBe(false);
   });
 
+  it("bulk operating: back is swallowed and the BulkDeleteConfirmModal stays open", () => {
+    const explorer = makeExplorerState(makeItems(3));
+    explorer.isBulkOperating = true;
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.BULK_DELETE));
+    });
+    expect(screen.getByText("drive.bulk_delete_title")).not.toBeNull();
+
+    // While the bulk operation is running, back must NOT close the confirm
+    // modal — it only consumes the event (CacheManagerModal precedent).
+    expect(pressBack()).toBe(true);
+    expect(screen.getByText("drive.bulk_delete_title")).not.toBeNull();
+  });
+
   it("bulk move: back closes the FolderSelectionScreen (true, then false)", () => {
     const explorer = makeExplorerState(makeItems(3));
     explorer.isSelectionMode = true;
