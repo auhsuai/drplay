@@ -898,7 +898,7 @@ describe("getTrackMetadata real metadata fetch", () => {
     const r = await getTrackMetadata("m4a-slow-id", "tok", 200_000, "slow.m4a");
     expect(r.v).toBe(8);
     expect(r.title).toBe("slow");
-    expect(filesUpdate).toHaveBeenCalledWith("m4a-slow-id", {
+    expect(filesUpdate).toHaveBeenCalledWith(["default", "m4a-slow-id"], {
       metadata: { format: "m4a", streamUnplayable: true },
     });
   });
@@ -2456,7 +2456,7 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     );
     expect(r.v).toBe(8);
     expect(r.title).toBe("slow");
-    expect(filesUpdate).toHaveBeenCalledWith("m4a-prefetch-tail", {
+    expect(filesUpdate).toHaveBeenCalledWith(["default", "m4a-prefetch-tail"], {
       metadata: { format: "m4a", streamUnplayable: true },
     });
     // head (1) + the parse's moov-chunk read (1) + ONE tail prefetch (1);
