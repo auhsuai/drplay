@@ -17,6 +17,22 @@ function classifyLoginError(err: unknown): string {
   return `${name}: ${message}`;
 }
 
+// Best-effort teardown of the Rust-side Google login waiter (mobile only):
+// cancel_google_login bumps the native generation so the pending auth loop
+// exits immediately with "Login cancelled" instead of waiting for the OS
+// browser flow to end on its own. Failure is intentionally swallowed:
+// correctness is already guaranteed TS-side by the attemptRef supersede
+// gates below, so a failed cancel only means Rust keeps waiting a little
+// longer — no state change, no user-facing error. Same fire-and-forget
+// shape as void wipePersistedMetadataCache().catch(...) in useAuth.
+async function cancelGoogleLogin(): Promise<void> {
+  try {
+    await invoke("cancel_google_login");
+  } catch {
+    // Intentionally silent — see the block comment above.
+  }
+}
+
 interface LoginResult {
   access_token: string;
   refresh_token?: string;
@@ -43,6 +59,10 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     // would otherwise still fire onLogin after this screen is gone.
     return () => {
       attemptRef.current += 1;
+      // Stop the native waiter as well (see cancelGoogleLogin). StrictMode
+      // double-mounts in dev fire this twice — cancel_google_login is
+      // idempotent (no-op when nothing is pending).
+      if (IS_MOBILE) void cancelGoogleLogin();
     };
   }, []);
 
@@ -64,6 +84,10 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const handleCancel = () => {
     // Invalidate the pending attempt — its late resolution is dropped below.
     attemptRef.current += 1;
+    // Tell the Rust side to stop waiting too. Mobile only: desktop's
+    // loopback-server flow has no cancellable native waiter. Fire-and-forget —
+    // the cancel UX below must run regardless of the IPC outcome.
+    if (IS_MOBILE) void cancelGoogleLogin();
     setIsLoading(false);
     setShowCancel(false);
     showErrorToast(t("login.cancelled_by_user"));

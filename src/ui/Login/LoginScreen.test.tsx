@@ -423,3 +423,124 @@ describe("LoginScreen invoke login error handling", () => {
     }
   });
 });
+
+describe("LoginScreen google-login cancel command wiring", () => {
+  const CANCEL_DELAY_MS = 5000;
+  const CANCEL_COMMAND = "cancel_google_login";
+
+  interface PendingToken {
+    access_token: string;
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="content-area"></div>';
+    invokeMock.mockReset();
+    captureErrorMock.mockClear();
+    platformMock.IS_MOBILE = false;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function countCancelCalls(): number {
+    return invokeMock.mock.calls.filter(
+      ([command]) => command === CANCEL_COMMAND,
+    ).length;
+  }
+
+  // The login invoke must stay pending (like the real Rust waiter), so the
+  // stub discriminates by command name — only the cancel command is scripted.
+  function stubInvokePendingLogin(cancelOutcome: () => Promise<unknown>): void {
+    invokeMock.mockImplementation((command: string) =>
+      command === CANCEL_COMMAND
+        ? cancelOutcome()
+        : new Promise<PendingToken>(() => {}),
+    );
+  }
+
+  it("cancel click on mobile invokes cancel_google_login exactly once and keeps the cancelled toast", () => {
+    platformMock.IS_MOBILE = true;
+    stubInvokePendingLogin(() => Promise.resolve(null));
+    vi.useFakeTimers();
+    try {
+      renderLogin();
+      fireEvent.click(screen.getByRole("button"));
+      act(() => {
+        vi.advanceTimersByTime(CANCEL_DELAY_MS);
+      });
+      expect(countCancelCalls()).toBe(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(countCancelCalls()).toBe(1);
+      expect(toastRootText()).toContain("Connection cancelled.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unmount while a login is pending on mobile invokes cancel_google_login exactly once", () => {
+    platformMock.IS_MOBILE = true;
+    stubInvokePendingLogin(() => Promise.resolve(null));
+    renderLogin();
+
+    fireEvent.click(screen.getByRole("button"));
+    expect(countCancelCalls()).toBe(0);
+
+    cleanup();
+
+    expect(countCancelCalls()).toBe(1);
+  });
+
+  it("cancel click on desktop never invokes cancel_google_login", () => {
+    // platformMock.IS_MOBILE stays false — desktop flow.
+    stubInvokePendingLogin(() => Promise.resolve(null));
+    vi.useFakeTimers();
+    try {
+      renderLogin();
+      fireEvent.click(screen.getByRole("button"));
+      act(() => {
+        vi.advanceTimersByTime(CANCEL_DELAY_MS);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(toastRootText()).toContain("Connection cancelled.");
+      expect(countCancelCalls()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a rejected cancel invoke stays silent: no new toast, no state flip", async () => {
+    platformMock.IS_MOBILE = true;
+    stubInvokePendingLogin(() =>
+      Promise.reject(new Error("cancel_google_login unavailable")),
+    );
+    vi.useFakeTimers();
+    try {
+      const { onLogin } = renderLogin();
+      fireEvent.click(screen.getByRole("button"));
+      act(() => {
+        vi.advanceTimersByTime(CANCEL_DELAY_MS);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const toastAfterCancel = toastRootText();
+      expect(toastAfterCancel).toContain("Connection cancelled.");
+
+      // Flush the rejected cancel promise through its handler.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(countCancelCalls()).toBe(1);
+      expect(toastRootText()).toBe(toastAfterCancel);
+      expect(captureErrorMock).not.toHaveBeenCalled();
+      expect(onLogin).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
