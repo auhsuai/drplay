@@ -65,7 +65,9 @@ function renderLogin() {
 }
 
 function toastRootText(): string {
-  return document.getElementById("content-area")?.textContent ?? "";
+  return Array.from(document.querySelectorAll<HTMLElement>(".app-toast"))
+    .map((el) => el.textContent ?? "")
+    .join("\n");
 }
 
 describe("LoginScreen invoke login error handling", () => {
