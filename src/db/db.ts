@@ -1,7 +1,6 @@
 import type { Table } from "dexie";
 import Dexie from "dexie";
 import type { Track } from "../types";
-import { getCurrentUserEmail } from "../utils/storageKeys";
 
 export interface DriveFile {
   id: string;
@@ -294,12 +293,28 @@ export class DriveDatabase extends Dexie {
       .upgrade(async (tx) => {
         // Plan A1.3: every legacy row belongs to whichever account was active
         // at the first launch after the upgrade (accepted one-time assignment;
-        // other accounts re-mirror on their next sync). getCurrentUserEmail()
-        // never throws — its internal try/catch returns DEFAULT_USER_EMAIL —
-        // which is exactly the worker-realm safety net: proSync.worker opens
+        // other accounts re-mirror on their next sync). The email read below
+        // never throws — its internal try/catch returns "default" — which is
+        // exactly the worker-realm safety net: proSync.worker opens
         // its own connection where localStorage does not exist, and a throw
         // here would abort the whole upgrade transaction.
-        const owner = getCurrentUserEmail();
+        //
+        // Deliberately NOT imported from utils/storageKeys: storageKeys →
+        // errorLog → db forms an import cycle once db needs the owner email,
+        // and under vitest's errorLog mock that cycle re-binds storageKeys'
+        // captureError away from the mocked instance (broke apiClient.test
+        // localStorage-failure assertions). Keep this read self-contained;
+        // the key string and sentinel mirror storageKeys' USER_EMAIL_KEY /
+        // DEFAULT_USER_EMAIL — update both together if they ever change.
+        const owner = (() => {
+          try {
+            return (
+              localStorage.getItem("drplay_current_user_email") || "default"
+            );
+          } catch {
+            return "default";
+          }
+        })();
         const legacyRows = (await tx.table("files").toArray()) as DriveFile[];
         await tx.table("filesV2").bulkPut(
           legacyRows.map((row) => ({
