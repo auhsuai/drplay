@@ -85,15 +85,16 @@ type DeferredCall = {
   resolve: (value: Array<{ id: string; name: string }>) => void;
   reject: (err: unknown) => void;
   signal: AbortSignal | undefined;
+  folderId?: string;
 };
 
 let deferredCalls: DeferredCall[] = [];
 
 function installListFolderChildrenMock() {
   mocks.driveApi.listFolderChildren.mockImplementation(
-    (_token: string, _folderId: string, signal?: AbortSignal) =>
+    (_token: string, folderId: string, signal?: AbortSignal) =>
       new Promise<Array<{ id: string; name: string }>>((resolve, reject) => {
-        deferredCalls.push({ resolve, reject, signal });
+        deferredCalls.push({ resolve, reject, signal, folderId });
         signal?.addEventListener("abort", () => {
           reject(new DOMException("The operation was aborted", "AbortError"));
         });
@@ -112,6 +113,35 @@ function installSearchFoldersMock() {
         searchDeferredCalls.push({ resolve, reject, signal });
       }),
   );
+}
+
+// Deferred promise for navigateToParentFolder's getFileParents call — records
+// the abort signal + target folder so parent-navigation races are observable.
+let parentsDeferredCalls: {
+  resolve: (value: Array<{ id: string; name: string }> | null) => void;
+  reject: (err: unknown) => void;
+  signal: AbortSignal | undefined;
+  folderId: string;
+}[] = [];
+
+function installGetFileParentsMock() {
+  mocks.driveApi.getFileParents.mockImplementation(
+    (_token: string, folderId: string, signal?: AbortSignal) =>
+      new Promise<Array<{ id: string; name: string }> | null>(
+        (resolve, reject) => {
+          parentsDeferredCalls.push({ resolve, reject, signal, folderId });
+        },
+      ),
+  );
+}
+
+function parentsDeferredCallAt(
+  index: number,
+): (typeof parentsDeferredCalls)[number] {
+  const call = parentsDeferredCalls[index];
+  if (call === undefined)
+    throw new Error(`expected deferred parents call ${String(index)}`);
+  return call;
 }
 
 const BACK_BUTTON_INDEX = 0;
@@ -846,5 +876,169 @@ describe("FolderSelectionScreen audit fixes", () => {
       expect.stringContaining("name contains 'abc'"),
       expect.anything(),
     );
+  });
+});
+
+// Parent-navigation behavior contract (P2 useFolderPicker batch). These four
+// specs describe the POST-FIX behavior of navigateToParentFolder; they are
+// written to FAIL against the current implementation on purpose (RED first),
+// and must all turn GREEN with the minimal logic fix — without any of the
+// existing suites regressing.
+describe("FolderSelectionScreen parent navigation", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    parentsDeferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    installGetFileParentsMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Empty history forces handleBack into navigateToParentFolder (the
+  // popFolderHistory path would never reach getFileParents).
+  function renderWithoutHistory() {
+    return render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId="folderB"
+        initialFolderHistory={[]}
+      />,
+    );
+  }
+
+  it("double back aborts the stale parent navigation", async () => {
+    renderWithoutHistory();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(parentsDeferredCalls).toHaveLength(1);
+    });
+
+    // Second Back lands while parents fetch #1 is still in flight.
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(parentsDeferredCalls).toHaveLength(2);
+    });
+
+    // The superseded navigation attempt must be aborted, not left racing.
+    expect(parentsDeferredCallAt(0).signal?.aborted).toBe(true);
+
+    // Settling both fetches must land on exactly ONE destination: the stale
+    // response is discarded and must not trigger its own folder refetch.
+    await act(async () => {
+      parentsDeferredCallAt(0).resolve([
+        { id: "stale-parent", name: "Stale Parent" },
+      ]);
+      parentsDeferredCallAt(1).resolve([
+        { id: "fresh-parent", name: "Fresh Parent" },
+      ]);
+      await Promise.resolve();
+    });
+    await act(async () => {});
+
+    expect(deferredCalls).toHaveLength(2);
+    expect(deferredCallAt(1).folderId).toBe("fresh-parent");
+  });
+
+  it("network failure during back stays inside the app root scope", async () => {
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId="folderB"
+        initialFolderHistory={[]}
+        appRootFolder="appRootId"
+      />,
+    );
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(parentsDeferredCalls).toHaveLength(1);
+    });
+
+    // getFileParents resolving null = hard Drive failure. The escape-root
+    // fallback must re-enter the APP root scope (resolvedAppRoot), not Drive's
+    // literal "root" which sits outside the scoped view.
+    await act(async () => {
+      parentsDeferredCallAt(0).resolve(null);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
+    expect(deferredCallAt(1).folderId).toBe("appRootId");
+  });
+
+  it("back refreshes an expired token before fetching parents", async () => {
+    mocks.getValidToken.mockResolvedValue("fresh-token");
+    renderWithoutHistory();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(parentsDeferredCalls).toHaveLength(1);
+    });
+
+    // Token symmetry with fetchFolders/searchFolders: the raw prop token can
+    // be expired by the time the user navigates, so the parents call must
+    // receive the refreshed getValidToken() result instead of the prop.
+    expect(mocks.driveApi.getFileParents.mock.calls[0]?.[0]).toBe(
+      "fresh-token",
+    );
+  });
+
+  it("undefined parent id does not wedge the picker", async () => {
+    renderWithoutHistory();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "child-x", name: "Child X" }]);
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Child X")).not.toBeNull();
+
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(parentsDeferredCalls).toHaveLength(1);
+    });
+
+    // Malformed Drive payload: parents is an array whose first entry is
+    // undefined. The early-return guard must not leave isLoadingRef wedged at
+    // true forever — loading has to be released so the grid comes back.
+    await act(async () => {
+      parentsDeferredCallAt(0).resolve([undefined] as unknown as Array<{
+        id: string;
+        name: string;
+      }>);
+      await Promise.resolve();
+    });
+    await act(async () => {});
+
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+    expect(screen.getByText("Child X")).not.toBeNull();
+
+    // The picker stays interactive: clicking a folder card still opens it.
+    fireEvent.click(screen.getByText("Child X"));
+    await waitFor(() => {
+      expect(deferredCalls.length).toBeGreaterThan(1);
+    });
+    expect(deferredCallAt(deferredCalls.length - 1).folderId).toBe("child-x");
   });
 });
