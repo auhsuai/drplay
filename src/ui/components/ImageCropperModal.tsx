@@ -7,6 +7,9 @@ import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 
 const CROPPER_MODULE = "ImageCropperModal";
+// Same guard as utils/color.ts: a cover whose load never settles must not
+// wedge the save button in isProcessing forever.
+const IMAGE_LOAD_TIMEOUT_MS = 10_000;
 
 interface ImageCropperModalProps {
   imageSrc: string;
@@ -169,33 +172,62 @@ function getCroppedImg(imageSrc: string, pixelCrop: Area): Promise<string> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.src = imageSrc;
-    image.onload = () => {
-      const canvas = document.createElement("canvas");
-      // Encode as 512x512 resolution for optimal quality vs storage space
-      const targetSize = 512;
-      canvas.width = targetSize;
-      canvas.height = targetSize;
-      const ctx = canvas.getContext("2d");
 
-      if (!ctx) {
-        reject(new Error("canvas-2d-context-unavailable"));
-        return;
+    // settled-flag pattern copied from utils/color.ts:44-61 — exactly one
+    // of timeout/onload/onerror may settle the promise; every path clears
+    // the timer and detaches handlers before acting.
+    let settled = false;
+    const timer = setTimeout(() => {
+      finish(() => {
+        reject(new Error("image-load-timeout"));
+      });
+    }, IMAGE_LOAD_TIMEOUT_MS);
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+      try {
+        action();
+      } finally {
+        image.src = "";
       }
-
-      ctx.drawImage(
-        image,
-        pixelCrop.x,
-        pixelCrop.y,
-        pixelCrop.width,
-        pixelCrop.height,
-        0,
-        0,
-        targetSize,
-        targetSize,
-      );
-
-      resolve(canvas.toDataURL("image/jpeg", 0.8));
     };
-    image.onerror = reject;
+
+    image.onload = () => {
+      finish(() => {
+        const canvas = document.createElement("canvas");
+        // Encode as 512x512 resolution for optimal quality vs storage space
+        const targetSize = 512;
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+        const ctx = canvas.getContext("2d");
+
+        if (!ctx) {
+          reject(new Error("canvas-2d-context-unavailable"));
+          return;
+        }
+
+        ctx.drawImage(
+          image,
+          pixelCrop.x,
+          pixelCrop.y,
+          pixelCrop.width,
+          pixelCrop.height,
+          0,
+          0,
+          targetSize,
+          targetSize,
+        );
+
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
+      });
+    };
+    image.onerror = () => {
+      finish(() => {
+        reject(new Error("image-load-error"));
+      });
+    };
   });
 }

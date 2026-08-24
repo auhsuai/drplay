@@ -1,17 +1,32 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  act,
+} from "@testing-library/react";
 import { initReactI18next } from "react-i18next";
 import i18n from "i18next";
 import enTranslation from "../../locales/en/translation.json";
 import { ImageCropperModal } from "./ImageCropperModal";
 
+vi.mock("../../utils/simpleToast", () => ({
+  showErrorToast: vi.fn(),
+}));
+
+import { showErrorToast } from "../../utils/simpleToast";
+
+const showErrorToastMock = vi.mocked(showErrorToast);
+
+const IMAGE_LOAD_TIMEOUT_MS = 10_000;
+
 vi.mock("react-easy-crop", async () => {
   const React = await import("react");
   function MockCropper(props: Record<string, unknown>) {
     const onCropComplete = props.onCropComplete as
-      | ((area: unknown, pixels: unknown) => void)
-      | undefined;
+      ((area: unknown, pixels: unknown) => void) | undefined;
     React.useEffect(() => {
       onCropComplete?.(
         { x: 0, y: 0, width: 100, height: 100 },
@@ -100,7 +115,7 @@ describe("ImageCropperModal close guards while processing", () => {
   });
 
   function startSave() {
-    fireEvent.click(screen.getByRole("button", { name: /Lưu|Save/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Lưu|Sav/ }));
   }
 
   it("blocks overlay, X and Cancel from closing while save is processing", () => {
@@ -133,5 +148,51 @@ describe("ImageCropperModal close guards while processing", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("ImageCropperModal save load-timeout recovery", () => {
+  beforeEach(() => {
+    // Same PendingImage stub as above: neither onload nor onerror ever
+    // fires, so getCroppedImg can only escape via the load timeout.
+    class PendingImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      src = "";
+    }
+    vi.stubGlobal("Image", PendingImage);
+    vi.useFakeTimers();
+    showErrorToastMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("re-enables Save, shows an error toast and re-opens Escape after the image load timeout instead of hanging forever", async () => {
+    const onClose = vi.fn();
+    render(<ImageCropperModal {...baseProps({ onClose })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Lưu|Sav/ }));
+    expect(screen.getByRole("button", { name: /Lưu|Sav/ })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IMAGE_LOAD_TIMEOUT_MS);
+    });
+
+    expect(screen.getByRole("button", { name: /Lưu|Sav/ })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
