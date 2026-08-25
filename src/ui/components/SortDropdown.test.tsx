@@ -26,6 +26,108 @@ const baseProps = {
   fallbackLabel: "Sort",
 };
 
+describe("SortDropdown a11y fixes (Phase B 2026-08-25)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("does not nest interactive controls (trigger and arrow are siblings)", () => {
+    const { container } = render(<SortDropdown {...baseProps} />);
+    const roleButtons = container.querySelectorAll('[role="button"]');
+    expect(roleButtons.length).toBe(2);
+
+    const trigger = screen.getByLabelText("sort.menu");
+    const arrow = container.querySelector(".arrow-btn") as HTMLElement;
+    expect(trigger).toBeDefined();
+    expect(arrow).toBeDefined();
+    expect(trigger.contains(arrow)).toBe(false);
+    expect(arrow.contains(trigger)).toBe(false);
+  });
+
+  it("clicking the arrow toggles desc without opening the menu", () => {
+    const onSortChange = vi.fn();
+    const { rerender } = render(
+      <SortDropdown {...baseProps} onSortChange={onSortChange} />,
+    );
+    const arrow = document.querySelector(".arrow-btn") as HTMLElement;
+
+    fireEvent.click(arrow);
+    expect(onSortChange).toHaveBeenCalledWith("name desc");
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+
+    rerender(
+      <SortDropdown
+        {...baseProps}
+        sortOption="name desc"
+        onSortChange={onSortChange}
+      />,
+    );
+    fireEvent.click(arrow);
+    expect(onSortChange).toHaveBeenLastCalledWith("name");
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+  });
+
+  it("keyboard Enter on the arrow toggles desc without opening the menu", () => {
+    const onSortChange = vi.fn();
+    render(<SortDropdown {...baseProps} onSortChange={onSortChange} />);
+    const arrow = document.querySelector(".arrow-btn") as HTMLElement;
+
+    fireEvent.keyDown(arrow, { key: "Enter" });
+    expect(onSortChange).toHaveBeenCalledWith("name desc");
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+  });
+
+  it("exposes listbox ARIA pattern (haspopup, controls, option roles)", () => {
+    render(<SortDropdown {...baseProps} />);
+    const trigger = screen.getByLabelText("sort.menu");
+    expect(trigger.getAttribute("aria-haspopup")).toBe("listbox");
+    expect(trigger.getAttribute("aria-controls")).toBe("sort-menu");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(trigger);
+    const listbox = screen.getByRole("listbox");
+    expect(listbox.id).toBe("sort-menu");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+    const opts = screen.getAllByRole("option");
+    expect(opts.map((o) => o.textContent)).toEqual(["Name", "Date"]);
+    expect(opts[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(opts[1]?.getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("selecting an option applies sort and closes the menu", () => {
+    const onSortChange = vi.fn();
+    render(<SortDropdown {...baseProps} onSortChange={onSortChange} />);
+    fireEvent.click(screen.getByLabelText("sort.menu"));
+    fireEvent.click(screen.getByRole("option", { name: "Date" }));
+    expect(onSortChange).toHaveBeenCalledWith("date desc");
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+  });
+
+  it("closes an open menu on Escape (desktop keyboard)", () => {
+    render(<SortDropdown {...baseProps} />);
+    fireEvent.click(screen.getByLabelText("sort.menu"));
+    expect(screen.getByTestId("sort-menu")).not.toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+  });
+
+  it("ignores Escape while closed and ignores other keys while open", () => {
+    render(<SortDropdown {...baseProps} />);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("sort.menu"));
+    fireEvent.keyDown(document, { key: "Enter" });
+    expect(screen.getByTestId("sort-menu")).not.toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+  });
+});
+
 describe("SortDropdown hardware-back closes the menu (batch fix 2026-08-17)", () => {
   afterEach(() => {
     cleanup();

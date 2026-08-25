@@ -64,28 +64,64 @@ export function SortDropdown({
     showSortMenu,
   );
 
+  // Desktop keyboard: Escape closes the menu while open (UploadButton
+  // pattern); the listener exists only while the menu is open and other
+  // keys pass through untouched.
+  useEffect(() => {
+    if (!showSortMenu) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowSortMenu(false);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showSortMenu]);
+
   return (
     <div className="relative">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={showSortMenu}
-        aria-label={t("sort.menu")}
-        onClick={() => {
-          setShowSortMenu(!showSortMenu);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setShowSortMenu(!showSortMenu);
-          }
-        }}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm [&:active:not(:has(.arrow-btn:active))]:scale-95 cursor-pointer select-none"
-      >
+      {/* APG forbids nested interactive controls: the label region (menu
+          trigger) and the arrow (asc/desc flip) are two SIBLING buttons.
+          flex-row-reverse keeps the original left-arrow/right-label look
+          while DOM order stays trigger-first for Tab. */}
+      <div className="flex flex-row-reverse items-center gap-1.5 [&:active:not(:has(.arrow-btn:active))]:scale-95 select-none">
         <div
           role="button"
           tabIndex={0}
-          className="arrow-btn p-1 -ml-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center"
+          aria-expanded={showSortMenu}
+          aria-haspopup="listbox"
+          aria-controls="sort-menu"
+          aria-label={t("sort.menu")}
+          onClick={() => {
+            setShowSortMenu(!showSortMenu);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setShowSortMenu(!showSortMenu);
+            }
+          }}
+          className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm cursor-pointer select-none"
+        >
+          <div className="hidden sm:grid text-center pr-1">
+            <span className="col-start-1 row-start-1 visible place-self-center">
+              {currentSortLabel}
+            </span>
+            {options.map((opt) => (
+              <span
+                key={opt.id}
+                className="col-start-1 row-start-1 invisible pointer-events-none select-none"
+                aria-hidden="true"
+              >
+                {opt.label}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div
+          role="button"
+          tabIndex={0}
+          className="arrow-btn p-1 rounded-md bg-white dark:bg-[#1a1b1e] shadow-sm hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center cursor-pointer select-none"
           onClick={(e) => {
             e.stopPropagation();
             if (sortOption.endsWith(" desc")) {
@@ -153,20 +189,6 @@ export function SortDropdown({
             </g>
           </svg>
         </div>
-        <div className="hidden sm:grid text-center pr-1">
-          <span className="col-start-1 row-start-1 visible place-self-center">
-            {currentSortLabel}
-          </span>
-          {options.map((opt) => (
-            <span
-              key={opt.id}
-              className="col-start-1 row-start-1 invisible pointer-events-none select-none"
-              aria-hidden="true"
-            >
-              {opt.label}
-            </span>
-          ))}
-        </div>
       </div>
 
       {showSortMenu && (
@@ -179,12 +201,17 @@ export function SortDropdown({
             }}
           ></div>
           <div
+            id="sort-menu"
+            role="listbox"
+            aria-label={t("sort.menu")}
             data-testid="sort-menu"
             className="absolute right-0 mt-2 min-w-full w-max bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
           >
             {options.map((opt) => (
               <button
                 key={opt.id}
+                role="option"
+                aria-selected={baseSortOption === opt.id}
                 onClick={() => {
                   const newOpt = opt.defaultDesc ? `${opt.id} desc` : opt.id;
                   onSortChange?.(newOpt);
