@@ -1569,6 +1569,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-saf-download",
+ "tauri-plugin-webview-settings",
  "tiny_http",
  "tokio",
  "url",
@@ -6252,6 +6253,14 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-saf-download"
+version = "0.1.0"
+dependencies = [
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-webview-settings"
 version = "0.1.0"
 dependencies = [
  "tauri",

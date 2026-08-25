@@ -181,7 +181,11 @@ pub fn run() {
         // SAF download folder picker + writer — Android only (Task 4
         // mobile-polish; the Rust crate registers the Kotlin plugin, no
         // commands). Desktop init is a no-op.
-        .plugin(tauri_plugin_saf_download::init());
+        .plugin(tauri_plugin_saf_download::init())
+        // WebView settings lock (textZoom=100) — Android only; keeps the OS
+        // font-scale setting from inflating the px-sized player UI. Desktop
+        // init is a no-op.
+        .plugin(tauri_plugin_webview_settings::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_keepawake::init());
     let app_result = builder

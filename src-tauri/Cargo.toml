@@ -7,7 +7,11 @@ edition = "2021"
 default-run = "drplay"
 
 [workspace]
-members = ["tauri-plugin-native-audio", "tauri-plugin-saf-download"]
+members = [
+    "tauri-plugin-native-audio",
+    "tauri-plugin-saf-download",
+    "tauri-plugin-webview-settings",
+]
 default-members = ["."]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -29,6 +33,9 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-native-audio = { path = "tauri-plugin-native-audio" }
 # SAF download folder picker + writer (Android only — Task 4 mobile-polish).
 tauri-plugin-saf-download = { path = "tauri-plugin-saf-download" }
+# WebView settings lock: textZoom=100 so OS font-scale cannot inflate the
+# px-sized player UI (Android only; desktop init is a no-op).
+tauri-plugin-webview-settings = { path = "tauri-plugin-webview-settings" }
 tauri-plugin-opener = "2"
 # Android/iOS custom-scheme deep links (RFC 8252 mobile OAuth redirect).
 # Rust side only — the JS getCurrent is not used; permission deep-link:default
