@@ -74,6 +74,17 @@ export function useSeekDrag({
   // commit on pointerup/cancel (seek + immediate buffer redraw), and a small
   // release delay so stale in-flight timeupdate events cannot jump the thumb.
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Single-owner drag: the window listeners below receive events from EVERY
+    // pointer, so an additional finger landing mid-drag must not register a
+    // second parallel listener set (it would overwrite the unmount-cleanup
+    // refs and let either lift commit the other finger's seek). While a drag
+    // is live every new pointerdown is ignored wholesale; move/up/cancel act
+    // only on the owning pointerId captured here. (MDN PointerEvent.isPrimary:
+    // there is one primary pointer per pointerType — touch + mouse can both
+    // be primary at once — so an active-drag guard, not isPrimary alone, is
+    // what serializes drags.)
+    if (isDraggingRef.current) return;
+    const ownerPointerId = e.pointerId;
     // The drag surface is the row (mobile) or the rail (desktop); the fill
     // refs below always belong to the rail — only the bounds/capture math
     // switches to the surface.
@@ -100,13 +111,53 @@ export function useSeekDrag({
       return newTime;
     };
 
+    // Recovery for a rejected native seek (see commit): put the fill, clock
+    // and UI playhead back on the engine's real position so the bar never
+    // keeps lying about where playback is.
+    const restoreToEngineTime = () => {
+      const realTime = audio.getCurrentTime();
+      playheadRef.current = realTime;
+      if (progressFillRef.current) {
+        const dur = durationRef.current || duration;
+        setFillWidth(clamp01(dur > 0 ? realTime / dur : 0) * 100);
+      }
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = formatTime(realTime);
+      updateBufferBar(
+        bufferFillRef.current,
+        audio.getBuffered(),
+        playheadRef.current,
+      );
+    };
+
     isDraggingRef.current = true;
     setIsDragging(true);
     updateTime(e.clientX);
 
-    const onMove = (moveEvent: PointerEvent) => updateTime(moveEvent.clientX);
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== ownerPointerId) return;
+      updateTime(moveEvent.clientX);
+    };
     const commit = (upEvent: PointerEvent) => {
-      void audio.seek(updateTime(upEvent.clientX));
+      if (upEvent.pointerId !== ownerPointerId) return;
+      const seekResult = audio.seek(updateTime(upEvent.clientX));
+      // NativeAudioEngine.seek rethrows after reporting (invokeStateful
+      // log-then-rethrow), so a bare fire-and-forget surfaces as an unhandled
+      // rejection and strands fill/thumb/text at the failed target. Desktop
+      // AudioController.seek is sync void — only promise engines get the
+      // recovery path: snap the UI back to the engine's real position right
+      // away (a paused engine may never emit another timeupdate), then log
+      // warn-level context. Error detail is plugin text, sanitized downstream.
+      if (seekResult && typeof seekResult.catch === "function") {
+        seekResult.catch((err: unknown) => {
+          restoreToEngineTime();
+          void captureError({
+            level: "warn",
+            source: SEEK_BAR_MODULE,
+            message: `seek-failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        });
+      }
       // Redraw immediately (not clear): updateBufferBar drops stale pre-seek
       // ranges, so an immediate redraw shows the real buffer at the new
       // position without the empty-bar blink a clear would cause. The UI
