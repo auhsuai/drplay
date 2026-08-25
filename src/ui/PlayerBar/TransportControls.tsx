@@ -20,6 +20,9 @@ export interface TransportControlsProps {
   isPlaying: boolean;
   isBuffering: boolean;
   isDownloading: boolean;
+  /** Track-change loading (PlayerBar arms it while a new track/nonce loads;
+   *  cleared by play/error/pause). Optional so existing callers stay valid. */
+  isLoadingTrack?: boolean;
   hasError: boolean;
   onRetry: () => void;
   playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
@@ -38,6 +41,7 @@ export function TransportControls({
   isPlaying,
   isBuffering,
   isDownloading,
+  isLoadingTrack,
   hasError,
   onRetry,
   playMode,
@@ -57,7 +61,9 @@ export function TransportControls({
   const iconClass = "w-5 h-5";
 
   const playIcon = () =>
-    isDownloading || (isBuffering && isPlaying && !hasError) ? (
+    isDownloading ||
+    isLoadingTrack ||
+    (isBuffering && isPlaying && !hasError) ? (
       <LoaderCircle
         className={`${iconClass} animate-spin [transform-box:view-box] origin-center`}
       />
@@ -131,7 +137,9 @@ export function TransportControls({
         className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-brand-primary hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
         disabled={!currentTrack || isDownloading}
       >
-        {isDownloading || (isBuffering && isPlaying && !hasError) ? (
+        {isDownloading ||
+        isLoadingTrack ||
+        (isBuffering && isPlaying && !hasError) ? (
           <LoaderCircle className="w-5 h-5 animate-spin [transform-box:view-box] origin-center" />
         ) : hasError ? (
           <RefreshCw className="w-5 h-5" />

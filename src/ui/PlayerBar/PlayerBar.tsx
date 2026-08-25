@@ -58,6 +58,10 @@ function PlayerBarImpl({
     message: string;
     code: string;
   } | null>(null);
+  // Track-change loading spinner: true from the moment the store points at a
+  // new track/nonce mid-play until the engine proves an outcome (play, error
+  // or pause). Pure UI feedback — cleared by the event handlers below.
+  const [isLoadingTrack, setIsLoadingTrack] = useState(false);
 
   // Fix I — storm guard state. Refs (not state): the counter must be read and
   // written from AudioController event callbacks without re-rendering the
@@ -110,9 +114,11 @@ function PlayerBarImpl({
   }, [audio]);
 
   // Replaces the old retryPlayback: retrying from the storm message is a
-  // manual action too, so the guard must reset with it.
+  // manual action too, so the guard must reset with it. Retrying is also a
+  // fresh load attempt — re-arm the track-change spinner BEFORE playTrack.
   const handleManualRetry = useCallback(() => {
     resetAdvanceGuard();
+    setIsLoadingTrack(true);
     if (currentTrack) {
       void audio.playTrack(currentTrack, currentTrack.restoreTime);
     }
@@ -127,6 +133,24 @@ function PlayerBarImpl({
     if (errorInfo) setErrorInfo(null);
   }
 
+  // Track-change spinner arm (same render-phase pattern as prevTrackIdRef):
+  // the load key `${track.id}:${loadNonce}` identifies one playback attempt.
+  // While playing, a key change means the engine is about to load new audio —
+  // arm the spinner immediately (the engine's own buffering event may lag or
+  // never fire for native players). The ref syncs even when paused so a
+  // later resume never sees a stale key; pausing clears a pending spinner
+  // here instead of the sync effect (react-hooks/set-state-in-effect).
+  const prevLoadKeyRef = useRef<string | undefined>(undefined);
+  const loadKey = currentTrack
+    ? `${currentTrack.id}:${String(loadNonce ?? 0)}`
+    : undefined;
+  if (loadKey !== prevLoadKeyRef.current) {
+    prevLoadKeyRef.current = loadKey;
+    if (currentTrack && isPlaying && !isLoadingTrack) setIsLoadingTrack(true);
+  } else if (!isPlaying && isLoadingTrack) {
+    setIsLoadingTrack(false);
+  }
+
   // Subscribe to AudioController Events (transport-relevant only — seek /
   // buffer-bar subscriptions live in SeekBar next to the DOM they own).
   useEffect(() => {
@@ -134,6 +158,10 @@ function PlayerBarImpl({
       setIsBuffering(isBuffering);
     });
     const unsubErr = audio.on("error", (err) => {
+      // An error is a definitive load outcome — drop the track-change
+      // spinner first so it can never mask the retry icon, including the
+      // storm-guard early returns below.
+      setIsLoadingTrack(false);
       // Task D: an unrecoverable playback failure (format_error — broken
       // format/decode or retry give-up) marks the current track broken so the
       // auto-advance guard in usePlayerQueue skips it instead of looping it
@@ -187,6 +215,8 @@ function PlayerBarImpl({
     const unsubPlay = audio.on("play", () => {
       resetAdvanceGuard();
       setErrorInfo(null);
+      // Playback actually resumed — the track-change load is done.
+      setIsLoadingTrack(false);
     });
     const unsubEnded = audio.on("ended", () => {
       // Fix I: while a format_error storm is armed, an `ended` must NOT
@@ -278,6 +308,7 @@ function PlayerBarImpl({
               isPlaying={isPlaying}
               isBuffering={isBuffering}
               isDownloading={isDownloading ?? false}
+              isLoadingTrack={isLoadingTrack}
               hasError={errorInfo !== null}
               onRetry={handleManualRetry}
               playMode={playMode}
@@ -324,6 +355,7 @@ function PlayerBarImpl({
               isPlaying={isPlaying}
               isBuffering={isBuffering}
               isDownloading={isDownloading ?? false}
+              isLoadingTrack={isLoadingTrack}
               hasError={errorInfo !== null}
               onRetry={handleManualRetry}
               playMode={playMode}

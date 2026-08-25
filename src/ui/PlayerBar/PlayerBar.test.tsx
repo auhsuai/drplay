@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ReactElement } from "react";
 import {
   act,
   cleanup,
@@ -66,7 +67,23 @@ vi.mock("lucide-react", () => {
     "RotateCw",
   ];
   const Stub = () => null;
-  return Object.fromEntries(icons.map((n) => [n, Stub]));
+  // The loading-spinner and retry glyphs must be OBSERVABLE for the
+  // track-change spinner tests: render them as tagged spans carrying their
+  // className (same data-attr stub pattern as NowPlayingControls.mobile
+  // tests). All other icons stay inert nulls.
+  type IconStub = (props: { className?: string }) => ReactElement | null;
+  const tagged =
+    (testId: string): IconStub =>
+    ({ className }) => <span data-testid={testId} className={className} />;
+  return Object.fromEntries(
+    icons.map((n): [string, IconStub] =>
+      n === "LoaderCircle"
+        ? [n, tagged("loading-spinner")]
+        : n === "RefreshCw"
+          ? [n, tagged("retry-icon")]
+          : [n, Stub],
+    ),
+  );
 });
 
 const { isFavorite, addFavorite, removeFavorite } = vi.hoisted(() => ({
@@ -2116,5 +2133,95 @@ describe("PlayerBar mobile transport — 3 buttons (redesigned row)", () => {
     // TrackInfo + prev + play + next + playMode at minimum (heart is
     // hidden lg:flex -> excluded from the a11y tree in jsdom).
     expect(screen.getAllByRole("button").length).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("PlayerBar track-change loading spinner", () => {
+  const TRACK_B = makeTrack({ id: "track-b" });
+
+  function rerenderToTrackB(
+    rerender: (ui: ReactElement) => void,
+    overrides: Partial<PlayerBarProps> = {},
+  ) {
+    rerender(
+      <PlayerBar
+        currentTrack={TRACK_B}
+        isPlaying={true}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onExpandNowPlaying={vi.fn()}
+        loadNonce={2}
+        {...overrides}
+      />,
+    );
+  }
+
+  it("shows the spinner while a newly selected track loads (rerender, no engine event yet)", () => {
+    const { rerender } = renderPlayer({
+      currentTrack: makeTrack({ id: "track-a" }),
+      isPlaying: true,
+      loadNonce: 1,
+    });
+
+    // Track B selected + nonce bumped by the store BEFORE the engine has
+    // emitted anything: the user must see loading feedback immediately.
+    rerenderToTrackB(rerender);
+
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+  });
+
+  it("hides the spinner when the engine emits play (load finished)", () => {
+    const { rerender } = renderPlayer({
+      currentTrack: makeTrack({ id: "track-a" }),
+      isPlaying: true,
+      loadNonce: 1,
+    });
+    rerenderToTrackB(rerender);
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+
+    act(() => {
+      fakeController._emit("play");
+    });
+
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
+  });
+
+  it("hides the spinner and shows the retry icon when the load fails (format_error)", () => {
+    const { rerender } = renderPlayer({
+      currentTrack: makeTrack({ id: "track-a" }),
+      isPlaying: true,
+      loadNonce: 1,
+    });
+    rerenderToTrackB(rerender);
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "File lỗi định dạng, đang bỏ qua...",
+        code: "format_error",
+      });
+    });
+
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
+    expect(screen.getByTestId("retry-icon")).toBeTruthy();
+  });
+
+  it("hides the spinner when playback pauses between tracks (no stale spinner)", () => {
+    const { rerender } = renderPlayer({
+      currentTrack: makeTrack({ id: "track-a" }),
+      isPlaying: true,
+      loadNonce: 1,
+    });
+    rerenderToTrackB(rerender);
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+
+    // The user pauses (or the queue pauses) while a track change is still
+    // loading: the spinner must not survive the pause branch.
+    rerenderToTrackB(rerender, { isPlaying: false });
+
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
   });
 });
