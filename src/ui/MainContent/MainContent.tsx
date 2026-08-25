@@ -14,45 +14,22 @@ import {
 import { BulkDeleteConfirmModal } from "./components/BulkDeleteConfirmModal";
 import { NewFolderModal } from "./components/NewFolderModal";
 
-import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
-import { useEventListener } from "../../hooks/useEventListener";
+import { useDriveExplorer } from "../../hooks/useDriveExplorer";
 import { isUploading, clearUploadedTint } from "../../utils/uploadManager";
 import { useHardwareBack } from "../../hooks/useHardwareBack";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { PaginationControls } from "./components/PaginationControls";
-import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 import { SkeletonRowList } from "../components/Skeleton";
-import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
-// Fallback delay for the cross-page highlight scroll: normally the page
-// commit itself re-runs the highlight effect, whose cleanup cancels this
-// timer before it fires; the timeout only performs the scroll when the new
-// page renders slower than the delay (slow devices/commits).
-const SCROLL_HIGHLIGHT_DELAY_MS = 50;
-
-// Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar)
-// — the file-list container sizes itself to fill the viewport below it
-// (applied as min-height: calc(100% - 140px) on the [data-drop-region] div).
-const HEADER_CHROME_HEIGHT_PX = 140;
-
-// Skeleton row ≈ 72px tall: 48px icon + p-3 (12px) padding top/bottom.
-const SKELETON_ROW_HEIGHT_PX = 72;
-// Minimum skeleton rows so short viewports never collapse the loading UI.
-const SKELETON_MIN_ROWS = 4;
-
-// Skeleton rows must fill the whole list area on every screen size — a
-// fixed count leaves a blank band on tall/wide displays. Estimate the
-// count from the viewport and recompute on resize, like Spotify/YouTube
-// skeletons do.
-const calcSkeletonRows = () =>
-  Math.max(
-    SKELETON_MIN_ROWS,
-    Math.ceil(
-      (window.innerHeight - HEADER_CHROME_HEIGHT_PX) / SKELETON_ROW_HEIGHT_PX,
-    ),
-  );
+import { HEADER_CHROME_HEIGHT_PX } from "./utils/layoutMetrics";
+import { useSkeletonRows } from "./hooks/useSkeletonRows";
+import { useDragActiveState } from "./hooks/useDragActiveState";
+import { useKeyboardSearchShortcuts } from "./hooks/useKeyboardSearchShortcuts";
+import { useHighlightScrollToRow } from "./hooks/useHighlightScrollToRow";
+import { useDebugTriggers } from "./hooks/useDebugTriggers";
+import { useBulkOverlaysHardwareBack } from "./hooks/useBulkOverlaysHardwareBack";
 
 interface MainContentProps {
   activeTab: TabKey;
@@ -109,23 +86,11 @@ export const MainContent = React.memo(function MainContent({
   const [debugTotalPages, setDebugTotalPages] = React.useState<number | null>(
     null,
   );
-  // While a native drag is in flight (DropZone announces it), the header
-  // chrome and pagination hide so the drop target area is unambiguous; the
-  // file-list container also doubles as the scoped dim region ([data-drop-region]).
-  const [isDragActive, setIsDragActive] = React.useState(false);
 
   // Recompute the skeleton row count on resize so the loading state keeps
   // filling the list area after a window size change.
-  const [skeletonRows, setSkeletonRows] = React.useState(calcSkeletonRows);
-  React.useEffect(() => {
-    const onResize = () => {
-      setSkeletonRows(calcSkeletonRows());
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
+  const skeletonRows = useSkeletonRows();
+  const isDragActive = useDragActiveState();
 
   const explorer = useDriveExplorer(
     currentFolderId,
@@ -135,14 +100,6 @@ export const MainContent = React.memo(function MainContent({
     onRemoveItem,
     sortOption,
   );
-
-  const handleDragActive = (e: Event) => {
-    // detail is typed | null because a CustomEvent constructed without the
-    // detail option defaults to null at runtime.
-    const detail = (e as CustomEvent<{ active: boolean } | null>).detail;
-    setIsDragActive(detail?.active ?? false);
-  };
-  useEventListener(DRAG_ACTIVE_EVENT, handleDragActive);
 
   useEffect(() => {
     isInitialMount.current = false;
@@ -156,26 +113,7 @@ export const MainContent = React.memo(function MainContent({
     };
   }, []);
 
-  // Keyboard shortcuts
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
-      e.preventDefault();
-      if (document.activeElement === searchInputRef.current) {
-        searchInputRef.current?.blur();
-        explorer.setSearchQuery("");
-      } else {
-        searchInputRef.current?.focus();
-      }
-    }
-    if (
-      e.key === "Escape" &&
-      document.activeElement === searchInputRef.current
-    ) {
-      searchInputRef.current?.blur();
-      explorer.setSearchQuery("");
-    }
-  };
-  useEventListener("keydown", handleKeyDown, [explorer.setSearchQuery]);
+  useKeyboardSearchShortcuts(searchInputRef, explorer.setSearchQuery);
 
   // Scroll to top on folder change — unless a LIVE locate highlight belongs
   // to the destination folder itself (the highlight effect will land on the
@@ -200,54 +138,13 @@ export const MainContent = React.memo(function MainContent({
   // Virtualizer is now isolated inside VirtualizedSongList
   const virtualizedListRef = useRef<VirtualizedSongListHandle>(null);
 
-  // Consume-once latch for highlight scrolling: the ts of the last locate we
-  // actually scrolled to. Data churn (upload ticks, search, Dexie writes)
-  // keeps re-creating filteredItems while the SAME highlight is active — the
-  // effect re-runs on every new identity but must not re-yank the viewport:
-  // one locate = one scroll.
-  const lastScrolledTsRef = useRef<number | null>(null);
-
-  // Handle highlight scrolling — consume-once per locate (keyed by ts). The
-  // latch is written ONLY where a scrollToIndex actually executes, never at
-  // effect entry. The cross-page path relies on this: Run 1 only switches
-  // pages and schedules the fallback timer; committing the new page re-runs
-  // this effect and its cleanup cancels that timer — an entry-latch would
-  // make Run 2 skip and lose the scroll entirely.
-  useEffect(() => {
-    if (!highlightedFileId || explorer.filteredItems.length === 0) return;
-    if (lastScrolledTsRef.current === highlightedFileId.ts) return;
-    const index = explorer.filteredItems.findIndex(
-      (item) => item.id === highlightedFileId.id,
-    );
-    if (index === -1) return;
-    const scrollToHighlightedRow = () => {
-      virtualizedListRef.current?.scrollToIndex(index % ITEMS_PER_PAGE, {
-        align: "center",
-      });
-      lastScrolledTsRef.current = highlightedFileId.ts;
-    };
-    const targetPage = Math.floor(index / ITEMS_PER_PAGE) + 1;
-    if (targetPage !== explorer.currentPage) {
-      explorer.setCurrentPage(targetPage);
-      const timerId = setTimeout(
-        scrollToHighlightedRow,
-        SCROLL_HIGHLIGHT_DELAY_MS,
-      );
-      return () => {
-        clearTimeout(timerId);
-      };
-    }
-    scrollToHighlightedRow();
-    // The effect only reads the enumerated explorer members (adding the whole
-    // explorer object would re-run the highlight-scroll on every render since
-    // useDriveExplorer returns a fresh object each render).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
+  useHighlightScrollToRow({
     highlightedFileId,
-    explorer.currentPage,
-    explorer.filteredItems,
-    explorer.setCurrentPage,
-  ]);
+    filteredItems: explorer.filteredItems,
+    currentPage: explorer.currentPage,
+    setCurrentPage: explorer.setCurrentPage,
+    listRef: virtualizedListRef,
+  });
 
   useEffect(() => {
     clearPrefetchedStreams();
@@ -271,32 +168,11 @@ export const MainContent = React.memo(function MainContent({
     setShowBulkDeleteConfirm(true);
   }, []);
 
-  // DEV-only debug triggers (Ctrl+Shift+D panel → "Loading / MainContent"):
-  // bulk-delete modal and selection toolbar drive the SAME local/explorer
-  // state the real flows use, so every subsequent interaction (close modal,
-  // exit selection, bulk action) keeps working unchanged. onDebugEvent no-ops
-  // in production builds; the listeners never run there.
-  useEffect(() => {
-    return onDebugEvent(DEBUG_EVENTS.BULK_DELETE, () => {
-      setShowBulkDeleteConfirm(true);
-    });
-  }, []);
-
-  useEffect(() => {
-    return onDebugEvent(DEBUG_EVENTS.SELECTION_MODE, () => {
-      explorer.setIsSelectionMode(true);
-    });
-    // The hook returns a fresh explorer object every render; the setter itself
-    // is the stable useState setter, so only the member dep is meaningful.
-    // Same shape as the highlight-scroll effect above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [explorer.setIsSelectionMode]);
-
-  useEffect(() => {
-    return onDebugEvent(DEBUG_EVENTS.PAGINATION, () => {
-      setDebugTotalPages(2);
-    });
-  }, []);
+  useDebugTriggers({
+    setShowBulkDeleteConfirm,
+    setIsSelectionMode: explorer.setIsSelectionMode,
+    setDebugTotalPages,
+  });
 
   // Hardware back (mobile): closes the NewFolderModal when it owns the
   // foreground — without this, the back press falls through the App-level
@@ -306,41 +182,13 @@ export const MainContent = React.memo(function MainContent({
     return true;
   }, showNewFolderModal);
 
-  // Hardware back (mobile): closes the two bulk overlays (BulkDeleteConfirmModal
-  // and bulk-move FolderSelectionScreen) when they own the foreground — without
-  // this, a back press falls through the App-level chain to the folder-up
-  // handler and pops folder history instead. BulkDeleteConfirmModal renders
-  // after FolderSelectionScreen in JSX, so it closes first (MoreMenu pattern:
-  // the later-rendered dialog is handled first). Handler closure includes every
-  // boolean gate in deps so the latest version is always on the LIFO stack (an
-  // inline `if (showBulkDeleteConfirm)` read against a stale closure would
-  // re-peel the same overlay twice — MoreMenu pattern). Registered ONLY while
-  // at least one bulk overlay is open, so an empty stack on close keeps the
-  // chain falling through to App.
-  const handleBulkOverlayBack = useCallback((): boolean => {
-    // While a bulk operation is running the overlays must not be dismissible
-    // by hardware back (CacheManagerModal/ImageCropperModal precedent): only
-    // consume the event so it does not fall through to folder-up.
-    if (explorer.isBulkOperating) return true;
-    if (showBulkDeleteConfirm) {
-      setShowBulkDeleteConfirm(false);
-      return true;
-    }
-    if (showBulkMoveScreen) {
-      setShowBulkMoveScreen(false);
-      return true;
-    }
-    return false;
-  }, [
-    explorer.isBulkOperating,
-    setShowBulkDeleteConfirm,
-    setShowBulkMoveScreen,
+  useBulkOverlaysHardwareBack({
+    isBulkOperating: explorer.isBulkOperating,
     showBulkDeleteConfirm,
     showBulkMoveScreen,
-  ]);
-
-  const isAnyBulkOverlayOpen = showBulkDeleteConfirm || showBulkMoveScreen;
-  useHardwareBack(handleBulkOverlayBack, isAnyBulkOverlayOpen);
+    setShowBulkDeleteConfirm,
+    setShowBulkMoveScreen,
+  });
 
   return (
     <main
