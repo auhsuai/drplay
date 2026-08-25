@@ -26,6 +26,14 @@ export function useSeekKeyboard({
   useEffect(() => {
     if (!enabled) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl/Meta/Alt chords belong to the app/webview, not the player
+      // (Alt+Left/Right is history navigation) — return before any
+      // preventDefault/seek so the chord is neither triggered nor swallowed.
+      // Same rule as the transport shortcuts in useKeyboardShortcuts.ts.
+      // e.repeat deliberately KEEPS seeking: holding an arrow scrubbing
+      // repeatedly is the intended player convention (YouTube-style).
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
       const activeEl = document.activeElement as HTMLElement | null;
       if (
         activeEl?.tagName === "INPUT" ||
