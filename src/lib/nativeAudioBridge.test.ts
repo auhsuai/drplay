@@ -435,6 +435,156 @@ describe("nativeAudioBridge", () => {
     });
   });
 
+  describe("load-window play intent (track switch keeps the user's play intent)", () => {
+    const listener = () =>
+      addPluginListenerMock.mock.calls[0]?.[2] as (s: unknown) => void;
+
+    // Track A READY and playing — the pre-switch baseline (wasPlaying=true,
+    // store isPlaying=true from the user's intent).
+    const READY_A = {
+      status: "playing",
+      currentTime: 5,
+      duration: 100,
+      isPlaying: true,
+      buffering: false,
+      rate: 1,
+    };
+
+    // Media3's real load shape: isPlaying stays false while buffering — it
+    // only flips true at READY (the state set_source/seek/play resolve with
+    // inside a JS-initiated load chain).
+    const LOADING_B = {
+      status: "loading",
+      currentTime: 0,
+      duration: 0,
+      isPlaying: false,
+      buffering: true,
+      rate: 1,
+    };
+
+    it("native isPlaying=false inside a JS-initiated load window must not overwrite the store's play intent", async () => {
+      await engine.initOnce();
+      const seen: string[] = [];
+      engine.on("play", () => seen.push("play"));
+      engine.on("pause", () => seen.push("pause"));
+      engine.on("buffering", () => seen.push("buffering"));
+
+      listener()(READY_A);
+      setStateMock.mockClear();
+
+      // User picks track B: the load chain resolves set_source/play with the
+      // buffering shape above.
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "plugin:native-audio|set_source" ||
+        cmd === "plugin:native-audio|play"
+          ? Promise.resolve(LOADING_B)
+          : Promise.resolve({}),
+      );
+
+      await engine.playTrack({
+        id: "track-B",
+        title: "B",
+        artist: "",
+        streamUrl: "",
+      });
+
+      // The buffering edge still flows (spinner input)…
+      expect(seen).toContain("buffering");
+      // …but the isPlaying=false state inside the load window is NOT a real
+      // pause: it must neither emit "pause" nor write isPlaying=false over
+      // the user's play intent (that overwrite killed the track-change
+      // spinner).
+      expect(seen).not.toContain("pause");
+      expect(setStateMock).not.toHaveBeenCalledWith(false);
+
+      // READY: the real play edge flows and re-affirms isPlaying=true.
+      listener()({ ...READY_A, currentTime: 6 });
+      expect(seen).toContain("play");
+      expect(setStateMock).toHaveBeenCalledWith(true);
+    });
+
+    it("a REAL pause after the load window closed still syncs isPlaying=false (exactly one pause edge)", async () => {
+      await engine.initOnce();
+      const seen: string[] = [];
+      engine.on("pause", () => seen.push("pause"));
+
+      listener()(READY_A);
+      invokeMock.mockImplementation(() => Promise.resolve(LOADING_B));
+      await engine.playTrack({
+        id: "track-B",
+        title: "B",
+        artist: "",
+        streamUrl: "",
+      });
+      // READY for track B.
+      listener()({ ...READY_A, currentTime: 6 });
+      setStateMock.mockClear();
+
+      // Focus loss / pause AFTER the chain settled — the window is closed,
+      // the pause edge must sync the store as before, and the earlier load
+      // window must not have leaked a fake extra pause edge.
+      listener()({
+        status: "idle",
+        currentTime: 6,
+        duration: 100,
+        isPlaying: false,
+        buffering: false,
+        rate: 1,
+      });
+
+      expect(seen).toEqual(["pause"]);
+      expect(setStateMock).toHaveBeenCalledWith(false);
+    });
+
+    it("an explicit engine.pause() mid-load closes the intent window — native pause syncs the store", async () => {
+      await engine.initOnce();
+      listener()(READY_A);
+      setStateMock.mockClear();
+
+      let resolveSource: ((v: unknown) => void) | undefined;
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "plugin:native-audio|set_source") {
+          return new Promise((resolve) => {
+            resolveSource = resolve;
+          });
+        }
+        return Promise.resolve({});
+      });
+
+      const turn = engine.playTrack({
+        id: "track-B",
+        title: "B",
+        artist: "",
+        streamUrl: "",
+      });
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          "plugin:native-audio|set_source",
+          expect.anything(),
+        );
+      });
+
+      // User pauses while the load chain is still suspended on set_source.
+      await engine.pause();
+
+      // pause() itself closes the window: the native isPlaying=false state is
+      // a real pause and must reach the store (pause wins instantly, even
+      // mid-buffer).
+      listener()({
+        status: "idle",
+        currentTime: 5,
+        duration: 0,
+        isPlaying: false,
+        buffering: true,
+        rate: 1,
+      });
+      expect(setStateMock).toHaveBeenCalledWith(false);
+
+      resolveSource?.(LOADING_B);
+      await turn;
+    });
+  });
+
   describe("getPlaybackEngine", () => {
     it("returns the native engine on mobile (IS_MOBILE=true)", () => {
       expect(bridge.getPlaybackEngine()).toBe(bridge.nativeAudioEngine);

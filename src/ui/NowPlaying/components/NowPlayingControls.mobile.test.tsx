@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { Track } from "../../../types";
 import { NowPlayingControls } from "./NowPlayingControls";
 import { NowPlayingView } from "../NowPlayingView";
@@ -22,7 +29,12 @@ vi.mock("../../../utils/metadata", () => ({
 }));
 
 const engine = vi.hoisted(() => ({
-  on: vi.fn(() => vi.fn()),
+  // Explicit function generic: mock.calls entries stay indexable
+  // ([event, handler]) without naming unused implementation params, and the
+  // handler slot is already a function type (no per-access casts).
+  on: vi.fn<
+    (event: string, handler?: (...args: never[]) => void) => () => void
+  >(() => vi.fn()),
   getCurrentTime: vi.fn(() => 0),
   getDuration: vi.fn(() => 0),
   getBuffered: vi.fn(() => ({ length: 0 })),
@@ -58,7 +70,19 @@ vi.mock("lucide-react", () => {
   const Stub = ({ className }: { className?: string }) => (
     <span data-icon="stub" className={className} />
   );
-  return Object.fromEntries(icons.map((n) => [n, Stub]));
+  // The load spinner must be OBSERVABLE for the buffering/track-load tests
+  // (same tagged-stub pattern as PlayerBar.test.tsx).
+  const spinnerStub = ({ className }: { className?: string }) => (
+    <span data-testid="loading-spinner" className={className} />
+  );
+  // Explicit entry tuples keep Object.fromEntries on the typed overload
+  // (untyped mixed arrays resolve to an `any` return — lint error).
+  type IconStub = (props: { className?: string }) => ReactElement;
+  const entries: Array<[string, IconStub]> = [
+    ...icons.map((n): [string, IconStub] => [n, Stub]),
+    ["LoaderCircle", spinnerStub],
+  ];
+  return Object.fromEntries(entries);
 });
 
 function makeTrack(overrides: Partial<Track> = {}): Track {
@@ -167,6 +191,51 @@ describe("NowPlayingControls mobile — 5-button transport (prev/-5s/play/+5s/ne
     );
     expect(playBtn.className).toContain("w-10 h-10");
   });
+
+  it("desktop: buffering does NOT swap in a spinner (overlay unchanged on desktop)", async () => {
+    vi.resetModules();
+    vi.doMock("../../../utils/platform", () => ({ IS_MOBILE: false }));
+    const { NowPlayingControls: DesktopControls } =
+      await import("./NowPlayingControls");
+    render(
+      <DesktopControls
+        isPlaying={true}
+        isBuffering={true}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onRewind5={vi.fn()}
+        onForward5={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
+  });
+
+  it("shows the load spinner while buffering with play intent (mobile)", () => {
+    renderControls({ isPlaying: true, isBuffering: true });
+    const spinner = screen.getByTestId("loading-spinner");
+    expect(spinner.className).toContain("animate-spin");
+  });
+
+  it("shows the spinner while download or track-change load feedback is active", () => {
+    renderControls({ isDownloading: true });
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+    cleanup();
+    renderControls({ isLoadingTrack: true });
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+  });
+
+  it("hides the spinner when the user paused mid-buffer (pause wins instantly)", () => {
+    renderControls({ isPlaying: false, isBuffering: true });
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
+  });
+
+  it("no spinner while playing without load feedback", () => {
+    renderControls({ isPlaying: true });
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
+  });
 });
 
 describe("NowPlayingView mobile — ±5s seek wiring through the shared engine", () => {
@@ -224,5 +293,88 @@ describe("NowPlayingView mobile — ±5s seek wiring through the shared engine",
     engine.getDuration.mockReturnValue(0);
     fireEvent.click(screen.getByRole("button", { name: "Rewind 5 seconds" }));
     expect(engine.seek).not.toHaveBeenCalled();
+  });
+
+  it("wires engine buffering + outcome edges into the overlay spinner (play intent)", () => {
+    // engine.on is a shared accumulating mock — earlier view renders in this
+    // file left stale subscriptions behind; only THIS render's handlers may
+    // be invoked.
+    engine.on.mockClear();
+    render(
+      <NowPlayingView
+        currentTrack={makeTrack()}
+        isPlaying={true}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onBack={vi.fn()}
+        isOpen={false}
+        token="tok"
+      />,
+    );
+
+    // The recorded handlers carry no parameter info in the mock's inferred
+    // type — one narrow cast per event signature (never[] params keep the
+    // cast comparable without `any`).
+    const findHandler = (
+      event: string,
+    ): ((...args: never[]) => void) | undefined =>
+      engine.on.mock.calls.find((call) => call[0] === event)?.[1];
+    const bufferingHandler = findHandler("buffering") as
+      ((p: { isBuffering: boolean }) => void) | undefined;
+    const playHandler = findHandler("play") as (() => void) | undefined;
+    const errorHandler = findHandler("error") as (() => void) | undefined;
+    expect(bufferingHandler).toBeTruthy();
+    expect(playHandler).toBeTruthy();
+    expect(errorHandler).toBeTruthy();
+
+    // Fresh load armed on mount (isPlaying=true) and buffering keeps it up.
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+    act(() => {
+      bufferingHandler?.({ isBuffering: true });
+    });
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+
+    // Buffering alone ending is not an outcome — the spinner waits for play.
+    act(() => {
+      bufferingHandler?.({ isBuffering: false });
+    });
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+
+    // READY: the play edge proves the load finished — spinner hides.
+    act(() => {
+      playHandler?.();
+    });
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
+  });
+
+  it("hides the overlay spinner when the load errors out", () => {
+    engine.on.mockClear();
+    render(
+      <NowPlayingView
+        currentTrack={makeTrack()}
+        isPlaying={true}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onBack={vi.fn()}
+        isOpen={false}
+        token="tok"
+      />,
+    );
+    const errorHandler = engine.on.mock.calls.find(
+      (call) => call[0] === "error",
+    )?.[1] as (() => void) | undefined;
+    expect(errorHandler).toBeTruthy();
+
+    expect(screen.getByTestId("loading-spinner")).toBeTruthy();
+    act(() => {
+      errorHandler?.();
+    });
+    expect(screen.queryByTestId("loading-spinner")).toBeNull();
   });
 });

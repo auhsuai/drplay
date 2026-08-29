@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { usePlayerStore } from "../../store/playerStore";
 import { seekRelative, SEEK_STEP_SECONDS } from "../../hooks/player/utils";
+import { useTrackLoadSpinner } from "../../hooks/player/useTrackLoadSpinner";
 import { IS_MOBILE } from "../../utils/platform";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
@@ -60,8 +61,14 @@ function PlayerBarImpl({
   } | null>(null);
   // Track-change loading spinner: true from the moment the store points at a
   // new track/nonce mid-play until the engine proves an outcome (play, error
-  // or pause). Pure UI feedback — cleared by the event handlers below.
-  const [isLoadingTrack, setIsLoadingTrack] = useState(false);
+  // or pause). Pure UI feedback — cleared by the event handlers below. The
+  // arm/clear render-phase logic lives in the shared hook (NowPlayingView's
+  // overlay spinner needs the exact same signal).
+  const [isLoadingTrack, setIsLoadingTrack] = useTrackLoadSpinner(
+    currentTrack,
+    loadNonce,
+    isPlaying,
+  );
 
   // Fix I — storm guard state. Refs (not state): the counter must be read and
   // written from AudioController event callbacks without re-rendering the
@@ -122,7 +129,7 @@ function PlayerBarImpl({
     if (currentTrack) {
       void audio.playTrack(currentTrack, currentTrack.restoreTime);
     }
-  }, [currentTrack, audio, resetAdvanceGuard]);
+  }, [currentTrack, audio, resetAdvanceGuard, setIsLoadingTrack]);
 
   // Reset transient track state when the track changes. Done during render
   // (React "adjusting state during render" pattern) so no setState happens
@@ -131,24 +138,6 @@ function PlayerBarImpl({
   if (currentTrack?.id !== prevTrackIdRef.current) {
     prevTrackIdRef.current = currentTrack?.id;
     if (errorInfo) setErrorInfo(null);
-  }
-
-  // Track-change spinner arm (same render-phase pattern as prevTrackIdRef):
-  // the load key `${track.id}:${loadNonce}` identifies one playback attempt.
-  // While playing, a key change means the engine is about to load new audio —
-  // arm the spinner immediately (the engine's own buffering event may lag or
-  // never fire for native players). The ref syncs even when paused so a
-  // later resume never sees a stale key; pausing clears a pending spinner
-  // here instead of the sync effect (react-hooks/set-state-in-effect).
-  const prevLoadKeyRef = useRef<string | undefined>(undefined);
-  const loadKey = currentTrack
-    ? `${currentTrack.id}:${String(loadNonce ?? 0)}`
-    : undefined;
-  if (loadKey !== prevLoadKeyRef.current) {
-    prevLoadKeyRef.current = loadKey;
-    if (currentTrack && isPlaying && !isLoadingTrack) setIsLoadingTrack(true);
-  } else if (!isPlaying && isLoadingTrack) {
-    setIsLoadingTrack(false);
   }
 
   // Subscribe to AudioController Events (transport-relevant only — seek /
@@ -241,7 +230,7 @@ function PlayerBarImpl({
       unsubPlay();
       unsubEnded();
     };
-  }, [onNextTrack, audio, resetAdvanceGuard]);
+  }, [onNextTrack, audio, resetAdvanceGuard, setIsLoadingTrack]);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel): renders the SAME error banner
   // as a real AudioController error via setErrorInfo only — it deliberately

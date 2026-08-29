@@ -143,6 +143,16 @@ export class NativeAudioEngine implements PlaybackEngine {
   //    so no seek(restoreA)/play(A) ever lands on the newer source.
   private playSeq = 0;
   private playChain: Promise<void> = Promise.resolve();
+  // Load-intent window (spinner fix): true while a JS-initiated playTrack
+  // chain is executing (set_source/seek/play round-trips). Inside this window
+  // Media3 reports isPlaying=false while buffering (isPlaying only flips true
+  // at READY), which used to read as a "pause" edge and wrote isPlaying=false
+  // over the user's play intent (set by usePlayer on track switch) — killing
+  // the track-change spinner on Android. Edges outside the window (audio
+  // focus loss, ended, error, a real user pause) sync the store exactly as
+  // before; an explicit pause() closes the window first so a genuine pause
+  // always wins, even mid-buffer.
+  private loadIntentActive = false;
 
   /** Initialize the plugin once (notification permission on Android 13+ is
    *  requested by the plugin during initialize()). Safe to call repeatedly. */
@@ -195,41 +205,56 @@ export class NativeAudioEngine implements PlaybackEngine {
     startTime?: number,
   ): Promise<void> {
     if (seq !== this.playSeq) return;
-    await this.initOnce();
-    if (seq !== this.playSeq) return;
+    // Open the load-intent window for this chain; closed in finally no
+    // matter how the chain exits (completed, superseded or failed). Safe
+    // against interleaving: a state processed inside any chain's window
+    // already flips wasPlaying to its own isPlaying value, so a gap between
+    // a superseded chain's exit and the next chain's start cannot fake a
+    // pause edge (the edge needs wasPlaying=true, i.e. a READY state).
+    this.loadIntentActive = true;
+    try {
+      await this.initOnce();
+      if (seq !== this.playSeq) return;
 
-    this.currentTrack = track;
+      this.currentTrack = track;
 
-    if (this.currentTrackId === track.id) {
-      const state = this.lastState;
-      if (state && !state.isPlaying) {
-        await this.invokeStateful(PLUGIN_COMMAND.play);
+      if (this.currentTrackId === track.id) {
+        const state = this.lastState;
+        if (state && !state.isPlaying) {
+          await this.invokeStateful(PLUGIN_COMMAND.play);
+        }
+        return;
       }
-      return;
-    }
 
-    this.currentTrackId = track.id;
-    await this.invokeStateful(PLUGIN_COMMAND.setSource, {
-      src: buildDriveStreamUrl(track.id),
-      title: track.title,
-      artist: track.artist,
-      headers: this.token
-        ? { Authorization: `Bearer ${this.token}` }
-        : undefined,
-    });
-    if (seq !== this.playSeq) return;
-
-    if (startTime !== undefined && startTime > 0) {
-      await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
-        position: startTime,
+      this.currentTrackId = track.id;
+      await this.invokeStateful(PLUGIN_COMMAND.setSource, {
+        src: buildDriveStreamUrl(track.id),
+        title: track.title,
+        artist: track.artist,
+        headers: this.token
+          ? { Authorization: `Bearer ${this.token}` }
+          : undefined,
       });
       if (seq !== this.playSeq) return;
+
+      if (startTime !== undefined && startTime > 0) {
+        await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
+          position: startTime,
+        });
+        if (seq !== this.playSeq) return;
+      }
+      await this.invokeStateful(PLUGIN_COMMAND.play);
+    } finally {
+      this.loadIntentActive = false;
     }
-    await this.invokeStateful(PLUGIN_COMMAND.play);
   }
 
   async pause(): Promise<void> {
     if (!IS_MOBILE) return;
+    // An explicit pause is a user intent flip — close the load window first
+    // so the native pause state syncs the store immediately (pause wins
+    // instantly, even mid-buffer).
+    this.loadIntentActive = false;
     await this.initOnce().catch(() => undefined);
     await this.invokeStateful(PLUGIN_COMMAND.pause);
   }
@@ -400,7 +425,13 @@ export class NativeAudioEngine implements PlaybackEngine {
     if (state.isPlaying && !this.wasPlaying) {
       this.emit("play", undefined);
       usePlayerStore.getState().setIsPlaying(true);
-    } else if (!state.isPlaying && this.wasPlaying) {
+    } else if (
+      !state.isPlaying &&
+      this.wasPlaying &&
+      // Inside a JS-initiated load window Media3 reports isPlaying=false
+      // while buffering — that is the load, not a pause. See loadIntentActive.
+      !this.loadIntentActive
+    ) {
       this.emit("pause", undefined);
       usePlayerStore.getState().setIsPlaying(false);
     }

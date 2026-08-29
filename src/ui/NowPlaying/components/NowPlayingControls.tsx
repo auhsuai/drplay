@@ -1,4 +1,5 @@
 ﻿import {
+  LoaderCircle,
   Play,
   Pause,
   SkipBack,
@@ -14,6 +15,14 @@ import { IS_MOBILE } from "../../../utils/platform";
 
 interface NowPlayingControlsProps {
   isPlaying: boolean;
+  /** Load feedback (same condition family as TransportControls' play icon):
+   *  engine buffering, the track-change spinner (arm/clear via
+   *  useTrackLoadSpinner) or the store's download flag. Optional so existing
+   *  callers stay valid. Mobile only — the desktop overlay keeps its
+   *  plain Play/Pause icon unchanged. */
+  isBuffering?: boolean | undefined;
+  isLoadingTrack?: boolean | undefined;
+  isDownloading?: boolean | undefined;
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
@@ -27,6 +36,9 @@ interface NowPlayingControlsProps {
 
 export function NowPlayingControls({
   isPlaying,
+  isBuffering,
+  isLoadingTrack,
+  isDownloading,
   onTogglePlay,
   onNextTrack,
   onPrevTrack,
@@ -42,6 +54,13 @@ export function NowPlayingControls({
   const sideBtnClass = "p-2";
   const iconClass = "w-5 h-5";
   const playBtnClass = IS_MOBILE ? "w-[44px] h-[44px]" : "w-10 h-10";
+  // Spinner instead of Pause/Play while a load is in flight (track switch,
+  // resume or buffering) — the Play/Pause icon jumping states without any
+  // loading cue read as "nothing happened" on Android. Desktop: the overlay
+  // never showed load feedback, so it keeps its icon logic untouched.
+  const showLoadSpinner =
+    IS_MOBILE &&
+    (isDownloading || isLoadingTrack || (isBuffering && isPlaying));
   return (
     <div className="w-full flex items-center justify-center mb-4">
       {/* Left spacer for perfect centering */}
@@ -75,7 +94,11 @@ export function NowPlayingControls({
           aria-label={t("player.play_pause", "Play/Pause")}
           className={`${playBtnClass} flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90`}
         >
-          {isPlaying ? (
+          {showLoadSpinner ? (
+            <LoaderCircle
+              className={`${iconClass} animate-spin [transform-box:view-box] origin-center`}
+            />
+          ) : isPlaying ? (
             <Pause className={iconClass} />
           ) : (
             <Play className={`${iconClass} ml-0.5`} />

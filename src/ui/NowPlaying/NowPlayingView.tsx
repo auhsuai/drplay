@@ -1,9 +1,10 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import type { Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getPlaybackEngine } from "../../lib/nativeAudioBridge";
 import { seekRelative, SEEK_STEP_SECONDS } from "../../hooks/player/utils";
+import { useTrackLoadSpinner } from "../../hooks/player/useTrackLoadSpinner";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { SeekBar } from "../components/SeekBar";
@@ -12,6 +13,12 @@ import { IS_MOBILE } from "../../utils/platform";
 interface NowPlayingViewProps {
   currentTrack: Track | null;
   isPlaying: boolean;
+  /** Store download flag (token/stream prep) — feeds the overlay's load
+   *  spinner alongside the engine buffering edge and the track-change key.
+   *  Optional so existing callers stay valid. */
+  isDownloading?: boolean | undefined;
+  /** Store load nonce — the track-load key for the spinner arm/clear. */
+  loadNonce?: number | undefined;
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
@@ -25,6 +32,8 @@ interface NowPlayingViewProps {
 export const NowPlayingView = memo(function NowPlayingView({
   currentTrack,
   isPlaying,
+  isDownloading,
+  loadNonce,
   onTogglePlay,
   onNextTrack,
   onPrevTrack,
@@ -50,6 +59,38 @@ export const NowPlayingView = memo(function NowPlayingView({
   const handleForward5 = useCallback(() => {
     seekRelative(audio, SEEK_STEP_SECONDS);
   }, [audio]);
+
+  // Load feedback for the overlay's play button — the exact inputs the
+  // PlayerBar spinner uses (spinner fix 2026-08): the engine buffering edge
+  // plus the shared track-change arm/clear hook, so the overlay shows a
+  // spinner from the moment a track switch starts until READY or error.
+  const [isBuffering, setIsBuffering] = useState(false);
+  useEffect(() => {
+    return audio.on("buffering", ({ isBuffering }) => {
+      setIsBuffering(isBuffering);
+    });
+  }, [audio]);
+  const [isLoadingTrack, setIsLoadingTrack] = useTrackLoadSpinner(
+    currentTrack,
+    loadNonce,
+    isPlaying,
+  );
+  // The arm/clear hook knows nothing about engine outcomes — mirror
+  // PlayerBar's play/error handlers here: `play` proves the load finished,
+  // `error` is a definitive failed outcome. Without these the overlay
+  // spinner would outlive READY (nothing else clears it).
+  useEffect(() => {
+    const unsubPlay = audio.on("play", () => {
+      setIsLoadingTrack(false);
+    });
+    const unsubErr = audio.on("error", () => {
+      setIsLoadingTrack(false);
+    });
+    return () => {
+      unsubPlay();
+      unsubErr();
+    };
+  }, [audio, setIsLoadingTrack]);
 
   if (!currentTrack) {
     return (
@@ -161,6 +202,9 @@ export const NowPlayingView = memo(function NowPlayingView({
             <div className="w-full flex flex-col items-center justify-center max-w-[800px] mx-auto">
               <NowPlayingControls
                 isPlaying={isPlaying}
+                isBuffering={isBuffering}
+                isLoadingTrack={isLoadingTrack}
+                isDownloading={isDownloading ?? false}
                 onTogglePlay={onTogglePlay}
                 onNextTrack={onNextTrack}
                 onPrevTrack={onPrevTrack}

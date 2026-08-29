@@ -576,6 +576,8 @@ function App() {
         isOpen={isNowPlayingOpen}
         currentTrack={currentTrack}
         isPlaying={isPlaying}
+        isDownloading={isDownloading}
+        loadNonce={loadNonce}
         onTogglePlay={stableHandleTogglePlay}
         onNextTrack={stableHandleNextTrack}
         onPrevTrack={stableHandlePrevTrack}
