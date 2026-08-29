@@ -108,6 +108,11 @@ class NativeAudioService : MediaSessionService() {
                 setUseFastForwardActionInCompactView(false)
                 setUseStopAction(false)
                 setSmallIcon(resolveNotificationSmallIconResId())
+                // Accent color for the media notification: media3 defaults to
+                // colorized=true with a transparent color, which leaves the action
+                // buttons tinted system-gray. Value mirrors src/App.css
+                // --color-brand-primary (Context#getColor, API 23+; minSdk is 26).
+                setColor(getColor(R.color.brand_primary))
                 setPlayer(player)
             }
     }

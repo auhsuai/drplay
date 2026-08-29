@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Why: mirrors the frontend brand color token "color-brand-primary" defined
+         in src/App.css. Media3 PlayerNotificationManager ships with colorized=true
+         and a transparent color, so without an accent the notification action
+         buttons fall back to the system gray tint. -->
+    <color name="brand_primary">#4285F4</color>
+</resources>
