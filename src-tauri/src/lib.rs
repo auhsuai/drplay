@@ -168,6 +168,40 @@ fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivit
     }
 }
 
+// Android-only: recreate the main config window when a resume finds zero
+// webviews. tao binds one window per Activity id; when a foreground service
+// (audio) keeps the process alive across activity destruction, a relaunched
+// activity gets a fresh id, no webview is re-bound and the UI stays frozen
+// (tauri-apps/tauri#15671). No-op while any webview is still alive.
+#[cfg(target_os = "android")]
+fn recreate_main_window_if_gone(app_handle: &tauri::AppHandle) {
+    if !app_handle.webview_windows().is_empty() {
+        return;
+    }
+    // Mirror tauri's own setup(): create the config window the same way the
+    // app was originally built (label/url/size all come from tauri.conf.json).
+    let config = match app_handle
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.create)
+    {
+        Some(config) => config,
+        None => {
+            eprintln!(
+                "[drplay] resumed with no webviews and no creatable window config — UI cannot be restored"
+            );
+            return;
+        }
+    };
+    if let Err(e) = tauri::WebviewWindowBuilder::from_config(app_handle, config)
+        .and_then(|builder| builder.build())
+    {
+        eprintln!("[drplay] failed to recreate webview window on resume: {e}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = protocol::register(tauri::Builder::default())
@@ -275,6 +309,15 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 IS_QUITTING.store(true, Ordering::SeqCst);
             }
+            // Surface an Android resume: with a foreground service keeping the
+            // process alive, the activity can be destroyed and relaunched
+            // without a webview ever being re-bound (tauri#15671). NOTE:
+            // published tauri-runtime-wry 2.11.3 only dispatches
+            // Event::Resumed per-window, so this arm becomes effective once
+            // the runtime surfaces an app-level RunEvent::Resumed on Android
+            // (upstream fix in flight there).
+            #[cfg(target_os = "android")]
+            tauri::RunEvent::Resumed => recreate_main_window_if_gone(_app_handle),
             _ => {}
     });
 }

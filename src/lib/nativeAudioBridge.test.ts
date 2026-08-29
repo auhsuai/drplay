@@ -1,5 +1,13 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach, expectTypeOf } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  vi,
+  beforeEach,
+  afterEach,
+  expectTypeOf,
+} from "vitest";
 import type { NativeAudioEngine, PlaybackEngine } from "./nativeAudioBridge";
 
 // IS_MOBILE is a module-level constant read at import time — the platform
@@ -606,6 +614,314 @@ describe("nativeAudioBridge", () => {
 
     it("nativeAudioEngine satisfies the PlaybackEngine surface (compile-time contract)", () => {
       expectTypeOf(bridge.nativeAudioEngine).toExtend<PlaybackEngine>();
+    });
+  });
+
+  // Long-suspend recovery: after a long device sleep the Android activity can
+  // come back with a dead plugin event channel / invoke bridge while the UI
+  // still renders the cached lastState — progress freezes silently. The engine
+  // must probe the bridge on every visible transition (read-only get_state),
+  // re-init when the probe fails, and re-sync the authoritative state.
+  describe("resume health-check (long-suspend recovery)", () => {
+    const GO_STATE = {
+      status: "playing",
+      currentTime: 42,
+      duration: 100,
+      isPlaying: true,
+      buffering: false,
+      rate: 1,
+    };
+
+    // Drain pending microtasks deterministically (no timers involved).
+    const drainMicrotasks = async () => {
+      for (let i = 0; i < 25; i++) await Promise.resolve();
+    };
+
+    const dispatchVisible = () => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+
+    // jsdom's document outlives vi.resetModules(), so handlers attached by an
+    // earlier test's engine would keep firing in later tests — record every
+    // visibilitychange registration and remove exactly those after each test.
+    const addSpy = vi.spyOn(document, "addEventListener");
+    afterEach(() => {
+      for (const [type, handler] of addSpy.mock.calls) {
+        if (type === "visibilitychange") {
+          document.removeEventListener(type, handler as EventListener);
+        }
+      }
+      addSpy.mockClear();
+      vi.useRealTimers();
+    });
+
+    it("probes the read-only get_state command on a visible transition", async () => {
+      await engine.initOnce();
+      invokeMock.mockClear();
+      invokeMock.mockResolvedValue(GO_STATE);
+      dispatchVisible();
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          "plugin:native-audio|get_state",
+        );
+      });
+    });
+
+    it("does not re-initialize when the bridge answers (live listener preserved)", async () => {
+      await engine.initOnce();
+      invokeMock.mockClear();
+      addPluginListenerMock.mockClear();
+      invokeMock.mockResolvedValue(GO_STATE);
+      dispatchVisible();
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          "plugin:native-audio|get_state",
+        );
+      });
+      expect(invokeMock).not.toHaveBeenCalledWith(
+        "plugin:native-audio|initialize",
+      );
+      expect(addPluginListenerMock).not.toHaveBeenCalled();
+    });
+
+    it("pushes the pulled state through onNativeState so the store re-syncs", async () => {
+      await engine.initOnce();
+      invokeMock.mockClear();
+      invokeMock.mockResolvedValue(GO_STATE);
+      dispatchVisible();
+      await vi.waitFor(() => {
+        expect(setStateMock).toHaveBeenCalledWith(true);
+      });
+    });
+
+    it("re-initializes, re-subscribes once and re-syncs when the probe times out", async () => {
+      await engine.initOnce();
+      invokeMock.mockClear();
+      addPluginListenerMock.mockClear();
+      let probeCalls = 0;
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "plugin:native-audio|get_state") {
+          probeCalls++;
+          // First probe: wedged bridge — never answers. A later probe (the
+          // re-pull after re-init) succeeds, proving the recovered bridge.
+          return probeCalls === 1
+            ? new Promise(() => {})
+            : Promise.resolve(GO_STATE);
+        }
+        return Promise.resolve({});
+      });
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      dispatchVisible();
+      // 3s resume-probe budget (RESUME_HEALTH_CHECK_TIMEOUT_MS).
+      await vi.advanceTimersByTimeAsync(3_000);
+      await drainMicrotasks();
+
+      // initPromise was reset + initOnce re-ran: initialize + listener again.
+      expect(invokeMock).toHaveBeenCalledWith("plugin:native-audio|initialize");
+      expect(addPluginListenerMock).toHaveBeenCalledTimes(1);
+      // Authoritative state pulled after re-init → store re-synced.
+      expect(setStateMock).toHaveBeenCalledWith(true);
+      // The health-check listener itself must NOT be re-attached on re-init.
+      expect(
+        addSpy.mock.calls.filter(([type]) => type === "visibilitychange"),
+      ).toHaveLength(1);
+    });
+
+    it("never probes or registers a health-check listener on desktop", async () => {
+      platformMock.IS_MOBILE = false;
+      vi.resetModules();
+      const desktopBridge = await import("./nativeAudioBridge");
+      await desktopBridge.nativeAudioEngine.initOnce();
+      dispatchVisible();
+      await drainMicrotasks();
+      expect(invokeMock).not.toHaveBeenCalled();
+      expect(
+        addSpy.mock.calls.some(([type]) => type === "visibilitychange"),
+      ).toBe(false);
+    });
+  });
+
+  // Every invoke is bounded so one wedged command can never stall the FIFO
+  // playChain (play/pause/seek queue) forever; set_source carries its own,
+  // larger budget because it performs the network load + container prepare.
+  describe("invoke timeouts (a wedged bridge cannot stall the chain)", () => {
+    const drainMicrotasks = async () => {
+      for (let i = 0; i < 25; i++) await Promise.resolve();
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("rejects a transport command at its timeout with a classified error", async () => {
+      await engine.initOnce();
+      invokeMock.mockImplementation(() => new Promise(() => {}));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      let settled = false;
+      let caught: unknown;
+      engine.pause().then(
+        () => {
+          settled = true;
+        },
+        (e: unknown) => {
+          caught = e;
+          settled = true;
+        },
+      );
+      // 10s transport budget (TRANSPORT_INVOKE_TIMEOUT_MS).
+      await vi.advanceTimersByTimeAsync(10_000);
+      await drainMicrotasks();
+
+      expect(settled).toBe(true);
+      expect((caught as Error | undefined)?.name).toBe(
+        "NativeInvokeTimeoutError",
+      );
+      expect(String(caught)).toContain("pause");
+      expect(String(caught)).toContain("timeout");
+    });
+
+    it("accepts a transport command answering just under the timeout", async () => {
+      await engine.initOnce();
+      invokeMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            // 1ms under the 10s transport budget — must NOT be a timeout.
+            setTimeout(() => {
+              resolve({});
+            }, 10_000 - 1);
+          }),
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      const turn = engine.pause();
+      await vi.advanceTimersByTimeAsync(10_000 - 1);
+      await drainMicrotasks();
+      await expect(turn).resolves.toBeUndefined();
+    });
+
+    it("gives set_source its own larger budget before rejecting", async () => {
+      await engine.initOnce();
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "plugin:native-audio|set_source"
+          ? new Promise(() => {})
+          : Promise.resolve({}),
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      let settled = false;
+      const turn = engine.playTrack({
+        id: "A",
+        title: "A",
+        artist: "",
+        streamUrl: "",
+      });
+      turn.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      // At the transport budget mark (10s) the load is still inside its own
+      // (30s) budget — not yet rejected.
+      await vi.advanceTimersByTimeAsync(10_000);
+      await drainMicrotasks();
+      expect(settled).toBe(false);
+      // ...and rejects at its own 30s budget (SET_SOURCE_INVOKE_TIMEOUT_MS).
+      await vi.advanceTimersByTimeAsync(20_000);
+      await drainMicrotasks();
+      expect(settled).toBe(true);
+      await expect(turn).rejects.toMatchObject({
+        name: "NativeInvokeTimeoutError",
+      });
+    });
+
+    it("bounds the initialize command so a wedged bridge cannot hang initOnce", async () => {
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "plugin:native-audio|initialize"
+          ? new Promise(() => {})
+          : Promise.resolve({}),
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      let settled = false;
+      let caught: unknown;
+      engine.initOnce().then(
+        () => {
+          settled = true;
+        },
+        (e: unknown) => {
+          caught = e;
+          settled = true;
+        },
+      );
+      // initialize rides the 10s transport budget.
+      await vi.advanceTimersByTimeAsync(10_000);
+      await drainMicrotasks();
+
+      expect(settled).toBe(true);
+      expect((caught as Error | undefined)?.name).toBe(
+        "NativeInvokeTimeoutError",
+      );
+    });
+
+    it("keeps the playChain serving later commands after a wedged load times out", async () => {
+      await engine.initOnce();
+      let firstSourceWedged = true;
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "plugin:native-audio|set_source" && firstSourceWedged
+          ? new Promise(() => {})
+          : Promise.resolve({}),
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      let firstSettled = false;
+      let firstError: unknown;
+      const first = engine.playTrack({
+        id: "track-A",
+        title: "A",
+        artist: "",
+        streamUrl: "",
+      });
+      first.then(
+        () => {
+          firstSettled = true;
+        },
+        (e: unknown) => {
+          firstError = e;
+          firstSettled = true;
+        },
+      );
+      // 30s set_source budget (SET_SOURCE_INVOKE_TIMEOUT_MS).
+      await vi.advanceTimersByTimeAsync(30_000);
+      await drainMicrotasks();
+      expect(firstSettled).toBe(true);
+      expect((firstError as Error | undefined)?.name).toBe(
+        "NativeInvokeTimeoutError",
+      );
+
+      // The failed chain must not poison the queue: the next playTrack runs.
+      firstSourceWedged = false;
+      void engine.playTrack({
+        id: "track-B",
+        title: "B",
+        artist: "",
+        streamUrl: "",
+      });
+      await drainMicrotasks();
+      expect(invokeMock).toHaveBeenCalledWith(
+        "plugin:native-audio|set_source",
+        expect.objectContaining({
+          src: "https://www.googleapis.com/drive/v3/files/track-B?alt=media",
+        }),
+      );
     });
   });
 });

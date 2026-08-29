@@ -97,7 +97,56 @@ const PLUGIN_COMMAND = {
   pause: "plugin:native-audio|pause",
   setSource: "plugin:native-audio|set_source",
   seekTo: "plugin:native-audio|seek_to",
+  // Read-only state probe (Kotlin NativeAudioPlugin.getState) — no audio, no
+  // transport mutation. The resume health-check uses it both to verify the
+  // invoke bridge is alive and to re-sync the authoritative player state.
+  getState: "plugin:native-audio|get_state",
 } as const;
+
+// Long-suspend recovery bounds (values pinned by nativeAudioBridge.test.ts).
+// Resume probe: pure local IPC with no media work — if get_state cannot
+// answer within 3s the bridge is considered dead and re-init is the only
+// recovery. Transport: bounded so one wedged invoke can never stall the FIFO
+// playChain (play/pause/seek queue) forever. set_source is the one
+// legitimately slow command (network load + container prepare) and gets its
+// own larger budget.
+const RESUME_HEALTH_CHECK_TIMEOUT_MS = 3_000;
+const TRANSPORT_INVOKE_TIMEOUT_MS = 10_000;
+const SET_SOURCE_INVOKE_TIMEOUT_MS = 30_000;
+
+/** Classified timeout failure for a native-audio invoke — the message carries
+ *  the command name and the word "timeout" so callers can classify by string
+ *  (same convention as apiClient.withTimeout). Never includes payload data. */
+export class NativeInvokeTimeoutError extends Error {
+  readonly command: string;
+  constructor(command: string, ms: number) {
+    super(
+      `timeout: native audio command "${command}" did not respond within ${String(ms)}ms`,
+    );
+    this.name = "NativeInvokeTimeoutError";
+    this.command = command;
+  }
+}
+
+// Tauri invoke has no AbortSignal (tauri-apps/tauri#8351): the command keeps
+// running after the timeout fires. Promise.race attaches handlers to both
+// promises immediately, so the loser's late settlement can never surface as
+// an unhandled rejection; the timer is cleared on whichever side settles.
+function invokeWithTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  command: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new NativeInvokeTimeoutError(command, ms));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
 
 /** Google Drive media download URL (token travels in the Authorization
  *  header — Google blocked token query params since 2020). */
@@ -153,6 +202,12 @@ export class NativeAudioEngine implements PlaybackEngine {
   // before; an explicit pause() closes the window first so a genuine pause
   // always wins, even mid-buffer.
   private loadIntentActive = false;
+  // Long-suspend recovery: the visibilitychange listener is attached once per
+  // engine (on first initOnce) and never re-attached on re-init, so a
+  // recovered bridge never accumulates duplicate listeners.
+  // resumeCheckInFlight guards two overlapping visible transitions.
+  private resumeCheckListenerAttached = false;
+  private resumeCheckInFlight = false;
 
   /** Initialize the plugin once (notification permission on Android 13+ is
    *  requested by the plugin during initialize()). Safe to call repeatedly. */
@@ -160,14 +215,29 @@ export class NativeAudioEngine implements PlaybackEngine {
     if (!IS_MOBILE) return Promise.resolve();
     if (!this.initPromise) {
       this.initPromise = (async () => {
-        await invoke(PLUGIN_COMMAND.initialize);
+        // The resume health-check listener rides on the first init so it
+        // exists even when this first initialize() fails — the probe's
+        // re-init path is then the only recovery.
+        this.attachResumeHealthCheck();
+        // Bounded like every other invoke: a wedged bridge must fail here
+        // (and reset initPromise below) instead of hanging the first load
+        // chain — or the resume re-init — forever.
+        await invokeWithTimeout(
+          invoke(PLUGIN_COMMAND.initialize),
+          TRANSPORT_INVOKE_TIMEOUT_MS,
+          PLUGIN_COMMAND.initialize,
+        );
         // Listener lives for the whole app session (no per-track teardown).
-        await addPluginListener(
-          "native-audio",
-          "native_audio_state",
-          (state: NativeAudioState) => {
-            this.onNativeState(state);
-          },
+        await invokeWithTimeout(
+          addPluginListener(
+            "native-audio",
+            "native_audio_state",
+            (state: NativeAudioState) => {
+              this.onNativeState(state);
+            },
+          ),
+          TRANSPORT_INVOKE_TIMEOUT_MS,
+          "plugin:native-audio|register_listener",
         );
       })().catch((e: unknown) => {
         // Reset so a later retry (e.g. after permission grant) can re-init.
@@ -176,6 +246,59 @@ export class NativeAudioEngine implements PlaybackEngine {
       });
     }
     return this.initPromise;
+  }
+
+  /** Long-suspend recovery (tauri#15671 family): after the activity survives
+   *  a long device sleep, the plugin event channel or the invoke bridge can
+   *  be dead while the UI keeps rendering the cached lastState — progress
+   *  freezes silently. On each visible transition, probe the bridge with the
+   *  read-only get_state command; on failure reset the cached init, re-run
+   *  initOnce() (re-subscribes the state listener) and re-pull the
+   *  authoritative state through the normal onNativeState path. */
+  private attachResumeHealthCheck(): void {
+    if (this.resumeCheckListenerAttached) return;
+    this.resumeCheckListenerAttached = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      void this.runResumeHealthCheck();
+    });
+  }
+
+  private async runResumeHealthCheck(): Promise<void> {
+    if (this.resumeCheckInFlight) return;
+    this.resumeCheckInFlight = true;
+    try {
+      await this.pullCurrentState();
+    } catch (e: unknown) {
+      this.report("resume health-check failed, re-initializing", e);
+      // Drop the cached init (possibly a dead listener registration) and
+      // rebuild it; initOnce re-subscribes the plugin listener.
+      this.initPromise = undefined;
+      try {
+        await this.initOnce();
+        await this.pullCurrentState();
+      } catch (reinitError: unknown) {
+        // Still dead: everything stays reset so the NEXT visible transition
+        // retries once more (bounded — no polling, no infinite loop).
+        this.report("resume re-init failed", reinitError);
+      }
+    } finally {
+      this.resumeCheckInFlight = false;
+    }
+  }
+
+  /** Pull the authoritative player state once and feed it through the same
+   *  onNativeState path as live events, so store + UI re-sync after a
+   *  suspend: a still-playing foreground service resumes ticking into the
+   *  fresh listener, and play/pause edges fire exactly as they would for
+   *  live events (identical-state pushes are no-ops by design). */
+  private async pullCurrentState(): Promise<void> {
+    const state = await invokeWithTimeout(
+      invoke<NativeAudioState | undefined>(PLUGIN_COMMAND.getState),
+      RESUME_HEALTH_CHECK_TIMEOUT_MS,
+      PLUGIN_COMMAND.getState,
+    );
+    if (state) this.onNativeState(state);
   }
 
   /** Access token for the Authorization header — kept in memory only, never
@@ -361,14 +484,23 @@ export class NativeAudioEngine implements PlaybackEngine {
     }
   }
 
+  // set_source performs the network load + container prepare (the one
+  // legitimately slow command); every other command is fast local IPC.
+  private invokeBudgetMs(command: string): number {
+    return command === PLUGIN_COMMAND.setSource
+      ? SET_SOURCE_INVOKE_TIMEOUT_MS
+      : TRANSPORT_INVOKE_TIMEOUT_MS;
+  }
+
   private async invokeStateful(
     command: string,
     payload?: Record<string, unknown>,
   ): Promise<void> {
     try {
-      const state = await invoke<NativeAudioState | undefined>(
+      const state = await invokeWithTimeout(
+        invoke<NativeAudioState | undefined>(command, payload),
+        this.invokeBudgetMs(command),
         command,
-        payload,
       );
       if (state) this.onNativeState(state);
     } catch (e: unknown) {
