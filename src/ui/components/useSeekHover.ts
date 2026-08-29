@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { formatTime } from "../../utils/formatTime";
+import { BUFFER_HEAD_PAD_PCT } from "../../utils/bufferedRange";
 import { clamp, clamp01 } from "./seekMath";
 
 // jsdom reports offsetWidth 0 (no layout); this fallback approximates the
@@ -74,11 +75,18 @@ export function useSeekHover({
       // or an overlap at the preview head.
       const playheadPercent = clamp01(playheadRef.current / duration);
       if (percent > playheadPercent) {
-        bufferPreviewRef.current.style.left = `${String(
-          playheadPercent * 100,
-        )}%`;
+        // Negative head, same seam geometry as the buffered segments
+        // (bufferedRange BUFFER_HEAD_PAD_PCT): the flat left edge is pulled
+        // back 2% (clamped to the rail start) so it tucks UNDER the fill's
+        // round cap — the fill drawn on top covers the padded strip, so the
+        // seam shows only the fill's convex cap instead of a square corner.
+        const headPercent = Math.max(
+          0,
+          playheadPercent * 100 - BUFFER_HEAD_PAD_PCT,
+        );
+        bufferPreviewRef.current.style.left = `${String(headPercent)}%`;
         bufferPreviewRef.current.style.width = `${String(
-          (percent - playheadPercent) * 100,
+          percent * 100 - headPercent,
         )}%`;
       } else {
         bufferPreviewRef.current.style.width = "0%";

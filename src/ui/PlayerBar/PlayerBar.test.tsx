@@ -1511,8 +1511,10 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     hoverAt(bar, 150); // 75% of the bar
 
     const preview = screen.getByTestId("buffer-preview");
-    expect(preview.style.left).toBe("10%");
-    expect(preview.style.width).toBe("65%");
+    // left includes the 2% negative-head pad (40-2 = 38 → clamp n/a here);
+    // the padded strip hides under the fill drawn on top.
+    expect(preview.style.left).toBe("8%");
+    expect(preview.style.width).toBe("67%");
   });
 
   it("does not show the buffer preview when hovering before the playhead", () => {
@@ -1539,8 +1541,9 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     hoverAt(bar, 150); // 75% of the bar
 
     const preview = screen.getByTestId("buffer-preview");
-    expect(preview.style.left).toBe("30%");
-    expect(preview.style.width).toBe("45%");
+    // 30% playhead with the 2% negative-head pad → head at 28%.
+    expect(preview.style.left).toBe("28%");
+    expect(preview.style.width).toBe("47%");
   });
 
   it("starts the preview at the drag position after a seek drag", () => {
@@ -1561,8 +1564,9 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     hoverAt(bar, 150); // 75% of the bar
 
     const preview = screen.getByTestId("buffer-preview");
-    expect(preview.style.left).toBe("50%");
-    expect(preview.style.width).toBe("25%");
+    // 50% drag position with the 2% negative-head pad → head at 48%.
+    expect(preview.style.left).toBe("48%");
+    expect(preview.style.width).toBe("27%");
   });
 
   it("starts the preview at the restored playhead when no timeupdate has fired", () => {
@@ -1574,8 +1578,9 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     hoverAt(bar, 150); // 75% of the bar
 
     const preview = screen.getByTestId("buffer-preview");
-    expect(preview.style.left).toBe("40%");
-    expect(preview.style.width).toBe("35%");
+    // 40% restored playhead with the 2% negative-head pad → head at 38%.
+    expect(preview.style.left).toBe("38%");
+    expect(preview.style.width).toBe("37%");
   });
 
   it("BUG regression: buffer preview keeps only a small right corner (rounded-r-sm) so it reads as a continuous buffer run, not a round dot", () => {
@@ -1594,6 +1599,60 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     expect(preview.className).toContain("rounded-r-sm");
     expect(preview.className).not.toContain("rounded-l-full");
     expect(preview.className).not.toContain("rounded-full");
+  });
+
+  it("BUG regression: buffer preview sits inside an overflow-hidden rounded-full clip container (no square left corner on the rounded rail)", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 10, duration: 100 });
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    // The preview's flat head is only safe inside a rounded-full
+    // overflow-hidden container (same clip pattern as the segments inside
+    // buffer-fill) — otherwise the edge renders as a sharp square corner on
+    // the rounded rail. The clip must NOT wrap the thumb: the thumb pokes
+    // out of the track (translate-x-1/2) and would be cut by the clip.
+    const clip = preview.parentElement as HTMLElement;
+    expect(clip.className).toContain("overflow-hidden");
+    expect(clip.className).toContain("rounded-full");
+    expect(clip.contains(screen.getByTestId("seek-thumb"))).toBe(false);
+  });
+
+  it("BUG regression: preview head is padded 2% before the playhead (negative head, synced with bufferedRange)", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 40, duration: 100 });
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    // Flat head pulled back 2% (clamped >= 0) so it tucks UNDER the fill's
+    // round cap — same negative-head design as the buffered segments; the
+    // fill drawn on top covers the padded strip.
+    expect(preview.style.left).toBe("38%");
+    expect(preview.style.width).toBe("37%");
+  });
+
+  it("BUG regression: preview head pad clamps to 0 when the playhead is within 2% of the rail start", () => {
+    renderPlayer();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 1, duration: 100 });
+    });
+    const bar = mockBarRect();
+
+    hoverAt(bar, 150); // 75% of the bar
+
+    const preview = screen.getByTestId("buffer-preview");
+    // Clamped to the rail start: the clip container's rounded-full rounds
+    // the flat head instead (segments behave identically from 0).
+    expect(preview.style.left).toBe("0%");
+    expect(preview.style.width).toBe("75%");
   });
 });
 

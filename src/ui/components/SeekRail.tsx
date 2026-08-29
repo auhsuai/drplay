@@ -61,12 +61,20 @@ export function SeekRail({
         className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
       ></div>
       {isHovering && (
-        <div
-          ref={bufferPreviewRef}
-          data-testid="buffer-preview"
-          className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-r-sm pointer-events-none"
-          style={{ left: "0%", width: "0%" }}
-        ></div>
+        // Clip wrapper for the hover preview — mirrors buffer-fill's
+        // `overflow-hidden rounded-full` so the preview's flat head is rounded
+        // to the rail when its negative-head pad clamps to 0 (otherwise the
+        // head renders as a square corner on the rounded track). The wrapper
+        // is a SIBLING of progress-fill on purpose: clipping the track itself
+        // would cut the thumb's deliberate translate-x-1/2 overhang.
+        <div className="absolute inset-0 overflow-hidden rounded-full pointer-events-none">
+          <div
+            ref={bufferPreviewRef}
+            data-testid="buffer-preview"
+            className="absolute top-0 left-0 h-full bg-gray-400 dark:bg-gray-500 rounded-r-sm pointer-events-none"
+            style={{ left: "0%", width: "0%" }}
+          ></div>
+        </div>
       )}
       <div
         ref={progressFillRef}
