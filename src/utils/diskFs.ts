@@ -298,6 +298,14 @@ async function walkDirRecursive(
   for (const entry of rawEntries) {
     // An abort that landed while read_dir was pending stops mid-iteration.
     throwIfWalkAborted(signal);
+    // A symlinked directory (Windows junction, mklink /D) must NOT be
+    // descended: the plugin reports both isDirectory and isSymlink for it
+    // (read_dir uses std entry.file_type(), which does not follow the link),
+    // and following one hangs the walk forever on a junction cycle and kills
+    // the whole batch on ACL-protected system junctions ("Application Data").
+    // The entry is skipped entirely — a reparse point is not the user's own
+    // music content. Symlinked FILES are kept: open() reads through the link.
+    if (entry.isDirectory && entry.isSymlink) continue;
     const childPath = joinPath(dirPath, entry.name);
     out.push({
       path: childPath,

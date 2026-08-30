@@ -113,8 +113,16 @@ export async function persistActiveSession(
   const now = Date.now();
   await withDbCapture(
     "session-persist",
-    () =>
-      db.uploadSessions.put({
+    async () => {
+      // A Dexie put REPLACES the whole row, so the enrich puts (stat size,
+      // session URI) must carry the FIRST write's createdAt forward —
+      // resumeInterruptedUploads sorts rows by createdAt ("oldest first =
+      // original order"), and re-stamping it on every persist would reorder
+      // resumed uploads by last activity instead.
+      const existing = await db.uploadSessions.get(entry.id);
+      const createdAt =
+        typeof existing?.createdAt === "number" ? existing.createdAt : now;
+      await db.uploadSessions.put({
         id: entry.id,
         userEmail: getCurrentUserEmail(),
         name: entry.name,
@@ -134,9 +142,10 @@ export async function persistActiveSession(
           ? { clientGeneratedId: extra.clientGeneratedId }
           : {}),
         status: "active",
-        createdAt: now,
+        createdAt,
         updatedAt: now,
-      }),
+      });
+    },
     (_opName, err) =>
       `session-persist-failed name=${entry.name}: ${describeError(err)}`,
   );

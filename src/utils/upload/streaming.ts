@@ -38,6 +38,16 @@ export async function handleChildFile(
   if (!parentId) throw new ParentFolderMissingError(dir);
   entry.parentId = parentId;
   const path = requireDiskPath(entry);
+  // A RESUMED folder-child runs WITHOUT its batch root: the fs read scope the
+  // root extended (registerUploadPath → src-tauri allow_directory) lives only
+  // in the old process, so after an app restart stat/open on this path would
+  // be scope-denied and the upload would fail with a generic error. Fresh
+  // children skip this — their root's recursive registration already covers
+  // every child path, and re-registering each file would cost one IPC call
+  // per file on large folder uploads.
+  if (entry.resumeUri !== undefined) {
+    await registerUploadPath(path);
+  }
   return uploadDiskFileStreaming(entry, path);
 }
 

@@ -331,6 +331,35 @@ describe("walkDiskFolder", () => {
     );
   });
 
+  it("skips symlinked directories (Windows junction) — no entry, no descent, walk continues", async () => {
+    // The plugin reports BOTH isDirectory and isSymlink for a junction
+    // (read_dir uses std entry.file_type(), which does not follow the link).
+    // Descending into one hangs on junction cycles and kills the whole batch
+    // on ACL-protected system junctions ("Application Data").
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "plugin:fs|read_dir") {
+        const path = pathOf(args);
+        if (path === "C:\\Music")
+          return Promise.resolve([
+            { name: "link", isDirectory: true, isFile: false, isSymlink: true },
+            dirEntry("song.mp3", false),
+          ]);
+        if (path === "C:\\Music\\link")
+          return Promise.resolve([dirEntry("inside.mp3", false)]);
+        return Promise.reject(new Error(`unknown dir: ${path}`));
+      }
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+
+    const entries = await walkDiskFolder("C:\\Music");
+
+    expect(entries.map((e) => e.relativePath)).toEqual(["song.mp3"]);
+    const readDirs = invokeMock.mock.calls
+      .filter((c) => c[0] === "plugin:fs|read_dir")
+      .map((c) => pathOf(c[1]));
+    expect(readDirs).toEqual(["C:\\Music"]);
+  });
+
   it("walks normally when a non-aborted signal is passed (optional param keeps old behavior)", async () => {
     mockTree();
     const controller = new AbortController();

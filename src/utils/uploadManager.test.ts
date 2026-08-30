@@ -2570,6 +2570,42 @@ describe("uploadManager", () => {
       await waitIdle();
     });
 
+    it("(a2) enriching the active row keeps the original createdAt (resumeInterruptedUploads sorts oldest-first = original order)", async () => {
+      const uploadGate = deferred<DriveFileItem>();
+      const statGate = deferred<DiskEntry>();
+      uploadFileResumableChunked.mockReturnValueOnce(uploadGate.promise);
+      statDiskPath.mockReturnValueOnce(statGate.promise);
+
+      const dateSpy = vi.spyOn(Date, "now");
+      dateSpy.mockReturnValue(1_000_000);
+      um.startUploads(
+        [diskFileSeed("Track One.mp3", "C:/Music/Track One.mp3")],
+        TOKEN,
+      );
+      // The base persist (processEntry) lands at t=1_000_000, then the upload
+      // blocks on the deferred stat before its totalSize enrich.
+      await flush();
+      dateSpy.mockReturnValue(9_000_000);
+      statGate.resolve({
+        path: "C:/Music/Track One.mp3",
+        name: "Track One.mp3",
+        relativePath: "Track One.mp3",
+        isDirectory: false,
+        size: 2,
+      });
+      await flush();
+
+      const rows = await db.uploadSessions.toArray();
+      expect(rows).toHaveLength(1);
+      // A Dexie put replaces the whole row — the enrich put must carry the
+      // FIRST write's createdAt forward instead of stamping a new one.
+      expect(rows[0]?.createdAt).toBe(1_000_000);
+
+      dateSpy.mockRestore();
+      uploadGate.resolve(makeDriveFile("f1", "Track One.mp3"));
+      await waitIdle();
+    });
+
     it("(b) markDone clears the session row", async () => {
       const d = deferred<DriveFileItem>();
       uploadFileResumable.mockReturnValueOnce(d.promise);

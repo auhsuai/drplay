@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { handleDiskFile } from "./streaming";
+import { handleChildFile, handleDiskFile } from "./streaming";
 import { fetchWithAuth } from "../apiClient";
 import {
   DEFAULT_READ_CHUNK_SIZE,
@@ -435,5 +435,65 @@ describe("handleDiskFile streaming reader (real readChunkFromState + real chunke
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+describe("handleChildFile fs scope registration", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedOpenStream.mockReset();
+    mockedStat.mockReset();
+    mockedRegister.mockReset();
+    vi.clearAllMocks();
+
+    mockedRegister.mockResolvedValue(undefined);
+    mockedPersist.mockResolvedValue(undefined);
+    mockedQuotaAllows.mockResolvedValue(true);
+    mockedTryGenerateClientId.mockResolvedValue(undefined);
+    vi.mocked(controllerFor).mockReturnValue(undefined);
+    vi.mocked(scheduleProgressNotify).mockImplementation(() => {});
+    mockedStat.mockResolvedValue(statResult(4096));
+    mockedOpenStream.mockImplementation(() =>
+      Promise.resolve(makeFakeStream(makeData(4096))),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeChildEntry(overrides: Partial<InternalEntry>): InternalEntry {
+    return {
+      ...makeEntry("C:\\Music\\Album\\song.mp3"),
+      kind: "folderChildFile",
+      relativeDir: "",
+      batchMemo: new Map<string, string>([["", "folder-1"]]),
+      ...overrides,
+    };
+  }
+
+  it("resumed folderChildFile re-registers the fs scope (runtime scope dies with the old process)", async () => {
+    // Resume path through the REAL chunked uploader: query-status answers 404
+    // (dead session → fresh initiate), then initiate + final PUT succeed.
+    mockedFetch
+      .mockResolvedValueOnce(makeJsonResponse(404, {}))
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, UPLOADED_FILE));
+    const entry = makeChildEntry({ resumeUri: "https://upload.uri/session" });
+
+    await handleChildFile(entry);
+
+    expect(mockedRegister).toHaveBeenCalledWith("C:\\Music\\Album\\song.mp3");
+  });
+
+  it("fresh folderChildFile does NOT re-register (the batch root's recursive allow_directory already covers it)", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockResolvedValueOnce(makeJsonResponse(201, UPLOADED_FILE));
+    const entry = makeChildEntry({});
+
+    await handleChildFile(entry);
+
+    expect(mockedRegister).not.toHaveBeenCalled();
   });
 });
