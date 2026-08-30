@@ -3,7 +3,6 @@ import type { Track } from "../../types";
 import { useTranslation } from "react-i18next";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 
-import { clearNextTrackPrefetches } from "../../utils/nextTrackPrefetcher";
 import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { TABS, type TabKey } from "../../utils/driveConstants";
 
@@ -26,21 +25,21 @@ import { SkeletonRowList } from "../components/Skeleton";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 // How long to wait after switching to the target page before scrolling the
-// highlighted item into view — the new page must render first; 50ms is just
+// highlighted item into view â€” the new page must render first; 50ms is just
 // enough for React to flush and the virtualizer to lay out the new rows.
 const SCROLL_HIGHLIGHT_DELAY_MS = 50;
 
 // Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar)
-// — the file-list container sizes itself to fill the viewport below it
+// â€” the file-list container sizes itself to fill the viewport below it
 // (applied as min-height: calc(100% - 140px) on the [data-drop-region] div).
 const HEADER_CHROME_HEIGHT_PX = 140;
 
-// Skeleton row ≈ 72px tall: 48px icon + p-3 (12px) padding top/bottom.
+// Skeleton row â‰ˆ 72px tall: 48px icon + p-3 (12px) padding top/bottom.
 const SKELETON_ROW_HEIGHT_PX = 72;
 // Minimum skeleton rows so short viewports never collapse the loading UI.
 const SKELETON_MIN_ROWS = 4;
 
-// Skeleton rows must fill the whole list area on every screen size — a
+// Skeleton rows must fill the whole list area on every screen size â€” a
 // fixed count leaves a blank band on tall/wide displays. Estimate the
 // count from the viewport and recompute on resize, like Spotify/YouTube
 // skeletons do.
@@ -100,9 +99,9 @@ export const MainContent = React.memo(function MainContent({
   const [showBulkMoveScreen, setShowBulkMoveScreen] = React.useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] =
     React.useState(false);
-  // DEV-only override (Ctrl+Shift+D panel → "Pagination"): totalPages is
+  // DEV-only override (Ctrl+Shift+D panel â†’ "Pagination"): totalPages is
   // DERIVED from real data (Math.ceil(filteredItems.length / ITEMS_PER_PAGE)),
-  // so it cannot be set directly — a local override forces the controls to
+  // so it cannot be set directly â€” a local override forces the controls to
   // render while the real setCurrentPage stays wired underneath.
   const [debugTotalPages, setDebugTotalPages] = React.useState<number | null>(
     null,
@@ -146,7 +145,7 @@ export const MainContent = React.memo(function MainContent({
     isInitialMount.current = false;
   }, []);
 
-  // Leaving the My Drive tab unmounts MainContent — clear every transient
+  // Leaving the My Drive tab unmounts MainContent â€” clear every transient
   // "uploaded" check so a fresh visit shows no stale completion tint.
   useEffect(() => {
     return () => {
@@ -245,7 +244,6 @@ export const MainContent = React.memo(function MainContent({
 
   useEffect(() => {
     clearPrefetchedStreams();
-    clearNextTrackPrefetches();
   }, [currentFolderId]);
 
   const handlePlay = useCallback(
@@ -265,7 +263,7 @@ export const MainContent = React.memo(function MainContent({
     setShowBulkDeleteConfirm(true);
   }, []);
 
-  // DEV-only debug triggers (Ctrl+Shift+D panel → "Loading / MainContent"):
+  // DEV-only debug triggers (Ctrl+Shift+D panel â†’ "Loading / MainContent"):
   // bulk-delete modal and selection toolbar drive the SAME local/explorer
   // state the real flows use, so every subsequent interaction (close modal,
   // exit selection, bulk action) keeps working unchanged. onDebugEvent no-ops

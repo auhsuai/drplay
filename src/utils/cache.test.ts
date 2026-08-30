@@ -24,9 +24,7 @@ const mocks = vi.hoisted(() => ({
   filesCountMock: vi.fn(),
   filesClearMock: vi.fn(),
   clearPrefetchedStreamsMock: vi.fn(),
-  clearNextTrackPrefetchesMock: vi.fn(),
   streamCountMock: vi.fn(),
-  pendingCountMock: vi.fn(),
 }));
 
 vi.mock("../db/db", () => ({
@@ -56,11 +54,6 @@ vi.mock("./streamPrefetcher", () => ({
   getPrefetchedStreamCount: mocks.streamCountMock,
 }));
 
-vi.mock("./nextTrackPrefetcher", () => ({
-  clearNextTrackPrefetches: mocks.clearNextTrackPrefetchesMock,
-  getPendingPrefetchCount: mocks.pendingCountMock,
-}));
-
 const invokeMock = vi.mocked(invoke);
 const captureErrorMock = vi.mocked(captureError);
 
@@ -73,18 +66,14 @@ beforeEach(() => {
   mocks.filesCountMock.mockReset();
   mocks.filesClearMock.mockReset();
   mocks.clearPrefetchedStreamsMock.mockReset();
-  mocks.clearNextTrackPrefetchesMock.mockReset();
   mocks.streamCountMock.mockReset();
-  mocks.pendingCountMock.mockReset();
 
   mocks.deleteMock.mockResolvedValue(undefined);
   mocks.metadataToArrayMock.mockResolvedValue([]);
   mocks.filesCountMock.mockResolvedValue(0);
   mocks.filesClearMock.mockResolvedValue(undefined);
   mocks.clearPrefetchedStreamsMock.mockReturnValue(undefined);
-  mocks.clearNextTrackPrefetchesMock.mockReturnValue(undefined);
   mocks.streamCountMock.mockReturnValue(0);
-  mocks.pendingCountMock.mockReturnValue(0);
   invokeMock.mockResolvedValue(undefined);
 });
 
@@ -139,7 +128,6 @@ describe("clearAppCache", () => {
     expect(mocks.deleteMock).not.toHaveBeenCalled();
     expect(invokeMock).not.toHaveBeenCalled();
     expect(mocks.clearPrefetchedStreamsMock).not.toHaveBeenCalled();
-    expect(mocks.clearNextTrackPrefetchesMock).not.toHaveBeenCalled();
   });
 
   it("clears covers and thumbnails when selected is [covers]", async () => {
@@ -155,7 +143,6 @@ describe("clearAppCache", () => {
     await expect(clearAppCache(["prefetch"])).resolves.toBeUndefined();
 
     expect(mocks.clearPrefetchedStreamsMock).toHaveBeenCalledTimes(1);
-    expect(mocks.clearNextTrackPrefetchesMock).toHaveBeenCalledTimes(1);
     expect(mocks.deleteMock).not.toHaveBeenCalled();
     expect(mocks.filesClearMock).not.toHaveBeenCalled();
     expect(invokeMock).not.toHaveBeenCalled();
@@ -169,7 +156,6 @@ describe("clearAppCache", () => {
     expect(mocks.filesClearMock).not.toHaveBeenCalled();
     expect(invokeMock).not.toHaveBeenCalled();
     expect(mocks.clearPrefetchedStreamsMock).not.toHaveBeenCalled();
-    expect(mocks.clearNextTrackPrefetchesMock).not.toHaveBeenCalled();
   });
 
   it("clears every category when called with no arguments (default all)", async () => {
@@ -181,7 +167,6 @@ describe("clearAppCache", () => {
     expect(invokeMock).toHaveBeenCalledWith("clear_local_cache");
     expect(invokeMock).toHaveBeenCalledWith("clear_thumbnail_dir");
     expect(mocks.clearPrefetchedStreamsMock).toHaveBeenCalledTimes(1);
-    expect(mocks.clearNextTrackPrefetchesMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -199,7 +184,6 @@ describe("getCacheSizes", () => {
       thumbnail_dir_bytes: 30,
     });
     mocks.streamCountMock.mockReturnValue(3);
-    mocks.pendingCountMock.mockReturnValue(5);
 
     const sizes = await getCacheSizes();
 
@@ -221,7 +205,7 @@ describe("getCacheSizes", () => {
     );
     expect(sizes[1]?.bytes).toBe(100 * FILES_ROW_ESTIMATED_BYTES);
     expect(sizes[2]?.bytes).toBe(40);
-    expect(sizes[3]?.bytes).toBe(8 * PREFETCH_ENTRY_ESTIMATED_BYTES);
+    expect(sizes[3]?.bytes).toBe(3 * PREFETCH_ENTRY_ESTIMATED_BYTES);
   });
 
   it("returns 0 bytes for covers when get_cache_info rejects without breaking the list", async () => {
@@ -231,7 +215,6 @@ describe("getCacheSizes", () => {
     mocks.filesCountMock.mockResolvedValue(50);
     invokeMock.mockRejectedValue(new Error("ipc down"));
     mocks.streamCountMock.mockReturnValue(2);
-    mocks.pendingCountMock.mockReturnValue(0);
 
     const sizes = await getCacheSizes();
 

@@ -10,10 +10,6 @@ import {
   clearPrefetchedStreams,
   getPrefetchedStreamCount,
 } from "./streamPrefetcher";
-import {
-  clearNextTrackPrefetches,
-  getPendingPrefetchCount,
-} from "./nextTrackPrefetcher";
 
 export const CLEAR_LOCAL_CACHE_CMD = "clear_local_cache";
 export const CLEAR_THUMBNAIL_DIR_CMD = "clear_thumbnail_dir";
@@ -42,8 +38,7 @@ export interface CacheCategoryInfo {
 export const FILES_ROW_ESTIMATED_BYTES = 200;
 
 // Estimated bytes per prefetch entry: a /drive-stream/ URL string (~30 chars)
-// plus Map entry overhead. streamPrefetcher stores only URL strings;
-// nextTrackPrefetcher holds an AbortController + URL per in-flight fetch.
+// plus Map entry overhead. streamPrefetcher stores only URL strings.
 export const PREFETCH_ENTRY_ESTIMATED_BYTES = 128;
 
 const ALL_CACHE_CATEGORIES: CacheCategoryId[] = [
@@ -135,7 +130,7 @@ async function estimateCoversBytes(): Promise<number> {
 
 function estimatePrefetchBytes(): number {
   try {
-    const entries = getPrefetchedStreamCount() + getPendingPrefetchCount();
+    const entries = getPrefetchedStreamCount();
     return entries * PREFETCH_ENTRY_ESTIMATED_BYTES;
   } catch (e: unknown) {
     // fire-and-forget: logging must not throw in this sync path (captureError
@@ -245,7 +240,6 @@ export async function clearAppCache(
   if (selected.includes("prefetch")) {
     await clearCategory("prefetch", "clear-prefetch-cache", failures, () => {
       clearPrefetchedStreams();
-      clearNextTrackPrefetches();
     });
   }
 

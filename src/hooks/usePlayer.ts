@@ -14,7 +14,6 @@ import {
   getPrefetchedStreamUrl,
   buildStreamUrl,
 } from "../utils/streamPrefetcher";
-import { prefetchNextTrackAudio } from "../utils/nextTrackPrefetcher";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../utils/sessionCleanup";
@@ -224,25 +223,14 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(false);
       setIsDownloading(true);
 
-      // Fire-and-forget: prefetch the next track's audio for gapless playback.
-      const scheduleNextTrackPrefetch = (
-        queue: Track[] | undefined,
-        current: Track,
-      ): void => {
-        if (!queue || queue.length < 2) return;
-        const idx = queue.findIndex((item) =>
-          item.queueItemId
-            ? item.queueItemId === current.queueItemId
-            : item.id === current.id,
-        );
-        if (idx === -1 || idx >= queue.length - 1) return;
-        const next = queue[idx + 1];
-        if (next === undefined) return;
-        const url =
-          getPrefetchedStreamUrl(next.id) ??
-          buildStreamUrl(next.id, next.originalName);
-        if (url) prefetchNextTrackAudio(url);
-      };
+      // NOTE: no next-track prefetch here. The old warm-up fetch was dead
+      // weight: public/sw.js answers upstream Drive fetches with
+      // `cache: 'no-store'`, so a page-side Range warm-up never lands in the
+      // Chromium HTTP cache (and re-enabling that cache is not safe — see the
+      // sw.js comment on Chromium bug #1026867 / PIPELINE_ERROR_READ).
+      // TODO(chunk-store): real gapless prefetch needs a bounded byte-range
+      // store inside the SW, served to the element from ONE consistent source
+      // per URL load.
 
       const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
@@ -279,8 +267,6 @@ export const usePlayer = (accessToken: string | null) => {
             message: `recordPlay-fail: ${e instanceof Error ? e.message : String(e)}`,
           });
         });
-
-        scheduleNextTrackPrefetch(contextQueue, targetTrack);
 
         void (async () => {
           try {

@@ -39,10 +39,6 @@ vi.mock("../../utils/streamPrefetcher", () => ({
   clearPrefetchedStreams: vi.fn(),
 }));
 
-vi.mock("../../utils/nextTrackPrefetcher", () => ({
-  clearNextTrackPrefetches: vi.fn(),
-}));
-
 vi.mock("../../utils/normalizeText", () => ({
   normalizeText: (s: string) => s.toLowerCase(),
 }));

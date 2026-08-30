@@ -38,10 +38,6 @@ vi.mock("../utils/streamPrefetcher", () => ({
   buildStreamUrl: vi.fn((id: string) => `/drive-stream/${id}`),
 }));
 
-vi.mock("../utils/nextTrackPrefetcher", () => ({
-  prefetchNextTrackAudio: vi.fn(),
-}));
-
 vi.mock("../utils/simpleToast", () => ({
   showErrorToast: vi.fn(),
 }));
@@ -319,5 +315,27 @@ describe("usePlayer broken-track reset on logout (Task D residual)", () => {
     expect(usePlayerStore.getState().currentTrack).toBeNull();
     expect(usePlayerStore.getState().originalQueue).toEqual([]);
     expect(usePlayerStore.getState().playbackQueue).toEqual([]);
+  });
+});
+
+describe("usePlayer next-track prefetch", () => {
+  it("play một track trong queue → KHÔNG phát request mạng nào cho track kế (sw.js no-store làm warm-cache prefetch vô nghĩa — đã bỏ)", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("{}", { status: 200 }));
+    installSessionMock();
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t1"), [
+        makeTrack("t1"),
+        makeTrack("t2"),
+      ]);
+    });
+
+    const urls = fetchSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((u) => u.includes("/drive-stream/t2"));
+    expect(urls).toHaveLength(0);
   });
 });
