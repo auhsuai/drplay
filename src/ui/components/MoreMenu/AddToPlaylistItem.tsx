@@ -1,6 +1,8 @@
 import { Music, ChevronRight } from "lucide-react";
 import type { Playlist } from "../../../utils/playlists";
 import type { Track } from "../../../types";
+import { IS_MOBILE } from "../../../utils/platform";
+import { menuItemBaseClass, menuItemIconClass } from "./constants";
 import { PlaylistsSubmenu } from "./PlaylistsSubmenu";
 
 interface AddToPlaylistItemProps {
@@ -25,6 +27,9 @@ interface AddToPlaylistItemProps {
   uploadBlockedTitle: string | undefined;
   setIsOpen: (open: boolean) => void;
   onClose?: (() => void) | undefined;
+  /** Mobile (IS_MOBILE) only: opens the standalone picker modal instead of
+   *  the nested submenu, which clips off-screen near the player bar edge. */
+  onOpenPicker: () => void;
   t: import("i18next").TFunction;
 }
 
@@ -44,6 +49,7 @@ export function AddToPlaylistItem({
   uploadBlockedTitle,
   setIsOpen,
   onClose,
+  onOpenPicker,
   t,
 }: AddToPlaylistItemProps) {
   return (
@@ -51,33 +57,42 @@ export function AddToPlaylistItem({
       {track && (
         <div className="relative">
           <button
-            onClick={handleToggleSubmenu}
+            onClick={IS_MOBILE ? onOpenPicker : handleToggleSubmenu}
             className={uploadingBlocked(
-              "w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-brand-primary rounded-md transition-all flex items-center justify-between group mb-1",
+              // Why the appended utility: this row pins the chevron right with
+              // justify-between, unlike the shared base's gap-2. With exactly
+              // two flex children justify-between fully absorbs the gap, so
+              // the desktop render is pixel-identical to the previous
+              // hand-rolled string.
+              `${menuItemBaseClass(IS_MOBILE)} justify-between`,
             )}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}
           >
             <div className="flex items-center gap-2">
-              <Music className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+              <Music className={menuItemIconClass(IS_MOBILE)} />
               <span className="truncate">{t("menu.add_to_playlist")}</span>
             </div>
-            <ChevronRight className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+            <ChevronRight className={menuItemIconClass(IS_MOBILE)} />
           </button>
 
-          <PlaylistsSubmenu
-            showPlaylistsSubmenu={showPlaylistsSubmenu}
-            playlistSearchQuery={playlistSearchQuery}
-            setPlaylistSearchQuery={setPlaylistSearchQuery}
-            playlistCurrentPage={playlistCurrentPage}
-            setPlaylistCurrentPage={setPlaylistCurrentPage}
-            playlistSubmenuOpenLeft={playlistSubmenuOpenLeft}
-            playlists={playlists}
-            onAddToPlaylist={(e, pId) => {
-              void handleAddToPlaylist(e, pId, track, setIsOpen, onClose);
-            }}
-            t={t}
-          />
+          {/* Desktop-only: the nested popup clips off-screen on mobile, where
+              the standalone picker modal replaces it entirely. */}
+          {!IS_MOBILE && (
+            <PlaylistsSubmenu
+              showPlaylistsSubmenu={showPlaylistsSubmenu}
+              playlistSearchQuery={playlistSearchQuery}
+              setPlaylistSearchQuery={setPlaylistSearchQuery}
+              playlistCurrentPage={playlistCurrentPage}
+              setPlaylistCurrentPage={setPlaylistCurrentPage}
+              playlistSubmenuOpenLeft={playlistSubmenuOpenLeft}
+              playlists={playlists}
+              onAddToPlaylist={(e, pId) => {
+                void handleAddToPlaylist(e, pId, track, setIsOpen, onClose);
+              }}
+              t={t}
+            />
+          )}
         </div>
       )}
     </>

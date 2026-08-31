@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
+import { IS_MOBILE } from "../../utils/platform";
 import {
   isUploading,
   subscribe as subscribeUploads,
@@ -23,6 +24,7 @@ import { DownloadDialog } from "./MoreMenu/DownloadDialog";
 import { DownloadToast } from "./MoreMenu/DownloadToast";
 import { MoreMenuTrigger } from "./MoreMenu/MoreMenuTrigger";
 import { PlayerBarMenuItems } from "./MoreMenu/PlayerBarMenuItems";
+import { PlaylistPickerModal } from "./MoreMenu/PlaylistPickerModal";
 import { RecentMenuItems } from "./MoreMenu/RecentMenuItems";
 import { useMenuMove } from "./MoreMenu/useMenuMove";
 import { useMoreMenuEvents } from "./MoreMenu/useMoreMenuEvents";
@@ -98,6 +100,10 @@ export function MoreMenu({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [buttonRect, setButtonRect] = useState<DOMRect | null>(null);
   const [openUpwards, setOpenUpwards] = useState(true);
+  // Mobile-only playlist picker: lifted to this level (NOT rendered inside
+  // the menu portal) because opening it closes the dropdown — a child of the
+  // portal would unmount with the menu.
+  const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
 
   const isMenuOpen = isOpen || forceOpen;
   // Why: 'recent' is a third curated mode for the Recent Files view (Delete +
@@ -332,6 +338,11 @@ export function MoreMenu({
         uploadBlockedTitle={uploadBlockedTitle}
         setIsOpen={setIsOpen}
         onClose={onClose}
+        onOpenPicker={() => {
+          setShowPlaylistPicker(true);
+          setIsOpen(false);
+          setShowPlaylistsSubmenu(false);
+        }}
         t={t}
       />
     </>
@@ -366,7 +377,7 @@ export function MoreMenu({
             ref={dropdownRef}
             role="menu"
             tabIndex={-1}
-            className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none ${anchorPoint ? "" : openUpwards ? "origin-bottom-right" : "origin-top-right"}`}
+            className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg ${IS_MOBILE ? "p-1" : "p-1.5"} flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none ${anchorPoint ? "" : openUpwards ? "origin-bottom-right" : "origin-top-right"}`}
             style={getContextMenuStyle({
               anchorPoint,
               buttonRect,
@@ -429,6 +440,38 @@ export function MoreMenu({
               onClose,
               onRemoveItem,
               onRefresh,
+            );
+          }}
+          t={t}
+        />,
+        document.body,
+      )}
+
+      {/* Playlist picker (mobile): portal sibling of the dialogs above, so it
+          survives the dropdown unmounting when the picker opens. */}
+      {createPortal(
+        <PlaylistPickerModal
+          open={showPlaylistPicker}
+          playlists={playlists}
+          track={track}
+          onClose={() => {
+            setShowPlaylistPicker(false);
+          }}
+          onPick={(e, id) => {
+            // Why the wrapped setter: handleAddToPlaylist only closes the
+            // MENU on success (its blocked/error paths return early on
+            // purpose). Bridging "menu closed" to "picker closed" keeps the
+            // dialog open for blocked/error cases so the user can retry
+            // after the toast.
+            void handleAddToPlaylist(
+              e,
+              id,
+              track,
+              (open) => {
+                setIsOpen(open);
+                if (!open) setShowPlaylistPicker(false);
+              },
+              onClose,
             );
           }}
           t={t}

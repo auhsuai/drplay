@@ -59,6 +59,16 @@ vi.mock("react-i18next", () => {
   };
 });
 
+// Slice 1/2: mobile compaction + the playlist-picker modal are gated by
+// IS_MOBILE. The getter keeps the named-export binding live so each test can
+// flip the platform mid-file (SeekBar.test / PlayerBar.test pattern).
+const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
+vi.mock("../../utils/platform", () => ({
+  get IS_MOBILE() {
+    return platformMock.IS_MOBILE;
+  },
+}));
+
 vi.mock("../../utils/driveApi", () => mocks.driveApi);
 vi.mock("../../db/db", () => ({ db: mocks.db }));
 vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
@@ -654,6 +664,218 @@ describe("MoreMenu compact trigger (Task 13 mobile sizing)", () => {
     expect(trigger.className).toContain("p-2");
     expect(trigger.className).not.toContain("h-8");
     expect(trigger.innerHTML).toContain("w-5 h-5");
+  });
+});
+
+// Slice 1 (mobile menu compaction): every row, its icon and the dropdown
+// panel shrink on IS_MOBILE. Desktop tokens must stay byte-identical.
+describe("MoreMenu mobile compact rows (Slice 1)", () => {
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  function rowButton(name: string): HTMLElement {
+    return within(menuEl()).getByRole("button", { name });
+  }
+
+  function classesOf(el: Element | null): string[] {
+    return (el?.getAttribute("class") ?? "").split(/\s+/);
+  }
+
+  it("mobile: playerbar rows carry the compact tokens (px-2.5 py-1.5 text-[13px] mb-0.5)", () => {
+    platformMock.IS_MOBILE = true;
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    const row = classesOf(rowButton("Download Song"));
+    expect(row).toEqual(
+      expect.arrayContaining(["px-2.5", "py-1.5", "text-[13px]", "mb-0.5"]),
+    );
+    expect(row).not.toContain("py-2");
+    expect(row).not.toContain("text-sm");
+  });
+
+  it("mobile: the dropdown panel uses p-1 instead of p-1.5 (w-60 untouched)", () => {
+    platformMock.IS_MOBILE = true;
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    const menu = classesOf(menuEl());
+    expect(menu).toContain("p-1");
+    expect(menu).not.toContain("p-1.5");
+    expect(menu).toContain("w-60");
+  });
+
+  it("mobile: default row icons shrink to w-3.5 h-3.5", () => {
+    platformMock.IS_MOBILE = true;
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    const icon = classesOf(rowButton("Locate File").querySelector("svg"));
+    expect(icon).toEqual(expect.arrayContaining(["w-3.5", "h-3.5"]));
+    expect(icon).not.toContain("w-4");
+  });
+
+  it("mobile: an explicit iconClassName override still wins", () => {
+    platformMock.IS_MOBILE = true;
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
+    openTrigger();
+    const icon = classesOf(
+      rowButton("Select multiple items").querySelector("svg"),
+    );
+    expect(icon).toEqual(expect.arrayContaining(["w-4", "h-4"]));
+    expect(icon).not.toContain("w-3.5");
+  });
+
+  it("mobile: the recent-variant Delete row (delete-class variant) is compact too", () => {
+    platformMock.IS_MOBILE = true;
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
+    openTrigger();
+    const row = classesOf(rowButton("Delete"));
+    expect(row).toEqual(
+      expect.arrayContaining(["px-2.5", "py-1.5", "text-[13px]", "mb-0.5"]),
+    );
+  });
+
+  it("desktop: rows keep the original tokens byte-identical (px-3 py-2 text-sm mb-1)", () => {
+    platformMock.IS_MOBILE = false;
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    const row = classesOf(rowButton("Download Song"));
+    expect(row).toEqual(
+      expect.arrayContaining(["px-3", "py-2", "text-sm", "mb-1"]),
+    );
+    expect(row).not.toContain("text-[13px]");
+  });
+
+  it("desktop: panel keeps p-1.5 and default icons stay w-4 h-4", () => {
+    platformMock.IS_MOBILE = false;
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    expect(classesOf(menuEl())).toContain("p-1.5");
+    const icon = classesOf(rowButton("Locate File").querySelector("svg"));
+    expect(icon).toEqual(expect.arrayContaining(["w-4", "h-4"]));
+    expect(icon).not.toContain("w-3.5");
+  });
+});
+
+// Slice 2 (mobile playlist picker): on IS_MOBILE the Add to Playlist item
+// must open a standalone modal — the nested submenu clips off-screen near
+// the player bar's bottom-right edge. Desktop keeps the submenu flow.
+describe("MoreMenu mobile playlist picker (Slice 2)", () => {
+  beforeEach(() => {
+    platformMock.IS_MOBILE = true;
+    mocks.uploadManager.isUploading.mockReset();
+    mocks.uploadManager.isUploading.mockReturnValue(false);
+    mocks.addTrackToPlaylist.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  async function openPicker(): Promise<void> {
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    // The playlists fetch resolves after the menu's effect runs; flush the
+    // microtask BEFORE opening the picker (a real user's tap latency). Once
+    // the menu closes, the hook's ignore-guard would skip the late result —
+    // same pre-existing race the desktop submenu has.
+    await act(async () => {});
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    );
+  }
+
+  it("mobile: Add to Playlist opens the picker dialog, not the nested submenu", async () => {
+    mocks.getPlaylists.mockResolvedValue([
+      {
+        id: "p1",
+        userEmail: "me@example.com",
+        name: "Playlist One",
+        createdAt: 1,
+        tracks: [],
+      },
+    ]);
+    await openPicker();
+
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(screen.queryByText("Playlists")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Search...")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Playlist One" })).toBeTruthy();
+  });
+
+  it("mobile: picking a playlist calls addTrackToPlaylist with the right id and closes dialog + menu", async () => {
+    const track = makeTrack();
+    mocks.getPlaylists.mockResolvedValue([
+      {
+        id: "p1",
+        userEmail: "me@example.com",
+        name: "Playlist One",
+        createdAt: 1,
+        tracks: [],
+      },
+    ]);
+    render(<MoreMenu isPlayerBarMode track={track} />);
+    openTrigger();
+    await act(async () => {});
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
+    await waitFor(() => {
+      expect(mocks.addTrackToPlaylist).toHaveBeenCalledWith("p1", track);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("mobile: an upload that starts after the picker opens shows the toast and keeps the dialog open", async () => {
+    mocks.getPlaylists.mockResolvedValue([
+      {
+        id: "p1",
+        userEmail: "me@example.com",
+        name: "Playlist One",
+        createdAt: 1,
+        tracks: [],
+      },
+    ]);
+    await openPicker();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    mocks.uploadManager.isUploading.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
+
+    await waitFor(() => {
+      expect(mocks.showErrorToast).toHaveBeenCalledWith(
+        "This item is already uploading. Please wait.",
+      );
+    });
+    expect(mocks.addTrackToPlaylist).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("desktop: Add to Playlist still opens the nested submenu and never the dialog", () => {
+    platformMock.IS_MOBILE = false;
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    );
+    expect(screen.getByText("Playlists")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 

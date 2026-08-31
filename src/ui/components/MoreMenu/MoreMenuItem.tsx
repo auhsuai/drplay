@@ -1,4 +1,6 @@
 import type { LucideIcon } from "lucide-react";
+import { IS_MOBILE } from "../../../utils/platform";
+import { menuItemIconClass } from "./constants";
 
 interface MoreMenuItemProps {
   icon: LucideIcon;
@@ -18,7 +20,10 @@ export function MoreMenuItem({
   disabled,
   title,
   className,
-  iconClassName = "w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity",
+  // Default param evaluates at render time, so the live IS_MOBILE binding is
+  // read per render (the test mock flips it between cases). An explicit
+  // caller-provided iconClassName still wins over both branches.
+  iconClassName = menuItemIconClass(IS_MOBILE),
   truncateLabel = true,
 }: MoreMenuItemProps) {
   return (

@@ -3,6 +3,21 @@ import { Search, Music, ChevronLeft, ChevronRight } from "lucide-react";
 import type { Playlist } from "../../../utils/playlists";
 import { matchesNormalized } from "../../../search/searchEngine";
 
+// Shared playlist-filter semantics (desktop submenu + mobile picker modal):
+// matchesNormalized is diacritics-insensitive AND-token matching that returns
+// false for an empty query by contract, so an empty/whitespace query shows
+// every playlist via the explicit guard. Single source of truth — the modal
+// must not re-implement the matcher.
+export function filterPlaylists(
+  playlists: Playlist[],
+  query: string,
+): Playlist[] {
+  const queryActive = query.trim() !== "";
+  return playlists.filter(
+    (p) => !queryActive || matchesNormalized(p.name, query),
+  );
+}
+
 interface PlaylistsSubmenuProps {
   showPlaylistsSubmenu: boolean;
   playlistSearchQuery: string;
@@ -28,14 +43,7 @@ export function PlaylistsSubmenu({
 }: PlaylistsSubmenuProps) {
   if (!showPlaylistsSubmenu) return null;
 
-  // Why: matchesNormalized (normalizeText-based) makes search
-  // diacritics-insensitive ("doi" finds "Đổi mới") and requires every token
-  // (AND). It returns false for an empty query by contract, so keep the old
-  // "empty query → show everything" behavior with an explicit guard.
-  const queryActive = playlistSearchQuery.trim() !== "";
-  const filteredPlaylists = playlists.filter(
-    (p) => !queryActive || matchesNormalized(p.name, playlistSearchQuery),
-  );
+  const filteredPlaylists = filterPlaylists(playlists, playlistSearchQuery);
   const playlistsPerPage = 5;
   const playlistTotalPages = Math.max(
     1,

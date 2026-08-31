@@ -1,7 +1,8 @@
-import { SquareCheckBig, Download, FolderOutput, Trash2 } from "lucide-react";
+﻿import { SquareCheckBig, Download, FolderOutput, Trash2 } from "lucide-react";
 import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
-import { MENU_ITEM_BASE_CLASS, MENU_ITEM_DELETE_CLASS } from "./constants";
+import { menuItemBaseClass, menuItemDeleteClass } from "./constants";
+import { IS_MOBILE } from "../../../utils/platform";
 import { MoreMenuItem } from "./MoreMenuItem";
 
 interface DefaultMenuItemsProps {
@@ -45,6 +46,8 @@ export function DefaultMenuItems({
   setShowMoveScreen,
   t,
 }: DefaultMenuItemsProps) {
+  const baseClass = menuItemBaseClass(IS_MOBILE);
+  const deleteClass = menuItemDeleteClass(IS_MOBILE);
   return (
     <>
       {driveItem && token && (
@@ -58,7 +61,7 @@ export function DefaultMenuItems({
               onClose?.();
               onSelectMultiple?.();
             }}
-            className={uploadingBlocked(MENU_ITEM_BASE_CLASS)}
+            className={uploadingBlocked(baseClass)}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}
             iconClassName="w-4 h-4 text-gray-400 group-hover:text-brand-primary"
@@ -79,7 +82,7 @@ export function DefaultMenuItems({
                 onClose?.();
               }
             }}
-            className={uploadingBlocked(MENU_ITEM_BASE_CLASS)}
+            className={uploadingBlocked(baseClass)}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}
           />
@@ -98,7 +101,7 @@ export function DefaultMenuItems({
                 onClose?.();
               }
             }}
-            className={uploadingBlocked(MENU_ITEM_DELETE_CLASS)}
+            className={uploadingBlocked(deleteClass)}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}
           />
@@ -113,7 +116,7 @@ export function DefaultMenuItems({
             handleDownloadClick(e, track, setIsOpen);
           }}
           className={uploadingBlocked(
-            `${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`,
+            `${baseClass} disabled:opacity-50 disabled:cursor-not-allowed`,
           )}
           disabled={isTargetUploading}
           title={uploadBlockedTitle}

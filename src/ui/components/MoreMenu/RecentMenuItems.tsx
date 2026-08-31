@@ -1,7 +1,8 @@
 import { Download, MapPin, Trash2 } from "lucide-react";
 import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
-import { MENU_ITEM_BASE_CLASS, MENU_ITEM_DELETE_CLASS } from "./constants";
+import { menuItemBaseClass, menuItemDeleteClass } from "./constants";
+import { IS_MOBILE } from "../../../utils/platform";
 import { MoreMenuItem } from "./MoreMenuItem";
 
 interface RecentMenuItemsProps {
@@ -37,6 +38,8 @@ export function RecentMenuItems({
   onClose,
   t,
 }: RecentMenuItemsProps) {
+  const baseClass = menuItemBaseClass(IS_MOBILE);
+  const deleteClass = menuItemDeleteClass(IS_MOBILE);
   return (
     <>
       {driveItem && token && (
@@ -49,7 +52,7 @@ export function RecentMenuItems({
             setIsOpen(false);
             onClose?.();
           }}
-          className={uploadingBlocked(MENU_ITEM_DELETE_CLASS)}
+          className={uploadingBlocked(deleteClass)}
           disabled={isTargetUploading}
           title={uploadBlockedTitle}
         />
@@ -64,7 +67,7 @@ export function RecentMenuItems({
               handleDownloadClick(e, track, setIsOpen);
             }}
             className={uploadingBlocked(
-              `${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`,
+              `${baseClass} disabled:opacity-50 disabled:cursor-not-allowed`,
             )}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}
@@ -74,7 +77,7 @@ export function RecentMenuItems({
             icon={MapPin}
             label={t("menu.navigate")}
             onClick={handleNavigateClick}
-            className={MENU_ITEM_BASE_CLASS}
+            className={baseClass}
           />
         </>
       )}

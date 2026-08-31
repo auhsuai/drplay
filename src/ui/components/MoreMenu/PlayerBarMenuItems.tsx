@@ -1,6 +1,7 @@
 import { Download, Heart, MapPin } from "lucide-react";
 import type { Track } from "../../../types";
-import { MENU_ITEM_BASE_CLASS } from "./constants";
+import { menuItemBaseClass } from "./constants";
+import { IS_MOBILE } from "../../../utils/platform";
 import { MoreMenuItem } from "./MoreMenuItem";
 
 interface PlayerBarMenuItemsProps {
@@ -34,6 +35,7 @@ export function PlayerBarMenuItems({
   isFavorite,
   onToggleFavorite,
 }: PlayerBarMenuItemsProps) {
+  const baseClass = menuItemBaseClass(IS_MOBILE);
   return (
     <>
       {track && (
@@ -51,7 +53,7 @@ export function PlayerBarMenuItems({
                   onToggleFavorite();
                   setIsOpen(false);
                 }}
-                className={MENU_ITEM_BASE_CLASS}
+                className={baseClass}
               />
             )}
 
@@ -62,7 +64,7 @@ export function PlayerBarMenuItems({
               handleDownloadClick(e, track, setIsOpen);
             }}
             className={uploadingBlocked(
-              `${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`,
+              `${baseClass} disabled:opacity-50 disabled:cursor-not-allowed`,
             )}
             disabled={isTargetUploading}
             title={uploadBlockedTitle}
@@ -72,7 +74,7 @@ export function PlayerBarMenuItems({
             icon={MapPin}
             label={t("menu.navigate")}
             onClick={handleNavigateClick}
-            className={MENU_ITEM_BASE_CLASS}
+            className={baseClass}
           />
         </>
       )}
