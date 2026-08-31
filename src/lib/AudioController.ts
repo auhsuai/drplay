@@ -493,26 +493,6 @@ export class AudioController implements PlaybackEngine {
     }
   }
 
-  public setVolume(vol: number) {
-    this.volume = Math.max(0, Math.min(1, vol));
-    if (!this.muted) {
-      for (const a of [this.audio1, this.audio2]) a.volume = this.volume;
-    }
-  }
-
-  public toggleMute() {
-    this.muted = !this.muted;
-    for (const a of [this.audio1, this.audio2])
-      a.volume = this.muted ? 0 : this.volume;
-    return this.muted;
-  }
-
-  public getVolume() {
-    return this.volume;
-  }
-  public isMuted() {
-    return this.muted;
-  }
   public getCurrentTime() {
     return this.activeAudio.currentTime;
   }

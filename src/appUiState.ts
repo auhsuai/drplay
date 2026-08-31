@@ -10,7 +10,6 @@ import {
   CURRENT_FOLDER_NAME_KEY,
   DB_NAV_STATE_KEY,
   FOLDER_HISTORY_KEY,
-  MINIMIZE_TO_TRAY_KEY,
   ROOT_FOLDER_KEY,
   SORT_OPTION_KEY,
 } from "./utils/storageKeys";
@@ -20,30 +19,16 @@ export const LS_CURRENT_FOLDER_ID = CURRENT_FOLDER_ID_KEY;
 export const LS_CURRENT_FOLDER_NAME = CURRENT_FOLDER_NAME_KEY;
 export const LS_FOLDER_HISTORY = FOLDER_HISTORY_KEY;
 export const LS_SORT_OPTION = SORT_OPTION_KEY;
-export const LS_MINIMIZE_TO_TRAY = MINIMIZE_TO_TRAY_KEY;
 export const LS_BACKGROUND_PLAYBACK = BACKGROUND_PLAYBACK_KEY;
 export { DB_NAV_STATE_KEY };
-
-// Lazy-useState-compatible reader for the tray-minimize preference: missing
-// key (first launch) defaults to minimized; only the literal 'true' means
-// minimized, any other stored value ('false'/corrupt) means not-minimized.
-// localStorage access can throw SecurityError (storage blocked by policy —
-// see MDN Window.localStorage), so the read is guarded and falls back to the
-// default like a missing key.
-export function loadMinimizeToTrayState(): boolean {
-  try {
-    const saved = localStorage.getItem(LS_MINIMIZE_TO_TRAY);
-    return saved !== null ? saved === "true" : true;
-  } catch {
-    return true; // storage blocked — default behavior (same as missing key)
-  }
-}
 
 // Lazy-useState-compatible reader for the mobile background-playback
 // preference (Task 3 mobile-polish): missing key (first launch) defaults to
 // ON — native audio keeps playing when the app is backgrounded (foreground
-// service), the toggle OFF opt-in pauses on hidden. Same strict-'true' and
-// blocked-storage contract as loadMinimizeToTrayState.
+// service), the toggle OFF opt-in pauses on hidden. localStorage access can
+// throw SecurityError (storage blocked by policy — see MDN
+// Window.localStorage), so the read is guarded and falls back to the default
+// like a missing key.
 export function loadBackgroundPlaybackState(): boolean {
   try {
     const saved = localStorage.getItem(LS_BACKGROUND_PLAYBACK);

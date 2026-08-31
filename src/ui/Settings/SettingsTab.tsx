@@ -2,7 +2,6 @@ import {
   FolderOpen,
   Globe,
   Moon,
-  MonitorDown,
   Download,
   Eraser,
   Archive,
@@ -41,8 +40,6 @@ import { UserAvatar } from "../components/UserAvatar";
 interface SettingsTabProps {
   theme: ThemeType;
   setTheme: (t: ThemeType) => void;
-  minimizeToTray: boolean;
-  setMinimizeToTray: (minimize: boolean) => void;
   backgroundPlayback: boolean;
   setBackgroundPlayback: (enabled: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
@@ -73,8 +70,6 @@ function uploadProgressLabel(entry: UploadEntry): string {
 export function SettingsTab({
   theme,
   setTheme,
-  minimizeToTray,
-  setMinimizeToTray,
   backgroundPlayback,
   setBackgroundPlayback,
   setShowFolderSelection,
@@ -390,13 +385,13 @@ export function SettingsTab({
               <ThemeDropdown currentTheme={theme} onChange={setTheme} />
             </div>
 
-            {/* Close Behavior Setting — desktop: minimize to tray
-                (byte-identical); mobile (Task 3 mobile-polish): "Chạy nhạc
+            {/* Close Behavior Setting (Task 3 mobile-polish): "Chạy nhạc
                 nền" background playback toggle — OFF pauses the native
                 engine when the app goes hidden, ON keeps the foreground
                 service playing. translation.json is owned by the cover
                 branch, so the label rides on t(key, defaultValue) with a
-                language-aware fallback. */}
+                language-aware fallback. Desktop renders no close-behavior
+                row (tray support removed — Android-only app). */}
             {IS_MOBILE ? (
               <div className="flex items-center justify-between py-4 pb-6">
                 <div className="flex items-center gap-4">
@@ -422,34 +417,7 @@ export function SettingsTab({
                   <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
                 </label>
               </div>
-            ) : (
-              <div className="flex items-center justify-between py-4 pb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
-                    <MonitorDown className="w-6 h-6 text-brand-primary" />
-                  </div>
-                  <div>
-                    <p className={settingsRowTitle}>
-                      {t("settings.minimize_to_tray")}
-                    </p>
-                  </div>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <span className="sr-only">
-                    {t("settings.minimize_to_tray")}
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={minimizeToTray}
-                    onChange={(e) => {
-                      setMinimizeToTray(e.target.checked);
-                    }}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
-                </label>
-              </div>
-            )}
+            ) : null}
 
             {/* Download Location Setting */}
             <div className="flex items-center justify-between py-4 pb-6">

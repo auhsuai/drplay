@@ -143,8 +143,6 @@ const { fakeController } = vi.hoisted(() => {
     seek: vi.fn(),
     playTrack: vi.fn(),
     pause: vi.fn(),
-    setVolume: vi.fn(),
-    toggleMute: vi.fn(),
     _handlers: {} as Record<string, Handler[]>,
     _emit(event: string, payload?: unknown) {
       for (const h of fakeController._handlers[event] ?? []) h(payload);
@@ -543,44 +541,6 @@ describe("PlayerBar seek redraws buffer bar immediately (no empty blink)", () =>
     fakeController.getDuration.mockReturnValue(240);
   });
 
-  it("BUG regression: ArrowLeft seek redraws the buffer bar synchronously (no empty-blink, stale ranges filtered)", () => {
-    renderPlayer();
-    const buffer = screen.getByTestId("buffer-fill");
-
-    setBuffered([[0, 300]]);
-    act(() => {
-      fakeController._emit("progress");
-    });
-    expect(buffer.childElementCount).toBe(1);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowLeft" });
-    });
-
-    expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    // Immediate redraw at seek time — the bar never flashes empty.
-    expect(buffer.childElementCount).toBe(1);
-  });
-
-  it("BUG regression: ArrowRight seek redraws the buffer bar synchronously (no empty-blink, stale ranges filtered)", () => {
-    renderPlayer();
-    const buffer = screen.getByTestId("buffer-fill");
-
-    setBuffered([[0, 300]]);
-    act(() => {
-      fakeController._emit("progress");
-    });
-    expect(buffer.childElementCount).toBe(1);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowRight" });
-    });
-
-    expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    // Immediate redraw at seek time — the bar never flashes empty.
-    expect(buffer.childElementCount).toBe(1);
-  });
-
   it("BUG regression: drag commit (pointerup) redraws the buffer bar synchronously after seek", () => {
     renderPlayer();
     act(() => {
@@ -973,70 +933,6 @@ describe("PlayerBar auto-advance storm guard (Fix I — queue cháy hết im l�
     });
     expect(onNext).toHaveBeenCalledTimes(4);
     expect(usePlayerStore.getState().isPlaying).toBe(false);
-  });
-
-  it("Fix I: manual next (phím n) reset guard → auto-advance hoạt động lại", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    stormBlock(onNext);
-    expect(usePlayerStore.getState().isPlaying).toBe(false);
-
-    // Manual next = user chủ động → guard reset, không còn bị giữ
-    act(() => {
-      fireEvent.keyDown(window, { key: "n" });
-    });
-    expect(onNext).toHaveBeenCalledTimes(3);
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(4);
-  });
-
-  it("Fix I: manual prev (phím p) reset guard", () => {
-    const onNext = vi.fn();
-    const onPrev = vi.fn();
-    renderPlayer({ onNextTrack: onNext, onPrevTrack: onPrev });
-
-    stormBlock(onNext);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "p" });
-    });
-    expect(onPrev).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(3);
-  });
-
-  it("Fix I: manual toggle play (phím cách) reset guard", () => {
-    const onNext = vi.fn();
-    const onTogglePlay = vi.fn();
-    renderPlayer({ onNextTrack: onNext, onTogglePlay });
-
-    stormBlock(onNext);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: " " });
-    });
-    expect(onTogglePlay).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(3);
   });
 
   it("Fix I: manual retry (nút phát giữa khi đang có lỗi) reset guard", () => {

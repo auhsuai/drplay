@@ -68,8 +68,6 @@ function makeRouterProps({ activeTab }: RouterPropsFactoryArgs) {
     setSortOption: vi.fn(),
     theme: "dark" as ThemeType,
     setTheme: vi.fn(),
-    minimizeToTray: false,
-    setMinimizeToTray: vi.fn(),
     backgroundPlayback: false,
     setBackgroundPlayback: vi.fn(),
     setShowFolderSelection: vi.fn(),

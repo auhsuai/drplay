@@ -2,10 +2,6 @@ import { useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { set as idbSet } from "../db/kv";
-import {
-  start as keepAwakeStart,
-  stop as keepAwakeStop,
-} from "tauri-plugin-keepawake-api";
 import type { Track } from "../types";
 import { recordPlay } from "../utils/history";
 import { getTrackMetadata } from "../utils/metadata";
@@ -131,33 +127,6 @@ export const usePlayer = (accessToken: string | null) => {
     setPlayMode,
     stableHandlePlayTrack,
   );
-
-  // Keep system awake
-  useEffect(() => {
-    // Keepawake plugin is cfg-gated out of the Android build (ACL: command
-    // plugin:keepawake|stop not allowed) — skip entirely on mobile.
-    if (IS_MOBILE) return;
-
-    if (isPlaying) {
-      keepAwakeStart({ display: false, idle: false, sleep: true }).catch(
-        (e: unknown) => {
-          void captureError({
-            level: "warn",
-            source: "usePlayer",
-            message: `keep-awake-failed: ${e instanceof Error ? e.message : String(e)}`,
-          });
-        },
-      );
-    } else {
-      keepAwakeStop().catch((e: unknown) => {
-        void captureError({
-          level: "warn",
-          source: "usePlayer",
-          message: `keep-awake-release-failed: ${e instanceof Error ? e.message : String(e)}`,
-        });
-      });
-    }
-  }, [isPlaying]);
 
   // Persist playMode
   useEffect(() => {
@@ -357,7 +326,7 @@ export const usePlayer = (accessToken: string | null) => {
         showErrorToast(
           t(
             "player.exception_toast",
-            "An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.",
+            "An unexpected error occurred. Check the error log in Settings.",
           ),
         );
       } finally {

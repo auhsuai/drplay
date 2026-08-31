@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { exit } from "@tauri-apps/plugin-process";
 import { useTranslation } from "react-i18next";
@@ -56,14 +55,10 @@ import {
   LS_CURRENT_FOLDER_ID,
   LS_CURRENT_FOLDER_NAME,
   LS_FOLDER_HISTORY,
-  LS_MINIMIZE_TO_TRAY,
   LS_BACKGROUND_PLAYBACK,
   LS_ROOT_FOLDER,
-  loadMinimizeToTrayState,
   loadBackgroundPlaybackState,
 } from "./appUiState";
-
-export { loadMinimizeToTrayState };
 
 function App() {
   const { t } = useTranslation();
@@ -202,10 +197,8 @@ function App() {
   // sidebarState.
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
-  const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
   // Mobile-only (Task 3 mobile-polish): "Chạy nhạc nền" — when OFF, playback
-  // pauses while the app is hidden. Desktop never reads it (tray path above
-  // stays byte-identical); the key is still persisted on both for symmetry.
+  // pauses while the app is hidden. The key is persisted on both platforms.
   const [backgroundPlayback, setBackgroundPlayback] = useState(
     loadBackgroundPlaybackState,
   );
@@ -265,30 +258,6 @@ function App() {
   useEffect(() => {
     setAppRootFolderRef.current = setAppRootFolder;
   }, [setAppRootFolder]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LS_MINIMIZE_TO_TRAY, String(minimizeToTray));
-    } catch (err) {
-      void captureError({
-        level: "warn",
-        source: "App",
-        message: `tray-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-      });
-    }
-    // update_minimize_to_tray is only registered in the desktop build (cfg
-    // gate) — invoking it on Android fails with "Command not found".
-    if (!IS_MOBILE) {
-      invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch(
-        (e: unknown) =>
-          void captureError({
-            source: "App",
-            message: `minimize-to-tray-failed: ${e instanceof Error ? e.message : String(e)}`,
-            kind: "minimize-to-tray-failed",
-          }),
-      );
-    }
-  }, [minimizeToTray]);
 
   useEffect(() => {
     try {
@@ -557,8 +526,6 @@ function App() {
             setSortOption={setSortOption}
             theme={theme}
             setTheme={setTheme}
-            minimizeToTray={minimizeToTray}
-            setMinimizeToTray={setMinimizeToTray}
             backgroundPlayback={backgroundPlayback}
             setBackgroundPlayback={setBackgroundPlayback}
             setShowFolderSelection={setShowFolderSelection}

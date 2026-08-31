@@ -108,7 +108,6 @@ interface RenderSeekBarOverrides {
   track?: Track | null;
   audio?: AudioController;
   active?: boolean;
-  keyboardSeek?: boolean;
 }
 
 function renderSeekBar(overrides: RenderSeekBarOverrides = {}) {
@@ -701,112 +700,6 @@ describe("SeekBar fill rounding at the buffer seam", () => {
       fireEvent.pointerUp(window, { clientX: 200, pointerId: 1 });
     });
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("SeekBar keyboard seek gating", () => {
-  beforeEach(() => {
-    fakeController.seek.mockClear();
-  });
-
-  it("BUG regression: keyboardSeek=false disables ArrowLeft/ArrowRight seek (NowPlaying delegates to the PlayerBar instance)", () => {
-    renderSeekBar({ keyboardSeek: false });
-    act(() => {
-      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
-    });
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowRight" });
-    });
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowLeft" });
-    });
-
-    expect(fakeController.seek).not.toHaveBeenCalled();
-  });
-
-  it("BUG regression: PlayerBar + NowPlaying instances do not double-seek (2x5s) on ArrowRight", () => {
-    renderSeekBar(); // PlayerBar instance — keyboardSeek defaults to true
-    renderSeekBar({ keyboardSeek: false }); // NowPlaying instance
-    fakeController.getDuration.mockReturnValue(240);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowRight" });
-    });
-
-    expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    expect(fakeController.seek).toHaveBeenCalledWith(5);
-  });
-
-  it("BUG regression: ArrowRight không seek về 0 khi duration chưa load (duration=0, currentTime=30 → giữ nguyên vị trí)", () => {
-    renderSeekBar();
-    fakeController.getDuration.mockReturnValue(0);
-    fakeController.getCurrentTime.mockReturnValue(30);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowRight" });
-    });
-
-    expect(fakeController.seek).not.toHaveBeenCalled();
-  });
-
-  it("default keyboardSeek seeks with ArrowRight and redraws the buffer bar synchronously", () => {
-    renderSeekBar();
-    fakeController.getDuration.mockReturnValue(240);
-    const buffer = screen.getByTestId("buffer-fill");
-
-    setBuffered([[0, 300]]);
-    act(() => {
-      fakeController._emit("progress");
-    });
-    expect(buffer.childElementCount).toBe(1);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowRight" });
-    });
-
-    expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    expect(buffer.childElementCount).toBe(1);
-  });
-
-  it("BUG regression (S3): Ctrl/Meta/Alt+Arrow chords neither preventDefault nor seek (webview history-nav survives)", () => {
-    renderSeekBar();
-    fakeController.getDuration.mockReturnValue(240);
-
-    for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
-      for (const key of ["ArrowLeft", "ArrowRight"] as const) {
-        const init: KeyboardEventInit = { key, cancelable: true };
-        init[modifier] = true;
-        const evt = new KeyboardEvent("keydown", init);
-        act(() => {
-          window.dispatchEvent(evt);
-        });
-        expect(
-          evt.defaultPrevented,
-          `${modifier}+${key} must reach the browser`,
-        ).toBe(false);
-      }
-    }
-    expect(fakeController.seek).not.toHaveBeenCalled();
-  });
-
-  it("BUG regression (S3): held-arrow auto-repeat keeps seeking (hold-to-scrub is the intended player convention)", () => {
-    renderSeekBar();
-    fakeController.getDuration.mockReturnValue(240);
-    fakeController.getCurrentTime.mockReturnValueOnce(10);
-
-    const evt = new KeyboardEvent("keydown", {
-      key: "ArrowRight",
-      repeat: true,
-      cancelable: true,
-    });
-    act(() => {
-      window.dispatchEvent(evt);
-    });
-
-    expect(evt.defaultPrevented).toBe(true);
-    expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    expect(fakeController.seek).toHaveBeenCalledWith(15);
   });
 });
 

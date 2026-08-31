@@ -14,7 +14,7 @@ import type { BufferedSource } from "../utils/bufferedRange";
  * singleton on every non-mobile platform.
  *
  * The engine mirrors AudioController's public surface (on/playTrack/pause/
- * seek/getCurrentTime/getDuration/getBuffered/setVolume/toggleMute/release)
+ * seek/getCurrentTime/getDuration/getBuffered/release)
  * so the whole desktop player UI layer (PlayerBar storm guard, SeekBar,
  * auto-advance, session save) works against it unchanged — only the transport
  * differs: tauri-plugin-native-audio commands instead of HTMLAudioElement.
@@ -82,10 +82,6 @@ export interface PlaybackEngine {
   getCurrentTime(): number;
   getDuration(): number;
   getBuffered(): BufferedSource;
-  setVolume(vol: number): void;
-  toggleMute(): boolean;
-  getVolume(): number;
-  isMuted(): boolean;
   release(): void | Promise<void>;
 }
 
@@ -414,19 +410,6 @@ export class NativeAudioEngine implements PlaybackEngine {
       currentTime: this.lastState?.currentTime ?? 0,
       buffered: emptyBuffered(),
     };
-  }
-
-  /** Volume is not exposed by the plugin — keep the desktop API shape as
-   *  no-ops so VolumeSlider renders unchanged on mobile. */
-  setVolume(): void {}
-  toggleMute(): boolean {
-    return false;
-  }
-  getVolume(): number {
-    return 1;
-  }
-  isMuted(): boolean {
-    return false;
   }
 
   /** Logout / player-stop: stop playback and drop the token + track binding.

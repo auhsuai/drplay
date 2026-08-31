@@ -8,7 +8,6 @@ import { SeekClock } from "./SeekClock";
 import { SeekRail } from "./SeekRail";
 import { useSeekDrag } from "./useSeekDrag";
 import { useSeekHover } from "./useSeekHover";
-import { useSeekKeyboard } from "./useSeekKeyboard";
 
 export interface SeekBarProps {
   currentTrack: Track | null;
@@ -17,18 +16,9 @@ export interface SeekBarProps {
    *  progress/durationchange subscriptions stay live while inactive so the
    *  buffer bar and duration pre-populate before the view opens. */
   active?: boolean;
-  /** Disable the global ArrowLeft/Right seek keys. The PlayerBar instance
-   *  keeps them (default true); the NowPlaying instance passes false so two
-   *  mounted SeekBars never double the seek step. */
-  keyboardSeek?: boolean;
 }
 
-export function SeekBar({
-  currentTrack,
-  audio,
-  active = true,
-  keyboardSeek = true,
-}: SeekBarProps) {
+export function SeekBar({ currentTrack, audio, active = true }: SeekBarProps) {
   // Refs for high-performance DOM updates (owned locally: seek drag / restore
   // session touch the DOM per event, never through React state).
   const progressFillRef = useRef<HTMLDivElement>(null);
@@ -246,12 +236,6 @@ export function SeekBar({
     // Mobile: the row is the drag surface (full PlayerBar width). Desktop
     // omits it — the rail stays the only surface, behavior byte-identical.
     surfaceRef: IS_MOBILE ? seekRowRef : undefined,
-  });
-  useSeekKeyboard({
-    audio,
-    bufferFillRef,
-    playheadRef,
-    enabled: keyboardSeek,
   });
 
   return (

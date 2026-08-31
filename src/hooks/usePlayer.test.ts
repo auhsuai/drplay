@@ -16,11 +16,6 @@ vi.mock("../db/kv", () => ({
   set: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("tauri-plugin-keepawake-api", () => ({
-  start: vi.fn(() => Promise.resolve()),
-  stop: vi.fn(() => Promise.resolve()),
-}));
-
 vi.mock("../utils/history", () => ({
   recordPlay: vi.fn(() => Promise.resolve()),
 }));

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App, { loadMinimizeToTrayState } from "./App";
+import App from "./App";
 import { loadBackgroundPlaybackState } from "./appUiState";
 import { TABS } from "./utils/driveConstants";
 import { DEBUG_EVENTS } from "./ui/debug/debugEvents";
@@ -217,47 +217,9 @@ vi.mock("./ui/HomeTab/HomeTab", async () => {
   };
 });
 
-// Lazy-useState initializer for the minimize-to-tray preference. Extracted
-// from the inline initializer so the localStorage contract (default on first
-// launch, strict 'true' match, tolerate blocked storage) is testable without
-// mounting the whole lazy-loaded app tree.
-describe("loadMinimizeToTrayState", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    localStorage.clear();
-  });
-
-  it("defaults to true when the key is missing (first launch — tray minimized)", () => {
-    expect(loadMinimizeToTrayState()).toBe(true);
-  });
-
-  it("returns true when the stored value is exactly 'true'", () => {
-    localStorage.setItem("drplay_minimize_to_tray", "true");
-    expect(loadMinimizeToTrayState()).toBe(true);
-  });
-
-  it("returns false for any other stored value ('false' / corrupt)", () => {
-    localStorage.setItem("drplay_minimize_to_tray", "false");
-    expect(loadMinimizeToTrayState()).toBe(false);
-    localStorage.setItem("drplay_minimize_to_tray", "garbage");
-    expect(loadMinimizeToTrayState()).toBe(false);
-  });
-
-  it("falls back to true when localStorage.getItem throws (SecurityError)", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new DOMException("blocked", "SecurityError");
-    });
-
-    expect(loadMinimizeToTrayState()).toBe(true);
-  });
-});
-
 // Task 3 mobile-polish: background-playback preference — same lazy-useState
-// contract as loadMinimizeToTrayState, but the DEFAULT is ON (native audio
+// localStorage contract (default on first launch, strict 'true' match,
+// tolerate blocked storage), but the DEFAULT is ON (native audio
 // keeps playing in the background via the foreground service; the OFF toggle
 // opts into pause-on-hidden).
 describe("loadBackgroundPlaybackState", () => {
@@ -402,43 +364,6 @@ describe("HomeTab keep-alive across tab switches", () => {
     if (homeParent2) {
       expect(homeParent2.className).not.toContain("hidden");
     }
-  });
-});
-
-describe("App minimize-to-tray invoke gate (desktop-only command)", () => {
-  afterEach(() => {
-    platformMock.IS_MOBILE = false;
-    cleanup();
-  });
-
-  it("does not invoke update_minimize_to_tray on mobile (command not registered)", async () => {
-    platformMock.IS_MOBILE = true;
-    mocks.invoke.mockClear();
-
-    render(<App />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(mocks.invoke).not.toHaveBeenCalledWith(
-      "update_minimize_to_tray",
-      expect.anything(),
-    );
-  });
-
-  it("invokes update_minimize_to_tray on desktop (unchanged path)", async () => {
-    platformMock.IS_MOBILE = false;
-    mocks.invoke.mockClear();
-
-    render(<App />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const minimizeArg: unknown = expect.anything();
-    expect(mocks.invoke).toHaveBeenCalledWith("update_minimize_to_tray", {
-      minimize: minimizeArg,
-    });
   });
 });
 

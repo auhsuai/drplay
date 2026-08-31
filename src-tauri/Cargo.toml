@@ -27,7 +27,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2" }
 # Vendored fork (v1.0.5 + Authorization-header support for Google Drive
 # streaming) — workspace member so tauri-cli builds its Android/Kotlin side.
 tauri-plugin-native-audio = { path = "tauri-plugin-native-audio" }
@@ -87,12 +87,6 @@ rand = "0.8.5"
 # zip 2.x (resolves 2.6.1, 2025-04-04) provides ZipArchive::by_index +
 # ZipFile::enclosed_name — the safe-path (zip-slip) check the import relies on.
 zip = "2"
-
-# keepawake has no Android backend (keepawake 0.5.1 src/sys/mod.rs:14
-# compile_error "Unsupported cfg") — desktop only; frontend already
-# catch-warns on invoke failure.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-tauri-plugin-keepawake = "0.1.0"
 
 # Android Keystore-backed credential store for the refresh token
 # (keyring-compatible, same 1.0.0 version keyring 4.1.6 enables via its

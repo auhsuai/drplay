@@ -43,8 +43,6 @@ interface TabContentRouterProps {
   setSortOption: (val: string) => void;
   theme: ThemeType;
   setTheme: (t: ThemeType) => void;
-  minimizeToTray: boolean;
-  setMinimizeToTray: (minimize: boolean) => void;
   backgroundPlayback: boolean;
   setBackgroundPlayback: (enabled: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
@@ -73,8 +71,6 @@ export function TabContentRouter({
   setSortOption,
   theme,
   setTheme,
-  minimizeToTray,
-  setMinimizeToTray,
   backgroundPlayback,
   setBackgroundPlayback,
   setShowFolderSelection,
@@ -154,8 +150,6 @@ export function TabContentRouter({
           <SettingsTab
             theme={theme}
             setTheme={setTheme}
-            minimizeToTray={minimizeToTray}
-            setMinimizeToTray={setMinimizeToTray}
             backgroundPlayback={backgroundPlayback}
             setBackgroundPlayback={setBackgroundPlayback}
             setShowFolderSelection={setShowFolderSelection}

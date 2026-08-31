@@ -146,10 +146,6 @@ vi.mock("./lib/nativeAudioBridge", () => ({
   nativeAudioEngine: engineMock,
   getPlaybackEngine: () => engineMock,
 }));
-vi.mock("tauri-plugin-keepawake-api", () => ({
-  start: vi.fn(() => Promise.resolve()),
-  stop: vi.fn(() => Promise.resolve()),
-}));
 vi.mock("./db/kv", () => ({
   get: vi.fn(() => Promise.resolve(undefined)),
   set: vi.fn(() => Promise.resolve()),

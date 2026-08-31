@@ -20,10 +20,6 @@ const engineMock = vi.hoisted(() => ({
   getDuration: vi.fn(() => 0),
   getBuffered: vi.fn(() => ({ length: 0 })),
   getState: vi.fn(() => null),
-  setVolume: vi.fn(),
-  toggleMute: vi.fn(() => false),
-  getVolume: vi.fn(() => 1),
-  isMuted: vi.fn(() => false),
   togglePlay: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../lib/nativeAudioBridge", () => ({
@@ -40,12 +36,6 @@ vi.mock("react-i18next", () => ({
 vi.mock("../db/kv", () => ({
   set: vi.fn(() => Promise.resolve()),
 }));
-
-const keepAwakeMock = vi.hoisted(() => ({
-  start: vi.fn(() => Promise.resolve()),
-  stop: vi.fn(() => Promise.resolve()),
-}));
-vi.mock("tauri-plugin-keepawake-api", () => keepAwakeMock);
 
 vi.mock("../utils/history", () => ({
   recordPlay: vi.fn(() => Promise.resolve()),
@@ -262,24 +252,6 @@ describe("usePlayer mobile branch (GATE B — native audio is the playback path)
 
     expect(engineMock.release).toHaveBeenCalledTimes(1);
     expect(audioMock.release).not.toHaveBeenCalled();
-  });
-
-  it("never calls keepawake start/stop on mobile (plugin ACL-gated out of Android)", async () => {
-    usePlayerStore.setState({ isPlaying: true });
-    const { rerender } = renderHook(() => usePlayer("access-token"));
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(keepAwakeMock.start).not.toHaveBeenCalled();
-    expect(keepAwakeMock.stop).not.toHaveBeenCalled();
-
-    usePlayerStore.setState({ isPlaying: false });
-    await act(async () => {
-      rerender();
-      await Promise.resolve();
-    });
-    expect(keepAwakeMock.start).not.toHaveBeenCalled();
-    expect(keepAwakeMock.stop).not.toHaveBeenCalled();
   });
 });
 

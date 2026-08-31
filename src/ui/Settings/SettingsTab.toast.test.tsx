@@ -93,8 +93,6 @@ vi.mock("./components/ErrorLogSection", () => ({
 const baseProps = {
   theme: "dark" as ThemeType,
   setTheme: vi.fn(),
-  minimizeToTray: false,
-  setMinimizeToTray: vi.fn(),
   backgroundPlayback: true,
   setBackgroundPlayback: vi.fn(),
   setShowFolderSelection: vi.fn(),

@@ -214,14 +214,12 @@ export const NowPlayingView = memo(function NowPlayingView({
                 onForward5={handleForward5}
               />
 
-              {/* Shared seekbar: single source of truth with PlayerBar. The
-                  view never seeks with the global arrow keys (PlayerBar owns
-                  that) and gates the 4/s timeupdate subscription on isOpen. */}
+              {/* Shared seekbar: single source of truth with PlayerBar.
+                  Gates the 4/s timeupdate subscription on isOpen. */}
               <SeekBar
                 currentTrack={currentTrack}
                 audio={audio}
                 active={isOpen}
-                keyboardSeek={false}
               />
             </div>
           </div>

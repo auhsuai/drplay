@@ -6,12 +6,10 @@ import { seekRelative, SEEK_STEP_SECONDS } from "../../hooks/player/utils";
 import { useTrackLoadSpinner } from "../../hooks/player/useTrackLoadSpinner";
 import { IS_MOBILE } from "../../utils/platform";
 import type { PlayerBarProps } from "./types";
-import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
 import { MoreMenu } from "../components/MoreMenu";
 import { SeekBar } from "../components/SeekBar";
-import { VolumeSlider } from "./VolumeSlider";
 import { ErrorToast } from "./ErrorToast";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
@@ -46,8 +44,8 @@ function PlayerBarImpl({
   // seek bar and session save below work unchanged on both.
   const audio = getPlaybackEngine();
 
-  // Local UI state (không gây ảnh hưởng global). Seek/volume state
-  // is owned by SeekBar/VolumeSlider/TrackInfo — this composition layer only
+  // Local UI state (không gây ảnh hưởng global). Seek state
+  // is owned by SeekBar/TrackInfo — this composition layer only
   // keeps transport-level state (PLAN v2 — render-critical isolation).
   const [isBuffering, setIsBuffering] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{
@@ -238,16 +236,6 @@ function PlayerBarImpl({
     });
   }, []);
 
-  // Handle Keyboard Shortcuts (transport keys; seek/volume keys live in
-  // SeekBar/VolumeSlider). Fix I: wrapped handlers so keyboard next/prev/play
-  // also reset the storm guard (they are manual user actions).
-  useKeyboardShortcuts({
-    onNextTrack: handleManualNext,
-    onPrevTrack: handleManualPrev,
-    onTogglePlay: handleManualTogglePlay,
-    onTogglePlayMode,
-  });
-
   // Handle Play/Pause from Props (Syncing)
   useEffect(() => {
     if (!currentTrack) return;
@@ -343,12 +331,6 @@ function PlayerBarImpl({
             />
             <SeekBar currentTrack={currentTrack} audio={audio} />
           </div>
-
-          {/* Right: Volume Controls. Mobile (Task 11 / Task 8B ADR): the
-              on-screen slider is a no-op there — Android uses the hardware
-              volume keys (ExoPlayer handles them natively), so the control
-              lives only in this desktop branch. */}
-          <VolumeSlider audio={audio} />
         </>
       )}
 
