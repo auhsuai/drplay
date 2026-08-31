@@ -30,6 +30,12 @@ export type NativeAudioState = {
   isPlaying: boolean;
   buffering: boolean;
   rate: number;
+  // Buffered-end estimate in seconds (Media3 Player.getBufferedPosition,
+  // reported by the plugin snapshot). Optional so update skew stays safe in
+  // BOTH directions: an older plugin simply omits the key (read as
+  // undefined → treated as 0) and a newer plugin's extra key is ignored by
+  // JS structural typing — no version handshake needed.
+  bufferedPosition?: number;
   error?: string;
 };
 
@@ -157,6 +163,16 @@ function emptyBuffered(): TimeRanges {
     length: 0,
     start: () => 0,
     end: () => 0,
+  };
+}
+
+/** Single-segment TimeRanges [0 → end] matching emptyBuffered's shape — the
+ *  mobile analogue of desktop HTMLAudioElement.buffered with one loaded run. */
+function makeSingleSegmentBuffered(end: number): TimeRanges {
+  return {
+    length: 1,
+    start: () => 0,
+    end: () => end,
   };
 }
 
@@ -405,10 +421,23 @@ export class NativeAudioEngine implements PlaybackEngine {
   }
 
   getBuffered(): BufferedSource {
+    // Media3's getBufferedPosition is a single end estimate (no per-range
+    // detail), so expose exactly one segment spanning [0 → end] — the same
+    // full-rail shape the UI renders from (bufferedRange computes the range
+    // from 0, the position fill covers everything before the playhead;
+    // Spotify/YouTube pattern). Never report [currentTime → X]: that would
+    // leave the pre-playhead strip unstyled on the rail.
+    const duration = this.lastState?.duration ?? 0;
+    const rawEnd = this.lastState?.bufferedPosition ?? 0;
+    // Clamp into [0, duration] and require a positive end: Media3 can return
+    // 0 (nothing buffered / no estimate yet) and a stale snapshot may carry
+    // an end past the track duration.
+    const safeEnd = Math.min(Math.max(rawEnd, 0), duration);
     return {
-      duration: this.lastState?.duration ?? 0,
+      duration,
       currentTime: this.lastState?.currentTime ?? 0,
-      buffered: emptyBuffered(),
+      buffered:
+        safeEnd > 0 ? makeSingleSegmentBuffered(safeEnd) : emptyBuffered(),
     };
   }
 
@@ -554,6 +583,17 @@ export class NativeAudioEngine implements PlaybackEngine {
 
     if (state.duration !== prev?.duration && state.duration > 0) {
       this.emit("durationchange", { duration: state.duration });
+    }
+
+    // Buffer-bar input: emit "progress" only when the buffered estimate
+    // actually MOVED. The plugin ticks at 40Hz, so emitting unconditionally
+    // would spam DOM writes; Media3 has no dedicated buffered-position event
+    // (EVENT_IS_LOADING_CHANGED is the closest and carries no position), so
+    // the JS-side diff mirrors desktop AudioController's throttled native
+    // `progress` handler. Emitted outside the timeupdate throttle gate so
+    // paused-loading buffer growth still refreshes the bar.
+    if (state.bufferedPosition !== prev?.bufferedPosition) {
+      this.emit("progress", undefined);
     }
 
     // Idle snapshots (initialize/get_state/pause right after a cold-start

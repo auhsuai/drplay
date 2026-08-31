@@ -60,6 +60,12 @@ data class NativeAudioState(
     val isPlaying: Boolean,
     val buffering: Boolean,
     val rate: Double,
+    // DrPlay fork: buffered-end estimate in seconds (Media3
+    // Player.getBufferedPosition) so the JS buffer bar can render on mobile.
+    // Default 0.0 keeps every existing call site (idle fallback snapshots)
+    // valid without changes; the JS side treats a missing/0 value as "no
+    // buffered range".
+    val bufferedPosition: Double = 0.0,
     val error: String? = null,
 )
 
@@ -151,6 +157,17 @@ object NativeAudioRuntime {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            syncTicking()
+            emitState()
+        }
+
+        // DrPlay fork: the buffer bar must also grow while PAUSED. The 25ms
+        // progress tick only runs while isPlaying, and Media3 has no event
+        // dedicated to buffered-position changes — EVENT_IS_LOADING_CHANGED
+        // is the closest signal (Player.java). Each emitState ships a fresh
+        // getBufferedPosition() estimate; the JS bridge diffs values before
+        // surfacing "progress", so unchanged pushes are free.
+        override fun onIsLoadingChanged(isLoading: Boolean) {
             syncTicking()
             emitState()
         }
@@ -555,6 +572,18 @@ object NativeAudioRuntime {
         val rawDurationMs = exoPlayer.duration
         val durationMs = if (rawDurationMs > 0) rawDurationMs else 0L
         val currentMs = max(0L, exoPlayer.currentPosition)
+        // DrPlay fork: Media3's getBufferedPosition is an ESTIMATE in ms
+        // (Player.java: "Returns an estimate of the position ... up to which
+        // data is buffered") and can transiently overshoot the duration while
+        // the estimate settles. Clamp into [0, durationMs] so the JS buffer
+        // bar can never exceed the rail; with no known duration the estimate
+        // is meaningless, so report 0.
+        // https://developer.android.com/reference/androidx/media3/common/Player#getBufferedPosition()
+        val bufferedMs = if (durationMs > 0) {
+            exoPlayer.bufferedPosition.coerceIn(0L, durationMs)
+        } else {
+            0L
+        }
         val buffering = exoPlayer.playbackState == Player.STATE_BUFFERING
 
         val seekState = activeSeekStateLocked()
@@ -578,6 +607,8 @@ object NativeAudioRuntime {
             status = status,
             currentTime = currentMs / 1000.0,
             duration = durationMs / 1000.0,
+            // Same ms→seconds convention as currentTime/duration above.
+            bufferedPosition = bufferedMs / 1000.0,
             isPlaying = effectiveIsPlaying,
             buffering = effectiveBuffering,
             rate = exoPlayer.playbackParameters.speed.toDouble(),
@@ -777,6 +808,7 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
         payload.put("status", state.status)
         payload.put("currentTime", state.currentTime)
         payload.put("duration", state.duration)
+        payload.put("bufferedPosition", state.bufferedPosition)
         payload.put("isPlaying", state.isPlaying)
         payload.put("buffering", state.buffering)
         payload.put("rate", state.rate)

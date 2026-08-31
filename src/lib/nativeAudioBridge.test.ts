@@ -1027,4 +1027,72 @@ describe("nativeAudioBridge", () => {
       );
     });
   });
+
+  // Mobile buffer bar: the plugin snapshot carries a buffered-end estimate
+  // (Media3 Player.getBufferedPosition). The bridge must turn it into the
+  // same single TimeRanges segment desktop's HTMLAudio produces, and notify
+  // consumers ("progress") only when the value actually moves — the plugin
+  // ticks at 40Hz and an unchanged estimate must not spam the DOM.
+  describe("native getBuffered (mobile buffer bar)", () => {
+    const listener = () =>
+      addPluginListenerMock.mock.calls[0]?.[2] as (s: unknown) => void;
+
+    const pushPlayingState = (bufferedPosition: number) => {
+      listener()({
+        status: "playing",
+        currentTime: 30,
+        duration: 300,
+        isPlaying: true,
+        buffering: false,
+        rate: 1,
+        bufferedPosition,
+      });
+    };
+
+    it("returns an empty range before any plugin state arrives", () => {
+      expect(engine.getBuffered().buffered.length).toBe(0);
+    });
+
+    it("exposes the pushed bufferedPosition as one [0 → end] range", async () => {
+      await engine.initOnce();
+      pushPlayingState(90);
+
+      const { buffered } = engine.getBuffered();
+      expect(buffered.length).toBe(1);
+      expect(buffered.start(0)).toBe(0);
+      expect(buffered.end(0)).toBe(90);
+    });
+
+    it("clamps bufferedPosition to the track duration", async () => {
+      await engine.initOnce();
+      pushPlayingState(500);
+
+      const { buffered } = engine.getBuffered();
+      expect(buffered.length).toBe(1);
+      expect(buffered.end(0)).toBe(300);
+    });
+
+    it("renders no segment when bufferedPosition is 0", async () => {
+      await engine.initOnce();
+      pushPlayingState(0);
+
+      expect(engine.getBuffered().buffered.length).toBe(0);
+    });
+
+    it('emits "progress" only when bufferedPosition changes between pushes', async () => {
+      await engine.initOnce();
+      const progressSpy = vi.fn();
+      engine.on("progress", progressSpy);
+
+      pushPlayingState(10);
+      expect(progressSpy).toHaveBeenCalledTimes(1);
+
+      // Unchanged estimate (40Hz tick cadence) must not spam the event.
+      pushPlayingState(10);
+      expect(progressSpy).toHaveBeenCalledTimes(1);
+
+      pushPlayingState(25);
+      expect(progressSpy).toHaveBeenCalledTimes(2);
+    });
+  });
 });
