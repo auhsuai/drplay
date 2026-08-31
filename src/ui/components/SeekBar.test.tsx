@@ -981,22 +981,107 @@ describe("SeekBar progress fill clipper + rail-anchored thumb (needle fix v2)", 
     expect(thumb.parentElement).toBe(rail);
   });
 
-  it("BUG regression: mobile shows the thumb always (M3/YT Music handle convention); desktop idle keeps it hidden", () => {
+  // Session-6 override of the earlier M3/YT Music mobile-always-visible rule:
+  // the thumb follows the Spotify-web convention — hidden by default on EVERY
+  // platform, visible only while the user interacts (hover on desktop,
+  // touch-drag on mobile via isDragging), fading back out on release
+  // (DRAG_RELEASE_DELAY_MS 150ms in useSeekDrag).
+  it("BUG regression: mobile idle (no touch) keeps the thumb hidden (was: always visible)", () => {
     platformMock.IS_MOBILE = true;
     try {
-      const { unmount } = renderSeekBar();
-      expect(screen.getByTestId("seek-thumb").className).toContain(
-        "opacity-100",
-      );
-      unmount();
-
-      platformMock.IS_MOBILE = false;
       renderSeekBar();
-      expect(screen.getByTestId("seek-thumb").className).toContain("opacity-0");
+      const thumb = screen.getByTestId("seek-thumb");
+      expect(thumb.className).toContain("opacity-0");
+      expect(thumb.className).not.toContain("opacity-100");
     } finally {
       platformMock.IS_MOBILE = false;
     }
   });
+
+  it("mobile: while dragging (pointerdown+move) the thumb is visible and unscaled", () => {
+    platformMock.IS_MOBILE = true;
+    try {
+      renderSeekBar();
+      act(() => {
+        fakeController._emit("durationchange", { duration: 240 });
+      });
+      const row = mockRowRect();
+      mockRailRect();
+
+      act(() => {
+        fireEvent.pointerDown(row, { clientX: 50, pointerId: 1 });
+      });
+      act(() => {
+        fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+      });
+      const thumb = screen.getByTestId("seek-thumb");
+      expect(thumb.className).toContain("opacity-100");
+      expect(thumb.className).toContain("scale-100");
+
+      act(() => {
+        fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+      });
+    } finally {
+      platformMock.IS_MOBILE = false;
+    }
+  });
+
+  it("desktop idle keeps the thumb hidden and scaled down (opacity-0 + scale-75, never scale-100)", () => {
+    renderSeekBar();
+    const thumb = screen.getByTestId("seek-thumb");
+    expect(thumb.className).toContain("opacity-0");
+    expect(thumb.className).not.toContain("opacity-100");
+    expect(thumb.className).toContain("scale-75");
+    expect(thumb.className).not.toContain("scale-100");
+  });
+
+  it("desktop hover reveals the thumb (opacity-100 + scale-100)", () => {
+    renderSeekBar();
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+
+    act(() => {
+      fireEvent.pointerEnter(rail, { pointerId: 1 });
+    });
+
+    const thumb = screen.getByTestId("seek-thumb");
+    expect(thumb.className).toContain("opacity-100");
+    expect(thumb.className).toContain("scale-100");
+  });
+
+  function mockRowRect(width = 200) {
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const row = rail.parentElement as HTMLElement;
+    const rect = {
+      left: 0,
+      right: width,
+      top: 0,
+      bottom: 10,
+      width,
+      height: 10,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(rect);
+    return row;
+  }
+
+  function mockRailRect(left = 40, width = 120) {
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const rect = {
+      left,
+      right: left + width,
+      top: 0,
+      bottom: 10,
+      width,
+      height: 10,
+      x: left,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue(rect);
+    return rail;
+  }
 });
 
 describe("SeekBar idle timeupdate guard (session-restore wipe)", () => {

@@ -1,6 +1,5 @@
 import { useTranslation } from "react-i18next";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
-import { IS_MOBILE } from "../../utils/platform";
 
 export interface SeekRailProps {
   progressBarRef: RefObject<HTMLDivElement | null>;
@@ -101,16 +100,24 @@ export function SeekRail({
           fill width this renders at the fill's end edge, identical visual
           position to the old fill-anchored right-0, but it survives 0%/100%
           where the clipper would cut the half-overhang (YT Music half-dot
-          convention). IS_MOBILE keeps the handle always visible per the
-          Material 3 slider spec (handles stay shown on touch surfaces) and
-          YouTube Music's mobile player (the playhead dot never hides):
-          https://m3.material.io/components/sliders/overview */}
+          convention). Hidden by default on ALL platforms (Spotify-web
+          convention — session-6 decision, overriding the earlier
+          M3/YT-Music mobile-always-visible rule): it shows only while the
+          user interacts — hover (desktop) or touch-drag (mobile, isDragging
+          covers the whole touch cycle) — and fades back out on release
+          (DRAG_RELEASE_DELAY_MS 150ms in useSeekDrag). Tailwind v4 emits
+          translate/scale as INDEPENDENT CSS properties (verified in
+          tailwindcss@4.3.3 dist: scale-75 -> `scale: ...`), so -translate-*
+          and scale-* compose without conflict and the transition must list
+          translate/scale explicitly for the fade + scale-in to animate. */}
       <div
         ref={thumbRef}
         data-testid="seek-thumb"
         style={{ left: "0%" }}
-        className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none transition-opacity ${
-          IS_MOBILE || isHovering || isDragging ? "opacity-100" : "opacity-0"
+        className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none transition-[opacity,transform,translate,scale] duration-150 ${
+          isHovering || isDragging
+            ? "opacity-100 scale-100"
+            : "opacity-0 scale-75"
         }`}
       ></div>
       {isHovering && duration > 0 && (
