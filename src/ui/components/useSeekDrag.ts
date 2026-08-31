@@ -22,9 +22,10 @@ export interface UseSeekDragOptions {
   setFillWidth: (percent: number) => void;
   /** Optional alternate hit surface (Task 5 mobile full-width seek). When set,
    *  pointerdown may land anywhere on the SURFACE (e.g. over the time clocks
-   *  flanking the rail) and both the percent math and the pointer capture use
-   *  its bounds — the whole row, not just the visual rail. Desktop omits it:
-   *  the rail stays the only surface. */
+   *  flanking the rail) and the pointer capture uses its bounds — the whole
+   *  row, not just the visual rail. The percent math still maps to the RAIL
+   *  bounds (see handlePointerDown) so 0%/100% land at the rail's actual ends.
+   *  Desktop omits it: the rail stays the only surface. */
   surfaceRef?: RefObject<HTMLDivElement | null> | undefined;
 }
 
@@ -100,7 +101,14 @@ export function useSeekDrag({
       });
     }
 
-    const bounds = surface.getBoundingClientRect();
+    // Gesture surface spans the row (Task 5 full-width seek) but the percent
+    // mapping must follow the visual rail so 0%/100% land at the rail's
+    // actual ends — the rail sits between two 52px clocks inside the row, so
+    // mapping to the row bounds made touching the rail's left edge read ~18%
+    // and reaching 0% require dragging to the screen edge. Desktop
+    // (surfaceRef undefined): surface === the rail, byte-identical behavior.
+    const rail = progressBarRef.current ?? surface;
+    const bounds = rail.getBoundingClientRect();
     const updateTime = (clientX: number) => {
       const percent = clamp01((clientX - bounds.left) / bounds.width);
       const newTime = percent * (durationRef.current || duration);

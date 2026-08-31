@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { formatTime } from "../../utils/formatTime";
+import { IS_MOBILE } from "../../utils/platform";
 import { BUFFER_HEAD_PAD_PCT } from "../../utils/bufferedRange";
 import { clamp, clamp01 } from "./seekMath";
 
@@ -37,13 +38,23 @@ export function useSeekHover({
   // Hover preview: tooltip + buffer highlight + thumb visibility. Position and
   // text are written DOM-direct on every pointermove (hot path, no re-render);
   // only the visibility toggle (enter/leave) goes through React state.
+  // Pointer events fire for touch on mobile (a tap fires pointerenter and
+  // pointermove on the rail — MDN "Pointer events": pointer events unify
+  // mouse, pen and touch input), so without a gate every touch would flip
+  // isHovering and flash the desktop hover affordances — the tooltip with its
+  // hard-coded "0:00" text plus the buffer preview — at the rail edge before
+  // the first move. Hover affordances are desktop-only; mobile feedback is
+  // the drag itself (clock + thumb via isDragging in useSeekDrag).
   const handlePointerEnter = () => {
+    if (IS_MOBILE) return;
     setIsHovering(true);
   };
   const handlePointerLeave = () => {
+    if (IS_MOBILE) return;
     setIsHovering(false);
   };
   const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (IS_MOBILE) return;
     if (duration === 0 || !progressBarRef.current) return;
     const bounds = progressBarRef.current.getBoundingClientRect();
     if (bounds.width <= 0) return;

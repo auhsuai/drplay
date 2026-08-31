@@ -891,6 +891,26 @@ describe("SeekBar mobile full-width drag surface (Task 5 — IS_MOBILE)", () => 
     return row;
   }
 
+  // B1: mocks the RAIL rect (default 40..160 inside the 0..200 row) — after
+  // the fix the percent math maps to the rail bounds while the row stays the
+  // hit/capture surface, so both rects must be mocked together.
+  function mockRailRect(left = 40, width = 120) {
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const rect = {
+      left,
+      right: left + width,
+      top: 0,
+      bottom: 10,
+      width,
+      height: 10,
+      x: left,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue(rect);
+    return rail;
+  }
+
   it("BUG regression (root cause): rail carries touch-none so the WebView gesture recognizer cannot hijack the drag (was: no touch-action -> pointercancel on move -> tap-only)", () => {
     renderSeekBar();
     const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
@@ -904,12 +924,16 @@ describe("SeekBar mobile full-width drag surface (Task 5 — IS_MOBILE)", () => 
     expect(row.className).toContain("touch-none");
   });
 
-  it("mobile: dragging the full-width row seeks by the ROW bounds (seek surface = whole row, not just the rail)", () => {
+  // B1 regression: the gesture surface spans the ROW (Task 5 full-width seek)
+  // but the percent math must map to the RAIL bounds — row 0..200 with the
+  // rail at 40..160 puts x=100 at rail-mid (50% -> 120s of 240s).
+  it("mobile: percent follows the RAIL bounds while the row stays the hit surface", () => {
     renderSeekBar();
     act(() => {
       fakeController._emit("durationchange", { duration: 240 });
     });
     const row = mockRowRect();
+    mockRailRect();
 
     act(() => {
       fireEvent.pointerDown(row, { clientX: 50, pointerId: 1 });
@@ -925,12 +949,17 @@ describe("SeekBar mobile full-width drag surface (Task 5 — IS_MOBILE)", () => 
     expect(fakeController.seek).toHaveBeenCalledWith(120);
   });
 
-  it("mobile: pointerdown over the time clock (outside the rail) still starts a drag (full-width surface)", () => {
+  // B1 regression: the drag still starts anywhere on the row (full-width
+  // surface intent preserved) but x=20 sits LEFT of the rail (rail.left=40),
+  // so the percent clamps to 0% -> seek(0) — the old row-bounds math read
+  // 20/200 = 10% -> 24s, putting 0% at the screen edge instead of the rail.
+  it("mobile: pointerdown over the time clock (outside the rail) still starts a drag and clamps to the rail's left edge (0%)", () => {
     renderSeekBar();
     act(() => {
       fakeController._emit("durationchange", { duration: 240 });
     });
     const row = mockRowRect();
+    mockRailRect();
 
     act(() => {
       fireEvent.pointerDown(row, { clientX: 20, pointerId: 1 });
@@ -940,7 +969,73 @@ describe("SeekBar mobile full-width drag surface (Task 5 — IS_MOBILE)", () => 
     });
 
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    expect(fakeController.seek).toHaveBeenCalledWith(24);
+    expect(fakeController.seek).toHaveBeenCalledWith(0);
+  });
+
+  // B1 regression: the rail's right edge must read 100% (the old row-bounds
+  // math read 160/200 = 80% -> 192s of 240s).
+  it("mobile: pointerdown+up at the rail's right edge seeks the full duration", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    mockRowRect();
+    const rail = mockRailRect();
+
+    act(() => {
+      fireEvent.pointerDown(rail, { clientX: 160, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 160, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(240);
+  });
+
+  // B1 regression: past the rail (row extends to 200, rail ends at 160) the
+  // percent clamps to 100% so the track's end stays reachable anywhere in the
+  // row tail — clamping, not percent scaling, keeps this inside [0, 1].
+  it("mobile: pointerdown+up past the rail's right edge (row tail) clamps to 100% and seeks the duration", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const row = mockRowRect();
+    mockRailRect();
+
+    act(() => {
+      fireEvent.pointerDown(row, { clientX: 200, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 200, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(240);
+  });
+
+  // B2 regression: pointer events fire for touch — a tap on the rail fires
+  // pointerenter/pointermove, which used to flip isHovering and flash the
+  // desktop hover affordances (tooltip hard-coded "0:00" + buffer preview) at
+  // the rail edge. On mobile these handlers must be no-ops: hover affordances
+  // are desktop-only, mobile feedback is the drag itself (clock + thumb).
+  it("mobile: pointerenter/pointermove on the rail never mount the hover tooltip or buffer preview", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+
+    act(() => {
+      fireEvent.pointerEnter(rail, { pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerMove(rail, { clientX: 100, pointerId: 1 });
+    });
+
+    expect(screen.queryByTestId("seek-tooltip")).toBeNull();
+    expect(screen.queryByTestId("buffer-preview")).toBeNull();
   });
 });
 
