@@ -11,7 +11,9 @@
     "cancelled_by_user": "Connection cancelled.",
     "cancelled": "Login cancelled",
     "timeout_error": "Login timed out. Try again.",
-    "failed": "Login failed. Try again."
+    "failed": "Login failed. Try again.",
+    "mobile_not_configured": "Google login is not configured on this device — an Android OAuth client is required in Google Console.",
+    "mobile_browser_opened": "Opened the browser — waiting for sign-in..."
   },
   "common": {
     "cancel": "Cancel",
@@ -85,7 +87,9 @@
     "bulk_delete_desc_other": "Delete {{count}} selected items? They will be moved to Google Drive Trash.",
     "folder_name_invalid": "Folder name contains invalid characters",
     "sort": "Sort",
-    "unknown_folder": "Unknown Folder"
+    "unknown_folder": "Unknown Folder",
+    "folder_cap_reached": "This folder has more than 10,000 files — showing the first 10,000.",
+    "search_close": "Close search"
   },
   "liked_songs": {
     "title": "Liked Songs",
@@ -112,7 +116,7 @@
     "audio_files": "Audio files",
     "upload_error": "Couldn't open the file picker. Try again.",
     "drop_failed": "Nothing to upload",
-    "uploading_blocked": "This item is already uploading. Please wait.",
+    "uploading_blocked": "This item is already uploading. Wait a moment.",
     "cancel_upload": "Cancel upload",
     "interrupted": "Some uploads were interrupted. Try again.",
     "resume_not_found": "Couldn't resume upload. File not found.",
@@ -153,7 +157,12 @@
     "add_favorite": "Add to favorites",
     "remove_favorite": "Remove from favorites",
     "exception_toast": "An exception occurred. Open Developer Tools (Ctrl+Shift+I) for details.",
-    "playback_failed": "Couldn't start playback. Try another track."
+    "playback_failed": "Couldn't start playback. Try another track.",
+    "rewind_5s": "Rewind 5 seconds",
+    "play_pause": "Play/Pause",
+    "forward_5s": "Forward 5 seconds",
+    "previous_track": "Previous track",
+    "next_track": "Next track"
   },
   "menu": {
     "remove_from_liked": "Remove from Liked Songs",
@@ -174,7 +183,10 @@
     "select_multiple": "Select multiple items",
     "saving": "Saving...",
     "save": "Save",
-    "untitled": "Untitled"
+    "untitled": "Untitled",
+    "saved_folder_lost_permission": "Download failed — the folder is no longer accessible. Re-pick it in Settings.",
+    "saved_at_folder": "Saved to {{folder}}",
+    "saved_at_app": "Saved to app storage"
   },
   "settings": {
     "title": "Settings",
@@ -246,7 +258,9 @@
     "error_log_count_other": "{{count}} errors",
     "trash_load_error": "Couldn't load trash. Try again.",
     "close": "Close",
-    "coming_soon": "Coming soon"
+    "coming_soon": "Coming soon",
+    "download_location_default": "App storage (default)",
+    "background_playback": "Background playback"
   },
   "sort": {
     "name": "A-Z",

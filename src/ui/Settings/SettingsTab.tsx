@@ -82,7 +82,7 @@ export function SettingsTab({
   userProfile,
   onLogout,
 }: SettingsTabProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   // Task 8 + Task 9: setting rows compact two notches on mobile (16px ->
   // 14px -> 13px); desktop keeps text-base — the string is byte-identical
   // to the pre-task markup.
@@ -139,16 +139,10 @@ export function SettingsTab({
 
   const activeUploads = uploadEntries.filter(isActiveUpload);
 
-  // Background-playback row label (mobile only). The key ships nowhere in
-  // translation.json yet (cover branch owns the file) — fall back per
-  // locale so the toggle reads "Chạy nhạc nền" in Vietnamese and
-  // "Background playback" in English.
+  // Background-playback row label (mobile only). Resolved from the shared
+  // translation resources — no per-locale fallback needed.
   const backgroundPlaybackLabel = (): string =>
-    t("settings.background_playback", {
-      defaultValue: i18n.language.toLowerCase().startsWith("vi")
-        ? "Chạy nhạc nền"
-        : "Background playback",
-    });
+    t("settings.background_playback");
 
   const handlePickDownloadPath = async () => {
     // Mobile (Task 4 mobile-polish): SAF folder picker via the

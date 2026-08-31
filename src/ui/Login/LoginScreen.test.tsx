@@ -124,7 +124,7 @@ describe("LoginScreen invoke login error handling", () => {
 
     await waitFor(() => {
       expect(toastRootText()).toContain(
-        "Google login chưa được cấu hình trên thiết bị này — cần OAuth client Android trên Google Console",
+        "Google login is not configured on this device — an Android OAuth client is required in Google Console.",
       );
     });
     expect(captureErrorMock).toHaveBeenCalledWith(
@@ -273,7 +273,7 @@ describe("LoginScreen invoke login error handling", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Đã mở trình duyệt — chờ đăng nhập..."),
+        screen.getByText("Opened the browser — waiting for sign-in..."),
       ).toBeTruthy();
     });
   });
@@ -285,7 +285,7 @@ describe("LoginScreen invoke login error handling", () => {
     fireEvent.click(screen.getByRole("button"));
 
     expect(
-      screen.queryByText("Đã mở trình duyệt — chờ đăng nhập..."),
+      screen.queryByText("Opened the browser — waiting for sign-in..."),
     ).toBeNull();
   });
 

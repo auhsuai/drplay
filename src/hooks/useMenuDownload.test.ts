@@ -47,9 +47,9 @@ const mockedGetMobileDownloadFolder = vi.mocked(getMobileDownloadFolder);
 
 // Minimal TFunction backed by the real en resources: the hook no longer
 // passes fallbacks to t(), so a real resource lookup keeps the asserted
-// UI strings in sync with the shipped copy. Object-form options
-// ({ defaultValue }) are honoured for keys not yet present in the JSON
-// (mobile-only strings land via defaultValue until the JSON is updated).
+// UI strings in sync with the shipped copy. Object-form options carry
+// interpolation vars ({{folder}}) and/or defaultValue for keys not yet
+// present in the JSON.
 const t = ((key: string, fallback?: string | Record<string, unknown>) => {
   const resolveFallback = (): string => {
     if (fallback && typeof fallback === "object") {
@@ -66,7 +66,16 @@ const t = ((key: string, fallback?: string | Record<string, unknown>) => {
       return resolveFallback();
     }
   }
-  return typeof acc === "string" ? acc : resolveFallback();
+  const resolved = typeof acc === "string" ? acc : resolveFallback();
+  if (fallback && typeof fallback === "object") {
+    return resolved.replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
+      const value = fallback[name];
+      return typeof value === "string" || typeof value === "number"
+        ? String(value)
+        : `{{${name}}}`;
+    });
+  }
+  return resolved;
 }) as unknown as TFunction;
 
 function makeTrack(overrides: Partial<Track> = {}): Track {
@@ -575,9 +584,7 @@ describe("useMenuDownload mobile SAF folder", () => {
 
     const result = await runDownload();
 
-    expect(result.current.downloadMessage).toContain(
-      "folder access was revoked",
-    );
+    expect(result.current.downloadMessage).toContain("no longer accessible");
   });
 
   it("shows 'Download failed' for a generic SAF write failure", async () => {

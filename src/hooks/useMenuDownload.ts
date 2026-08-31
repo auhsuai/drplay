@@ -221,9 +221,7 @@ export function useMenuDownload(t: TFunction) {
             return;
           }
           setDownloadMessage(
-            t("menu.saved_at_folder", {
-              defaultValue: `Saved to ${mobileFolder.name}`,
-            }),
+            t("menu.saved_at_folder", { folder: mobileFolder.name }),
           );
           return;
         }

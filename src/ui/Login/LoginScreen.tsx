@@ -144,7 +144,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         showErrorToast(
           t("login.mobile_not_configured", {
             defaultValue:
-              "Google login chưa được cấu hình trên thiết bị này — cần OAuth client Android trên Google Console",
+              "Đăng nhập Google chưa được cấu hình trên thiết bị này — cần OAuth client Android trên Google Console.",
           }),
         );
         void captureError({
@@ -240,7 +240,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           <p className="mt-4 text-sm text-gray-500 dark:text-gray-400 animate-in fade-in duration-300">
             {t(
               "login.mobile_browser_opened",
-              "Đã mở trình duyệt — chờ đăng nhập...",
+              "Đã mở trình duyệt — đang chờ đăng nhập...",
             )}
           </p>
         )}

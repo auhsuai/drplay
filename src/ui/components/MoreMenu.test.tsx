@@ -505,7 +505,7 @@ describe("MoreMenu upload race guards", () => {
         `button ${name} disabled`,
       ).toBe(true);
       expect((btn as HTMLButtonElement).title, `button ${name} tooltip`).toBe(
-        "This item is already uploading. Please wait.",
+        "This item is already uploading. Wait a moment.",
       );
     }
   });
@@ -565,7 +565,7 @@ describe("MoreMenu upload race guards", () => {
       buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
     expect(byName("Delete").disabled).toBe(true);
     expect(byName("Delete").title).toBe(
-      "This item is already uploading. Please wait.",
+      "This item is already uploading. Wait a moment.",
     );
     expect(byName("Locate File").disabled).toBe(false);
   });
@@ -590,7 +590,7 @@ describe("MoreMenu upload race guards", () => {
       name: "Delete",
     });
     expect(btn.disabled).toBe(true);
-    expect(btn.title).toBe("This item is already uploading. Please wait.");
+    expect(btn.title).toBe("This item is already uploading. Wait a moment.");
   });
 
   it("blocks adding to playlist when the upload starts after the submenu is already open (handler guard)", async () => {
@@ -613,7 +613,7 @@ describe("MoreMenu upload race guards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
     expect(mocks.addTrackToPlaylist).not.toHaveBeenCalled();
     expect(mocks.showErrorToast).toHaveBeenCalledWith(
-      "This item is already uploading. Please wait.",
+      "This item is already uploading. Wait a moment.",
     );
   });
 
@@ -637,7 +637,7 @@ describe("MoreMenu upload race guards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(mocks.driveApi.deleteFile).not.toHaveBeenCalled();
     expect(mocks.showErrorToast).toHaveBeenCalledWith(
-      "This item is already uploading. Please wait.",
+      "This item is already uploading. Wait a moment.",
     );
   });
 });
@@ -860,7 +860,7 @@ describe("MoreMenu mobile playlist picker (Slice 2)", () => {
 
     await waitFor(() => {
       expect(mocks.showErrorToast).toHaveBeenCalledWith(
-        "This item is already uploading. Please wait.",
+        "This item is already uploading. Wait a moment.",
       );
     });
     expect(mocks.addTrackToPlaylist).not.toHaveBeenCalled();
