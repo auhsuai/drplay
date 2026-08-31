@@ -1,4 +1,4 @@
-import { Download, Heart, MapPin } from "lucide-react";
+import { Download, MapPin } from "lucide-react";
 import type { Track } from "../../../types";
 import { menuItemBaseClass } from "./constants";
 import { IS_MOBILE } from "../../../utils/platform";
@@ -17,10 +17,6 @@ interface PlayerBarMenuItemsProps {
   uploadBlockedTitle: string | undefined;
   setIsOpen: (open: boolean) => void;
   t: import("i18next").TFunction;
-  /** Redesign 2026-08-17: mobile favorite toggle. Only rendered when BOTH
-   *  are provided (TrackInfo mobile passes them; desktop does not). */
-  isFavorite?: boolean | undefined;
-  onToggleFavorite?: (() => void) | undefined;
 }
 
 export function PlayerBarMenuItems({
@@ -32,31 +28,12 @@ export function PlayerBarMenuItems({
   uploadBlockedTitle,
   setIsOpen,
   t,
-  isFavorite,
-  onToggleFavorite,
 }: PlayerBarMenuItemsProps) {
   const baseClass = menuItemBaseClass(IS_MOBILE);
   return (
     <>
       {track && (
         <>
-          {typeof isFavorite === "boolean" &&
-            typeof onToggleFavorite === "function" && (
-              <MoreMenuItem
-                icon={Heart}
-                label={
-                  isFavorite
-                    ? t("player.remove_favorite")
-                    : t("player.add_favorite")
-                }
-                onClick={() => {
-                  onToggleFavorite();
-                  setIsOpen(false);
-                }}
-                className={baseClass}
-              />
-            )}
-
           <MoreMenuItem
             icon={Download}
             label={t("menu.download_song")}

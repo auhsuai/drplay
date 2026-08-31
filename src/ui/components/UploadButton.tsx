@@ -23,8 +23,8 @@ const AUDIO_FILE_EXTENSIONS: ReadonlyArray<string> = [
   "aac",
   "opus",
 ];
-// Matches the "+" playlist button style (Sidebar.tsx) — gray, hover to dark,
-// fixed icon-sized hit area.
+// Matches the Sidebar toggle-button style (Sidebar.tsx) — gray, hover to
+// dark, fixed icon-sized hit area.
 const TOGGLE_BUTTON_CLASS =
   "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-all duration-300 w-6 h-6 flex items-center justify-center shrink-0";
 const MENU_ITEM_CLASS =

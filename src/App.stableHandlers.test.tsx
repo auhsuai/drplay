@@ -104,8 +104,6 @@ vi.mock("./ui/Login/LoginScreen", () => ({ LoginScreen: () => null }));
 vi.mock("./ui/MainContent/MainContent", () => ({
   MainContent: () => <div data-testid="main-content" />,
 }));
-vi.mock("./ui/LikedSongs/LikedSongs", () => ({ LikedSongs: () => null }));
-vi.mock("./ui/Playlist/PlaylistView", () => ({ PlaylistView: () => null }));
 vi.mock("./ui/Settings/SettingsTab", () => ({ SettingsTab: () => null }));
 vi.mock("./ui/HomeTab/HomeTab", () => ({
   HomeTab: () => <div data-testid="home-tab">HOME</div>,

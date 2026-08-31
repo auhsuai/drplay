@@ -27,14 +27,6 @@ const mocks = vi.hoisted(() => ({
   },
   captureError: vi.fn(),
   showErrorToast: vi.fn(),
-  getPlaylists: vi.fn(),
-  addTrackToPlaylist: vi.fn(),
-  // PlaylistPickerModal (Slice 2) manages playlists inline: the modal imports
-  // these util functions, so the mock must export them even though the
-  // MoreMenu-level tests only exercise pick/add-track flows.
-  createPlaylist: vi.fn(),
-  updatePlaylist: vi.fn(),
-  deletePlaylist: vi.fn(),
   uploadManager: {
     isUploading: vi.fn(),
     subscribe: vi.fn((cb: () => void) => {
@@ -65,9 +57,9 @@ vi.mock("react-i18next", () => {
   };
 });
 
-// Slice 1/2: mobile compaction + the playlist-picker modal are gated by
-// IS_MOBILE. The getter keeps the named-export binding live so each test can
-// flip the platform mid-file (SeekBar.test / PlayerBar.test pattern).
+// Slice 1: mobile menu compaction is gated by IS_MOBILE. The getter keeps
+// the named-export binding live so each test can flip the platform mid-file
+// (SeekBar.test / PlayerBar.test pattern).
 const platformMock = vi.hoisted(() => ({ IS_MOBILE: false }));
 vi.mock("../../utils/platform", () => ({
   get IS_MOBILE() {
@@ -82,13 +74,6 @@ vi.mock("../../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
 }));
 vi.mock("../../utils/uploadManager", () => mocks.uploadManager);
-vi.mock("../../utils/playlists", () => ({
-  getPlaylists: mocks.getPlaylists,
-  addTrackToPlaylist: mocks.addTrackToPlaylist,
-  createPlaylist: mocks.createPlaylist,
-  updatePlaylist: mocks.updatePlaylist,
-  deletePlaylist: mocks.deletePlaylist,
-}));
 
 function makeTrack(over: Partial<Track> = {}): Track {
   return {
@@ -136,7 +121,6 @@ function menuButtonNames(): string[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.getPlaylists.mockResolvedValue([]);
   mocks.driveApi.deleteFile.mockResolvedValue({
     id: "track-1",
     name: "My Song",
@@ -152,7 +136,7 @@ afterEach(() => {
 });
 
 describe("MoreMenu recent variant", () => {
-  it("shows exactly 4 curated items (Delete / Download Song / Add to Playlist / Locate File) and no Select Multiple or Move to", () => {
+  it("shows exactly 3 curated items (Delete / Download Song / Locate File) and no Select Multiple or Move to", () => {
     render(
       <MoreMenu
         variant="recent"
@@ -163,7 +147,6 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
       "Delete",
       "Download Song",
       "Locate File",
@@ -185,21 +168,13 @@ describe("MoreMenu recent variant", () => {
       />,
     );
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
-    ]);
+    expect(menuButtonNames().sort()).toEqual(["Download Song", "Locate File"]);
   });
 
   it("hides Delete when driveItem is missing (track-only render) but keeps track-based items", () => {
     render(<MoreMenu variant="recent" track={makeTrack()} token="tok" />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
-    ]);
+    expect(menuButtonNames().sort()).toEqual(["Download Song", "Locate File"]);
   });
 
   it("dispatches the locate-file CustomEvent with fileId/parentId/parentName on Locate File", () => {
@@ -285,32 +260,15 @@ describe("MoreMenu recent variant", () => {
     );
     expect(screen.getByText("File name")).toBeTruthy();
   });
-
-  it("opens PlaylistsSubmenu on Add to Playlist", () => {
-    render(
-      <MoreMenu
-        variant="recent"
-        track={makeTrack()}
-        driveItem={makeDriveItem()}
-        token="tok"
-      />,
-    );
-    openTrigger();
-    fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    );
-    expect(screen.getByText("Playlists")).toBeTruthy();
-  });
 });
 
 describe("MoreMenu default variant regression (file list)", () => {
-  it("keeps the original 5 items (Select Multiple / Move to / Delete / Download / Add to Playlist)", () => {
+  it("keeps the original 4 items (Select Multiple / Move to / Delete / Download)", () => {
     render(
       <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
     );
     openTrigger();
     expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
       "Delete",
       "Download Song",
       "Move to...",
@@ -329,7 +287,6 @@ describe("MoreMenu default variant regression (file list)", () => {
     );
     openTrigger();
     expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
       "Delete",
       "Download Song",
       "Move to...",
@@ -339,14 +296,10 @@ describe("MoreMenu default variant regression (file list)", () => {
 });
 
 describe("MoreMenu playerbar variant regression", () => {
-  it("keeps the original 2 track items (Download Song / Locate File) plus shared Add to Playlist, no Delete", () => {
+  it("keeps the original 2 track items (Download Song / Locate File), no Delete", () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
-    ]);
+    expect(menuButtonNames().sort()).toEqual(["Download Song", "Locate File"]);
     expect(
       within(menuEl()).queryByRole("button", { name: "Delete" }),
     ).toBeNull();
@@ -354,6 +307,44 @@ describe("MoreMenu playerbar variant regression", () => {
       within(menuEl()).queryByRole("button", { name: "Select multiple items" }),
     ).toBeNull();
   });
+
+  // Guard test (test sau khi xóa): playlists + favorites have been removed
+  // from the app. If either feature ever leaks back into ANY menu mode, this
+  // fails immediately.
+  it.each([
+    [
+      "default",
+      { track: makeTrack(), driveItem: makeDriveItem(), token: "tok" },
+    ],
+    ["playerbar", { isPlayerBarMode: true, track: makeTrack() }],
+    [
+      "recent",
+      {
+        variant: "recent" as const,
+        track: makeTrack(),
+        driveItem: makeDriveItem(),
+        token: "tok",
+      },
+    ],
+  ])(
+    "%s mode: does NOT render Add to Playlist or heart items (features removed)",
+    (_mode, props) => {
+      render(<MoreMenu {...props} />);
+      openTrigger();
+      expect(
+        within(menuEl()).queryByRole("button", { name: "Add to Playlist" }),
+      ).toBeNull();
+      expect(
+        within(menuEl()).queryByRole("button", { name: "Add to favorites" }),
+      ).toBeNull();
+      expect(
+        within(menuEl()).queryByRole("button", {
+          name: "Remove from favorites",
+        }),
+      ).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    },
+  );
 
   it("still dispatches locate-file with the same detail as before", () => {
     const spy = vi.fn();
@@ -377,106 +368,6 @@ describe("MoreMenu playerbar variant regression", () => {
       parentId: "parent-1",
       parentName: "Folder One",
     });
-  });
-});
-
-describe("MoreMenu playerbar favorite item (heart moved into menu)", () => {
-  it("renders an Add to favorites item when isFavorite + onToggleFavorite are both provided", () => {
-    render(
-      <MoreMenu
-        isPlayerBarMode
-        track={makeTrack()}
-        isFavorite={false}
-        onToggleFavorite={vi.fn()}
-      />,
-    );
-    openTrigger();
-    expect(
-      within(menuEl()).getByRole("button", { name: "Add to favorites" }),
-    ).toBeTruthy();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Add to favorites",
-      "Download Song",
-      "Locate File",
-    ]);
-  });
-
-  it("switches the label to Remove from favorites when the track is liked", () => {
-    render(
-      <MoreMenu
-        isPlayerBarMode
-        track={makeTrack()}
-        isFavorite={true}
-        onToggleFavorite={vi.fn()}
-      />,
-    );
-    openTrigger();
-    expect(
-      within(menuEl()).getByRole("button", { name: "Remove from favorites" }),
-    ).toBeTruthy();
-    expect(
-      within(menuEl()).queryByRole("button", { name: "Add to favorites" }),
-    ).toBeNull();
-  });
-
-  it("clicking the item calls onToggleFavorite and closes the menu", () => {
-    const onToggleFavorite = vi.fn();
-    render(
-      <MoreMenu
-        isPlayerBarMode
-        track={makeTrack()}
-        isFavorite={false}
-        onToggleFavorite={onToggleFavorite}
-      />,
-    );
-    openTrigger();
-    fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to favorites" }),
-    );
-    expect(onToggleFavorite).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('[role="menu"]')).toBeNull();
-  });
-
-  it("does not render the heart item when only one of the two props is provided", () => {
-    render(
-      <MoreMenu
-        isPlayerBarMode
-        track={makeTrack()}
-        isFavorite={false}
-        onToggleFavorite={undefined}
-      />,
-    );
-    openTrigger();
-    expect(
-      within(menuEl()).queryByRole("button", { name: "Add to favorites" }),
-    ).toBeNull();
-    expect(
-      within(menuEl()).queryByRole("button", { name: "Remove from favorites" }),
-    ).toBeNull();
-  });
-
-  it("does not render the heart item in default mode even with the props provided", () => {
-    render(
-      <MoreMenu
-        track={makeTrack()}
-        driveItem={makeDriveItem()}
-        token="tok"
-        isFavorite={false}
-        onToggleFavorite={vi.fn()}
-      />,
-    );
-    openTrigger();
-    expect(
-      within(menuEl()).queryByRole("button", { name: "Add to favorites" }),
-    ).toBeNull();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Delete",
-      "Download Song",
-      "Move to...",
-      "Select multiple items",
-    ]);
   });
 });
 
@@ -505,7 +396,6 @@ describe("MoreMenu upload race guards", () => {
       "Move to...",
       "Delete",
       "Download Song",
-      "Add to Playlist",
     ]) {
       const btn = buttons.find((b) => b.textContent?.trim() === name);
       expect(btn, `button ${name} should exist`).toBeDefined();
@@ -530,7 +420,6 @@ describe("MoreMenu upload race guards", () => {
       "Move to...",
       "Delete",
       "Download Song",
-      "Add to Playlist",
     ]) {
       const btn = buttons.find((b) => b.textContent?.trim() === name);
       expect(btn, `button ${name} should exist`).toBeDefined();
@@ -545,7 +434,7 @@ describe("MoreMenu upload race guards", () => {
     }
   });
 
-  it("disables Download Song + Add to Playlist for a track uploading in playerbar mode, keeps Locate File enabled", () => {
+  it("disables Download Song for a track uploading in playerbar mode, keeps Locate File enabled", () => {
     mocks.uploadManager.isUploading.mockReturnValue(true);
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
@@ -553,7 +442,6 @@ describe("MoreMenu upload race guards", () => {
     const byName = (name: string) =>
       buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
     expect(byName("Download Song").disabled).toBe(true);
-    expect(byName("Add to Playlist").disabled).toBe(true);
     expect(byName("Locate File").disabled).toBe(false);
     expect(byName("Locate File").title).toBe("");
   });
@@ -600,30 +488,6 @@ describe("MoreMenu upload race guards", () => {
     });
     expect(btn.disabled).toBe(true);
     expect(btn.title).toBe("This item is already uploading. Wait a moment.");
-  });
-
-  it("blocks adding to playlist when the upload starts after the submenu is already open (handler guard)", async () => {
-    mocks.getPlaylists.mockResolvedValue([{ id: "p1", name: "Playlist One" }]);
-    render(
-      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
-    );
-    openTrigger();
-    fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    );
-    expect(screen.getByText("Playlists")).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Playlist One" })).toBeTruthy();
-    });
-
-    mocks.uploadManager.isUploading.mockReturnValue(true);
-    act(() => notify?.());
-
-    fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
-    expect(mocks.addTrackToPlaylist).not.toHaveBeenCalled();
-    expect(mocks.showErrorToast).toHaveBeenCalledWith(
-      "This item is already uploading. Wait a moment.",
-    );
   });
 
   it("blocks the delete confirm action when the upload starts after the dialog is open (handler guard)", () => {
@@ -775,124 +639,6 @@ describe("MoreMenu mobile compact rows (Slice 1)", () => {
   });
 });
 
-// Slice 2 (mobile playlist picker): on IS_MOBILE the Add to Playlist item
-// must open a standalone modal â€” the nested submenu clips off-screen near
-// the player bar's bottom-right edge. Desktop keeps the submenu flow.
-describe("MoreMenu mobile playlist picker (Slice 2)", () => {
-  beforeEach(() => {
-    platformMock.IS_MOBILE = true;
-    mocks.uploadManager.isUploading.mockReset();
-    mocks.uploadManager.isUploading.mockReturnValue(false);
-    mocks.addTrackToPlaylist.mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    platformMock.IS_MOBILE = false;
-    cleanup();
-  });
-
-  async function openPicker(): Promise<void> {
-    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
-    openTrigger();
-    // The playlists fetch resolves after the menu's effect runs; flush the
-    // microtask BEFORE opening the picker (a real user's tap latency). Once
-    // the menu closes, the hook's ignore-guard would skip the late result â€”
-    // same pre-existing race the desktop submenu has.
-    await act(async () => {});
-    fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    );
-  }
-
-  it("mobile: Add to Playlist opens the picker dialog, not the nested submenu", async () => {
-    mocks.getPlaylists.mockResolvedValue([
-      {
-        id: "p1",
-        userEmail: "me@example.com",
-        name: "Playlist One",
-        createdAt: 1,
-        tracks: [],
-      },
-    ]);
-    await openPicker();
-    await act(async () => {});
-
-    expect(document.querySelector('[role="menu"]')).toBeNull();
-    expect(screen.queryByText("Playlists")).toBeNull();
-    expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(screen.getByPlaceholderText("Search...")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Playlist One" })).toBeTruthy();
-  });
-
-  it("mobile: picking a playlist calls addTrackToPlaylist with the right id and closes dialog + menu", async () => {
-    const track = makeTrack();
-    mocks.getPlaylists.mockResolvedValue([
-      {
-        id: "p1",
-        userEmail: "me@example.com",
-        name: "Playlist One",
-        createdAt: 1,
-        tracks: [],
-      },
-    ]);
-    render(<MoreMenu isPlayerBarMode track={track} />);
-    openTrigger();
-    await act(async () => {});
-    fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    );
-    await act(async () => {});
-
-    fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
-    await waitFor(() => {
-      expect(mocks.addTrackToPlaylist).toHaveBeenCalledWith("p1", track);
-    });
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-    expect(document.querySelector('[role="menu"]')).toBeNull();
-  });
-
-  it("mobile: an upload that starts after the picker opens shows the toast and keeps the dialog open", async () => {
-    mocks.getPlaylists.mockResolvedValue([
-      {
-        id: "p1",
-        userEmail: "me@example.com",
-        name: "Playlist One",
-        createdAt: 1,
-        tracks: [],
-      },
-    ]);
-    await openPicker();
-    // Rows come from the modal's own open-fetch (localPlaylists), so flush
-    // the microtask before clicking a row.
-    await act(async () => {});
-    expect(screen.getByRole("dialog")).toBeTruthy();
-
-    mocks.uploadManager.isUploading.mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
-
-    await waitFor(() => {
-      expect(mocks.showErrorToast).toHaveBeenCalledWith(
-        "This item is already uploading. Wait a moment.",
-      );
-    });
-    expect(mocks.addTrackToPlaylist).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog")).toBeTruthy();
-  });
-
-  it("desktop: Add to Playlist still opens the nested submenu and never the dialog", () => {
-    platformMock.IS_MOBILE = false;
-    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
-    openTrigger();
-    fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    );
-    expect(screen.getByText("Playlists")).toBeTruthy();
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-});
-
 describe("MoreMenu debug download toast trigger", () => {
   afterEach(() => {
     cleanup();
@@ -1037,7 +783,7 @@ describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
 
   it("prioritizes DownloadDialog > DeleteConfirm > MoveScreen > Menu", () => {
     // The default-variant menu item order is: Select Multiple / Move to /
-    // Delete / Download Song / Add to Playlist. Each item closes the menu
+    // Delete / Download Song. Each item closes the menu
     // and opens its own dialog. We re-open the menu between clicks to layer
     // each dialog on top of the previous one (the real product can't
     // actually do this because the dialog backdrop blocks further clicks â€”

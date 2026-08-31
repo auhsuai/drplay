@@ -27,15 +27,10 @@
   "sidebar": {
     "home": "Home",
     "my_drive": "My Drive",
-    "liked_songs": "Liked Songs",
-    "create_playlist": "Create Playlist",
-    "create_playlist_error": "Couldn't create playlist. Try again.",
     "settings": "Settings",
     "guest": "Guest",
     "not_authenticated": "Not signed in",
     "log_out": "Sign out",
-    "playlists": "Playlists",
-    "new_playlist_placeholder": "My Playlist #1",
     "storage_unlimited": "Storage used"
   },
   "folder_selection": {
@@ -91,21 +86,9 @@
     "folder_cap_reached": "This folder has more than 10,000 files — showing the first 10,000.",
     "search_close": "Close search"
   },
-  "liked_songs": {
-    "title": "Liked Songs",
-    "empty_title": "No liked songs yet",
-    "empty_subtitle": "Tap the heart on any song to save it.",
-    "add_failed": "Couldn't add to favorites. Try again.",
-    "remove_failed": "Couldn't remove from favorites. Try again.",
-    "load_failed": "Couldn't load liked songs. Try again."
-  },
   "now_playing": {
     "progress": "Playback progress"
   },
-  "playlist_name": "Playlist",
-  "song_one": "1 song",
-  "song_other": "{{count}} songs",
-  "title": "Title",
   "upload": {
     "error": "Couldn't upload. Try again.",
     "quota_exceeded": "Your Google Drive storage is full",
@@ -126,28 +109,9 @@
   "unknown_artist": "Unknown Artist",
   "view_all": "View All",
   "playlist": {
-    "delete_error": "Couldn't delete playlist. Try again.",
-    "add_track_error": "Couldn't add track to playlist. Try again.",
-    "remove_track_error": "Couldn't remove track from playlist. Try again.",
-    "update_error": "Couldn't update playlist. Try again.",
-    "rename": "Rename",
-    "row_actions": "Playlist options",
-    "empty_state_title": "No tracks yet",
-    "empty_state_subtitle": "Add songs to your playlist.",
-    "change_cover": "Change Cover",
-    "cover_save_error": "Couldn't save cover. Try again.",
-    "adjust_cover": "Adjust Image",
-    "zoom": "Zoom",
-    "close": "Close",
     "prev": "Previous",
-    "next": "Next",
-    "remove_error": "Couldn't remove track. Try again.",
-    "load_error": "Couldn't load playlist. Try again.",
-    "cover_invalid_type": "Choose an image file",
-    "cover_too_large": "Image must be 5 MB or smaller",
-    "cover_read_error": "Couldn't read the selected image. Try again."
+    "next": "Next"
   },
-  "confirm_delete_playlist": "Delete this playlist?",
   "delete": "Delete",
   "remove_from_playlist": "Remove from Playlist",
   "player": {
@@ -156,8 +120,6 @@
     "format_error": "Audio format not supported. Skipping to next track.",
     "advance_stopped": "Drive is overloaded or locked — auto-playback paused. Try again in a few minutes.",
     "view_now_playing": "View Now Playing",
-    "add_favorite": "Add to favorites",
-    "remove_favorite": "Remove from favorites",
     "exception_toast": "An exception occurred. Open Developer Tools (Ctrl+Shift+I) for details.",
     "playback_failed": "Couldn't start playback. Try another track.",
     "rewind_5s": "Rewind 5 seconds",
@@ -167,10 +129,6 @@
     "next_track": "Next track"
   },
   "menu": {
-    "remove_from_liked": "Remove from Liked Songs",
-    "add_to_playlist": "Add to Playlist",
-    "add_to_playlist_error": "Couldn't add to playlist. Try again.",
-    "no_playlists": "No playlists yet",
     "download_song": "Download Song",
     "navigate": "Locate File",
     "download": "Download Song",

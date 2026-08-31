@@ -27,15 +27,10 @@
   "sidebar": {
     "home": "Trang chủ",
     "my_drive": "Kho của tôi",
-    "liked_songs": "Đã thích",
-    "create_playlist": "Tạo danh sách phát",
-    "create_playlist_error": "Không thể tạo danh sách phát. Vui lòng thử lại.",
     "settings": "Cài đặt",
     "guest": "Khách",
     "not_authenticated": "Chưa đăng nhập",
     "log_out": "Đăng xuất",
-    "playlists": "Danh sách phát",
-    "new_playlist_placeholder": "Danh sách phát của tôi #1",
     "storage_unlimited": "Dung lượng đã dùng"
   },
   "folder_selection": {
@@ -91,21 +86,9 @@
     "folder_cap_reached": "Thư mục có hơn 10.000 tệp — hiển thị 10.000 tệp đầu tiên.",
     "search_close": "Đóng tìm kiếm"
   },
-  "liked_songs": {
-    "title": "Bài hát đã thích",
-    "empty_title": "Chưa có bài hát nào",
-    "empty_subtitle": "Nhấn trái tim trên bài hát để lưu vào đây.",
-    "add_failed": "Không thể thêm vào yêu thích. Vui lòng thử lại.",
-    "remove_failed": "Không thể bỏ khỏi yêu thích. Vui lòng thử lại.",
-    "load_failed": "Không thể tải bài hát đã thích. Vui lòng thử lại."
-  },
   "now_playing": {
     "progress": "Tiến độ phát"
   },
-  "playlist_name": "Danh sách phát",
-  "song_one": "1 bài hát",
-  "song_other": "{{count}} bài hát",
-  "title": "Tiêu đề",
   "upload": {
     "error": "Không thể tải lên. Vui lòng thử lại.",
     "quota_exceeded": "Dung lượng Google Drive của bạn đã đầy",
@@ -126,28 +109,9 @@
   "unknown_artist": "Không rõ ca sĩ",
   "view_all": "Xem tất cả",
   "playlist": {
-    "delete_error": "Không thể xóa danh sách phát. Vui lòng thử lại.",
-    "add_track_error": "Không thể thêm bài hát vào danh sách phát. Vui lòng thử lại.",
-    "remove_track_error": "Không thể xóa bài hát khỏi danh sách phát. Vui lòng thử lại.",
-    "update_error": "Không thể cập nhật danh sách phát. Vui lòng thử lại.",
-    "rename": "Đổi tên",
-    "row_actions": "Tùy chọn danh sách phát",
-    "empty_state_title": "Danh sách phát trống",
-    "empty_state_subtitle": "Thêm bài hát vào danh sách phát của bạn.",
-    "change_cover": "Đổi ảnh bìa",
-    "cover_save_error": "Không thể lưu ảnh bìa. Vui lòng thử lại.",
-    "adjust_cover": "Điều chỉnh ảnh",
-    "zoom": "Phóng to",
-    "close": "Đóng",
     "prev": "Trang trước",
-    "next": "Trang sau",
-    "remove_error": "Không thể xóa bài hát khỏi danh sách. Vui lòng thử lại.",
-    "load_error": "Không thể tải danh sách phát. Vui lòng thử lại.",
-    "cover_invalid_type": "Chọn tệp hình ảnh",
-    "cover_too_large": "Ảnh phải nhỏ hơn hoặc bằng 5 MB",
-    "cover_read_error": "Không thể đọc ảnh đã chọn. Vui lòng thử lại."
+    "next": "Trang sau"
   },
-  "confirm_delete_playlist": "Xóa danh sách phát này?",
   "delete": "Xóa",
   "remove_from_playlist": "Bỏ khỏi danh sách",
   "player": {
@@ -156,8 +120,6 @@
     "format_error": "Định dạng âm thanh không được hỗ trợ. Bỏ qua bài tiếp theo.",
     "advance_stopped": "Drive đang quá tải hoặc bị khóa — tạm dừng tự phát. Thử lại sau vài phút.",
     "view_now_playing": "Xem bài đang phát",
-    "add_favorite": "Thêm vào yêu thích",
-    "remove_favorite": "Bỏ khỏi yêu thích",
     "exception_toast": "Đã xảy ra lỗi. Mở Developer Tools (Ctrl+Shift+I) để xem chi tiết.",
     "playback_failed": "Không phát được bài này. Vui lòng thử bài hát khác.",
     "rewind_5s": "Tua lại 5 giây",
@@ -167,10 +129,6 @@
     "next_track": "Bài sau"
   },
   "menu": {
-    "remove_from_liked": "Bỏ khỏi yêu thích",
-    "add_to_playlist": "Thêm vào danh sách phát",
-    "add_to_playlist_error": "Không thể thêm vào danh sách phát. Vui lòng thử lại.",
-    "no_playlists": "Chưa có danh sách phát nào",
     "download_song": "Tải bài hát xuống",
     "navigate": "Tìm tệp",
     "download": "Tải bài hát xuống",

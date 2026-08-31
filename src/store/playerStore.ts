@@ -40,7 +40,7 @@ interface PlayerState {
   setIsDownloading: (isDownloading: boolean) => void;
   /** Change the play mode (shuffle recomputes the playback queue downstream). */
   setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void;
-  /** Replace the user-ordered queue (folder load, playlist open). */
+  /** Replace the user-ordered queue (folder load). */
   setOriginalQueue: (queue: Track[]) => void;
   /**
    * Replace the playback queue, or update it from its previous value — the

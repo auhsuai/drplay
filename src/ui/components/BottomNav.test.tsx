@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("BottomNav", () => {
-  it("renders the 4 static sidebar destinations", () => {
+  it("renders the 3 static sidebar destinations", () => {
     render(<BottomNav activeTab={TABS.home} onTabChange={onTabChange} />);
     expect(
       screen.getByRole("button", { name: "sidebar.home" }),
@@ -27,35 +27,42 @@ describe("BottomNav", () => {
       screen.getByRole("button", { name: "sidebar.my_drive" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "sidebar.liked_songs" }),
-    ).toBeInTheDocument();
-    expect(
       screen.getByRole("button", { name: "sidebar.settings" }),
     ).toBeInTheDocument();
   });
 
+  // Guard test (test sau khi xóa): Liked Songs has been removed from the app.
+  // If the feature ever leaks back into the nav, this fails immediately.
+  it("does NOT render a Liked Songs destination (feature removed)", () => {
+    render(<BottomNav activeTab={TABS.home} onTabChange={onTabChange} />);
+    expect(
+      screen.queryByRole("button", { name: "sidebar.liked_songs" }),
+    ).toBeNull();
+    expect(screen.queryByText("Liked Songs")).toBeNull();
+    // Exactly 3 destinations total.
+    expect(
+      screen.getByRole("button", { name: "sidebar.home" }).parentElement
+        ?.childElementCount,
+    ).toBe(3);
+  });
+
   it("marks exactly the active tab", () => {
     const { rerender } = render(
-      <BottomNav activeTab={TABS.likedSongs} onTabChange={onTabChange} />,
+      <BottomNav activeTab={TABS.myDrive} onTabChange={onTabChange} />,
     );
     expect(
-      screen.getByRole("button", { name: "sidebar.liked_songs" }),
+      screen.getByRole("button", { name: "sidebar.my_drive" }),
     ).toHaveAttribute("aria-current", "page");
     expect(
       screen.getByRole("button", { name: "sidebar.home" }),
     ).not.toHaveAttribute("aria-current");
-    expect(
-      screen.getByRole("button", { name: "sidebar.my_drive" }),
-    ).not.toHaveAttribute("aria-current");
 
-    rerender(
-      <BottomNav activeTab={`playlist_123`} onTabChange={onTabChange} />,
-    );
-    expect(
-      screen.getByRole("button", { name: "sidebar.my_drive" }),
-    ).toHaveAttribute("aria-current", "page");
+    rerender(<BottomNav activeTab={TABS.settings} onTabChange={onTabChange} />);
     expect(
       screen.getByRole("button", { name: "sidebar.settings" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(
+      screen.getByRole("button", { name: "sidebar.my_drive" }),
     ).not.toHaveAttribute("aria-current");
   });
 

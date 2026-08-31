@@ -28,21 +28,6 @@ vi.mock("react-i18next", () => {
   };
 });
 
-const mocks = vi.hoisted(() => ({
-  isFavorite: vi.fn<(trackId: string) => Promise<boolean>>(),
-  addFavorite: vi.fn<(track: Track) => Promise<void>>(),
-  removeFavorite: vi.fn<(trackId: string) => Promise<void>>(),
-}));
-
-vi.mock("../../utils/favorites", () => ({
-  isFavorite: mocks.isFavorite,
-  addFavorite: mocks.addFavorite,
-  removeFavorite: mocks.removeFavorite,
-  // Mirrors the constant from favorites.ts so the test-side dispatch uses
-  // the same event name the component under test listens for.
-  FAVORITES_UPDATED_EVENT: "favorites-updated",
-}));
-
 // TrackInfo fetches cover metadata per track; the real module pulls heavy
 // deps (music-metadata, IndexedDB) not needed here. V_PLACEHOLDER /
 // UNKNOWN_ARTIST are mirrored so TrackInfo's real-entry guard works in tests.
@@ -64,17 +49,13 @@ vi.mock("../../utils/platform", () => ({
   },
 }));
 
-// The real MoreMenu pulls heavy deps (driveApi, db, playlists, uploads). A
-// stub trigger button keeps this file hermetic while still asserting that
-// TrackInfo places the menu inside the (formerly `hidden lg:flex`) wrapper.
-// The stub captures the props TrackInfo passes (isFavorite / onToggleFavorite
-// on mobile) and acts as the toggle: clicking it runs onToggleFavorite.
+// The real MoreMenu pulls heavy deps (driveApi, db, uploads). A stub keeps
+// this file hermetic while still asserting that TrackInfo places the menu
+// inside the (formerly `hidden lg:flex`) wrapper.
 interface TrackInfoMoreMenuProps {
   track?: Track | undefined;
   isPlayerBarMode?: boolean;
   compact?: boolean;
-  isFavorite?: boolean | undefined;
-  onToggleFavorite?: (() => void) | undefined;
 }
 const moreMenuMock = vi.hoisted(() =>
   vi.fn<(props: TrackInfoMoreMenuProps) => void>(),
@@ -88,7 +69,6 @@ vi.mock("../components/MoreMenu", async () => {
         type: "button",
         "aria-haspopup": "menu",
         "aria-label": "More options",
-        onClick: () => props.onToggleFavorite?.(),
       });
     },
   };
@@ -111,12 +91,6 @@ function renderTrackInfo() {
 }
 
 beforeEach(() => {
-  mocks.isFavorite.mockReset();
-  mocks.addFavorite.mockReset();
-  mocks.removeFavorite.mockReset();
-  mocks.isFavorite.mockResolvedValue(false);
-  mocks.addFavorite.mockResolvedValue(undefined);
-  mocks.removeFavorite.mockResolvedValue(undefined);
   moreMenuMock.mockClear();
   platformMock.IS_MOBILE = false;
 });
@@ -131,44 +105,25 @@ describe("TrackInfo mobile (row reorder — MoreMenu moved to PlayerBar level)",
     platformMock.IS_MOBILE = true;
   });
 
-  function lastMoreMenuProps() {
-    const calls = moreMenuMock.mock.calls;
-    const last = calls[calls.length - 1];
-    if (last === undefined) {
-      throw new Error("MoreMenu was never rendered");
-    }
-    return last[0];
-  }
-
-  it("mobile: renders only the title button — no MoreMenu, no heart (menu now lives at PlayerBar level)", () => {
+  it("mobile: renders only the title button — no MoreMenu (menu now lives at PlayerBar level)", () => {
     renderTrackInfo();
     expect(
       screen.getByRole("button", { name: "View Now Playing" }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "More options" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Add to favorites" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Remove from favorites" }),
-    ).toBeNull();
     expect(moreMenuMock).not.toHaveBeenCalled();
   });
 
-  it("desktop regression: wrapper keeps hidden lg:flex, heart keeps p-2 + 20px icon", async () => {
+  it("desktop regression: wrapper keeps hidden lg:flex and renders the plain MoreMenu", async () => {
     platformMock.IS_MOBILE = false;
     renderTrackInfo();
-    const heart = await screen.findByRole("button", {
-      name: "Add to favorites",
+    const menuButton = await screen.findByRole("button", {
+      name: "More options",
     });
-    const wrapper = heart.parentElement as HTMLElement;
+    const wrapper = menuButton.parentElement as HTMLElement;
     expect(wrapper.className).toContain("hidden");
     expect(wrapper.className).toContain("lg:flex");
-    expect(heart.className).not.toContain("h-8");
-    expect(heart.className).toContain("p-2");
-    expect(heart.querySelector("svg")?.getAttribute("class")).toContain("w-5");
-    expect(lastMoreMenuProps().isFavorite).toBeUndefined();
-    expect(lastMoreMenuProps().onToggleFavorite).toBeUndefined();
+    expect(moreMenuMock).toHaveBeenCalled();
   });
 });
 

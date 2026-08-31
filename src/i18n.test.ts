@@ -65,13 +65,6 @@ describe("i18n module init (P0 crash guard)", () => {
     expect(language).toBe("en");
   });
 
-  it("pluralizes the song count via the built-in count option (song_one / song_other)", async () => {
-    const { default: i18nInstance } = await freshI18n();
-
-    expect(i18nInstance.t("song", { count: 1 })).toBe("1 song");
-    expect(i18nInstance.t("song", { count: 5 })).toBe("5 songs");
-  });
-
   it("logs a warn via captureError when t() hits a missing key (dev gate)", async () => {
     const { default: i18nInstance, captureError } = await freshI18n();
 

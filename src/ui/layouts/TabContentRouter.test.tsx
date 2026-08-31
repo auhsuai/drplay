@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { Suspense, useState } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Suspense } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TabContentRouter } from "./TabContentRouter";
 import type { TabKey } from "../../utils/driveConstants";
 import { TABS } from "../../utils/driveConstants";
@@ -33,32 +33,6 @@ vi.mock("../HomeTab/HomeTab", () => ({
       <div
         data-testid="mock-home-tab"
         data-active={isActive ? "true" : "false"}
-      />
-    );
-  },
-}));
-
-vi.mock("../LikedSongs/LikedSongs", () => ({
-  LikedSongs: () => <div data-testid="mock-liked-songs" />,
-}));
-
-// mountToken = per-instance sequence assigned by the useState initializer:
-// it runs exactly once per mounted instance, so a playlist_A -> playlist_B
-// switch must yield token "2" if (and only if) the view really remounted.
-let mockPlaylistMounts = 0;
-
-vi.mock("../Playlist/PlaylistView", () => ({
-  PlaylistView: function MockPlaylistView({
-    playlistId,
-  }: {
-    playlistId: string;
-  }): ReactElement {
-    const [mountToken] = useState(() => String(++mockPlaylistMounts));
-    return (
-      <div
-        data-testid="mock-playlist-view"
-        data-playlist-id={playlistId}
-        data-mount-token={mountToken}
       />
     );
   },
@@ -110,38 +84,11 @@ function withRouter(renderChild: ReactElement) {
   return render(<Suspense fallback={null}>{renderChild}</Suspense>);
 }
 
-beforeEach(() => {
-  mockPlaylistMounts = 0;
-});
-
 afterEach(() => {
   cleanup();
 });
 
-describe("TabContentRouter playlist remount contract (F2)", () => {
-  it("remounts PlaylistView when switching between two playlists", async () => {
-    const { rerender } = withRouter(
-      <TabContentRouter {...makeRouterProps({ activeTab: "playlist_A" })} />,
-    );
-    const initial = await screen.findByTestId("mock-playlist-view");
-    expect(initial.dataset.playlistId).toBe("A");
-    expect(initial.dataset.mountToken).toBe("1");
-
-    rerender(
-      <Suspense fallback={null}>
-        <TabContentRouter {...makeRouterProps({ activeTab: "playlist_B" })} />
-      </Suspense>,
-    );
-
-    const after = screen.getByTestId("mock-playlist-view");
-    // Props must follow the new tab…
-    expect(after.dataset.playlistId).toBe("B");
-    // …AND the instance must be fresh (playlist A's state must not leak).
-    // RED on pre-fix code: same position + type without a key lets React
-    // reuse the instance, so the token stays "1".
-    expect(after.dataset.mountToken).toBe("2");
-  });
-
+describe("TabContentRouter tab routing", () => {
   it("keeps HomeTab alive across switches (same session key) while flipping isActive", async () => {
     const { rerender } = withRouter(
       <TabContentRouter {...makeRouterProps({ activeTab: TABS.home })} />,
@@ -149,22 +96,50 @@ describe("TabContentRouter playlist remount contract (F2)", () => {
     const homeBefore = await screen.findByTestId("mock-home-tab");
     expect(homeBefore.dataset.active).toBe("true");
 
-    rerender(
-      <Suspense fallback={null}>
-        <TabContentRouter {...makeRouterProps({ activeTab: "playlist_C" })} />
-      </Suspense>,
-    );
-    const homeHidden = screen.getByTestId("mock-home-tab");
+    // act + microtask flush: the lazy target (MainContent) must resolve
+    // before asserting, otherwise the stale committed tree is still shown.
+    await act(async () => {
+      rerender(
+        <Suspense fallback={null}>
+          <TabContentRouter {...makeRouterProps({ activeTab: TABS.myDrive })} />
+        </Suspense>,
+      );
+      await Promise.resolve();
+    });
+    const homeHidden = await screen.findByTestId("mock-home-tab");
     expect(homeHidden.dataset.active).toBe("false");
     // Same DOM node = keep-alive held; a remount would create a fresh node.
     expect(homeHidden).toBe(homeBefore);
 
-    rerender(
-      <Suspense fallback={null}>
-        <TabContentRouter {...makeRouterProps({ activeTab: TABS.home })} />
-      </Suspense>,
-    );
+    await act(async () => {
+      rerender(
+        <Suspense fallback={null}>
+          <TabContentRouter {...makeRouterProps({ activeTab: TABS.home })} />
+        </Suspense>,
+      );
+      await Promise.resolve();
+    });
     expect(screen.getByTestId("mock-home-tab").dataset.active).toBe("true");
-    expect(mockPlaylistMounts).toBe(1);
   });
+
+  it("renders SettingsTab for the settings tab", () => {
+    withRouter(
+      <TabContentRouter {...makeRouterProps({ activeTab: TABS.settings })} />,
+    );
+    return screen.findByTestId("mock-settings-tab").then(() => {});
+  });
+
+  // Guard test (test sau khi xóa): LikedSongs + PlaylistView have been removed
+  // from the router. A stale playlist_ id (e.g. from a persisted session) or
+  // the literal "Liked Songs" string must fall through to the safe
+  // coming-soon fallback, never render a deleted view.
+  it.each(["playlist_123" as TabKey, "Liked Songs" as TabKey])(
+    "activeTab %s falls through to the safe fallback (no LikedSongs/PlaylistView)",
+    (tab) => {
+      withRouter(<TabContentRouter {...makeRouterProps({ activeTab: tab })} />);
+      expect(screen.queryByTestId("mock-playlist-view")).toBeNull();
+      expect(screen.queryByTestId("mock-liked-songs")).toBeNull();
+      return screen.findByText(/^common\.coming_soon:/).then(() => {});
+    },
+  );
 });

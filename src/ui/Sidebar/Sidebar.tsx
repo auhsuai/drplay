@@ -1,10 +1,9 @@
-import { Home, HardDrive, Heart } from "lucide-react";
+import { Home, HardDrive } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { TABS, type TabKey } from "../../utils/driveConstants";
 import { DropZone } from "../components/DropZone";
 import { NavItem } from "./NavItem";
 import { SidebarHeader } from "./SidebarHeader";
-import { PlaylistSection } from "./PlaylistSection";
 import { StorageQuotaCard } from "./StorageQuotaCard";
 import { UserProfileSection } from "./UserProfileSection";
 
@@ -60,22 +59,7 @@ export function Sidebar({
           }}
           isSidebarOpen={isSidebarOpen}
         />
-        <NavItem
-          icon={<Heart />}
-          label={t("sidebar.liked_songs")}
-          active={activeTab === TABS.likedSongs}
-          onClick={() => {
-            onTabChange(TABS.likedSongs);
-          }}
-          isSidebarOpen={isSidebarOpen}
-        />
       </nav>
-      <PlaylistSection
-        onTabChange={onTabChange}
-        isSidebarOpen={isSidebarOpen}
-        onToggleSidebar={onToggleSidebar}
-        activeTab={activeTab}
-      />
       <StorageQuotaCard token={token} isSidebarOpen={isSidebarOpen} />
       <UserProfileSection
         userProfile={userProfile}

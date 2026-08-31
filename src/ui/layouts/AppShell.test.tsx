@@ -116,9 +116,9 @@ describe("AppShell mobile (IS_MOBILE=true)", () => {
   });
 
   it("passes the active tab to the BottomNav", async () => {
-    await renderAppShell({ isMobile: true, activeTab: TABS.likedSongs });
+    await renderAppShell({ isMobile: true, activeTab: TABS.myDrive });
     expect(
-      screen.getByRole("button", { name: "sidebar.liked_songs" }),
+      screen.getByRole("button", { name: "sidebar.my_drive" }),
     ).toHaveAttribute("aria-current", "page");
   });
 

@@ -16,16 +16,6 @@ const HomeTab = React.lazy(() =>
     default: module.HomeTab,
   })),
 );
-const LikedSongs = React.lazy(() =>
-  import("../LikedSongs/LikedSongs").then((module) => ({
-    default: module.LikedSongs,
-  })),
-);
-const PlaylistView = React.lazy(() =>
-  import("../Playlist/PlaylistView").then((module) => ({
-    default: module.PlaylistView,
-  })),
-);
 const SettingsTab = React.lazy(() =>
   import("../Settings/SettingsTab").then((module) => ({
     default: module.SettingsTab,
@@ -160,31 +150,7 @@ export function TabContentRouter({
               }
             }}
           />
-        ) : activeTab === TABS.likedSongs ? (
-          <LikedSongs
-            onPlay={(t: Track, c: Track[]) => {
-              onPlayTrack(t, c);
-            }}
-            currentTrack={currentTrack}
-          />
-        ) : activeTab.startsWith("playlist_") ? (
-          <PlaylistView
-            // Remount per playlist (key = raw id): same position+type would
-            // otherwise let React REUSE the playlist_A instance for
-            // playlist_B, showing A's data until B's refetch lands — and
-            // forever if that fetch rejects. Fresh instance per id is the
-            // intended behavior; the old scroll position reset is accepted.
-            key={activeTab.replace("playlist_", "")}
-            playlistId={activeTab.replace("playlist_", "")}
-            onPlay={(t: Track, c?: Track[]) => {
-              onPlayTrack(t, c);
-            }}
-            onDelete={() => {
-              onSwitchTab(TABS.home);
-            }}
-            currentTrack={currentTrack}
-          />
-        ) : activeTab === TABS.settings ? (
+        ) : (activeTab as string) === TABS.settings ? (
           <SettingsTab
             theme={theme}
             setTheme={setTheme}

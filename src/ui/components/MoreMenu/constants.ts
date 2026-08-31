@@ -28,8 +28,8 @@ export function menuItemDeleteClass(isMobile: boolean): string {
 }
 
 // Shared row-icon sizing: 14px on mobile vs 16px on desktop, so raw lucide
-// icons rendered outside MoreMenuItem (Add-to-Playlist music/chevron) match
-// MoreMenuItem's default icon contract.
+// icons rendered outside MoreMenuItem match MoreMenuItem's default icon
+// contract.
 export function menuItemIconClass(isMobile: boolean): string {
   return isMobile
     ? "w-3.5 h-3.5 opacity-60 group-hover:opacity-100 transition-opacity"

@@ -215,8 +215,6 @@ describe("DebugPanel", () => {
   );
 
   it.each([
-    { label: "Empty: Playlist", event: DEBUG_EVENTS.PLAYLIST_EMPTY },
-    { label: "Empty: Liked Songs", event: DEBUG_EVENTS.LIKED_EMPTY },
     { label: "Empty: Trash", event: DEBUG_EVENTS.TRASH_EMPTY },
     { label: "Empty: Folder selection", event: DEBUG_EVENTS.FOLDERS_EMPTY },
   ])(

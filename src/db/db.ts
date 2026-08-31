@@ -34,14 +34,6 @@ export interface KvRow {
   key: string;
   value: unknown;
 }
-export interface PlaylistRow {
-  id: string;
-  name: string;
-  createdAt: number;
-  tracks: Track[];
-  coverImage?: string | undefined;
-  userEmail: string;
-}
 export interface RecentTrackRow {
   id: string;
   track: Track;
@@ -90,7 +82,7 @@ export interface UploadSessionRow {
 
 /**
  * Local IndexedDB mirror of the signed-in user's Drive data (file list,
- * favorites, play history, play counts, folder visits, error logs, app
+ * play history, play counts, folder visits, error logs, app
  * config). The UI reads from here so browsing is instant, while Drive stays
  * the source of truth that gets fetched on demand. Every per-user table is
  * keyed by [userEmail+id] (schema v7, `files` followed in schema v10) so
@@ -103,13 +95,8 @@ export class DriveDatabase extends Dexie {
   // code keeps talking to db.files.
   files!: Table<DriveFile, [string, string]>;
   syncState!: Table<SyncState, string>; // Primary key is 'key'
-  favorites!: Table<
-    Track & { userEmail: string; createdAt?: number },
-    [string, string]
-  >; // Compound PK [userEmail+id] (schema v7)
   errorLogs!: Table<ErrorLogEntry, string>; // Primary key is 'id', index on 'ts'
   kv!: Table<KvRow, string>;
-  playlists!: Table<PlaylistRow, string>;
   recentTracks!: Table<RecentTrackRow, [string, string]>;
   playCounts!: Table<PlayCountRow, [string, string]>;
   folderVisits!: Table<FolderVisitRow, [string, string]>;
@@ -119,10 +106,6 @@ export class DriveDatabase extends Dexie {
   recentTracksV2!: Table<RecentTrackRow, [string, string]>;
   playCountsV2!: Table<PlayCountRow, [string, string]>;
   folderVisitsV2!: Table<FolderVisitRow, [string, string]>;
-  favoritesV2!: Table<
-    Track & { userEmail: string; createdAt?: number },
-    [string, string]
-  >;
   filesV2!: Table<DriveFile, [string, string]>; // [userEmail+id] PK (schema v10)
 
   constructor() {
@@ -324,14 +307,24 @@ export class DriveDatabase extends Dexie {
         );
       });
 
+    // Version 11 drops the playlists table and the compound-key favorites
+    // mirror (schema v7) now that the playlist and liked-songs features have
+    // been removed from the app. Same drop precedent as v8: passing null
+    // deletes the table on upgrade while every historical version above stays
+    // declared so devices whose DB still sits at an old version keep a
+    // complete upgrade path.
+    this.version(11).stores({
+      playlists: null,
+      favoritesV2: null,
+    });
+
     // Bind the public table names to the new compound-key tables so app code
-    // (history.ts / favorites.ts / every db.files consumer) keeps talking to
-    // the current tables.
+    // (history.ts / every db.files consumer) keeps talking to the current
+    // tables.
     this.files = this.filesV2;
     this.recentTracks = this.recentTracksV2;
     this.playCounts = this.playCountsV2;
     this.folderVisits = this.folderVisitsV2;
-    this.favorites = this.favoritesV2;
   }
 }
 

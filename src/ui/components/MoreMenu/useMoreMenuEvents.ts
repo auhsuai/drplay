@@ -8,7 +8,6 @@ interface UseMoreMenuEventsParams {
   onClose?: (() => void) | undefined;
   menuRef: RefObject<HTMLDivElement | null>;
   dropdownRef: RefObject<HTMLDivElement | null>;
-  setShowPlaylistsSubmenu: (value: boolean) => void;
   // Portal overlays stacked above the dropdown — the SAME state sources the
   // hardware-back handler in MoreMenu.tsx reads, so Escape mirrors its LIFO
   // priority exactly.
@@ -26,7 +25,6 @@ export function useMoreMenuEvents({
   onClose,
   menuRef,
   dropdownRef,
-  setShowPlaylistsSubmenu,
   showDownloadDialog,
   showDeleteConfirm,
   showMoveScreen,
@@ -36,9 +34,8 @@ export function useMoreMenuEvents({
 }: UseMoreMenuEventsParams): void {
   const closeMenu = useCallback(() => {
     setIsOpen(false);
-    setShowPlaylistsSubmenu(false);
     onClose?.();
-  }, [onClose, setIsOpen, setShowPlaylistsSubmenu]);
+  }, [onClose, setIsOpen]);
 
   // Outside mousedown closes the menu when the target is outside both the
   // trigger wrapper and the (portal-rendered) dropdown.

@@ -200,8 +200,6 @@ vi.mock("./ui/Login/LoginScreen", () => ({ LoginScreen: () => null }));
 vi.mock("./ui/MainContent/MainContent", () => ({
   MainContent: () => <div data-testid="main-content" />,
 }));
-vi.mock("./ui/LikedSongs/LikedSongs", () => ({ LikedSongs: () => null }));
-vi.mock("./ui/Playlist/PlaylistView", () => ({ PlaylistView: () => null }));
 vi.mock("./ui/Settings/SettingsTab", () => ({ SettingsTab: () => null }));
 
 // HomeTab mock counts MOUNTS (not renders): useEffect with [] runs once per
@@ -334,14 +332,14 @@ describe("HomeTab keep-alive across tab switches", () => {
     });
   });
 
-  it("(b) home -> likedSongs -> home keeps HomeTab mounted", async () => {
+  it("(b) home -> settings -> home keeps HomeTab mounted", async () => {
     render(<App />);
     await waitFor(() => {
       expect(mocks.homeMounts.value).toBe(1);
     });
 
     await act(async () => {
-      mocks.sidebarProps.value?.onTabChange(TABS.likedSongs);
+      mocks.sidebarProps.value?.onTabChange(TABS.settings);
       await Promise.resolve();
     });
     await act(async () => {
@@ -646,40 +644,6 @@ describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
     expect(mocks.processExit).toHaveBeenCalledWith(0);
   });
 
-  it("mobile: back after the 2s window expired arms again (toast, no exit)", async () => {
-    platformMock.IS_MOBILE = true;
-    render(<App />);
-    await screen.findByTestId("home-tab");
-
-    vi.useFakeTimers();
-    pressBack();
-    vi.advanceTimersByTime(2000);
-    pressBack();
-
-    expect(screen.getByText(BACK_HINT)).toBeTruthy();
-    expect(mocks.processExit).not.toHaveBeenCalled();
-  });
-
-  it("mobile: back on Liked Songs returns Home (no exit, no toast)", async () => {
-    platformMock.IS_MOBILE = true;
-    render(<App />);
-    await screen.findByTestId("home-tab");
-
-    await act(async () => {
-      mocks.sidebarProps.value?.onTabChange(TABS.likedSongs);
-      await Promise.resolve();
-    });
-    const homeWrapper = screen.getByTestId("home-tab").parentElement;
-    expect(homeWrapper?.className).toContain("hidden");
-
-    pressBack();
-
-    const homeWrapper2 = screen.getByTestId("home-tab").parentElement;
-    expect(homeWrapper2?.className).not.toContain("hidden");
-    expect(mocks.processExit).not.toHaveBeenCalled();
-    expect(screen.queryByText(BACK_HINT)).toBeNull();
-  });
-
   it("mobile: back on Settings returns Home (no exit, no toast)", async () => {
     platformMock.IS_MOBILE = true;
     render(<App />);
@@ -699,8 +663,21 @@ describe("App mobile back chain (tab->Home + double-back-to-exit)", () => {
     expect(mocks.processExit).not.toHaveBeenCalled();
     expect(screen.queryByText(BACK_HINT)).toBeNull();
   });
-});
 
+  it("mobile: back after the 2s window expired arms again (toast, no exit)", async () => {
+    platformMock.IS_MOBILE = true;
+    render(<App />);
+    await screen.findByTestId("home-tab");
+
+    vi.useFakeTimers();
+    pressBack();
+    vi.advanceTimersByTime(2000);
+    pressBack();
+
+    expect(screen.getByText(BACK_HINT)).toBeTruthy();
+    expect(mocks.processExit).not.toHaveBeenCalled();
+  });
+});
 // Task 14 mobile-polish: My Drive folder drill-down is a LIFO navigation
 // layer ABOVE NowPlaying/tab/exit — back on a subfolder pops one history
 // level instead of falling straight into the double-back-to-exit chain.

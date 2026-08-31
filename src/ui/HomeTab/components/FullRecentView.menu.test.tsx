@@ -21,8 +21,6 @@ const mocks = vi.hoisted(() => ({
   },
   captureError: vi.fn(),
   showErrorToast: vi.fn(),
-  getPlaylists: vi.fn(),
-  addTrackToPlaylist: vi.fn(),
   getTrackMetadata: vi.fn(),
 }));
 
@@ -79,10 +77,6 @@ vi.mock("../../../utils/errorLog", () => ({
 vi.mock("../../../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
 }));
-vi.mock("../../../utils/playlists", () => ({
-  getPlaylists: mocks.getPlaylists,
-  addTrackToPlaylist: mocks.addTrackToPlaylist,
-}));
 
 function makeTrack(id: string, title: string): Track {
   return {
@@ -97,7 +91,6 @@ function makeTrack(id: string, title: string): Track {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.getPlaylists.mockResolvedValue([]);
   mocks.driveApi.deleteFile.mockResolvedValue({
     id: "t1",
     name: "x",
@@ -172,12 +165,7 @@ describe("FullRecentView menu delete flow", () => {
     const names = Array.from(menu.querySelectorAll("button")).map(
       (b) => b.textContent?.trim() ?? "",
     );
-    expect(names.sort()).toEqual([
-      "Add to Playlist",
-      "Delete",
-      "Download Song",
-      "Locate File",
-    ]);
+    expect(names.sort()).toEqual(["Delete", "Download Song", "Locate File"]);
   });
 
   it("deleting a track removes it from the visible list (local removal)", async () => {

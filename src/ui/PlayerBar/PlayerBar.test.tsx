@@ -18,7 +18,6 @@ import { usePlayerStore } from "../../store/playerStore";
 import { getTrackMetadata } from "../../utils/metadata";
 import { useAuthStore } from "../../store/authStore";
 import * as errorLog from "../../utils/errorLog";
-import { FAVORITES_UPDATED_EVENT } from "../../utils/favorites";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 vi.mock("react-i18next", () => {
@@ -62,7 +61,6 @@ vi.mock("lucide-react", () => {
     "Repeat1",
     "Maximize2",
     "RefreshCw",
-    "Heart",
     "RotateCcw",
     "RotateCw",
   ];
@@ -86,27 +84,10 @@ vi.mock("lucide-react", () => {
   );
 });
 
-const { isFavorite, addFavorite, removeFavorite } = vi.hoisted(() => ({
-  isFavorite: vi.fn<(trackId: string) => Promise<boolean>>(),
-  addFavorite: vi.fn<(track: Track) => Promise<void>>(),
-  removeFavorite: vi.fn<(trackId: string) => Promise<void>>(),
-}));
-
-vi.mock("../../utils/favorites", () => ({
-  isFavorite,
-  addFavorite,
-  removeFavorite,
-  // Mirrors the constant from favorites.ts so the test-side dispatch uses
-  // the same event name the component under test listens for.
-  FAVORITES_UPDATED_EVENT: "favorites-updated",
-}));
-
 interface MoreMenuStubProps {
   track?: Track | undefined;
   isPlayerBarMode?: boolean;
   compact?: boolean;
-  isFavorite?: boolean | undefined;
-  onToggleFavorite?: (() => void) | undefined;
 }
 const moreMenuMock = vi.hoisted(() =>
   vi.fn<(props: MoreMenuStubProps) => void>(),
@@ -120,13 +101,12 @@ vi.mock("../components/MoreMenu", async () => {
       // the trigger is display:none below the lg breakpoint, so the stub stays
       // a no-op there to keep the desktop a11y tree byte-identical. The mobile
       // PlayerBar-level menu is always visible → render a real trigger button
-      // so the row-order and favorite-wiring tests can interact with it.
+      // so the row-order tests can interact with it.
       if (!props.compact) return null;
       return React.createElement("button", {
         type: "button",
         "aria-haspopup": "menu",
         "aria-label": "More options",
-        onClick: () => props.onToggleFavorite?.(),
       });
     },
   };
@@ -271,12 +251,6 @@ beforeEach(() => {
   installFakeOn();
   setBuffered([]);
   fakeController._handlers = {};
-  isFavorite.mockClear();
-  addFavorite.mockClear();
-  removeFavorite.mockClear();
-  isFavorite.mockResolvedValue(false);
-  addFavorite.mockResolvedValue(undefined);
-  removeFavorite.mockResolvedValue(undefined);
   moreMenuMock.mockClear();
 });
 
@@ -1071,8 +1045,13 @@ describe("PlayerBar auto-advance storm guard (Fix I — queue cháy hết im l�
 
     stormBlock(onNext);
 
-    // Nút trung tâm khi hasError → onRetry (replay restore time)
-    const centerButton = screen.getAllByRole("button")[3] as HTMLElement;
+    // Nút trung tâm khi hasError → onRetry (replay restore time).
+    // The desktop center button has no aria-label — locate it via the
+    // retry-icon glyph it renders while hasError is true (robust against
+    // heart-button removal shifting getAllByRole indices).
+    const centerButton = screen
+      .getByTestId("retry-icon")
+      .closest("button") as HTMLElement;
     fireEvent.click(centerButton);
     expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
 
@@ -1133,205 +1112,6 @@ describe("PlayerBar auto-advance storm guard (Fix I — queue cháy hết im l�
     expect(onNext).toHaveBeenCalledTimes(3);
     expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
     expect(usePlayerStore.getState().isPlaying).toBe(true);
-  });
-});
-
-describe("PlayerBar favorite (heart) button", () => {
-  it("checks favorite status for the current track and renders the heart button (not liked)", async () => {
-    renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
-    expect(btn).toBeTruthy();
-    expect(isFavorite).toHaveBeenCalledWith("track-1");
-  });
-
-  it("shows the liked state (remove aria-label + filled class) when isFavorite resolves true", async () => {
-    isFavorite.mockResolvedValue(true);
-    renderPlayer();
-    const btn = await screen.findByRole("button", {
-      name: "Remove from favorites",
-    });
-    expect(btn.className).toContain("text-brand-primary");
-  });
-
-  it("calls addFavorite and flips to liked on click when not liked", async () => {
-    renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
-    fireEvent.click(btn);
-    await screen.findByRole("button", { name: "Remove from favorites" });
-    expect(addFavorite).toHaveBeenCalledTimes(1);
-    expect(addFavorite).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "track-1" }),
-    );
-    expect(removeFavorite).not.toHaveBeenCalled();
-  });
-
-  it("calls removeFavorite on click when already liked", async () => {
-    isFavorite.mockResolvedValue(true);
-    renderPlayer();
-    const btn = await screen.findByRole("button", {
-      name: "Remove from favorites",
-    });
-    fireEvent.click(btn);
-    await screen.findByRole("button", { name: "Add to favorites" });
-    expect(removeFavorite).toHaveBeenCalledTimes(1);
-    expect(removeFavorite).toHaveBeenCalledWith("track-1");
-    expect(addFavorite).not.toHaveBeenCalled();
-  });
-
-  it("re-checks favorite status when the track id changes", async () => {
-    const { rerender } = renderPlayer();
-    await screen.findByRole("button", { name: "Add to favorites" });
-    isFavorite.mockClear();
-
-    rerender(
-      <PlayerBar
-        currentTrack={makeTrack({ id: "track-2" })}
-        isPlaying={false}
-        onTogglePlay={vi.fn()}
-        onNextTrack={vi.fn()}
-        onPrevTrack={vi.fn()}
-        playMode="normal"
-        onTogglePlayMode={vi.fn()}
-        onExpandNowPlaying={vi.fn()}
-      />,
-    );
-    await screen.findByRole("button", { name: "Add to favorites" });
-    expect(isFavorite).toHaveBeenCalledWith("track-2");
-  });
-
-  it("re-checks the current track when favorites-updated fires elsewhere (no stale heart)", async () => {
-    renderPlayer();
-    await screen.findByRole("button", { name: "Add to favorites" });
-    isFavorite.mockClear();
-    isFavorite.mockResolvedValue(true);
-
-    act(() => {
-      window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
-    });
-
-    expect(isFavorite).toHaveBeenCalledWith("track-1");
-    await screen.findByRole("button", { name: "Remove from favorites" });
-  });
-
-  it("drops an in-flight favorites-updated re-check when the track changed (no cross-track heart race)", async () => {
-    // Desktop hides the PlayerBar-level favorite inside MoreMenu; run the
-    // mobile branch so the hook instance under test (PlayerBar's own) is the
-    // one whose liked-state is observable via the MoreMenu stub props.
-    platformMock.IS_MOBILE = true;
-    try {
-      const { rerender } = renderPlayer();
-      let resolveStale!: (liked: boolean) => void;
-      isFavorite.mockImplementation((trackId: string) =>
-        trackId === "track-1"
-          ? new Promise<boolean>((res) => {
-              resolveStale = res;
-            })
-          : Promise.resolve(false),
-      );
-
-      // favorites-updated fires while track-1 is still current → the hook
-      // starts a re-check whose response we hold back in flight.
-      act(() => {
-        window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
-      });
-      // Sanity: the deferred re-check really started.
-      expect(resolveStale).toBeTypeOf("function");
-
-      // The user moves on to track-2 while the track-1 re-check is pending.
-      rerender(
-        <PlayerBar
-          currentTrack={makeTrack({ id: "track-2" })}
-          isPlaying={false}
-          onTogglePlay={vi.fn()}
-          onNextTrack={vi.fn()}
-          onPrevTrack={vi.fn()}
-          playMode="normal"
-          onTogglePlayMode={vi.fn()}
-          onExpandNowPlaying={vi.fn()}
-        />,
-      );
-      // Flush track-2's own checks (resolve false → menu shows unliked).
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      // When the LATE track-1 response finally lands, it must NOT be applied
-      // to track-2 (the old fixed `() => false` stale-check flipped the heart
-      // here even though track-2 was never favorited).
-      await act(async () => {
-        resolveStale(true);
-        await Promise.resolve();
-      });
-
-      const lastMenuProps = moreMenuMock.mock.lastCall?.[0] as
-        { isFavorite?: boolean } | undefined;
-      expect(lastMenuProps?.isFavorite).toBe(false);
-    } finally {
-      platformMock.IS_MOBILE = false;
-    }
-  });
-
-  it("does not crash when favorites-updated fires with no current track", async () => {
-    const { rerender } = renderPlayer();
-    await screen.findByRole("button", { name: "Add to favorites" });
-    isFavorite.mockClear();
-
-    rerender(
-      <PlayerBar
-        currentTrack={null}
-        isPlaying={false}
-        onTogglePlay={vi.fn()}
-        onNextTrack={vi.fn()}
-        onPrevTrack={vi.fn()}
-        playMode="normal"
-        onTogglePlayMode={vi.fn()}
-        onExpandNowPlaying={vi.fn()}
-      />,
-    );
-
-    expect(() => {
-      act(() => {
-        window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
-      });
-    }).not.toThrow();
-    expect(isFavorite).not.toHaveBeenCalled();
-  });
-
-  it("ignores a second click while the first toggle is still in flight (no duplicate add)", async () => {
-    let resolveAdd: (() => void) | undefined;
-    addFavorite.mockImplementationOnce(
-      () =>
-        new Promise<void>((res) => {
-          resolveAdd = res;
-        }),
-    );
-    renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
-
-    fireEvent.click(btn);
-    fireEvent.click(btn);
-
-    expect(addFavorite).toHaveBeenCalledTimes(1);
-    act(() => {
-      resolveAdd?.();
-    });
-    await screen.findByRole("button", { name: "Remove from favorites" });
-  });
-
-  it("resets the toggle guard after completion so the next click can remove", async () => {
-    renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
-    fireEvent.click(btn);
-    await screen.findByRole("button", { name: "Remove from favorites" });
-    expect(addFavorite).toHaveBeenCalledTimes(1);
-
-    const removeBtn = screen.getByRole("button", {
-      name: "Remove from favorites",
-    });
-    fireEvent.click(removeBtn);
-    await screen.findByRole("button", { name: "Add to favorites" });
-    expect(removeFavorite).toHaveBeenCalledTimes(1);
-    expect(removeFavorite).toHaveBeenCalledWith("track-1");
   });
 });
 
@@ -2084,40 +1864,16 @@ describe("PlayerBar mobile transport — 3 buttons (redesigned row)", () => {
     return last[0];
   }
 
-  it("mobile: MoreMenu at PlayerBar level receives the favorite state + toggle handler", async () => {
+  it("mobile: MoreMenu at PlayerBar level renders compact without favorite props", async () => {
     renderPlayer();
     await waitFor(() => {
       expect(moreMenuMock).toHaveBeenCalled();
     });
     const last = lastMoreMenuProps();
     expect(last.compact).toBe(true);
-    expect(last.isFavorite).toBe(false);
-    expect(typeof last.onToggleFavorite).toBe("function");
-  });
-
-  it("mobile: clicking the PlayerBar-level MoreMenu's favorite toggles the track through addFavorite", async () => {
-    renderPlayer();
-    await waitFor(() => {
-      expect(moreMenuMock).toHaveBeenCalled();
-    });
-    const menu = screen.getByRole("button", { name: "More options" });
-    fireEvent.click(menu);
-    await screen.findByRole("button", { name: "More options" });
-    expect(addFavorite).toHaveBeenCalledTimes(1);
-    expect(removeFavorite).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(lastMoreMenuProps().isFavorite).toBe(true);
-    });
-  });
-
-  it("mobile: no standalone heart button on the bar (favorite moved into MoreMenu)", () => {
-    renderPlayer();
-    expect(
-      screen.queryByRole("button", { name: "Add to favorites" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Remove from favorites" }),
-    ).toBeNull();
+    // Guard (test sau khi xóa): the favorite wiring must stay gone.
+    expect("isFavorite" in last).toBe(false);
+    expect("onToggleFavorite" in last).toBe(false);
   });
 
   it("compacts transport buttons on mobile (Task 9: 36px side targets, 44px play)", () => {

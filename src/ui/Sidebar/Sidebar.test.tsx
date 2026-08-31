@@ -7,7 +7,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar, type SidebarProps } from "./Sidebar";
 import en from "../../locales/en/translation.json";
@@ -40,9 +39,6 @@ vi.mock("lucide-react", () => {
     "Home",
     "HardDrive",
     "Settings",
-    "Heart",
-    "Plus",
-    "ListMusic",
     "LogOut",
     "Gauge",
     "CloudUpload",
@@ -52,17 +48,11 @@ vi.mock("lucide-react", () => {
 });
 
 const mocks = vi.hoisted(() => ({
-  getPlaylists: vi.fn(),
-  createPlaylist: vi.fn(),
   getDriveStorageQuota: vi.fn(),
   captureError: vi.fn(),
   showErrorToast: vi.fn(),
 }));
 
-vi.mock("../../utils/playlists", () => ({
-  getPlaylists: mocks.getPlaylists,
-  createPlaylist: mocks.createPlaylist,
-}));
 vi.mock("../../utils/driveApi", () => ({
   getDriveStorageQuota: mocks.getDriveStorageQuota,
 }));
@@ -135,7 +125,6 @@ async function findQuotaText(expected: string) {
 
 describe("Sidebar storage quota", () => {
   beforeEach(() => {
-    mocks.getPlaylists.mockResolvedValue([]);
     mocks.getDriveStorageQuota.mockReset();
     mocks.captureError.mockReset();
   });
@@ -580,39 +569,6 @@ describe("Sidebar storage quota", () => {
       expect(screen.queryByTestId("storage-quota")).toBeNull();
     });
   });
-
-  it("still renders playlists normally when logged in with quota", async () => {
-    mocks.getPlaylists.mockResolvedValue([
-      { id: "pl-1", name: "My List", userEmail: "u", createdAt: 0, tracks: [] },
-    ]);
-    mocks.getDriveStorageQuota.mockResolvedValue(makeQuota());
-    render(<Sidebar {...baseProps({ activeTab: "playlist_pl-1" })} />);
-
-    expect(await screen.findByText("My List")).toBeTruthy();
-    await findQuotaText("2 GB / 15 GB");
-  });
-
-  it("fires the create-playlist flow unchanged (no regression on existing behavior)", async () => {
-    mocks.createPlaylist.mockResolvedValue({
-      id: "pl-new",
-      name: "New",
-      userEmail: "u",
-      createdAt: 0,
-      tracks: [],
-    });
-    mocks.getDriveStorageQuota.mockResolvedValue(makeQuota());
-    const onTabChange = vi.fn();
-    render(<Sidebar {...baseProps({ onTabChange })} />);
-
-    const user = userEvent.setup();
-    await user.click(screen.getByTitle("Create Playlist"));
-    const input = screen.getByPlaceholderText("My Playlist #1");
-    await user.type(input, "New{Enter}");
-
-    await waitFor(() => {
-      expect(onTabChange).toHaveBeenCalledWith("playlist_pl-new");
-    });
-  });
 });
 
 describe('Sidebar UploadButton (header "+")', () => {
@@ -668,7 +624,7 @@ describe('Sidebar UploadButton (header "+")', () => {
   });
 
   it("dims the UploadButton and disables it while a non-MyDrive tab is active", () => {
-    render(<Sidebar {...baseProps({ activeTab: "Liked Songs" })} />);
+    render(<Sidebar {...baseProps({ activeTab: "Settings" })} />);
     // The i18n mock resolves t(key, fallback) to the fallback string.
     const btn = screen.getByTitle("Open My Drive to upload");
     expect(btn.className).toContain("opacity-40");
@@ -679,7 +635,6 @@ describe('Sidebar UploadButton (header "+")', () => {
 
 describe("Sidebar avatar fallback", () => {
   beforeEach(() => {
-    mocks.getPlaylists.mockResolvedValue([]);
     mocks.getDriveStorageQuota.mockResolvedValue(makeQuota());
     mocks.captureError.mockReset();
   });
@@ -733,38 +688,5 @@ describe("Sidebar avatar fallback", () => {
     render(<Sidebar {...baseProps({ token: null, userProfile: null })} />);
     expect(screen.getByText("?")).toBeTruthy();
     expect(screen.queryByAltText("Profile")).toBeNull();
-  });
-});
-
-describe("Sidebar playlist row + button alignment", () => {
-  afterEach(() => {
-    cleanup();
-    vi.clearAllMocks();
-  });
-
-  it("pushes the playlist + button to the row right edge (justify-between) when expanded, aligning it with the header upload +", () => {
-    render(<Sidebar {...baseProps({ token: "tok-1" })} />);
-    const btn = screen.getByTitle("Create Playlist");
-    // The button's parent is the playlist row container.
-    const row = btn.parentElement;
-    expect(row).not.toBeNull();
-    if (row) {
-      expect(row.className).toContain("justify-between");
-    }
-    // Expanded: no ml-3 spacer (justify-between distributes the space instead).
-    expect(btn.className).not.toContain("ml-3");
-  });
-
-  it("keeps the legacy collapsed layout (no justify-between, button keeps ml-3)", () => {
-    render(
-      <Sidebar {...baseProps({ isSidebarOpen: false, token: "tok-1" })} />,
-    );
-    const btn = screen.getByTitle("Create Playlist");
-    const row = btn.parentElement;
-    expect(row).not.toBeNull();
-    if (row) {
-      expect(row.className).not.toContain("justify-between");
-    }
-    expect(btn.className).toContain("ml-3");
   });
 });

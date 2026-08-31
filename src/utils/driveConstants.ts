@@ -8,17 +8,14 @@ export const ROOT_FOLDER_ID = "root";
 // usePlayerQueue, driveStore).
 export const MY_DRIVE_TAB = "My Drive";
 
-// Single source of truth for every static tab id. Playlist tabs
-// (`playlist_${id}`) are dynamic — one per user playlist — and are covered by
-// the `playlist_${string}` member of TabKey below, not by this object.
+// Single source of truth for every static tab id.
 export const TABS = {
   home: "Home",
   myDrive: MY_DRIVE_TAB,
-  likedSongs: "Liked Songs",
   settings: "Settings",
 } as const;
 
-export type TabKey = (typeof TABS)[keyof typeof TABS] | `playlist_${string}`;
+export type TabKey = (typeof TABS)[keyof typeof TABS];
 
 // Google Drive files.list caps each request at 1000 results (docs: values
 // above 1000 are coerced to 1000). Single source of truth for the page size

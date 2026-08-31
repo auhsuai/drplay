@@ -19,12 +19,6 @@ import {
   getMostVisitedFolders,
 } from "./history";
 import * as errorLog from "./errorLog";
-import {
-  addFavorite,
-  getFavorites,
-  isFavorite,
-  removeFavorite,
-} from "./favorites";
 
 const TRACK: Track = {
   id: "t1",
@@ -672,7 +666,6 @@ describe("PK collision cross-user (regression)", () => {
     await db.recentTracks.clear();
     await db.playCounts.clear();
     await db.folderVisits.clear();
-    await db.favorites.clear();
   });
 
   it("recentTracks: user B playing the same track does not erase user A history", async () => {
@@ -724,49 +717,6 @@ describe("PK collision cross-user (regression)", () => {
     setUser("b@x.com");
     const bHeavy = await getHeavyRotation();
     expect(bHeavy.map((t) => t.id)).toEqual(["t1"]);
-  });
-
-  it("favorites: two users can favorite the same track independently (2 rows)", async () => {
-    setUser("a@x.com");
-    await addFavorite(TRACK);
-    setUser("b@x.com");
-    await addFavorite(TRACK);
-
-    expect(await db.favorites.count()).toBe(2);
-    const aRows = await db.favorites
-      .where("userEmail")
-      .equals("a@x.com")
-      .toArray();
-    const bRows = await db.favorites
-      .where("userEmail")
-      .equals("b@x.com")
-      .toArray();
-    expect(aRows).toHaveLength(1);
-    expect(bRows).toHaveLength(1);
-
-    setUser("a@x.com");
-    expect(await isFavorite("t1")).toBe(true);
-    expect((await getFavorites()).map((t) => t.id)).toEqual(["t1"]);
-    setUser("b@x.com");
-    expect(await isFavorite("t1")).toBe(true);
-    expect((await getFavorites()).map((t) => t.id)).toEqual(["t1"]);
-  });
-
-  it("favorites: user B removing their favorite must not delete user A favorite", async () => {
-    setUser("a@x.com");
-    await addFavorite(TRACK);
-    setUser("b@x.com");
-    await addFavorite(TRACK);
-
-    setUser("b@x.com");
-    await removeFavorite("t1");
-
-    expect(await db.favorites.count()).toBe(1);
-    setUser("a@x.com");
-    expect(await isFavorite("t1")).toBe(true);
-    expect((await getFavorites()).map((t) => t.id)).toEqual(["t1"]);
-    setUser("b@x.com");
-    expect(await isFavorite("t1")).toBe(false);
   });
 
   it("folderVisits: visit counts of the same folder stay independent per user", async () => {

@@ -1,4 +1,4 @@
-import { HardDrive, Heart, Home, Settings } from "lucide-react";
+import { HardDrive, Home, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { TABS, type TabKey } from "../../utils/driveConstants";
 
@@ -8,15 +8,10 @@ interface BottomNavProps {
 }
 
 // Mobile-only primary navigation (Task 11): mirrors the Sidebar's static
-// destinations — Home / My Drive / Liked Songs / Settings. Playlist tabs
-// (`playlist_${id}`) are dynamic per-user and have no single overview page,
-// so they highlight My Drive, matching the pre-port BottomNav convention.
+// destinations — Home / My Drive / Settings.
 // Only rendered by AppShell when IS_MOBILE; desktop keeps the Sidebar.
 export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
   const { t } = useTranslation();
-
-  const isDriveActive =
-    activeTab === TABS.myDrive || activeTab.startsWith("playlist_");
 
   const items = [
     {
@@ -29,13 +24,7 @@ export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
       key: TABS.myDrive,
       label: t("sidebar.my_drive"),
       icon: HardDrive,
-      active: isDriveActive,
-    },
-    {
-      key: TABS.likedSongs,
-      label: t("sidebar.liked_songs"),
-      icon: Heart,
-      active: activeTab === TABS.likedSongs,
+      active: activeTab === TABS.myDrive,
     },
     {
       key: TABS.settings,

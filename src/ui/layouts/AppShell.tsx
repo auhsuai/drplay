@@ -64,7 +64,7 @@ export function AppShell({
     <div
       className={`flex flex-1 overflow-hidden transition-all duration-700 ease-in-out ${!isLoggedIn || (!appRootFolder && !showFolderSelection) ? "blur-xl scale-[0.97] opacity-40 pointer-events-none" : "blur-0 scale-100 opacity-100"}`}
     >
-      {/* Mobile (Task 11): the Sidebar stays MOUNTED (login state, playlist
+      {/* Mobile (Task 11): the Sidebar stays MOUNTED (login state, folder
           scroll etc. are never reset) — only its wrapper is display:hidden;
           `contents` on desktop keeps the aside a direct flex child exactly
           as before (zero layout change). */}

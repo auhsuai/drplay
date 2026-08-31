@@ -40,7 +40,7 @@ vi.mock("../../../utils/platform", () => ({
 // touches localStorage at import time), so stub useTranslation to return the
 // fallback passed to t(), matching every other component test in the repo.
 // initReactI18next is stubbed too: the real src/i18n module (pulled in
-// transitively via MoreMenu → playlists) calls i18n.use(initReactI18next),
+// transitively via MoreMenu) calls i18n.use(initReactI18next),
 // which i18next would reject with "passing an undefined module" otherwise.
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({

@@ -2,8 +2,6 @@ export const DEBUG_EVENTS = {
   RATE_LIMIT: "drplay:debug:rate-limit",
   PLAYER_ERROR: "drplay:debug:player-error",
   QUOTA: "drplay:debug:quota",
-  PLAYLIST_EMPTY: "drplay:debug:playlist-empty",
-  LIKED_EMPTY: "drplay:debug:liked-empty",
   TRASH_EMPTY: "drplay:debug:trash-empty",
   FOLDERS_EMPTY: "drplay:debug:folders-empty",
   SKELETON: "drplay:debug:skeleton",
@@ -17,8 +15,6 @@ export interface DebugEventMap {
   [DEBUG_EVENTS.RATE_LIMIT]: undefined;
   [DEBUG_EVENTS.PLAYER_ERROR]: { code: string; message: string };
   [DEBUG_EVENTS.QUOTA]: { usageInDrive: number; limit: number | null };
-  [DEBUG_EVENTS.PLAYLIST_EMPTY]: undefined;
-  [DEBUG_EVENTS.LIKED_EMPTY]: undefined;
   [DEBUG_EVENTS.TRASH_EMPTY]: undefined;
   [DEBUG_EVENTS.FOLDERS_EMPTY]: undefined;
   [DEBUG_EVENTS.SKELETON]: {
@@ -30,8 +26,8 @@ export interface DebugEventMap {
   [DEBUG_EVENTS.PAGINATION]: undefined;
 }
 
-// Same window-CustomEvent pattern the rest of the app uses (favorites.ts,
-// playlists.ts, upload/events.ts): a plain dispatch, no try/catch — dispatching
+// Same window-CustomEvent pattern the rest of the app uses (upload/events.ts):
+// a plain dispatch, no try/catch — dispatching
 // without listeners is a safe no-op, and a throw here would be a real bug that
 // must surface instead of being swallowed.
 export function dispatchDebugEvent<K extends keyof DebugEventMap>(

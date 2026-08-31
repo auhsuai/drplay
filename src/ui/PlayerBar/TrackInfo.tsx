@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { Heart, Maximize2, Music } from "lucide-react";
+import { Maximize2, Music } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MoreMenu } from "../components/MoreMenu";
 import { V_PLACEHOLDER, UNKNOWN_ARTIST } from "../../utils/metadata";
@@ -8,7 +8,6 @@ import { useAuthStore } from "../../store/authStore";
 import { usePlayerStore } from "../../store/playerStore";
 import { useTrackMetadata } from "../../hooks/useTrackMetadata";
 import { captureError } from "../../utils/errorLog";
-import { useFavoriteForTrack } from "./useFavoriteForTrack";
 import { IS_MOBILE } from "../../utils/platform";
 import type { Track } from "../../types";
 
@@ -24,10 +23,6 @@ export function TrackInfo({
   onExpandNowPlaying,
 }: TrackInfoProps) {
   const { t } = useTranslation();
-  // Favorite state (isLiked + toggle) now lives in useFavoriteForTrack — shared
-  // with PlayerBar, which renders the mobile MoreMenu (row reorder 2026-08-17).
-  // TrackInfo keeps the desktop heart only.
-  const { isLiked, toggleFavorite } = useFavoriteForTrack(currentTrack);
   const coverImgRef = useRef<HTMLImageElement>(null);
   // Parsed tags shown in the bar. PlayerBar is memoized with a comparator that
   // treats two tracks with the same id as equal, so a store-side title/artist
@@ -207,34 +202,16 @@ export function TrackInfo({
           )}
         </div>
       </div>
-      {/* Redesign 2026-08-17 + row reorder: on mobile the MoreMenu now lives at
-          PlayerBar level (title → -5s/play/+5s → More options), so TrackInfo
-          renders no menu here. Desktop keeps the heart + plain MoreMenu
-          byte-identical (heart must not duplicate in the desktop menu); the
-          wrapper keeps `hidden lg:flex` (Task 13). */}
+      {/* Redesign 2026-08-17: on mobile the MoreMenu now lives at PlayerBar
+          level (title → -5s/play/+5s → More options), so TrackInfo renders no
+          menu here. Desktop keeps the plain MoreMenu (wrapper `hidden lg:flex`,
+          Task 13). */}
       {!IS_MOBILE && currentTrack && (
         <div className="hidden lg:flex ml-2 items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => {
-              void toggleFavorite();
-            }}
-            aria-label={
-              isLiked ? t("player.remove_favorite") : t("player.add_favorite")
-            }
-            className={`p-2 transition-all duration-200 hover:scale-110 ${isLiked ? "text-brand-primary" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
-          >
-            <Heart
-              className="w-5 h-5"
-              fill={isLiked ? "currentColor" : "none"}
-            />
-          </button>
           <MoreMenu
             track={currentTrack}
             isPlayerBarMode={true}
             compact={false}
-            isFavorite={undefined}
-            onToggleFavorite={undefined}
           />
         </div>
       )}

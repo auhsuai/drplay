@@ -9,7 +9,6 @@ import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
-import { useFavoriteForTrack } from "./useFavoriteForTrack";
 import { MoreMenu } from "../components/MoreMenu";
 import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
@@ -42,16 +41,12 @@ function PlayerBarImpl({
   onExpandNowPlaying,
 }: PlayerBarProps) {
   const { t } = useTranslation();
-  // Favorite state for the mobile MoreMenu (row reorder 2026-08-17): TrackInfo
-  // keeps its own instance for the desktop heart; this one feeds the
-  // PlayerBar-level menu. Both share the same check/toggle logic via the hook.
-  const { isLiked, toggleFavorite } = useFavoriteForTrack(currentTrack);
   // Desktop: HTMLAudioElement controller. Android (GATE branch B): the native
   // ExoPlayer engine — same event surface, so the storm guard, auto-advance,
   // seek bar and session save below work unchanged on both.
   const audio = getPlaybackEngine();
 
-  // Local UI state (không gây ảnh hưởng global). Seek/volume/favorite state
+  // Local UI state (không gây ảnh hưởng global). Seek/volume state
   // is owned by SeekBar/VolumeSlider/TrackInfo — this composition layer only
   // keeps transport-level state (PLAN v2 — render-critical isolation).
   const [isBuffering, setIsBuffering] = useState(false);
@@ -309,19 +304,10 @@ function PlayerBarImpl({
               onForward5={handleForward5}
             />
 
-            {/* Right: More options — favorite state moved here from TrackInfo
-                (was embedded in the track info column before the reorder). */}
+            {/* Right: More options */}
             {currentTrack && (
               <div className="shrink-0">
-                <MoreMenu
-                  track={currentTrack}
-                  isPlayerBarMode
-                  compact
-                  isFavorite={isLiked}
-                  onToggleFavorite={() => {
-                    void toggleFavorite();
-                  }}
-                />
+                <MoreMenu track={currentTrack} isPlayerBarMode compact />
               </div>
             )}
           </div>
