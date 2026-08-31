@@ -441,6 +441,109 @@ describe("nativeAudioBridge", () => {
 
       expect(seen).toEqual([]);
     });
+
+    // Root cause regression: Kotlin's emitState() pushes an idle snapshot
+    // {0,0} when PlayerBar's play/pause sync effect calls pause() right
+    // after a cold-start session restore. AudioController never emits a
+    // timeupdate without real media state, so surfacing the idle snapshot
+    // as timeupdate violates the engine contract — SeekBar applies the
+    // payload unconditionally and wipes the restored duration/position
+    // seed to 0:00.
+    it("does not emit timeupdate for an idle snapshot (cold-start restore pause)", async () => {
+      await engine.initOnce();
+      // Drive the throttle clock deterministically: the spy makes the idle
+      // push below pass the throttle window, proving the emit is stopped by
+      // the idle guard and not by throttle.
+      const nowSpy = vi.spyOn(performance, "now");
+      const clock = 10_000;
+      nowSpy.mockImplementation(() => clock);
+      try {
+        const seen: Array<{ currentTime: number; duration: number }> = [];
+        engine.on("timeupdate", (e) => seen.push(e));
+
+        listener()({
+          status: "idle",
+          currentTime: 0,
+          duration: 0,
+          isPlaying: false,
+          buffering: false,
+          rate: 1,
+        });
+
+        expect(seen).toEqual([]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("still emits the pause edge for an idle snapshot after real playback (guard does not eat edges)", async () => {
+      await engine.initOnce();
+      const nowSpy = vi.spyOn(performance, "now");
+      let clock = 10_000;
+      nowSpy.mockImplementation(() => clock);
+      try {
+        const seen: string[] = [];
+        const timeUpdates: Array<{ currentTime: number; duration: number }> =
+          [];
+        engine.on("pause", () => seen.push("pause"));
+        engine.on("timeupdate", (e) => timeUpdates.push(e));
+
+        // Baseline: real playback state flips wasPlaying=true and surfaces
+        // exactly one throttled tick.
+        listener()({
+          status: "playing",
+          currentTime: 5,
+          duration: 100,
+          isPlaying: true,
+          buffering: false,
+          rate: 1,
+        });
+        // Expire the throttle window so the idle push below is judged by the
+        // idle guard alone, not by throttle.
+        clock += 1_000;
+
+        // Kotlin's pause-attached idle snapshot (the restore bug shape).
+        listener()({
+          status: "idle",
+          currentTime: 0,
+          duration: 0,
+          isPlaying: false,
+          buffering: false,
+          rate: 1,
+        });
+
+        // The play/pause edge mapping must keep flowing unchanged...
+        expect(seen).toEqual(["pause"]);
+        // ...while only the real playback tick surfaces as timeupdate.
+        expect(timeUpdates).toEqual([{ currentTime: 5, duration: 100 }]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("still emits a throttled timeupdate with the exact payload for a real state", async () => {
+      await engine.initOnce();
+      const nowSpy = vi.spyOn(performance, "now");
+      const clock = 10_000;
+      nowSpy.mockImplementation(() => clock);
+      try {
+        const seen: Array<{ currentTime: number; duration: number }> = [];
+        engine.on("timeupdate", (e) => seen.push(e));
+
+        listener()({
+          status: "playing",
+          currentTime: 30,
+          duration: 240,
+          isPlaying: true,
+          buffering: false,
+          rate: 1,
+        });
+
+        expect(seen).toEqual([{ currentTime: 30, duration: 240 }]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
   });
 
   describe("load-window play intent (track switch keeps the user's play intent)", () => {

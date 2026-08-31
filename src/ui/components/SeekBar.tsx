@@ -115,6 +115,11 @@ export function SeekBar({
     if (!active) return;
 
     const unsubTime = audio.on("timeupdate", ({ currentTime, duration }) => {
+      // Mirror of the fill's duration>0 guard below: a zero-duration payload
+      // is an idle/load-window state, not real playback state (AudioController
+      // never emits one) — applying it would clobber the session-restored
+      // seed; bonus: no more 0:00 flicker while a track's metadata is loading.
+      if (duration <= 0) return;
       setDuration(duration);
       durationRef.current = duration;
       if (isDraggingRef.current) return;

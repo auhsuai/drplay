@@ -573,15 +573,26 @@ export class NativeAudioEngine implements PlaybackEngine {
       this.emit("durationchange", { duration: state.duration });
     }
 
-    // Throttle to ~5/s (desktop THROTTLE_MS parity) — the plugin ticks every
-    // 25ms in foreground.
-    const now = performance.now();
-    if (now - this.lastTimeUpdate >= NativeAudioEngine.TIMEUPDATE_THROTTLE_MS) {
-      this.lastTimeUpdate = now;
-      this.emit("timeupdate", {
-        currentTime: state.currentTime,
-        duration: state.duration,
-      });
+    // Idle snapshots (initialize/get_state/pause right after a cold-start
+    // session restore) must not surface as timeupdate: AudioController never
+    // emits one without real media state, and SeekBar applies the payload
+    // unconditionally, so a {0,0} push wipes the restored duration/position
+    // seed to 0:00. The edge emits above must keep running untouched — only
+    // the throttled tick is gated.
+    if (state.duration > 0 || state.currentTime > 0) {
+      // Throttle to ~5/s (desktop THROTTLE_MS parity) — the plugin ticks every
+      // 25ms in foreground.
+      const now = performance.now();
+      if (
+        now - this.lastTimeUpdate >=
+        NativeAudioEngine.TIMEUPDATE_THROTTLE_MS
+      ) {
+        this.lastTimeUpdate = now;
+        this.emit("timeupdate", {
+          currentTime: state.currentTime,
+          duration: state.duration,
+        });
+      }
     }
   }
 }

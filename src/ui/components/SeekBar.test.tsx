@@ -1083,3 +1083,45 @@ describe("SeekBar progress fill min-width (needle fix)", () => {
     expect(fill.style.minWidth).toBe("0px");
   });
 });
+
+describe("SeekBar idle timeupdate guard (session-restore wipe)", () => {
+  // renderSeekBar() has no working track override (its overrides key `track`
+  // is not the component's `currentTrack` prop), so restore-seeded mounts
+  // render directly — same shape as the session-restore regression above.
+  it("BUG regression: an idle {0,0} timeupdate does not wipe the restored duration/position seed", () => {
+    render(
+      <SeekBar
+        currentTrack={makeTrack({ restoreTime: 90, restoreDuration: 240 })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 0 });
+    });
+
+    // The native bridge's idle snapshot (Kotlin pause right after a
+    // cold-start session restore) must not clobber the seed: the left
+    // clock keeps the restored position and the right clock keeps the
+    // restored duration.
+    expect(screen.getByText("1:30")).toBeTruthy();
+    expect(screen.getByText("4:00")).toBeTruthy();
+    expect(screen.queryByText("0:00")).toBeNull();
+  });
+
+  it("a real timeupdate with a zero current position still renders 0:00", () => {
+    render(
+      <SeekBar
+        currentTrack={makeTrack({ restoreTime: 90, restoreDuration: 240 })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
+
+    expect(screen.getByText("0:00")).toBeTruthy();
+    expect(screen.getByText("4:00")).toBeTruthy();
+  });
+});
