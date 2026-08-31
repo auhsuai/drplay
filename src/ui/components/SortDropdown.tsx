@@ -101,9 +101,13 @@ export function SortDropdown({
               setShowSortMenu(!showSortMenu);
             }
           }}
-          className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm cursor-pointer select-none"
+          className="flex items-center px-3 py-1.5 text-sm font-medium bg-gray-500 hover:bg-gray-600 text-white dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-gray-100 rounded-lg transition-all shadow-sm cursor-pointer select-none"
         >
-          <div className="hidden sm:grid text-center pr-1">
+          {/* Why grid: label + invisible option-label spans stack in the same
+              cell to keep the chip width stable across sort choices. The
+              container must be visible on mobile too (no `hidden sm:`) — the
+              chip is the only affordance showing the active sort there. */}
+          <div className="grid text-center pr-1">
             <span className="col-start-1 row-start-1 visible place-self-center">
               {currentSortLabel}
             </span>
@@ -205,7 +209,7 @@ export function SortDropdown({
             role="listbox"
             aria-label={t("sort.menu")}
             data-testid="sort-menu"
-            className="absolute right-0 mt-2 min-w-full w-max bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
+            className="absolute right-0 mt-1 min-w-full w-max bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
           >
             {options.map((opt) => (
               <button

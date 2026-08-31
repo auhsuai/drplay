@@ -234,13 +234,17 @@ describe("FullRecentView sort UI", () => {
 
   const openSortMenu = async () => {
     const user = userEvent.setup();
-    const arrow = screen.getByTitle("Toggle order");
-    await user.click(arrow.parentElement as HTMLElement);
+    // Since the a11y split (d0a9c81), the label trigger and the arrow are
+    // SIBLING buttons — the trigger is the element with the sort.menu
+    // label, not the arrow's parent (that was the pre-split nested DOM).
+    await user.click(screen.getByLabelText("Sort options"));
   };
 
   const clickSortOption = async (label: string) => {
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: label }));
+    // Sort options are role="option" inside the listbox (a11y commit
+    // d0a9c81), not implicit buttons — query by the current contract.
+    await user.click(screen.getByRole("option", { name: label }));
   };
 
   it("renders cards in newest-first input order by default with Date label", () => {
@@ -308,7 +312,7 @@ describe("FullRecentView sort UI", () => {
     const arrow = screen.getByTitle("Toggle order");
     await user.click(arrow);
     expect(cardOrder()).toEqual(["old", "mid", "new"]);
-    expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "A-Z" })).toBeNull();
     await user.click(arrow);
     expect(cardOrder()).toEqual(["new", "mid", "old"]);
   });

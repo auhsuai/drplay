@@ -168,3 +168,47 @@ describe("SortDropdown hardware-back closes the menu (batch fix 2026-08-17)", ()
     expect(pressBack()).toBe(false);
   });
 });
+
+describe("SortDropdown mobile chip visibility + contrast fix (2026-08-31)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  // jsdom does not apply responsive CSS, so visibility is asserted through
+  // the Tailwind classes themselves (repo pattern for mobile-only bugs).
+  it("shows the chip label container at every screen size (grid, not hidden)", () => {
+    const { container } = render(<SortDropdown {...baseProps} />);
+    const trigger = screen.getByLabelText("sort.menu");
+    const labelWrap = trigger.querySelector("div") as HTMLElement;
+    expect(labelWrap).not.toBeNull();
+    expect(labelWrap.className).toContain("grid");
+    expect(labelWrap.className).not.toContain("hidden");
+    expect(container).toBeTruthy();
+  });
+
+  it("renders the current sort option label in the chip", () => {
+    const { rerender } = render(<SortDropdown {...baseProps} />);
+    const trigger = screen.getByLabelText("sort.menu");
+    expect(trigger.textContent).toContain("Name");
+
+    // NOTE: text was already present in the DOM before this fix (it was
+    // merely visually hidden on mobile) — this assertion is a guard
+    // against regression, not the fix itself.
+    rerender(<SortDropdown {...baseProps} sortOption="date desc" />);
+    expect(screen.getByLabelText("sort.menu").textContent).toContain("Date");
+  });
+
+  it("keeps the menu attached right below the chip (mt-1, not mt-2)", () => {
+    render(<SortDropdown {...baseProps} />);
+    fireEvent.click(screen.getByLabelText("sort.menu"));
+    const menu = screen.getByTestId("sort-menu");
+    expect(menu.className).toContain("mt-1");
+    expect(menu.className).not.toContain("mt-2");
+  });
+
+  it("uses bright text on the gray chip for AA contrast", () => {
+    render(<SortDropdown {...baseProps} />);
+    const trigger = screen.getByLabelText("sort.menu");
+    expect(trigger.className).toContain("text-white");
+  });
+});

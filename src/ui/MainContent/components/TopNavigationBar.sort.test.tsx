@@ -74,8 +74,10 @@ function makeProps(overrides: Partial<TopNavProps> = {}): TopNavProps {
 }
 
 const openSortMenu = () => {
-  const arrow = screen.getByTitle("Toggle order");
-  fireEvent.click(arrow.parentElement as HTMLElement);
+  // Since the a11y split (d0a9c81), the label trigger and the arrow are
+  // SIBLING buttons — the trigger is the element with the sort.menu label,
+  // not the arrow's parent (that was the pre-split nested DOM).
+  fireEvent.click(screen.getByLabelText("Sort options"));
 };
 
 describe("TopNavigationBar sort dropdown (contract guard)", () => {
@@ -109,7 +111,9 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
   it('clicking Date sets "modifiedTime desc"', () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Date" }));
+    // Sort options are role="option" inside the listbox (a11y commit d0a9c81),
+    // not implicit buttons — query by the current contract.
+    fireEvent.click(screen.getByRole("option", { name: "Date" }));
     expect(onSortChange).toHaveBeenCalledWith("modifiedTime desc");
   });
 
@@ -118,14 +122,14 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
       <TopNavigationBar {...makeProps({ sortOption: "modifiedTime desc" })} />,
     );
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "A-Z" }));
+    fireEvent.click(screen.getByRole("option", { name: "A-Z" }));
     expect(onSortChange).toHaveBeenCalledWith("name");
   });
 
   it('clicking Size sets "size"', () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Size" }));
+    fireEvent.click(screen.getByRole("option", { name: "Size" }));
     expect(onSortChange).toHaveBeenCalledWith("size");
   });
 
@@ -133,7 +137,7 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
     render(<TopNavigationBar {...makeProps()} />);
     fireEvent.click(screen.getByTitle("Toggle order"));
     expect(onSortChange).toHaveBeenCalledWith("name desc");
-    expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "A-Z" })).toBeNull();
   });
 
   it('arrow toggle removes " desc" when already descending', () => {
