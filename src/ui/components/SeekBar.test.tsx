@@ -943,3 +943,48 @@ describe("SeekBar mobile full-width drag surface (Task 5 — IS_MOBILE)", () => 
     expect(fakeController.seek).toHaveBeenCalledWith(24);
   });
 });
+
+describe("SeekBar progress fill min-width (needle fix)", () => {
+  it("BUG regression: a very small percent clamps the fill to the rail height (minWidth 6px) so rounded-full keeps both ends round", () => {
+    renderSeekBar();
+    // 30s into a 2h track = 0.41666...% — on a ~216px rail that is ~0.86px,
+    // narrower than the 6px (h-1.5) rail height, which collapsed the fill's
+    // rounded-full radii into a sharp needle (W3C css-backgrounds-3 §4.5
+    // Overlapping Curves: all radii scale by f = min(Li/Si) when curves
+    // overlap). minWidth = the rail height keeps one fully rounded pill.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 30, duration: 7200 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toContain("0.4166");
+    expect(fill.style.minWidth).toBe("6px");
+  });
+
+  it("BUG regression: percent 0 resets minWidth to 0 so the empty state stays invisible", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 30, duration: 7200 });
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 7200 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("0%");
+    expect(fill.style.minWidth).toBe("0px");
+  });
+
+  it("BUG regression: session restore at 0 (restoreTime=0, restoreDuration>0) keeps minWidth 0 and width 0%", () => {
+    render(
+      <SeekBar
+        currentTrack={makeTrack({ restoreTime: 0, restoreDuration: 3600 })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("0%");
+    expect(fill.style.minWidth).toBe("0px");
+  });
+});

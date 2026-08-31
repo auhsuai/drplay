@@ -10,6 +10,15 @@ import { useSeekDrag } from "./useSeekDrag";
 import { useSeekHover } from "./useSeekHover";
 import { useSeekKeyboard } from "./useSeekKeyboard";
 
+// The visible fill is clamped to the rail height (h-1.5 = 6px in SeekRail):
+// when the fill is narrower than that, CSS border-radius overlap-scaling
+// (W3C css-backgrounds-3 §4.5 "Overlapping Curves", f = min(Li/Si)) collapses
+// rounded-full's 9999px radii down to ~width/2 and the fill is drawn as a
+// sharp needle instead of a rounded pill. Zero percent must stay at 0 or the
+// empty state would render a 6px dot.
+const PROGRESS_FILL_MIN_WIDTH = "6px";
+const PROGRESS_FILL_MIN_WIDTH_ZERO = "0px";
+
 export interface SeekBarProps {
   currentTrack: Track | null;
   audio: PlaybackEngine;
@@ -63,12 +72,17 @@ export function SeekBar({
   // on the hot path). aria-valuenow is mirrored on the SAME write-point (WAI-
   // ARIA requires it updated with JS; the fill width is the progress value),
   // so the a11y attribute and the visual fill can never drift apart. The
-  // fill className carries rounded-full statically: both ends stay round at
-  // every width (original look — no small 2px right corner, no rail-end
-  // toggle).
+  // fill className carries rounded-full statically, but that only stays round
+  // while the fill is at least the rail height (h-1.5 = 6px): below it, CSS
+  // border-radius overlap-scaling (W3C css-backgrounds-3 §4.5, f = min(Li/Si))
+  // collapses the 9999px radii to ~width/2 and the fill degenerates into a
+  // sharp needle. minWidth clamps the fill back to the rail height whenever
+  // it is visible; 0 keeps the empty state invisible.
   const setFillWidth = (percent: number): void => {
     if (!progressFillRef.current) return;
     progressFillRef.current.style.width = `${String(percent)}%`;
+    progressFillRef.current.style.minWidth =
+      percent > 0 ? PROGRESS_FILL_MIN_WIDTH : PROGRESS_FILL_MIN_WIDTH_ZERO;
     progressBarRef.current?.setAttribute(
       "aria-valuenow",
       String(Math.round(percent)),
