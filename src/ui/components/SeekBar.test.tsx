@@ -1039,24 +1039,26 @@ describe("SeekBar mobile full-width drag surface (Task 5 — IS_MOBILE)", () => 
   });
 });
 
-describe("SeekBar progress fill min-width (needle fix)", () => {
-  it("BUG regression: a very small percent clamps the fill to the rail height (minWidth 6px) so rounded-full keeps both ends round", () => {
+describe("SeekBar progress fill clipper + rail-anchored thumb (needle fix v2)", () => {
+  it("BUG regression: the fill width stays the TRUE percent at tiny progress (no min-width notch) and the thumb `left` matches it", () => {
     renderSeekBar();
-    // 30s into a 2h track = 0.41666...% — on a ~216px rail that is ~0.86px,
-    // narrower than the 6px (h-1.5) rail height, which collapsed the fill's
-    // rounded-full radii into a sharp needle (W3C css-backgrounds-3 §4.5
-    // Overlapping Curves: all radii scale by f = min(Li/Si) when curves
-    // overlap). minWidth = the rail height keeps one fully rounded pill.
+    // 30s into a 2h track = 0.41666...% — the fill must keep this true
+    // width. The rail's overflow-hidden rounded-full clipper rounds any
+    // width to the track contour, so the old 6px min-width clamp (which
+    // jumped the fill 0→6px as soon as progress > 0, reading as "a notch
+    // sitting there while seeking") is gone — minWidth must never be set.
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 30, duration: 7200 });
     });
 
     const fill = screen.getByTestId("progress-fill");
     expect(fill.style.width).toContain("0.4166");
-    expect(fill.style.minWidth).toBe("6px");
+    expect(fill.style.minWidth).toBe("");
+    const thumb = screen.getByTestId("seek-thumb");
+    expect(thumb.style.left).toContain("0.4166");
   });
 
-  it("BUG regression: percent 0 resets minWidth to 0 so the empty state stays invisible", () => {
+  it("BUG regression: currentTime 0 writes the thumb at left 0% (same write-point as the fill)", () => {
     renderSeekBar();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 30, duration: 7200 });
@@ -1065,22 +1067,42 @@ describe("SeekBar progress fill min-width (needle fix)", () => {
       fakeController._emit("timeupdate", { currentTime: 0, duration: 7200 });
     });
 
-    const fill = screen.getByTestId("progress-fill");
-    expect(fill.style.width).toBe("0%");
-    expect(fill.style.minWidth).toBe("0px");
+    const thumb = screen.getByTestId("seek-thumb");
+    expect(thumb.style.left).toBe("0%");
   });
 
-  it("BUG regression: session restore at 0 (restoreTime=0, restoreDuration>0) keeps minWidth 0 and width 0%", () => {
-    render(
-      <SeekBar
-        currentTrack={makeTrack({ restoreTime: 0, restoreDuration: 3600 })}
-        audio={fakeController as unknown as AudioController}
-      />,
-    );
+  it("BUG regression: the fill is wrapped by an overflow-hidden rounded-full clipper (rounded contour at any width, iifx/SO pattern)", () => {
+    renderSeekBar();
 
-    const fill = screen.getByTestId("progress-fill");
-    expect(fill.style.width).toBe("0%");
-    expect(fill.style.minWidth).toBe("0px");
+    const clip = screen.getByTestId("progress-fill")
+      .parentElement as HTMLElement;
+    expect(clip.className).toContain("overflow-hidden");
+    expect(clip.className).toContain("rounded-full");
+  });
+
+  it("BUG regression: the thumb is NOT inside the clipper — a direct child of the rail so the 0%/100% half-overhang is never cut", () => {
+    renderSeekBar();
+
+    const thumb = screen.getByTestId("seek-thumb");
+    const rail = screen.getByRole("progressbar");
+    expect(thumb.parentElement).toBe(rail);
+  });
+
+  it("BUG regression: mobile shows the thumb always (M3/YT Music handle convention); desktop idle keeps it hidden", () => {
+    platformMock.IS_MOBILE = true;
+    try {
+      const { unmount } = renderSeekBar();
+      expect(screen.getByTestId("seek-thumb").className).toContain(
+        "opacity-100",
+      );
+      unmount();
+
+      platformMock.IS_MOBILE = false;
+      renderSeekBar();
+      expect(screen.getByTestId("seek-thumb").className).toContain("opacity-0");
+    } finally {
+      platformMock.IS_MOBILE = false;
+    }
   });
 });
 

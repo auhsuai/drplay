@@ -206,9 +206,25 @@ describe("SortDropdown mobile chip visibility + contrast fix (2026-08-31)", () =
     expect(menu.className).not.toContain("mt-2");
   });
 
-  it("uses bright text on the gray chip for AA contrast", () => {
-    render(<SortDropdown {...baseProps} />);
+  // Why: the chip and the arrow used to paint themselves (gray chip vs white
+  // arrow pill) and read as two separate controls. The contract now is ONE
+  // shared frame that owns the surface; the buttons only own hover states.
+  it("renders chip + arrow inside one shared frame (single background)", () => {
+    const { container } = render(<SortDropdown {...baseProps} />);
     const trigger = screen.getByLabelText("sort.menu");
-    expect(trigger.className).toContain("text-white");
+    // The chip must not paint itself anymore (old gray chip is gone).
+    expect(trigger.className).not.toContain("bg-gray-500");
+    expect(trigger.className).not.toContain("text-white");
+    // The shared frame (parent of both sibling buttons) owns the surface.
+    const frame = trigger.parentElement as HTMLElement;
+    expect(frame).toBeTruthy();
+    expect(frame.className).toContain("bg-white");
+    expect(frame.className).toContain("dark:bg-[#1a1b1e]");
+    expect(frame.className).toContain("shadow-sm");
+    // The arrow rides inside the same frame without its own background.
+    const arrow = container.querySelector(".arrow-btn") as HTMLElement;
+    expect(frame.contains(arrow)).toBe(true);
+    expect(arrow.className).not.toContain("bg-white");
+    expect(arrow.className).not.toContain("shadow-sm");
   });
 });

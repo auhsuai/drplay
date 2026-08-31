@@ -80,11 +80,13 @@ export function SortDropdown({
 
   return (
     <div className="relative">
-      {/* APG forbids nested interactive controls: the label region (menu
-          trigger) and the arrow (asc/desc flip) are two SIBLING buttons.
-          flex-row-reverse keeps the original left-arrow/right-label look
-          while DOM order stays trigger-first for Tab. */}
-      <div className="flex flex-row-reverse items-center gap-1.5 [&:active:not(:has(.arrow-btn:active))]:scale-95 select-none">
+      {/* Why one frame: the chip and the arrow previously painted themselves
+          (gray chip vs white arrow pill) and read as two separate controls.
+          The frame owns the single surface (bg/shadow/rounding); the sibling
+          buttons only own their hover/press states. flex-row-reverse keeps
+          the left-arrow/right-label look while DOM order stays trigger-first
+          for Tab. */}
+      <div className="flex flex-row-reverse items-center gap-1.5 rounded-lg bg-white dark:bg-[#1a1b1e] shadow-sm transition-all [&:active:not(:has(.arrow-btn:active))]:scale-95 select-none">
         <div
           role="button"
           tabIndex={0}
@@ -101,7 +103,7 @@ export function SortDropdown({
               setShowSortMenu(!showSortMenu);
             }
           }}
-          className="flex items-center px-3 py-1.5 text-sm font-medium bg-gray-500 hover:bg-gray-600 text-white dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-gray-100 rounded-lg transition-all shadow-sm cursor-pointer select-none"
+          className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all cursor-pointer select-none"
         >
           {/* Why grid: label + invisible option-label spans stack in the same
               cell to keep the chip width stable across sort choices. The
@@ -125,7 +127,7 @@ export function SortDropdown({
         <div
           role="button"
           tabIndex={0}
-          className="arrow-btn p-1 rounded-md bg-white dark:bg-[#1a1b1e] shadow-sm hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center cursor-pointer select-none"
+          className="arrow-btn p-1 rounded-md hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center cursor-pointer select-none"
           onClick={(e) => {
             e.stopPropagation();
             if (sortOption.endsWith(" desc")) {

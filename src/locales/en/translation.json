@@ -130,6 +130,8 @@
     "add_track_error": "Couldn't add track to playlist. Try again.",
     "remove_track_error": "Couldn't remove track from playlist. Try again.",
     "update_error": "Couldn't update playlist. Try again.",
+    "rename": "Rename",
+    "row_actions": "Playlist options",
     "empty_state_title": "No tracks yet",
     "empty_state_subtitle": "Add songs to your playlist.",
     "change_cover": "Change Cover",

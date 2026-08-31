@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   render,
@@ -29,6 +29,12 @@ const mocks = vi.hoisted(() => ({
   showErrorToast: vi.fn(),
   getPlaylists: vi.fn(),
   addTrackToPlaylist: vi.fn(),
+  // PlaylistPickerModal (Slice 2) manages playlists inline: the modal imports
+  // these util functions, so the mock must export them even though the
+  // MoreMenu-level tests only exercise pick/add-track flows.
+  createPlaylist: vi.fn(),
+  updatePlaylist: vi.fn(),
+  deletePlaylist: vi.fn(),
   uploadManager: {
     isUploading: vi.fn(),
     subscribe: vi.fn((cb: () => void) => {
@@ -79,6 +85,9 @@ vi.mock("../../utils/uploadManager", () => mocks.uploadManager);
 vi.mock("../../utils/playlists", () => ({
   getPlaylists: mocks.getPlaylists,
   addTrackToPlaylist: mocks.addTrackToPlaylist,
+  createPlaylist: mocks.createPlaylist,
+  updatePlaylist: mocks.updatePlaylist,
+  deletePlaylist: mocks.deletePlaylist,
 }));
 
 function makeTrack(over: Partial<Track> = {}): Track {
@@ -767,7 +776,7 @@ describe("MoreMenu mobile compact rows (Slice 1)", () => {
 });
 
 // Slice 2 (mobile playlist picker): on IS_MOBILE the Add to Playlist item
-// must open a standalone modal — the nested submenu clips off-screen near
+// must open a standalone modal â€” the nested submenu clips off-screen near
 // the player bar's bottom-right edge. Desktop keeps the submenu flow.
 describe("MoreMenu mobile playlist picker (Slice 2)", () => {
   beforeEach(() => {
@@ -787,7 +796,7 @@ describe("MoreMenu mobile playlist picker (Slice 2)", () => {
     openTrigger();
     // The playlists fetch resolves after the menu's effect runs; flush the
     // microtask BEFORE opening the picker (a real user's tap latency). Once
-    // the menu closes, the hook's ignore-guard would skip the late result —
+    // the menu closes, the hook's ignore-guard would skip the late result â€”
     // same pre-existing race the desktop submenu has.
     await act(async () => {});
     fireEvent.click(
@@ -806,6 +815,7 @@ describe("MoreMenu mobile playlist picker (Slice 2)", () => {
       },
     ]);
     await openPicker();
+    await act(async () => {});
 
     expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(screen.queryByText("Playlists")).toBeNull();
@@ -831,6 +841,7 @@ describe("MoreMenu mobile playlist picker (Slice 2)", () => {
     fireEvent.click(
       within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
     );
+    await act(async () => {});
 
     fireEvent.click(screen.getByRole("button", { name: "Playlist One" }));
     await waitFor(() => {
@@ -853,6 +864,9 @@ describe("MoreMenu mobile playlist picker (Slice 2)", () => {
       },
     ]);
     await openPicker();
+    // Rows come from the modal's own open-fetch (localPlaylists), so flush
+    // the microtask before clicking a row.
+    await act(async () => {});
     expect(screen.getByRole("dialog")).toBeTruthy();
 
     mocks.uploadManager.isUploading.mockReturnValue(true);
@@ -923,14 +937,14 @@ describe("MoreMenu debug download toast trigger", () => {
 
 // Batch back-button fix (2026-08-17): MoreMenu's portal-hosted sub-dialogs
 // (DownloadDialog / DeleteConfirmDialog / FolderSelectionScreen) and the menu
-// dropdown itself must all register a hardware-back handler — otherwise the
+// dropdown itself must all register a hardware-back handler â€” otherwise the
 // native back falls through the App-level chain to the MyDrive tab layer and
 // jumps Home (or out of the app). The fix calls handleGlobalBack() with the
 // real module-level stack (no mock) so the same LIFO ordering the native
 // listener uses is exercised end-to-end.
 describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
   // Real-world behavior (verified by reading DefaultMenuItems / useMenuDownload):
-  // every menu item closes the dropdown THEN opens its dialog/screen — so the
+  // every menu item closes the dropdown THEN opens its dialog/screen â€” so the
   // back handler never has to peel dialog-off-menu, only dialog-or-menu.
 
   beforeEach(() => {
@@ -973,7 +987,7 @@ describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
     );
     expect(screen.getByText("File name")).toBeTruthy();
     // Menu auto-closed when Download Song was clicked (handleDownloadClick
-    // calls setIsOpen(false) — verified by reading useMenuDownload).
+    // calls setIsOpen(false) â€” verified by reading useMenuDownload).
     expect(document.querySelector('[role="menu"]')).toBeNull();
 
     expect(pressBack()).toBe(true);
@@ -1026,7 +1040,7 @@ describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
     // Delete / Download Song / Add to Playlist. Each item closes the menu
     // and opens its own dialog. We re-open the menu between clicks to layer
     // each dialog on top of the previous one (the real product can't
-    // actually do this because the dialog backdrop blocks further clicks —
+    // actually do this because the dialog backdrop blocks further clicks â€”
     // this test simulates the layering by re-opening the menu manually).
     const { rerender } = render(
       <MoreMenu
@@ -1045,14 +1059,14 @@ describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
     );
     expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
 
-    // Reopen menu + open Delete — Delete sits "above" Move in the
+    // Reopen menu + open Delete â€” Delete sits "above" Move in the
     // handler's priority (innermost = first peeled).
     openTrigger();
     fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
     expect(screen.getByText("Move to Trash?")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Move to..." })).toBeTruthy();
 
-    // Reopen menu + open Download — Download is the topmost layer.
+    // Reopen menu + open Download â€” Download is the topmost layer.
     openTrigger();
     fireEvent.click(
       within(menuEl()).getByRole("button", { name: "Download Song" }),
@@ -1152,7 +1166,7 @@ describe("MoreMenu Escape respects overlay priority (bugfix 2026-08-23)", () => 
     expect(screen.getByText("File name")).toBeTruthy();
 
     // Re-open the dropdown on top of all three dialogs (the real product
-    // cannot do this because the dialog backdrop blocks clicks — same
+    // cannot do this because the dialog backdrop blocks clicks â€” same
     // simulated-layering trick as the hardware-back priority test above).
     openTrigger();
     expect(menuEl()).toBeTruthy();
@@ -1253,7 +1267,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
 
   it.each<Case>([
     {
-      name: "identity: long-press point fits left+down → values unchanged",
+      name: "identity: long-press point fits left+down â†’ values unchanged",
       vw: 1280,
       vh: 800,
       anchorPoint: { x: 100, y: 100 },
@@ -1262,7 +1276,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { left: 100, top: 100 },
     },
     {
-      name: "identity: trigger rect fits right+down (open downwards) → values unchanged",
+      name: "identity: trigger rect fits right+down (open downwards) â†’ values unchanged",
       vw: 1280,
       vh: 800,
       buttonRect: makeRect(100, 140, 400),
@@ -1270,7 +1284,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { right: 1280 - 400, top: 148 },
     },
     {
-      name: "identity: trigger rect fits right+up (open upwards) → values unchanged",
+      name: "identity: trigger rect fits right+up (open upwards) â†’ values unchanged",
       vw: 1280,
       vh: 800,
       buttonRect: makeRect(700, 740, 400),
@@ -1278,7 +1292,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { right: 880, bottom: 800 - 700 + GAP },
     },
     {
-      name: "long-press near right edge of a narrow screen → menu shifted flush right",
+      name: "long-press near right edge of a narrow screen â†’ menu shifted flush right",
       vw: 360,
       vh: 640,
       anchorPoint: { x: 150, y: 100 },
@@ -1287,7 +1301,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { left: 360 - W, top: 100 },
     },
     {
-      name: "long-press right-half but too close to left edge → menu pinned flush left",
+      name: "long-press right-half but too close to left edge â†’ menu pinned flush left",
       vw: 360,
       vh: 640,
       anchorPoint: { x: 200, y: 600 },
@@ -1296,7 +1310,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { right: 360 - W, bottom: 40 },
     },
     {
-      name: "long-press in upper half too low for the menu height → top clamped",
+      name: "long-press in upper half too low for the menu height â†’ top clamped",
       vw: 800,
       vh: 400,
       anchorPoint: { x: 100, y: 180 },
@@ -1305,7 +1319,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { left: 100, top: 400 - H },
     },
     {
-      name: "long-press in lower half too high for the menu height → bottom clamped",
+      name: "long-press in lower half too high for the menu height â†’ bottom clamped",
       vw: 800,
       vh: 400,
       anchorPoint: { x: 700, y: 220 },
@@ -1314,7 +1328,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { right: 100, bottom: 400 - H },
     },
     {
-      name: "trigger near left edge on a narrow screen → menu pinned flush left",
+      name: "trigger near left edge on a narrow screen â†’ menu pinned flush left",
       vw: 360,
       vh: 640,
       buttonRect: makeRect(300, 340, 100),
@@ -1322,7 +1336,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { right: 360 - W, bottom: 640 - 300 + GAP },
     },
     {
-      name: "trigger opens upwards but not enough room above → bottom clamped",
+      name: "trigger opens upwards but not enough room above â†’ bottom clamped",
       vw: 800,
       vh: 400,
       buttonRect: makeRect(50, 90, 500),
@@ -1330,7 +1344,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { right: 800 - 500, bottom: 400 - H },
     },
     {
-      name: "trigger opens downwards but not enough room below → top clamped",
+      name: "trigger opens downwards but not enough room below â†’ top clamped",
       vw: 800,
       vh: 400,
       buttonRect: makeRect(160, 200, 500),
@@ -1338,7 +1352,7 @@ describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
       expected: { right: 800 - 500, top: 400 - H },
     },
     {
-      name: "window smaller than the menu on both axes → pinned to top-left, no negative offsets",
+      name: "window smaller than the menu on both axes â†’ pinned to top-left, no negative offsets",
       vw: 200,
       vh: 300,
       anchorPoint: { x: 100, y: 150 },

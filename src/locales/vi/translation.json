@@ -130,6 +130,8 @@
     "add_track_error": "Không thể thêm bài hát vào danh sách phát. Vui lòng thử lại.",
     "remove_track_error": "Không thể xóa bài hát khỏi danh sách phát. Vui lòng thử lại.",
     "update_error": "Không thể cập nhật danh sách phát. Vui lòng thử lại.",
+    "rename": "Đổi tên",
+    "row_actions": "Tùy chọn danh sách phát",
     "empty_state_title": "Danh sách phát trống",
     "empty_state_subtitle": "Thêm bài hát vào danh sách phát của bạn.",
     "change_cover": "Đổi ảnh bìa",
