@@ -218,3 +218,24 @@ describe("TrackInfo reactive auth token (getState → selector)", () => {
     });
   });
 });
+
+describe("TrackInfo root column width (transport/menu drift fix)", () => {
+  it("mobile: root TrackInfo container grows into the leftover row space (flex-1) and stays shrinkable (min-w-0) so transport buttons stay pinned", () => {
+    platformMock.IS_MOBILE = true;
+    const { container } = renderTrackInfo();
+    const root = container.firstChild as HTMLElement;
+    // Without flex-1 the TrackInfo width collapsed to its content width, so
+    // the 5-button transport + MoreMenu drifted horizontally with the title
+    // length (measured 117px drift at 360px). flex: 1 1 0% pins them.
+    expect(root.className).toContain("flex-1");
+    expect(root.className).toContain("min-w-0");
+  });
+
+  it("desktop: root keeps the fixed 30% column (no flex-1)", () => {
+    platformMock.IS_MOBILE = false;
+    const { container } = renderTrackInfo();
+    const root = container.firstChild as HTMLElement;
+    expect(root.className).toContain("w-[30%]");
+    expect(root.className).not.toContain("flex-1");
+  });
+});

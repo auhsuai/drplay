@@ -139,12 +139,14 @@ export function TrackInfo({
   return (
     // Task 5: on mobile TrackInfo sits in the top row next to the 5-button
     // transport — w-[30%] min-w-[140px] would push the buttons off-screen
-    // (140px + ~216px of buttons > 360px phone). flex-1 min-w-0 lets the
-    // title truncate instead. Desktop keeps the fixed 30% column.
+    // (140px + ~216px of buttons > 360px phone). flex-1 min-w-0 makes
+    // TrackInfo fill the leftover row space (flex: 1 1 0% includes shrink)
+    // so the transport + MoreMenu stay pinned while the title truncates.
+    // Desktop keeps the fixed 30% column.
     <div
       className={
         IS_MOBILE
-          ? "flex items-center min-w-0 shrink justify-start pr-2"
+          ? "flex items-center min-w-0 flex-1 justify-start pr-2"
           : "flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2"
       }
     >
