@@ -112,8 +112,6 @@
     "prev": "Previous",
     "next": "Next"
   },
-  "delete": "Delete",
-  "remove_from_playlist": "Remove from Playlist",
   "player": {
     "no_track": "No track playing",
     "network_interrupted": "Network connection lost. Retrying...",

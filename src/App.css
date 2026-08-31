@@ -40,19 +40,6 @@ body {
   -ms-overflow-style: none; /* IE and Edge */
   scrollbar-width: none; /* Firefox */
 }
-@keyframes flash-highlight {
-  0%,
-  100% {
-    background-color: transparent;
-  }
-  50% {
-    background-color: rgba(59, 130, 246, 0.4);
-  }
-}
-.flash-highlight {
-  animation: flash-highlight 1s ease-in-out 4;
-}
-
 /* SortDropdown arrow fill/drain animations (moved from inline <style> in
    SortDropdown.tsx so the SVG is not re-parsed with a style node on every
    render/dropdown open). Names are SortDropdown-specific; keep in sync. */
