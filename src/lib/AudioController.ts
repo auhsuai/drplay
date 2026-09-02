@@ -4,44 +4,17 @@ import { captureError } from "../utils/errorLog";
 import { buildStreamUrl } from "../utils/streamPrefetcher";
 import { isAbortError } from "../hooks/player/utils";
 import type { BufferedSource } from "../utils/bufferedRange";
+import {
+  createNativeEventHandlers,
+  type AudioEventMap,
+  type AudioEventHandler,
+} from "./audioNativeEvents";
 
-type AudioEventMap = {
-  timeupdate: { currentTime: number; duration: number };
-  durationchange: { duration: number };
-  buffering: { isBuffering: boolean };
-  /** Native `progress` event — buffered data grew. Consumers re-read
-   *  `getBuffered()` to render the buffer bar (audio.buffered only changes
-   *  while a `progress` event fires). Throttled to ~5/s. Also re-emitted from
-   *  seeked/loadeddata/suspend/durationchange because for a small/fast file the
-   *  LAST native `progress` can fire with buffered empty — those discrete
-   *  events are the only proof the final buffer state settled. */
-  progress: undefined;
-  error: { message: string; code: string };
-  ended: undefined;
-  play: undefined;
-  pause: undefined;
-};
-
-type AudioEventHandler<K extends keyof AudioEventMap> = (
-  payload: AudioEventMap[K],
-) => void;
+export type { AudioEventMap, AudioEventHandler } from "./audioNativeEvents";
 
 export class AudioController {
-  private static readonly THROTTLE_MS = 200;
   private static readonly RETRY_DELAY_MS = 2000;
   private static readonly MAX_RETRIES = 3;
-  private static readonly ENDED_THRESHOLD_SECONDS = 1;
-  // Task B: mediaError.code values, per MDN MediaError constants (same
-  // values lib.dom declares on the global `MediaError` constructor). The
-  // global is NOT implemented by jsdom (the test environment), so referencing
-  // `MediaError.MEDIA_ERR_*` at runtime would throw ReferenceError in tests —
-  // the named values below carry the same semantics without that dependency.
-  // MEDIA_ERR_NETWORK (2) is intentionally NOT declared: the retry path below
-  // covers "every remaining code" (NETWORK or a null mediaError), so a
-  // constant for it would be an unused private member (TS6133).
-  private static readonly MEDIA_ERR_ABORTED = 1;
-  private static readonly MEDIA_ERR_DECODE = 3;
-  private static readonly MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
   private static instance: AudioController | undefined;
   private audio1: HTMLAudioElement;
@@ -60,8 +33,7 @@ export class AudioController {
   private listeners: { [K in keyof AudioEventMap]?: AudioEventHandler<K>[] } =
     {};
 
-  private lastTimeUpdate = 0;
-  private lastProgressEmit = 0;
+  private throttle = { lastTimeUpdate: 0, lastProgressEmit: 0 };
 
   // Retained reference to every native listener attached by setupAudio(),
   // keyed by element then event type. Anonymous handlers are unreachable and
@@ -131,132 +103,20 @@ export class AudioController {
     audio.addEventListener("loadedmetadata", onMetadata);
   }
 
-  // Buffer-bar reliability beyond `progress`: for a small/fast file the LAST
-  // native progress event can fire with buffered still empty, then loading
-  // finishes with NO further progress event — the bar would stay empty even
-  // though buffered is full (race). These discrete events prove the buffered
-  // state may have changed, so re-emit `progress` so consumers re-read
-  // getBuffered(). They fire rarely -> no throttle (no DOM churn).
-  private reemitProgress(audio: HTMLAudioElement): void {
-    if (audio === this.activeAudio) {
-      this.emit("progress", undefined);
-    }
-  }
-
   private setupAudio(audio: HTMLAudioElement) {
-    // Handlers are held as named properties (not inline anonymous closures)
-    // so each reference is retained in this.elementListeners and removable.
-    // Behaviour is identical to the previous inline arrows.
-    const handlers: Record<string, EventListener> = {};
-
-    handlers.timeupdate = () => {
-      if (audio !== this.activeAudio) return;
-      const now = performance.now();
-      if (now - this.lastTimeUpdate > AudioController.THROTTLE_MS) {
-        this.lastTimeUpdate = now;
-        this.emit("timeupdate", {
-          currentTime: audio.currentTime,
-          duration: audio.duration || 0,
-        });
-      }
-    };
-
-    // Surface metadata readiness so consumers can render the real duration
-    // even before the first timeupdate (e.g. paused with metadata loaded).
-    handlers.durationchange = () => {
-      if (audio === this.activeAudio) {
-        this.emit("durationchange", { duration: audio.duration || 0 });
-        this.emit("progress", undefined);
-      }
-    };
-
-    handlers.seeked = () => {
-      this.reemitProgress(audio);
-    };
-
-    handlers.loadeddata = () => {
-      this.reemitProgress(audio);
-    };
-
-    handlers.suspend = () => {
-      this.reemitProgress(audio);
-    };
-
-    // Native `progress` fires periodically while the media resource loads —
-    // this is when audio.buffered grows (paused OR playing, unlike timeupdate
-    // which only fires during playback). Throttled to ~5/s to avoid DOM churn
-    // in buffer-bar consumers. The sentinel `=== 0` guarantees the FIRST
-    // event always emits, even when the throttle clock is at t=0 (fake timers).
-    handlers.progress = () => {
-      if (audio !== this.activeAudio) return;
-      const now = performance.now();
-      if (
-        this.lastProgressEmit === 0 ||
-        now - this.lastProgressEmit > AudioController.THROTTLE_MS
-      ) {
-        this.lastProgressEmit = now;
-        this.emit("progress", undefined);
-      }
-    };
-
-    handlers.waiting = () => {
-      if (audio === this.activeAudio) {
-        this.emit("buffering", { isBuffering: true });
-      }
-    };
-
-    handlers.playing = () => {
-      if (audio === this.activeAudio) {
-        this.emit("buffering", { isBuffering: false });
-        this.emit("play", undefined);
-        usePlayerStore.getState().setIsPlaying(true);
-      }
-    };
-
-    handlers.pause = () => {
-      if (audio === this.activeAudio) {
-        this.emit("pause", undefined);
-        usePlayerStore.getState().setIsPlaying(false);
-      }
-    };
-
-    handlers.ended = () => {
-      if (audio === this.activeAudio) {
-        if (
-          audio.duration &&
-          audio.currentTime <
-            audio.duration - AudioController.ENDED_THRESHOLD_SECONDS
-        )
-          return;
-        this.emit("ended", undefined);
-      }
-    };
-
-    handlers.error = () => {
-      if (audio !== this.activeAudio) return;
-
-      // Task B: classify by mediaError.code (MDN) — the code decides whether a
-      // retry can ever help. ABORTED means the user/browser cancelled the
-      // fetch (not a failure — stay silent, a retry could restart playback
-      // the user just cancelled); DECODE / SRC_NOT_SUPPORTED mean the resource
-      // itself is unusable, so retrying would only burn ~6s before hitting the
-      // same give-up — skip the track right away. Everything remaining is
-      // transient (NETWORK or a null mediaError) → existing retry path.
-      const mediaErrorCode = audio.error?.code ?? null;
-
-      if (mediaErrorCode === AudioController.MEDIA_ERR_ABORTED) {
-        void captureError({
-          level: "warn",
-          source: "AudioController",
-          message: `Audio error aborted by user (mediaError.code=${String(AudioController.MEDIA_ERR_ABORTED)})`,
-        });
-        return;
-      }
-
-      if (
-        mediaErrorCode === AudioController.MEDIA_ERR_DECODE ||
-        mediaErrorCode === AudioController.MEDIA_ERR_SRC_NOT_SUPPORTED
-      ) {
+    const handlers = createNativeEventHandlers(audio, {
+      isActive: (a) => {
+        return a === this.activeAudio;
+      },
+      emit: (event, payload) => {
+        this.emit(event, payload);
+      },
+      throttle: this.throttle,
+      onUnrecoverableError: (mediaErrorCode) => {
+        // DECODE / SRC_NOT_SUPPORTED: the resource itself is unusable — no
+        // retry can help. Give up immediately (clearRetryTimer + log +
+        // error/ended events); a retry would only burn ~6s before hitting
+        // the same give-up.
         this.clearRetryTimer();
         void captureError({
           level: "error",
@@ -268,46 +128,46 @@ export class AudioController {
           code: "format_error",
         });
         this.emit("ended", undefined);
-        return;
-      }
-
-      this.retryCount++;
-      void captureError({
-        level: "error",
-        source: "AudioController",
-        message: `Audio error (attempt ${String(this.retryCount)})`,
-      });
-
-      if (
-        this.retryCount < AudioController.MAX_RETRIES &&
-        this.currentTrackId
-      ) {
-        this.emit("error", {
-          message: "Mạng không ổn định, đang thử lại...",
-          code: "network_interrupted",
+      },
+      onTransientError: (position) => {
+        // NETWORK / null mediaError: transient → existing retry path.
+        this.retryCount++;
+        void captureError({
+          level: "error",
+          source: "AudioController",
+          message: `Audio error (attempt ${String(this.retryCount)})`,
         });
-        const pos = audio.currentTime;
-        // B1: capture track id + change token at schedule time; when the timer
-        // fires, a stale retry (track switched in between) is a no-op.
-        const trackId = this.currentTrackId;
-        const token = this.changeToken;
-        this.clearRetryTimer();
-        this.retryTimer = setTimeout(() => {
-          this.retryTimer = null;
-          // Fire-and-forget: timer-scheduled retry; errors are handled (and
-          // logged) inside retry() itself.
-          void this.retry(pos, trackId, token);
-        }, AudioController.RETRY_DELAY_MS);
-      } else {
-        // B1: giving up — no zombie retry may fire later.
-        this.clearRetryTimer();
-        this.emit("error", {
-          message: "File lỗi định dạng, đang bỏ qua...",
-          code: "format_error",
-        });
-        this.emit("ended", undefined);
-      }
-    };
+
+        if (
+          this.retryCount < AudioController.MAX_RETRIES &&
+          this.currentTrackId
+        ) {
+          this.emit("error", {
+            message: "Mạng không ổn định, đang thử lại...",
+            code: "network_interrupted",
+          });
+          // B1: capture track id + change token at schedule time; when the
+          // timer fires, a stale retry (track switched in between) is a no-op.
+          const trackId = this.currentTrackId;
+          const token = this.changeToken;
+          this.clearRetryTimer();
+          this.retryTimer = setTimeout(() => {
+            this.retryTimer = null;
+            // Fire-and-forget: timer-scheduled retry; errors are handled (and
+            // logged) inside retry() itself.
+            void this.retry(position, trackId, token);
+          }, AudioController.RETRY_DELAY_MS);
+        } else {
+          // B1: giving up — no zombie retry may fire later.
+          this.clearRetryTimer();
+          this.emit("error", {
+            message: "File lỗi định dạng, đang bỏ qua...",
+            code: "format_error",
+          });
+          this.emit("ended", undefined);
+        }
+      },
+    });
 
     for (const [type, handler] of Object.entries(handlers)) {
       audio.addEventListener(type, handler);

@@ -47,6 +47,9 @@ const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
+const logAuth = (level: "warn" | "error", message: string): Promise<void> =>
+  captureError({ level, source: AUTH_MODULE, message });
+
 /**
  * Auth lifecycle hook: hydrates the session from localStorage on mount,
  * starts/stops the pro-sync worker and proactive token refresh while logged
@@ -101,11 +104,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
     try {
       savedToken = localStorage.getItem(ACCESS_TOKEN_KEY);
     } catch {
-      void captureError({
-        level: "warn",
-        source: AUTH_MODULE,
-        message: "auth-storage-read-failed",
-      });
+      void logAuth("warn", "auth-storage-read-failed");
     }
     if (savedToken) {
       setAccessToken(savedToken);
@@ -114,11 +113,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
       try {
         issueTime = parseInt(localStorage.getItem(TOKEN_TIME_KEY) || "", 10);
       } catch {
-        void captureError({
-          level: "warn",
-          source: AUTH_MODULE,
-          message: "auth-storage-read-failed",
-        });
+        void logAuth("warn", "auth-storage-read-failed");
         issueTime = NaN;
       }
       // Corrupt/missing token_time -> treat as expired and refresh promptly
@@ -141,12 +136,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
       typeof tokenData.access_token !== "string" ||
       tokenData.access_token.length === 0
     ) {
-      void captureError({
-        level: "error",
-        source: AUTH_MODULE,
-        message:
-          "Login aborted: malformed token response (missing access_token) — no token leaked",
-      });
+      void logAuth(
+        "error",
+        "Login aborted: malformed token response (missing access_token) — no token leaked",
+      );
       return;
     }
     try {
@@ -161,11 +154,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         void writeRefreshToken(tokenData.refresh_token);
       }
     } catch {
-      void captureError({
-        level: "warn",
-        source: AUTH_MODULE,
-        message: "auth-storage-write-failed",
-      });
+      void logAuth("warn", "auth-storage-write-failed");
     }
     setAccessToken(tokenData.access_token);
     setIsLoggedIn(true);
@@ -192,11 +181,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
       try {
         refreshTokenToRevoke = await readRefreshToken();
       } catch (e: unknown) {
-        void captureError({
-          level: "warn",
-          source: AUTH_MODULE,
-          message: `Failed to read refresh token for revoke — continuing logout: ${classifyError(e)}`,
-        });
+        void logAuth(
+          "warn",
+          `Failed to read refresh token for revoke — continuing logout: ${classifyError(e)}`,
+        );
       }
 
       let tokenToRevoke: string | null = null;
@@ -208,11 +196,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
         localStorage.removeItem(TOKEN_TIME_KEY);
         localStorage.removeItem(USER_EMAIL_KEY);
       } catch {
-        void captureError({
-          level: "warn",
-          source: AUTH_MODULE,
-          message: "auth-storage-clear-failed",
-        });
+        void logAuth("warn", "auth-storage-clear-failed");
       }
       setIsLoggedIn(false);
       setAccessToken(null);
@@ -226,22 +210,20 @@ export const useAuth = (onLogoutExt?: () => void) => {
         await invoke(CLEAR_LOCAL_CACHE_CMD);
         clearAllMetadataCache();
       } catch (e: unknown) {
-        void captureError({
-          level: "warn",
-          source: AUTH_MODULE,
-          message: `Failed to clear backend cache (clear_local_cache) — continuing logout: ${classifyError(e)}`,
-        });
+        void logAuth(
+          "warn",
+          `Failed to clear backend cache (clear_local_cache) — continuing logout: ${classifyError(e)}`,
+        );
       }
 
       if (tokenToRevoke) {
         try {
           await revokeGoogleToken(tokenToRevoke);
         } catch (e: unknown) {
-          void captureError({
-            level: "warn",
-            source: AUTH_MODULE,
-            message: `Google token revoke failed — token may remain valid server-side: ${classifyError(e)}`,
-          });
+          void logAuth(
+            "warn",
+            `Google token revoke failed — token may remain valid server-side: ${classifyError(e)}`,
+          );
         }
       }
 
@@ -273,14 +255,12 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // Listen for auth-logout event from apiClient
   useEffect(() => {
     const handleAuthLogout = () => {
-      handleLogoutRef.current().catch(
-        (err: unknown) =>
-          void captureError({
-            level: "error",
-            source: AUTH_MODULE,
-            message: `Logout failed: ${classifyError(err)}`,
-          }),
-      );
+      handleLogoutRef
+        .current()
+        .catch(
+          (err: unknown) =>
+            void logAuth("error", `Logout failed: ${classifyError(err)}`),
+        );
     };
     window.addEventListener("auth-logout", handleAuthLogout);
 
@@ -327,11 +307,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
         try {
           return await getValidToken(true);
         } catch (e: unknown) {
-          void captureError({
-            level: "error",
-            source: AUTH_MODULE,
-            message: `Token refresh handler failed (getValidToken) — worker unable to refresh; fallback null: ${classifyError(e)}`,
-          });
+          void logAuth(
+            "error",
+            `Token refresh handler failed (getValidToken) — worker unable to refresh; fallback null: ${classifyError(e)}`,
+          );
           return null;
         }
       });
@@ -384,11 +363,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
             try {
               localStorage.setItem(USER_EMAIL_KEY, data.email);
             } catch {
-              void captureError({
-                level: "warn",
-                source: AUTH_MODULE,
-                message: "auth-storage-write-failed",
-              });
+              void logAuth("warn", "auth-storage-write-failed");
             }
             window.dispatchEvent(new CustomEvent("user-changed"));
           }
@@ -397,11 +372,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
             // isAbortError does not narrow the type, so fall back to the same
             // name/message extraction used elsewhere (classifyFolderError).
             const message = err instanceof Error ? err.message : String(err);
-            void captureError({
-              level: "error",
-              source: AUTH_MODULE,
-              message: `Failed to fetch user profile (best-effort): ${message}`,
-            });
+            void logAuth(
+              "error",
+              `Failed to fetch user profile (best-effort): ${message}`,
+            );
           }
         }
       })();

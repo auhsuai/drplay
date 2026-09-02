@@ -29,6 +29,14 @@ import { useMediaSession } from "./useMediaSession";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
+const errMsg = (e: unknown): string =>
+  e instanceof Error ? e.message : String(e);
+
+const logUsePlayer = (
+  level: "warn" | "error",
+  message: string,
+): Promise<void> => captureError({ level, source: "usePlayer", message });
+
 export const usePlayer = (accessToken: string | null) => {
   const { t } = useTranslation();
   const {
@@ -120,20 +128,12 @@ export const usePlayer = (accessToken: string | null) => {
     if (isPlaying) {
       keepAwakeStart({ display: false, idle: false, sleep: true }).catch(
         (e: unknown) => {
-          void captureError({
-            level: "warn",
-            source: "usePlayer",
-            message: `keep-awake-failed: ${e instanceof Error ? e.message : String(e)}`,
-          });
+          void logUsePlayer("warn", `keep-awake-failed: ${errMsg(e)}`);
         },
       );
     } else {
       keepAwakeStop().catch((e: unknown) => {
-        void captureError({
-          level: "warn",
-          source: "usePlayer",
-          message: `keep-awake-release-failed: ${e instanceof Error ? e.message : String(e)}`,
-        });
+        void logUsePlayer("warn", `keep-awake-release-failed: ${errMsg(e)}`);
       });
     }
   }, [isPlaying]);
@@ -141,11 +141,7 @@ export const usePlayer = (accessToken: string | null) => {
   // Persist playMode
   useEffect(() => {
     idbSet(SESSION_CLEANUP_KEYS.playModeKv, playMode).catch((e: unknown) => {
-      void captureError({
-        level: "warn",
-        source: "usePlayer",
-        message: `playmode-save-fail: ${e instanceof Error ? e.message : String(e)}`,
-      });
+      void logUsePlayer("warn", `playmode-save-fail: ${errMsg(e)}`);
     });
   }, [playMode]);
 
@@ -238,11 +234,7 @@ export const usePlayer = (accessToken: string | null) => {
         const freshToken = await getValidToken(false, signal).catch(
           (e: unknown) => {
             if (isAbortError(e)) throw e;
-            void captureError({
-              level: "warn",
-              source: "usePlayer",
-              message: `token-refresh-fail: ${e instanceof Error ? e.message : String(e)}`,
-            });
+            void logUsePlayer("warn", `token-refresh-fail: ${errMsg(e)}`);
             return null;
           },
         );
@@ -261,11 +253,7 @@ export const usePlayer = (accessToken: string | null) => {
         setIsDownloading(false);
 
         recordPlay(targetTrack).catch((e: unknown) => {
-          void captureError({
-            level: "warn",
-            source: "usePlayer",
-            message: `recordPlay-fail: ${e instanceof Error ? e.message : String(e)}`,
-          });
+          void logUsePlayer("warn", `recordPlay-fail: ${errMsg(e)}`);
         });
 
         void (async () => {
@@ -284,21 +272,13 @@ export const usePlayer = (accessToken: string | null) => {
             }
           } catch (e: unknown) {
             if (!isAbortError(e)) {
-              void captureError({
-                level: "warn",
-                source: "usePlayer",
-                message: `metadata-prefetch-fail: ${e instanceof Error ? e.message : String(e)}`,
-              });
+              void logUsePlayer("warn", `metadata-prefetch-fail: ${errMsg(e)}`);
             }
           }
         })();
       } catch (e: unknown) {
         if (isAbortError(e)) return;
-        void captureError({
-          level: "error",
-          source: "usePlayer",
-          message: `network-playback-error: ${e instanceof Error ? e.message : String(e)}`,
-        });
+        void logUsePlayer("error", `network-playback-error: ${errMsg(e)}`);
         showErrorToast(
           t(
             "player.exception_toast",
@@ -358,11 +338,7 @@ export const usePlayer = (accessToken: string | null) => {
             );
           } catch (e: unknown) {
             if (!isAbortError(e)) {
-              void captureError({
-                level: "warn",
-                source: "usePlayer",
-                message: `bitrate-resume-fail: ${e instanceof Error ? e.message : String(e)}`,
-              });
+              void logUsePlayer("warn", `bitrate-resume-fail: ${errMsg(e)}`);
             }
           }
 
@@ -378,11 +354,7 @@ export const usePlayer = (accessToken: string | null) => {
           setIsPlaying(true);
         } catch (e: unknown) {
           if (isAbortError(e)) return;
-          void captureError({
-            level: "error",
-            source: "usePlayer",
-            message: `stream-url-resume-fail: ${e instanceof Error ? e.message : String(e)}`,
-          });
+          void logUsePlayer("error", `stream-url-resume-fail: ${errMsg(e)}`);
           showErrorToast(t("player.playback_failed"));
         } finally {
           if (!signal.aborted) setIsDownloading(false);

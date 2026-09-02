@@ -99,6 +99,20 @@ export async function withDbCapture(
   }
 }
 
+// Shared best-effort DB row operation (see withDbCapture): swallow failures
+// and log `${label}-db-failed` — the same message the old inline try/catch
+// produced.
+export async function dbRowOp(
+  op: () => Promise<unknown>,
+  label: string,
+): Promise<void> {
+  return withDbCapture(
+    label,
+    op,
+    (opName, err) => `${opName}-db-failed: ${describeError(err)}`,
+  );
+}
+
 // Best-effort IndexedDB snapshot of an ACTIVE upload (schema v9 uploadSessions)
 // so a crashed/interrupted upload can be resumed on the next launch (slice
 // 5.2). NEVER throws and never blocks the upload: the row is resume metadata
