@@ -171,3 +171,16 @@ export async function clearSession(entry: InternalEntry): Promise<void> {
       `session-clear-failed name=${entry.name}: ${describeError(err)}`,
   );
 }
+
+// Shared best-effort DB capture (see withDbCapture): swallow failures and log
+// `${label}-db-failed` — the same message the old inline try/catch produced.
+export async function dbRowOp(
+  op: () => Promise<unknown>,
+  label: string,
+): Promise<void> {
+  return withDbCapture(
+    label,
+    op,
+    (opName, err) => `${opName}-db-failed: ${describeError(err)}`,
+  );
+}
