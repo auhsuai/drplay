@@ -22,6 +22,14 @@ import {
 } from "../utils/storageKeys";
 import { classifyError } from "./useDriveShared";
 
+// 9 điểm log trong file dùng chung một shape { level, source: "useDrive",
+// message } — gom về đây để source chỉ được khai một chỗ; message do call-site
+// compose (kèm classifyError khi có error object).
+const warnDrive = (message: string): void =>
+  void captureError({ level: "warn", source: "useDrive", message });
+const errDrive = (message: string): void =>
+  void captureError({ level: "error", source: "useDrive", message });
+
 // Validates the persisted folder-history shape the same way the Dexie branch
 // does: an entry survives only when it is an object with a string `id`. The
 // type predicate narrows `name` as string even though runtime only checks
@@ -128,12 +136,9 @@ export const useDriveInit = ({
                 });
                 if (isCancelled()) return;
                 if (!verifyRes.ok) {
-                  void captureError({
-                    level: "warn",
-                    source: "useDrive",
-                    message:
-                      "verify-root-inaccessible: saved root no longer accessible",
-                  });
+                  warnDrive(
+                    "verify-root-inaccessible: saved root no longer accessible",
+                  );
                   localRoot = null;
                 } else {
                   const verifyData = (await verifyRes.json()) as {
@@ -141,20 +146,14 @@ export const useDriveInit = ({
                     driveId?: unknown;
                   };
                   if (verifyData.mimeType !== FOLDER_MIME) {
-                    void captureError({
-                      level: "warn",
-                      source: "useDrive",
-                      message:
-                        "verify-root-not-folder: saved root is not a folder",
-                    });
+                    warnDrive(
+                      "verify-root-not-folder: saved root is not a folder",
+                    );
                     localRoot = null;
                   } else if (verifyData.driveId) {
-                    void captureError({
-                      level: "warn",
-                      source: "useDrive",
-                      message:
-                        "verify-root-shared-drive: saved root is a Shared Drive folder",
-                    });
+                    warnDrive(
+                      "verify-root-shared-drive: saved root is a Shared Drive folder",
+                    );
                     localRoot = null;
                   }
                 }
@@ -177,27 +176,21 @@ export const useDriveInit = ({
                       await db.files.clear();
                       await invoke(CLEAR_LOCAL_CACHE_CMD);
                     } catch (e: unknown) {
-                      void captureError({
-                        level: "warn",
-                        source: "useDrive",
-                        message: `clear-cache-failed: ${classifyError(e)}`,
-                      });
+                      warnDrive(`clear-cache-failed: ${classifyError(e)}`);
                     }
                   }
                 }
-              } else if (!localRoot) {
-                localRoot = null;
               }
+              // Không có else-if "(!localRoot) → localRoot = null" như bản
+              // gốc: safeLocalStorageGet trả string|null nên điều kiện
+              // !localRoot chỉ xảy ra khi giá trị đã là null; mọi nhánh sau
+              // đều truthiness-based nên phép gán là no-op.
             } else {
               localRoot = null;
             }
           } catch (e: unknown) {
             if (isCancelled()) return;
-            void captureError({
-              level: "error",
-              source: "useDrive",
-              message: `sync-config-failed: ${classifyError(e)}`,
-            });
+            errDrive(`sync-config-failed: ${classifyError(e)}`);
             localRoot = null;
           }
         }
@@ -274,11 +267,9 @@ export const useDriveInit = ({
                     parseNavHistory(JSON.parse(savedHistoryStr)),
                   );
                 } catch (e: unknown) {
-                  void captureError({
-                    level: "warn",
-                    source: "useDrive",
-                    message: `nav-state-parse: corrupt localStorage folder history, ${classifyError(e)}`,
-                  });
+                  warnDrive(
+                    `nav-state-parse: corrupt localStorage folder history, ${classifyError(e)}`,
+                  );
                   setFolderHistory([]);
                 }
               } else {
@@ -287,11 +278,7 @@ export const useDriveInit = ({
             }
           } catch (e: unknown) {
             if (isCancelled()) return;
-            void captureError({
-              level: "warn",
-              source: "useDrive",
-              message: `nav-state-restore-failed: ${classifyError(e)}`,
-            });
+            warnDrive(`nav-state-restore-failed: ${classifyError(e)}`);
             fallbackToRoot();
           }
 
@@ -310,11 +297,7 @@ export const useDriveInit = ({
         // to a safe state so the app is not stuck without an app root folder and
         // hydration still completes in the finally below.
         if (isCancelled()) return;
-        void captureError({
-          level: "error",
-          source: "useDrive",
-          message: `init-app-unexpected: ${classifyError(e)}`,
-        });
+        errDrive(`init-app-unexpected: ${classifyError(e)}`);
         setAppRootFolder(null);
       } finally {
         // Hydration safety: always flip to true unless the effect was cleaned up
@@ -328,14 +311,9 @@ export const useDriveInit = ({
 
     // Defensive net: initApp's own try/finally already guarantees hydration, but
     // this catch logs any rejection that escapes initApp instead of swallowing it.
-    initApp().catch(
-      (e: unknown) =>
-        void captureError({
-          level: "error",
-          source: "useDrive",
-          message: `init-app-failed: ${classifyError(e)}`,
-        }),
-    );
+    initApp().catch((e: unknown) => {
+      errDrive(`init-app-failed: ${classifyError(e)}`);
+    });
 
     return () => {
       cancelled = true;

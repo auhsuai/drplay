@@ -25,6 +25,10 @@ import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 export const STORM_ERRORS = 3;
 export const STORM_WINDOW_MS = 15_000;
 export const STORM_COOLDOWN_MS = 30_000;
+// Banner đặt paused khi storm-guard chặn auto-advance — cùng 1 chuỗi tại 2
+// điểm set trong error/ended handler.
+const STORM_BANNER_MESSAGE =
+  "Drive is overloaded or locked — auto-playback paused.";
 
 function PlayerBarImpl({
   currentTrack,
@@ -124,6 +128,33 @@ function PlayerBarImpl({
     }
   }, [currentTrack, audio, resetAdvanceGuard, setIsLoadingTrack]);
 
+  // Mobile và desktop render cùng 1 bộ transport + track-info với đúng 1 bộ
+  // props — khai 1 lần rồi chèn vào 2 layout, tránh 30 dòng prop lặp.
+  const trackInfoEl = (
+    <TrackInfo
+      currentTrack={currentTrack}
+      onExpandNowPlaying={onExpandNowPlaying}
+    />
+  );
+  const transportEl = (
+    <TransportControls
+      currentTrack={currentTrack}
+      isPlaying={isPlaying}
+      isBuffering={isBuffering}
+      isDownloading={isDownloading ?? false}
+      isLoadingTrack={isLoadingTrack}
+      hasError={errorInfo !== null}
+      onRetry={handleManualRetry}
+      playMode={playMode}
+      onTogglePlay={handleManualTogglePlay}
+      onPrevTrack={handleManualPrev}
+      onNextTrack={handleManualNext}
+      onTogglePlayMode={onTogglePlayMode}
+      onRewind5={handleRewind5}
+      onForward5={handleForward5}
+    />
+  );
+
   // Reset transient track state when the track changes. Done during render
   // (React "adjusting state during render" pattern) so no setState happens
   // synchronously inside an effect (react-hooks/set-state-in-effect).
@@ -167,7 +198,7 @@ function PlayerBarImpl({
           if (now - stormBlockedAtRef.current <= STORM_COOLDOWN_MS) {
             setErrorInfo({
               code: "advance_stopped",
-              message: "Drive is overloaded or locked — auto-playback paused.",
+              message: STORM_BANNER_MESSAGE,
             });
             return;
           }
@@ -183,7 +214,7 @@ function PlayerBarImpl({
           stormBlockedAtRef.current = Date.now();
           setErrorInfo({
             code: "advance_stopped",
-            message: "Drive is overloaded or locked — auto-playback paused.",
+            message: STORM_BANNER_MESSAGE,
           });
           return;
         }
@@ -269,28 +300,10 @@ function PlayerBarImpl({
         <div className="flex flex-col h-full w-full min-w-0">
           <div className="flex-1 flex items-center gap-2 min-w-0">
             {/* Left: Track Info */}
-            <TrackInfo
-              currentTrack={currentTrack}
-              onExpandNowPlaying={onExpandNowPlaying}
-            />
+            {trackInfoEl}
 
             {/* Center: 3-button transport (-5s / play / +5s) */}
-            <TransportControls
-              currentTrack={currentTrack}
-              isPlaying={isPlaying}
-              isBuffering={isBuffering}
-              isDownloading={isDownloading ?? false}
-              isLoadingTrack={isLoadingTrack}
-              hasError={errorInfo !== null}
-              onRetry={handleManualRetry}
-              playMode={playMode}
-              onTogglePlay={handleManualTogglePlay}
-              onPrevTrack={handleManualPrev}
-              onNextTrack={handleManualNext}
-              onTogglePlayMode={onTogglePlayMode}
-              onRewind5={handleRewind5}
-              onForward5={handleForward5}
-            />
+            {transportEl}
 
             {/* Right: More options */}
             {currentTrack && (
@@ -306,29 +319,11 @@ function PlayerBarImpl({
       ) : (
         <>
           {/* Left: Track Info */}
-          <TrackInfo
-            currentTrack={currentTrack}
-            onExpandNowPlaying={onExpandNowPlaying}
-          />
+          {trackInfoEl}
 
           {/* Center: Controls */}
           <div className="flex flex-col items-center justify-center flex-1 shrink-0 max-w-[722px] min-w-[200px]">
-            <TransportControls
-              currentTrack={currentTrack}
-              isPlaying={isPlaying}
-              isBuffering={isBuffering}
-              isDownloading={isDownloading ?? false}
-              isLoadingTrack={isLoadingTrack}
-              hasError={errorInfo !== null}
-              onRetry={handleManualRetry}
-              playMode={playMode}
-              onTogglePlay={handleManualTogglePlay}
-              onPrevTrack={handleManualPrev}
-              onNextTrack={handleManualNext}
-              onTogglePlayMode={onTogglePlayMode}
-              onRewind5={handleRewind5}
-              onForward5={handleForward5}
-            />
+            {transportEl}
             <SeekBar currentTrack={currentTrack} audio={audio} />
           </div>
         </>

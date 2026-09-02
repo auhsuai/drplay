@@ -17,6 +17,12 @@ import {
 import { clearNetworkCooldown } from "./fetchPipeline";
 import type { CacheEntry, CachedMetadata } from "./types";
 
+// 6 điểm log trong file dùng chung một shape { level, source: META_MODULE,
+// message } — gom về đây để source chỉ được khai một chỗ; message do
+// call-site compose (kèm classifyMetaError khi có error object).
+const logMeta = (level: "warn" | "error", message: string): void =>
+  void captureError({ level, source: META_MODULE, message });
+
 export function classifyMetaError(err: unknown): {
   name: string;
   message: string;
@@ -50,11 +56,7 @@ try {
 } catch (e: unknown) {
   // fire-and-forget: logging must not throw in this module-init sync path
   // (captureError never rejects — it swallows failures internally).
-  void captureError({
-    level: "warn",
-    source: META_MODULE,
-    message: `lru-load-failed: ${classifyMetaError(e).message}`,
-  });
+  logMeta("warn", `lru-load-failed: ${classifyMetaError(e).message}`);
 }
 
 // Shared LRU helpers: `touchLruKeys` moves `id` to the back (most-recently
@@ -87,13 +89,9 @@ function updateLRU(key: string) {
     lruKeys,
     () => lruKeys.length > MAX_LRU_CACHE,
     (oldest) => {
-      db.metadataCache.delete(oldest).catch((e: unknown) =>
-        captureError({
-          level: "error",
-          source: META_MODULE,
-          message: `lru-delete-failed: ${classifyMetaError(e).message}`,
-        }),
-      );
+      db.metadataCache.delete(oldest).catch((e: unknown) => {
+        logMeta("error", `lru-delete-failed: ${classifyMetaError(e).message}`);
+      });
     },
   );
 
@@ -102,11 +100,7 @@ function updateLRU(key: string) {
   } catch (e: unknown) {
     // fire-and-forget: logging must not throw in this sync path (captureError
     // never rejects — it swallows failures internally).
-    void captureError({
-      level: "warn",
-      source: META_MODULE,
-      message: `lru-save-failed: ${classifyMetaError(e).message}`,
-    });
+    logMeta("warn", `lru-save-failed: ${classifyMetaError(e).message}`);
   }
 }
 
@@ -180,13 +174,9 @@ export function cacheTrackMetadata(
   const idbEntry: CachedMetadata = canPersistFullPicture(entry)
     ? { ...stored, pictureDataFull: entry.pictureDataFull }
     : stored;
-  setCache(`${METADATA_KEY_PREFIX}${fileId}`, idbEntry).catch((e: unknown) =>
-    captureError({
-      level: "warn",
-      source: META_MODULE,
-      message: `cache-set-failed: ${classifyMetaError(e).message}`,
-    }),
-  );
+  setCache(`${METADATA_KEY_PREFIX}${fileId}`, idbEntry).catch((e: unknown) => {
+    logMeta("warn", `cache-set-failed: ${classifyMetaError(e).message}`);
+  });
   return entry;
 }
 
@@ -202,9 +192,8 @@ const fullPictureCache = new Map<string, Uint8Array>();
 let fullPictureBytes = 0;
 
 export function setFullPictureCache(fileId: string, data: Uint8Array): void {
-  if (fullPictureCache.has(fileId)) {
-    fullPictureBytes -= fullPictureCache.get(fileId)?.byteLength ?? 0;
-  }
+  // Subtraction is safe without a has() guard: a miss reads undefined → ?? 0.
+  fullPictureBytes -= fullPictureCache.get(fileId)?.byteLength ?? 0;
   // delete+set is the Map-native write-touch: the key re-inserts at the tail,
   // making the oldest entry the one at the head (iteration order).
   fullPictureCache.delete(fileId);
@@ -294,11 +283,7 @@ export async function wipePersistedMetadataCache(): Promise<void> {
       localStorage.removeItem(METADATA_LRU_KEY);
     }
   } catch (e: unknown) {
-    void captureError({
-      level: "warn",
-      source: META_MODULE,
-      message: `lru-wipe-failed: ${classifyMetaError(e).message}`,
-    });
+    logMeta("warn", `lru-wipe-failed: ${classifyMetaError(e).message}`);
   }
 
   try {
@@ -307,11 +292,10 @@ export async function wipePersistedMetadataCache(): Promise<void> {
   } catch (e: unknown) {
     // Logged, not rethrown: fire-and-forget callers treat resolution as "wipe
     // finished", and a failed bulk delete is recoverable (rows are cache).
-    void captureError({
-      level: "error",
-      source: META_MODULE,
-      message: `metadata-idb-wipe-failed: ${classifyMetaError(e).message}`,
-    });
+    logMeta(
+      "error",
+      `metadata-idb-wipe-failed: ${classifyMetaError(e).message}`,
+    );
   }
 }
 

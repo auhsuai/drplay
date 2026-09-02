@@ -10,6 +10,13 @@ import { IS_MOBILE } from "../../../utils/platform";
 const TOP_NAVIGATION_BAR_MODULE = "TopNavigationBar";
 const DRAG_THRESHOLD_PX = 5;
 
+const captureErr = (label: string, err: unknown): void =>
+  void captureError({
+    level: "warn",
+    source: TOP_NAVIGATION_BAR_MODULE,
+    message: `${label}: ${err instanceof Error ? err.message : String(err)}`,
+  });
+
 interface TopNavigationBarProps {
   isSelectionMode: boolean;
   selectedCount: number;
@@ -129,11 +136,7 @@ export function TopNavigationBar({
         try {
           el.setPointerCapture(e.pointerId);
         } catch (err) {
-          void captureError({
-            level: "warn",
-            source: TOP_NAVIGATION_BAR_MODULE,
-            message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
+          captureErr("set-pointer-capture-failed", err);
         }
       }
       el.scrollLeft = drag.startScrollLeft - (e.clientX - drag.startX);
@@ -147,11 +150,7 @@ export function TopNavigationBar({
             el.releasePointerCapture(e.pointerId);
           }
         } catch (err) {
-          void captureError({
-            level: "warn",
-            source: TOP_NAVIGATION_BAR_MODULE,
-            message: `release-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
+          captureErr("release-pointer-capture-failed", err);
         }
       }
       dragStartRef.current = null;
