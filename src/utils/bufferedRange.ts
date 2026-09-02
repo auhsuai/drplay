@@ -31,7 +31,9 @@ const BUFFER_SEGMENT_BG = "bg-gray-400 dark:bg-gray-500 rounded-r-sm";
 // seam, even when a buffered range starts exactly at the playhead (right
 // after a seek). 2% of the track duration is several bar-pixels on any
 // realistic bar width, comfortably deeper than the ~3px cap radius.
-const BUFFER_HEAD_PAD_PCT = 2;
+// Exported so the hover buffer-preview (useSeekHover) shares the exact same
+// seam geometry instead of drifting apart.
+export const BUFFER_HEAD_PAD_PCT = 2;
 
 /**
  * Render the buffered ranges as individual absolutely-positioned segments

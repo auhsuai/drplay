@@ -32,11 +32,13 @@ function showToast(
   variant: ToastVariant,
   durationOverride?: number,
 ): void {
-  // Rendered inside #content-area (the region right of the sidebar) so the
-  // toast sits flush against the sidebar's right edge, above the PlayerBar —
-  // same portal target as ErrorToast. Falls back to document.body when the
-  // app shell isn't mounted (e.g. unit tests).
-  const root = document.getElementById("content-area") || document.body;
+  // Mounted on document.body (NOT #content-area): the AppShell content
+  // wrapper carries a scale property, which always forms its own stacking
+  // context — a toast inside #content-area can never compete with the
+  // root-context overlays (z-[9999]) no matter its z-index. On body as the
+  // last DOM node, z-index 9999 wins the tie against those overlays.
+  // (document.body always exists per the DOM spec — no fallback needed.)
+  const root = document.body;
 
   // Replace the previous toast right away: cancel its timers and remove it
   // from the DOM so only one toast is ever visible at a time.

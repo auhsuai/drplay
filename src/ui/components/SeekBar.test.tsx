@@ -33,6 +33,11 @@ vi.mock("react-i18next", () => {
   };
 });
 
+const { captureErrorMock } = vi.hoisted(() => ({
+  captureErrorMock: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("../../utils/errorLog", () => ({ captureError: captureErrorMock }));
+
 const { fakeController } = vi.hoisted(() => {
   type Handler = (payload: unknown) => void;
   const fakeController = {
@@ -127,6 +132,7 @@ beforeEach(() => {
   fakeController.getDuration.mockClear();
   fakeController.getBuffered.mockClear();
   fakeController.seek.mockClear();
+  captureErrorMock.mockClear();
   installFakeOn();
   fakeController.getDuration.mockReturnValue(0);
   setBuffered([]);
@@ -632,6 +638,46 @@ describe("SeekBar keyboard seek gating", () => {
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
     expect(buffer.childElementCount).toBe(1);
   });
+
+  it("BUG regression (S3): Ctrl/Meta/Alt+Arrow chords neither preventDefault nor seek (webview history-nav survives)", () => {
+    renderSeekBar();
+    fakeController.getDuration.mockReturnValue(240);
+
+    for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
+      for (const key of ["ArrowLeft", "ArrowRight"] as const) {
+        const init: KeyboardEventInit = { key, cancelable: true };
+        init[modifier] = true;
+        const evt = new KeyboardEvent("keydown", init);
+        act(() => {
+          window.dispatchEvent(evt);
+        });
+        expect(
+          evt.defaultPrevented,
+          `${modifier}+${key} must reach the browser`,
+        ).toBe(false);
+      }
+    }
+    expect(fakeController.seek).not.toHaveBeenCalled();
+  });
+
+  it("BUG regression (S3): held-arrow auto-repeat keeps seeking (hold-to-scrub is the intended player convention)", () => {
+    renderSeekBar();
+    fakeController.getDuration.mockReturnValue(240);
+    fakeController.getCurrentTime.mockReturnValueOnce(10);
+
+    const evt = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      repeat: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(evt);
+    });
+
+    expect(evt.defaultPrevented).toBe(true);
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(15);
+  });
 });
 
 describe("SeekBar active gating (NowPlaying closed view)", () => {
@@ -685,5 +731,169 @@ describe("SeekBar interleaved layout (time spans on both sides of the bar)", () 
       "SPAN",
     );
     expect(container.firstElementChild?.lastElementChild?.tagName).toBe("SPAN");
+  });
+});
+
+describe("SeekBar progress fill min-width (needle fix)", () => {
+  it("BUG regression: a very small percent clamps the fill to the rail height (minWidth 6px) so rounded-full keeps both ends round", () => {
+    renderSeekBar();
+    // 30s into a 2h track = 0.41666...% — on a ~216px rail that is ~0.86px,
+    // narrower than the 6px (h-1.5) rail height, which collapsed the fill's
+    // rounded-full radii into a sharp needle (W3C css-backgrounds-3 §4.5
+    // Overlapping Curves: all radii scale by f = min(Li/Si) when curves
+    // overlap). minWidth = the rail height keeps one fully rounded pill.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 30, duration: 7200 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toContain("0.4166");
+    expect(fill.style.minWidth).toBe("6px");
+  });
+
+  it("BUG regression: percent 0 resets minWidth to 0 so the empty state stays invisible", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 30, duration: 7200 });
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 7200 });
+    });
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("0%");
+    expect(fill.style.minWidth).toBe("0px");
+  });
+
+  it("BUG regression: session restore at 0 (restoreTime=0, restoreDuration>0) keeps minWidth 0 and width 0%", () => {
+    render(
+      <SeekBar
+        currentTrack={makeTrack({ restoreTime: 0, restoreDuration: 3600 })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    const fill = screen.getByTestId("progress-fill");
+    expect(fill.style.width).toBe("0%");
+    expect(fill.style.minWidth).toBe("0px");
+  });
+});
+
+describe("SeekBar drag pointer ownership (S1 multi-touch)", () => {
+  it("BUG regression (S1): a second finger landing mid-drag is ignored — its move/up must not seek and the owning finger stays in control", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    // Second finger lands while finger 1 is dragging: registering a second
+    // parallel listener set is the bug — it must be ignored wholesale.
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 150, pointerId: 2 });
+    });
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 170, pointerId: 2 });
+    });
+    // Finger 2 lifts first: no seek may be committed from a foreign pointer.
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 2 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+
+    // The owning finger keeps full control of the drag.
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+  });
+
+  it("BUG regression (S1): unmount mid multi-touch drag removes the active pointer's listeners too (no leaked stray seek)", () => {
+    const { unmount } = renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 150, pointerId: 2 });
+    });
+    unmount();
+
+    // The still-registered owner set (finger 1) must have been removed with
+    // the unmount, not orphaned by the overwritten cleanup refs.
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 2 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+  });
+
+  it("BUG regression (S1): pointercancel from a foreign pointer is ignored — only the owning pointer reaches commit", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      // No fireEvent.pointercancel helper exists — dispatch the native event
+      // straight onto window where the drag listeners live.
+      window.dispatchEvent(
+        new PointerEvent("pointercancel", { clientX: 150, pointerId: 2 }),
+      );
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+  });
+
+  it("BUG regression (S2): a rejected native seek is caught and logged, and the UI snaps back to the engine's real position", async () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    fakeController.getCurrentTime.mockReturnValueOnce(60);
+    fakeController.seek.mockRejectedValueOnce(new Error("seek_to failed"));
+    const bar = mockBarRect();
+
+    // Commit a drag whose target (clamped to 240s) the native engine rejects.
+    await act(async () => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+      fireEvent.pointerUp(window, { clientX: 240, pointerId: 1 });
+      // Flush the rejection microtask chain inside act so the recovery
+      // (restore + log) lands before the assertions below.
+      await Promise.resolve();
+    });
+
+    // No unhandled rejection: the failure is logged warn-level with context.
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", source: "SeekBar" }),
+    );
+    // Fill/clock restored to the engine's real position (60s of 240s) instead
+    // of staying stranded at the failed seek target.
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+    expect(screen.getByText("1:00")).toBeTruthy();
   });
 });

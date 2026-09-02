@@ -10,6 +10,7 @@ import {
   act,
 } from "@testing-library/react";
 import { MoreMenu } from "./MoreMenu";
+import { getContextMenuStyle } from "./MoreMenu/menuPositioning";
 import en from "../../locales/en/translation.json";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
@@ -566,5 +567,178 @@ describe("MoreMenu debug download toast trigger", () => {
     expect(() => {
       dispatchDownloadToast("Downloaded: debug-test.mp3");
     }).not.toThrow();
+  });
+});
+
+describe("MoreMenu popup positioning clamps to viewport (P1)", () => {
+  const originalVw = window.innerWidth;
+  const originalVh = window.innerHeight;
+
+  // jsdom exposes innerWidth/innerHeight as configurable own properties, so
+  // defineProperty is the reliable way to stub them per-case.
+  function setViewport(vw: number, vh: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: vw,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: vh,
+    });
+  }
+
+  // Only right/top/bottom are read by getContextMenuStyle; the rest completes
+  // the DOMRect shape (structurally assignable, no cast needed).
+  function makeRect(top: number, bottom: number, right: number): DOMRect {
+    return {
+      top,
+      right,
+      bottom,
+      left: right - 40,
+      x: right - 40,
+      y: top,
+      width: 40,
+      height: bottom - top,
+      toJSON: () => {},
+    };
+  }
+
+  afterEach(() => {
+    setViewport(originalVw, originalVh);
+  });
+
+  interface Case {
+    name: string;
+    vw: number;
+    vh: number;
+    anchorPoint?: { x: number; y: number } | null;
+    buttonRect?: DOMRect | null;
+    openUpwards?: boolean;
+    expected: Record<string, number>;
+  }
+
+  const W = 240; // w-60 on the dropdown portal
+  const H = 250; // MENU_ESTIMATED_HEIGHT_PX
+  const GAP = 8;
+
+  it.each<Case>([
+    {
+      name: "identity: long-press point fits left+down → values unchanged",
+      vw: 1280,
+      vh: 800,
+      anchorPoint: { x: 100, y: 100 },
+      buttonRect: null,
+      openUpwards: false,
+      expected: { left: 100, top: 100 },
+    },
+    {
+      name: "identity: trigger rect fits right+down (open downwards) → values unchanged",
+      vw: 1280,
+      vh: 800,
+      buttonRect: makeRect(100, 140, 400),
+      openUpwards: false,
+      expected: { right: 1280 - 400, top: 148 },
+    },
+    {
+      name: "identity: trigger rect fits right+up (open upwards) → values unchanged",
+      vw: 1280,
+      vh: 800,
+      buttonRect: makeRect(700, 740, 400),
+      openUpwards: true,
+      expected: { right: 880, bottom: 800 - 700 + GAP },
+    },
+    {
+      name: "long-press near right edge of a narrow screen → menu shifted flush right",
+      vw: 360,
+      vh: 640,
+      anchorPoint: { x: 150, y: 100 },
+      buttonRect: null,
+      openUpwards: false,
+      expected: { left: 360 - W, top: 100 },
+    },
+    {
+      name: "long-press right-half but too close to left edge → menu pinned flush left",
+      vw: 360,
+      vh: 640,
+      anchorPoint: { x: 200, y: 600 },
+      buttonRect: null,
+      openUpwards: false,
+      expected: { right: 360 - W, bottom: 40 },
+    },
+    {
+      name: "long-press in upper half too low for the menu height → top clamped",
+      vw: 800,
+      vh: 400,
+      anchorPoint: { x: 100, y: 180 },
+      buttonRect: null,
+      openUpwards: false,
+      expected: { left: 100, top: 400 - H },
+    },
+    {
+      name: "long-press in lower half too high for the menu height → bottom clamped",
+      vw: 800,
+      vh: 400,
+      anchorPoint: { x: 700, y: 220 },
+      buttonRect: null,
+      openUpwards: false,
+      expected: { right: 100, bottom: 400 - H },
+    },
+    {
+      name: "trigger near left edge on a narrow screen → menu pinned flush left",
+      vw: 360,
+      vh: 640,
+      buttonRect: makeRect(300, 340, 100),
+      openUpwards: true,
+      expected: { right: 360 - W, bottom: 640 - 300 + GAP },
+    },
+    {
+      name: "trigger opens upwards but not enough room above → bottom clamped",
+      vw: 800,
+      vh: 400,
+      buttonRect: makeRect(50, 90, 500),
+      openUpwards: true,
+      expected: { right: 800 - 500, bottom: 400 - H },
+    },
+    {
+      name: "trigger opens downwards but not enough room below → top clamped",
+      vw: 800,
+      vh: 400,
+      buttonRect: makeRect(160, 200, 500),
+      openUpwards: false,
+      expected: { right: 800 - 500, top: 400 - H },
+    },
+    {
+      name: "window smaller than the menu on both axes → pinned to top-left, no negative offsets",
+      vw: 200,
+      vh: 300,
+      anchorPoint: { x: 100, y: 150 },
+      buttonRect: null,
+      openUpwards: false,
+      expected: { left: 0, top: Math.max(300 - H, 0) },
+    },
+  ])("$name", (c) => {
+    setViewport(c.vw, c.vh);
+    expect(
+      getContextMenuStyle({
+        anchorPoint: c.anchorPoint,
+        buttonRect: c.buttonRect ?? null,
+        openUpwards: c.openUpwards ?? false,
+      }),
+    ).toEqual(c.expected);
+  });
+
+  it("renders the long-press menu inside a narrow viewport through the real component", () => {
+    setViewport(360, 640);
+    render(
+      <MoreMenu
+        track={makeTrack()}
+        anchorPoint={{ x: 150, y: 100 }}
+        forceOpen
+      />,
+    );
+
+    const menu = menuEl();
+    expect(menu.style.left).toBe(String(360 - W) + "px");
+    expect(menu.style.top).toBe("100px");
   });
 });

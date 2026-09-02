@@ -357,3 +357,69 @@ describe("useMenuDownload save path building (RC3)", () => {
     );
   });
 });
+
+describe("useMenuDownload double-click race guard", () => {
+  it("invokes write_file exactly once when Confirm fires twice in the same tick", async () => {
+    fetchResolved();
+    const { result } = renderHook(() => useMenuDownload(t));
+    act(() => {
+      result.current.handleDownloadClick(
+        { stopPropagation: () => {} } as unknown as MouseEvent,
+        makeTrack(),
+        () => {},
+      );
+    });
+
+    // Keep the first download in flight so the second synchronous call hits
+    // the busy-guard while the write has not resolved yet (real double-click:
+    // both clicks land before React re-renders).
+    let resolveWrite!: () => void;
+    mockedInvoke.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
+    );
+
+    const calls: Array<Promise<void>> = [];
+    act(() => {
+      calls.push(result.current.executeDownload());
+      calls.push(result.current.executeDownload());
+    });
+
+    // Flush microtasks so both invocations reach their invoke call.
+    await act(async () => {});
+
+    expect(
+      mockedInvoke.mock.calls.filter((c) => c[0] === "plugin:fs|write_file"),
+    ).toHaveLength(1);
+
+    resolveWrite();
+    await Promise.all(calls);
+  });
+
+  it("allows a new download after the previous one finishes", async () => {
+    fetchResolved();
+    await runDownload();
+    expect(
+      mockedInvoke.mock.calls.filter((c) => c[0] === "plugin:fs|write_file"),
+    ).toHaveLength(1);
+
+    fetchResolved();
+    const { result } = renderHook(() => useMenuDownload(t));
+    act(() => {
+      result.current.handleDownloadClick(
+        { stopPropagation: () => {} } as unknown as MouseEvent,
+        makeTrack({ id: "file-456", title: "Second Song" }),
+        () => {},
+      );
+    });
+    await act(async () => {
+      await result.current.executeDownload();
+    });
+
+    expect(
+      mockedInvoke.mock.calls.filter((c) => c[0] === "plugin:fs|write_file"),
+    ).toHaveLength(2);
+  });
+});

@@ -52,7 +52,9 @@ function renderLogin() {
 }
 
 function toastRootText(): string {
-  return document.getElementById("content-area")?.textContent ?? "";
+  // simpleToast mounts to document.body (stacking-context fix, see
+  // simpleToast.tsx) — query body-level, not #content-area.
+  return document.querySelector(".app-toast")?.textContent ?? "";
 }
 
 describe("LoginScreen invoke login error handling", () => {

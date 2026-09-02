@@ -36,6 +36,16 @@ describe("simpleToast", () => {
     expect(document.querySelector(".app-toast--error")).toBeNull();
   });
 
+  it("BUG regression: toast mounts to document.body, never into #content-area", () => {
+    // The AppShell content wrapper carries a scale property, so it always
+    // forms its own stacking context — a toast inside #content-area can
+    // never compete with root-context overlays regardless of z-index.
+    showErrorToast("boom");
+
+    const el = document.querySelector(".app-toast");
+    expect(el?.parentElement).toBe(document.body);
+  });
+
   it("removes the toast after default duration (4000ms) + fade-out (200ms)", () => {
     showErrorToast("boom");
 

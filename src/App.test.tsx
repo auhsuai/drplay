@@ -10,8 +10,20 @@ import { DEBUG_EVENTS } from "./ui/debug/debugEvents";
 // login state mid-test (logout -> login session-key contract).
 const mocks = vi.hoisted(() => {
   const authState = { isLoggedIn: true };
+  // Handlers live in a mutable holder so a test can swap them between
+  // renders and prove the App-level ref-delegate wrappers reach the
+  // LATEST handlers (F1 — PlayerBar memo comparator ignores handlers).
+  const playerHandlers = {
+    value: {
+      handleTogglePlay: vi.fn(),
+      handleNextTrack: vi.fn(),
+      handlePrevTrack: vi.fn(),
+      handleTogglePlayMode: vi.fn(),
+    },
+  };
   return {
     authState,
+    playerHandlers,
     // Counts HomeTab mounts made with a non-null token ("session mounts").
     // The token-null remount that fires on logout is the intended data wipe
     // and is deliberately NOT counted — see the keep-alive describe below.

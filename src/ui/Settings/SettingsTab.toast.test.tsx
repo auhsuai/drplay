@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-// Integration test: real simpleToast + a #content-area container (as AppShell
-// provides in production). Verifies the full chain SettingsTab click →
-// showSuccessToast → toast element appended to #content-area. This catches
-// regressions where the success branch calls the wrong toast function.
+// Integration test: real simpleToast (mounted on document.body since the
+// toast stacking-context fix — see simpleToast.tsx). Verifies the full chain
+// SettingsTab click → showSuccessToast → toast element appended to document
+// body. This catches regressions where the success branch calls the wrong
+// toast function.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   render,
@@ -104,7 +105,7 @@ describe("Clear Cache flow renders a real success toast", () => {
     document.body.innerHTML = "";
   });
 
-  it("appends an .app-toast--success element into #content-area after confirming in the modal", async () => {
+  it("appends an .app-toast--success element to document.body after confirming in the modal", async () => {
     render(<SettingsTab {...baseProps} />);
     // Settings trigger → modal opens (all categories default-checked).
     fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
