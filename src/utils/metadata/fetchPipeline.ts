@@ -65,6 +65,14 @@ import {
 // the map, so it stays tiny and needs no timer.
 const networkCooldownUntil = new Map<string, number>();
 
+const logMetaWarn = (message: string, kind?: string): Promise<void> =>
+  captureError({
+    level: "warn",
+    source: META_MODULE,
+    message,
+    ...(kind ? { kind } : {}),
+  });
+
 /**
  * Drops every per-file network cooldown. Called by clearAllMetadataCache so a
  * user-initiated cache clear restores a fully CLEAN state — without this,
@@ -109,11 +117,9 @@ async function getTrackMetadataImpl(
         return mergeFullPicture(fileId, cachedData);
       }
     } catch (e: unknown) {
-      await captureError({
-        level: "warn",
-        source: META_MODULE,
-        message: `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
-      });
+      await logMetaWarn(
+        `idb-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+      );
     }
   }
 
@@ -134,11 +140,9 @@ async function getTrackMetadataImpl(
         return diskEntry;
       }
     } catch (e: unknown) {
-      await captureError({
-        level: "warn",
-        source: META_MODULE,
-        message: `disk-metadata-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
-      });
+      await logMetaWarn(
+        `disk-metadata-read-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+      );
     }
   }
 
@@ -229,11 +233,9 @@ async function getTrackMetadataImpl(
           try {
             await tokenizer.prefetchRange(0, prefetchEnd);
           } catch (e: unknown) {
-            void captureError({
-              level: "warn",
-              source: META_MODULE,
-              message: `tag-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
-            });
+            void logMetaWarn(
+              `tag-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+            );
           }
         }
       }
@@ -263,12 +265,10 @@ async function getTrackMetadataImpl(
       });
     } catch (e: unknown) {
       if (e instanceof BudgetExceededError) {
-        await captureError({
-          level: "warn",
-          source: META_MODULE,
-          message: `cover-budget-exceeded (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
-          kind: "BudgetExceededError",
-        });
+        await logMetaWarn(
+          `cover-budget-exceeded (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+          "BudgetExceededError",
+        );
         // Re-parse with covers skipped on a FRESH tokenizer: the old one has
         // exhausted its fetch budget (even its tail-scan would throw again).
         // A fresh budget plus ignore()-advancing past the cover reads only the
@@ -362,26 +362,20 @@ async function getTrackMetadataImpl(
             // Best-effort optimization only: a failed prefetch must not
             // change the tail scan — readRange below re-reads the region
             // chunked, exactly as before (same scan outcome, more requests).
-            void captureError({
-              level: "warn",
-              source: META_MODULE,
-              message: `m4a-tail-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
-            });
+            void logMetaWarn(
+              `m4a-tail-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+            );
           }
           const tail = await tokenizer.readRange(tailStart, size);
           if (scanTailForMoov(tail, size) === null) {
-            await captureError({
-              level: "warn",
-              source: META_MODULE,
-              message: `m4a-tail-scan: no moov box found at the end of file (fileId=${fileId}, size=${String(size)})`,
-            });
+            await logMetaWarn(
+              `m4a-tail-scan: no moov box found at the end of file (fileId=${fileId}, size=${String(size)})`,
+            );
           }
         } catch (e: unknown) {
-          await captureError({
-            level: "warn",
-            source: META_MODULE,
-            message: `m4a-tail-scan-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
-          });
+          await logMetaWarn(
+            `m4a-tail-scan-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+          );
         }
       }
     }
@@ -395,11 +389,9 @@ async function getTrackMetadataImpl(
           metadata: { format, streamUnplayable: true },
         });
       } catch (e: unknown) {
-        await captureError({
-          level: "warn",
-          source: META_MODULE,
-          message: `files-metadata-write-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
-        });
+        await logMetaWarn(
+          `files-metadata-write-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
+        );
       }
     }
 
@@ -407,12 +399,10 @@ async function getTrackMetadataImpl(
     cacheTrackMetadata(fileId, entry);
     return entry;
   } catch (e: unknown) {
-    await captureError({
-      level: "warn",
-      source: META_MODULE,
-      message: `metadata-fetch-failed (fileId=${fileId}, size=${String(size)}, format=${format}): ${classifyMetaError(e).message}`,
-      kind: classifyMetaError(e).name,
-    });
+    await logMetaWarn(
+      `metadata-fetch-failed (fileId=${fileId}, size=${String(size)}, format=${format}): ${classifyMetaError(e).message}`,
+      classifyMetaError(e).name,
+    );
     const placeholder = makePlaceholder(safeName, size);
     // A caller abort (scroll unmounted the card mid-fetch) surfaces here as a
     // RangeFetchNetworkError — the tokenizer classifies the AbortError as

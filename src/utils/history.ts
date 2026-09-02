@@ -20,6 +20,16 @@ function classifyHistoryError(err: unknown): string {
   return `${name}: ${message}`;
 }
 
+// Shared error-log shape: every failure path in this module logs at level
+// "error" with the same `${label}: name: message` format and never rethrows.
+async function logHistoryError(label: string, err: unknown): Promise<void> {
+  await captureError({
+    level: "error",
+    source: HISTORY_MODULE,
+    message: `${label}: ${classifyHistoryError(err)}`,
+  });
+}
+
 export interface PlayCountEntry {
   track: Track;
   count: number;
@@ -73,11 +83,7 @@ export async function recordPlay(track: Track) {
       },
     );
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `recordPlay-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("recordPlay-failed", e);
   }
 
   window.dispatchEvent(new Event("recent-updated"));
@@ -106,11 +112,7 @@ async function prunePlayCounts(email: string): Promise<void> {
     );
   } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `playCounts-prune-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("playCounts-prune-failed", e);
   }
 }
 
@@ -142,11 +144,7 @@ async function pruneRecentTracks(email: string): Promise<void> {
       .delete();
   } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `recentTracks-prune-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("recentTracks-prune-failed", e);
   }
 }
 
@@ -172,11 +170,7 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
     }
     return deduped.slice(0, RECENT_CAP);
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getRecentlyPlayed-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getRecentlyPlayed-failed", e);
     return [];
   }
 }
@@ -200,11 +194,7 @@ export async function getHeavyRotation(): Promise<Track[]> {
       .toArray();
     return rows.map((row) => row.track);
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getHeavyRotation-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getHeavyRotation-failed", e);
     return [];
   }
 }
@@ -259,11 +249,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
     }
     return tracks;
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getRandomDiscoveries-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getRandomDiscoveries-failed", e);
     return [];
   }
 }
@@ -296,11 +282,7 @@ export async function recordFolderVisit(folderId: string, folderName: string) {
       await pruneFolderVisits(email);
     });
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `recordFolderVisit-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("recordFolderVisit-failed", e);
   }
 }
 
@@ -326,11 +308,7 @@ async function pruneFolderVisits(email: string): Promise<void> {
     );
   } catch (e: unknown) {
     // Prune failure must not lose the visit record — log with context only.
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `folderVisits-prune-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("folderVisits-prune-failed", e);
   }
 }
 
@@ -355,11 +333,7 @@ export async function getMostVisitedFolders(): Promise<FolderVisitEntry[]> {
         lastVisited: r.lastVisited,
       }));
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getMostVisitedFolders-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getMostVisitedFolders-failed", e);
     return [];
   }
 }
