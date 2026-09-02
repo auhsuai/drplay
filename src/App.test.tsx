@@ -62,7 +62,6 @@ const mocks = vi.hoisted(() => {
       loadNonce: 0,
     })),
     useTheme: vi.fn(() => ({ theme: "dark", setTheme: vi.fn() })),
-    useServiceWorker: vi.fn(),
     useAppGlobalEvents: vi.fn(),
     useTauriEvents: vi.fn(),
     useLocateFile: vi.fn(() => ({ highlightedFileId: null })),
@@ -142,9 +141,6 @@ vi.mock("./hooks/useAuth", () => ({ useAuth: mocks.useAuth }));
 vi.mock("./hooks/useDrive", () => ({ useDrive: mocks.useDrive }));
 vi.mock("./hooks/usePlayer", () => ({ usePlayer: mocks.usePlayer }));
 vi.mock("./hooks/useTheme", () => ({ useTheme: mocks.useTheme }));
-vi.mock("./hooks/useServiceWorker", () => ({
-  useServiceWorker: mocks.useServiceWorker,
-}));
 vi.mock("./hooks/useAppGlobalEvents", () => ({
   useAppGlobalEvents: mocks.useAppGlobalEvents,
 }));
@@ -193,9 +189,6 @@ vi.mock("./ui/components/RateLimitModal", () => ({
     return null;
   },
 }));
-// DebugPanel is DEV-gated via import.meta.env.DEV, which vitest evaluates as
-// true — mock it so the App-level tests stay unaffected by the debug overlay.
-vi.mock("./ui/debug/DebugPanel", () => ({ DebugPanel: () => null }));
 vi.mock("./ui/Login/LoginScreen", () => ({ LoginScreen: () => null }));
 vi.mock("./ui/MainContent/MainContent", () => ({
   MainContent: () => <div data-testid="main-content" />,

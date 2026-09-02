@@ -45,9 +45,16 @@ vi.mock("./apiClient", () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-vi.mock("./errorLog", () => ({
-  captureError: vi.fn(),
-}));
+// uploadTransportErrors (in this graph) uses the canonical sanitizeString now
+// living in errorLog — keep the real one, mock only captureError (same
+// pattern as apiClient.test.ts).
+vi.mock("./errorLog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./errorLog")>();
+  return {
+    ...actual,
+    captureError: vi.fn(),
+  };
+});
 
 import { fetchWithAuth } from "./apiClient";
 import { captureError } from "./errorLog";

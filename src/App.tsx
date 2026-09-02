@@ -12,7 +12,6 @@ import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
 import { useShallow } from "zustand/react/shallow";
 import { TabContentRouter } from "./ui/layouts/TabContentRouter";
 import { AppShell } from "./ui/layouts/AppShell";
-import { DebugPanel } from "./ui/debug/DebugPanel";
 import { DEBUG_EVENTS, onDebugEvent } from "./ui/debug/debugEvents";
 
 import "./App.css";
@@ -31,7 +30,6 @@ import { useTheme } from "./hooks/useTheme";
 import { resumeInterruptedUploads } from "./utils/uploadManager";
 import { getCurrentUserEmail } from "./utils/storageKeys";
 
-import { useServiceWorker } from "./hooks/useServiceWorker";
 import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
 import { useBackgroundPlayback } from "./hooks/useBackgroundPlayback";
 import { useDriveStore } from "./store/driveStore";
@@ -70,7 +68,7 @@ function App() {
   // Listen to Tauri events (Quota Exceeded, Repair Thumbnail)
   useTauriEvents(setShowRateLimitModal);
 
-  // DEV-only debug trigger (Ctrl+Shift+D panel): same setShowRateLimitModal
+  // DEV-only debug trigger: same setShowRateLimitModal path as the Tauri
   // path as the Tauri event, so the modal opens exactly like a real quota
   // failure. The helper no-ops in production builds.
   useEffect(() => {
@@ -117,10 +115,6 @@ function App() {
     clearSessionState();
     setAppRootFolderRef.current(null);
   });
-
-  // Initialize service worker; pass the access token so the SW learns it on
-  // login/refresh/logout (it keeps its own in-memory copy, see useServiceWorker).
-  useServiceWorker(accessToken);
 
   // Global window events (focus refresh, contextmenu). Logout via the
   // 'auth-logout' event is handled internally by useAuth.
@@ -567,9 +561,6 @@ function App() {
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
       />
-
-      {/* DEV-only debug UI panel (Ctrl+Shift+D); never shipped in production */}
-      {import.meta.env.DEV && <DebugPanel />}
     </div>
   );
 }

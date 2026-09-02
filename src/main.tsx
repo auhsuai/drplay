@@ -2,9 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./i18n";
 import App from "./App";
-import { initLogger } from "./utils/logger";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
-import { captureError } from "./utils/errorLog";
+import { captureError, initLogger } from "./utils/errorLog";
 
 initLogger();
 

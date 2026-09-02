@@ -5,9 +5,15 @@ import {
   WorkerAbortError,
 } from "./workerError";
 
-vi.mock("../utils/errorLog", () => ({
-  captureError: vi.fn().mockResolvedValue(undefined),
-}));
+// workerError.ts uses the canonical sanitizeString now living in errorLog —
+// keep the real one, mock only captureError (same pattern as apiClient.test.ts).
+vi.mock("../utils/errorLog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/errorLog")>();
+  return {
+    ...actual,
+    captureError: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 import { captureError } from "../utils/errorLog";
 

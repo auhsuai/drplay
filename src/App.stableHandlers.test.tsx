@@ -73,7 +73,6 @@ vi.mock("./hooks/useDrive", () => ({
 vi.mock("./hooks/useTheme", () => ({
   useTheme: () => ({ theme: "dark", setTheme: vi.fn() }),
 }));
-vi.mock("./hooks/useServiceWorker", () => ({ useServiceWorker: vi.fn() }));
 vi.mock("./hooks/useAppGlobalEvents", () => ({
   useAppGlobalEvents: vi.fn(),
 }));
@@ -99,7 +98,6 @@ vi.mock("./ui/Settings/TrashScreen", () => ({ TrashScreen: () => null }));
 vi.mock("./ui/components/RateLimitModal", () => ({
   RateLimitModal: () => null,
 }));
-vi.mock("./ui/debug/DebugPanel", () => ({ DebugPanel: () => null }));
 vi.mock("./ui/Login/LoginScreen", () => ({ LoginScreen: () => null }));
 vi.mock("./ui/MainContent/MainContent", () => ({
   MainContent: () => <div data-testid="main-content" />,

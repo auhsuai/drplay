@@ -20,10 +20,13 @@ const { captureSpy } = vi.hoisted(() => ({
 }));
 
 // Intercept the errorLog module so captureError routes to our spy.
+// initLogger is a no-op: main.tsx calls it at module load; the real one only
+// monkeypatches console, which these assertions don't depend on.
 vi.mock("../utils/errorLog", () => ({
   captureError: (...args: unknown[]) => {
     captureSpy(...args);
   },
+  initLogger: () => {},
 }));
 
 // Fake window + localStorage so importing main.tsx (which imports i18n->localStorage)
