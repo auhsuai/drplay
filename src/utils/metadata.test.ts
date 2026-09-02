@@ -87,7 +87,10 @@ import {
   TAG_BUDGET_MAX,
   FULL_PERSIST_MAX_BYTES,
 } from "./metadata";
-import { METADATA_NETWORK_COOLDOWN_MS } from "./metadata/constants";
+import {
+  METADATA_NETWORK_COOLDOWN_MS,
+  INFLIGHT_TIMEOUT,
+} from "./metadata/constants";
 import { parseDiskMetadata } from "./metadata/fetchPipeline";
 import { captureError } from "./errorLog";
 import {
@@ -642,6 +645,163 @@ describe("getTrackMetadata dedup + real fetch", () => {
   });
 });
 
+describe("getTrackMetadata inflight window (slow pipeline keeps the dedup entry)", () => {
+  const fresh = () => import("./metadata");
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A fetch that stays PENDING until release() — mirrors Drive's slow
+  // first-byte window (getTrackMetadataImpl worst case: 45s timeout x2 tries
+  // + backoff + semaphore, well past INFLIGHT_TIMEOUT=30s). The internal
+  // AbortSignal.timeout(45s) uses Node timers that fake timers cannot fire,
+  // so the pipeline stays pending exactly until release() is called.
+  function makeGatedFetch(fixture: Uint8Array) {
+    let releaseGate!: () => void;
+    const gate = new Promise<{
+      status: number;
+      ok: boolean;
+      arrayBuffer: () => Promise<ArrayBuffer>;
+    }>((resolveGate) => {
+      releaseGate = () => {
+        resolveGate({
+          status: 206,
+          ok: true,
+          arrayBuffer: () => Promise.resolve(fixture.slice().buffer),
+        });
+      };
+    });
+    const fetchMock = vi.fn(() => gate);
+    vi.stubGlobal("fetch", fetchMock);
+    return {
+      fetchMock,
+      release: () => {
+        releaseGate();
+      },
+    };
+  }
+
+  it("a caller arriving after INFLIGHT_TIMEOUT joins the still-pending pipeline instead of spawning a second one", async () => {
+    vi.useFakeTimers();
+    const fixture = buildMp3Fixture("Slow Title", "Slow Artist", "Slow Album");
+    const { fetchMock, release } = makeGatedFetch(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const p1 = getTrackMetadata(
+      "inflight-slow",
+      "tok",
+      fixture.length,
+      "slow.mp3",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Past INFLIGHT_TIMEOUT the first pipeline is STILL pending (fetch gated).
+    await vi.advanceTimersByTimeAsync(INFLIGHT_TIMEOUT + 1_000);
+
+    // Second caller must JOIN p1. On the old code the cleanup timer deleted
+    // the inflight entry here and this call spawned a second parallel
+    // pipeline (a second range request for the same fileId).
+    const p2 = getTrackMetadata(
+      "inflight-slow",
+      "tok",
+      fixture.length,
+      "slow.mp3",
+    );
+
+    release();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(r1.title).toBe("Slow Title");
+    expect(r2.title).toBe("Slow Title");
+  });
+
+  it("settling before INFLIGHT_TIMEOUT cleans the entry as before and never warns", async () => {
+    vi.useFakeTimers();
+    const fixture = buildMp3Fixture(
+      "Quick Title",
+      "Quick Artist",
+      "Quick Album",
+    );
+    const { fetchMock, release } = makeGatedFetch(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const p1 = getTrackMetadata(
+      "inflight-quick",
+      "tok",
+      fixture.length,
+      "quick.mp3",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    release();
+    const r1 = await p1;
+    expect(r1.v).toBe(8);
+
+    // Settle already removed the entry: a caller after INFLIGHT_TIMEOUT is
+    // served from the memory cache, not by re-joining or re-fetching.
+    await vi.advanceTimersByTimeAsync(INFLIGHT_TIMEOUT + 1_000);
+    const r2 = await getTrackMetadata(
+      "inflight-quick",
+      "tok",
+      fixture.length,
+      "quick.mp3",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(r2.v).toBe(8);
+    expect(r2.title).toBe("Quick Title");
+
+    const inflightWarns = vi
+      .mocked(captureError)
+      .mock.calls.filter(([args]) =>
+        args.message.includes("inflight-still-pending"),
+      );
+    expect(inflightWarns).toHaveLength(0);
+  });
+
+  it("pending past INFLIGHT_TIMEOUT logs exactly ONE watchdog warn and the entry stays joinable", async () => {
+    vi.useFakeTimers();
+    const fixture = buildMp3Fixture("Warn Title", "Warn Artist", "Warn Album");
+    const { fetchMock, release } = makeGatedFetch(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const p1 = getTrackMetadata(
+      "inflight-warn",
+      "tok",
+      fixture.length,
+      "warn.mp3",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(INFLIGHT_TIMEOUT + 1_000);
+
+    const warnCalls = vi
+      .mocked(captureError)
+      .mock.calls.filter(
+        ([args]) =>
+          args.level === "warn" &&
+          args.message.includes("inflight-still-pending"),
+      );
+    expect(warnCalls).toHaveLength(1);
+
+    // Entry kept alive: a late caller still joins the same pipeline.
+    const late = getTrackMetadata(
+      "inflight-warn",
+      "tok",
+      fixture.length,
+      "warn.mp3",
+    );
+    release();
+    await Promise.all([p1, late]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("getTrackMetadata real metadata fetch", () => {
   const fresh = () => import("./metadata");
 
@@ -1026,6 +1186,123 @@ describe("getTrackMetadata per-file network cooldown", () => {
     expect(okCalls.length).toBeGreaterThan(0);
     expect(r.v).toBe(8);
     expect(r.title).toBe("Back Song");
+  });
+
+  it("caller abort mid-fetch does NOT pin the cooldown (immediate re-mount re-fetches)", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    // A fetch that stays pending until the caller signal aborts (card
+    // unmounted by a scroll) — then rejects with AbortError exactly like a
+    // real browser fetch would through the merged timeout signal.
+    let abortedFetchCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        abortedFetchCalls += 1;
+        const signal = init?.signal;
+        return new Promise<never>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(
+              new DOMException("This operation was aborted", "AbortError"),
+            );
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(
+                new DOMException("This operation was aborted", "AbortError"),
+              );
+            },
+            { once: true },
+          );
+        });
+      }),
+    );
+
+    const controller = new AbortController();
+    const r1Promise = getTrackMetadata(
+      "cd-abort",
+      "tok",
+      2048,
+      "cd.mp3",
+      controller.signal,
+    );
+    // Abort only once the head request is actually in flight.
+    await vi.waitFor(() => {
+      expect(abortedFetchCalls).toBeGreaterThan(0);
+    });
+    controller.abort();
+    const r1 = await r1Promise;
+    expect(r1.v).toBe(V_PLACEHOLDER);
+
+    // Immediate re-mount with a FRESH controller (every real re-mount creates
+    // its own AbortController — see useTrackMetadata): Drive is healthy, so
+    // the fetch MUST run again and parse real metadata — an abort must never
+    // have pinned the 60s cooldown or cached the placeholder.
+    const fixture = buildMp3Fixture(
+      "Abort Recovery",
+      "Recover Artist",
+      "Recover Album",
+    );
+    const { calls: okCalls } = makeFetchMock(fixture);
+    const r2 = await getTrackMetadata(
+      "cd-abort",
+      "tok",
+      2048,
+      "cd.mp3",
+      new AbortController().signal,
+    );
+    expect(okCalls.length).toBeGreaterThan(0);
+    expect(r2.v).toBe(8);
+    expect(r2.title).toBe("Abort Recovery");
+  });
+
+  it("a REAL network failure still pins the cooldown (no immediate re-fetch)", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    const r1 = await getTrackMetadata(
+      "cd-real-net",
+      "tok",
+      2048,
+      "cd.mp3",
+      new AbortController().signal,
+    );
+    expect(r1.v).toBe(V_PLACEHOLDER);
+    const callsAfterFail = calls.length;
+    expect(callsAfterFail).toBeGreaterThan(0);
+
+    // Immediate re-mount with a live (non-aborted) signal while Drive is
+    // genuinely failing: the 60s cooldown MUST hold — no new fetch.
+    const r2 = await getTrackMetadata(
+      "cd-real-net",
+      "tok",
+      2048,
+      "cd.mp3",
+      new AbortController().signal,
+    );
+    expect(calls.length).toBe(callsAfterFail);
+    expect(r2.v).toBe(V_PLACEHOLDER);
+  });
+
+  it("clearAllMetadataCache also drops the per-file network cooldown", async () => {
+    const { getTrackMetadata, clearAllMetadataCache } =
+      await import("./metadata");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    // First mount: real network failure pins the 60s per-file cooldown.
+    const r1 = await getTrackMetadata("cd-clear", "tok", 2048, "cd.mp3");
+    expect(r1.v).toBe(V_PLACEHOLDER);
+    const callsAfterFail = calls.length;
+    expect(callsAfterFail).toBeGreaterThan(0);
+
+    // Re-mount inside the cooldown is blocked by design (sanity guard).
+    await getTrackMetadata("cd-clear", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBe(callsAfterFail);
+
+    // Clearing the whole metadata cache must restore a CLEAN state — the
+    // cooldown map included — so the next mount re-fetches immediately.
+    clearAllMetadataCache();
+    await getTrackMetadata("cd-clear", "tok", 2048, "cd.mp3");
+    expect(calls.length).toBeGreaterThan(callsAfterFail);
   });
 });
 

@@ -12,7 +12,9 @@ import {
   METADATA_KEY_PREFIX,
   METADATA_LRU_KEY,
   META_MODULE,
+  V_PLACEHOLDER,
 } from "./constants";
+import { clearNetworkCooldown } from "./fetchPipeline";
 import type { CacheEntry, CachedMetadata } from "./types";
 
 export function classifyMetaError(err: unknown): {
@@ -262,6 +264,24 @@ export function clearAllMetadataCache(): void {
   lruKeys = [];
   fullPictureCache.clear();
   fullPictureBytes = 0;
+  // A cleared cache is a CLEAN state: the per-file network cooldowns (set by
+  // fetchPipeline on a real network failure) must go too, or files that failed
+  // once stay placeholder-blocked up to METADATA_NETWORK_COOLDOWN_MS despite
+  // the user's explicit full reset.
+  clearNetworkCooldown();
+}
+
+// Rank used by setCache to order writes. Raw data.v must NOT be compared
+// directly: placeholders (v >= V_PLACEHOLDER) sort numerically above real
+// parses (v = REAL_METADATA_VERSION), so a placeholder could clobber a real
+// row and a stored v9 row could block real parses forever. Real always wins
+// over placeholder; among same-rank entries the fresh-write window decides.
+const PLACEHOLDER_RANK = -1;
+
+function scoreOf(entry: CachedMetadata): number {
+  // Parity with searchEngine.isRealCacheEntry: any v < V_PLACEHOLDER is a
+  // real parse, everything else is a placeholder.
+  return entry.v < V_PLACEHOLDER ? entry.v : PLACEHOLDER_RANK;
 }
 
 export async function setCache(
@@ -272,8 +292,8 @@ export async function setCache(
   const existing = await getCacheEntry(key);
   if (genAtStart !== cacheGeneration) return;
 
-  const newScore = newEntry.v;
-  const oldScore = existing?.data.v ?? 0;
+  const newScore = scoreOf(newEntry);
+  const oldScore = existing ? scoreOf(existing.data) : PLACEHOLDER_RANK;
 
   if (existing && oldScore > newScore) return;
   if (
@@ -288,5 +308,16 @@ export async function setCache(
     data: newEntry,
     ts: Date.now(),
   });
+  // Same TOCTOU as the get-side guard: clearAllMetadataCache() may bump the
+  // generation while this put is in flight. Touching the LRU now would
+  // resurrect the key into localStorage/bookkeeping AFTER the user's clear,
+  // so re-check before updateLRU (the stale row itself, if it landed past the
+  // clear's IDB delete, stays orphaned bookkeeping-wise until the next clear).
+  // Same TOCTOU as the get-side guard: clearAllMetadataCache() may bump the
+  // generation while this put is in flight. Touching the LRU now would
+  // resurrect the key into localStorage/bookkeeping AFTER the user's clear,
+  // so re-check before updateLRU (the stale row itself, if it landed past the
+  // clear's IDB delete, stays orphaned bookkeeping-wise until the next clear).
+  if (genAtStart !== cacheGeneration) return;
   updateLRU(key);
 }

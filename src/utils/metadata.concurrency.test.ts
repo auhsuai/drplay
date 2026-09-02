@@ -239,6 +239,48 @@ describe("lruKeys + cache invalidation hardening", () => {
     }
   });
 
+  it("generation guard: a clear during the IDB put does not resurrect the LRU key", async () => {
+    // Companion to the guard above: there the clear landed during the GET
+    // (caught by the pre-put check). Here the get resolves cleanly and setCache
+    // suspends inside the awaited PUT when clearAllMetadataCache() bumps the
+    // generation. Releasing the put afterwards must NOT run updateLRU — on
+    // unguarded code it re-added the key to localStorage AFTER the user's
+    // clear, resurrecting stale bookkeeping.
+    localStorage.removeItem(METADATA_LRU_KEY);
+    clearAllMetadataCache();
+
+    const metadataCacheTable = db.metadataCache as unknown as {
+      put: (row: unknown) => Promise<unknown>;
+    };
+    const originalPut = metadataCacheTable.put;
+    let releasePut!: () => void;
+    const pendingPut = new Promise<void>((resolve) => {
+      releasePut = resolve;
+    });
+    const putMock = vi.fn(() => pendingPut);
+    metadataCacheTable.put = putMock;
+
+    try {
+      cacheTrackMetadata("gen-put-guard", makeEntry());
+      await flushPromises();
+      // The get resolved and passed the first generation check; setCache is
+      // now suspended on the pending put.
+      expect(putMock).toHaveBeenCalledTimes(1);
+
+      clearAllMetadataCache();
+      releasePut();
+      await flushPromises();
+
+      const stored = JSON.parse(
+        localStorage.getItem(METADATA_LRU_KEY) || "[]",
+      ) as string[];
+      expect(stored).not.toContain("metadata_gen-put-guard");
+      expect(localStorage.getItem(METADATA_LRU_KEY)).toBeNull();
+    } finally {
+      metadataCacheTable.put = originalPut;
+    }
+  });
+
   it("getCacheEntry treats entries with a stale CACHE_VERSION as a miss", async () => {
     localStorage.removeItem(METADATA_LRU_KEY);
     clearAllMetadataCache();
@@ -290,5 +332,88 @@ describe("lruKeys + cache invalidation hardening", () => {
     const parsed = JSON.parse(stored || "") as unknown[];
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed).toContain("metadata_corrupt-1");
+  });
+});
+
+function makeRealEntry(
+  overrides: Partial<CachedMetadata> = {},
+): CachedMetadata {
+  return {
+    title: "Real Title",
+    artist: "Real Artist",
+    album: "Real Album",
+    duration: 60,
+    durationEstimated: false,
+    pictureData: null,
+    pictureDataFull: null,
+    v: 8,
+    ...overrides,
+  };
+}
+
+function storedData(key: string): CachedMetadata | undefined {
+  const row = memoryStore.get(key);
+  if (!row) return undefined;
+  if (typeof row.entry !== "object" || row.entry === null) return undefined;
+  return (row.entry as { data: CachedMetadata }).data;
+}
+
+describe("setCache score polarity guard (real vs placeholder)", () => {
+  beforeEach(() => {
+    localStorage.removeItem(METADATA_LRU_KEY);
+    clearAllMetadataCache();
+    memoryStore.clear();
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("(a) a real parse overwrites an existing v9 placeholder row", async () => {
+    // Legacy/future caller left a v9 placeholder in IDB: a subsequent real
+    // parse (v8) must win — raw-v comparison (9 > 8) would skip forever.
+    memoryStore.set("metadata_polarity-a", {
+      key: "metadata_polarity-a",
+      entry: { version: 2, data: makeEntry(), ts: Date.now() },
+    });
+
+    cacheTrackMetadata(
+      "polarity-a",
+      makeRealEntry({ title: "Real A", duration: 42 }),
+    );
+    await flushPromises();
+
+    const data = storedData("metadata_polarity-a");
+    expect(data?.title).toBe("Real A");
+    expect(data?.duration).toBe(42);
+    expect(data?.v).toBe(8);
+  });
+
+  it("(b) a placeholder never overwrites an existing real row", async () => {
+    // Real parsed entry (v8) already persisted: an incoming placeholder (v9)
+    // must be skipped — raw-v comparison lets it clobber the real row.
+    memoryStore.set("metadata_polarity-b", {
+      key: "metadata_polarity-b",
+      entry: {
+        version: 2,
+        data: makeRealEntry({ title: "Real B" }),
+        ts: Date.now(),
+      },
+    });
+
+    cacheTrackMetadata("polarity-b", makeEntry());
+    await flushPromises();
+
+    const data = storedData("metadata_polarity-b");
+    expect(data?.title).toBe("Real B");
+    expect(data?.v).toBe(8);
+  });
+
+  it("(c) fresh-window gap-fill keeps the first of two same-rank writes", async () => {
+    // Guard for the existing contract: two writes of equal rank inside
+    // FRESH_WRITE_WINDOW_MS keep the first one (gap-fill protection).
+    cacheTrackMetadata("polarity-c", { ...makeEntry(), title: "First" });
+    await flushPromises();
+    cacheTrackMetadata("polarity-c", { ...makeEntry(), title: "Second" });
+    await flushPromises();
+
+    expect(storedData("metadata_polarity-c")?.title).toBe("First");
   });
 });

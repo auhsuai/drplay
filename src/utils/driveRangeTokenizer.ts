@@ -182,11 +182,18 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     this.assertBudget(fetchLen);
     const data = await this.chunkFetcher.fetch(0, fetchLen - 1);
     // Populate the aligned chunk cache so parse-time reads inside the head
-    // region are served without extra requests. A trailing partial chunk is
-    // safe: the prefetched region always ends at min(headBytes, fileSize), so
-    // any later read lands either inside it or in a fully-fetched chunk beyond.
+    // region are served without extra requests. Same invariant as
+    // prefetchRange below: a trailing PARTIAL chunk may be cached only when
+    // it ends at EOF (no bytes exist beyond it); elsewhere it is left
+    // uncached so a later read past the prefetched region re-fetches the
+    // full chunk instead of being silently truncated at the short entry's
+    // edge (possible once headBytes is not a multiple of RANGE_CHUNK, or
+    // the server returns a short body mid-file).
+    const reachedEof = data.length >= fileSize;
     for (let start = 0; start < data.length; start += RANGE_CHUNK) {
-      this.chunkCache.set(start, data.subarray(start, start + RANGE_CHUNK));
+      const slice = data.subarray(start, start + RANGE_CHUNK);
+      if (slice.length < RANGE_CHUNK && !reachedEof) continue;
+      this.chunkCache.set(start, slice);
     }
     this.chunkCache.evict();
     return data.subarray(0, fetchLen);

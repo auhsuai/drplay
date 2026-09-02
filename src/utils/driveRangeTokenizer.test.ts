@@ -4,8 +4,10 @@ import {
   DRIVE_COOLDOWN_MS,
   DRIVE_FAILURE_WINDOW_MS,
   DriveRangeTokenizer,
+  HEAD_BYTES,
   RangeFetchNetworkError,
   RangeNotSupportedError,
+  REQUEST_TIMEOUT_MS,
   SizeUnknownError,
   isDriveCircuitOpen,
   resetDriveCircuitBreakerForTests,
@@ -248,6 +250,56 @@ describe("DriveRangeTokenizer", () => {
     expect(mock).toHaveBeenCalledTimes(3); // circuit-open read did not fetch
   });
 
+  // Caller-abort during the body read (arrayBuffer rejects) after a 206:
+  // deliberate cancellation (unmount mid-download), never a Drive failure —
+  // it must not feed the app-wide circuit breaker, exactly like the
+  // fetch-reject catch.
+  it("caller abort during body read (arrayBuffer rejects) does not feed the circuit breaker either", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const captureSpy = vi
+      .spyOn(errorLogModule, "captureError")
+      .mockResolvedValue();
+    const mock = vi.fn(() => ({
+      status: 206,
+      ok: true,
+      arrayBuffer: () =>
+        Promise.reject(
+          new DOMException("The user aborted a request", "AbortError"),
+        ),
+    }));
+    vi.stubGlobal("fetch", mock);
+    const tz = new DriveRangeTokenizer("f1", 1000, {
+      abortSignal: controller.signal,
+    });
+
+    // Same exit shape as every other caller-abort path (kind timeout, the
+    // exact message the timeout/429-abort branches throw).
+    for (let i = 0; i < 3; i += 1) {
+      await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+        name: "RangeFetchNetworkError",
+        kind: "timeout",
+        message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+      });
+    }
+    // 3 deliberate cancels inside the failure window must NOT open the
+    // app-wide circuit...
+    expect(isDriveCircuitOpen()).toBe(false);
+    // ...so the 4th read still issues a real fetch (no fail-fast pinning).
+    await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+      RangeFetchNetworkError,
+    );
+    expect(mock).toHaveBeenCalledTimes(4);
+    // Silent per the file's cancellation convention: no body-failed warn.
+    expect(captureSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "range-fetch-body-failed",
+        ) as unknown as string,
+      }),
+    );
+  });
+
   it("classifies timeout rejections as RangeFetchNetworkError with kind timeout", async () => {
     const mock = vi
       .fn()
@@ -316,13 +368,94 @@ describe("DriveRangeTokenizer", () => {
     expect(vf.calls).toHaveLength(3);
   });
 
-  it("gives up after 2 retries and reports the last error", async () => {
+  // FLIPPED deliberately per the android contract (2a2d909/e839613): retry
+  // exhaustion on 429/5xx now surfaces the TRANSIENT RangeFetchNetworkError
+  // (kind network) instead of the deterministic RangeNotSupportedError, so
+  // fetchPipeline stops pinning the placeholder after throttle storms.
+  it("gives up after 2 retries and reports a transient throttled error", async () => {
     const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 500]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "network",
+    });
+    expect(vf.calls).toHaveLength(3); // all attempts spent before giving up
+  });
+
+  // Every 429/5xx attempt feeds the breaker, including the final exhausted
+  // one — 3 attempts must record 3 failures (DRIVE_FAILURE_THRESHOLD=3 opens
+  // the circuit), not 2.
+  it("feeds the drive breaker once per attempt including the final exhausted one", async () => {
+    const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 500]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+      RangeFetchNetworkError,
+    );
+    expect(vf.calls).toHaveLength(3);
+    // 3 recorded failures >= threshold -> circuit opened.
+    expect(isDriveCircuitOpen()).toBe(true);
+  });
+
+  it("single non-retryable 404 stays deterministic RangeNotSupportedError without feeding the breaker", async () => {
+    const vf = installVirtualFile(1000, (i) => i % 256, [404]);
     const tz = new DriveRangeTokenizer("f1", 1000);
     await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
       RangeNotSupportedError,
     );
-    expect(vf.calls).toHaveLength(3);
+    expect(vf.calls).toHaveLength(1); // no retry on 404
+    expect(isDriveCircuitOpen()).toBe(false); // deterministic: no breaker feed
+  });
+
+  // Caller-abort during 429/5xx backoff must mirror the timeout branch:
+  // never sleep the full Retry-After (up to 32s) just to fire one doomed
+  // attempt afterwards — exit immediately via the same RangeFetchNetworkError
+  // path the timeout branch uses for caller-abort.
+  it("caller abort during 429 backoff exits immediately instead of sleeping the Retry-After", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const mock = vi.fn(() => {
+      // Caller cancels exactly when the failed response arrives — the
+      // signal is already aborted at the moment the backoff sleep starts.
+      controller.abort();
+      return Promise.resolve({
+        status: 500,
+        ok: false,
+        headers: new Headers({ "Retry-After": "32" }),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      });
+    });
+    vi.stubGlobal("fetch", mock);
+    const tz = new DriveRangeTokenizer("f1", 1000, {
+      abortSignal: controller.signal,
+    });
+
+    let settled = false;
+    const guarded = tz.readRange(0, 8).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    // Same error path the timeout branch uses for a caller-abort exit.
+    expect(err).toBeInstanceOf(RangeFetchNetworkError);
+    expect(err).toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "timeout",
+      message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+    });
+    expect(mock).toHaveBeenCalledTimes(1); // no doomed second attempt
+    // The 500 was a REAL failure: it still feeds the breaker, but one
+    // failure alone must not open the circuit.
+    expect(isDriveCircuitOpen()).toBe(false);
   });
 
   it("throws SizeUnknownError when size is 0 or negative", () => {
@@ -410,6 +543,65 @@ describe("DriveRangeTokenizer", () => {
       (c) => c.range === "bytes=0-65535",
     ).length;
     expect(chunk0Fetches).toBe(1);
+  });
+
+  // Invariant anchor (mirror of prefetchRange's seed guard): a partially
+  // covered chunk may only be cached when it ends at EOF. The old seed loop
+  // cached every chunk unconditionally, so a head that is not a multiple of
+  // RANGE_CHUNK left a short cache entry mid-file and later reads past it
+  // were silently truncated at that entry's edge.
+  describe("prefetchHead (single-request head region)", () => {
+    it("a partial seed chunk below EOF is NOT cached: reads past the head re-fetch the full chunk", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      // Head smaller than one 64KB chunk on a much longer file: the only
+      // covered chunk [0, 30000) is partial and does NOT end at EOF.
+      const data = await tz.prefetchHead(30_000);
+      expect(data).toHaveLength(30_000);
+      expect(vf.calls).toHaveLength(1);
+      expect(vf.calls[0]?.range).toBe("bytes=0-29999");
+      // A read beyond the prefetched region (same aligned chunk) must hit
+      // the network for the FULL chunk — never serve the short seed's edge
+      // as a silent truncation (the old code returned 0 bytes here).
+      const tail = await tz.readRange(35_000, 35_100);
+      expect(tail).toHaveLength(100);
+      expect(tail[0]).toBe(35_000 % 256);
+      expect(tail[99]).toBe(35_099 % 256);
+      expect(vf.calls).toHaveLength(2);
+      expect(vf.calls[1]?.range).toBe("bytes=0-65535");
+    });
+
+    it("seeds full chunks normally; only the partial below-EOF trailing chunk is skipped", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      const data = await tz.prefetchHead(70_000); // 1 full chunk + 4464 bytes
+      expect(data).toHaveLength(70_000);
+      expect(vf.calls).toHaveLength(1);
+      // Inside the fully-covered chunk 0: cache-served, no extra request.
+      await tz.readRange(0, 100);
+      expect(vf.calls).toHaveLength(1);
+      // Inside the partially-covered chunk 1: normal aligned re-fetch, no
+      // shadowing by a short entry.
+      const tail = await tz.readRange(75_536, 75_636);
+      expect(tail).toHaveLength(100);
+      expect(tail[0]).toBe(75_536 % 256);
+      expect(vf.calls).toHaveLength(2);
+      expect(vf.calls[1]?.range).toBe("bytes=65536-131071");
+    });
+
+    it("a partial trailing chunk AT EOF is still cached (the invariant's allowed case)", async () => {
+      const vf = installVirtualFile(100_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 100_000);
+      const data = await tz.prefetchHead(HEAD_BYTES); // clamps to fileSize
+      expect(data).toHaveLength(100_000);
+      expect(vf.calls).toHaveLength(1);
+      expect(vf.calls[0]?.range).toBe("bytes=0-99999");
+      // The EOF-ending partial chunk stays cache-served: no extra request.
+      const end = await tz.readRange(90_000, 90_100);
+      expect(end).toHaveLength(100);
+      expect(end[0]).toBe(90_000 % 256);
+      expect(vf.calls).toHaveLength(1);
+    });
   });
 
   describe("prefetchRange (single-request arbitrary region)", () => {

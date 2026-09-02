@@ -185,6 +185,20 @@ export class RangeChunkFetcher {
           // record it for the circuit breaker and surface it as
           // RangeFetchNetworkError so the metadata caller treats it as
           // transient (never pins the v:9 placeholder).
+          //
+          // A CALLER abort mid-body (unmount/navigation while the body is
+          // still downloading) is deliberate cancellation, not a Drive
+          // failure: mirror the fetch-reject catch above (no
+          // recordDriveFailure, no warn) and exit through the same
+          // RangeFetchNetworkError("timeout") shape every other abort path
+          // uses.
+          const callerAborted = this.callerSignal?.aborted === true;
+          if (callerAborted) {
+            throw new RangeFetchNetworkError(
+              "timeout",
+              `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+            );
+          }
           recordDriveFailure();
           void captureError({
             level: "warn",
@@ -195,18 +209,41 @@ export class RangeChunkFetcher {
         }
         return new Uint8Array(body);
       }
-      if (
-        attempt < MAX_RETRIES &&
-        (response.status === 429 || response.status >= 500)
-      ) {
+      if (response.status === 429 || response.status >= 500) {
+        // Every 429/5xx attempt feeds the breaker — including the final
+        // exhausted one (the old guard skipped it, undercounting 2/3).
         recordDriveFailure();
-        // 429/5xx are the throttle signal itself — once they trip the
-        // circuit, do not keep retrying into the cooldown.
-        if (isDriveCircuitOpen()) {
-          this.throwCircuitOpen(chunkStart, chunkEnd);
+        if (attempt < MAX_RETRIES) {
+          // 429/5xx are the throttle signal itself — once they trip the
+          // circuit, do not keep retrying into the cooldown.
+          if (isDriveCircuitOpen()) {
+            this.throwCircuitOpen(chunkStart, chunkEnd);
+          }
+          // Mirror the timeout branch's caller-abort handling: never sleep
+          // into a cancelled caller's backoff (a Retry-After can park this
+          // loop for up to 32s) just to fire one doomed attempt afterwards —
+          // exit now through the same RangeFetchNetworkError path that branch
+          // throws when the CALLER aborted.
+          if (!(this.callerSignal?.aborted ?? false)) {
+            await sleep(
+              backoffDelay(attempt, response.headers.get("Retry-After")),
+            );
+            continue;
+          }
+          throw new RangeFetchNetworkError(
+            "timeout",
+            `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+          );
         }
-        await sleep(backoffDelay(attempt, response.headers.get("Retry-After")));
-        continue;
+        // A retry budget exhausted on 429/5xx is still a TRANSIENT throttle
+        // failure (RFC 9110 §15.5.5: 429/503 signal a temporary condition).
+        // The old RangeNotSupportedError here made fetchPipeline cache the
+        // placeholder permanently after a throttle storm; RangeFetchNetworkError
+        // keeps the next mount re-fetching instead of pinning v:9.
+        throw new RangeFetchNetworkError(
+          "network",
+          `Drive range fetch throttled (status ${String(response.status)}) after ${String(MAX_RETRIES)} retries`,
+        );
       }
       throw new RangeNotSupportedError(response.status);
     }
