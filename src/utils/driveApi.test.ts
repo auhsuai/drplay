@@ -41,7 +41,8 @@ vi.mock("./apiClient", () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-vi.mock("./errorLog", () => ({
+vi.mock("./errorLog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./errorLog")>()),
   captureError: vi.fn(),
 }));
 

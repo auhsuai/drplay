@@ -5,7 +5,8 @@ import {
   WorkerAbortError,
 } from "./workerError";
 
-vi.mock("../utils/errorLog", () => ({
+vi.mock("../utils/errorLog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/errorLog")>()),
   captureError: vi.fn().mockResolvedValue(undefined),
 }));
 

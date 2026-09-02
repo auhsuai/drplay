@@ -66,7 +66,8 @@ vi.mock("../utils/simpleToast", () => ({
   showSuccessToast: vi.fn(),
 }));
 
-vi.mock("../utils/errorLog", () => ({
+vi.mock("../utils/errorLog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/errorLog")>()),
   captureError: vi.fn(),
 }));
 

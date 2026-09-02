@@ -1,5 +1,4 @@
-import { captureError } from "./errorLog";
-import { sanitizeString } from "./logger";
+import { captureError, sanitizeString } from "./errorLog";
 import { DRIVE_MODULE } from "./driveApi";
 import type { DriveErrorBody, DriveFileItem } from "./driveApi";
 

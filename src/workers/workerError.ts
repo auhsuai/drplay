@@ -8,10 +8,9 @@
 // NOTE: workers run in a separate global scope where initLogger() (called in
 // main.tsx) is never invoked, so the global console is NOT monkeypatched with
 // the sanitizer. We therefore redact inline here using the canonical
-// `sanitizeString` from src/utils/logger.ts as a single source of truth.
+// `sanitizeString` from src/utils/errorLog.ts as a single source of truth.
 
-import { sanitizeString } from "../utils/logger";
-import { captureError } from "../utils/errorLog";
+import { captureError, sanitizeString } from "../utils/errorLog";
 
 export type WorkerErrorKind =
   "network" | "timeout" | "abort" | "parse" | "unknown";
@@ -25,7 +24,7 @@ export class WorkerAbortError extends Error {
   }
 }
 
-// Thin, throw-safe wrapper around logger.ts's canonical sanitizer. If
+// Thin, throw-safe wrapper around errorLog.ts's canonical sanitizer. If
 // sanitizeString ever throws (it shouldn't), we fall back to the raw value so
 // the worker still emits the log instead of dropping it or crashing on log.
 function safeSanitize(value: string): string {
@@ -110,7 +109,7 @@ export function logWorkerError(
   // secrets never reach the logs through the structured fields.
   const ctxStr = safeSanitize(formatContext(context));
   const line = `[${timestamp()}] [${module}] ${kind}: ${message}${ctxStr ? " | " + ctxStr : ""}`;
-  // Final line goes through the canonical 2026 sanitizer from logger.ts as a
+  // Final line goes through the canonical 2026 sanitizer from errorLog.ts as a
   // single source of truth for link/id/token redaction. safeSanitize guarantees
   // we never throw while logging and never silently drop the message if the
   // sanitizer itself fails.

@@ -10,7 +10,6 @@ import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
 import { useShallow } from "zustand/react/shallow";
 import { TabContentRouter } from "./ui/layouts/TabContentRouter";
 import { AppShell } from "./ui/layouts/AppShell";
-import { DebugPanel } from "./ui/debug/DebugPanel";
 import { DEBUG_EVENTS, onDebugEvent } from "./ui/debug/debugEvents";
 
 import "./App.css";
@@ -396,9 +395,6 @@ function App() {
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
       />
-
-      {/* DEV-only debug UI panel (Ctrl+Shift+D); never shipped in production */}
-      {import.meta.env.DEV && <DebugPanel />}
     </div>
   );
 }

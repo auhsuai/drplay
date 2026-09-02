@@ -24,6 +24,7 @@ vi.mock("../utils/errorLog", () => ({
   captureError: (...args: unknown[]) => {
     captureSpy(...args);
   },
+  initLogger: () => {},
 }));
 
 // Fake window + localStorage so importing main.tsx (which imports i18n->localStorage)

@@ -136,9 +136,6 @@ vi.mock("./ui/components/RateLimitModal", () => ({
     return null;
   },
 }));
-// DebugPanel is DEV-gated via import.meta.env.DEV, which vitest evaluates as
-// true — mock it so the App-level tests stay unaffected by the debug overlay.
-vi.mock("./ui/debug/DebugPanel", () => ({ DebugPanel: () => null }));
 vi.mock("./ui/Login/LoginScreen", () => ({ LoginScreen: () => null }));
 vi.mock("./ui/MainContent/MainContent", () => ({
   MainContent: () => <div data-testid="main-content" />,
