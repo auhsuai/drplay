@@ -57,3 +57,40 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     );
   });
 }
+
+// Let ONE caller escape an await as soon as its signal fires, WITHOUT
+// touching the awaited promise itself — the shared single-flight refresh must
+// keep running for every other caller (abort is per-caller, never a cancel of
+// the shared work). An already-aborted signal rejects immediately; the abort
+// listener is always removed once the race settles, so no listener leaks.
+export function raceWithAbortSignal<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (err: unknown) => {
+        cleanup();
+        // Same normalization as withTimeout above: the shared flight always
+        // rejects with Error instances, but never propagate a non-Error raw.
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}

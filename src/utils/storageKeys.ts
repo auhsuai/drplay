@@ -22,21 +22,27 @@ export function getCurrentUserEmail(): string {
   }
 }
 
-// Error message contract: `<label>-failed:<err.name|unknown>`, level warn,
-// source "useDrive" — the useDriveInit call sites pin these exact strings.
+// Error message contract: `<label>-failed:<err.name|unknown>`, level warn.
+// Default source is "useDrive" — the useDriveInit call sites pin these exact
+// strings. Other modules pass their own source as the last argument so the
+// log attributes failures correctly instead of masquerading as useDrive.
 function localStorageFailureMessage(label: string, err: unknown): string {
   return `${label}-failed:${
     err instanceof Error || err instanceof DOMException ? err.name : "unknown"
   }`;
 }
 
-export function safeLocalStorageGet(key: string, label: string): string | null {
+export function safeLocalStorageGet(
+  key: string,
+  label: string,
+  source: string = "useDrive",
+): string | null {
   try {
     return localStorage.getItem(key);
   } catch (err) {
     void captureError({
       level: "warn",
-      source: "useDrive",
+      source,
       message: localStorageFailureMessage(label, err),
     });
     return null;
@@ -47,13 +53,14 @@ export function safeLocalStorageSet(
   key: string,
   value: string,
   label: string,
+  source: string = "useDrive",
 ): void {
   try {
     localStorage.setItem(key, value);
   } catch (err) {
     void captureError({
       level: "warn",
-      source: "useDrive",
+      source,
       message: localStorageFailureMessage(label, err),
     });
   }

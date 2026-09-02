@@ -5,6 +5,10 @@ import {
   getValidToken,
   TokenRefreshError,
   scheduleProactiveRefresh,
+  revokeGoogleToken,
+  readRefreshToken,
+  writeRefreshToken,
+  deleteRefreshToken,
 } from "./apiClient";
 import { stopProactiveRefresh } from "./apiClient";
 import { captureError } from "./errorLog";
@@ -37,6 +41,21 @@ vi.mock("./errorLog", async (importOriginal) => {
 const invokeMock = vi.mocked(invoke);
 const getCurrentSessionIdMock = vi.mocked(getCurrentSessionId);
 const captureErrorMock = vi.mocked(captureError);
+
+// Bounds an await so a permanently-pending promise (e.g. a caller that the
+// code under test forgot to wake on abort) fails FAST with a named error
+// instead of eating the whole 15s vitest timeout. Losing races are absorbed
+// by Promise.race internals — no unhandled rejection.
+function withPendingGuard<T>(promise: Promise<T>, ms = 1_500): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`still pending after ${String(ms)}ms`));
+      }, ms);
+    }),
+  ]);
+}
 
 // Command-aware invoke mock: maps each Tauri command name to a value or
 // handler. Always returns a promise (like the real invoke) so withTimeout
@@ -82,7 +101,7 @@ function makeStorage(): Storage {
 
 let storage: Storage;
 
-beforeEach(() => {
+beforeEach(async () => {
   storage = makeStorage();
   (globalThis as unknown as { localStorage: Storage }).localStorage = storage;
   (
@@ -93,6 +112,13 @@ beforeEach(() => {
   getCurrentSessionIdMock.mockReset();
   getCurrentSessionIdMock.mockReturnValue(0);
   captureErrorMock.mockClear();
+  // Reset the module-level in-memory refresh-token fallback between tests so a
+  // failed-keyring write in one test cannot leak into the next. deleteRefreshToken
+  // clears the in-memory variable (plus keyring + localStorage); the default
+  // invoke mock makes the keyring delete a no-op success.
+  invokeMock.mockReset();
+  invokeMock.mockResolvedValue(undefined);
+  await deleteRefreshToken();
 });
 
 afterEach(() => {
@@ -142,7 +168,7 @@ describe("fetchWithAuth", () => {
 
     expect(res.status).toBe(200);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(timeoutSpy).toHaveBeenCalled(); // timeout applied on main + reused on retry
+    expect(timeoutSpy).toHaveBeenCalled(); // per-attempt timeout on main + retry
     const retryCall = fetchSpy.mock.calls[1];
     if (retryCall === undefined) throw new Error("expected fetch retry call");
     const retryOpts = retryCall[1] as RequestInit;
@@ -165,6 +191,111 @@ describe("fetchWithAuth", () => {
 
     expect(res.status).toBe(401);
     expect(fetchSpy).toHaveBeenCalledTimes(1); // no retry attempted
+  });
+
+  it("a follower whose shared refresh fails receives the original 401 response, not TokenRefreshError", async () => {
+    storage.setItem(ACCESS_TOKEN_KEY, "old");
+    let rejectRefresh!: (err: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    });
+    const refreshCallCount = () =>
+      invokeMock.mock.calls.filter((call) => call[0] === "refresh_google_token")
+        .length;
+
+    // Another caller puts a refresh in flight and keeps it pending, so
+    // fetchWithAuth's force-refresh below joins it as a FOLLOWER instead of
+    // starting its own flight.
+    void getValidToken(true);
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 401 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const fwPromise = fetchWithAuth("/api/songs");
+    // One macrotask flush guarantees the follower has attached to the shared
+    // promise before the failure fires (attachment only needs microtasks).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    rejectRefresh(new Error("invalid_grant: revoked"));
+
+    // JSDoc contract: when the refresh cannot produce a token the ORIGINAL
+    // 401 response is returned — for followers too. Before the fix the
+    // follower's shared-promise rejection escaped as TokenRefreshError.
+    const res = await fwPromise;
+
+    expect(res.status).toBe(401);
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // no retry without a new token
+    expect(refreshCallCount()).toBe(1); // no second refresh started
+    // Side-effects fire exactly once (by the lead inside getValidToken),
+    // never duplicated per follower.
+    const dispatchMock = (
+      globalThis as unknown as {
+        window: { dispatchEvent: ReturnType<typeof vi.fn> };
+      }
+    ).window.dispatchEvent;
+    const authLogoutCalls = dispatchMock.mock.calls.filter(
+      ([e]) => (e as Event).type === "auth-logout",
+    );
+    expect(authLogoutCalls).toHaveLength(1);
+  });
+
+  it("fetchWithAuth exits immediately with AbortError when aborted while waiting for the shared refresh", async () => {
+    storage.setItem(ACCESS_TOKEN_KEY, "old");
+    let releaseRefresh!: (value: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    });
+
+    // A lead caller puts a refresh in flight so fetchWithAuth's 401 handler
+    // JOINS it as a follower instead of starting its own.
+    const lead = getValidToken(true);
+    await vi.waitFor(() => {
+      expect(
+        invokeMock.mock.calls.filter((c) => c[0] === "refresh_google_token")
+          .length,
+      ).toBe(1);
+    });
+
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 401 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const controller = new AbortController();
+    const fwPromise = fetchWithAuth("/api/songs", {
+      signal: controller.signal,
+    });
+    // One macrotask flush guarantees the 401 came back and fetchWithAuth has
+    // entered (and joined) the shared refresh before we abort.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    controller.abort();
+
+    // Must not hang until the shared flight settles — abort escapes NOW.
+    // finally: settle the flight either way so no pending refreshPromise
+    // leaks into the next test (module state persists between tests).
+    try {
+      await expect(withPendingGuard(fwPromise)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    } finally {
+      // The shared flight keeps running for everyone else; the lead completes.
+      releaseRefresh({ access_token: "after-abort-token", expires_in: 3600 });
+      await expect(lead).resolves.toBe("after-abort-token");
+    }
   });
 
   it("applies AbortSignal.timeout to the request", async () => {
@@ -218,7 +349,7 @@ describe("fetchWithAuth", () => {
     },
   );
 
-  it("keeps the timeout override on the 401 retry (same merged signal)", async () => {
+  it("keeps the timeout override on the 401 retry (fresh per-attempt signal)", async () => {
     storage.setItem(ACCESS_TOKEN_KEY, "old");
     storage.setItem(REFRESH_TOKEN_KEY, "rt");
     invokeMock.mockResolvedValue({ access_token: "new", expires_in: 3600 });
@@ -235,19 +366,34 @@ describe("fetchWithAuth", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const controller = new AbortController();
 
-    const res = await fetchWithAuth("/api/songs", { timeoutMs: 60_000 });
+    const res = await fetchWithAuth("/api/songs", {
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
 
     expect(res.status).toBe(200);
-    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    // Per-attempt deadline: EVERY attempt (main + retry) arms its own full
+    // caller override, never inheriting the budget the previous attempt
+    // already spent on the wire plus the refresh round-trip.
+    expect(timeoutSpy.mock.calls.map((c) => c[0])).toEqual([60_000, 60_000]);
     const firstCall = fetchSpy.mock.calls[0];
     const secondCall = fetchSpy.mock.calls[1];
     if (firstCall === undefined || secondCall === undefined)
       throw new Error("expected fetch calls");
     const firstSignal = (firstCall[1] as RequestInit).signal;
     const retrySignal = (secondCall[1] as RequestInit).signal;
-    expect(retrySignal).toBe(firstSignal);
+    // The retry signal is NOT the spent merged signal from attempt 1...
+    expect(firstSignal).toBeDefined();
+    expect(retrySignal).not.toBe(firstSignal);
+    // ...but caller cancellation still propagates into it instantly.
+    expect(controller.signal.aborted).toBe(false);
+    controller.abort();
+    expect(
+      retrySignal instanceof AbortSignal ? retrySignal.aborted : false,
+    ).toBe(true);
   });
 
   it("merges the caller signal with the timeout override via AbortSignal.any", async () => {
@@ -502,6 +648,77 @@ describe("M1b keyring-backed refresh token storage", () => {
       vi.useRealTimers();
     }
   });
+
+  it("reports a localStorage clear failure (not a keyring-write failure) when removeItem throws after a successful keyring write", async () => {
+    mockInvoke({ set_refresh_token: undefined });
+    vi.spyOn(storage, "removeItem").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+
+    await writeRefreshToken("rt-clear-secret");
+
+    // The KEYRING write succeeded, so exactly one warning must be logged and
+    // it must name the localStorage clear — never misclassify it as a
+    // keyring-write failure (which would imply the vault lost the token).
+    expect(captureErrorMock).toHaveBeenCalledTimes(1);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining(
+          "refresh-token-localstorage-clear-failed",
+        ) as unknown as string,
+      }),
+    );
+    const logged = JSON.stringify(captureErrorMock.mock.calls);
+    expect(logged).not.toContain("keyring-write-failed");
+    expect(logged).not.toContain("rt-clear-secret");
+    // Keyring flow semantics preserved: the vault holds the credential, so
+    // no in-memory fallback may be created by a storage-clear hiccup.
+    mockInvoke({ get_refresh_token: null });
+    await expect(readRefreshToken()).resolves.toBeNull();
+  });
+
+  it("(g) prefers the newer in-memory token over a stale keyring token after a failed rotation write", async () => {
+    // Cycle 1: keyring still holds the ORIGINAL rt-A; refreshing WITH rt-A
+    // succeeds and rotates to rt-B, whose keyring write FAILS → rt-B must
+    // survive in memory.
+    mockInvoke({
+      get_refresh_token: "rt-A",
+      refresh_google_token: (args?: Record<string, unknown>) =>
+        args?.refreshToken === "rt-A"
+          ? { access_token: "acc-2", refresh_token: "rt-B", expires_in: 3600 }
+          : Promise.reject(new Error("unexpected refresh token")),
+      set_refresh_token: () =>
+        Promise.reject(new Error("credential vault write denied")),
+    });
+
+    await expect(getValidToken(true)).resolves.toBe("acc-2");
+    await vi.waitFor(() => {
+      expect(captureErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "keyring-write-failed",
+          ) as unknown as string,
+        }),
+      );
+    });
+
+    // Cycle 2: the vault STILL serves stale rt-A while memory holds the
+    // newest rt-B (write failed above). The next refresh MUST use rt-B —
+    // using rt-A would fail with invalid_grant and sign the user out.
+    mockInvoke({
+      get_refresh_token: "rt-A",
+      refresh_google_token: (args?: Record<string, unknown>) =>
+        args?.refreshToken === "rt-B"
+          ? { access_token: "acc-3", expires_in: 3600 }
+          : Promise.reject(new Error("invalid_grant: revoked")),
+    });
+    await expect(getValidToken(true)).resolves.toBe("acc-3");
+    expect(invokeMock).toHaveBeenCalledWith("refresh_google_token", {
+      refreshToken: "rt-B",
+    });
+  });
 });
 
 // Spec-guards for the single-flight refresh upgrade: every one of these
@@ -542,6 +759,44 @@ describe("getValidToken single-flight refresh", () => {
     await expect(lead).resolves.toBe("shared-token");
     await expect(follower).resolves.toBe("shared-token");
     expect(refreshCallCount()).toBe(1);
+  });
+
+  it("a follower whose caller signal aborts mid-flight rejects AbortError immediately while the shared flight continues", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let releaseRefresh!: (value: unknown) => void;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        new Promise((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    });
+
+    const lead = getValidToken(true);
+    const controller = new AbortController();
+    const follower = getValidToken(true, controller.signal);
+
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    controller.abort();
+
+    // JSDoc contract: aborting rejects THIS caller with an AbortError right
+    // away instead of keeping it pending until the shared flight settles.
+    // finally: settle the shared flight either way so a pending refreshPromise
+    // can never leak across tests (module state persists between tests).
+    try {
+      await expect(withPendingGuard(follower)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    } finally {
+      // Single-flight preserved: the shared refresh was NOT cancelled — the
+      // lead still receives the token once it lands.
+      releaseRefresh({ access_token: "late-token", expires_in: 3600 });
+      await expect(lead).resolves.toBe("late-token");
+      expect(refreshCallCount()).toBe(1);
+    }
   });
 
   it("concurrent callers all reject when the refresh fails", async () => {
@@ -636,5 +891,246 @@ describe("getValidToken single-flight refresh", () => {
     await expect(getValidToken(true)).resolves.toBe("first");
     await expect(getValidToken(true)).resolves.toBe("first");
     expect(refreshCallCount()).toBe(2);
+  });
+});
+
+// Spec-guards for the bounded-retry upgrade (max attempts + exponential
+// backoff, never retry forever): the refresh retry chain must stop after the
+// attempt budget instead of retrying forever, back off exponentially between
+// attempts, reset its budget on a successful refresh, and stay cancellable
+// via stopProactiveRefresh.
+describe("scheduleRetryRefresh bounded retry (max attempts + backoff)", () => {
+  const refreshCallCount = () =>
+    invokeMock.mock.calls.filter((call) => call[0] === "refresh_google_token")
+      .length;
+
+  // The retry timer is the only setTimeout in the 30s..120s window (the
+  // timeout wrappers use 5s/15s and the proactive timer runs at ~55min), so
+  // filtering by delay isolates the retry-timer delays for assertion.
+  const retryTimerDelays = (
+    calls: ReadonlyArray<readonly unknown[]>,
+  ): number[] =>
+    calls
+      .map((call) => call[1] as number)
+      .filter((delay) => delay >= 30_000 && delay <= 120_000);
+
+  const alwaysFailRefresh = () => {
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () => Promise.reject(new Error("Failed to fetch")),
+    });
+  };
+
+  it("stops retrying after the max-attempt budget instead of retrying forever", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    alwaysFailRefresh();
+    vi.useFakeTimers();
+    try {
+      await getValidToken(true); // transient failure → schedules the first retry
+      // Backoff budget: 30s + 60s + 120s + 120s = 330s, then give-up.
+      await vi.advanceTimersByTimeAsync(400_000);
+      expect(refreshCallCount()).toBe(5); // 1 initial + 4 retries (RETRY_MAX_ATTEMPTS)
+      expect(captureErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("giving up") as unknown as string,
+        }),
+      );
+      // Budget exhausted: no timer is scheduled, so more time changes nothing.
+      await vi.advanceTimersByTimeAsync(400_000);
+      expect(refreshCallCount()).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off exponentially between retries (each delay longer than the last, capped)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    alwaysFailRefresh();
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn<typeof globalThis, "setTimeout">(
+      globalThis,
+      "setTimeout",
+    );
+    try {
+      await getValidToken(true); // schedules 30s
+      await vi.advanceTimersByTimeAsync(30_000); // retry 1 fires → schedules 60s
+      await vi.advanceTimersByTimeAsync(60_000); // retry 2 fires → schedules 120s (capped)
+      const delays = retryTimerDelays(setTimeoutSpy.mock.calls);
+      expect(delays).toEqual([30_000, 60_000, 120_000]);
+      expect(delays[1] ?? 0).toBeGreaterThan(delays[0] ?? 0);
+      expect(delays[2] ?? 0).toBeGreaterThan(delays[1] ?? 0);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the retry budget on a successful refresh (next cycle starts at the base delay)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let failRefresh = true;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: () =>
+        failRefresh
+          ? Promise.reject(new Error("Failed to fetch"))
+          : Promise.resolve({ access_token: "ok", expires_in: 3600 }),
+    });
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn<typeof globalThis, "setTimeout">(
+      globalThis,
+      "setTimeout",
+    );
+    try {
+      await getValidToken(true); // fails → schedules retry at 30s
+      failRefresh = false; // the scheduled retry now succeeds
+      await vi.advanceTimersByTimeAsync(30_000); // retry fires and SUCCEEDS → budget resets
+      failRefresh = true;
+      await getValidToken(true); // fails again → must schedule at 30s (fresh cycle), not 60s
+      const delays = retryTimerDelays(setTimeoutSpy.mock.calls);
+      const lastDelay = delays[delays.length - 1];
+      expect(lastDelay).toBe(30_000);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stopProactiveRefresh cancels a pending retry timer", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    alwaysFailRefresh();
+    vi.useFakeTimers();
+    try {
+      await getValidToken(true); // schedules a retry at 30s
+      stopProactiveRefresh(); // cancels the pending retry timer
+      await vi.advanceTimersByTimeAsync(400_000);
+      expect(refreshCallCount()).toBe(1); // no retry ever fired
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Observability upgrade: a non-OK HTTP status from the Google revoke endpoint
+// used to be dropped silently. Logout still proceeds (revoke is best-effort),
+// but the failure must be logged with the status code only — never the token
+// or the response body.
+describe("revokeGoogleToken observability", () => {
+  it("warns with the HTTP status (never the token) when the revoke endpoint responds non-OK", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 400 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(revokeGoogleToken("revk-secret")).resolves.toBeUndefined();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(captureErrorMock).toHaveBeenCalledTimes(1);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining("400") as unknown as string,
+      }),
+    );
+    // The token must never appear in the log payload.
+    expect(JSON.stringify(captureErrorMock.mock.calls)).not.toContain(
+      "revk-secret",
+    );
+  });
+});
+
+// Storage-failure resilience: a localStorage failure inside the refresh flow
+// is a transient environment problem (quota / privacy mode), NOT an auth
+// failure. It must be logged as a warning and the flow must continue — the
+// access token stays valid in memory/broadcast; persistence is best-effort.
+// A storage error must NEVER dispatch 'auth-logout'.
+describe("getValidToken tolerates localStorage failures", () => {
+  const dispatchEventMock = () =>
+    (
+      globalThis as unknown as {
+        window: { dispatchEvent: ReturnType<typeof vi.fn> };
+      }
+    ).window.dispatchEvent;
+
+  const eventCount = (type: string) =>
+    dispatchEventMock().mock.calls.filter(([e]) => (e as Event).type === type)
+      .length;
+
+  it("a localStorage quota failure during token persistence does NOT sign the user out", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: {
+        access_token: "tok-storage-fail-secret",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("exceeded quota", "QuotaExceededError");
+    });
+
+    const result = await getValidToken(true);
+
+    expect(result).toBe("tok-storage-fail-secret");
+    expect(eventCount("auth-logout")).toBe(0);
+    expect(eventCount("token-updated")).toBe(1);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining(
+          "access-token-persist-failed:QuotaExceededError",
+        ) as unknown as string,
+      }),
+    );
+    for (const call of captureErrorMock.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("tok-storage-fail-secret");
+    }
+  });
+
+  it("a failing localStorage read degrades to the refresh path instead of crashing", async () => {
+    mockInvoke({
+      get_refresh_token: "rt-keyring",
+      refresh_google_token: {
+        access_token: "tok-read-fail-secret",
+        expires_in: 3600,
+      },
+    });
+    vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+
+    const result = await getValidToken(true);
+
+    expect(result).toBe("tok-read-fail-secret");
+    expect(eventCount("auth-logout")).toBe(0);
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "apiClient",
+        message: expect.stringContaining(
+          "-failed:SecurityError",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("fetchWithAuth sends the request without an Authorization header when localStorage reads fail", async () => {
+    vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const res = await fetchWithAuth("/api/songs");
+
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const firstCall = fetchSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected fetch call");
+    const h = new Headers((firstCall[1] as RequestInit).headers);
+    expect(h.get("Authorization")).toBeNull();
   });
 });

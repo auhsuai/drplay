@@ -2,11 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { captureError } from "./errorLog";
 import { getCurrentSessionId } from "./sessionGuard";
-import { ACCESS_TOKEN_KEY, TOKEN_TIME_KEY } from "./storageKeys";
+import {
+  ACCESS_TOKEN_KEY,
+  TOKEN_TIME_KEY,
+  safeLocalStorageGet,
+  safeLocalStorageSet,
+} from "./storageKeys";
+import { backoffDelay } from "./retryDelay";
 import {
   TokenRefreshError,
   MAX_SAFE_TIMEOUT,
   withTimeout,
+  raceWithAbortSignal,
 } from "./apiClientShared";
 import {
   REFRESH_TIMEOUT_MS,
@@ -29,7 +36,13 @@ const PROACTIVE_REFRESH_MIN_MS = 5000;
 // models aligned (see computeProactiveRefreshDelayMs).
 export const TOKEN_EXPIRY_MS = 50 * 60 * 1000;
 const TOKEN_TIME_MAX_FUTURE_MS = 86_400_000;
-const RETRY_DELAY_MS = 30_000;
+// Retry-refresh backoff policy (never retry forever): a transient refresh
+// failure is retried at most RETRY_MAX_ATTEMPTS times with exponential
+// backoff from RETRY_BASE_DELAY_MS, capped at RETRY_MAX_DELAY_MS; once the
+// budget is exhausted the chain stops until a new refresh cycle.
+const RETRY_BASE_DELAY_MS = 30_000;
+const RETRY_MAX_DELAY_MS = 120_000;
+const RETRY_MAX_ATTEMPTS = 4;
 const DEFAULT_EXPIRES_IN_SEC = 3600;
 
 // Single-flight guard for concurrent token refresh: while a refresh is in
@@ -38,12 +51,17 @@ const DEFAULT_EXPIRES_IN_SEC = 3600;
 // the next refresh starts a fresh flight.
 let refreshPromise: Promise<string | null> | null = null;
 let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
+// Retries already scheduled in the current failed-refresh cycle. Reset on a
+// successful refresh and whenever the chain is stopped (stopProactiveRefresh),
+// so a later failure always starts a fresh cycle from the base delay.
+let retryAttempt = 0;
 
 export const stopProactiveRefresh = () => {
   if (refreshTimerId) {
     clearTimeout(refreshTimerId);
     refreshTimerId = null;
   }
+  retryAttempt = 0;
 };
 
 // Pure computation for the proactive-refresh timer delay. The effective token
@@ -86,7 +104,13 @@ export const scheduleProactiveRefresh = (expiresInSeconds: number) => {
 };
 
 function getStoredTokenTime(): number {
-  const raw = localStorage.getItem(TOKEN_TIME_KEY);
+  // Storage-failure safe: a read failure degrades to null → parsed as invalid
+  // → forces a refresh (the correct degraded behavior), never throws.
+  const raw = safeLocalStorageGet(
+    TOKEN_TIME_KEY,
+    "token-time-read",
+    "apiClient",
+  );
   const parsed = parseInt(raw || "", 10);
 
   if (
@@ -108,7 +132,28 @@ function getStoredTokenTime(): number {
 }
 
 function scheduleRetryRefresh() {
-  if (refreshTimerId) clearTimeout(refreshTimerId);
+  if (refreshTimerId) {
+    clearTimeout(refreshTimerId);
+    refreshTimerId = null;
+  }
+  if (retryAttempt >= RETRY_MAX_ATTEMPTS) {
+    retryAttempt = 0;
+    void captureError({
+      level: "warn",
+      source: "apiClient",
+      message:
+        "Token refresh retry limit reached, giving up until a new refresh cycle",
+    });
+    return;
+  }
+  const delayMs = backoffDelay(retryAttempt, null, {
+    baseMs: RETRY_BASE_DELAY_MS,
+    maxMs: RETRY_MAX_DELAY_MS,
+    // Single-client refresh (no thundering-herd risk), so keep the backoff
+    // deterministic (jitter window 0) for predictable retry spacing.
+    jitterMaxMs: 0,
+  });
+  retryAttempt += 1;
   refreshTimerId = setTimeout(() => {
     getValidToken(true).catch(() =>
       captureError({
@@ -117,7 +162,7 @@ function scheduleRetryRefresh() {
         message: "retry-refresh-failed",
       }),
     );
-  }, RETRY_DELAY_MS);
+  }, delayMs);
 }
 
 /**
@@ -131,8 +176,10 @@ function scheduleRetryRefresh() {
  * as signed out (dispatch 'auth-logout' + return null).
  * @param forceRefresh Skip the staleness check and refresh unconditionally
  * (used on 401 retries and proactive/worker refreshes).
- * @param signal Optional caller cancellation — aborting rejects with an
- * AbortError and the refresh continues to completion for other callers.
+ * @param signal Optional caller cancellation. Aborting rejects THIS caller
+ * with an AbortError as soon as the signal fires (entry, mid-wait on a joined
+ * flight) — the shared refresh itself is NEVER cancelled and keeps running
+ * for other callers; only the aborting caller escapes early.
  * @returns The valid access token, or null when no token is available (signed
  * out / refresh impossible). An empty string means the session changed while
  * refreshing (logout raced the refresh).
@@ -143,7 +190,13 @@ export const getValidToken = async (
 ): Promise<string | null> => {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  // Storage-failure safe: an unreadable token (privacy mode / quota) degrades
+  // to null → the refresh path runs, instead of rejecting with a raw error.
+  const token = safeLocalStorageGet(
+    ACCESS_TOKEN_KEY,
+    "access-token-read",
+    "apiClient",
+  );
   const issueTime = getStoredTokenTime();
   const isExpired = Date.now() - issueTime > TOKEN_EXPIRY_MS;
 
@@ -161,8 +214,10 @@ export const getValidToken = async (
       // promise. Success delivers the same token (or "" when the session
       // changed) to everyone; failure rejects so every follower throws, while
       // the lead caller (the one that created the promise, below) converts
-      // the failure into a null return.
-      return refreshPromise;
+      // the failure into a null return. A caller signal only rescues THIS
+      // caller from the wait (AbortError) — the shared flight keeps running
+      // for everyone else (single-flight is never cancelled by one aborter).
+      return raceWithAbortSignal(refreshPromise, signal);
     }
 
     refreshPromise = (async (): Promise<string | null> => {
@@ -208,8 +263,24 @@ export const getValidToken = async (
         return "";
       }
 
-      localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-      localStorage.setItem(TOKEN_TIME_KEY, Date.now().toString());
+      // Persistence is best-effort: a storage failure here (quota / privacy
+      // mode) is logged and ignored. It must NEVER reject this IIFE — a raw
+      // rejection is not a TokenRefreshError, so the lead caller's catch
+      // would dispatch 'auth-logout' and sign the user out over a transient
+      // environment problem. The access token stays valid in memory and the
+      // token-updated broadcast below still fires.
+      safeLocalStorageSet(
+        ACCESS_TOKEN_KEY,
+        accessToken,
+        "access-token-persist",
+        "apiClient",
+      );
+      safeLocalStorageSet(
+        TOKEN_TIME_KEY,
+        Date.now().toString(),
+        "token-time-persist",
+        "apiClient",
+      );
       if (tokenData.refresh_token) {
         // Fire-and-forget: the access token is already valid, so persisting
         // the rotated refresh token must not delay the refresh flow.
