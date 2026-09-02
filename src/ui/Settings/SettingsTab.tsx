@@ -17,18 +17,12 @@ import { ErrorLogSection } from "./components/ErrorLogSection";
 import { CacheManagerModal } from "./components/CacheManagerModal";
 
 import type { ThemeType } from "../../hooks/useTheme";
-import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
-import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
-import { captureError } from "../../utils/errorLog";
-import {
-  setCustomDownloadPath,
-  getEffectiveDownloadPath,
-} from "../../utils/downloadPath";
 import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useEffect, useState } from "react";
 import { subscribe, getEntries, cancelUpload } from "../../utils/uploadManager";
 import type { UploadEntry } from "../../utils/uploadManager";
+import { useDownloadPathSetting } from "./useDownloadPathSetting";
+import { useSeedImport } from "./useSeedImport";
 
 interface SettingsTabProps {
   theme: ThemeType;
@@ -67,22 +61,10 @@ export function SettingsTab({
   setShowTrashScreen,
 }: SettingsTabProps) {
   const { t } = useTranslation();
-  const [downloadPath, setDownloadPath] = useState<string>("");
   const [showCacheManager, setShowCacheManager] = useState(false);
-  const [importingSeed, setImportingSeed] = useState(false);
   const [uploadEntries, setUploadEntries] = useState<UploadEntry[]>(getEntries);
-
-  useEffect(() => {
-    void getEffectiveDownloadPath()
-      .then(setDownloadPath)
-      .catch((err: unknown) => {
-        void captureError({
-          level: "warn",
-          source: "SettingsTab",
-          message: `download-path-load-failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      });
-  }, []);
+  const { downloadPath, handlePickDownloadPath } = useDownloadPathSetting();
+  const { importingSeed, handleImportSeed } = useSeedImport();
 
   // Live snapshot of the upload queue: subscribe returns an unsubscribe, so
   // the effect's cleanup unsubscribes on unmount (no leaked subscriber).
@@ -94,74 +76,6 @@ export function SettingsTab({
   }, []);
 
   const activeUploads = uploadEntries.filter(isActiveUpload);
-
-  const handlePickDownloadPath = async () => {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: t("settings.select_download_folder"),
-      });
-      if (selected) {
-        setCustomDownloadPath(selected);
-        setDownloadPath(selected);
-      }
-    } catch {
-      showErrorToast(t("settings.select_folder_error"));
-    }
-  };
-
-  // Seed offline import (2026-08-10): one-shot restore of a metadata+cover
-  // backup produced by the Colab scanner. The picked zip is unpacked by Rust
-  // (import_metadata_seed) into <app_cache_dir>/metadata + /covers; mounted
-  // cards pick the data up on their next fetch (disk-first), already-mounted
-  // placeholders refresh on re-mount — the toast is the import's own signal.
-  interface ImportSeedStats {
-    metadataCount: number;
-    coverCount: number;
-    skipped: number;
-  }
-  const handleImportSeed = async () => {
-    if (importingSeed) return;
-    try {
-      const selected = await open({
-        directory: false,
-        multiple: false,
-        filters: [{ name: t("settings.import_seed"), extensions: ["zip"] }],
-      });
-      // Cancelled / no selection: nothing to import.
-      if (typeof selected !== "string") return;
-      setImportingSeed(true);
-      try {
-        const stats = await invoke<ImportSeedStats>("import_metadata_seed", {
-          zipPath: selected,
-        });
-        showSuccessToast(
-          t("settings.import_seed_success", {
-            metadata: stats.metadataCount,
-            covers: stats.coverCount,
-            skipped: stats.skipped,
-          }),
-        );
-      } catch (err) {
-        await captureError({
-          level: "error",
-          source: "SettingsTab",
-          message: `import-seed-failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        showErrorToast(t("settings.import_seed_error"));
-      } finally {
-        setImportingSeed(false);
-      }
-    } catch (err) {
-      await captureError({
-        level: "error",
-        source: "SettingsTab",
-        message: `open-seed-dialog-failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
-      showErrorToast(t("settings.import_seed_error"));
-    }
-  };
 
   return (
     <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto px-8 py-10 relative transition-colors duration-300">

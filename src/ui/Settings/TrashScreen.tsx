@@ -5,45 +5,33 @@ import {
   RefreshCw,
   LoaderCircle,
   TriangleAlert,
-  FileHeadphone,
-  Folder,
-  Check,
   SquareCheckBig,
   Ellipsis,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SkeletonRowList } from "../components/Skeleton";
-import {
-  restoreFile,
-  permanentlyDeleteFile,
-  FOLDER_MIME,
-} from "../../utils/driveApi";
-import { getTrashedFiles } from "../../utils/drivePagination";
+import { restoreFile, permanentlyDeleteFile } from "../../utils/driveApi";
 import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { useClickOutside } from "../../hooks/useClickOutside";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
-
-const TRASH_MODULE = "TrashScreen";
+import { TrashItemRow } from "./TrashItemRow";
+import {
+  removeIdsFromSelection,
+  runBulkOperation,
+  describeError,
+  TRASH_MODULE,
+} from "./trashBulkOps";
+import { useTrashedFiles } from "./useTrashedFiles";
 
 interface TrashScreenProps {
   token: string;
   onClose: () => void;
 }
 
-interface TrashedItem {
-  id: string;
-  name: string;
-  mimeType: string;
-}
-
 export function TrashScreen({ token, onClose }: TrashScreenProps) {
   const { t } = useTranslation();
-  const [items, setItems] = useState<TrashedItem[]>([]);
-  // Loading starts TRUE so the first committed frame shows the skeleton —
-  // starting false flashed the "Trash is empty" state for one frame before
-  // the effect set loading on (RC-B).
-  const [isLoading, setIsLoading] = useState(true);
+  const { items, setItems, isLoading, setIsLoading } = useTrashedFiles(token);
   const [isEmptying, setIsEmptying] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
 
@@ -66,42 +54,6 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     isMoreMenuOpen,
   );
 
-  const fetchTrashed = async () => {
-    try {
-      // Fetch trashed audio files and folders that were deleted by DrPlay
-      const q =
-        "trashed=true and appProperties has { key='deletedByDrPlay' and value='true' }";
-      const files = await getTrashedFiles(token, q);
-      setItems(
-        files.map((f: TrashedItem) => ({
-          id: f.id,
-          name: f.name,
-          mimeType: f.mimeType,
-        })),
-      );
-    } catch (e) {
-      void captureError({
-        level: "error",
-        source: TRASH_MODULE,
-        message: `fetch-trashed-failed: ${e instanceof Error ? e.message : String(e)}`,
-      });
-      showErrorToast(t("settings.trash_load_error"));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    // fetchTrashed only sets state after await, but the React Compiler
-    // lint rule (set-state-in-effect) still traces the finally-setState
-    // through the try/catch exception edges, so the disable stays.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchTrashed();
-    // fetchTrashed only closes over token (already in deps); its identity
-    // changes every render but the effect must only run on token change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
   // trash empty state by clearing items and dropping the loading flag so the
   // skeleton leaves immediately. onDebugEvent no-ops in production builds;
@@ -111,7 +63,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       setItems([]);
       setIsLoading(false);
     });
-  }, []);
+    // setState functions are useState setters (stable identities), so this
+    // still subscribes exactly once.
+  }, [setItems, setIsLoading]);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Loading / MainContent"):
   // forces the trash skeleton. isLoading is checked BEFORE items in the
@@ -124,7 +78,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         setIsLoading(true);
       }
     });
-  }, []);
+    // setIsLoading is a useState setter (stable identity), so this still
+    // subscribes exactly once.
+  }, [setIsLoading]);
 
   const handleRestore = async (id: string) => {
     setRestoringId(id);
@@ -136,7 +92,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       void captureError({
         level: "error",
         source: TRASH_MODULE,
-        message: `restore-failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `restore-failed: ${describeError(e)}`,
       });
       showErrorToast(t("settings.restore_error"));
     } finally {
@@ -150,26 +106,12 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     }
     setIsEmptying(true);
     try {
-      const deletePromises = items.map((item) =>
-        permanentlyDeleteFile(token, item.id),
+      const ids = items.map((item) => item.id);
+      const { succeededIds, failedCount } = await runBulkOperation(
+        items.map((item) => permanentlyDeleteFile(token, item.id)),
+        ids,
+        "empty-trash-item-failed",
       );
-      const results = await Promise.allSettled(deletePromises);
-      const succeededIds = new Set<string>();
-      let failedCount = 0;
-      results.forEach((result, index) => {
-        const item = items[index];
-        if (item === undefined) return;
-        if (result.status === "fulfilled") {
-          succeededIds.add(item.id);
-        } else {
-          failedCount += 1;
-          void captureError({
-            level: "error",
-            source: TRASH_MODULE,
-            message: `empty-trash-item-failed: ${item.id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
-          });
-        }
-      });
       if (failedCount > 0) {
         setItems((prev) => prev.filter((item) => !succeededIds.has(item.id)));
         showErrorToast(
@@ -184,7 +126,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       void captureError({
         level: "error",
         source: TRASH_MODULE,
-        message: `empty-trash-failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `empty-trash-failed: ${describeError(e)}`,
       });
       showErrorToast(t("settings.empty_trash_error"));
     } finally {
@@ -197,36 +139,18 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
-      const results = await Promise.allSettled(
+      const { succeededIds, failedCount } = await runBulkOperation(
         ids.map((id) => restoreFile(token, id)),
+        ids,
+        "bulk-restore-item-failed",
       );
-      const succeededIds = new Set<string>();
-      let failedCount = 0;
-      results.forEach((result, index) => {
-        const id = ids[index];
-        if (id === undefined) return;
-        if (result.status === "fulfilled") {
-          succeededIds.add(id);
-        } else {
-          failedCount += 1;
-          void captureError({
-            level: "error",
-            source: TRASH_MODULE,
-            message: `bulk-restore-item-failed: ${id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
-          });
-        }
-      });
       setItems((prev) => prev.filter((item) => !succeededIds.has(item.id)));
       window.dispatchEvent(new CustomEvent("refresh-drive"));
       if (failedCount > 0) {
         showErrorToast(
           t("settings.bulk_restore_error_count", { count: failedCount }),
         );
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          succeededIds.forEach((id) => next.delete(id));
-          return next;
-        });
+        setSelectedIds((prev) => removeIdsFromSelection(prev, succeededIds));
       } else {
         setSelectedIds(new Set());
         setIsSelectionMode(false);
@@ -235,7 +159,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       void captureError({
         level: "error",
         source: TRASH_MODULE,
-        message: `bulk-restore-failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `bulk-restore-failed: ${describeError(e)}`,
       });
       showErrorToast(t("settings.restore_error"));
     } finally {
@@ -248,35 +172,17 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
-      const results = await Promise.allSettled(
+      const { succeededIds, failedCount } = await runBulkOperation(
         ids.map((id) => permanentlyDeleteFile(token, id)),
+        ids,
+        "bulk-delete-item-failed",
       );
-      const succeededIds = new Set<string>();
-      let failedCount = 0;
-      results.forEach((result, index) => {
-        const id = ids[index];
-        if (id === undefined) return;
-        if (result.status === "fulfilled") {
-          succeededIds.add(id);
-        } else {
-          failedCount += 1;
-          void captureError({
-            level: "error",
-            source: TRASH_MODULE,
-            message: `bulk-delete-item-failed: ${id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
-          });
-        }
-      });
       setItems((prev) => prev.filter((item) => !succeededIds.has(item.id)));
       if (failedCount > 0) {
         showErrorToast(
           t("settings.bulk_delete_error_count", { count: failedCount }),
         );
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          succeededIds.forEach((id) => next.delete(id));
-          return next;
-        });
+        setSelectedIds((prev) => removeIdsFromSelection(prev, succeededIds));
       } else {
         setSelectedIds(new Set());
         setIsSelectionMode(false);
@@ -285,7 +191,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       void captureError({
         level: "error",
         source: TRASH_MODULE,
-        message: `bulk-delete-failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `bulk-delete-failed: ${describeError(e)}`,
       });
       showErrorToast(t("settings.empty_trash_error"));
     } finally {
@@ -416,82 +322,17 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   )}
                 </div>
               </div>
-              {items.map((item) => {
-                const isFolder = item.mimeType === FOLDER_MIME;
-                const isSelected = selectedIds.has(item.id);
-                return (
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    key={item.id}
-                    className={`flex items-center justify-between p-3 rounded-xl transition-colors ${
-                      isSelectionMode ? "cursor-pointer" : ""
-                    } ${
-                      isSelected
-                        ? "bg-brand-primary/10 border border-brand-primary/30"
-                        : "bg-gray-50 dark:bg-[#202124] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] border border-transparent"
-                    }`}
-                    onClick={() => {
-                      if (isSelectionMode) toggleItem(item.id);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        if (isSelectionMode) toggleItem(item.id);
-                      }
-                    }}
-                  >
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      {isSelectionMode && (
-                        <div
-                          className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
-                            isSelected
-                              ? "bg-brand-primary border-brand-primary"
-                              : "border-gray-300 dark:border-gray-600 bg-white dark:bg-black/20"
-                          }`}
-                        >
-                          {isSelected && (
-                            <Check className="w-3.5 h-3.5 text-white" />
-                          )}
-                        </div>
-                      )}
-                      <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : "bg-brand-primary/10 text-brand-primary"}`}
-                      >
-                        {isFolder ? (
-                          <Folder className="w-5 h-5" fill="currentColor" />
-                        ) : (
-                          <FileHeadphone className="w-5 h-5" />
-                        )}
-                      </div>
-                      <div className="overflow-hidden">
-                        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate max-w-[250px] sm:max-w-sm">
-                          {item.name}
-                        </h4>
-                      </div>
-                    </div>
-                    {!isSelectionMode && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleRestore(item.id);
-                        }}
-                        disabled={restoringId === item.id}
-                        className="px-4 py-1.5 text-xs font-semibold text-green-600 bg-green-50 hover:bg-green-100 dark:bg-green-900/20 dark:hover:bg-green-900/40 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 shrink-0"
-                      >
-                        {restoringId === item.id ? (
-                          <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <RefreshCw className="w-3.5 h-3.5" />
-                        )}
-                        <span className="hidden sm:inline">
-                          {t("settings.restore")}
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+              {items.map((item) => (
+                <TrashItemRow
+                  key={item.id}
+                  item={item}
+                  isSelected={selectedIds.has(item.id)}
+                  isSelectionMode={isSelectionMode}
+                  isRestoring={restoringId === item.id}
+                  onToggle={toggleItem}
+                  onRestore={handleRestore}
+                />
+              ))}
             </div>
           )}
         </div>
