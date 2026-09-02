@@ -5,24 +5,20 @@
 // bounds the total bytes fetched per file (BUDGET_CAP) and the app-wide
 // concurrent fetch count (CONCURRENCY 3), and classifies failures so the
 // metadata caller can fall back to a placeholder.
+//
+// Refactor layout (behavior unchanged): the chunk-LRU lives in
+// ./driveRangeChunkCache and the HTTP fetch machinery (app-wide semaphore,
+// in-flight dedup, retry/circuit-breaker state machine) in
+// ./driveRangeChunkFetcher; this file keeps the public surface — the
+// tokenizer class, the constants, and the re-exports — so every consumer and
+// the vitest mock specifier "./driveRangeTokenizer" keeps resolving the
+// exact same names as before.
 import { AbstractTokenizer } from "strtok3";
 import type { IFileInfo, IReadChunkOptions, ITokenizerOptions } from "strtok3";
 import { EndOfStreamError } from "strtok3";
-import { createSemaphore, sleep } from "./asyncLimit";
-import {
-  isDriveCircuitOpen,
-  recordDriveFailure,
-  recordDriveSuccess,
-} from "./driveRangeCircuitBreaker";
-import {
-  BudgetExceededError,
-  RangeFetchNetworkError,
-  RangeNotSupportedError,
-  SizeUnknownError,
-} from "./driveRangeErrors";
-import { captureError } from "./errorLog";
-import { backoffDelay, mergeWithTimeoutSignal } from "./retryDelay";
-import { DRIVE_STREAM_PREFIX } from "./streamPrefetcher";
+import { BudgetExceededError, SizeUnknownError } from "./driveRangeErrors";
+import { AlignedChunkCache, MAX_CACHED_CHUNKS } from "./driveRangeChunkCache";
+import { RangeChunkFetcher } from "./driveRangeChunkFetcher";
 
 // The circuit-breaker state machine (Fix H) and the typed fetch-error classes
 // live in their own modules (same folder); this file re-exports their whole
@@ -43,37 +39,24 @@ export {
   RangeNotSupportedError,
   SizeUnknownError,
 } from "./driveRangeErrors";
+export {
+  CONCURRENCY,
+  MAX_RETRIES,
+  REQUEST_TIMEOUT_MS,
+} from "./driveRangeChunkFetcher";
 
 export const RANGE_CHUNK = 65_536; // aligned chunk size (64KB)
 export const HEAD_BYTES = 131_072; // head region read before parsing (128KB)
 export const TAIL_BYTES = 1_048_576; // tail region scanned for moov (1MB)
 export const BUDGET_CAP = 20 * 1024 * 1024; // max bytes fetched per file (20MB)
-export const CONCURRENCY = 3; // max app-wide concurrent range fetches
-// Per-request timeout. Google Drive media endpoints show a known 30±5s
-// first-byte delay under load (rclone forum threads 22681/8320) — the old
-// 30s timeout aborted requests exactly AT that boundary, failing when Drive
-// was about to deliver. 45s clears the delay range with margin: a slow
-// success beats a fast timeout + placeholder (metadata fetch storm fix).
-export const REQUEST_TIMEOUT_MS = 45_000;
-export const MAX_RETRIES = 2; // extra attempts for 5xx/429 (total 3 tries)
-const TIMEOUT_RETRIES = 1; // extra attempt for timeouts (total 2 tries)
-const MAX_CACHED_CHUNKS = 128; // LRU bound (~8MB at 64KB chunks)
-const TOKENIZER_MODULE = "driveRangeTokenizer";
 
 export interface DriveRangeTokenizerOptions extends ITokenizerOptions {
   /** Override the 20MB per-file fetch budget (tests). */
   budgetBytes?: number;
 }
 
-// ---- App-wide fetch throttle: at most CONCURRENCY range fetches in flight.
-const rangeFetchSemaphore = createSemaphore(CONCURRENCY);
-
-function classifyFetchError(err: unknown): "network" | "timeout" {
-  if (err instanceof Error) {
-    if (err.name === "TimeoutError" || err.name === "AbortError")
-      return "timeout";
-  }
-  return "network";
+function alignedChunkStart(position: number): number {
+  return position - (position % RANGE_CHUNK);
 }
 
 /**
@@ -84,14 +67,9 @@ function classifyFetchError(err: unknown): "network" | "timeout" {
  * this is what lets a moov-at-end M4A be parsed without downloading mdat.
  */
 export class DriveRangeTokenizer extends AbstractTokenizer {
-  private readonly fileId: string;
   private readonly budgetBytes: number;
-  private readonly callerSignal: AbortSignal | undefined;
-  private readonly chunkCache = new Map<number, Uint8Array>();
-  // In-flight chunk fetches keyed by aligned chunkStart: a read racing an
-  // already-running fetch of the same chunk joins it instead of issuing a
-  // second request (which would double-charge the per-file fetch budget).
-  private readonly inflightChunks = new Map<number, Promise<Uint8Array>>();
+  private readonly chunkCache = new AlignedChunkCache();
+  private readonly chunkFetcher: RangeChunkFetcher;
   private loadedBytes = 0;
   override fileInfo: IFileInfo = { size: 0 };
 
@@ -104,9 +82,14 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     if (!Number.isFinite(size) || size <= 0) {
       throw new SizeUnknownError();
     }
-    this.fileId = fileId;
     this.budgetBytes = options.budgetBytes ?? BUDGET_CAP;
-    this.callerSignal = options.abortSignal;
+    this.chunkFetcher = new RangeChunkFetcher(
+      fileId,
+      options.abortSignal,
+      (byteCount) => {
+        this.loadedBytes += byteCount;
+      },
+    );
     this.fileInfo = { size };
   }
 
@@ -196,10 +179,8 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     const fileSize = this.fileInfo.size ?? 0;
     const fetchLen = Math.max(0, Math.min(headBytes, fileSize));
     if (fetchLen <= 0) return new Uint8Array(0);
-    if (this.loadedBytes + fetchLen > this.budgetBytes) {
-      throw new BudgetExceededError(this.loadedBytes, this.budgetBytes);
-    }
-    const data = await this.fetchChunk(0, fetchLen - 1);
+    this.assertBudget(fetchLen);
+    const data = await this.chunkFetcher.fetch(0, fetchLen - 1);
     // Populate the aligned chunk cache so parse-time reads inside the head
     // region are served without extra requests. Same invariant as
     // prefetchRange below: a trailing PARTIAL chunk may be cached only when
@@ -214,7 +195,7 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
       if (slice.length < RANGE_CHUNK && !reachedEof) continue;
       this.chunkCache.set(start, slice);
     }
-    this.evictOldestChunks();
+    this.chunkCache.evict();
     return data.subarray(0, fetchLen);
   }
 
@@ -245,8 +226,8 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     const fetchEnd = Math.min(Math.max(fetchStart, endExclusive), fileSize);
     const fetchLen = Math.max(0, fetchEnd - fetchStart);
     if (fetchLen <= 0) return new Uint8Array(0);
-    const firstChunk = fetchStart - (fetchStart % RANGE_CHUNK);
-    const lastChunk = fetchEnd - 1 - ((fetchEnd - 1) % RANGE_CHUNK);
+    const firstChunk = alignedChunkStart(fetchStart);
+    const lastChunk = alignedChunkStart(fetchEnd - 1);
     const chunkCount = (lastChunk - firstChunk) / RANGE_CHUNK + 1;
     // The LRU holds MAX_CACHED_CHUNKS chunks; seeding more than it can keep
     // is self-defeating: every evicted chunk is re-fetched by the parse,
@@ -259,10 +240,8 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
       return new Uint8Array(0);
     }
     const fetchSize = fetchEnd - firstChunk;
-    if (this.loadedBytes + fetchSize > this.budgetBytes) {
-      throw new BudgetExceededError(this.loadedBytes, this.budgetBytes);
-    }
-    const data = await this.fetchChunk(firstChunk, fetchEnd - 1);
+    this.assertBudget(fetchSize);
+    const data = await this.chunkFetcher.fetch(firstChunk, fetchEnd - 1);
     for (
       let chunkStart = firstChunk;
       chunkStart <= lastChunk;
@@ -272,7 +251,7 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
       const fullyCovered = chunkEnd <= fetchEnd;
       const endsAtEof = chunkStart === lastChunk && fetchEnd === fileSize;
       if (!fullyCovered && !endsAtEof) continue;
-      const existing = this.chunkCache.get(chunkStart);
+      const existing = this.chunkCache.peek(chunkStart);
       const sliceStart = Math.max(firstChunk, chunkStart);
       const sliceEnd = Math.min(fetchEnd, chunkEnd);
       const slice = data.subarray(
@@ -283,36 +262,31 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
         this.chunkCache.set(chunkStart, slice);
       }
     }
-    this.evictOldestChunks();
+    this.chunkCache.evict();
     return data.subarray(fetchStart - firstChunk, fetchEnd - firstChunk);
+  }
+
+  private assertBudget(fetchSize: number): void {
+    if (this.loadedBytes + fetchSize > this.budgetBytes) {
+      throw new BudgetExceededError(this.loadedBytes, this.budgetBytes);
+    }
   }
 
   private async getChunk(
     start: number,
   ): Promise<{ chunkStart: number; data: Uint8Array }> {
     const fileSize = this.fileInfo.size ?? 0;
-    const chunkStart = start - (start % RANGE_CHUNK);
+    const chunkStart = alignedChunkStart(start);
     const cached = this.chunkCache.get(chunkStart);
-    if (cached) {
-      // Map preserves insertion order, so delete+set on a hit "moves to the
-      // end": the first key is now the least-recently-used one, making the
-      // eviction below a true LRU (hot chunks survive repeated seeking).
-      this.chunkCache.delete(chunkStart);
-      this.chunkCache.set(chunkStart, cached);
-      return { chunkStart, data: cached };
-    }
+    if (cached) return { chunkStart, data: cached };
 
     const chunkEnd = Math.min(fileSize - 1, chunkStart + RANGE_CHUNK - 1);
     if (chunkStart > chunkEnd) {
       return { chunkStart, data: new Uint8Array(0) };
     }
 
-    const fetchSize = chunkEnd - chunkStart + 1;
-    if (this.loadedBytes + fetchSize > this.budgetBytes) {
-      throw new BudgetExceededError(this.loadedBytes, this.budgetBytes);
-    }
-
-    const data = await this.fetchChunk(chunkStart, chunkEnd);
+    this.assertBudget(chunkEnd - chunkStart + 1);
+    const data = await this.chunkFetcher.fetch(chunkStart, chunkEnd);
     // A joined in-flight fetch (prefetchRange/prefetchHead) can cover more
     // than this chunk — cache only the chunk's own extent so cache entries
     // keep their exact-chunk shape (a short EOF body stays short, as before).
@@ -321,208 +295,7 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
       Math.min(data.length, chunkEnd - chunkStart + 1),
     );
     this.chunkCache.set(chunkStart, chunkData);
-    this.evictOldestChunks();
+    this.chunkCache.evict();
     return { chunkStart, data: chunkData };
-  }
-
-  private evictOldestChunks(): void {
-    while (this.chunkCache.size > MAX_CACHED_CHUNKS) {
-      const oldest = this.chunkCache.keys().next().value;
-      if (oldest === undefined) break;
-      this.chunkCache.delete(oldest);
-    }
-  }
-
-  private async fetchChunk(
-    chunkStart: number,
-    chunkEnd: number,
-  ): Promise<Uint8Array> {
-    const inFlight = this.inflightChunks.get(chunkStart);
-    if (inFlight) {
-      const data = await inFlight;
-      // Join only when the in-flight fetch covers this request. A prefetchRange
-      // whose first chunk ends mid-chunk resolves short here — it has settled
-      // and left the map, so fetch the full extent ourselves (never serve
-      // short data for a chunk read).
-      if (data.length >= chunkEnd - chunkStart + 1) return data;
-      return this.fetchChunk(chunkStart, chunkEnd);
-    }
-    const promise = rangeFetchSemaphore.run(async () => {
-      const data = await this.fetchChunkWithRetry(chunkStart, chunkEnd);
-      // Charge the budget exactly once per real fetch — joiners never reach
-      // this line, so concurrent readers of one chunk cannot double-charge.
-      this.loadedBytes += data.length;
-      return data;
-    });
-    this.inflightChunks.set(chunkStart, promise);
-    try {
-      return await promise;
-    } finally {
-      // Remove only our own entry: a fallback re-registration may have
-      // replaced it while this fetch was settling.
-      if (this.inflightChunks.get(chunkStart) === promise) {
-        this.inflightChunks.delete(chunkStart);
-      }
-    }
-  }
-
-  private throwCircuitOpen(chunkStart: number, chunkEnd: number): never {
-    void captureError({
-      level: "warn",
-      source: TOKENIZER_MODULE,
-      message: `range-fetch-circuit-open (fileId=${this.fileId}, bytes=${String(chunkStart)}-${String(chunkEnd)})`,
-    });
-    throw new RangeFetchNetworkError("timeout", "drive-throttle-circuit-open");
-  }
-
-  private async fetchChunkWithRetry(
-    chunkStart: number,
-    chunkEnd: number,
-  ): Promise<Uint8Array> {
-    for (let attempt = 0; ; attempt += 1) {
-      // Fix H: when the app-wide Drive circuit is open (>= threshold failures
-      // in the window), fail fast INSTEAD of fetching — no request, no retry,
-      // so a throttled account gets time to recover. The metadata caller
-      // treats RangeFetchNetworkError as transient (no placeholder pinning).
-      if (isDriveCircuitOpen()) {
-        this.throwCircuitOpen(chunkStart, chunkEnd);
-      }
-      let response: Response;
-      try {
-        response = await fetch(`${DRIVE_STREAM_PREFIX}${this.fileId}`, {
-          headers: {
-            Range: `bytes=${String(chunkStart)}-${String(chunkEnd)}`,
-          },
-          cache: "no-store",
-          signal: mergeWithTimeoutSignal(this.callerSignal, REQUEST_TIMEOUT_MS),
-        });
-      } catch (err: unknown) {
-        // Caller-abort (unmount/navigation) is deliberate cancellation, not
-        // a transient Drive failure: it must not feed the app-wide circuit
-        // breaker (a few quick cancels would otherwise pin the whole app to
-        // a placeholder for the cooldown) and it is not a timeout either.
-        // Only the internal AbortSignal.timeout() fires AbortError with the
-        // caller signal still un-aborted — that one is a real timeout.
-        const callerAborted = this.callerSignal?.aborted === true;
-        if (!callerAborted) {
-          recordDriveFailure();
-        }
-        const kind = classifyFetchError(err);
-        if (kind === "timeout") {
-          if (!callerAborted) {
-            void captureError({
-              level: "warn",
-              source: TOKENIZER_MODULE,
-              message: `range-fetch-timeout (fileId=${this.fileId}, bytes=${String(chunkStart)}-${String(chunkEnd)})`,
-            });
-          }
-          // Timeouts are usually first-byte latency spikes on large Drive
-          // files, so a bounded retry can rescue them. Never retry when the
-          // CALLER aborted — that is deliberate cancellation, not a
-          // transient failure (an aborted signal makes every retry reject
-          // instantly anyway). Retries also stop when the circuit just
-          // opened — the failure count is the throttle signal.
-          if (
-            attempt < TIMEOUT_RETRIES &&
-            !(this.callerSignal?.aborted ?? false) &&
-            !isDriveCircuitOpen()
-          ) {
-            await sleep(backoffDelay(attempt));
-            continue;
-          }
-          throw new RangeFetchNetworkError(
-            "timeout",
-            `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
-          );
-        }
-        void captureError({
-          level: "warn",
-          source: TOKENIZER_MODULE,
-          message: `range-fetch-network-failed (fileId=${this.fileId}, bytes=${String(chunkStart)}-${String(chunkEnd)}): ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        });
-        throw new RangeFetchNetworkError(
-          "network",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-      if (response.status === 206) {
-        recordDriveSuccess();
-        let body: ArrayBuffer;
-        try {
-          body = await response.arrayBuffer();
-        } catch (err: unknown) {
-          // Body-stream read failure after the headers arrived (connection
-          // reset mid-body on a weak link) is a transient network failure —
-          // record it for the circuit breaker and surface it as
-          // RangeFetchNetworkError so the metadata caller treats it as
-          // transient (never pins the v:9 placeholder).
-          // A CALLER abort mid-body (unmount/navigation while the body is
-          // still downloading) is deliberate cancellation, not a Drive
-          // failure: mirror the fetch-reject catch above (commit bd1abdb) —
-          // no recordDriveFailure, no warn, and exit through the same
-          // RangeFetchNetworkError("timeout") shape every other abort path
-          // uses.
-          const callerAborted = this.callerSignal?.aborted === true;
-          if (callerAborted) {
-            throw new RangeFetchNetworkError(
-              "timeout",
-              `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
-            );
-          }
-          recordDriveFailure();
-          void captureError({
-            level: "warn",
-            source: TOKENIZER_MODULE,
-            message: `range-fetch-body-failed (fileId=${this.fileId}, bytes=${String(chunkStart)}-${String(chunkEnd)}): ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          });
-          throw new RangeFetchNetworkError(
-            "network",
-            err instanceof Error ? err.message : String(err),
-          );
-        }
-        return new Uint8Array(body);
-      }
-      if (response.status === 429 || response.status >= 500) {
-        // Every 429/5xx attempt feeds the breaker — including the final
-        // exhausted one (the old guard skipped it, undercounting 2/3).
-        recordDriveFailure();
-        if (attempt < MAX_RETRIES) {
-          // 429/5xx are the throttle signal itself — once they trip the
-          // circuit, do not keep retrying into the cooldown.
-          if (isDriveCircuitOpen()) {
-            this.throwCircuitOpen(chunkStart, chunkEnd);
-          }
-          // Mirror the timeout branch's caller-abort handling: never sleep
-          // into a cancelled caller's backoff (a Retry-After can park this
-          // loop for up to MAX_DELAY_MS) just to fire one doomed attempt
-          // afterwards — exit now through the same RangeFetchNetworkError
-          // path that branch throws when the CALLER aborted.
-          if (!(this.callerSignal?.aborted ?? false)) {
-            await sleep(
-              backoffDelay(attempt, response.headers.get("Retry-After")),
-            );
-            continue;
-          }
-          throw new RangeFetchNetworkError(
-            "timeout",
-            `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
-          );
-        }
-        // A retry budget exhausted on 429/5xx is still a TRANSIENT throttle
-        // failure (RFC 9110 §15.5.5: 429/503 signal a temporary condition).
-        // The old RangeNotSupportedError here made fetchPipeline cache the
-        // placeholder permanently after a throttle storm; RangeFetchNetworkError
-        // keeps the next mount re-fetching instead of pinning v:9.
-        throw new RangeFetchNetworkError(
-          "network",
-          `Drive range fetch throttled (status ${String(response.status)}) after ${String(MAX_RETRIES)} retries`,
-        );
-      }
-      throw new RangeNotSupportedError(response.status);
-    }
   }
 }
