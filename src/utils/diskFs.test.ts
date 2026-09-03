@@ -4,6 +4,7 @@ import {
   openDiskReadStream,
   registerUploadPath,
   statDiskPath,
+  toForwardSlashRelative,
   walkDiskFolder,
 } from "./diskFs";
 import { captureError } from "./errorLog";
@@ -415,6 +416,16 @@ describe("walkDiskFolder", () => {
       invokeMock.mock.calls.filter((c) => c[0] === "plugin:fs|read_dir"),
     ).toHaveLength(2);
     expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("toForwardSlashRelative keeps a sibling prefix-collision path intact", () => {
+    expect(toForwardSlashRelative("C:\\Music", "C:\\MusicExtra\\a.mp3")).toBe(
+      "C:/MusicExtra/a.mp3",
+    );
+    // Boundary itself must still be stripped (no behavior change for real children).
+    expect(toForwardSlashRelative("C:\\Music", "C:\\Music\\a.mp3")).toBe(
+      "a.mp3",
+    );
   });
 });
 

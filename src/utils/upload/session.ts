@@ -40,7 +40,19 @@ export function resumeEntryFromRow(
   }
   if (row.diskPath === undefined) return null;
   if (row.kind === "folderRoot" || row.kind === "folderChild") return null;
-  if (row.kind === "folderChildFile" && row.uploadUri === undefined)
+  if (
+    row.kind === "folderChildFile" &&
+    row.uploadUri === undefined &&
+    // F3: refuse ONLY a child whose parent was never resolved. Persist order
+    // guarantees this gate: processEntry's first persist writes the PLACEHOLDER
+    // parentId with no totalSize; the stat persist (uploadDiskFileStreaming)
+    // runs AFTER handleChildFile stored the resolved Drive folder into
+    // entry.parentId and is the first write carrying totalSize. So a row
+    // without totalSize still holds the unresumable placeholder, while a row
+    // WITH totalSize persists the real destination folder — equivalent to a
+    // diskFile of the same crash window: resume it, no URI = fresh initiate.
+    row.totalSize === undefined
+  )
     return null;
   const entry: InternalEntry = {
     // Fresh id — the old row (same id) was deleted by the caller first, so
@@ -60,14 +72,105 @@ export function resumeEntryFromRow(
       : {}),
   };
   if (row.kind === "folderChildFile") {
-    // The parent Drive folder id was resolved BEFORE the session initiated
-    // (handleChildFile runs before the chunked upload), so row.parentId is the
-    // real destination. Feed it back through a single-entry batch memo so
-    // handleChildFile resolves it without a live batch.
+    // The parent Drive folder id was resolved BEFORE the stat persist landed
+    // (handleChildFile runs before uploadDiskFileStreaming), and the totalSize
+    // gate above guarantees every accepted row carries that resolution, so
+    // row.parentId is the real destination. Feed it back through a single-entry
+    // batch memo so handleChildFile resolves it without a live batch.
     entry.relativeDir = "";
     entry.batchMemo = new Map<string, string>([["", row.parentId]]);
   }
   return entry;
+}
+
+// P2-B1a/B1c: resumed entry id -> interrupted SOURCE session row id. The
+// source row is marked 'interrupted' at scan time and deleted only once the
+// successor's own rows exist — deleting it earlier loses card + position on a
+// mid-resume crash. Lives here (session.ts, the resume-row owner) instead of
+// the old monolithic queue so both resume.ts (scan/mark) and pump.ts
+// (processEntry settle) reach the same map without an import cycle.
+const resumedPredecessors = new Map<string, string>();
+
+export function claimResumedPredecessor(
+  successorId: string,
+  oldRowId: string,
+): void {
+  resumedPredecessors.set(successorId, oldRowId);
+}
+
+// P2-F2 layer 2b helper (resume scan): source-row ids claimed by an earlier
+// resume round whose successor has not settled yet (map values = row ids).
+export function claimedPredecessorRowIds(): Set<string> {
+  return new Set(resumedPredecessors.values());
+}
+
+// P2-B1a: delete the interrupted source pair — the OLD session row plus its
+// stale same-id dimmed card (the successor publishes its rows under a fresh
+// id, so both old copies are garbage the moment retirement is safe).
+async function deleteInterruptedPredecessor(oldRowId: string): Promise<void> {
+  await dbRowOp(
+    () => db.uploadSessions.delete(oldRowId),
+    "session-resume-delete",
+  );
+  await dbRowOp(() => db.files.delete(oldRowId), "pending-row-delete");
+}
+
+// P2-B1a: retire an entry's interrupted source row once it is safe. With
+// requireSuccessorRow the deletion happens only when the successor's OWN
+// session row exists — a failed persist keeps the source recoverable for the
+// next scan. Without it the entry reached a definitive end (done / error /
+// cancel), where keeping the source would only resurrect dead work.
+export async function settleResumedPredecessor(
+  successorId: string,
+  requireSuccessorRow: boolean,
+): Promise<void> {
+  const oldRowId = resumedPredecessors.get(successorId);
+  if (oldRowId === undefined) return;
+  if (requireSuccessorRow) {
+    try {
+      if ((await db.uploadSessions.get(successorId)) === undefined) {
+        // Successor persist never landed — keep the source untouched.
+        return;
+      }
+    } catch (err) {
+      // Read failure is transient/local: conservative fallback KEEPS the
+      // source (never destroy the last remaining copy blindly).
+      await captureError({
+        level: "warn",
+        source: MODULE,
+        message: `resume-predecessor-check-failed: ${describeError(err)}`,
+      });
+      return;
+    }
+  }
+  resumedPredecessors.delete(successorId);
+  await deleteInterruptedPredecessor(oldRowId);
+}
+
+// P2-B1c: resume metadata carried onto the successor's first session snapshot
+// (shape mirrors SessionPersistExtra). undefined for fresh entries, so their
+// persisted rows stay byte-identical to before.
+export function inheritedResumeExtras(
+  entry: InternalEntry,
+):
+  | { uploadUri?: string; totalSize?: number; clientGeneratedId?: string }
+  | undefined {
+  if (
+    entry.resumeUri === undefined &&
+    entry.resumeTotalSize === undefined &&
+    entry.resumeClientGeneratedId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(entry.resumeUri !== undefined ? { uploadUri: entry.resumeUri } : {}),
+    ...(entry.resumeTotalSize !== undefined
+      ? { totalSize: entry.resumeTotalSize }
+      : {}),
+    ...(entry.resumeClientGeneratedId !== undefined
+      ? { clientGeneratedId: entry.resumeClientGeneratedId }
+      : {}),
+  };
 }
 
 // Resume metadata that only becomes known AFTER processEntry's first persist

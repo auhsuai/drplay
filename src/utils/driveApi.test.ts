@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   backoffDelay,
+  classifyDriveError,
   createFolder,
   deleteFile,
   driveFetch,
@@ -282,6 +283,20 @@ describe("backoffDelay", () => {
 // queryResumableStatus, putChunkWithRetry): 429/5xx by status alone, 403 only
 // when the body reports a Drive rate-limit reason (read via clone, only while
 // retries remain so the final attempt never consumes the body).
+describe("classifyDriveError name-based classification", () => {
+  it('classifies a caller-abort DOMException ("AbortError") as "timeout"', () => {
+    expect(classifyDriveError(new DOMException("aborted", "AbortError"))).toBe(
+      "timeout",
+    );
+  });
+
+  it('classifies an error named "TimeoutError" as "timeout" even without "timeout" in the message', () => {
+    expect(
+      classifyDriveError(new DOMException("signal timed out", "TimeoutError")),
+    ).toBe("timeout");
+  });
+});
+
 describe("shouldRetryDriveResponse", () => {
   it("returns true for 429 and 5xx statuses", async () => {
     expect(await shouldRetryDriveResponse(makeResponse(429), 0, 2)).toBe(true);
@@ -655,6 +670,53 @@ describe("driveFetch caller abort (Bug 1b)", () => {
 
     await assertion;
     expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Mirror of driveRangeTokenizer's "caller abort during 429 backoff exits
+  // immediately" regression: a retryable-status response (429/5xx + Retry-After)
+  // that resolves AFTER the caller cancelled must not park the loop in the
+  // full backoff sleep (up to MAX_DELAY_MS = 32s) just to fire one doomed
+  // attempt afterwards.
+  it("caller abort when a retryable-status response resolves exits immediately instead of sleeping", async () => {
+    const controller = new AbortController();
+    const retryAfterResponse = {
+      status: 500,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "32" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch.mockImplementationOnce(() => {
+      // Caller cancels exactly when the failed response arrives — the signal
+      // is already aborted the moment the backoff sleep would start.
+      controller.abort();
+      return Promise.resolve(retryAfterResponse);
+    });
+
+    let settled = false;
+    const guarded = driveFetch("https://www.googleapis.com/drive/v3/files", {
+      signal: controller.signal,
+    }).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened
+    // with NO second fetch attempt queued behind the sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    expect(err).toBeInstanceOf(DOMException);
+    expect(err).toMatchObject({ name: "AbortError" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1); // no doomed second attempt
   });
 
   // Variation guard: only a USER abort stops the retry chain. An AbortError
@@ -1451,6 +1513,46 @@ describe("uploadFileResumable", () => {
       uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p"),
     ).rejects.toMatchObject({ name: "UploadError", kind: "invalid" });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("POST initiate 500 after exhausting driveFetch retries → kind network + status 500 (manager-retryable), not invalid", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(makeErrorBodyResponse(500, "Backend Error"));
+
+    const p = uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
+    const assertion = expect(p).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "network",
+      status: 500,
+    });
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await assertion;
+    // driveFetch's full budget: 1 original POST + 4 backoff retries.
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
+    expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
+  });
+
+  // Regression (F1): a 5xx that survives driveFetch's WHOLE retry budget
+  // (×4 backoff) is transient, not fatal-invalid — it must surface as kind
+  // 'network' (+status) so uploadWithRetry, the single bytes-path retry
+  // layer, retries with backoff instead of killing the entry.
+  it("POST initiate 500 after exhausting driveFetch retries → kind network + status 500 (manager-retryable), not invalid", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(makeErrorBodyResponse(500, "Backend Error"));
+
+    const p = uploadFileResumable("tok", new Uint8Array(3), "a.mp3", "p");
+    const assertion = expect(p).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "network",
+      status: 500,
+    });
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await assertion;
+    // driveFetch's full budget: 1 original POST + 4 backoff retries.
+    expect(mockedFetch).toHaveBeenCalledTimes(5);
+    expect(fetchCallAt(0)[0]).toBe(INITIATE_URL);
   });
 
   it("POST initiate 403 with quota message → UploadError kind quota", async () => {
@@ -2500,13 +2602,60 @@ describe("uploadFileResumableChunked", () => {
     );
   });
 
-  it("chunk 500 → retried twice with backoff [1s, 3s], then network UploadError", async () => {
+  // Regression (F2): exhausting the per-chunk retry budget (500 ×3) is
+  // TRANSIENT — the session-restart layer must run query-status and resume
+  // the SAME session at the confirmed offset instead of failing the whole
+  // multi-GB file (same recovery as a raw network reset; mirrors how
+  // query-status treats its own exhausted retries).
+  it("chunk PUT 500 ×3 exhausts the budget → query-status resumes the SAME session at the confirmed offset (no new initiate)", async () => {
     vi.useFakeTimers();
     mockedFetch
       .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
       .mockResolvedValueOnce(makeRangeResponse(500, null))
       .mockResolvedValueOnce(makeRangeResponse(500, null))
-      .mockResolvedValueOnce(makeRangeResponse(500, null));
+      .mockResolvedValueOnce(makeRangeResponse(500, null))
+      // Query-status after the exhausted budget: Drive still holds chunk 1.
+      .mockResolvedValueOnce(makeRangeResponse(308, "bytes=0-8388607"))
+      // The tail continues on the SAME session and completes.
+      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+
+    const reader = makeReader(makePayload(TOTAL_SIZE), CHUNK_SIZE);
+    const p = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: TOTAL_SIZE,
+      readChunk: reader.readChunk,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await p).toEqual(uploadedFile);
+    // 1 initiate + 3 PUT attempts (budget) + 1 query-status + 1 final PUT.
+    expect(mockedFetch).toHaveBeenCalledTimes(6);
+    // The surviving session was resumed — NEVER re-initiated.
+    expect(
+      mockedFetch.mock.calls.filter((c) => c[0] === INITIATE_URL),
+    ).toHaveLength(1);
+    // Chunks continue from the server-confirmed byte (8388607 + 1).
+    expect(reader.offsets).toEqual([0, 8388608]);
+    const [queryUrl, queryOpts] = fetchCallAt(4);
+    expect(queryUrl).toBe(LOCATION);
+    expect(queryOpts?.method).toBe("PUT");
+    expect(
+      (queryOpts?.headers as Record<string, string>)["Content-Range"],
+    ).toBe("*/10000000");
+    const [, finalPutOpts] = fetchCallAt(5);
+    expect(
+      (finalPutOpts?.headers as Record<string, string>)["Content-Range"],
+    ).toBe("bytes 8388608-9999999/10000000");
+  });
+
+  // Regression (F1, chunked path): initiate POST answered 5xx on EVERY
+  // driveFetch attempt (budget ×4) → transient, NOT fatal-invalid. The
+  // uploader must try a fresh session (attempt 2); only after the LAST
+  // session also fails does it surface the generic network exhaustion error.
+  it("initiate 500 exhausts driveFetch's budget → second session attempted; final error transient network, never invalid", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(makeErrorBodyResponse(500, "Backend Error"));
 
     const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
     const p = uploadFileResumableChunked("tok", {
@@ -2515,13 +2664,21 @@ describe("uploadFileResumableChunked", () => {
       totalSize: CHUNK_SIZE,
       readChunk: reader.readChunk,
     });
-    const assertion = expect(p).rejects.toMatchObject({ kind: "network" });
-    await vi.advanceTimersByTimeAsync(10_000);
+    const assertion = expect(p).rejects.toMatchObject({
+      name: "UploadError",
+      kind: "network",
+      message: "upload failed after 2 attempts",
+    });
+    await vi.advanceTimersByTimeAsync(300_000);
 
     await assertion;
-    // 1 original PUT + 2 retries = 3 PUT calls, no session restart.
-    expect(mockedFetch).toHaveBeenCalledTimes(4);
-    expect(reader.offsets).toEqual([0]);
+    // Both sessions ran their own full initiate budget (5 POSTs each).
+    expect(mockedFetch).toHaveBeenCalledTimes(10);
+    // Session 2 was actually initiated (the restart path ran).
+    expect(fetchCallAt(5)[0]).toBe(INITIATE_URL);
+    expect(mockedFetch.mock.calls.every((c) => c[0] === INITIATE_URL)).toBe(
+      true,
+    );
   });
 
   it("chunk 429 → retried, succeeds on the second attempt", async () => {
@@ -2766,6 +2923,71 @@ describe("uploadFileResumableChunked", () => {
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ kind: "aborted" });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Mirror of driveFetch's and queryResumableStatus's caller-abort guards,
+  // now for the CHUNK PUT retry loop (putChunkWithRetry): a 429/5xx response
+  // with Retry-After resolving AFTER the caller cancelled must not park the
+  // chunk upload in the full backoff sleep (up to MAX_DELAY_MS = 32s) just to
+  // fire one doomed attempt afterwards (the merged signal would reject it
+  // instantly). Distinct from "caller abort mid-upload" above: there the fetch
+  // itself REJECTS mid-flight (catch path); here the response RESOLVES
+  // successfully and the gap was the backoff sleep.
+  it("caller abort when a retryable-status chunk response resolves exits immediately instead of sleeping", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const retryAfterResponse = {
+      status: 500,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "32" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch
+      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+      .mockImplementationOnce(() => {
+        // Caller cancels exactly when the failed chunk response arrives —
+        // the signal is already aborted the moment the backoff sleep would
+        // start.
+        controller.abort();
+        return Promise.resolve(retryAfterResponse);
+      });
+
+    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+    let settled = false;
+    const guarded = uploadFileResumableChunked("tok", {
+      name: "big.flac",
+      parentId: "p",
+      totalSize: CHUNK_SIZE,
+      readChunk: reader.readChunk,
+      signal: controller.signal,
+    }).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened
+    // with NO second fetch attempt queued behind the sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    // Same aborted-upload error path as putChunkWithRetry's fetch-rejection
+    // catch: UploadError kind 'aborted' (never a fresh type).
+    expect(err).toBeInstanceOf(UploadError);
+    expect(err).toMatchObject({
+      kind: "aborted",
+      message: "upload aborted by caller",
+    });
+    // Initiate POST + the one failed PUT; no doomed second attempt.
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
@@ -4257,6 +4479,76 @@ describe("queryResumableStatus per-attempt timeout signals", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+// Mirror of driveFetch's caller-abort guard regression ("caller abort when a
+// retryable-status response resolves exits immediately instead of sleeping"):
+// a 429/5xx response with Retry-After resolving AFTER the caller cancelled
+// must not park the status query in the full backoff sleep (up to MAX_DELAY_MS
+// = 32s) just to fire one doomed attempt afterwards.
+describe("queryResumableStatus caller abort during retry backoff", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  const UPLOAD_URI =
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=query-abort-1";
+
+  it("caller abort when a retryable-status response resolves exits immediately instead of sleeping", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const retryAfterResponse = {
+      status: 500,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "32" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch.mockImplementationOnce(() => {
+      // Caller cancels exactly when the failed response arrives — the signal
+      // is already aborted the moment the backoff sleep would start.
+      controller.abort();
+      return Promise.resolve(retryAfterResponse);
+    });
+
+    let settled = false;
+    const guarded = queryResumableStatus(
+      UPLOAD_URI,
+      "tok",
+      1000,
+      controller.signal,
+    ).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // 1ms of fake time: enough for the response microtasks to run, nowhere
+    // near the 32s Retry-After — the rejection must already have happened
+    // with NO second fetch attempt queued behind the sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const err = await guarded;
+    // Same aborted-upload error path as this module's fetch-rejection catch:
+    // UploadError kind 'aborted' (never a fresh type).
+    expect(err).toBeInstanceOf(UploadError);
+    expect(err).toMatchObject({
+      kind: "aborted",
+      message: "upload aborted by caller",
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1); // no doomed second attempt
   });
 });
 

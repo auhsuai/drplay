@@ -120,10 +120,13 @@ async function uploadWithRetry(
       // A Retry-After header (RFC 9110) from a 429/5xx overrides the
       // exponential backoff when present; backoffDelay falls back to
       // exponential + jitter when undefined.
-      await sleep(backoffDelay(attempt - 1, err.retryAfter));
-      // An abort during the backoff must not schedule another attempt — the
-      // user asked to cancel; re-firing would waste a fresh upload session.
+      // A retry decision made on an already-aborted signal must not sleep:
+      // guard BEFORE the backoff so a caller cancel exits immediately instead
+      // of waiting out the full delay (mirror of driveFetch's pre-sleep abort
+      // guard). The loop-top check covers an abort DURING the sleep, so no
+      // post-sleep check is needed here.
       if (signal?.aborted) throw abortedUploadError();
+      await sleep(backoffDelay(attempt - 1, err.retryAfter));
     }
   }
   throw lastErr instanceof Error

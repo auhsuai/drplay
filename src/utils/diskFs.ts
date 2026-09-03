@@ -327,12 +327,18 @@ function joinPath(dirPath: string, name: string): string {
 // Strip the walked root and normalize separators: "C:\Music\sub\a.mp3" with
 // root "C:\Music" becomes "sub/a.mp3" (no leading slash). Forward slashes
 // are valid on Windows and keep relativePath portable to the Drive API.
-function toForwardSlashRelative(
+// Exported for unit testing only; internal callers unchanged.
+export function toForwardSlashRelative(
   rootPath: string,
   absolutePath: string,
 ): string {
-  const rel = absolutePath.startsWith(rootPath)
-    ? absolutePath.slice(rootPath.length)
-    : absolutePath;
+  // Only strip when absolutePath is genuinely UNDER rootPath: the remainder
+  // must be empty, start with a separator, or the root itself must end with
+  // one. A bare startsWith() would let a sibling sharing a string prefix
+  // ("C:\MusicExtra") match root "C:\Music" and corrupt its relativePath.
+  const rest = absolutePath.slice(rootPath.length);
+  const underRoot =
+    rest === "" || /^[\\/]/.test(rest) || /[\\/]$/.test(rootPath);
+  const rel = underRoot ? rest : absolutePath;
   return rel.replace(/^[\\/]+/, "").replace(/\\/g, "/");
 }

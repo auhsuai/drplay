@@ -27,7 +27,7 @@ import {
   ResumeFileMissingError,
 } from "./errors";
 import { findEntryByAnyId, pruneEntry } from "./queueState";
-import { clearSession, dbRowOp } from "./session";
+import { clearSession, dbRowOp, settleResumedPredecessor } from "./session";
 import type { InternalEntry } from "./types";
 
 // User-facing queue operations and the terminal (done/error) transition
@@ -73,6 +73,10 @@ function cancelQueuedEntry(entry: InternalEntry): void {
   void dbRowOp(() => db.files.delete(entry.id), "pending-row-delete");
   // Sync path: fire-and-forget — clearSession swallows its own failures.
   void clearSession(entry);
+  // A cancelled resume is a definitive end: drop the interrupted source pair
+  // unconditionally, or every future launch would resurrect the cancelled
+  // work (P2-B1a).
+  void settleResumedPredecessor(entry.id, false);
   clearProgressNotifyTimer();
   notify();
   pruneEntry(entry);
@@ -116,6 +120,10 @@ export async function markDone(
   markRecentlyDone(driveItem.id);
   // Terminal: the active session row is stale the moment the upload is done.
   await clearSession(entry);
+  // P2-B1a terminal net: normally retired at processEntry already; if that
+  // persist failed, a completed upload means the real Drive row exists — the
+  // source is safe to drop (no-op when nothing is pending).
+  await settleResumedPredecessor(entry.id, false);
   await finishEntry(entry);
   window.dispatchEvent(
     new CustomEvent<{ count: number }>(DRIVE_FILES_CHANGED_EVENT, {
@@ -194,6 +202,11 @@ export async function markError(
   // Terminal (error/cancel): the active session row is stale — drop it so a
   // future resume never retries a dead entry.
   await clearSession(entry);
+  // P2-B1a terminal net: if the successor's first persist failed and this
+  // entry still ended terminally, drop the source pair anyway — a permanently
+  // failed resume must not resurrect on every launch (no-op when already
+  // retired).
+  await settleResumedPredecessor(entry.id, false);
   await finishEntry(entry);
 }
 

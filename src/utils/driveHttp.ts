@@ -20,11 +20,21 @@ const DEFAULT_TIMEOUT_MS = 20000;
 export { backoffDelay, mergeWithTimeoutSignal, sleep };
 
 /**
- * Derive a short, safe classification tag from an error's message ONLY.
+ * Derive a short, safe classification tag from an error's name and message.
  * We never log the error object or its stack — those can leak file ids, user
  * data, or (in theory) auth material into logs. Callers use this for observability.
  */
 export function classifyDriveError(err: unknown): string {
+  // Name check first (same pattern as apiClient.classifyRequestError): a
+  // caller abort rejects with DOMException("aborted", "AbortError") — its
+  // message carries no "aborterror" text — and AbortSignal.timeout()
+  // rejects with name "TimeoutError" (only some engines put "timeout" in
+  // the message), so both would otherwise land in "unknown".
+  if (
+    (err instanceof DOMException || err instanceof Error) &&
+    (err.name === "AbortError" || err.name === "TimeoutError")
+  )
+    return "timeout";
   const msg =
     err instanceof Error
       ? err.message
@@ -123,8 +133,17 @@ export async function driveFetch(
           isDriveFetchRetryableStatus,
         ))
       ) {
-        await sleep(backoffDelay(attempt, res.headers.get("Retry-After")));
-        continue;
+        // Mirror driveRangeTokenizer's caller-abort guard (and this catch
+        // path below): never sleep into a cancelled caller's backoff — a
+        // long Retry-After can park this loop for up to MAX_DELAY_MS just
+        // to fire one doomed attempt afterwards. The AbortError thrown here
+        // lands in the catch block, which rethrows it because
+        // options.signal.aborted is true (same exit as a mid-fetch abort).
+        if (!(options.signal?.aborted ?? false)) {
+          await sleep(backoffDelay(attempt, res.headers.get("Retry-After")));
+          continue;
+        }
+        throw new DOMException("aborted", "AbortError");
       }
       return res;
     } catch (err) {

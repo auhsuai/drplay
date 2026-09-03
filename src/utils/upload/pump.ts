@@ -1,14 +1,21 @@
 import { db } from "../../db/db";
 import type { DriveFileItem } from "../driveApi";
 import { UploadError } from "../driveUpload";
+import { captureError } from "../errorLog";
 import { notify, resetProgressNotify } from "./events";
 import { createEntry, enqueuePendingRows, pendingRow } from "./enqueue";
 import { createControllerFor } from "./controllers";
 import { handleFolderChild, handleFolderRoot } from "./folderBatch";
 import { markDone, markError } from "./terminal";
 import { uploadWithQuotaAndRetry } from "./retry";
-import { appendEntries, nextQueued } from "./queueState";
-import { dbRowOp, persistActiveSession } from "./session";
+import { appendEntries, hasActiveDuplicate, nextQueued } from "./queueState";
+import {
+  dbRowOp,
+  inheritedResumeExtras,
+  persistActiveSession,
+  settleResumedPredecessor,
+} from "./session";
+import { MODULE } from "./errors";
 import { handleChildFile, handleDiskFile } from "./streaming";
 import type { InternalEntry, UploadSeed } from "./types";
 
@@ -22,17 +29,33 @@ const UPLOAD_CONCURRENCY = 2;
 let busy = false;
 
 /**
- * Enqueue uploads and start pumping the queue. The manager runs uploads
- * strictly sequentially (one at a time) and publishes a pending db.files row
- * per entry so the UI can render dimmed cards immediately, long before Drive
- * confirms anything. Invalid seeds (folder without a disk path, file without
- * bytes/path) surface as error entries instead of throwing.
+ * Enqueue uploads and start pumping the queue. The manager runs up to
+ * UPLOAD_CONCURRENCY uploads in parallel (see pump()) and publishes a pending
+ * db.files row per entry so the UI can render dimmed cards immediately, long
+ * before Drive confirms anything. Invalid seeds (folder without a disk path,
+ * file without bytes/path) surface as error entries instead of throwing.
  * @param seeds The items to upload (bytes payloads or disk paths).
  * @param token Drive access token for this batch's requests.
  */
 export function startUploads(seeds: UploadSeed[], token: string): void {
   const queued: InternalEntry[] = [];
   for (const seed of seeds) {
+    // P2-B4 duplicate-seed guard: a seed whose (diskPath, parentId) matches an
+    // ACTIVE (queued/uploading) entry would upload a second identical Drive
+    // copy (double-click menu / double-drop). Skip it — terminal entries are
+    // pruned from `entries`, so done/error files stay re-uploadable on purpose.
+    if (
+      seed.diskPath !== undefined &&
+      hasActiveDuplicate(seed.diskPath, seed.parentId)
+    ) {
+      // Basename only in the log — never the user's full disk path.
+      void captureError({
+        level: "warn",
+        source: MODULE,
+        message: `duplicate-seed-skipped name=${seed.name}`,
+      });
+      continue;
+    }
     const entry = createEntry(seed, token);
     appendEntries(entry);
     // Invalid seeds are terminal 'error' entries — they never touch the DB.
@@ -93,8 +116,14 @@ async function processEntry(entry: InternalEntry): Promise<void> {
   // pipeline.
   await Promise.all([
     dbRowOp(() => db.files.put(pendingRow(entry)), "pending-row"),
-    persistActiveSession(entry),
+    // P2-B1c: a resumed entry re-persists its INHERITED session metadata at
+    // the first write — otherwise a crash before the chunked uploader reports
+    // a fresh URI drops the still-valid server session and restarts at byte 0.
+    persistActiveSession(entry, inheritedResumeExtras(entry)),
   ]);
+  // P2-B1a: both successor rows were attempted — retire the marked source
+  // pair, but only if the successor's own session row really landed.
+  await settleResumedPredecessor(entry.id, true);
   try {
     const driveItem = await handleByKind(entry);
     await markDone(entry, driveItem);

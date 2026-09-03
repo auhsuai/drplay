@@ -21,6 +21,7 @@ import {
   IdempotentConflictError,
   UploadError,
   abortedUploadError,
+  isTransientUploadStatus,
   mapUploadHttpError,
 } from "./uploadTransportErrors";
 
@@ -155,6 +156,15 @@ export async function uploadFileResumable(
     }
     if (signal?.aborted) {
       throw abortedUploadError();
+    }
+    // A 429/5xx that survived EVERY transport retry (driveFetch's ×4 budget
+    // behind the initiate POST) is transient, NOT invalid: rethrow as kind
+    // 'network' (+status/Retry-After) so uploadWithRetry — the single
+    // bytes-path retry layer — retries with backoff instead of failing the
+    // entry fatally (same treatment the PUT branch above gives live 429/5xx).
+    // auth/quota and the other 4xx fall through and stay fatal.
+    if (err instanceof UploadError && isTransientUploadStatus(err.status)) {
+      throw new UploadError(err.message, "network", err.status, err.retryAfter);
     }
     if (err instanceof UploadError) {
       throw err;

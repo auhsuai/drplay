@@ -12,6 +12,7 @@ import {
   SessionExpiredError,
   UploadError,
   abortedUploadError,
+  isTransientUploadStatus,
   surfaceSessionUploadError,
   uploadAttemptsExhaustedError,
 } from "./uploadTransportErrors";
@@ -196,7 +197,13 @@ export async function uploadFileResumableChunked(
     } catch (err) {
       if (err instanceof IdempotentConflictError) return err.file;
       if (opts.signal?.aborted) throw abortedUploadError();
-      if (err instanceof UploadError) throw err;
+      // Fatal UploadErrors exit here (auth/quota, 'invalid' 4xx like
+      // 400/404/409-without-id…). A 429/5xx that survived driveFetch's whole
+      // retry budget is TRANSIENT — fall through and restart the session
+      // exactly like the raw transient failures below.
+      if (err instanceof UploadError && !isTransientUploadStatus(err.status)) {
+        throw err;
+      }
       // Initiate exhausted its own retries with a transient failure — try a fresh session (bounded by CHUNKED_SESSION_MAX_ATTEMPTS).
       if (attempt + 1 < CHUNKED_SESSION_MAX_ATTEMPTS) {
         await captureError({

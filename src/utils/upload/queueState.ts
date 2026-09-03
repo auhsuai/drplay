@@ -23,6 +23,37 @@ let nextScanIndex = 0;
 // acyclic (queue -> events, never events -> queue).
 bindEntries(() => entries);
 
+// resume.ts must READ the live entries for its double-resume guards (scan-time
+// layer 2a skip + ghost-sweep keep-set) — exported straight from the owner so
+// the import graph stays acyclic (resume -> state, never state -> resume).
+
+// Every in-process entry, ANY status (terminal-but-unpruned included) — the
+// same matching scope the P2-F2 layer 2a skip uses.
+export function liveEntries(): readonly InternalEntry[] {
+  return entries;
+}
+
+// Ids of every in-process entry (any status): a pending db.files row owned by
+// a live entry is never a ghost (F1), even when its session row has not landed.
+export function liveEntryIds(): Set<string> {
+  return new Set(entries.map((e) => e.id));
+}
+
+// P2-B4 duplicate-seed guard: does a live entry with the same
+// (diskPath, parentId) still sit in queued/uploading? Only disk-path seeds
+// carry the stable identity this check needs (bytes seeds have no key).
+export function hasActiveDuplicate(
+  diskPath: string,
+  parentId: string,
+): boolean {
+  return entries.some(
+    (e) =>
+      e.diskPath === diskPath &&
+      e.parentId === parentId &&
+      (e.status === "queued" || e.status === "uploading"),
+  );
+}
+
 // Append entries at the TAIL — the invariant nextScanIndex relies on (see its
 // comment above). Every enqueue path funnels here.
 export function appendEntries(...added: InternalEntry[]): void {
