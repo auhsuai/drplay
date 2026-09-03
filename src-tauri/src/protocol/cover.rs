@@ -102,18 +102,23 @@ pub(crate) fn shard_pair(raw_id: &str) -> (&str, &str) {
     (s1, s2)
 }
 
-/// ETag derived from the file's mtime — zero extra deps, changes whenever the
-/// cover is re-written. mtime granularity is coarse (seconds), which is fine:
-/// a rewritten cover with the same second still flips content via the moka
-/// cache TTL and the 304 gate only short-circuits byte-identical responses.
+/// ETag derived from the file's full-precision mtime (secs+nanos since epoch).
+/// Zero extra deps; changes whenever the cover is re-written, including
+/// rewrites inside the same wall-clock second. Sub-second precision matters:
+/// truncating to seconds made two same-second overwrites share an ETag, so
+/// the If-None-Match gate answered 304 with stale bytes. All supported
+/// filesystems carry sub-second mtimes (NTFS stores 100ns FILETIME units,
+/// ext4/f2fs keep nanosecond inode fields); if metadata is unavailable the
+/// value falls back to `"0"`. The string stays opaque — consumers only
+/// compare it verbatim (ETag header / If-None-Match), never parse it.
 fn etag_from_mtime(path: &Path) -> String {
-    let mtime_secs = std::fs::metadata(path)
+    let mtime_nanos = std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("\"{mtime_secs}\"")
+    format!("\"{mtime_nanos}\"")
 }
 
 // Initialized from `lib.rs` `setup` with a log path under `<app_cache_dir>/.thumbnails/`.
@@ -241,6 +246,13 @@ pub async fn handle_cover_get(
     };
     let result: CoverResult = match disk_result {
         Ok((etag, bytes)) => {
+            // Disk-served covers count as accesses too (same as CACHE_HIT):
+            // keeps the recency access log complete for ids whose covers are
+            // not yet in RAM. Guard is dropped before the .await below
+            // (std::sync::MutexGuard is !Send and must not span await points).
+            if let Ok(mut r) = recorder.lock() {
+                r.record(raw_id);
+            }
             COVER_CACHE
                 .insert(cache_key.clone(), (etag.clone(), bytes.clone()))
                 .await;
@@ -346,6 +358,8 @@ pub async fn clear_thumbnail_dir(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Total byte size of every regular file under `path` (recursive), or 0 when
 /// the path does not exist. Pure std — no tauri dependency, unit-testable.
+/// Symlink/junction entries are never followed or counted: their target may
+/// live outside the tree, and the GC budget must only reflect owned bytes.
 /// Recursion depth is bounded in practice: the thumbnail dir holds 1-2 levels.
 pub fn directory_size(path: &std::path::Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else {
@@ -353,8 +367,19 @@ pub fn directory_size(path: &std::path::Path) -> u64 {
     };
     let mut total = 0u64;
     for entry in entries.flatten() {
+        // `DirEntry::file_type`/`metadata` do NOT traverse symlinks/junctions
+        // (unlike `Path::is_dir`, stat semantics), so a link pointing outside
+        // is skipped instead of being sized or recursed into. An unreadable
+        // entry contributes nothing — same vanish-mid-scan policy as
+        // `remove_dir_contents`.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
         let entry_path = entry.path();
-        if entry_path.is_dir() {
+        if file_type.is_dir() {
             total = total.saturating_add(directory_size(&entry_path));
         } else if let Ok(meta) = entry.metadata() {
             total = total.saturating_add(meta.len());

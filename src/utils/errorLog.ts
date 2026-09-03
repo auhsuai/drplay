@@ -5,6 +5,8 @@ import type { ErrorLogEntry } from "../db/db";
 // Mỗi entry gồm regex (global) và hàm redact tương ứng. Gắn type rõ ràng để
 // tránh nhầm lẫn: link pattern luôn → [REDACTED_LINK] (kể cả khi url chứa
 // "?id="), còn id/access_token/bearer được redact riêng biệt.
+// Charset giá trị chung [a-zA-Z0-9._+/=-]: hợp của base64 (+ / =) và
+// base64url (- _) theo RFC 4648 §4/§5 — bắt cả token dạng "1//..." của Google.
 const SENSITIVE_PATTERNS: {
   re: RegExp;
   redact: (match: string, prefix: string) => string;
@@ -21,41 +23,44 @@ const SENSITIVE_PATTERNS: {
   },
   // Ẩn mọi string có chứa id= (id của bài hát trên drive); prefix ?/& tuỳ chọn
   {
-    re: /([?&]?)id=[a-zA-Z0-9_-]+/g,
+    re: /([?&]?)id=[a-zA-Z0-9._+/=-]+/g,
     redact: (_m, p) => `${p}id=[REDACTED_ID]`,
   },
   // Drive file/folder ids logged by hooks (keys ending in "Id" or "folder")
   // — case-sensitive 'id=' above misses these; redact the value only.
   {
-    re: /([?&]?)(?:dbId|driveFileId|fileId|folder)=[a-zA-Z0-9_-]+/g,
+    re: /([?&]?)(?:dbId|driveFileId|fileId|folder)=[a-zA-Z0-9._+/=-]+/g,
     redact: (_m, p) => `${p}[REDACTED_ID]`,
   },
   // Ẩn Access Token nếu lỡ bị log ra (giữ nguyên pattern tiền tố tuỳ chọn)
   {
-    re: /([?&]?)access_token=[a-zA-Z0-9._-]+/g,
+    re: /([?&]?)access_token=[a-zA-Z0-9._+/=-]+/g,
     redact: () => "[REDACTED_TOKEN]",
   },
   // Ẩn Refresh Token (sống lâu hơn access token nên không được log — OWASP Logging Cheat Sheet)
   {
-    re: /([?&]?)refresh_token=[a-zA-Z0-9._-]+/g,
+    re: /([?&]?)refresh_token=[a-zA-Z0-9._+/=-]+/g,
     redact: () => "[REDACTED_TOKEN]",
   },
   // Ẩn token= chung (đặt sau access_token/refresh_token để key dài hơn được khớp trước)
-  { re: /([?&]?)token=[a-zA-Z0-9._-]+/g, redact: () => "[REDACTED_TOKEN]" },
+  { re: /([?&]?)token=[a-zA-Z0-9._+/=-]+/g, redact: () => "[REDACTED_TOKEN]" },
   // Ẩn upload_id= (key lẫn value)
-  { re: /([?&]?)upload_id=[a-zA-Z0-9._-]+/g, redact: () => "[REDACTED_ID]" },
+  { re: /([?&]?)upload_id=[a-zA-Z0-9._+/=-]+/g, redact: () => "[REDACTED_ID]" },
   // Ẩn api_key / api-key / apikey
   {
-    re: /([?&]?)api[_-]?key=[a-zA-Z0-9._-]+/g,
+    re: /([?&]?)api[_-]?key=[a-zA-Z0-9._+/=-]+/g,
     redact: () => "[REDACTED_TOKEN]",
   },
   // Ẩn header Authorization (đứng trước Bearer để "Authorization: Bearer xyz" không bị redact 2 lần)
   {
-    re: /Authorization:\s*(?:Bearer\s+)?[a-zA-Z0-9._-]+/gi,
+    re: /Authorization:\s*(?:Bearer\s+)?[a-zA-Z0-9._+/=-]+/gi,
     redact: () => "Authorization: [REDACTED_TOKEN]",
   },
   // Ẩn Bearer token (case-insensitive, defense-in-depth, đồng bộ với workerError.ts)
-  { re: /Bearer\s+[a-zA-Z0-9._-]+/gi, redact: () => "Bearer [REDACTED_TOKEN]" },
+  {
+    re: /Bearer\s+[a-zA-Z0-9._+/=-]+/gi,
+    redact: () => "Bearer [REDACTED_TOKEN]",
+  },
 ];
 
 export const sanitizeString = (str: string): string => {

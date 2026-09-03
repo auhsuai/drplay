@@ -43,31 +43,35 @@ export interface FolderVisitEntry {
 export async function recordPlay(track: Track) {
   const email = getCurrentUserEmail();
   try {
-    await db.transaction("rw", [db.recentTracks, db.playCounts], async () => {
-      // Compound PK [userEmail+id] (schema v7): the row is addressable by its
-      // exact key — no need to scan + filter by id like the old raw-id schema.
-      const existing = await db.recentTracks.get([email, track.id]);
-      if (existing) {
-        await db.recentTracks.delete([email, track.id]);
-      }
-      await db.recentTracks.put({
-        id: track.id,
-        track,
-        userEmail: email,
-        createdAt: Date.now(),
-      });
-      await pruneRecentTracks(email);
+    await db.transaction(
+      "rw",
+      [db.recentTracks, db.playCounts, db.errorLogs],
+      async () => {
+        // Compound PK [userEmail+id] (schema v7): the row is addressable by its
+        // exact key — no need to scan + filter by id like the old raw-id schema.
+        const existing = await db.recentTracks.get([email, track.id]);
+        if (existing) {
+          await db.recentTracks.delete([email, track.id]);
+        }
+        await db.recentTracks.put({
+          id: track.id,
+          track,
+          userEmail: email,
+          createdAt: Date.now(),
+        });
+        await pruneRecentTracks(email);
 
-      const countRow = await db.playCounts.get([email, track.id]);
-      const nextCount = (countRow?.count || 0) + 1;
-      await db.playCounts.put({
-        id: track.id,
-        track,
-        count: nextCount,
-        userEmail: email,
-      });
-      await prunePlayCounts(email);
-    });
+        const countRow = await db.playCounts.get([email, track.id]);
+        const nextCount = (countRow?.count || 0) + 1;
+        await db.playCounts.put({
+          id: track.id,
+          track,
+          count: nextCount,
+          userEmail: email,
+        });
+        await prunePlayCounts(email);
+      },
+    );
   } catch (e: unknown) {
     await captureError({
       level: "error",
@@ -268,7 +272,7 @@ export async function recordFolderVisit(folderId: string, folderName: string) {
   if (folderId === ROOT_FOLDER_ID) return;
   const email = getCurrentUserEmail();
   try {
-    await db.transaction("rw", [db.folderVisits], async () => {
+    await db.transaction("rw", [db.folderVisits, db.errorLogs], async () => {
       // Compound PK [userEmail+id] (schema v7): the row is addressable by its
       // exact key — no need to scan + filter by id like the old raw-id schema.
       const existing = await db.folderVisits.get([email, folderId]);

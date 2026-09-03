@@ -152,11 +152,14 @@ export async function deleteFile(
     },
   };
 
-  const response = await driveFetch(`${DRIVE_FILES_URL}/${fileId}`, {
-    method: "PATCH",
-    headers: authJsonHeaders(token),
-    body: JSON.stringify(metadata),
-  });
+  const response = await driveFetch(
+    `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}`,
+    {
+      method: "PATCH",
+      headers: authJsonHeaders(token),
+      body: JSON.stringify(metadata),
+    },
+  );
 
   assertDriveOk(response, "delete file");
   const data: unknown = await readJsonOrInvalidResponse(
@@ -190,7 +193,7 @@ export async function moveFile(
 ): Promise<DriveFileItem | { success: boolean }> {
   // First, get the actual parents of the file to ensure we remove it from all of them
   const getResponse = await driveFetch(
-    `${DRIVE_FILES_URL}/${fileId}?fields=parents`,
+    `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=parents`,
     {
       headers: authHeaders(token),
     },
@@ -213,8 +216,12 @@ export async function moveFile(
     }
   }
 
+  const moveParams = new URLSearchParams({
+    addParents: newParentId,
+    removeParents,
+  });
   const response = await driveFetch(
-    `${DRIVE_FILES_URL}/${fileId}?addParents=${newParentId}&removeParents=${removeParents}`,
+    `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?${moveParams.toString()}`,
     {
       method: "PATCH",
       headers: authHeaders(token),
@@ -257,11 +264,14 @@ export async function restoreFile(
     },
   };
 
-  const response = await driveFetch(`${DRIVE_FILES_URL}/${fileId}`, {
-    method: "PATCH",
-    headers: authJsonHeaders(token),
-    body: JSON.stringify(metadata),
-  });
+  const response = await driveFetch(
+    `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}`,
+    {
+      method: "PATCH",
+      headers: authJsonHeaders(token),
+      body: JSON.stringify(metadata),
+    },
+  );
 
   assertDriveOk(response, "restore file");
   const data: unknown = await readJsonOrInvalidResponse(
@@ -286,10 +296,13 @@ export async function permanentlyDeleteFile(
   token: string,
   fileId: string,
 ): Promise<boolean> {
-  const response = await driveFetch(`${DRIVE_FILES_URL}/${fileId}`, {
-    method: "DELETE",
-    headers: authHeaders(token),
-  });
+  const response = await driveFetch(
+    `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}`,
+    {
+      method: "DELETE",
+      headers: authHeaders(token),
+    },
+  );
 
   assertDriveOk(response, "permanently delete file");
   return true;
@@ -335,7 +348,7 @@ export async function getFileParents(
   fileId: string,
   signal?: AbortSignal,
 ): Promise<string[] | null> {
-  const url = `${DRIVE_FILES_URL}/${fileId}?fields=parents`;
+  const url = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=parents`;
   const response = await driveFetch(url, {
     headers: authHeaders(token),
     ...(signal ? { signal } : {}),
@@ -363,7 +376,7 @@ export async function getFileName(
   fileId: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  const url = `${DRIVE_FILES_URL}/${fileId}?fields=name`;
+  const url = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=name`;
   const response = await driveFetch(url, {
     headers: authHeaders(token),
     ...(signal ? { signal } : {}),

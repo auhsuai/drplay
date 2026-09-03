@@ -18,26 +18,30 @@ function makeDeps(overrides: Partial<ProSyncHandlerDeps> = {}): {
   updateToken: ReturnType<typeof vi.fn>;
   dispatch: ReturnType<typeof vi.fn>;
   logError: ReturnType<typeof vi.fn>;
+  notifyRefreshFailed: ReturnType<typeof vi.fn>;
 } {
   const updateToken = vi.fn();
   const dispatch = vi.fn();
   const logError = vi.fn();
+  const notifyRefreshFailed = vi.fn();
   const deps: ProSyncHandlerDeps = {
     onTokenRefreshRequest: null,
     updateToken,
     dispatch,
     logError,
+    notifyRefreshFailed,
     ...overrides,
   };
-  return { deps, updateToken, dispatch, logError };
+  return { deps, updateToken, dispatch, logError, notifyRefreshFailed };
 }
 
 describe("handleWorkerMessage", () => {
   it("TOKEN_EXPIRED with successful refresh calls updateToken and nothing else", async () => {
     const onTokenRefreshRequest = vi.fn().mockResolvedValue("new-token");
-    const { deps, updateToken, dispatch, logError } = makeDeps({
-      onTokenRefreshRequest,
-    });
+    const { deps, updateToken, dispatch, logError, notifyRefreshFailed } =
+      makeDeps({
+        onTokenRefreshRequest,
+      });
 
     await handleWorkerMessage({ type: "TOKEN_EXPIRED" }, deps);
 
@@ -45,13 +49,15 @@ describe("handleWorkerMessage", () => {
     expect(updateToken).toHaveBeenCalledWith("new-token");
     expect(dispatch).not.toHaveBeenCalled();
     expect(logError).not.toHaveBeenCalled();
+    expect(notifyRefreshFailed).not.toHaveBeenCalled();
   });
 
-  it("TOKEN_EXPIRED with null refresh result does not call updateToken", async () => {
+  it("TOKEN_EXPIRED with null refresh result does not call updateToken and replies refresh_failed", async () => {
     const onTokenRefreshRequest = vi.fn().mockResolvedValue(null);
-    const { deps, updateToken, dispatch, logError } = makeDeps({
-      onTokenRefreshRequest,
-    });
+    const { deps, updateToken, dispatch, logError, notifyRefreshFailed } =
+      makeDeps({
+        onTokenRefreshRequest,
+      });
 
     await handleWorkerMessage({ type: "TOKEN_EXPIRED" }, deps);
 
@@ -59,25 +65,29 @@ describe("handleWorkerMessage", () => {
     expect(updateToken).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
     expect(logError).not.toHaveBeenCalled();
+    expect(notifyRefreshFailed).toHaveBeenCalledTimes(1);
   });
 
-  it("TOKEN_EXPIRED with no refresh handler does nothing", async () => {
-    const { deps, updateToken, dispatch, logError } = makeDeps();
+  it("TOKEN_EXPIRED with no refresh handler replies refresh_failed (worker must not stall)", async () => {
+    const { deps, updateToken, dispatch, logError, notifyRefreshFailed } =
+      makeDeps();
 
     await handleWorkerMessage({ type: "TOKEN_EXPIRED" }, deps);
 
     expect(updateToken).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
     expect(logError).not.toHaveBeenCalled();
+    expect(notifyRefreshFailed).toHaveBeenCalledTimes(1);
   });
 
   it("TOKEN_EXPIRED with throwing refresh handler logs the error instead of propagating", async () => {
     const onTokenRefreshRequest = vi
       .fn()
       .mockRejectedValue(new Error("refresh blew up"));
-    const { deps, updateToken, dispatch, logError } = makeDeps({
-      onTokenRefreshRequest,
-    });
+    const { deps, updateToken, dispatch, logError, notifyRefreshFailed } =
+      makeDeps({
+        onTokenRefreshRequest,
+      });
 
     await handleWorkerMessage({ type: "TOKEN_EXPIRED" }, deps);
 
@@ -85,6 +95,7 @@ describe("handleWorkerMessage", () => {
     expect(logError).toHaveBeenCalledTimes(1);
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("refresh"));
     expect(dispatch).not.toHaveBeenCalled();
+    expect(notifyRefreshFailed).toHaveBeenCalledTimes(1);
   });
 
   it("SYNC_PROGRESS dispatches progress event without logging", async () => {
@@ -266,7 +277,7 @@ describe("startProSyncWorker", () => {
     });
   });
 
-  it("setTokenRefreshHandler(null) prevents a restarted worker from reusing the stale handler", async () => {
+  it("setTokenRefreshHandler(null) replies refresh_failed to a restarted worker instead of stalling it", async () => {
     setTokenRefreshHandler(() => Promise.resolve("stale-token"));
     startProSyncWorker("token");
     setTokenRefreshHandler(null);
@@ -278,11 +289,29 @@ describe("startProSyncWorker", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(worker.postMessage).toHaveBeenCalledTimes(1);
-    expect(worker.postMessage).toHaveBeenCalledWith({
+    expect(worker.postMessage).toHaveBeenCalledTimes(2);
+    expect(worker.postMessage).toHaveBeenNthCalledWith(1, {
       type: "sync",
       token: "token",
     });
+    expect(worker.postMessage).toHaveBeenLastCalledWith({
+      type: "refresh_failed",
+    });
+  });
+
+  it("TOKEN_EXPIRED whose handler resolves null posts refresh_failed to the worker", async () => {
+    setTokenRefreshHandler(() => Promise.resolve(null));
+    startProSyncWorker("token");
+    const worker = lastWorker();
+
+    worker.onmessage?.({ data: { type: "TOKEN_EXPIRED" } });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(worker.postMessage).toHaveBeenLastCalledWith({
+      type: "refresh_failed",
+    });
+    setTokenRefreshHandler(null);
   });
 });
 

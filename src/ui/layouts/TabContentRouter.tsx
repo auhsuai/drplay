@@ -48,7 +48,7 @@ interface TabContentRouterProps {
   currentFolderName: string;
   currentFolderId: string;
   onBreadcrumbClick: (id: string, name: string, index: number) => void;
-  highlightedFileId: { id: string; ts: number } | null;
+  highlightedFileId: { id: string; ts: number; folderId: string } | null;
   sortOption: string;
   setSortOption: (val: string) => void;
   theme: ThemeType;

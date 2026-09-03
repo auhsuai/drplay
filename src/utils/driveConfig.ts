@@ -67,7 +67,7 @@ export async function getAppConfig(
     const fileId = search.fileId;
     if (fileId === null) return null;
 
-    const downloadUrl = `${DRIVE_FILES_URL}/${fileId}?alt=media`;
+    const downloadUrl = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?alt=media`;
     const downloadRes = await driveFetch(downloadUrl, {
       headers: authHeaders(token),
       ...(signal ? { signal } : {}),
@@ -156,7 +156,7 @@ async function saveAppConfigInternal(
       close_delim;
 
     const uploadUrl = fileId
-      ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`
+      ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=multipart`
       : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
 
     const uploadRes = await driveFetch(uploadUrl, {

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { db } from "../db/db";
-import { fetchWithAuth } from "../utils/apiClient";
 import { classifyDriveError } from "../utils/driveApi";
 import {
   ROOT_FOLDER_ID,
@@ -9,7 +8,7 @@ import {
   type TabKey,
 } from "../utils/driveConstants";
 import { captureError } from "../utils/errorLog";
-import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
+import { getFileName, getFileParents } from "../utils/driveFiles";
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
@@ -49,13 +48,27 @@ export function useLocateFile(
   const [highlightedFileId, setHighlightedFileId] = useState<{
     id: string;
     ts: number;
+    folderId: string;
   } | null>(null);
   const pendingEnsuredFileId = useRef<string | null>(null);
+  const locateInFlightRef = useRef(false);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let mounted = true;
     const stillMounted = () => mounted;
+    // F5: one controller per effect run — cleanup aborts it so an in-flight
+    // locate chain (up to ~42 sequential Drive fetches) cannot outlive the
+    // listener that started it.
+    const abortController = new AbortController();
+    const { signal } = abortController;
+    // Intentional cancel (unmount / deps change): mirror driveHttp's
+    // caller-abort guard — exit fast and quiet instead of logging a failure.
+    const isCallerAborted = (err: unknown): boolean =>
+      signal.aborted ||
+      (err instanceof DOMException && err.name === "AbortError");
     const handleLocateFile = async (ev: Event) => {
+      if (locateInFlightRef.current) return;
       // Duck-typed event payload: locate-file is dispatched internally with
       // { fileId }, but a corrupt/malformed event must not crash the listener.
       const detail = (ev as CustomEvent<{ fileId?: unknown } | null>).detail;
@@ -85,19 +98,14 @@ export function useLocateFile(
 
           if (!folderInfo || !folderInfo.parentId) {
             try {
-              const res = await fetchWithAuth(
-                `${DRIVE_FILES_URL}/${current}?fields=parents`,
-                {
-                  headers: authHeaders(accessToken),
-                },
+              const parents = await getFileParents(
+                accessToken,
+                current,
+                signal,
               );
-              if (res.ok) {
-                const data = (await res.json()) as { parents?: string[] };
-                if (data.parents && data.parents.length > 0) {
-                  pId = data.parents[0];
-                }
-              }
+              pId = parents?.[0];
             } catch (e: unknown) {
+              if (isCallerAborted(e)) throw e;
               void captureError({
                 level: "warn",
                 source: "useLocateFile",
@@ -117,28 +125,13 @@ export function useLocateFile(
           const parentInfo = await db.files.get(pId);
           if (!parentInfo) {
             try {
-              const pRes = await fetchWithAuth(
-                `${DRIVE_FILES_URL}/${pId}?fields=name`,
-                {
-                  headers: authHeaders(accessToken),
-                },
-              );
-              if (pRes.ok) {
-                const pData = (await pRes.json()) as { name?: unknown };
-                newHistory.unshift({
-                  id: pId,
-                  name:
-                    typeof pData.name === "string"
-                      ? pData.name
-                      : t("drive.unknown_folder", UNKNOWN_FOLDER),
-                });
-              } else {
-                newHistory.unshift({
-                  id: pId,
-                  name: t("drive.unknown_folder", UNKNOWN_FOLDER),
-                });
-              }
+              const parentName = await getFileName(accessToken, pId, signal);
+              newHistory.unshift({
+                id: pId,
+                name: parentName ?? t("drive.unknown_folder", UNKNOWN_FOLDER),
+              });
             } catch (e: unknown) {
+              if (isCallerAborted(e)) throw e;
               void captureError({
                 level: "warn",
                 source: "useLocateFile",
@@ -157,6 +150,22 @@ export function useLocateFile(
         return newHistory;
       };
 
+      const clearHighlightTimer = () => {
+        if (highlightTimerRef.current !== null) {
+          clearTimeout(highlightTimerRef.current);
+          highlightTimerRef.current = null;
+        }
+      };
+
+      const scheduleHighlightClear = () => {
+        clearHighlightTimer();
+        highlightTimerRef.current = setTimeout(() => {
+          highlightTimerRef.current = null;
+          setHighlightedFileId(null);
+        }, HIGHLIGHT_DURATION_MS);
+      };
+
+      locateInFlightRef.current = true;
       setIsLoadingTracks(true);
       setActiveTab(MY_DRIVE_TAB);
 
@@ -165,21 +174,12 @@ export function useLocateFile(
         let folderName = t("drive.unknown_folder", UNKNOWN_FOLDER);
 
         try {
-          const response = await fetchWithAuth(
-            `${DRIVE_FILES_URL}/${fileId}?fields=parents`,
-            {
-              headers: authHeaders(accessToken),
-            },
-          );
-          if (response.ok) {
-            const data = (await response.json()) as { parents?: string[] };
-            if (!stillMounted()) return;
-            if (data.parents && data.parents.length > 0) {
-              const first = data.parents[0];
-              if (first !== undefined) parentId = first;
-            }
-          }
+          const parents = await getFileParents(accessToken, fileId, signal);
+          if (!stillMounted()) return;
+          const first = parents?.[0];
+          if (first !== undefined) parentId = first;
         } catch (e: unknown) {
+          if (isCallerAborted(e)) throw e;
           void captureError({
             level: "warn",
             source: "useLocateFile",
@@ -208,28 +208,35 @@ export function useLocateFile(
           if (parentInfo) {
             folderName = parentInfo.name;
           } else {
-            const pRes = await fetchWithAuth(
-              `${DRIVE_FILES_URL}/${parentId}?fields=name`,
-              {
-                headers: authHeaders(accessToken),
-              },
-            );
-            if (pRes.ok) {
-              const pData = (await pRes.json()) as { name?: unknown };
+            // F4: a cosmetic name lookup must not kill the whole locate —
+            // mirror rebuildHistory's degrade contract (warn + Unknown Folder
+            // fallback), so navigation still completes.
+            try {
+              const fetchedName = await getFileName(
+                accessToken,
+                parentId,
+                signal,
+              );
               if (!stillMounted()) return;
-              folderName =
-                typeof pData.name === "string"
-                  ? pData.name
-                  : t("drive.unknown_folder", UNKNOWN_FOLDER);
+              if (fetchedName !== null) folderName = fetchedName;
+            } catch (e: unknown) {
+              if (isCallerAborted(e)) throw e;
+              void captureError({
+                level: "warn",
+                source: "useLocateFile",
+                message: `Parent name fetch failed: ${classifyDriveError(e)}`,
+              });
             }
           }
         }
 
         if (parentId === currentFolderId) {
-          setHighlightedFileId({ id: fileId, ts: Date.now() });
-          setTimeout(() => {
-            setHighlightedFileId(null);
-          }, HIGHLIGHT_DURATION_MS);
+          setHighlightedFileId({
+            id: fileId,
+            ts: Date.now(),
+            folderId: parentId,
+          });
+          scheduleHighlightClear();
           return;
         }
 
@@ -240,18 +247,21 @@ export function useLocateFile(
         pendingEnsuredFileId.current = fileId;
         setCurrentFolderId(parentId);
         setCurrentFolderName(folderName);
-        setHighlightedFileId({ id: fileId, ts: Date.now() });
-
-        setTimeout(() => {
-          setHighlightedFileId(null);
-        }, HIGHLIGHT_DURATION_MS);
+        setHighlightedFileId({
+          id: fileId,
+          ts: Date.now(),
+          folderId: parentId,
+        });
+        scheduleHighlightClear();
       } catch (err: unknown) {
+        if (isCallerAborted(err)) return;
         void captureError({
           level: "error",
           source: "useLocateFile",
           message: `Locate file failed: ${classifyDriveError(err)}`,
         });
       } finally {
+        locateInFlightRef.current = false;
         if (mounted) setIsLoadingTracks(false);
       }
     };
@@ -263,7 +273,12 @@ export function useLocateFile(
     window.addEventListener(EVENT_LOCATE_FILE, handleLocateListener);
     return () => {
       mounted = false;
+      abortController.abort();
       window.removeEventListener(EVENT_LOCATE_FILE, handleLocateListener);
+      if (highlightTimerRef.current !== null) {
+        clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
     };
   }, [
     accessToken,

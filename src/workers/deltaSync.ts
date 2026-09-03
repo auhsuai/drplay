@@ -33,7 +33,25 @@ export async function performDeltaSync(startPageToken: string) {
         `nextPageToken,newStartPageToken,changes(fileId,removed,file(${FILES_FIELDS},trashed))`,
       );
 
-      const res = await fetchDrive("changes", getCurrentToken() as string, url);
+      // Retry the SAME changes page after a successful token refresh. The old
+      // `continue` only worked by accident: it jumped to `while (pageToken)`,
+      // which stayed truthy solely because pageToken === startPageToken on
+      // entry. The explicit loop makes the same-page retry independent from
+      // that truthiness invariant and never advances pagination on a retry
+      // (Drive leaves its cursor untouched when it rejects with 401).
+      let res = await fetchDrive("changes", getCurrentToken() as string, url);
+      while (!res.ok && res.status === 401) {
+        if (
+          !(await refreshTokenAndRetry(
+            syncRetry,
+            syncRetryDeps,
+            "delta-sync/changes",
+          ))
+        ) {
+          break;
+        }
+        res = await fetchDrive("changes", getCurrentToken() as string, url);
+      }
 
       if (!res.ok) {
         if (res.status === 410) {
@@ -51,26 +69,24 @@ export async function performDeltaSync(startPageToken: string) {
           await performFullSync();
           return;
         }
-        if (res.status === 401) {
-          if (
-            await refreshTokenAndRetry(
-              syncRetry,
-              syncRetryDeps,
-              "delta-sync/changes",
-            )
-          )
-            continue;
-        }
         // Non-ok with no retry left (refresh refused/failed or a status other
-        // than 410/401): say so instead of breaking silently — the poller
-        // would otherwise wait for a SYNC_COMPLETE that never comes.
+        // than 410/401): report the failure and stop WITHOUT touching stored
+        // state. logWorkerError above only records an error-log line, it is
+        // NOT a terminal signal — returning here is what makes this exit path
+        // honest: no SYNC_COMPLETE, and the save block below never runs, so
+        // the stored startPageToken stays put (even when an earlier page of
+        // this run already delivered a newStartPageToken) and the next sync
+        // replays the exact same window. Breaking silently instead would
+        // either advance the cursor past changes we never fetched or leave
+        // the poller waiting for a terminal signal that never comes.
         logWorkerError(
           "proSync/delta-sync",
           { phase: "changes", status: res.status },
           new Error(`Failed to fetch changes (${String(res.status)})`),
           "warn",
         );
-        break;
+        self.postMessage({ type: "SYNC_ERROR" });
+        return;
       }
 
       const data = await parseDriveJson<DriveChangesList>("changes", res);
@@ -155,5 +171,10 @@ export async function performDeltaSync(startPageToken: string) {
   } catch (err) {
     if (err instanceof WorkerAbortError) return;
     logWorkerError("proSync/delta-sync", { phase: "changes" }, err, "error");
+    // Parse/pagination failure mid-run used to end with NO terminal signal at
+    // all (the poller kept waiting). Report honestly instead; the stored
+    // startPageToken is untouched — the save block above was skipped by the
+    // throw — so the next sync replays the same window.
+    self.postMessage({ type: "SYNC_ERROR" });
   }
 }

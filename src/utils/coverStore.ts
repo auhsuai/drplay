@@ -31,6 +31,24 @@ const inflightPostKeys = new Set<string>();
 // handler — in such runtimes EVERY POST fails identically, so after the first
 // such failure the whole upload path is disabled (no per-track warn noise).
 let schemeUnavailable = false;
+// Transient-outage marker: a POST that failed with a network-level TypeError
+// WHILE the browser reported offline (navigator.onLine === false) says nothing
+// about the scheme's health, so it must not kill uploads for the session.
+// Uploads stay paused (no per-track warn noise) until onLine reports the
+// connection back; there is deliberately no `online` event listener — the
+// check happens at the next POST call, matching this module's fire-and-forget
+// call pattern.
+let offlineSuspension = false;
+
+function isBrowserOffline(): boolean {
+  // Only an explicit onLine === false counts as offline. A missing navigator
+  // or undefined onLine (older WebViews, non-browser runtimes) must read as
+  // "online" so genuine scheme-dead failures still latch permanently — hence
+  // the explicit comparison instead of a truthiness check.
+  const onLine: boolean | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.onLine;
+  return onLine === false;
+}
 
 function postKey(fileId: string, thumb: boolean): string {
   return `${thumb ? "t" : "f"}:${fileId}`;
@@ -85,6 +103,14 @@ export async function postCoverToCache(
   bytes: Uint8Array,
 ): Promise<void> {
   if (schemeUnavailable || bytes.byteLength === 0) return;
+  if (offlineSuspension) {
+    // A previous failure happened while offline. Stay paused until onLine
+    // reports the connection back; then clear the pause and let THIS call be
+    // the retry probe. If the scheme is genuinely dead, the next TypeError
+    // observed while online re-latches schemeUnavailable below.
+    if (isBrowserOffline()) return;
+    offlineSuspension = false;
+  }
   const key = postKey(fileId, thumb);
   if (inflightPostKeys.has(key)) return;
   inflightPostKeys.add(key);
@@ -131,12 +157,24 @@ async function performPostOnce(
       signal: AbortSignal.timeout(POST_TIMEOUT_MS),
     });
   } catch (e) {
-    // A TypeError here means the scheme was rejected before the request could
-    // be sent (Chromium: ERR_UNKNOWN_URL_SCHEME) — the failure is permanent,
-    // so mark the scheme dead and rethrow for the caller's warn + drop.
-    // A TimeoutError (DOMException) is NOT a scheme problem, so it must not
-    // disable the path (the scheme worked, the disk write was just slow).
-    if (e instanceof TypeError) schemeUnavailable = true;
+    // A TypeError means the request never reached the Rust handler. What it
+    // means for the future of this upload path depends on navigator.onLine AT
+    // THE TIME OF FAILURE: while offline, fetch rejects with the same
+    // "Failed to fetch" TypeError even though the scheme is healthy — that is
+    // a transient outage, so suspend only until connectivity returns. A
+    // TypeError observed WHILE ONLINE is the scheme being rejected before the
+    // request could be sent (Chromium: ERR_UNKNOWN_URL_SCHEME), which is
+    // permanent for the runtime — latch the path off as before.
+    // A TimeoutError (DOMException) is NOT a scheme problem in either case,
+    // so it must not disable the path (the scheme worked, the disk write was
+    // just slow).
+    if (e instanceof TypeError) {
+      if (isBrowserOffline()) {
+        offlineSuspension = true;
+      } else {
+        schemeUnavailable = true;
+      }
+    }
     throw e;
   }
   return response.status;

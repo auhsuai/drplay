@@ -13,6 +13,7 @@ import {
   toDriveFileRow,
 } from "./proSync.worker";
 import type { SyncRetryState } from "./proSync.worker";
+import { syncRetryDeps } from "./tokenRefresh";
 
 describe("isValidDriveFile", () => {
   it("returns true for a file with a non-empty string id", () => {
@@ -706,5 +707,441 @@ describe("fetchDrive transient retry", () => {
     const res = await pending;
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B fixes (23/08/2026) — full/delta pagination + honest signaling.
+//
+// Previously untested region ("vùng mù"): a multi-page full-sync driven
+// through mocked fetch responses, including the 401-mid-pagination path.
+// The tests below drive performFullSync/performDeltaSync indirectly via the
+// exported handleWorkerMessage entry point and answer the worker's
+// TOKEN_EXPIRED post with a "token" message — exactly what proSyncManager on
+// the main thread does in production.
+// ---------------------------------------------------------------------------
+
+const START_PAGE_TOKEN_KEY_LOCAL = "startPageToken";
+
+function audioFileRow(id: string): Record<string, unknown> {
+  return {
+    id,
+    name: `${id}.mp3`,
+    mimeType: "audio/mpeg",
+    parents: ["root"],
+    size: "10",
+    modifiedTime: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+async function resetSyncTables(): Promise<void> {
+  await db.files.clear();
+  await db.syncState.clear();
+}
+
+// Stubs the worker-global `self` so posted messages are collected and replies
+// to TOKEN_EXPIRED with a refreshed token (the main thread's production role).
+function stubSelfWithTokenReply(freshToken: string): Array<{ type: string }> {
+  const posted: Array<{ type: string }> = [];
+  vi.stubGlobal("self", {
+    postMessage: (msg: { type: string }) => {
+      posted.push(msg);
+      if (msg.type === "TOKEN_EXPIRED") {
+        setTimeout(() => {
+          void handleWorkerMessage({
+            data: { type: "token", token: freshToken },
+          } as MessageEvent);
+        }, 0);
+      }
+    },
+  });
+  return posted;
+}
+
+// Stubs the worker-global `self` so posted messages are collected and replies
+// to TOKEN_EXPIRED with refresh_failed (the main thread's "cannot refresh"
+// production role — refreshTokenAndRetry resolves false, no fresh token).
+function stubSelfWithRefreshFailedReply(): Array<{ type: string }> {
+  const posted: Array<{ type: string }> = [];
+  vi.stubGlobal("self", {
+    postMessage: (msg: { type: string }) => {
+      posted.push(msg);
+      if (msg.type === "TOKEN_EXPIRED") {
+        setTimeout(() => {
+          void handleWorkerMessage({
+            data: { type: "refresh_failed" },
+          } as MessageEvent);
+        }, 0);
+      }
+    },
+  });
+  return posted;
+}
+
+describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("syncs ALL pages when the FIRST page hits 401 and the token refresh succeeds", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-1" }), {
+          status: 200,
+        }),
+      )
+      // First files page arrives stale — the main thread refreshes the token.
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      // Same page retried with the fresh token; two pages total this run.
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [audioFileRow("p1a")],
+            nextPageToken: "pg2",
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ files: [audioFileRow("p2a")] }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-a" },
+    } as MessageEvent);
+
+    expect(await db.files.get("p1a")).toBeDefined();
+    expect(await db.files.get("p2a")).toBeDefined();
+    expect(posted).toContainEqual({ type: "SYNC_PROGRESS" });
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+    // startPageToken lookup + page 1 twice (401 then same-page retry) + page 2.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-1" }),
+    );
+  });
+
+  it("delta-sync refetches the SAME changes page after a successful refresh (lock invariant)", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [
+              {
+                fileId: "dx1",
+                file: { id: "dx1", name: "dx1.mp3", mimeType: "audio/mpeg" },
+              },
+            ],
+            newStartPageToken: "start-new",
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-b" },
+    } as MessageEvent);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Both attempts carry the SAME pageToken — the retry never skips a page.
+    const pageTokens = fetchMock.mock.calls.map((call) =>
+      new URL(String(call[0])).searchParams.get("pageToken"),
+    );
+    expect(pageTokens).toEqual(["start-old", "start-old"]);
+    expect(await db.files.get("dx1")).toBeDefined();
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-new" }),
+    );
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+});
+
+describe("full-sync reports SYNC_ERROR when a later page fails to parse", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("posts SYNC_ERROR (never COMPLETE) and does NOT persist the fresh start token", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-9" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [audioFileRow("bp1")],
+            nextPageToken: "pg2",
+          }),
+          { status: 200 },
+        ),
+      )
+      // Page 2 of 2 returns a body that is not valid JSON → parseDriveJson throws.
+      .mockResolvedValueOnce(new Response("<not-json>", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-c" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+  });
+});
+
+describe("full-sync reports SYNC_ERROR when bulkPut fails mid-sync", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("posts SYNC_ERROR (never COMPLETE) and does NOT persist the fresh start token", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-8" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ files: [audioFileRow("bf1")] }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(db.files, "bulkPut").mockRejectedValueOnce(
+      new Error("simulated bulkPut failure"),
+    );
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-d" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+  });
+});
+
+describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP failure", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("mid-pagination 400: posts SYNC_ERROR (never COMPLETE), does NOT persist the fresh start token, keeps page-1 rows", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-1" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [audioFileRow("p1a")],
+            nextPageToken: "pg2",
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-mid400" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    // A partially synced library must not be branded complete: persisting
+    // start-1 here would permanently skip the un-fetched [pg2…] pages.
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+    // Already-persisted page-1 rows stay (the replay is idempotent bulkPut).
+    expect(await db.files.get("p1a")).toBeDefined();
+  });
+
+  it("first-page 400: posts SYNC_ERROR, does NOT save the token and does NOT run the non-playable cleanup", async () => {
+    await resetSyncTables();
+    await db.files.bulkPut([
+      {
+        id: "wma-old",
+        name: "old.wma",
+        mimeType: "audio/x-ms-wma",
+        parentId: "root",
+        size: 1,
+        trashed: false,
+        isFolder: false,
+      },
+    ]);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-2" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-first400" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+    // Cleanup only ever runs at full-sync COMPLETION — a failed pass with a
+    // zero-page library must not mass-delete rows it never refreshed.
+    expect(await db.files.get("wma-old")).toBeDefined();
+  });
+});
+
+describe("delta-sync reports SYNC_ERROR instead of advancing or stalling on an HTTP failure", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("mid-pagination 400 after a newStartPageToken: posts SYNC_ERROR (never COMPLETE), keeps the OLD stored token", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [
+              {
+                fileId: "d1",
+                file: { id: "d1", name: "d1.mp3", mimeType: "audio/mpeg" },
+              },
+            ],
+            newStartPageToken: "start-mid",
+            nextPageToken: "pg2",
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-delta400" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    // An earlier page already delivered start-mid, but page 2 never arrived:
+    // advancing the cursor here would permanently skip the un-fetched window.
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+
+  it("first-page 400: posts SYNC_ERROR and keeps the stored token untouched", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-keep",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-delta-first400" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-keep" }),
+    );
+  });
+});
+
+describe("worker releases its 401 wait when the main thread cannot refresh", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("resolves the pending token-refresh wait with false immediately on a refresh_failed reply (was: stalled until the timeout)", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("self", { postMessage: () => {} });
+    const state: SyncRetryState = { count: 0, max: 3 };
+
+    const pending = refreshTokenAndRetry(
+      state,
+      syncRetryDeps,
+      "full-sync/files",
+    );
+    await handleWorkerMessage({
+      data: { type: "refresh_failed" },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toBe(false);
+    expect(state.count).toBe(1);
+  });
+
+  it("a sync whose refresh fails posts SYNC_ERROR through the honest exit path", async () => {
+    const posted = stubSelfWithRefreshFailedReply();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-f" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValue(new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-norefresh" },
+    } as MessageEvent);
+
+    expect(posted).toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
   });
 });

@@ -1,4 +1,5 @@
 import { captureError } from "./errorLog";
+import { SORT_OPTION_KEY } from "./storageKeys";
 import { del as kvDel } from "../db/kv";
 
 // Session data lives in two places: localStorage (drplay_last_session,
@@ -9,7 +10,7 @@ import { del as kvDel } from "../db/kv";
 // next account.
 export const SESSION_CLEANUP_KEYS = {
   lastSessionLocalStorage: "drplay_last_session",
-  sortOptionLocalStorage: "drplay_sort_option",
+  sortOptionLocalStorage: SORT_OPTION_KEY,
   lastSessionKv: "drplay_last_session",
   playModeKv: "drplay_playmode",
   queueKv: "drplay_queue",
@@ -41,6 +42,7 @@ export function clearSessionState(): void {
         // fire-and-forget: logging must not throw in this sync callback
         // (captureError never rejects — it swallows failures internally).
         void captureError({
+          level: "warn",
           source: "sessionCleanup",
           message: `logout-cleanup-failed: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
           kind: "logout-cleanup-failed",

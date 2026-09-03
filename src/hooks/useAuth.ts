@@ -23,6 +23,7 @@ import {
   deleteRefreshToken,
 } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
+import { db } from "../db/db";
 import { authHeaders } from "../utils/driveFiles";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
@@ -32,6 +33,7 @@ import {
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
   TOKEN_TIME_KEY,
+  getCurrentUserEmail,
 } from "../utils/storageKeys";
 
 interface TokenData {
@@ -41,6 +43,12 @@ interface TokenData {
 }
 
 const AUTH_MODULE = "useAuth";
+
+// Dexie syncState key holding the Drive changes start-page token. Must stay
+// byte-identical to START_PAGE_TOKEN_KEY in src/workers/syncState.ts (the
+// worker module is deliberately NOT imported here — it would bundle the whole
+// sync pipeline into the main thread just for one string constant).
+const SYNC_START_PAGE_TOKEN_KEY = "startPageToken";
 
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
 
@@ -171,6 +179,11 @@ export const useAuth = (onLogoutExt?: () => void) => {
       invalidateCurrentSession();
       stopProSyncWorker();
 
+      // Account identity for the per-user DB wipe below must be captured
+      // BEFORE the localStorage clear that follows (same reason
+      // refreshTokenToRevoke is read first).
+      const loggingOutEmail = getCurrentUserEmail();
+
       // Read the long-lived refresh token BEFORE the localStorage clear
       // below: readRefreshToken falls back to the legacy LS copy when the
       // keyring read fails, so reading after the clear would silently skip
@@ -215,6 +228,37 @@ export const useAuth = (onLogoutExt?: () => void) => {
           `Failed to clear backend cache (clear_local_cache) — continuing logout: ${classifyError(e)}`,
         );
       }
+
+      // Account-boundary wipe: the offline mirror rows and the per-account
+      // metadata caches are keyed by user — only the logged-out account's
+      // mirror is removed. The "default" sentinel identifies no real account,
+      // so there is nothing reliably owned to wipe for it (wiping it could
+      // destroy legacy-migrated rows). Fire-and-forget exactly like the
+      // metadata cache clear above: IDB latency must not block logout;
+      // failures are logged, never silent, and logout never rejects.
+      if (loggingOutEmail.trim().length > 0 && loggingOutEmail !== "default") {
+        void db.files.clear().catch((e: unknown) => {
+          void logAuth(
+            "warn",
+            `Files persisted-wipe failed — continuing logout: ${classifyError(e)}`,
+          );
+        });
+      }
+
+      // Sync-cursor teardown: the Drive changes startPageToken in db.syncState
+      // is account-scoped state — left behind, the NEXT login would delta-sync
+      // the previous account's change window onto its own fresh mirror.
+      // Deleted INDEPENDENTLY of the file wipe above (a failed wipe must not
+      // preserve the stale cursor) and best-effort like every logout step:
+      // failure logged, logout continues.
+      void db.syncState
+        .delete(SYNC_START_PAGE_TOKEN_KEY)
+        .catch((e: unknown) => {
+          void logAuth(
+            "warn",
+            `Failed to delete sync startPageToken — continuing logout: ${classifyError(e)}`,
+          );
+        });
 
       if (tokenToRevoke) {
         try {

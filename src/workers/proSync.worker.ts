@@ -1,5 +1,9 @@
 import { pushToken, runSync } from "./syncRunner";
-import { refreshTokenAndRetry } from "./tokenRefresh";
+import {
+  REFRESH_FAILED_TYPE,
+  refreshTokenAndRetry,
+  resolveTokenRefresh,
+} from "./tokenRefresh";
 import type { RefreshTokenRetryDeps, SyncRetryState } from "./tokenRefresh";
 import { delay, fetchDrive, isTransientStatus } from "./driveFetch";
 import {
@@ -34,6 +38,19 @@ if (typeof self !== "undefined") {
 }
 
 export async function handleWorkerMessage(e: MessageEvent): Promise<void> {
+  // Main-thread "cannot refresh" reply: release any pending 401 wait
+  // immediately (resolveTokenRefresh(false) → the sync pass gives up through
+  // its normal retry budget). This message carries no token field, so it can
+  // never pass the isWorkerRequestMessage guard below and needs its own
+  // branch first.
+  if (
+    typeof e.data === "object" &&
+    e.data !== null &&
+    (e.data as { type?: unknown }).type === REFRESH_FAILED_TYPE
+  ) {
+    resolveTokenRefresh(false);
+    return;
+  }
   if (!isWorkerRequestMessage(e.data)) return;
   const { type, token } = e.data;
 

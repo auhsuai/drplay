@@ -1147,6 +1147,57 @@ describe("PlayerBar favorite (heart) button", () => {
     await screen.findByRole("button", { name: "Remove from favorites" });
   });
 
+  it("drops an in-flight favorites-updated re-check when the track changed (no cross-track heart race)", async () => {
+    const { rerender } = renderPlayer();
+    await screen.findByRole("button", { name: "Add to favorites" });
+    let resolveStale!: (liked: boolean) => void;
+    isFavorite.mockImplementation((trackId: string) =>
+      trackId === "track-1"
+        ? new Promise<boolean>((res) => {
+            resolveStale = res;
+          })
+        : Promise.resolve(false),
+    );
+
+    // favorites-updated fires while track-1 is still current → the re-check
+    // starts and its response is held in flight.
+    act(() => {
+      window.dispatchEvent(new CustomEvent(FAVORITES_UPDATED_EVENT));
+    });
+    expect(resolveStale).toBeTypeOf("function");
+
+    // The user moves on to track-2 while the track-1 re-check is pending.
+    isFavorite.mockClear();
+    rerender(
+      <PlayerBar
+        currentTrack={makeTrack({ id: "track-2" })}
+        isPlaying={false}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onExpandNowPlaying={vi.fn()}
+      />,
+    );
+    await screen.findByRole("button", { name: "Add to favorites" });
+
+    // When the LATE track-1 response finally lands, it must NOT flip
+    // track-2's heart (track-2 was never favorited — the old fixed
+    // `() => false` stale-check let the stale `true` through here).
+    await act(async () => {
+      resolveStale(true);
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Remove from favorites" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Add to favorites" }),
+    ).not.toBeNull();
+  });
+
   it("does not crash when favorites-updated fires with no current track", async () => {
     const { rerender } = renderPlayer();
     await screen.findByRole("button", { name: "Add to favorites" });

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { db } from "../db/db";
+import { upsertFileRows, type UpsertableFileRow } from "../db/fileRows";
 import { driveFetch, FOLDER_MIME } from "../utils/driveApi";
 import type { DriveFileItem, DriveFilesListResponse } from "../utils/driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
@@ -81,23 +82,31 @@ export function useDriveOnDemandFetch({
             Array.isArray(data.files) &&
             data.files.length > 0
           ) {
-            const filesToInsert = data.files.map((f: DriveFileItem) => ({
-              id: f.id,
-              name: f.name,
-              mimeType: f.mimeType,
-              parentId: currentFolderId,
-              size: f.size ? parseInt(f.size, 10) : undefined,
-              modifiedTime: f.modifiedTime,
-              trashed: false,
-              isFolder: f.mimeType === FOLDER_MIME,
-            }));
+            // Canonical-parent rule: parentId is derived INSIDE upsertFileRows
+            // from parents[0] of this very response — never from the folder
+            // being browsed (Drive's own parents is the single source of
+            // truth; a file returned by the query may report an ancestor).
+            // `parents` is omitted entirely when absent (not set to undefined)
+            // because UpsertableFileRow declares it as a plain optional prop.
+            const rowsToUpsert: UpsertableFileRow[] = data.files.map(
+              (f: DriveFileItem) => ({
+                id: f.id,
+                name: f.name,
+                mimeType: f.mimeType,
+                ...(f.parents !== undefined ? { parents: f.parents } : {}),
+                size: f.size ? parseInt(f.size, 10) : undefined,
+                modifiedTime: f.modifiedTime,
+                trashed: false,
+                isFolder: f.mimeType === FOLDER_MIME,
+              }),
+            );
             try {
-              await db.files.bulkPut(filesToInsert);
+              await upsertFileRows(rowsToUpsert);
             } catch (dbErr) {
               void captureError({
                 level: "error",
                 source: "useDriveExplorer",
-                message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${String(filesToInsert.length)}): ${String(dbErr)}`,
+                message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${String(rowsToUpsert.length)}): ${String(dbErr)}`,
               });
               break;
             }

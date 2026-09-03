@@ -54,7 +54,8 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   currentFolderId: string;
   currentFolderName: string;
   folderHistory: { id: string; name: string }[];
-  highlightedFileId: { id: string; ts: number } | null | undefined;
+  highlightedFileId:
+    { id: string; ts: number; folderId: string } | null | undefined;
   isPlaying: string | undefined;
   onRefresh: () => void;
   onRemoveItem?: ((id: string) => void) | undefined;

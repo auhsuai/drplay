@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -28,7 +28,9 @@ import {
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
   TOKEN_TIME_KEY,
+  USER_EMAIL_KEY,
 } from "../utils/storageKeys";
+import { db } from "../db/db";
 
 const authState = vi.hoisted(() => ({
   isLoggedIn: false,
@@ -144,7 +146,7 @@ describe("useAuth init effect token expiry model (B1)", () => {
     // threshold (TOKEN_EXPIRY_MS), so getValidToken would NOT refresh on use,
     // and the init effect must schedule a proactive refresh that fires BEFORE
     // the stale threshold. Remaining time until stale = 3000 - 2880 = ~120s.
-    // Before the fix the hook used 3600 - 2880 = 720s — the timer would have
+    // Before the fix the hook used 3600 - 2880 = 720s â€” the timer would have
     // fired AFTER getValidToken already treats the token as stale.
     localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
     localStorage.setItem(TOKEN_TIME_KEY, String(Date.now() - 48 * 60 * 1000));
@@ -237,7 +239,7 @@ describe("useAuth worker lifecycle (B4)", () => {
     expect(mockedStopProSyncWorker).not.toHaveBeenCalled();
     // Worker receives the new token through the in-place update channel (B2).
     expect(mockedUpdateWorkerToken).toHaveBeenCalledWith("tok-B");
-    // Still exactly one start, with the login token — no stop/start churn.
+    // Still exactly one start, with the login token â€” no stop/start churn.
     expect(mockedStartProSyncWorker).toHaveBeenCalledTimes(1);
     expect(mockedStartProSyncWorker).toHaveBeenCalledWith("tok-A");
     // Refresh handler stays registered for the whole session.
@@ -267,7 +269,7 @@ describe("useAuth worker lifecycle (B4)", () => {
 
       // Poller unmounted: advancing past the poll interval must not trigger
       // a sync after logout. (Focus-listener removal is covered thoroughly in
-      // useProSyncPoller.test.tsx — dispatching focus here would also hit the
+      // useProSyncPoller.test.tsx â€” dispatching focus here would also hit the
       // listener of a still-mounted hook from a previous test, since RTL
       // auto-cleanup is disabled in this repo.)
       act(() => {
@@ -424,6 +426,48 @@ describe("useAuth handleLogout revokes the refresh token too (M2)", () => {
     expect(mockedRevokeGoogleToken).toHaveBeenCalledWith("tok-123");
     expect(mockedDeleteRefreshToken).toHaveBeenCalledTimes(1);
     expect(onLogoutExt).toHaveBeenCalled();
+  });
+});
+
+describe("useAuth logout DB wipe (per-user cleanup + sync cursor reset)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.removeItem(USER_EMAIL_KEY);
+  });
+
+  it("clears the files mirror and deletes the sync cursor when logging out of a real account", async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
+    localStorage.setItem(USER_EMAIL_KEY, "user-a@test.com");
+    const clearSpy = vi.spyOn(db.files, "clear").mockResolvedValue(undefined);
+    const deleteSpy = vi
+      .spyOn(db.syncState, "delete")
+      .mockResolvedValue(undefined);
+    const { result } = renderHook(() => useAuth());
+
+    await act(async () => {
+      await result.current.handleLogout();
+    });
+
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(deleteSpy).toHaveBeenCalledWith("startPageToken");
+  });
+
+  it("deletes the sync cursor even when the account email is unknown (stale cursor must never survive)", async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
+    const clearSpy = vi.spyOn(db.files, "clear").mockResolvedValue(undefined);
+    const deleteSpy = vi
+      .spyOn(db.syncState, "delete")
+      .mockResolvedValue(undefined);
+    const { result } = renderHook(() => useAuth());
+
+    await act(async () => {
+      await result.current.handleLogout();
+    });
+
+    // No real email was ever known: nothing reliably owned to wipe.
+    expect(clearSpy).not.toHaveBeenCalled();
+    // The cursor is account-scoped state â€” deleted independently of the wipe.
+    expect(deleteSpy).toHaveBeenCalledWith("startPageToken");
   });
 });
 

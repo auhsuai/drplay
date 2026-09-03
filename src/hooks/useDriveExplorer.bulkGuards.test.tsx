@@ -1,7 +1,7 @@
 ﻿// @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { db } from "../db/db";
 import { useDriveExplorer } from "./useDriveExplorer";
 import { useDriveStore } from "../store/driveStore";
@@ -399,5 +399,137 @@ describe("useDriveBulkOps closes the confirm dialog immediately (action runs in 
 
     expect(onComplete).not.toHaveBeenCalled();
     expect(mockedMoveFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDriveExplorer: stale selection never survives a folder/search change", () => {
+  function seedTwoFolders() {
+    return db.files.bulkAdd([
+      {
+        id: "a1",
+        name: "a-one.mp3",
+        mimeType: "audio/mpeg",
+        parentId: "folder-a",
+        size: 1000,
+        modifiedTime: "2024-01-01T00:00:00.000Z",
+        trashed: false,
+        isFolder: false,
+      },
+      {
+        id: "b1",
+        name: "b-one.mp3",
+        mimeType: "audio/mpeg",
+        parentId: "folder-b",
+        size: 1000,
+        modifiedTime: "2024-01-02T00:00:00.000Z",
+        trashed: false,
+        isFolder: false,
+      },
+    ]);
+  }
+
+  it("changing folders clears stale selection", async () => {
+    await seedTwoFolders();
+    let folderId = "folder-a";
+    const { result, rerender } = renderHook(() =>
+      useDriveExplorer(folderId, "Folder A", TOKEN, () => {}),
+    );
+
+    act(() => {
+      result.current.setSelectedIds(new Set(["a1"]));
+      result.current.setIsSelectionMode(true);
+    });
+    expect(result.current.selectedIds.has("a1")).toBe(true);
+    expect(result.current.isSelectionMode).toBe(true);
+
+    act(() => {
+      folderId = "folder-b";
+      rerender();
+    });
+
+    // Navigation really happened (folder B's listing rendered)…
+    await waitFor(() => {
+      expect(result.current.filteredItems.map((i) => i.id)).toEqual(["b1"]);
+    });
+    // …so the selection from folder A must NOT leak into folder B — bulk ops
+    // run on raw selectedIds and would delete A's files while viewing B.
+    expect(result.current.selectedIds.size).toBe(0);
+    expect(result.current.isSelectionMode).toBe(false);
+  });
+
+  it("typing a search query clears stale selection", async () => {
+    await seedTwoFolders();
+    const { result } = renderHook(() =>
+      useDriveExplorer("folder-a", "Folder A", TOKEN, () => {}),
+    );
+    await waitFor(() => {
+      expect(result.current.filteredItems.map((i) => i.id)).toEqual(["a1"]);
+    });
+
+    act(() => {
+      result.current.setSelectedIds(new Set(["a1"]));
+      result.current.setIsSelectionMode(true);
+    });
+    expect(result.current.selectedIds.size).toBe(1);
+
+    act(() => {
+      result.current.setSearchQuery("b-one");
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedIds.size).toBe(0);
+    });
+    expect(result.current.isSelectionMode).toBe(false);
+  });
+});
+
+describe("useDriveExplorer: currentPage clamps back into range when the list shrinks", () => {
+  const FOLDER_CLAMP = "clamp-folder";
+
+  it("clamps currentPage back into range when bulk delete empties the last page", async () => {
+    await db.files.bulkAdd(
+      Array.from({ length: 120 }, (_, i) => ({
+        id: `d-${String(i)}`,
+        name: `song-${String(i)}.mp3`,
+        mimeType: "audio/mpeg",
+        parentId: FOLDER_CLAMP,
+        size: 1000,
+        modifiedTime: "2024-01-01T00:00:00.000Z",
+        trashed: false,
+        isFolder: false,
+      })),
+    );
+
+    const { result } = renderHook(() =>
+      useDriveExplorer(FOLDER_CLAMP, "Folder", TOKEN, () => {}),
+    );
+
+    // Wait for the Dexie live listing to populate.
+    await waitFor(() => {
+      expect(result.current.filteredItems).toHaveLength(120);
+    });
+
+    // User pages to the last page (items d-100..d-119).
+    act(() => {
+      result.current.setCurrentPage(3);
+    });
+    expect(result.current.currentPage).toBe(3);
+    expect(result.current.currentItems).toHaveLength(20);
+
+    // Bulk delete wipes every item on that page — the local Dexie mirror
+    // loses the rows exactly as handleBulkDelete + refresh would leave them.
+    await act(async () => {
+      await db.files.bulkDelete(
+        Array.from({ length: 20 }, (_, i) => `d-${String(100 + i)}`),
+      );
+    });
+
+    // The explorer must land back on a page that still has items instead of
+    // showing an empty page until the user clicks pagination manually.
+    await waitFor(() => {
+      expect(result.current.currentPage).toBe(2);
+    });
+    expect(result.current.totalPages).toBe(2);
+    expect(result.current.currentItems.length).toBeGreaterThan(0);
   });
 });
