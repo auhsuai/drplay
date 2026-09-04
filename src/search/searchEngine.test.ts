@@ -36,6 +36,7 @@ function makeFile(
     isFolder: opts.isFolder ?? false,
     size: opts.size,
     modifiedTime: opts.modifiedTime,
+    userEmail: "default", // compound PK part (schema v10)
   };
 }
 

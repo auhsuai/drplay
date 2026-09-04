@@ -13,6 +13,18 @@ import { captureError } from "./errorLog";
 
 vi.mock("./errorLog", () => ({ captureError: vi.fn() }));
 
+// Hybrid mock: keep the real storageKeys module intact, but pin the account
+// email to a real (non-sentinel) address so the wire-email guard in
+// proSyncManager lets sync/token messages through, exactly like a logged-in
+// user (see resolveWireUserEmail / DEFAULT_USER_EMAIL sentinel guard).
+vi.mock("./storageKeys", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./storageKeys")>();
+  return {
+    ...actual,
+    getCurrentUserEmail: () => "sync-owner@example.com",
+  };
+});
+
 function makeDeps(overrides: Partial<ProSyncHandlerDeps> = {}): {
   deps: ProSyncHandlerDeps;
   updateToken: ReturnType<typeof vi.fn>;
@@ -274,6 +286,7 @@ describe("startProSyncWorker", () => {
     expect(worker.postMessage).toHaveBeenLastCalledWith({
       type: "token",
       token: "new-token",
+      userEmail: "sync-owner@example.com",
     });
   });
 
@@ -293,6 +306,7 @@ describe("startProSyncWorker", () => {
     expect(worker.postMessage).toHaveBeenNthCalledWith(1, {
       type: "sync",
       token: "token",
+      userEmail: "sync-owner@example.com",
     });
     expect(worker.postMessage).toHaveBeenLastCalledWith({
       type: "refresh_failed",
@@ -377,6 +391,7 @@ describe("triggerProSync", () => {
     expect(worker.postMessage).toHaveBeenCalledWith({
       type: "sync",
       token: "tok-1",
+      userEmail: "sync-owner@example.com",
     });
   });
 
@@ -392,6 +407,7 @@ describe("triggerProSync", () => {
     expect(worker.postMessage).toHaveBeenCalledWith({
       type: "sync",
       token: "tok-2",
+      userEmail: "sync-owner@example.com",
     });
   });
 });

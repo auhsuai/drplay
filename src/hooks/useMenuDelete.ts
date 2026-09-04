@@ -5,6 +5,7 @@ import { stopPlaybackIfTrack } from "../utils/stopPlayback";
 import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 import type { DriveItem } from "../types";
 import type { TFunction } from "i18next";
 
@@ -51,7 +52,8 @@ export function useMenuDelete(t: TFunction) {
       // away — never keep playing audio that no longer exists. Only after a
       // successful Drive delete (a failed delete falls to catch, no stop).
       stopPlaybackIfTrack(deleteDriveItem.id);
-      await db.files.delete(deleteDriveItem.id);
+      // Compound PK (schema v10): [userEmail, id].
+      await db.files.delete([getCurrentUserEmail(), deleteDriveItem.id]);
       setShowDeleteConfirm(false);
       setIsOpen(false);
       onClose?.();

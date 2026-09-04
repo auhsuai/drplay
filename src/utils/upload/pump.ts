@@ -1,9 +1,10 @@
-import { db } from "../../db/db";
+import { upsertPendingCardRows } from "../../db/fileRows";
 import type { DriveFileItem } from "../driveApi";
 import { UploadError } from "../driveUpload";
 import { captureError } from "../errorLog";
+import { getCurrentUserEmail } from "../storageKeys";
 import { notify, resetProgressNotify } from "./events";
-import { createEntry, enqueuePendingRows, pendingRow } from "./enqueue";
+import { createEntry, enqueuePendingRows, pendingCard } from "./enqueue";
 import { createControllerFor } from "./controllers";
 import { handleFolderChild, handleFolderRoot } from "./folderBatch";
 import { markDone, markError } from "./terminal";
@@ -115,7 +116,10 @@ async function processEntry(entry: InternalEntry): Promise<void> {
   // exists before handleByKind without adding a DB roundtrip to the upload
   // pipeline.
   await Promise.all([
-    dbRowOp(() => db.files.put(pendingRow(entry)), "pending-row"),
+    dbRowOp(
+      () => upsertPendingCardRows([pendingCard(entry)], getCurrentUserEmail()),
+      "pending-row",
+    ),
     // P2-B1c: a resumed entry re-persists its INHERITED session metadata at
     // the first write — otherwise a crash before the chunked uploader reports
     // a fresh URI drops the still-valid server session and restarts at byte 0.

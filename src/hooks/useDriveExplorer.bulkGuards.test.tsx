@@ -414,6 +414,7 @@ describe("useDriveExplorer: stale selection never survives a folder/search chang
         modifiedTime: "2024-01-01T00:00:00.000Z",
         trashed: false,
         isFolder: false,
+        userEmail: "default", // compound PK part (schema v10)
       },
       {
         id: "b1",
@@ -424,6 +425,7 @@ describe("useDriveExplorer: stale selection never survives a folder/search chang
         modifiedTime: "2024-01-02T00:00:00.000Z",
         trashed: false,
         isFolder: false,
+        userEmail: "default", // compound PK part (schema v10)
       },
     ]);
   }
@@ -497,6 +499,7 @@ describe("useDriveExplorer: currentPage clamps back into range when the list shr
         modifiedTime: "2024-01-01T00:00:00.000Z",
         trashed: false,
         isFolder: false,
+        userEmail: "default", // compound PK part (schema v10)
       })),
     );
 
@@ -520,7 +523,10 @@ describe("useDriveExplorer: currentPage clamps back into range when the list shr
     // loses the rows exactly as handleBulkDelete + refresh would leave them.
     await act(async () => {
       await db.files.bulkDelete(
-        Array.from({ length: 20 }, (_, i) => `d-${String(100 + i)}`),
+        Array.from(
+          { length: 20 },
+          (_, i) => ["default", `d-${String(100 + i)}`] as [string, string],
+        ),
       );
     });
 

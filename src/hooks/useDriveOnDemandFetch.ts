@@ -7,6 +7,7 @@ import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 
 const DRIVE_PAGE_SIZE = 1000;
 
@@ -88,6 +89,9 @@ export function useDriveOnDemandFetch({
             // truth; a file returned by the query may report an ancestor).
             // `parents` is omitted entirely when absent (not set to undefined)
             // because UpsertableFileRow declares it as a plain optional prop.
+            // Schema v10: rows carry the owning account — the helper overwrites
+            // the composed userEmail with its own ownerEmail argument.
+            const ownerEmail = getCurrentUserEmail();
             const rowsToUpsert: UpsertableFileRow[] = data.files.map(
               (f: DriveFileItem) => ({
                 id: f.id,
@@ -98,10 +102,11 @@ export function useDriveOnDemandFetch({
                 modifiedTime: f.modifiedTime,
                 trashed: false,
                 isFolder: f.mimeType === FOLDER_MIME,
+                userEmail: ownerEmail,
               }),
             );
             try {
-              await upsertFileRows(rowsToUpsert);
+              await upsertFileRows(rowsToUpsert, ownerEmail);
             } catch (dbErr) {
               void captureError({
                 level: "error",

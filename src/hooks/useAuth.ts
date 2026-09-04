@@ -24,6 +24,7 @@ import {
 } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { db } from "../db/db";
+import { wipeFileRowsForUser } from "../db/fileRows";
 import { authHeaders } from "../utils/driveFiles";
 import { clearAllMetadataCache } from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
@@ -33,6 +34,7 @@ import {
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
   TOKEN_TIME_KEY,
+  DEFAULT_USER_EMAIL,
   getCurrentUserEmail,
 } from "../utils/storageKeys";
 
@@ -51,6 +53,13 @@ const AUTH_MODULE = "useAuth";
 const SYNC_START_PAGE_TOKEN_KEY = "startPageToken";
 
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
+
+// Same shape as the sync worker's isValidSyncOwnerEmail: the shared sentinel
+// ("default") identifies no real account, so there is nothing reliably owned
+// to wipe for it — wiping the sentinel could destroy another account's
+// legacy-migrated rows.
+const isValidLogoutWipeEmail = (email: string): boolean =>
+  email.trim().length > 0 && email !== DEFAULT_USER_EMAIL;
 
 const classifyError = (e: unknown): string =>
   e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
@@ -229,15 +238,15 @@ export const useAuth = (onLogoutExt?: () => void) => {
         );
       }
 
-      // Account-boundary wipe: the offline mirror rows and the per-account
-      // metadata caches are keyed by user — only the logged-out account's
-      // mirror is removed. The "default" sentinel identifies no real account,
-      // so there is nothing reliably owned to wipe for it (wiping it could
-      // destroy legacy-migrated rows). Fire-and-forget exactly like the
-      // metadata cache clear above: IDB latency must not block logout;
-      // failures are logged, never silent, and logout never rejects.
-      if (loggingOutEmail.trim().length > 0 && loggingOutEmail !== "default") {
-        void db.files.clear().catch((e: unknown) => {
+      // Account-boundary wipe #2 (schema v10): db.files rows are keyed
+      // [userEmail+id], so only the logged-out account's mirror is removed —
+      // other accounts' rows survive. Skipped when no real email was ever
+      // known (see isValidLogoutWipeEmail). Fire-and-forget exactly like the
+      // metadata wipe above: IDB latency must not block logout; failures are
+      // logged here and inside the wipe itself, never silent, and logout
+      // never rejects because of it.
+      if (isValidLogoutWipeEmail(loggingOutEmail)) {
+        void wipeFileRowsForUser(loggingOutEmail).catch((e: unknown) => {
           void logAuth(
             "warn",
             `Files persisted-wipe failed — continuing logout: ${classifyError(e)}`,

@@ -12,6 +12,7 @@ export interface DriveFile {
   trashed: boolean;
   isFolder: boolean;
   metadata?: unknown; // For future ID3 tag caching
+  userEmail: string; // Owning account (schema v10 per-user scoping)
 }
 
 export interface SyncState {
@@ -92,12 +93,15 @@ export interface UploadSessionRow {
  * favorites, play history, play counts, folder visits, error logs, app
  * config). The UI reads from here so browsing is instant, while Drive stays
  * the source of truth that gets fetched on demand. Every per-user table is
- * keyed by [userEmail+id] (schema v7) so multiple Google accounts never
+ * keyed by [userEmail+id] (schema v7, `files` followed in schema v10) so
+ * multiple Google accounts never
  * overwrite each other's rows. Schema changes are forward-only: never alter a
  * table's primary key in place — add a new version with new tables and copy.
  */
 export class DriveDatabase extends Dexie {
-  files!: Table<DriveFile, string>; // Primary key is 'id'
+  // Compound PK [userEmail+id] (schema v10) — rebound to filesV2 below so app
+  // code keeps talking to db.files.
+  files!: Table<DriveFile, [string, string]>;
   syncState!: Table<SyncState, string>; // Primary key is 'key'
   favorites!: Table<
     Track & { userEmail: string; createdAt?: number },
@@ -119,6 +123,7 @@ export class DriveDatabase extends Dexie {
     Track & { userEmail: string; createdAt?: number },
     [string, string]
   >;
+  filesV2!: Table<DriveFile, [string, string]>; // [userEmail+id] PK (schema v10)
 
   constructor() {
     super("DrPlayDriveDB");
@@ -261,8 +266,58 @@ export class DriveDatabase extends Dexie {
       uploadSessions: "id, userEmail, status",
     });
 
+    // Version 10 fixes the same cross-user collision for `files` that v7
+    // fixed for the per-user tables above: rows were keyed by RAW Drive id,
+    // so two accounts' mirrors of the same file overwrote each other. Dexie
+    // cannot change an existing table's primary key in place (UpgradeError),
+    // so — same precedent as v7 — this version adds filesV2 with a compound
+    // [userEmail+id] primary key and copies the old rows into it. The
+    // standalone "id" index is kept ON PURPOSE even though id is part of the
+    // compound PK: upload/queue.ts ghost sweep reads
+    // where("id").startsWith("pending-") across owners, and
+    // [userEmail+parentId] gives the listing its per-user folder query.
+    this.version(10)
+      .stores({
+        filesV2:
+          "[userEmail+id], id, parentId, name, isFolder, [userEmail+parentId]",
+      })
+      .upgrade(async (tx) => {
+        // Plan A1.3: every legacy row belongs to whichever account was active
+        // at the first launch after the upgrade (accepted one-time assignment;
+        // other accounts re-mirror on their next sync). The email read below
+        // never throws — its internal try/catch returns "default" — which is
+        // exactly the worker-realm safety net: proSync.worker opens
+        // its own connection where localStorage does not exist, and a throw
+        // here would abort the whole upgrade transaction.
+        //
+        // Deliberately NOT imported from utils/storageKeys: storageKeys →
+        // errorLog → db forms an import cycle once db needs the owner email,
+        // and under vitest's errorLog mock that cycle re-binds storageKeys'
+        // captureError away from the mocked instance (broke apiClient.test
+        // localStorage-failure assertions). Keep this read self-contained;
+        // the key string and sentinel mirror storageKeys' USER_EMAIL_KEY /
+        // DEFAULT_USER_EMAIL — update both together if they ever change.
+        const owner = (() => {
+          try {
+            return (
+              localStorage.getItem("drplay_current_user_email") || "default"
+            );
+          } catch {
+            return "default";
+          }
+        })();
+        const legacyRows = (await tx.table("files").toArray()) as DriveFile[];
+        await tx.table("filesV2").bulkPut(
+          legacyRows.map((row) => ({
+            ...row,
+            userEmail: owner,
+          })),
+        );
+      });
+
     // Bind the public table names to the new compound-key tables so app code
     // (history.ts / favorites.ts) keeps talking to db.recentTracks etc.
+    this.files = this.filesV2;
     this.recentTracks = this.recentTracksV2;
     this.playCounts = this.playCountsV2;
     this.folderVisits = this.folderVisitsV2;

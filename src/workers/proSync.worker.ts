@@ -10,10 +10,16 @@ import {
   isValidDriveFile,
   partitionValidFiles,
   toDriveFileRow,
+  toUpsertableFileRow,
 } from "./driveMapping";
 
+// userEmail rides on both request frames (schema v10 per-account stamping).
+// It is OPTIONAL at the guard level so a frame missing the field reaches
+// runSync's owner gate, which rejects it with an explicit SYNC_ERROR instead
+// of silently dropping the message (no terminal signal would stall the UI).
 type WorkerRequestMessage =
-  { type: "sync"; token: string } | { type: "token"; token: string };
+  | { type: "sync"; token: string; userEmail?: string }
+  | { type: "token"; token: string; userEmail?: string };
 
 export function isWorkerRequestMessage(
   data: unknown,
@@ -52,17 +58,26 @@ export async function handleWorkerMessage(e: MessageEvent): Promise<void> {
     return;
   }
   if (!isWorkerRequestMessage(e.data)) return;
-  const { type, token } = e.data;
+  const { type, token, userEmail } = e.data;
 
   if (type === "token") {
+    // The email accompanying a rotation needs NO storage: ownership is
+    // declared per-run on every "sync" frame (single source of truth), so a
+    // mid-run rotation can never split one pass across two owners — the
+    // running sync keeps stamping with the email it was started with.
     pushToken(token);
     return;
   }
 
-  await runSync(token);
+  await runSync(token, userEmail);
 }
 
-export { toDriveFileRow, isValidDriveFile, partitionValidFiles };
+export {
+  toDriveFileRow,
+  toUpsertableFileRow,
+  isValidDriveFile,
+  partitionValidFiles,
+};
 export { refreshTokenAndRetry };
 export { delay, isTransientStatus, fetchDrive };
 export type { SyncRetryState, RefreshTokenRetryDeps };

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { db } from "../db/db";
+import { upsertFileRows } from "../db/fileRows";
 import {
   deleteFile,
   moveFile,
@@ -12,6 +13,7 @@ import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { t } from "i18next";
 import { captureError } from "../utils/errorLog";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 
 // Bulk ops must never touch items that are still uploading (a pending row can
 // not be deleted/moved — it has no Drive id yet). Excluded ids get a toast and
@@ -75,15 +77,31 @@ export function useDriveBulkOps({
     try {
       const res = await createFolder(token, folderName, currentFolderId);
       if (res.id) {
-        await db.files.put({
-          id: res.id,
-          name: res.name || folderName,
-          parentId: currentFolderId,
-          mimeType: FOLDER_MIME,
-          isFolder: true,
-          trashed: false,
-          modifiedTime: new Date().toISOString(),
-        });
+        // Parent truth: the created folder's own Drive response parents when
+        // the API echoes them back (files.create returns a File resource with
+        // parents[]); otherwise the operation's own target — the request
+        // itself placed the folder under currentFolderId. Either way the row
+        // goes through the single write helper (canonical parent rule).
+        await upsertFileRows(
+          [
+            {
+              id: res.id,
+              name: res.name || folderName,
+              mimeType: FOLDER_MIME,
+              isFolder: true,
+              trashed: false,
+              modifiedTime: new Date().toISOString(),
+              parents:
+                res.parents !== undefined && res.parents.length > 0
+                  ? res.parents
+                  : [currentFolderId],
+              // Provisional userEmail (type-required) — the helper stamps its
+              // own ownerEmail argument authoritatively.
+              userEmail: getCurrentUserEmail(),
+            },
+          ],
+          getCurrentUserEmail(),
+        );
       }
       onRefresh();
       // onComplete only on success (not in finally): keep the modal open on
@@ -139,7 +157,11 @@ export function useDriveBulkOps({
         }
       }
       if (deletedIds.length > 0) {
-        await db.files.bulkDelete(deletedIds);
+        // Compound PK (schema v10): delete by [userEmail, id] pairs.
+        const ownerEmail = getCurrentUserEmail();
+        await db.files.bulkDelete(
+          deletedIds.map((id) => [ownerEmail, id] as [string, string]),
+        );
         if (onRemoveItem)
           deletedIds.forEach((id) => {
             onRemoveItem(id);
@@ -193,10 +215,12 @@ export function useDriveBulkOps({
         }
       }
       // Single transaction for the whole batch (vs. one update() per item);
-      // missing keys are skipped without throwing, same as update().
+      // missing keys are skipped without throwing, same as update(). Keys are
+      // compound [userEmail, id] pairs (schema v10).
+      const ownerEmail = getCurrentUserEmail();
       await db.files.bulkUpdate(
         movedIds.map((id) => ({
-          key: id,
+          key: [ownerEmail, id] as [string, string],
           changes: { parentId: destinationFolderId },
         })),
       );

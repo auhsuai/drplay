@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { db } from "../db/db";
 import { captureError } from "../utils/errorLog";
 import { SYNC_EVENT_NAMES } from "../utils/proSyncManager";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 import { buildSearchIndex, queryIndex } from "../search/searchEngine";
 import type { SearchHit } from "../search/searchEngine";
 import {
@@ -73,8 +74,22 @@ function createWorkerExecutor(): SearchExecutor {
 
 function createInlineExecutor(): SearchExecutor {
   const listeners = new Set<(r: SearchWorkerResponse) => void>();
+  // Main-thread boundary scoping (schema v10): the index only sees the active
+  // account's rows here. The real worker path reads all rows for now — it has
+  // no email channel until a later step wires one through the message
+  // protocol (see performRebuild in search.worker.ts).
   const deps: SearchWorkerDeps = {
-    db,
+    db: {
+      files: {
+        toArray: async () => {
+          const owner = getCurrentUserEmail();
+          return (await db.files.toArray()).filter(
+            (row) => row.userEmail === owner,
+          );
+        },
+      },
+      metadataCache: db.metadataCache,
+    },
     build: buildSearchIndex,
     query: queryIndex,
     post: (r) => {

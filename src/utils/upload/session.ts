@@ -112,7 +112,11 @@ async function deleteInterruptedPredecessor(oldRowId: string): Promise<void> {
     () => db.uploadSessions.delete(oldRowId),
     "session-resume-delete",
   );
-  await dbRowOp(() => db.files.delete(oldRowId), "pending-row-delete");
+  await dbRowOp(
+    // Compound PK (schema v10): [userEmail, id].
+    () => db.files.delete([getCurrentUserEmail(), oldRowId]),
+    "pending-row-delete",
+  );
 }
 
 // P2-B1a: retire an entry's interrupted source row once it is safe. With

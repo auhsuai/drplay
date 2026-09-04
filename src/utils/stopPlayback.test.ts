@@ -119,7 +119,10 @@ describe("useDriveBulkOps.handleBulkDelete with stopPlayback", () => {
     expect(mocks.store.setCurrentTrack).toHaveBeenCalledWith(null);
     expect(mocks.store.setIsPlaying).toHaveBeenCalledWith(false);
     expect(onRemoveItem).toHaveBeenCalledTimes(2);
-    expect(mocks.bulkDelete).toHaveBeenCalledWith(["track-1", "other-1"]);
+    expect(mocks.bulkDelete).toHaveBeenCalledWith([
+      ["default", "track-1"],
+      ["default", "other-1"],
+    ]);
   });
 
   it("bulk delete where the playing track FAILS: toast error but playback is NOT stopped", async () => {
@@ -137,7 +140,7 @@ describe("useDriveBulkOps.handleBulkDelete with stopPlayback", () => {
     expect(mocks.store.setCurrentTrack).not.toHaveBeenCalled();
     expect(mocks.store.setIsPlaying).not.toHaveBeenCalled();
     expect(mocks.showErrorToast).toHaveBeenCalledTimes(1);
-    expect(mocks.bulkDelete).toHaveBeenCalledWith(["other-1"]);
+    expect(mocks.bulkDelete).toHaveBeenCalledWith([["default", "other-1"]]);
   });
 
   it("bulk delete WITHOUT the playing track never touches the player", async () => {

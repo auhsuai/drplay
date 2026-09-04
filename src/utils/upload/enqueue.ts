@@ -1,6 +1,6 @@
-import { db } from "../../db/db";
-import type { DriveFile } from "../../db/db";
+import { upsertPendingCardRows, type PendingFileCard } from "../../db/fileRows";
 import { captureError } from "../errorLog";
+import { getCurrentUserEmail } from "../storageKeys";
 import {
   AUDIO_FILE_MIME,
   ERROR_INVALID_SEED,
@@ -50,16 +50,16 @@ function failSeed(entry: InternalEntry, reason: string): void {
 
 // A queued entry's placeholder db.files row (the dimmed card in the live
 // list) — same shape whether written at enqueue or by processEntry; putting
-// the same id + content is idempotent, so both writes coexist safely.
-export function pendingRow(entry: InternalEntry): DriveFile {
+// the same id + content is idempotent, so both writes coexist safely. The
+// card is NOT a Drive resource: its self-managed parentId passes through
+// upsertPendingCardRows verbatim (no canonical root fallback).
+export function pendingCard(entry: InternalEntry): PendingFileCard {
   return {
     id: entry.id,
     name: entry.name,
     mimeType: entry.isFolder ? FOLDER_MIME : AUDIO_FILE_MIME,
     parentId: entry.parentId,
-    trashed: false,
     isFolder: entry.isFolder,
-    modifiedTime: new Date().toISOString(),
   };
 }
 
@@ -70,7 +70,7 @@ export function pendingRow(entry: InternalEntry): DriveFile {
 export function enqueuePendingRows(batch: InternalEntry[]): Promise<void> {
   if (batch.length === 0) return Promise.resolve();
   return dbRowOp(
-    () => db.files.bulkPut(batch.map((e) => pendingRow(e))),
+    () => upsertPendingCardRows(batch.map(pendingCard), getCurrentUserEmail()),
     "enqueue-pending-rows",
   );
 }

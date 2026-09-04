@@ -1,6 +1,7 @@
 import { db } from "../../db/db";
 import type { UploadSessionRow } from "../../db/db";
 import { captureError } from "../errorLog";
+import { getCurrentUserEmail } from "../storageKeys";
 import { showErrorToast } from "../simpleToast";
 import { t } from "i18next";
 import { MODULE, PENDING_ID_PREFIX, describeError } from "./errors";
@@ -137,7 +138,13 @@ export async function resumeInterruptedUploads(
         (row) => !liveSessionIds.has(row.id) && !liveEntryIds.has(row.id),
       );
       if (ghostRows.length > 0) {
-        await db.files.bulkDelete(ghostRows.map((row) => row.id));
+        // Compound PK (schema v10): delete this user's ghosts by
+        // [userEmail, id]; other owners' cards are swept when their own
+        // account runs the resume scan.
+        const ownerEmail = getCurrentUserEmail();
+        await db.files.bulkDelete(
+          ghostRows.map((row) => [ownerEmail, row.id] as [string, string]),
+        );
       }
       // F4: a ghost that is NOT the stale card of a row consumed this round is
       // the pending card of a seed that never started (crashed before its

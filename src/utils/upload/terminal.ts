@@ -1,8 +1,9 @@
 import { db } from "../../db/db";
-import type { DriveFile } from "../../db/db";
+import { upsertFileRows, type UpsertableFileRow } from "../../db/fileRows";
 import type { DriveFileItem } from "../driveApi";
 import { captureError } from "../errorLog";
 import { showErrorToast } from "../simpleToast";
+import { getCurrentUserEmail } from "../storageKeys";
 import { t } from "i18next";
 import { UploadError } from "../driveUpload";
 import { clearControllerFor, controllerFor } from "./controllers";
@@ -70,7 +71,11 @@ export function cancelUpload(id: string): void {
 function cancelQueuedEntry(entry: InternalEntry): void {
   entry.status = "error";
   entry.error = ERROR_ABORTED;
-  void dbRowOp(() => db.files.delete(entry.id), "pending-row-delete");
+  // Compound PK (schema v10): [userEmail, id].
+  void dbRowOp(
+    () => db.files.delete([getCurrentUserEmail(), entry.id]),
+    "pending-row-delete",
+  );
   // Sync path: fire-and-forget — clearSession swallows its own failures.
   void clearSession(entry);
   // A cancelled resume is a definitive end: drop the interrupted source pair
@@ -111,7 +116,27 @@ export async function markDone(
   ) {
     entry.batchMemo.set(entry.relativeDir, driveItem.id);
   }
-  await dbRowOp(() => db.files.put(realRow(entry, driveItem)), "real-row");
+  await dbRowOp(
+    () =>
+      upsertFileRows(
+        [
+          {
+            // Provisional userEmail (type-required) — the helper stamps its
+            // own ownerEmail argument authoritatively.
+            ...realUploadRow(entry, driveItem),
+            userEmail: getCurrentUserEmail(),
+          },
+        ],
+        getCurrentUserEmail(),
+        // The resumable-upload response never echoes parents[] back (narrowed
+        // by asDriveFileItem), so the canonical source here is the parent THIS
+        // entry itself sent in the upload request — for folder children that
+        // is the resolved Drive folder id (entry.parentId was set from the
+        // batch memo before initiating).
+        [entry.parentId],
+      ),
+    "real-row",
+  );
   entry.status = "done";
   // The row shows a green check for a short while after finishing — a driveId
   // is the id the live list knows the item by, so mark that one. Notify runs
@@ -216,13 +241,25 @@ export async function markError(
 // does not share this — a queued entry never touched the network and must turn
 // terminal synchronously within cancelUpload (the pump only picks 'queued').
 async function finishEntry(entry: InternalEntry): Promise<void> {
-  await dbRowOp(() => db.files.delete(entry.id), "pending-row-delete");
+  // Compound PK (schema v10): [userEmail, id].
+  await dbRowOp(
+    () => db.files.delete([getCurrentUserEmail(), entry.id]),
+    "pending-row-delete",
+  );
   notify();
   pruneEntry(entry);
   clearControllerFor(entry);
 }
 
-function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
+// Map the settled upload into the helper's raw-row shape. The parent is NOT
+// set here — markDone passes entry.parentId as upsertFileRows' knownParents
+// (the request's own target), so a future response that DOES carry parents[]
+// automatically wins via the row's own parents. Same as driveMapping, the row
+// is WITHOUT userEmail (the call site composes the provisional value).
+function realUploadRow(
+  entry: InternalEntry,
+  driveItem: DriveFileItem,
+): Omit<UpsertableFileRow, "userEmail"> {
   let size: number | undefined;
   if (driveItem.size !== undefined) {
     const n = Number(driveItem.size);
@@ -232,7 +269,6 @@ function realRow(entry: InternalEntry, driveItem: DriveFileItem): DriveFile {
     id: driveItem.id,
     name: entry.name,
     mimeType: entry.isFolder ? FOLDER_MIME : driveItem.mimeType,
-    parentId: entry.parentId,
     size,
     trashed: false,
     isFolder: entry.isFolder,

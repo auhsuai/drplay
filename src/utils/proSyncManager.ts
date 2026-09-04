@@ -1,4 +1,5 @@
 import { captureError } from "./errorLog";
+import { DEFAULT_USER_EMAIL, getCurrentUserEmail } from "./storageKeys";
 
 // Named constants for the worker->main protocol (message types) and the
 // main->UI protocol (CustomEvent names). Worker messages were previously
@@ -48,6 +49,25 @@ let onTokenRefreshRequest: (() => Promise<string | null>) | null = null;
 // triggerProSync, so a re-sync never needs the caller to pass the token again.
 let lastToken: string | null = null;
 
+// Timing hazard: USER_EMAIL_KEY only lands in localStorage AFTER the
+// best-effort userinfo fetch resolves (useAuth fires it right after login),
+// while the first sync is fired straight from the isLoggedIn effect — reading
+// the key at that instant yields the shared "default" sentinel. Syncing with
+// it would stamp every row with "default" (the exact cross-account-leak shape
+// schema v10's [userEmail+id] key exists to prevent), so the main thread must
+// NOT fire a sync run until a real email exists.
+//
+// Trade-off (accepted): while the profile has not landed yet, syncs are
+// skipped entirely and retried by the 60s poller (useProSyncPoller) — the
+// first successful sync may be delayed by up to one poll tick. The worker's
+// owner gate is the second, authoritative line of defense for any frame that
+// slips through another producer.
+function resolveWireUserEmail(): string | null {
+  const email = getCurrentUserEmail();
+  if (!email || email === DEFAULT_USER_EMAIL) return null;
+  return email;
+}
+
 export function setTokenRefreshHandler(
   handler: (() => Promise<string | null>) | null,
 ) {
@@ -57,19 +77,32 @@ export function setTokenRefreshHandler(
 export function updateWorkerToken(token: string) {
   lastToken = token;
   if (globalWorker) {
-    globalWorker.postMessage({ type: WORKER_REQUEST_TYPES.token, token });
+    // The token push itself is unconditional — it releases a pending 401
+    // wait. The email rides along only when a REAL one is known, so a
+    // sentinel can never overwrite an email already delivered to the worker.
+    const userEmail = resolveWireUserEmail();
+    globalWorker.postMessage(
+      userEmail
+        ? { type: WORKER_REQUEST_TYPES.token, token, userEmail }
+        : { type: WORKER_REQUEST_TYPES.token, token },
+    );
   }
 }
 
 // Re-triggers a delta sync with the last known token. No-op (never throws)
-// while the worker has not been started or no token is known yet — the
-// poller only runs while logged in, so both cases are transient. The worker's
-// own isBusy guard turns an overlapping sync into a harmless SYNC_BUSY.
+// while the worker has not been started, no token is known yet, or the
+// account email has not landed (sentinel guard — see resolveWireUserEmail);
+// the poller only runs while logged in, so all three cases are transient. The
+// worker's own isBusy guard turns an overlapping sync into a harmless
+// SYNC_BUSY.
 export function triggerProSync(): void {
   if (!globalWorker || !lastToken) return;
+  const userEmail = resolveWireUserEmail();
+  if (!userEmail) return;
   globalWorker.postMessage({
     type: WORKER_REQUEST_TYPES.sync,
     token: lastToken,
+    userEmail,
   });
 }
 
@@ -193,7 +226,18 @@ export function startProSyncWorker(token: string) {
     };
   }
 
-  globalWorker.postMessage({ type: WORKER_REQUEST_TYPES.sync, token });
+  // Sentinel guard BEFORE the initial sync (see resolveWireUserEmail for the
+  // hazard): the worker is still created and wired so token-refresh replies
+  // keep working, but no sync run starts until a real email exists — the
+  // poller retries once the profile has landed.
+  const userEmail = resolveWireUserEmail();
+  if (!userEmail) return;
+
+  globalWorker.postMessage({
+    type: WORKER_REQUEST_TYPES.sync,
+    token,
+    userEmail,
+  });
 }
 
 export function stopProSyncWorker() {

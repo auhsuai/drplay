@@ -30,7 +30,6 @@ import {
   TOKEN_TIME_KEY,
   USER_EMAIL_KEY,
 } from "../utils/storageKeys";
-import { db } from "../db/db";
 
 const authState = vi.hoisted(() => ({
   isLoggedIn: false,
@@ -39,6 +38,27 @@ const authState = vi.hoisted(() => ({
   setIsLoggedIn: vi.fn(),
   setAccessToken: vi.fn(),
   setUserProfile: vi.fn(),
+}));
+
+// Logout DB-teardown mocks (hoisted so the vi.mock factories below can close
+// over them; direct method references like db.syncState.delete would trip
+// @typescript-eslint/unbound-method).
+const { mockedSyncStateDelete, mockedWipeFileRowsForUser } = vi.hoisted(() => ({
+  mockedSyncStateDelete: vi.fn(() => Promise.resolve()),
+  mockedWipeFileRowsForUser: vi.fn<(email: string) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
+}));
+
+vi.mock("../db/db", () => ({
+  db: {
+    files: { clear: vi.fn(() => Promise.resolve()) },
+    syncState: { delete: mockedSyncStateDelete },
+  },
+}));
+
+vi.mock("../db/fileRows", () => ({
+  wipeFileRowsForUser: mockedWipeFileRowsForUser,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -429,45 +449,63 @@ describe("useAuth handleLogout revokes the refresh token too (M2)", () => {
   });
 });
 
-describe("useAuth logout DB wipe (per-user cleanup + sync cursor reset)", () => {
+// Logout account-boundary teardown (schema v10): db.files rows are keyed
+// [userEmail+id], so logout wipes ONLY the logged-out account's mirror, and
+// the Drive changes cursor (db.syncState "startPageToken") must never survive
+// a logout — otherwise the NEXT account's first sync delta-applies another
+// account's change window onto its own mirror.
+describe("useAuth logout DB wipes (per-user files + sync cursor)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     localStorage.removeItem(USER_EMAIL_KEY);
   });
 
-  it("clears the files mirror and deletes the sync cursor when logging out of a real account", async () => {
-    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
-    localStorage.setItem(USER_EMAIL_KEY, "user-a@test.com");
-    const clearSpy = vi.spyOn(db.files, "clear").mockResolvedValue(undefined);
-    const deleteSpy = vi
-      .spyOn(db.syncState, "delete")
-      .mockResolvedValue(undefined);
+  it("wipes the logged-out account's file rows AND deletes the sync cursor on logout", async () => {
+    localStorage.setItem(USER_EMAIL_KEY, "out@example.com");
     const { result } = renderHook(() => useAuth());
 
     await act(async () => {
       await result.current.handleLogout();
     });
 
-    expect(clearSpy).toHaveBeenCalledTimes(1);
-    expect(deleteSpy).toHaveBeenCalledWith("startPageToken");
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledWith("out@example.com");
+    expect(mockedSyncStateDelete).toHaveBeenCalledWith("startPageToken");
   });
 
-  it("deletes the sync cursor even when the account email is unknown (stale cursor must never survive)", async () => {
-    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
-    const clearSpy = vi.spyOn(db.files, "clear").mockResolvedValue(undefined);
-    const deleteSpy = vi
-      .spyOn(db.syncState, "delete")
-      .mockResolvedValue(undefined);
+  it("deletes the sync cursor EVEN WHEN the files wipe fails (independence) and logout still resolves", async () => {
+    localStorage.setItem(USER_EMAIL_KEY, "out@example.com");
+    mockedWipeFileRowsForUser.mockRejectedValueOnce(new Error("idb down"));
+    const onLogoutExt = vi.fn();
+    const { result } = renderHook(() => useAuth(onLogoutExt));
+
+    await expect(
+      act(async () => {
+        await result.current.handleLogout();
+      }),
+    ).resolves.toBeUndefined();
+
+    // The two teardowns are independent: a failed file wipe must not skip
+    // the cursor delete nor abort the rest of logout.
+    expect(mockedSyncStateDelete).toHaveBeenCalledWith("startPageToken");
+    expect(onLogoutExt).toHaveBeenCalled();
+    expect(
+      mockedCaptureError.mock.calls.some(([c]) =>
+        c.message.includes("Files persisted-wipe failed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the file-row wipe when no real account email was ever known, but STILL deletes the cursor", async () => {
+    // beforeEach cleared localStorage — no USER_EMAIL_KEY, so no account is
+    // reliably identified and there is nothing owned to wipe.
     const { result } = renderHook(() => useAuth());
 
     await act(async () => {
       await result.current.handleLogout();
     });
 
-    // No real email was ever known: nothing reliably owned to wipe.
-    expect(clearSpy).not.toHaveBeenCalled();
-    // The cursor is account-scoped state â€” deleted independently of the wipe.
-    expect(deleteSpy).toHaveBeenCalledWith("startPageToken");
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+    expect(mockedSyncStateDelete).toHaveBeenCalledWith("startPageToken");
   });
 });
 

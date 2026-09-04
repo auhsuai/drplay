@@ -202,7 +202,7 @@ describe("FullRecentView menu delete flow", () => {
       expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith("tok", "t1");
     });
     await waitFor(() => {
-      expect(mocks.db.files.delete).toHaveBeenCalledWith("t1");
+      expect(mocks.db.files.delete).toHaveBeenCalledWith(["default", "t1"]);
     });
     await waitFor(() => {
       expect(screen.queryByText("Alpha")).toBeNull();

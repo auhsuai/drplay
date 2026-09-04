@@ -239,7 +239,10 @@ describe("MoreMenu recent variant", () => {
       expect(mocks.driveApi.deleteFile).toHaveBeenCalledWith("tok", "track-1");
     });
     await waitFor(() => {
-      expect(mocks.db.files.delete).toHaveBeenCalledWith("track-1");
+      expect(mocks.db.files.delete).toHaveBeenCalledWith([
+        "default",
+        "track-1",
+      ]);
     });
     await waitFor(() => {
       expect(onRemoveItem).toHaveBeenCalledWith("track-1");

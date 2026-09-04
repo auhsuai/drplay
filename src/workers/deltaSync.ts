@@ -1,23 +1,27 @@
 import { db } from "../db/db";
+import { upsertFileRows } from "../db/fileRows";
 import { isAudioFile } from "../utils/audioQuery";
 import { FOLDER_MIME } from "../utils/driveApi";
-import { isValidDriveFile, toDriveFileRow } from "./driveMapping";
+import { parseDriveJson } from "./driveFetch";
+import { isValidDriveFile } from "./driveMapping";
 import type { DriveChangesList } from "./driveMapping";
-import { fetchDrive, parseDriveJson } from "./driveFetch";
 import { logWorkerError, WorkerAbortError } from "./workerError";
-import { refreshTokenAndRetry, syncRetryDeps } from "./tokenRefresh";
 import {
+  buildOwnerRow,
   DRIVE_CHANGES_URL,
+  fetchDriveWithAuthRetry,
   FILES_FIELDS,
+  hasCurrentToken,
   START_PAGE_TOKEN_KEY,
-  getCurrentToken,
   syncRetry,
 } from "./syncState";
 import { performFullSync } from "./fullSync";
 
-export async function performDeltaSync(startPageToken: string) {
-  const token = getCurrentToken();
-  if (!token) return;
+export async function performDeltaSync(
+  startPageToken: string,
+  ownerEmail: string,
+) {
+  if (!hasCurrentToken()) return;
   let pageToken = startPageToken;
   let newStartPageToken = startPageToken;
   // Files skipped because they lack a usable id, accumulated across all pages
@@ -33,25 +37,17 @@ export async function performDeltaSync(startPageToken: string) {
         `nextPageToken,newStartPageToken,changes(fileId,removed,file(${FILES_FIELDS},trashed))`,
       );
 
-      // Retry the SAME changes page after a successful token refresh. The old
+      // Same-page 401 retry lives in fetchDriveWithAuthRetry. The old
       // `continue` only worked by accident: it jumped to `while (pageToken)`,
       // which stayed truthy solely because pageToken === startPageToken on
-      // entry. The explicit loop makes the same-page retry independent from
+      // entry. The shared helper makes the same-page retry independent from
       // that truthiness invariant and never advances pagination on a retry
       // (Drive leaves its cursor untouched when it rejects with 401).
-      let res = await fetchDrive("changes", getCurrentToken() as string, url);
-      while (!res.ok && res.status === 401) {
-        if (
-          !(await refreshTokenAndRetry(
-            syncRetry,
-            syncRetryDeps,
-            "delta-sync/changes",
-          ))
-        ) {
-          break;
-        }
-        res = await fetchDrive("changes", getCurrentToken() as string, url);
-      }
+      const res = await fetchDriveWithAuthRetry(
+        "changes",
+        "delta-sync/changes",
+        url,
+      );
 
       if (!res.ok) {
         if (res.status === 410) {
@@ -66,7 +62,7 @@ export async function performDeltaSync(startPageToken: string) {
               "error",
             );
           }
-          await performFullSync();
+          await performFullSync(ownerEmail);
           return;
         }
         // Non-ok with no retry left (refresh refused/failed or a status other
@@ -101,7 +97,9 @@ export async function performDeltaSync(startPageToken: string) {
             // the explicit assertion mirrors the previous `!` with identical
             // runtime semantics (a missing fileId still throws inside the
             // per-change try/catch below).
-            await db.files.delete(change.fileId as string);
+            // Delete by THIS run's owner key — the compound [userEmail+id]
+            // primary key only addresses rows of the account being synced.
+            await db.files.delete([ownerEmail, change.fileId as string]);
             hasValidChanges = true;
           } else if (change.file) {
             const file = change.file;
@@ -116,7 +114,13 @@ export async function performDeltaSync(startPageToken: string) {
             const isFolder = file.mimeType === FOLDER_MIME;
 
             if (isFolder || isAudioFile(file.mimeType, file.name as string)) {
-              await db.files.put(toDriveFileRow(file, isFolder));
+              // Per-change helper call keeps the one-bad-change isolation of
+              // the previous per-change put (a batched page-wide upsert would
+              // let one poisoned row abort its valid siblings).
+              await upsertFileRows(
+                [buildOwnerRow(file, isFolder, ownerEmail)],
+                ownerEmail,
+              );
               hasValidChanges = true;
             }
           }
