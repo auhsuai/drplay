@@ -19,10 +19,10 @@ const SORT_COLLATOR = new Intl.Collator(undefined, {
   sensitivity: "base",
 });
 
-// metadataCache is typed Record<string, CachedMetadata> but is a sparse
-// module-level cache — index access can still be undefined at runtime.
+// Map.get carries the true nullability (CachedMetadata | undefined) so the
+// optional chain below is checked by the compiler instead of by comment.
 const cachedTitle = (id: string): string | undefined =>
-  metadataCache[id]?.title;
+  metadataCache.get(id)?.title;
 
 // Pure sort extracted from the listing memo so it is unit-testable and the
 // sort memo only re-runs on [partitioned, sortOption] instead of re-sorting

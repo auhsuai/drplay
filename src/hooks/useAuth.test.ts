@@ -13,7 +13,10 @@ import {
   readRefreshToken,
   deleteRefreshToken,
 } from "../utils/apiClient";
-import { clearAllMetadataCache } from "../utils/metadata";
+import {
+  clearAllMetadataCache,
+  wipePersistedMetadataCache,
+} from "../utils/metadata";
 import { captureError } from "../utils/errorLog";
 import { fetchWithAuth } from "../utils/apiClient";
 import {
@@ -43,11 +46,16 @@ const authState = vi.hoisted(() => ({
 // Logout DB-teardown mocks (hoisted so the vi.mock factories below can close
 // over them; direct method references like db.syncState.delete would trip
 // @typescript-eslint/unbound-method).
-const { mockedSyncStateDelete, mockedWipeFileRowsForUser } = vi.hoisted(() => ({
+const {
+  mockedSyncStateDelete,
+  mockedWipeFileRowsForUser,
+  mockedWipePersistedMetadataCache,
+} = vi.hoisted(() => ({
   mockedSyncStateDelete: vi.fn(() => Promise.resolve()),
   mockedWipeFileRowsForUser: vi.fn<(email: string) => Promise<void>>(() =>
     Promise.resolve(),
   ),
+  mockedWipePersistedMetadataCache: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../db/db", () => ({
@@ -103,7 +111,10 @@ vi.mock("../utils/cache", () => ({
 }));
 
 vi.mock("../utils/metadata", () => ({
+  // Mirrors the real async contract: wipePersistedMetadataCache resolves a
+  // Promise, and handleLogout attaches .catch to it.
   clearAllMetadataCache: vi.fn(),
+  wipePersistedMetadataCache: mockedWipePersistedMetadataCache,
 }));
 
 vi.mock("../utils/errorLog", () => ({
@@ -124,6 +135,9 @@ const mockedInvalidateCurrentSession = vi.mocked(invalidateCurrentSession);
 const mockedRevokeGoogleToken = vi.mocked(revokeGoogleToken);
 const mockedStopProactiveRefresh = vi.mocked(stopProactiveRefresh);
 const mockedClearAllMetadataCache = vi.mocked(clearAllMetadataCache);
+const mockedWipePersistedMetadataCacheHoisted = vi.mocked(
+  wipePersistedMetadataCache,
+);
 const mockedCaptureError = vi.mocked(captureError);
 const mockedFetchWithAuth = vi.mocked(fetchWithAuth);
 const mockedStartProSyncWorker = vi.mocked(startProSyncWorker);
@@ -314,6 +328,7 @@ describe("useAuth handleLogout backend cleanup", () => {
     expect(invokedCommands()).not.toContain("clear_stream_token");
     expect(invokedCommands()).toContain("clear_local_cache");
     expect(mockedClearAllMetadataCache).toHaveBeenCalled();
+    expect(mockedWipePersistedMetadataCacheHoisted).toHaveBeenCalled();
     expect(mockedInvalidateCurrentSession).toHaveBeenCalled();
     expect(mockedStopProSyncWorker).toHaveBeenCalled();
     expect(mockedStopProactiveRefresh).toHaveBeenCalled();

@@ -17,6 +17,12 @@ import {
 import { clearNetworkCooldown } from "./fetchPipeline";
 import type { CacheEntry, CachedMetadata } from "./types";
 
+// 6 điểm log trong file dùng chung một shape { level, source: META_MODULE,
+// message } — gom về đây để source chỉ được khai một chỗ; message do
+// call-site compose (kèm classifyMetaError khi có error object).
+const logMeta = (level: "warn" | "error", message: string): void =>
+  void captureError({ level, source: META_MODULE, message });
+
 export function classifyMetaError(err: unknown): {
   name: string;
   message: string;
@@ -50,11 +56,7 @@ try {
 } catch (e: unknown) {
   // fire-and-forget: logging must not throw in this module-init sync path
   // (captureError never rejects — it swallows failures internally).
-  void captureError({
-    level: "warn",
-    source: META_MODULE,
-    message: `lru-load-failed: ${classifyMetaError(e).message}`,
-  });
+  logMeta("warn", `lru-load-failed: ${classifyMetaError(e).message}`);
 }
 
 // Shared LRU helpers: `touchLruKeys` moves `id` to the back (most-recently
@@ -87,13 +89,9 @@ function updateLRU(key: string) {
     lruKeys,
     () => lruKeys.length > MAX_LRU_CACHE,
     (oldest) => {
-      db.metadataCache.delete(oldest).catch((e: unknown) =>
-        captureError({
-          level: "error",
-          source: META_MODULE,
-          message: `lru-delete-failed: ${classifyMetaError(e).message}`,
-        }),
-      );
+      db.metadataCache.delete(oldest).catch((e: unknown) => {
+        logMeta("error", `lru-delete-failed: ${classifyMetaError(e).message}`);
+      });
     },
   );
 
@@ -102,11 +100,7 @@ function updateLRU(key: string) {
   } catch (e: unknown) {
     // fire-and-forget: logging must not throw in this sync path (captureError
     // never rejects — it swallows failures internally).
-    void captureError({
-      level: "warn",
-      source: META_MODULE,
-      message: `lru-save-failed: ${classifyMetaError(e).message}`,
-    });
+    logMeta("warn", `lru-save-failed: ${classifyMetaError(e).message}`);
   }
 }
 
@@ -145,25 +139,24 @@ export async function putCacheEntry(
   await db.metadataCache.put({ key, entry });
 }
 
-export const metadataCache: Record<string, CachedMetadata> = {};
+export const metadataCache = new Map<string, CachedMetadata>();
 const memCacheKeys: string[] = [];
 
-// The Record type claims every key exists, but a fileId with no cached entry
-// is undefined at runtime — this helper surfaces the true shape so guards
-// below are checked (and lint-visible) instead of lying about nullability.
+// Map.get carries the true nullability in its type (CachedMetadata | undefined)
+// so guards below are checked by the compiler instead of by comment.
 export function getMemCacheEntry(fileId: string): CachedMetadata | undefined {
-  return metadataCache[fileId];
+  return metadataCache.get(fileId);
 }
 
 export function setMetadataCache(fileId: string, entry: CachedMetadata) {
   touchLruKeys(memCacheKeys, fileId);
-  metadataCache[fileId] = entry;
+  metadataCache.set(fileId, entry);
   evictLruKeys(
     memCacheKeys,
     () => memCacheKeys.length > MAX_MEM_CACHE,
     (oldest) => {
-      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: the eviction cap must PHYSICALLY remove the key (assigning undefined would leave it enumerable and defeat the memory bound).
-      delete metadataCache[oldest];
+      // Map.delete physically removes the key, preserving the memory bound.
+      metadataCache.delete(oldest);
     },
   );
 }
@@ -181,13 +174,9 @@ export function cacheTrackMetadata(
   const idbEntry: CachedMetadata = canPersistFullPicture(entry)
     ? { ...stored, pictureDataFull: entry.pictureDataFull }
     : stored;
-  setCache(`${METADATA_KEY_PREFIX}${fileId}`, idbEntry).catch((e: unknown) =>
-    captureError({
-      level: "warn",
-      source: META_MODULE,
-      message: `cache-set-failed: ${classifyMetaError(e).message}`,
-    }),
-  );
+  setCache(`${METADATA_KEY_PREFIX}${fileId}`, idbEntry).catch((e: unknown) => {
+    logMeta("warn", `cache-set-failed: ${classifyMetaError(e).message}`);
+  });
   return entry;
 }
 
@@ -203,9 +192,8 @@ const fullPictureCache = new Map<string, Uint8Array>();
 let fullPictureBytes = 0;
 
 export function setFullPictureCache(fileId: string, data: Uint8Array): void {
-  if (fullPictureCache.has(fileId)) {
-    fullPictureBytes -= fullPictureCache.get(fileId)?.byteLength ?? 0;
-  }
+  // Subtraction is safe without a has() guard: a miss reads undefined → ?? 0.
+  fullPictureBytes -= fullPictureCache.get(fileId)?.byteLength ?? 0;
   // delete+set is the Map-native write-touch: the key re-inserts at the tail,
   // making the oldest entry the one at the head (iteration order).
   fullPictureCache.delete(fileId);
@@ -254,12 +242,13 @@ export function mergeFullPicture(
 
 let cacheGeneration = 0;
 
-export function clearAllMetadataCache(): void {
+// Mem-layer teardown shared by clearAllMetadataCache (memory-only reset) and
+// wipePersistedMetadataCache (account-boundary wipe). Bumping cacheGeneration
+// also drops any in-flight setCache put/updateLRU, so no stale row can be
+// resurrected into IDB/localStorage after a clear/wipe has started.
+function clearMemMetadataCaches(): void {
   cacheGeneration++;
-  for (const k of Object.keys(metadataCache)) {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- intentional: must fully drop every key so Object.keys(metadataCache) is 0 after clear (test asserts this; assigning undefined would keep the keys).
-    delete metadataCache[k];
-  }
+  metadataCache.clear();
   memCacheKeys.length = 0;
   lruKeys = [];
   fullPictureCache.clear();
@@ -269,6 +258,45 @@ export function clearAllMetadataCache(): void {
   // once stay placeholder-blocked up to METADATA_NETWORK_COOLDOWN_MS despite
   // the user's explicit full reset.
   clearNetworkCooldown();
+}
+
+export function clearAllMetadataCache(): void {
+  clearMemMetadataCaches();
+}
+
+/**
+ * Account-boundary wipe (logout): metadataCache IDB rows carry NO userEmail
+ * (every other per-user table moved to [userEmail+id] in schema v7), so rows
+ * left behind by user A would be served to user B. Metadata is re-fetchable
+ * cache data, so instead of a schema migration this wipes EVERYTHING: the mem
+ * layers (via clearAllMetadataCache semantics) + the persisted localStorage
+ * LRU list + all metadataCache rows in IndexedDB (bulk delete). Best-effort:
+ * individual failures are logged and never reject — logout must proceed.
+ */
+export async function wipePersistedMetadataCache(): Promise<void> {
+  clearMemMetadataCaches();
+
+  // Drop the persisted LRU bookkeeping BEFORE deleting the rows so an
+  // interrupted wipe never leaves a key list pointing at deleted rows.
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(METADATA_LRU_KEY);
+    }
+  } catch (e: unknown) {
+    logMeta("warn", `lru-wipe-failed: ${classifyMetaError(e).message}`);
+  }
+
+  try {
+    const keys = await db.metadataCache.toCollection().primaryKeys();
+    await db.metadataCache.bulkDelete(keys);
+  } catch (e: unknown) {
+    // Logged, not rethrown: fire-and-forget callers treat resolution as "wipe
+    // finished", and a failed bulk delete is recoverable (rows are cache).
+    logMeta(
+      "error",
+      `metadata-idb-wipe-failed: ${classifyMetaError(e).message}`,
+    );
+  }
 }
 
 // Rank used by setCache to order writes. Raw data.v must NOT be compared
@@ -308,11 +336,6 @@ export async function setCache(
     data: newEntry,
     ts: Date.now(),
   });
-  // Same TOCTOU as the get-side guard: clearAllMetadataCache() may bump the
-  // generation while this put is in flight. Touching the LRU now would
-  // resurrect the key into localStorage/bookkeeping AFTER the user's clear,
-  // so re-check before updateLRU (the stale row itself, if it landed past the
-  // clear's IDB delete, stays orphaned bookkeeping-wise until the next clear).
   // Same TOCTOU as the get-side guard: clearAllMetadataCache() may bump the
   // generation while this put is in flight. Touching the LRU now would
   // resurrect the key into localStorage/bookkeeping AFTER the user's clear,

@@ -5,11 +5,17 @@ import {
   getTrackMetadata,
   clearAllMetadataCache,
   cacheTrackMetadata,
+  getFullPictureData,
+  metadataCache,
+  wipePersistedMetadataCache,
   METADATA_LRU_KEY,
   V_PLACEHOLDER,
 } from "./metadata";
 import { db } from "../db/db";
 import type { MetadataCacheRow } from "../db/db";
+// Same module instance as ./metadata (the barrel re-exports it) — imported
+// directly because setFullPictureCache is not part of the public barrel.
+import { setFullPictureCache } from "./metadata/cache";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -29,6 +35,15 @@ vi.mock("../db/db", () => ({
       delete: (key: string) => {
         memoryStore.delete(key);
         return Promise.resolve();
+      },
+      // Mirrors Table.toCollection().primaryKeys() for the account-boundary
+      // wipe (wipePersistedMetadataCache): all primary keys currently stored.
+      toCollection: () => ({
+        primaryKeys: () => Promise.resolve([...memoryStore.keys()]),
+      }),
+      bulkDelete: (keys: string[]) => {
+        keys.forEach((k) => memoryStore.delete(k));
+        return Promise.resolve(0);
       },
     },
   },
@@ -415,5 +430,65 @@ describe("setCache score polarity guard (real vs placeholder)", () => {
     await flushPromises();
 
     expect(storedData("metadata_polarity-c")?.title).toBe("First");
+  });
+});
+
+describe("account-boundary persisted wipe (wipePersistedMetadataCache)", () => {
+  afterEach(() => {
+    localStorage.removeItem(METADATA_LRU_KEY);
+  });
+
+  it("wipes IDB rows, the persisted LRU list and every mem cache at once", async () => {
+    localStorage.removeItem(METADATA_LRU_KEY);
+    clearAllMetadataCache();
+    memoryStore.clear();
+    vi.mocked(invoke).mockReset();
+
+    // Seed all three layers user A leaves behind:
+    // 1) IDB rows of metadataCache (no userEmail column — shared across users),
+    memoryStore.set("metadata_user-a-song", {
+      key: "metadata_user-a-song",
+      entry: { version: 2, data: makeEntry(), ts: Date.now() },
+    });
+    memoryStore.set("metadata_user-a-other", {
+      key: "metadata_user-a-other",
+      entry: { version: 2, data: makeRealEntry(), ts: Date.now() },
+    });
+    // 2) the persisted localStorage LRU list,
+    localStorage.setItem(
+      METADATA_LRU_KEY,
+      JSON.stringify(["metadata_user-a-song", "metadata_user-a-other"]),
+    );
+    // 3) the mem caches (entry Map + full-picture LRU).
+    cacheTrackMetadata("mem-user-a", makeEntry());
+    setFullPictureCache("mem-user-a", new Uint8Array([1, 2, 3, 4]));
+    expect(memoryStore.size).toBe(2);
+    expect([...metadataCache.keys()]).toContain("mem-user-a");
+    expect(getFullPictureData("mem-user-a")).not.toBeNull();
+
+    await wipePersistedMetadataCache();
+    await flushPromises();
+
+    expect(memoryStore.size).toBe(0);
+    expect(localStorage.getItem(METADATA_LRU_KEY)).toBeNull();
+    expect(metadataCache.size).toBe(0);
+    expect(getFullPictureData("mem-user-a")).toBeNull();
+  });
+
+  it("clearAllMetadataCache still leaves IDB rows untouched (old semantics)", async () => {
+    // Guard for the mem-only contract: utils/cache.ts callers rely on
+    // clearAllMetadataCache NOT touching persistence.
+    localStorage.removeItem(METADATA_LRU_KEY);
+    memoryStore.clear();
+
+    memoryStore.set("metadata_survivor", {
+      key: "metadata_survivor",
+      entry: { version: 2, data: makeEntry(), ts: Date.now() },
+    });
+
+    clearAllMetadataCache();
+    await flushPromises();
+
+    expect(memoryStore.has("metadata_survivor")).toBe(true);
   });
 });
