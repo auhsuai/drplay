@@ -20,6 +20,16 @@ function classifyHistoryError(err: unknown): string {
   return `${name}: ${message}`;
 }
 
+// Shared error-log shape: every failure path in this module logs at level
+// "error" with the same `${label}: name: message` format and never rethrows.
+async function logHistoryError(label: string, err: unknown): Promise<void> {
+  await captureError({
+    level: "error",
+    source: HISTORY_MODULE,
+    message: `${label}: ${classifyHistoryError(err)}`,
+  });
+}
+
 export interface PlayCountEntry {
   track: Track;
   count: number;
@@ -73,11 +83,7 @@ export async function recordPlay(track: Track) {
       },
     );
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `recordPlay-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("recordPlay-failed", e);
   }
 
   window.dispatchEvent(new Event("recent-updated"));
@@ -106,11 +112,7 @@ async function prunePlayCounts(email: string): Promise<void> {
     );
   } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `playCounts-prune-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("playCounts-prune-failed", e);
   }
 }
 
@@ -142,11 +144,7 @@ async function pruneRecentTracks(email: string): Promise<void> {
       .delete();
   } catch (e: unknown) {
     // Prune failure must not lose the play record — log with context only.
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `recentTracks-prune-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("recentTracks-prune-failed", e);
   }
 }
 
@@ -172,11 +170,7 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
     }
     return deduped.slice(0, RECENT_CAP);
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getRecentlyPlayed-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getRecentlyPlayed-failed", e);
     return [];
   }
 }
@@ -200,11 +194,7 @@ export async function getHeavyRotation(): Promise<Track[]> {
       .toArray();
     return rows.map((row) => row.track);
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getHeavyRotation-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getHeavyRotation-failed", e);
     return [];
   }
 }
@@ -217,19 +207,19 @@ export async function getHeavyRotation(): Promise<Track[]> {
  */
 export async function getRandomDiscoveries(): Promise<Track[]> {
   try {
-    const rows = await db.metadataCache.toArray();
-    const keys = rows
-      .filter((r) => {
-        const entry = r.entry as { data?: { v: number } } | undefined;
-        return entry && entry.data && entry.data.v < V_PLACEHOLDER;
-      })
-      .map((r) => r.key)
-      .filter(
-        (k) => typeof k === "string" && k.startsWith(METADATA_KEY_PREFIX),
-      );
-    if (keys.length === 0) return [];
+    // Key-only scan: the metadata-key prefix is applied to the primary key
+    // inside IndexedDB (':id'), so building the candidate list deserializes
+    // no entry payloads. The v predicate lives inside each entry value, so
+    // candidate rows are validated lazily while walking the shuffled keys —
+    // the walk stops as soon as RANDOM_DISCOVERIES_LIMIT real entries are
+    // collected and the whole table never materializes in memory at once.
+    const candidateKeys = await db.metadataCache
+      .where(":id")
+      .startsWith(METADATA_KEY_PREFIX)
+      .primaryKeys();
+    if (candidateKeys.length === 0) return [];
 
-    const shuffled = [...keys];
+    const shuffled = [...candidateKeys];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       const a = shuffled[i];
@@ -237,13 +227,21 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
       if (a === undefined || b === undefined) continue;
       [shuffled[i], shuffled[j]] = [b, a];
     }
-    const selectedKeys = shuffled.slice(0, RANDOM_DISCOVERIES_LIMIT);
 
     const tracks: Track[] = [];
-    for (const key of selectedKeys) {
-      const id = key.replace(METADATA_KEY_PREFIX, "");
+    for (const key of shuffled) {
+      if (tracks.length >= RANDOM_DISCOVERIES_LIMIT) break;
+      // A row can vanish between the key scan and this get — skip it.
+      const row = await db.metadataCache.get(key);
+      if (!row) continue;
+      const entry = row.entry as { data?: { v: number } } | undefined;
+      const isValid =
+        entry !== undefined &&
+        entry.data !== undefined &&
+        entry.data.v < V_PLACEHOLDER;
+      if (!isValid) continue;
       tracks.push({
-        id,
+        id: key.replace(METADATA_KEY_PREFIX, ""),
         title: "Audio Track",
         artist: "",
         streamUrl: "",
@@ -251,11 +249,7 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
     }
     return tracks;
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getRandomDiscoveries-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getRandomDiscoveries-failed", e);
     return [];
   }
 }
@@ -288,11 +282,7 @@ export async function recordFolderVisit(folderId: string, folderName: string) {
       await pruneFolderVisits(email);
     });
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `recordFolderVisit-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("recordFolderVisit-failed", e);
   }
 }
 
@@ -318,11 +308,7 @@ async function pruneFolderVisits(email: string): Promise<void> {
     );
   } catch (e: unknown) {
     // Prune failure must not lose the visit record — log with context only.
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `folderVisits-prune-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("folderVisits-prune-failed", e);
   }
 }
 
@@ -347,11 +333,7 @@ export async function getMostVisitedFolders(): Promise<FolderVisitEntry[]> {
         lastVisited: r.lastVisited,
       }));
   } catch (e: unknown) {
-    await captureError({
-      level: "error",
-      source: HISTORY_MODULE,
-      message: `getMostVisitedFolders-failed: ${classifyHistoryError(e)}`,
-    });
+    await logHistoryError("getMostVisitedFolders-failed", e);
     return [];
   }
 }

@@ -11,8 +11,9 @@ import {
 import { backoffDelay } from "./retryDelay";
 import {
   TokenRefreshError,
-  MAX_SAFE_TIMEOUT,
+  warn,
   withTimeout,
+  MAX_SAFE_TIMEOUT,
   raceWithAbortSignal,
 } from "./apiClientShared";
 import {
@@ -120,11 +121,7 @@ function getStoredTokenTime(): number {
   ) {
     // fire-and-forget: logging must not throw in this sync path (captureError
     // never rejects — it swallows failures internally).
-    void captureError({
-      level: "warn",
-      source: "apiClient",
-      message: "Invalid token_time detected, forcing refresh",
-    });
+    void warn("Invalid token_time detected, forcing refresh");
     return 0;
   }
 
@@ -138,12 +135,9 @@ function scheduleRetryRefresh() {
   }
   if (retryAttempt >= RETRY_MAX_ATTEMPTS) {
     retryAttempt = 0;
-    void captureError({
-      level: "warn",
-      source: "apiClient",
-      message:
-        "Token refresh retry limit reached, giving up until a new refresh cycle",
-    });
+    void warn(
+      "Token refresh retry limit reached, giving up until a new refresh cycle",
+    );
     return;
   }
   const delayMs = backoffDelay(retryAttempt, null, {
@@ -155,13 +149,7 @@ function scheduleRetryRefresh() {
   });
   retryAttempt += 1;
   refreshTimerId = setTimeout(() => {
-    getValidToken(true).catch(() =>
-      captureError({
-        level: "warn",
-        source: "apiClient",
-        message: "retry-refresh-failed",
-      }),
-    );
+    getValidToken(true).catch(() => warn("retry-refresh-failed"));
   }, delayMs);
 }
 
@@ -308,11 +296,7 @@ export const getValidToken = async (
         if (err.kind === "invalid_grant") {
           window.dispatchEvent(new CustomEvent("auth-logout"));
         } else {
-          await captureError({
-            level: "warn",
-            source: "apiClient",
-            message: `Token refresh failed (${err.kind}), will retry`,
-          });
+          await warn(`Token refresh failed (${err.kind}), will retry`);
           scheduleRetryRefresh();
         }
       } else {

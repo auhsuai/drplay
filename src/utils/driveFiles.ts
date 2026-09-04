@@ -74,6 +74,21 @@ function parseDriveFileItem(data: unknown): DriveFileItem | null {
   return item as DriveFileItem;
 }
 
+// Shared tail for the simple write endpoints: assert ok, parse the JSON body
+// into a DriveFileItem, and throw the canonical invalid-response error
+// otherwise. moveFile does NOT use this (its non-ok path has its own
+// captureError + detail handling).
+async function readItemOrThrow(
+  response: Response,
+  action: string,
+): Promise<DriveFileItem> {
+  assertDriveOk(response, action);
+  const data: unknown = await readJsonOrInvalidResponse(response, action);
+  const item = parseDriveFileItem(data);
+  if (item === null) throw new Error(`Failed to ${action} (invalid response)`);
+  return item;
+}
+
 function parseName(data: unknown): string | null {
   if (typeof data !== "object" || data === null) return null;
   const name = (data as { name?: unknown }).name;
@@ -120,15 +135,7 @@ export async function createFolder(
     ...(signal ? { signal } : {}),
   });
 
-  assertDriveOk(response, "create folder");
-  const data: unknown = await readJsonOrInvalidResponse(
-    response,
-    "create folder",
-  );
-  const item = parseDriveFileItem(data);
-  if (item === null)
-    throw new Error("Failed to create folder (invalid response)");
-  return item;
+  return readItemOrThrow(response, "create folder");
 }
 
 /**
@@ -161,15 +168,7 @@ export async function deleteFile(
     },
   );
 
-  assertDriveOk(response, "delete file");
-  const data: unknown = await readJsonOrInvalidResponse(
-    response,
-    "delete file",
-  );
-  const item = parseDriveFileItem(data);
-  if (item === null)
-    throw new Error("Failed to delete file (invalid response)");
-  return item;
+  return readItemOrThrow(response, "delete file");
 }
 
 /**
@@ -273,15 +272,7 @@ export async function restoreFile(
     },
   );
 
-  assertDriveOk(response, "restore file");
-  const data: unknown = await readJsonOrInvalidResponse(
-    response,
-    "restore file",
-  );
-  const item = parseDriveFileItem(data);
-  if (item === null)
-    throw new Error("Failed to restore file (invalid response)");
-  return item;
+  return readItemOrThrow(response, "restore file");
 }
 
 /**

@@ -14,6 +14,19 @@ export interface FetchWithAuthOptions extends RequestInit {
   timeoutMs?: number;
 }
 
+// Merge the caller's signal (e.g. a component-unmount cancel) with a fresh
+// per-attempt timeout signal via AbortSignal.any so neither wins, falling back
+// to the timeout alone on runtimes lacking AbortSignal.any.
+const mergeCallerSignal = (
+  callerSignal: AbortSignal | null | undefined,
+  timeoutMs: number,
+): AbortSignal => {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return callerSignal && typeof AbortSignal.any === "function"
+    ? AbortSignal.any([callerSignal, timeoutSignal])
+    : timeoutSignal;
+};
+
 /**
  * Fetch with the current access token attached. Every call is bounded by a
  * timeout (default 15s, overridable via `timeoutMs`) so a stalled server can
@@ -59,17 +72,11 @@ export const fetchWithAuth = async (
       ? Math.min(timeoutMs, MAX_SAFE_TIMEOUT)
       : FETCH_TIMEOUT_MS;
 
-  // Every outbound fetch must be bounded by a timeout so a stalled server
-  // cannot hang the caller forever. Merge with any caller-supplied signal
-  // (e.g. a component-unmount cancel) via AbortSignal.any so neither wins,
-  // falling back to the timeout alone on runtimes lacking AbortSignal.any.
-  const timeoutSignal = AbortSignal.timeout(effectiveTimeoutMs);
-  const signal =
-    options.signal && typeof AbortSignal.any === "function"
-      ? AbortSignal.any([options.signal, timeoutSignal])
-      : timeoutSignal;
-
-  const requestOptions: RequestInit = { ...fetchOptions, headers, signal };
+  const requestOptions: RequestInit = {
+    ...fetchOptions,
+    headers,
+    signal: mergeCallerSignal(options.signal, effectiveTimeoutMs),
+  };
 
   // Main request (timeout-bounded). Network/timeout here reject naturally so
   // callers can decide retry vs. surface; we never swallow a hang.
@@ -112,15 +119,10 @@ export const fetchWithAuth = async (
         // owns its own full effectiveTimeoutMs (same philosophy as the
         // main request above); the caller signal stays in the merge so a
         // caller cancel still cancels the retry instantly.
-        const retryTimeoutSignal = AbortSignal.timeout(effectiveTimeoutMs);
-        const retrySignal =
-          options.signal && typeof AbortSignal.any === "function"
-            ? AbortSignal.any([options.signal, retryTimeoutSignal])
-            : retryTimeoutSignal;
         return await fetch(url, {
           ...fetchOptions,
           headers: retryHeaders,
-          signal: retrySignal,
+          signal: mergeCallerSignal(options.signal, effectiveTimeoutMs),
         });
       } catch (err: unknown) {
         // Retry failed: classify and throw a clear, typed error. We do NOT

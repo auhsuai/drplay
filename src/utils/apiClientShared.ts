@@ -2,6 +2,8 @@
 // error, the bounded-timeout wrapper and the error classification. No
 // module-level mutable state lives here — everything is pure or stateless.
 
+import { captureError } from "./errorLog";
+
 export class TokenRefreshError extends Error {
   readonly kind: "network" | "invalid_grant" | "timeout" | "unknown";
   constructor(
@@ -15,6 +17,12 @@ export class TokenRefreshError extends Error {
 }
 
 export const MAX_SAFE_TIMEOUT = 2_147_483_647; // 32-bit signed int limit (~24.8 days); larger values overflow and fire immediately
+
+// Fire-and-forget warn log with the standard apiClient source tag. captureError
+// never rejects, so callers may void it; the promise is returned for flows
+// that await the write (e.g. the lead refresh caller before scheduling retry).
+export const warn = (message: string): Promise<void> =>
+  captureError({ level: "warn", source: "apiClient", message });
 
 // Every outbound network call must be bounded so a stalled server cannot hang
 // the caller indefinitely (checklist: "no timeout on network calls").
