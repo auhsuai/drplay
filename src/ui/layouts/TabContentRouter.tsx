@@ -83,9 +83,9 @@ export function TabContentRouter({
     <>
       {/* HomeTab stays mounted across tab switches (keep-alive): hiding
           it with display:none instead of unmounting prevents the
-          refetch-on-remount churn of every home data load
-          (getRecentlyPlayed / getHeavyRotation / getRandomDiscoveries /
-          getMostVisitedFolders / getRecentlyAddedAudioFiles) and keeps
+           refetch-on-remount churn of every home data load
+           (getRecentlyPlayed / getHeavyRotation / getRandomDiscoveries /
+           getMostVisitedFolders / the db.files mirror query) and keeps
           scroll/greeting state. The key forces a clean remount per login
           session: logout -> login must not reuse the previous account's
           HomeTab state. accessToken is deliberately NOT the key — it

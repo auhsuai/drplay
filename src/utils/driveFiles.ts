@@ -1,23 +1,13 @@
-import { getAudioFilesQuery } from "./audioQuery";
 import { authHeaders, authJsonHeaders } from "./authHeaders";
 import { captureError } from "./errorLog";
 import { driveFetch } from "./driveHttp";
 import { DRIVE_MODULE, FOLDER_MIME } from "./driveTypes";
-import type { DriveFileItem, DriveFilesListResponse } from "./driveTypes";
-import { IS_MOBILE } from "./platform";
-import { MAX_PAGINATION_PAGES, PAGINATION_PAGE_SIZE } from "./driveConstants";
+import type { DriveFileItem } from "./driveTypes";
 
 // Re-exported so the ~15 main-thread callers importing authHeaders from
 // driveFiles keep working; the implementation now lives in the
 // dependency-free authHeaders module shared with the proSync worker.
 export { authHeaders };
-
-// "Recently Added to Drive" fetches a single page of the newest files. 100
-// bounds the response (Drive's default page size for shared drives; the max
-// is 1000) and must exceed every responsive grid count (2/4/5) so the grid
-// can always tell "list is full → more files may exist" apart from "list
-// really is that short".
-const RECENTLY_ADDED_PAGE_SIZE = 100;
 
 // Drive Files API base URL — every request in this module targets it.
 export const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
@@ -298,81 +288,6 @@ export async function permanentlyDeleteFile(
 
   assertDriveOk(response, "permanently delete file");
   return true;
-}
-
-/**
- * The newest audio files in the user's whole Drive (sorted by createdTime
- * desc) for the "Recently Added" section.
- * Desktop: exactly one page of 100 — larger than every responsive grid count
- * (2/4/5) so the UI can tell "full list" from "list really is that short"
- * (historical contract, unchanged).
- * Mobile (Task 14): no load-more/pagination UX exists, so the pageToken loop
- * runs automatically to the MAX_PAGINATION_PAGES safety cap (10 x 1000).
- * @param token Drive access token.
- * @returns The newest audio files (empty array on malformed payloads).
- */
-export async function getRecentlyAddedAudioFiles(
-  token: string,
-): Promise<DriveFileItem[]> {
-  const q = getAudioFilesQuery();
-  // Desktop keeps the historical single-page fetch byte-for-byte.
-  if (!IS_MOBILE) {
-    const url = `${DRIVE_FILES_URL}?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${String(RECENTLY_ADDED_PAGE_SIZE)}`;
-
-    const response = await driveFetch(url, {
-      headers: authHeaders(token),
-    });
-
-    assertDriveOk(response, "fetch recently added audio files");
-
-    const data: unknown = await readJsonOrInvalidResponse(
-      response,
-      "fetch recently added audio files",
-    );
-    return parseFilesList(data);
-  }
-
-  // Mobile: aggregate every page up to the cap, writing nothing in between
-  // (this call returns the full list to HomeTab in one shot).
-  const all: DriveFileItem[] = [];
-  let pageToken: string | undefined;
-  for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
-    const url = new URL(DRIVE_FILES_URL);
-    url.searchParams.set("q", q);
-    // nextPageToken MUST stay in the fields mask — Drive's partial response
-    // silently drops it otherwise (same warning as drivePagination.ts).
-    url.searchParams.set(
-      "fields",
-      "nextPageToken,files(id,name,mimeType,size,modifiedTime)",
-    );
-    url.searchParams.set("orderBy", "createdTime desc");
-    url.searchParams.set("pageSize", String(PAGINATION_PAGE_SIZE));
-    if (pageToken) url.searchParams.set("pageToken", pageToken);
-
-    const response = await driveFetch(url.toString(), {
-      headers: authHeaders(token),
-    });
-
-    assertDriveOk(response, "fetch recently added audio files");
-
-    const data = (await readJsonOrInvalidResponse(
-      response,
-      "fetch recently added audio files",
-    )) as DriveFilesListResponse | null;
-    if (data && Array.isArray(data.files)) all.push(...data.files);
-    pageToken = data?.nextPageToken;
-    if (!pageToken) break;
-  }
-  // Loop ended with a token in hand → the cap was hit. Log (no user-facing
-  // toast here: a background list topping 10k newest files is a hard edge).
-  if (pageToken) {
-    void captureError({
-      level: "warn",
-      source: DRIVE_MODULE,
-      message: "recently-added-truncated-at-cap",
-    });
-  }
-  return all;
 }
 
 /**

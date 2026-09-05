@@ -23,7 +23,7 @@ export type TabKey = (typeof TABS)[keyof typeof TABS];
 export const PAGINATION_PAGE_SIZE = 1000;
 
 // Worst-case safety cap shared by the UI-layer pageToken loops
-// (useDriveOnDemandFetch, getRecentlyAddedAudioFiles): 10 pages x
+// (useDriveOnDemandFetch): 10 pages x
 // PAGINATION_PAGE_SIZE = up to 10,000 results per query. Guards against a
 // misbehaving server that keeps issuing nextPageToken forever.
 // NOTE: drivePagination.ts keeps its own private copy of the same value —

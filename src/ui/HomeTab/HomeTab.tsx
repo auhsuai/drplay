@@ -175,11 +175,11 @@ export function HomeTab({
           >
             {/* Mirror of the Recent Files overlay contract, with one
                 deliberate difference: `>=` instead of `>`. The list is
-                capped at RECENTLY_ADDED_PAGE_SIZE (100), so a list exactly
+                capped at the mirror query's limit (100), so a list exactly
                 as long as the grid (e.g. 5 == visibleCount on desktop)
-                means the API page was FULL — more files may exist behind
-                it, and the last card must open the full view. Recent Files
-                keeps `>`: its data is an unbounded local history slice. */}
+                means more files may exist behind it, and the last card must
+                open the full view. Recent Files keeps `>`: its data is an
+                unbounded local history slice. */}
             <PremiumGrid
               items={recentlyAddedItems}
               onPlay={onPlay}
