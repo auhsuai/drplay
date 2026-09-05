@@ -83,14 +83,23 @@ import {
   cacheTrackMetadata,
   clearAllMetadataCache,
   getTrackMetadata,
+  LARGE_FILE_THRESHOLD,
   V_PLACEHOLDER,
   TAG_BUDGET_MAX,
   FULL_PERSIST_MAX_BYTES,
 } from "./metadata";
 import {
   METADATA_NETWORK_COOLDOWN_MS,
+  REAL_METADATA_VERSION,
   INFLIGHT_TIMEOUT,
 } from "./metadata/constants";
+import {
+  BUDGET_CAP,
+  HEAD_BYTES,
+  REQUEST_TIMEOUT_MS,
+  TAIL_BYTES,
+} from "./driveRangeTokenizer";
+import swSource from "../../public/sw.js?raw";
 import { parseDiskMetadata } from "./metadata/fetchPipeline";
 import { captureError } from "./errorLog";
 import {
@@ -888,6 +897,7 @@ describe("getTrackMetadata real metadata fetch", () => {
     const r = await getTrackMetadata("m4a-fast-id", "tok", 1052, "fast.m4a");
     expect(r.v).toBe(8);
     expect(r.title).toBe("fast");
+    expect(r.streamUnplayable).toBeUndefined();
     expect(filesUpdate).not.toHaveBeenCalled();
   });
 
@@ -898,9 +908,31 @@ describe("getTrackMetadata real metadata fetch", () => {
     const r = await getTrackMetadata("m4a-slow-id", "tok", 200_000, "slow.m4a");
     expect(r.v).toBe(8);
     expect(r.title).toBe("slow");
+    expect(r.streamUnplayable).toBe(true);
     expect(filesUpdate).toHaveBeenCalledWith(["default", "m4a-slow-id"], {
       metadata: { format: "m4a", streamUnplayable: true },
     });
+    // The cached entry (memory + IDB row) must carry the flag so the player's
+    // pre-play gate sees it without a second parse.
+    const idbRow = memoryStore.get("metadata_m4a-slow-id");
+    const idbData = idbRow?.entry as
+      { version: number; data: CachedMetadata } | undefined;
+    expect(idbData?.data.v).toBe(8);
+    expect(idbData?.data.streamUnplayable).toBe(true);
+  });
+
+  it(".aac file whose head is an MP4 container parses as m4a (magic bytes win, no ADTS short-circuit)", async () => {
+    // AAC-in-MP4 mislabel: detectFormat is magic-bytes-only — the ftyp check
+    // precedes the ADTS syncword check and the extension is only consulted
+    // for .opus — so a .aac-named file with an MP4 head takes the NORMAL m4a
+    // parse path. If detection ever forced ".aac" → the ADTS short-circuit,
+    // this would return the v:9 placeholder instead of a parsed v:8 entry.
+    makeFetchMock(buildM4aFaststart());
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata("aac-in-mp4", "tok", 1052, "song.aac");
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("song");
   });
 
   it("unknown size (0) returns a placeholder without any fetch", async () => {
@@ -1504,9 +1536,9 @@ describe("cover extraction + full picture LRU", () => {
     expect(r.pictureDataFull).toBeNull();
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({
-        level: "warn",
+        level: "info",
         message: expect.stringContaining(
-          "cover-skip-too-large",
+          "cover-degraded-too-large",
         ) as unknown as string,
       }),
     );
@@ -1533,9 +1565,9 @@ describe("cover extraction + full picture LRU", () => {
     expect(r.pictureDataFull).toBeNull();
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({
-        level: "warn",
+        level: "info",
         message: expect.stringContaining(
-          "cover-skip-truncated",
+          "cover-degraded-truncated",
         ) as unknown as string,
       }),
     );
@@ -1600,13 +1632,40 @@ describe("cover extraction + full picture LRU", () => {
     expect(r.pictureDataFull).toBeNull();
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({
-        level: "warn",
+        level: "info",
         message: expect.stringContaining(
-          "cover-budget-exceeded",
+          "cover-degraded-budget",
         ) as unknown as string,
       }),
     );
     expect(compressCoverVariants).not.toHaveBeenCalled();
+  });
+
+  it("gives the skipCovers retry tokenizer the raised 32MB budget", async () => {
+    const { getTrackMetadata } = await fresh();
+    // Same trigger as the salvage test: two 12MB picture blocks whose
+    // combined reads blow the 20MB default budget mid-way through the second
+    // block, forcing the skipCovers retry on a fresh tokenizer.
+    const fixture = buildFlacWithPicture("Retry Budget FLAC", "Retry Artist", [
+      makeJpeg(12 * 1024 * 1024),
+      makeJpeg(12 * 1024 * 1024),
+    ]);
+    makeFetchMock(fixture);
+
+    const r = await getTrackMetadata(
+      "pic-g2",
+      "tok",
+      fixture.length,
+      "pic.flac",
+    );
+    expect(r.v).toBe(8);
+    // The retry must NOT run on the 20MB default: with ID3v2-carrying files
+    // skipCovers still reads the whole tag up-front, so a 20-32MB tag would
+    // blow the retry a second time and fall to the placeholder. The retry
+    // gets the raised TAG_BUDGET_MAX instead.
+    expect(tokenizerConstructions).toHaveLength(2);
+    expect(tokenizerConstructions[0]?.budgetBytes).toBeUndefined();
+    expect(tokenizerConstructions[1]?.budgetBytes).toBe(TAG_BUDGET_MAX);
   });
 
   it("evicts the oldest full picture when the entry cap (64) is exceeded", async () => {
@@ -2342,6 +2401,54 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
     // NOT clamped: the ID3v1 tail read still fires beyond HEAD_BYTES.
     expect(calls.some((c) => rangeStart(c.range) >= HEAD_BYTES)).toBe(true);
   });
+
+  it("LARGE m4a (150MB) with moov at the tail: clamped head-only fetch, no tail request, no streamUnplayable marking", async () => {
+    // head = ftyp + an mdat box whose declared length spans the rest of the
+    // virtual 150MB file (the moov sits at the tail — outside the clamped
+    // head and never materialized in the fixture, mirroring buildSparseMp3:
+    // the tail is claimed via virtualSize and reads past the head would come
+    // back zero-filled, so any tail fetch would show up as a 2nd+ request).
+    const ftyp = mp4Box("ftyp", [
+      ...fourCC("isom"),
+      0x00,
+      0x00,
+      0x02,
+      0x00,
+      ...fourCC("isom"),
+    ]);
+    const head = new Uint8Array(HEAD_BYTES);
+    head.set(ftyp, 0);
+    const mdatLength = LARGE_VIRTUAL_SIZE - ftyp.length;
+    head.set([...u32be(mdatLength), ...fourCC("mdat")], ftyp.length);
+    const { calls } = makeFetchMock(head, { virtualSize: LARGE_VIRTUAL_SIZE });
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "large-m4a-moov-tail",
+      "tok",
+      LARGE_VIRTUAL_SIZE,
+      "Big Song.m4a",
+    );
+    // CHARACTERIZATION (actual behavior): the clamped parse does NOT fail —
+    // music-metadata's MP4Parser treats the clamped EOF as end-of-atoms
+    // (peekToken catch → break), resolves with empty metadata, and the
+    // pipeline caches a v:8 entry carrying the stripped filename with
+    // duration 0 / estimated. The Fix E comment in fetchPipeline.ts ("fails
+    // its parse (placeholder)") is inaccurate on the v:9 part — changing
+    // this to a placeholder would be a deliberate prod decision.
+    expect(r.v).toBe(REAL_METADATA_VERSION);
+    expect(r.title).toBe("Big Song");
+    // The bogus clamped-size duration must never surface.
+    expect(r.duration).toBe(0);
+    expect(r.durationEstimated).toBe(true);
+    expect(r.streamUnplayable).toBeUndefined();
+    // Fix E skip: the non-faststart scan never runs for large files — no
+    // files row write with streamUnplayable, and no 1MB tail fetch either.
+    expect(filesUpdate).not.toHaveBeenCalled();
+    // The clamped head prefetch is the ONLY request: no tag-region, no tail.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.range).toBe("bytes=0-131071");
+  });
 });
 
 describe("getTrackMetadata prefetchRange (one request per region, was many chunk requests)", () => {
@@ -2808,5 +2915,55 @@ describe("parseDiskMetadata validation contract", () => {
     expect(entry?.pictureDataFull).toBeNull();
     expect(entry?.coverOnDisk).toBe(true);
     expect(entry?.v).toBe(8);
+    expect(entry?.streamUnplayable).toBeUndefined();
+  });
+
+  it("passes streamUnplayable through only when a valid boolean", () => {
+    const flagged = parseDiskMetadata(diskRaw({ streamUnplayable: true }));
+    expect(flagged?.streamUnplayable).toBe(true);
+    const dropped = parseDiskMetadata(diskRaw({ streamUnplayable: "yes" }));
+    expect(dropped?.streamUnplayable).toBeUndefined();
+  });
+});
+
+// ---- Frozen constants (T3): these values are load-bearing — every one is a
+// production-evidence-derived threshold or a wire-format/cache-compat marker.
+// Changing one must be a deliberate decision that updates the corresponding
+// rationale, not a side effect of a refactor. A failing assert here = "you
+// changed a survival constant, re-justify it".
+
+describe("frozen survival constants", () => {
+  it("Fix E large-file threshold: 104857600 (100MB) — production timeouts clustered at 152-297MB, nothing below 101MB", () => {
+    expect(LARGE_FILE_THRESHOLD).toBe(104_857_600);
+  });
+
+  it("tokenizer regions: HEAD_BYTES 131072 (128KB head), TAIL_BYTES 1048576 (1MB moov tail), BUDGET_CAP 20971520 (20MB default fetch budget)", () => {
+    expect(HEAD_BYTES).toBe(131_072);
+    expect(TAIL_BYTES).toBe(1_048_576);
+    expect(BUDGET_CAP).toBe(20 * 1024 * 1024);
+  });
+
+  it("ID3v2 raised tag budget: TAG_BUDGET_MAX 33554432 (32MB hard cap above the 20MB default)", () => {
+    expect(TAG_BUDGET_MAX).toBe(32 * 1024 * 1024);
+  });
+
+  it("cache-entry versions: V_PLACEHOLDER 9 and REAL_METADATA_VERSION 8 — searchEngine visibility (v<9) and persisted-IDB compat depend on the exact values", () => {
+    expect(V_PLACEHOLDER).toBe(9);
+    expect(REAL_METADATA_VERSION).toBe(8);
+  });
+
+  it("per-file network cooldown: METADATA_NETWORK_COOLDOWN_MS 60000 — outlasts Drive's 30±5s first-byte delay to stop the re-hang loop", () => {
+    expect(METADATA_NETWORK_COOLDOWN_MS).toBe(60_000);
+  });
+
+  it("range-fetch timeout: REQUEST_TIMEOUT_MS 45000 — must exceed Drive's 30±5s first-byte latency with margin, else healthy slow fetches abort", () => {
+    expect(REQUEST_TIMEOUT_MS).toBe(45_000);
+  });
+
+  it("sw.js total-size cache: TOTAL_SIZE_CACHE_LIMIT 1000 (was 100) — long sessions must not evict totals that closed-range 206 Content-Range synthesis depends on", () => {
+    // public/sw.js cannot import TS; read the literal from the source text
+    // (same ?raw pattern as swMime.test.ts) so the guard covers the SW copy.
+    const m = /const TOTAL_SIZE_CACHE_LIMIT = (\d+);/.exec(swSource);
+    expect(m?.[1]).toBe("1000");
   });
 });

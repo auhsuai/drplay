@@ -11,7 +11,6 @@ import {
   restoreFile,
   getAppConfig,
   getDriveStorageQuota,
-  getRecentlyAddedAudioFiles,
   permanentlyDeleteFile,
   saveAppConfig,
   shouldRetryDriveResponse,
@@ -216,38 +215,6 @@ function nextHeld(pending: HeldRequest[]): HeldRequest {
 }
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
-
-describe("getRecentlyAddedAudioFiles", () => {
-  beforeEach(() => {
-    mockedFetch.mockReset();
-  });
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("requests a full page (pageSize=100) of the newest audio files with audio fields preserved", async () => {
-    mockedFetch.mockResolvedValue(makeJsonResponse(200, { files: [] }));
-    await getRecentlyAddedAudioFiles("tok-test");
-
-    const firstCall = fetchCallAt(0);
-    const url = firstCall[0] as string;
-    expect(url).toContain("pageSize=100");
-    expect(url).toContain("orderBy=createdTime desc");
-    expect(url).toContain("fields=files(id,name,mimeType,size,modifiedTime)");
-    expect(url).toContain("q=");
-  });
-
-  it("maps the Drive response files array into the returned list", async () => {
-    mockedFetch.mockResolvedValue(
-      makeJsonResponse(200, {
-        files: [{ id: "x", name: "A.mp3", mimeType: "audio/mpeg" }],
-      }),
-    );
-    const items = await getRecentlyAddedAudioFiles("tok-test");
-    expect(items).toHaveLength(1);
-    expect(items[0]?.id).toBe("x");
-  });
-});
 
 describe("backoffDelay", () => {
   it("honors numeric Retry-After in seconds (capped at MAX_DELAY_MS)", () => {
@@ -925,15 +892,6 @@ describe("driveFiles malformed JSON body", () => {
 
     await expect(restoreFile("tok", "f1")).rejects.toThrow(
       "Failed to restore file (invalid response)",
-    );
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("getRecentlyAddedAudioFiles throws `Failed to fetch recently added audio files (invalid response)` when json() rejects", async () => {
-    mockedFetch.mockResolvedValueOnce(makeNonJsonResponse());
-
-    await expect(getRecentlyAddedAudioFiles("tok")).rejects.toThrow(
-      "Failed to fetch recently added audio files (invalid response)",
     );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });

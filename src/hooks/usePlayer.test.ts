@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePlayer, PLAYER_STOP_EVENT } from "./usePlayer";
 import { usePlayerStore } from "../store/playerStore";
 import type { Track } from "../types";
+import { showErrorToast } from "../utils/simpleToast";
+import { metadataCache } from "../utils/metadata";
+import type { CachedMetadata } from "../utils/metadata";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -26,6 +29,7 @@ vi.mock("../utils/history", () => ({
 
 vi.mock("../utils/metadata", () => ({
   getTrackMetadata: vi.fn(() => Promise.resolve({ duration: 200 })),
+  metadataCache: new Map(),
 }));
 
 vi.mock("../utils/apiClient", () => ({
@@ -337,5 +341,120 @@ describe("usePlayer next-track prefetch", () => {
       .map((c) => (typeof c[0] === "string" ? c[0] : ""))
       .filter((u) => u.includes("/drive-stream/t2"));
     expect(urls).toHaveLength(0);
+  });
+});
+
+describe("usePlayer pre-play streamUnplayable gate (P1)", () => {
+  const gateTrack = (id: string): Track => ({ ...makeTrack(id), size: 2048 });
+
+  const makeFlagged = (unplayable: boolean | undefined): CachedMetadata => ({
+    title: "t",
+    artist: "a",
+    duration: 200,
+    durationEstimated: false,
+    pictureData: null,
+    pictureDataFull: null,
+    v: 8,
+    ...(unplayable !== undefined ? { streamUnplayable: unplayable } : {}),
+  });
+
+  beforeEach(() => {
+    metadataCache.clear();
+  });
+
+  it("click lần 1 trên track cờ → bị chặn: không session, không isPlaying, có toast", async () => {
+    metadataCache.set("gate-a", makeFlagged(true));
+    installSessionMock();
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(gateTrack("gate-a"), [
+        gateTrack("gate-a"),
+      ]);
+    });
+
+    expect(usePlayerStore.getState().currentTrack).toBeNull();
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    expect(vi.mocked(showErrorToast)).toHaveBeenCalledTimes(1);
+  });
+
+  it("click lần 2 ĐÚNG track vừa bị chặn → force phát bình thường (toast không lặp)", async () => {
+    metadataCache.set("gate-b", makeFlagged(true));
+    installSessionMock();
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(gateTrack("gate-b"), [
+        gateTrack("gate-b"),
+      ]);
+    });
+    await act(async () => {
+      await result.current.handlePlayTrack(gateTrack("gate-b"), [
+        gateTrack("gate-b"),
+      ]);
+    });
+
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("gate-b");
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(vi.mocked(showErrorToast)).toHaveBeenCalledTimes(1);
+  });
+
+  it("phát track khác giữa chừng → ref reset, quay lại track cờ bị chặn lại từ đầu", async () => {
+    metadataCache.set("gate-c", makeFlagged(true));
+    metadataCache.set("gate-d", makeFlagged(undefined));
+    installSessionMock();
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(gateTrack("gate-c"), [
+        gateTrack("gate-c"),
+      ]);
+    });
+    await act(async () => {
+      await result.current.handlePlayTrack(gateTrack("gate-d"), [
+        gateTrack("gate-d"),
+      ]);
+    });
+    await act(async () => {
+      await result.current.handlePlayTrack(gateTrack("gate-c"), [
+        gateTrack("gate-c"),
+      ]);
+    });
+
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("gate-d");
+    expect(vi.mocked(showErrorToast)).toHaveBeenCalledTimes(2);
+  });
+
+  it("track không cờ → phát như cũ, không toast", async () => {
+    installSessionMock();
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(gateTrack("gate-e"), [
+        gateTrack("gate-e"),
+      ]);
+    });
+
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("gate-e");
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(vi.mocked(showErrorToast)).not.toHaveBeenCalled();
+  });
+
+  it("isNavigation=true (auto-advance) bỏ qua gate → track cờ vẫn được phát thử", async () => {
+    metadataCache.set("gate-f", makeFlagged(true));
+    installSessionMock();
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(
+        gateTrack("gate-f"),
+        undefined,
+        true,
+      );
+    });
+
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("gate-f");
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(vi.mocked(showErrorToast)).not.toHaveBeenCalled();
   });
 });

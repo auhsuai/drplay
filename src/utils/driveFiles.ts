@@ -1,4 +1,3 @@
-import { getAudioFilesQuery } from "./audioQuery";
 import { authHeaders, authJsonHeaders } from "./authHeaders";
 import { captureError } from "./errorLog";
 import { driveFetch } from "./driveHttp";
@@ -9,13 +8,6 @@ import type { DriveFileItem } from "./driveTypes";
 // driveFiles keep working; the implementation now lives in the
 // dependency-free authHeaders module shared with the proSync worker.
 export { authHeaders };
-
-// "Recently Added to Drive" fetches a single page of the newest files. 100
-// bounds the response (Drive's default page size for shared drives; the max
-// is 1000) and must exceed every responsive grid count (2/4/5) so the grid
-// can always tell "list is full → more files may exist" apart from "list
-// really is that short".
-const RECENTLY_ADDED_PAGE_SIZE = 100;
 
 // Drive Files API base URL — every request in this module targets it.
 export const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
@@ -297,33 +289,6 @@ export async function permanentlyDeleteFile(
 
   assertDriveOk(response, "permanently delete file");
   return true;
-}
-
-/**
- * One page of the newest audio files in the user's whole Drive (sorted by
- * createdTime desc) for the "Recently Added" section. Page size is fixed at
- * 100 — larger than every grid count so the UI can tell "full list" from
- * "list really is that short".
- * @param token Drive access token.
- * @returns The newest audio files (empty array on malformed payloads).
- */
-export async function getRecentlyAddedAudioFiles(
-  token: string,
-): Promise<DriveFileItem[]> {
-  const q = getAudioFilesQuery();
-  const url = `${DRIVE_FILES_URL}?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=createdTime desc&pageSize=${String(RECENTLY_ADDED_PAGE_SIZE)}`;
-
-  const response = await driveFetch(url, {
-    headers: authHeaders(token),
-  });
-
-  assertDriveOk(response, "fetch recently added audio files");
-
-  const data: unknown = await readJsonOrInvalidResponse(
-    response,
-    "fetch recently added audio files",
-  );
-  return parseFilesList(data);
 }
 
 /**

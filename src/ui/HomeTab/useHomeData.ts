@@ -7,7 +7,9 @@ import {
   getRandomDiscoveries,
   getMostVisitedFolders,
 } from "../../utils/history";
-import { getRecentlyAddedAudioFiles } from "../../utils/driveApi";
+import { db } from "../../db/db";
+import { getCurrentUserEmail } from "../../utils/storageKeys";
+import { hasAudioExtension } from "../../utils/audioQuery";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { DRIVE_FILES_CHANGED_EVENT } from "../../utils/upload/errors";
@@ -33,6 +35,12 @@ const HOME_TAB_MODULE = "HomeTab";
 // the trailing fire (no maxWait needed): an upload session terminates, so
 // the last completion always starts the final timer.
 const DELTA_REFRESH_DEBOUNCE_MS = 1000;
+
+// "Recently Added to Drive" cap. Bounds the rendered list and must exceed
+// every responsive grid count (2/4/5) so the grid can always tell "list is
+// full → more files may exist" apart from "list really is that short"
+// (the overlay contract in HomeTab.tsx keys off `>=` visibleCount).
+const RECENTLY_ADDED_LIMIT = 100;
 
 // Data + greeting layer of the Home tab, extracted verbatim from HomeTab.tsx.
 // Pure hook — all JSX/render stays in HomeTab.tsx (the public facade), so the
@@ -127,21 +135,43 @@ export function useHomeData(token: string | null) {
     );
     sessionStorage.setItem("drplay_home_visit", (visitCount + 1).toString());
 
+    // Reads the local IDB mirror (db.files) instead of the Drive API: the
+    // mirror is maintained by fullSync/deltaSync and updated incrementally as
+    // new files arrive, so this section loads instantly like the four other
+    // local sections instead of waiting on a multi-second Drive round trip.
+    // Rows carry the same ISO modifiedTime strings Drive reports, so a plain
+    // lexicographic desc sort orders newest-first; missing modifiedTime sorts
+    // oldest. The null-token guard stays: logged-out means no Recently Added.
     const loadRecentlyAdded = (activeToken: string | null): void => {
       if (!activeToken) return;
       const generation = ++loadGenRef.current;
-      getRecentlyAddedAudioFiles(activeToken)
-        .then((files) => {
+      db.files
+        .where("userEmail")
+        .equals(getCurrentUserEmail())
+        .toArray()
+        .then((rows) => {
           if (generation !== loadGenRef.current) return;
           setRecentlyAdded(
-            files.map((f) => ({
-              id: f.id,
-              title: f.name,
-              artist: "",
-              streamUrl: "",
-              originalName: f.name,
-              size: f.size ? parseInt(f.size, 10) : undefined,
-            })),
+            rows
+              .filter(
+                (row) =>
+                  !row.isFolder && !row.trashed && hasAudioExtension(row.name),
+              )
+              .sort((a, b) => {
+                const at = a.modifiedTime ?? "";
+                const bt = b.modifiedTime ?? "";
+                if (at !== bt) return bt.localeCompare(at);
+                return a.id.localeCompare(b.id);
+              })
+              .slice(0, RECENTLY_ADDED_LIMIT)
+              .map((row) => ({
+                id: row.id,
+                title: row.name,
+                artist: "",
+                streamUrl: "",
+                originalName: row.name,
+                size: row.size,
+              })),
           );
         })
         .catch((err: unknown) => {

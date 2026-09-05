@@ -104,6 +104,89 @@ describe("upsertFileRows", () => {
     expect(row?.parentId).toBe(ROOT_FOLDER_ID);
   });
 
+  // Metadata is app-local state (e.g. the streamUnplayable flag persisted by
+  // the metadata fetch pipeline via db.files.update) — it never comes from the
+  // Drive API, so sync-mapped rows arrive without it. bulkPut replaces whole
+  // rows, so the writer must re-attach the existing metadata or every sync
+  // would silently erase the flag (see fetchPipeline.ts — "persist the flag on
+  // the files row so the player can avoid streaming it").
+  describe("metadata survival across sync upserts", () => {
+    const PLAYABLE_FLAG = { format: "m4a", streamUnplayable: true };
+
+    it("preserves existing metadata when the incoming row has none", async () => {
+      await upsertFileRows(
+        [makeRow({ id: "flagged", metadata: PLAYABLE_FLAG })],
+        "user@example.com",
+      );
+
+      await upsertFileRows(
+        [makeRow({ id: "flagged", parents: ["folder-S"] })],
+        "user@example.com",
+      );
+
+      expect(
+        (await db.files.get(["user@example.com", "flagged"]))?.metadata,
+      ).toEqual(PLAYABLE_FLAG);
+    });
+
+    it("lets an incoming row WITH metadata replace the stored one", async () => {
+      await upsertFileRows(
+        [makeRow({ id: "replaced", metadata: PLAYABLE_FLAG })],
+        "user@example.com",
+      );
+
+      await upsertFileRows(
+        [makeRow({ id: "replaced", metadata: { format: "mp3" } })],
+        "user@example.com",
+      );
+
+      expect(
+        (await db.files.get(["user@example.com", "replaced"]))?.metadata,
+      ).toEqual({ format: "mp3" });
+    });
+
+    it("leaves a brand-new row's metadata undefined (no empty object)", async () => {
+      await upsertFileRows([makeRow({ id: "fresh" })], "user@example.com");
+
+      const row = await db.files.get(["user@example.com", "fresh"]);
+      expect(row).toBeDefined();
+      expect(row?.metadata).toBeUndefined();
+      expect("metadata" in (row as DriveFile)).toBe(true);
+      expect(row?.metadata).not.toBeNull();
+    });
+
+    it("handles all three cases in ONE batch upsert call", async () => {
+      await db.files.bulkPut([
+        {
+          ...makeRow({ id: "keep-me" }),
+          userEmail: "user@example.com",
+          metadata: PLAYABLE_FLAG,
+        } as DriveFile,
+        {
+          ...makeRow({ id: "overwrite-me" }),
+          userEmail: "user@example.com",
+          metadata: { format: "old" },
+        } as DriveFile,
+      ]);
+
+      await upsertFileRows(
+        [
+          makeRow({ id: "keep-me" }), // incoming w/o metadata -> preserved
+          makeRow({ id: "overwrite-me", metadata: { format: "new" } }), // incoming wins
+          makeRow({ id: "brand-new" }), // no existing -> undefined
+        ],
+        "user@example.com",
+      );
+
+      const kept = await db.files.get(["user@example.com", "keep-me"]);
+      const over = await db.files.get(["user@example.com", "overwrite-me"]);
+      const fresh = await db.files.get(["user@example.com", "brand-new"]);
+      expect(kept?.metadata).toEqual(PLAYABLE_FLAG);
+      expect(over?.metadata).toEqual({ format: "new" });
+      expect(fresh?.metadata).toBeUndefined();
+    });
+  });
+
   // Upload-completion rows: the resumable-upload response is narrowed by
   // asDriveFileItem and never carries `parents[]`, so the caller passes the
   // parent ITSELF sent in the upload request as a fallback source of truth.

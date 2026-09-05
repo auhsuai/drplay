@@ -28,7 +28,6 @@ export {
   moveFile,
   restoreFile,
   permanentlyDeleteFile,
-  getRecentlyAddedAudioFiles,
   getFileParents,
   getFileName,
 } from "./driveFiles";

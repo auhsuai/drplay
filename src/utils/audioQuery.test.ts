@@ -3,7 +3,6 @@ import {
   PLAYABLE_AUDIO_EXTENSIONS,
   getAudioQuery,
   getFolderAudioQuery,
-  getAudioFilesQuery,
   hasAudioExtension,
   isAudioFile,
 } from "./audioQuery";
@@ -17,9 +16,6 @@ const AUDIO_QUERY =
 
 const FOLDER_AUDIO_QUERY =
   "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
-
-const AUDIO_FILES_QUERY =
-  "trashed=false and ((name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
 
 const NON_PLAYABLE_EXTENSIONS = [
   ".wma",
@@ -44,12 +40,6 @@ describe("getFolderAudioQuery", () => {
   });
 });
 
-describe("getAudioFilesQuery", () => {
-  it("matches the frozen query contract", () => {
-    expect(getAudioFilesQuery()).toBe(AUDIO_FILES_QUERY);
-  });
-});
-
 describe("folder/recent query keeps audio/mpeg coverage (regression v2)", () => {
   // A Drive upload via the web UI or app stores .mp3 as audio/mpeg, not
   // application/octet-stream. v1 dropped the `mimeType contains 'audio/'`
@@ -62,18 +52,12 @@ describe("folder/recent query keeps audio/mpeg coverage (regression v2)", () => 
     it(`folder query matches ${ext} files stored as audio/mpeg`, () => {
       expect(getFolderAudioQuery("abc123")).toContain(expectedClause);
     });
-
-    it(`recent query (getAudioFilesQuery) matches ${ext} files stored as audio/mpeg`, () => {
-      expect(getAudioFilesQuery()).toContain(expectedClause);
-    });
   }
 
-  it("non-playable extensions still never appear in folder/recent queries", () => {
+  it("non-playable extensions never appear in the folder query", () => {
     const folderQuery = getFolderAudioQuery("abc123");
-    const filesQuery = getAudioFilesQuery();
     for (const ext of NON_PLAYABLE_EXTENSIONS) {
       expect(folderQuery).not.toContain(ext);
-      expect(filesQuery).not.toContain(ext);
     }
   });
 
@@ -118,7 +102,6 @@ describe("hasAudioExtension", () => {
     for (const ext of NON_PLAYABLE_EXTENSIONS) {
       expect(AUDIO_QUERY).not.toContain(ext);
       expect(FOLDER_AUDIO_QUERY).not.toContain(ext);
-      expect(AUDIO_FILES_QUERY).not.toContain(ext);
     }
   });
 });

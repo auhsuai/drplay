@@ -69,7 +69,3 @@ export function getAudioQuery(): string {
 export function getFolderAudioQuery(folderId: string): string {
   return `'${folderId}' in parents and ${TRASHED} and ${buildAudioCondition(true, true)}`;
 }
-
-export function getAudioFilesQuery(): string {
-  return `${TRASHED} and ${buildAudioCondition(false, true)}`;
-}

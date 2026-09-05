@@ -111,7 +111,12 @@ function overrideContentType(response, ext) {
 // from the request's Range header plus the body length in Content-Length,
 // which CORS does allow through.
 const RANGE_PATTERN = /^bytes=(\d+)-(\d*)$/;
-const TOTAL_SIZE_CACHE_LIMIT = 100;
+const TOTAL_SIZE_CACHE_LIMIT = 1000;
+// 1000 (was 100): entries are small Map items (~a few KB total), so a higher
+// limit is cheap. In long sessions (>100 files), an early file's total could
+// already have been evicted by the time the user seeks back to it; the SW then
+// cannot annotate a closed-range 206 with Content-Range and Chromium fails to
+// decode it (SRC_NOT_SUPPORTED, code=4) — verified experimentally.
 // Full resource size learned from open-ended ranges (bytes=0- / bytes=S-),
 // where total = start + Content-Length is always exact. Closed ranges
 // (bytes=S-E) — media seeks or metadata prefetches — are only annotated when

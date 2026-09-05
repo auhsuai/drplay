@@ -24,6 +24,11 @@ export interface CachedMetadata {
   sampleRate?: number;
   bitDepth?: number;
   channels?: number;
+  // Non-faststart m4a (moov after mdat): the file cannot be streamed
+  // progressively. Set by fetchPipeline when the box walk detects the
+  // layout; usePlayer gates the first user play attempt (the immediately
+  // repeated click on the same track forces playback).
+  streamUnplayable?: boolean;
 }
 
 export interface CacheEntry {

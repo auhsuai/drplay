@@ -8,7 +8,7 @@ import {
 } from "tauri-plugin-keepawake-api";
 import type { Track } from "../types";
 import { recordPlay } from "../utils/history";
-import { getTrackMetadata } from "../utils/metadata";
+import { getTrackMetadata, metadataCache } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import {
   getPrefetchedStreamUrl,
@@ -76,6 +76,10 @@ export const usePlayer = (accessToken: string | null) => {
   );
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  // P1 pre-play gate: fileId of the most recently BLOCKED track. A second
+  // consecutive click on the same id forces playback; any other user click
+  // (different track or unflagged) resets it.
+  const blockedStreamRef = useRef<string | undefined>(undefined);
 
   // Load session from IDB
   usePlayerSession(
@@ -202,6 +206,36 @@ export const usePlayer = (accessToken: string | null) => {
         if (!usePlayerStore.getState().isPlaying)
           usePlayerStore.getState().setIsPlaying(true);
         return;
+      }
+
+      // P1 pre-play gate — user-initiated clicks only (auto-advance enters
+      // with isNavigation=true and must keep attempting flagged tracks: the
+      // queue has no filter and its format_error guard still advances past a
+      // failing file). The card metadata pipeline has normally already parsed
+      // the entry into metadataCache by click time, so the flag read is
+      // synchronous and a blocked click never delays or disturbs current
+      // playback, any session state, or restoreDuration. First click on a
+      // flagged track: toast + remember the id; an immediate second click on
+      // the SAME id forces playback (user override — the browser may still
+      // surface a real format error, which is their call).
+      if (!isNavigation) {
+        const cached = metadataCache.get(track.id);
+        if (cached?.streamUnplayable === true) {
+          if (blockedStreamRef.current === track.id) {
+            blockedStreamRef.current = undefined;
+          } else {
+            blockedStreamRef.current = track.id;
+            showErrorToast(
+              t(
+                "player.stream_unplayable",
+                "This track can't be streamed (moov at file end). Press play again to try.",
+              ),
+            );
+            return;
+          }
+        } else if (blockedStreamRef.current !== undefined) {
+          blockedStreamRef.current = undefined;
+        }
       }
 
       let targetTrack = track;

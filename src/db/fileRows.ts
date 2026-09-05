@@ -70,6 +70,22 @@ export async function upsertFileRows(
     userEmail: ownerEmail,
   }));
 
+  // Metadata is app-local state (e.g. the streamUnplayable flag the metadata
+  // fetch pipeline persists via db.files.update — see fetchPipeline.ts): it
+  // never originates from a Drive response, so sync-mapped rows always arrive
+  // without it. bulkPut replaces WHOLE rows, which would erase the stored
+  // metadata on every sync — re-attach the existing metadata when the incoming
+  // row carries none. bulkGet fetches all prior rows in one round trip (never
+  // an N+1 per row); it resolves to undefined for missing keys, so brand-new
+  // rows keep metadata undefined.
+  const keys = ownedRows.map(
+    (row) => [row.userEmail, row.id] as [string, string],
+  );
+  const existingRows = await db.files.bulkGet(keys);
+  ownedRows.forEach((row, i) => {
+    if (row.metadata === undefined) row.metadata = existingRows[i]?.metadata;
+  });
+
   await db.files.bulkPut(ownedRows);
 }
 
