@@ -5,6 +5,7 @@ export interface SeekRailProps {
   progressBarRef: RefObject<HTMLDivElement | null>;
   bufferFillRef: RefObject<HTMLDivElement | null>;
   progressFillRef: RefObject<HTMLDivElement | null>;
+  thumbRef: RefObject<HTMLDivElement | null>;
   tooltipRef: RefObject<HTMLDivElement | null>;
   bufferPreviewRef: RefObject<HTMLDivElement | null>;
   isHovering: boolean;
@@ -20,6 +21,7 @@ export function SeekRail({
   progressBarRef,
   bufferFillRef,
   progressFillRef,
+  thumbRef,
   tooltipRef,
   bufferPreviewRef,
   isHovering,
@@ -67,18 +69,43 @@ export function SeekRail({
           ></div>
         </div>
       )}
-      <div
-        ref={progressFillRef}
-        data-testid="progress-fill"
-        className="absolute left-0 h-full bg-brand-primary rounded-full flex items-center transform-gpu will-change-[width]"
-      >
+      {/* The fill sits inside an overflow-hidden rounded-full clipper: the
+          clipper cuts the fill to the track's rounded contour at ANY width,
+          so the fill keeps its true percent width with no min-width clamp
+          (the old 6px clamp jumped the fill 0→6px the moment progress > 0,
+          reading as a notch while seeking).
+          https://iifx.dev/en/articles/460222310 (rounded CSS progress bar —
+          track overflow-hidden clips the fill to the rounded contour)
+          https://stackoverflow.com/questions/77801099 (rounded corner
+          overlap — radius scaling breaks on narrow children, fix via
+          clipping the parent). */}
+      <div className="absolute inset-0 overflow-hidden rounded-full pointer-events-none">
         <div
-          data-testid="seek-thumb"
-          className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none transition-opacity ${
-            isHovering || isDragging ? "opacity-100" : "opacity-0"
-          }`}
+          ref={progressFillRef}
+          data-testid="progress-fill"
+          className="absolute left-0 h-full bg-brand-primary rounded-full transform-gpu will-change-[width]"
         ></div>
       </div>
+      {/* Rail-anchored thumb (NOT inside the clipper): positioned from the
+          rail's left edge via inline `left` % — at the same percent as the
+          fill width this renders at the fill's end edge, identical visual
+          position to the old fill-anchored right-0, but it survives 0%/100%
+          where the clipper would cut the half-overhang (YT Music half-dot
+          convention). Hidden by default, visible only while the user
+          interacts (hover or drag). Tailwind v4 emits translate/scale as
+          INDEPENDENT CSS properties, so -translate-* and scale-* compose
+          without conflict and the transition must list translate/scale
+          explicitly for the fade + scale-in to animate. */}
+      <div
+        ref={thumbRef}
+        data-testid="seek-thumb"
+        style={{ left: "0%" }}
+        className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none transition-[opacity,transform,translate,scale] duration-150 ${
+          isHovering || isDragging
+            ? "opacity-100 scale-100"
+            : "opacity-0 scale-75"
+        }`}
+      ></div>
       {isHovering && duration > 0 && (
         <div
           ref={tooltipRef}
