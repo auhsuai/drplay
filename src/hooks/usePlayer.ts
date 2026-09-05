@@ -17,6 +17,7 @@ import {
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../utils/sessionCleanup";
+import { prefetchTrackInServiceWorker } from "../utils/swPrefetch";
 import { isAbortError } from "./player/utils";
 import { usePlayerSession } from "./player/usePlayerSession";
 import { usePlayerQueue } from "./player/usePlayerQueue";
@@ -253,14 +254,18 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying(false);
       setIsDownloading(true);
 
-      // NOTE: no next-track prefetch here. The old warm-up fetch was dead
-      // weight: public/sw.js answers upstream Drive fetches with
+      // NOTE: no page-side prefetch fetch here. The old warm-up fetch was
+      // dead weight: public/sw.js answers upstream Drive fetches with
       // `cache: 'no-store'`, so a page-side Range warm-up never lands in the
       // Chromium HTTP cache (and re-enabling that cache is not safe — see the
       // sw.js comment on Chromium bug #1026867 / PIPELINE_ERROR_READ).
-      // TODO(chunk-store): real gapless prefetch needs a bounded byte-range
-      // store inside the SW, served to the element from ONE consistent source
-      // per URL load.
+      // Slice 2 instead asks the SW to warm its own IDB byte-cache for the
+      // NEXT track in queue (the current one streams through the SW anyway
+      // and write-through caches it as it plays).
+      const nextTrack = playbackQueue.find(
+        (t) => t.id !== targetTrack.id && t.id,
+      );
+      if (nextTrack) prefetchTrackInServiceWorker(nextTrack.id);
 
       const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
@@ -332,6 +337,7 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying,
       setIsDownloading,
       setCurrentTrack,
+      playbackQueue,
       t,
     ],
   );

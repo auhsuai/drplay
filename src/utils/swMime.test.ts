@@ -334,7 +334,14 @@ describe("sw.js Content-Range synthesis for CORS-stripped 206", () => {
 
   it("evicts the oldest cached total beyond the cache limit", async () => {
     const sw = makeSw();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(corsFilteredResponse(10)));
+    // Fresh Response per call (as a real network delivers): the byte-cache
+    // write-through tee()s the body, which locks a shared mock object.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(() => Promise.resolve(corsFilteredResponse(10))),
+    );
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
     // TOTAL_SIZE_CACHE_LIMIT is now 1000 (was 100 — raised so long sessions
     // keep totals for closed-range Content-Range synthesis): fill the cache
