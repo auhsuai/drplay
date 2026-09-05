@@ -11,6 +11,57 @@ const ELLIPSIS = "\u2026";
 /** Matches Windows `\` and POSIX `/` separators. */
 const SEGMENT_SEPARATOR = /[\\/]/;
 
+/** Minimal structural type for Intl.Segmenter (tsconfig lib is ES2020). */
+interface GraphemeSegmenter {
+  segment(input: string): Iterable<{ segment: string }>;
+}
+
+/** Constructor shape of Intl.Segmenter with grapheme granularity. */
+type GraphemeSegmenterConstructor = new (
+  locales?: string | string[],
+  options?: { granularity?: string },
+) => GraphemeSegmenter;
+
+// WHY: String.length/slice count UTF-16 code units, so clipping a folder name
+// with emoji ZWJ-sequences or combining marks can split a grapheme (lone
+// surrogate renders as U+FFFD). Intl.Segmenter counts user-perceived
+// characters instead. Singleton at module scope: one instance per load.
+// Undefined on runtimes without Intl.Segmenter (pre-Baseline-2024 WebViews),
+// where the helpers below fall back to legacy UTF-16 slicing.
+const graphemeSegmenter: GraphemeSegmenter | undefined = (() => {
+  try {
+    const intlRef = (
+      globalThis as unknown as {
+        Intl?: { Segmenter?: GraphemeSegmenterConstructor };
+      }
+    ).Intl;
+    const Ctor = intlRef?.Segmenter;
+    if (typeof Ctor !== "function") return undefined;
+    return new Ctor(undefined, { granularity: "grapheme" });
+  } catch {
+    return undefined;
+  }
+})();
+
+/** Counts user-perceived characters; legacy UTF-16 length without Segmenter. */
+function graphemeLength(value: string): number {
+  if (graphemeSegmenter === undefined) return value.length;
+  return [...graphemeSegmenter.segment(value)].length;
+}
+
+/** Keeps the first `maxGraphemes` user-perceived characters. */
+function takeGraphemes(value: string, maxGraphemes: number): string {
+  if (graphemeSegmenter === undefined) return value.slice(0, maxGraphemes);
+  let taken = "";
+  let count = 0;
+  for (const { segment } of graphemeSegmenter.segment(value)) {
+    if (count >= maxGraphemes) break;
+    taken += segment;
+    count += 1;
+  }
+  return taken;
+}
+
 /**
  * Truncates a long path from the middle: keeps the first two segments and the
  * last (non-empty) segment, joins them with an ellipsis.
@@ -27,7 +78,7 @@ export function truncatePathMiddle(
   maxChars: number = MAX_VISIBLE_CHARS,
 ): string {
   if (typeof path !== "string") return "";
-  if (path.length <= maxChars) return path;
+  if (graphemeLength(path) <= maxChars) return path;
 
   const parts = path.split(SEGMENT_SEPARATOR);
 
@@ -62,12 +113,15 @@ export function truncatePathMiddle(
   // reads as a real path, not `C:\Users…Music`.
   const overhead = sep.length * 2 + ELLIPSIS.length;
   const suffixBudget = Math.min(
-    suffix.length,
-    Math.max(1, maxChars - overhead - prefix.length),
+    graphemeLength(suffix),
+    Math.max(1, maxChars - overhead - graphemeLength(prefix)),
   );
-  const shownSuffix = suffix.slice(0, suffixBudget);
-  const prefixBudget = Math.max(1, maxChars - overhead - shownSuffix.length);
-  const shownPrefix = prefix.slice(0, prefixBudget);
+  const shownSuffix = takeGraphemes(suffix, suffixBudget);
+  const prefixBudget = Math.max(
+    1,
+    maxChars - overhead - graphemeLength(shownSuffix),
+  );
+  const shownPrefix = takeGraphemes(prefix, prefixBudget);
 
   return shownPrefix + sep + ELLIPSIS + sep + shownSuffix;
 }

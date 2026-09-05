@@ -768,64 +768,82 @@ describe("uploadManager", () => {
 
   it("9e. retry: UploadError network kèm status 429 (transport map) → backoff HONOR Retry-After 5s → lần 2 pass", async () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
-    // The transport now surfaces transient HTTP (429) as kind 'network' with
-    // the Retry-After header; the manager's single retry layer must sleep
-    // ~5s (RFC 9110) instead of the 1–1.5s exponential base.
-    uploadFileResumable
-      .mockRejectedValueOnce(
-        new UploadErrorClass("rate limited (429)", "network", 429, "5"),
-      )
-      .mockResolvedValueOnce(makeDriveFile("file-9e", "ra.mp3"));
-    const snapshots = captureSnapshots();
+    // Pin the default-path jitter to its floor so the 5s Retry-After waits
+    // exactly 5000ms (Retry-After is jittered since the thundering-herd fix).
+    // Scoped restore (not restoreAllMocks): the module-level dispatchSpy must
+    // survive across tests.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      // The transport now surfaces transient HTTP (429) as kind 'network' with
+      // the Retry-After header; the manager's single retry layer must sleep
+      // ~5s (RFC 9110) instead of the 1–1.5s exponential base.
+      uploadFileResumable
+        .mockRejectedValueOnce(
+          new UploadErrorClass("rate limited (429)", "network", 429, "5"),
+        )
+        .mockResolvedValueOnce(makeDriveFile("file-9e", "ra.mp3"));
+      const snapshots = captureSnapshots();
 
-    um.startUploads([fileSeed("ra.mp3")], TOKEN);
-    await realTick();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+      um.startUploads([fileSeed("ra.mp3")], TOKEN);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
-    // 4.9s in: the Retry-After sleep (5s) has NOT elapsed — exp+jitter would
-    // have fired by now, so this bounds the sleep to the honored header.
-    await advanceBackoff(4900);
-    await realTick();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+      // 4.9s in: the Retry-After sleep (5s) has NOT elapsed — exp+jitter would
+      // have fired by now, so this bounds the sleep to the honored header.
+      await advanceBackoff(4900);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
-    // Crossing 5s: the Retry-After sleep resolves → attempt 2 fires.
-    await advanceBackoff(200);
-    await realTick();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(2);
+      // Crossing 5s: the Retry-After sleep resolves → attempt 2 fires.
+      await advanceBackoff(200);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(2);
 
-    await realTick();
-    expect(snapshots[snapshots.length - 1]).toEqual([
-      { status: "done", error: undefined },
-    ]);
-    expect(um.getEntries()).toEqual([]);
+      await realTick();
+      expect(snapshots[snapshots.length - 1]).toEqual([
+        { status: "done", error: undefined },
+      ]);
+      expect(um.getEntries()).toEqual([]);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("9f. retry hết: network x3 kèm status 500 → đúng 3 calls, error cuối kind network", async () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
-    uploadFileResumable.mockRejectedValue(
-      new UploadErrorClass("server error", "network", 500),
-    );
-    const snapshots = captureSnapshots();
+    // Pin the default-path jitter to its floor so exp backoff waits exactly
+    // 1000ms/2000ms (exp is jittered since the thundering-herd fix).
+    // Scoped restore (not restoreAllMocks): the module-level dispatchSpy must
+    // survive across tests.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      uploadFileResumable.mockRejectedValue(
+        new UploadErrorClass("server error", "network", 500),
+      );
+      const snapshots = captureSnapshots();
 
-    um.startUploads([fileSeed("n500.mp3")], TOKEN);
-    await realTick();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(1);
+      um.startUploads([fileSeed("n500.mp3")], TOKEN);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(1);
 
-    await advanceBackoff(1500);
-    await realTick();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(2);
+      await advanceBackoff(1500);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(2);
 
-    await advanceBackoff(3000);
-    await realTick();
-    expect(uploadFileResumable).toHaveBeenCalledTimes(3);
-    await realTick();
+      await advanceBackoff(3000);
+      await realTick();
+      expect(uploadFileResumable).toHaveBeenCalledTimes(3);
+      await realTick();
 
-    expect(snapshots[snapshots.length - 1]).toEqual([
-      { status: "error", error: "network" },
-    ]);
-    expect(um.getEntries()).toEqual([]);
-    await advanceBackoff(10_000);
-    expect(uploadFileResumable).toHaveBeenCalledTimes(3);
+      expect(snapshots[snapshots.length - 1]).toEqual([
+        { status: "error", error: "network" },
+      ]);
+      expect(um.getEntries()).toEqual([]);
+      await advanceBackoff(10_000);
+      expect(uploadFileResumable).toHaveBeenCalledTimes(3);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("9g. kind auth (status 401) → không retry, 1 call, error auth", async () => {

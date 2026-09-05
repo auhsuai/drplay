@@ -77,8 +77,15 @@ export function getAudioQuery(): string {
   return `${TRASHED} and ${buildAudioCondition(true, false)}`;
 }
 
+// Drive v3 query string literals are single-quoted; a literal quote/backslash
+// must be escaped as \' and \\. Escape backslash first so an existing
+// backslash is not mistaken for the escape of the inserted quote escape.
+function escapeDriveQueryLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
 export function getFolderAudioQuery(folderId: string): string {
-  return `'${folderId}' in parents and ${TRASHED} and ${buildAudioCondition(true, true)}`;
+  return `'${escapeDriveQueryLiteral(folderId)}' in parents and ${TRASHED} and ${buildAudioCondition(true, true)}`;
 }
 
 export function getAudioFilesQuery(): string {

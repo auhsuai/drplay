@@ -11,7 +11,12 @@ const realDelay = (ms: number): Promise<void> =>
 
 describe("backoffDelay", () => {
   it("honors numeric Retry-After in seconds (capped at 32s)", () => {
-    expect(backoffDelay(0, "5")).toBe(5000);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      expect(backoffDelay(0, "5")).toBe(5000); // floor: 5000 + zero jitter
+    } finally {
+      vi.restoreAllMocks();
+    }
     expect(backoffDelay(0, "100")).toBe(32000); // 100s > cap
   });
 
@@ -70,6 +75,79 @@ describe("backoffDelay", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it("jitters a numeric Retry-After on the default path (thundering-herd guard)", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      // 5000 + 0.5 * 5000 * 0.5 = 6250
+      expect(backoffDelay(0, "5")).toBe(6250);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("jitters an HTTP-date Retry-After on the default path, still capped", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const future = new Date(1_000_000 + 10_000).toUTCString();
+      // diff 10000 + 0.5 * 10000 * 0.5 = 12500
+      expect(backoffDelay(0, future)).toBe(12500);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("caps default-path Retry-After + jitter at maxMs even with random maxed", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    try {
+      expect(backoffDelay(0, "100")).toBe(32000);
+      expect(backoffDelay(0, "31", { maxMs: 8000 })).toBe(8000);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("caps worker-mode Retry-After + jitter at maxMs (no cap overflow)", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    try {
+      // 8000 + floor(0.999*501) = 8500 without the re-cap
+      expect(
+        backoffDelay(0, "8", { maxMs: 8000, jitterMaxMs: 500 }),
+      ).toBeLessThanOrEqual(8000);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("caps worker-mode exponential + jitter at maxMs", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    try {
+      expect(
+        backoffDelay(5, undefined, { maxMs: 8000, jitterMaxMs: 500 }),
+      ).toBeLessThanOrEqual(8000);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("clamps a negative attempt to the attempt-0 floor", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      expect(backoffDelay(-1)).toBe(1000);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps Retry-After: 0 at exactly 0 (server says retry immediately)", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    try {
+      expect(backoffDelay(0, "0")).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe("sleep", () => {
@@ -82,6 +160,28 @@ describe("sleep", () => {
     await vi.advanceTimersByTimeAsync(500);
     await p;
     expect(resolved).toBe(true);
+  });
+
+  it("rejects with signal.reason when the signal is already aborted", async () => {
+    vi.useFakeTimers();
+    const stop = new Error("stop");
+    const controller = new AbortController();
+    controller.abort(stop);
+    const assertion = expect(sleep(5000, controller.signal)).rejects.toBe(stop);
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
+  it("rejects with signal.reason when aborted mid-sleep", async () => {
+    vi.useFakeTimers();
+    const stop = new Error("stop");
+    const controller = new AbortController();
+    const assertion = expect(sleep(30_000, controller.signal)).rejects.toBe(
+      stop,
+    );
+    controller.abort(stop);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
   });
 });
 

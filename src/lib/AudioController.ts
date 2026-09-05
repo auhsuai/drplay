@@ -219,9 +219,20 @@ export class AudioController implements PlaybackEngine {
   ) {
     const handlers = this.listeners[event];
     if (handlers) {
-      handlers.forEach((h) => {
-        h(payload);
-      });
+      // Isolate each listener so one throwing subscriber cannot block the
+      // rest (Node EventEmitter / DOM dispatchEvent semantics). Snapshot
+      // guards against unsubscribe-during-emit shifting the live array.
+      for (const handler of [...handlers]) {
+        try {
+          handler(payload);
+        } catch (err: unknown) {
+          void captureError({
+            level: "warn",
+            source: "AudioController",
+            message: `emit ${event} handler failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
     }
   }
 

@@ -31,4 +31,13 @@ describe("normalizeText", () => {
       true,
     );
   });
+
+  it("returns empty string for non-string runtime inputs instead of throwing", () => {
+    // Intentional runtime-foreign values: type-level input is string,
+    // so cast via unknown to simulate plain-JS callers with missing metadata.
+    expect(normalizeText(undefined as unknown as string)).toBe("");
+    expect(normalizeText(null as unknown as string)).toBe("");
+    expect(normalizeText(123 as unknown as string)).toBe("");
+    expect(normalizeText({} as unknown as string)).toBe("");
+  });
 });

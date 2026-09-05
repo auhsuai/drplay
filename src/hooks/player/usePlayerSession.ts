@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { get } from "../../db/kv";
+import { get, set as idbSet } from "../../db/kv";
 import type { Track, PlayMode } from "../../types";
 import { getValidToken } from "../../utils/apiClient";
 import {
@@ -219,6 +219,17 @@ export function usePlayerSession(
         localStorage.setItem(
           SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
           JSON.stringify(sessionData),
+        );
+        // Dual-write: the load path falls back to this kv copy when
+        // localStorage is empty or corrupt, so the key must be written here.
+        idbSet(SESSION_CLEANUP_KEYS.lastSessionKv, sessionData).catch(
+          (e: unknown) => {
+            void captureError({
+              level: "warn",
+              source: PLAYER_SESSION_MODULE,
+              message: `session-kv-save-fail: ${classifyPlayerError(e).message}`,
+            });
+          },
         );
         lastSaveTime = now;
       } catch (e: unknown) {

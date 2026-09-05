@@ -26,6 +26,6 @@ export const PAGINATION_PAGE_SIZE = 1000;
 // (useDriveOnDemandFetch): 10 pages x
 // PAGINATION_PAGE_SIZE = up to 10,000 results per query. Guards against a
 // misbehaving server that keeps issuing nextPageToken forever.
-// NOTE: drivePagination.ts keeps its own private copy of the same value —
-// that module's loop is out of scope for this constant (refactor boundary).
+// NOTE: shared with the fetchAllPages loop in drivePagination.ts (imports it
+// from here) — keep the value in sync with that loop's truncation warning.
 export const MAX_PAGINATION_PAGES = 10;

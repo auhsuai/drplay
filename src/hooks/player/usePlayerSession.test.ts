@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { get } from "../../db/kv";
+import { get, set as kvSet } from "../../db/kv";
 import { getValidToken } from "../../utils/apiClient";
 import {
   getPrefetchedStreamUrl,
@@ -14,6 +14,7 @@ import type { Track } from "../../types";
 
 vi.mock("../../db/kv", () => ({
   get: vi.fn(),
+  set: vi.fn(() => Promise.resolve(undefined)),
 }));
 
 vi.mock("../../utils/apiClient", () => ({
@@ -58,6 +59,7 @@ vi.mock("../../utils/platform", () => ({
 }));
 
 const mockedGet = vi.mocked(get);
+const mockedKvSet = vi.mocked(kvSet);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedGetPrefetchedStreamUrl = vi.mocked(getPrefetchedStreamUrl);
 const mockedBuildStreamUrl = vi.mocked(buildStreamUrl);
@@ -518,5 +520,32 @@ describe("usePlayerSession user-wins guard (session-restore-superseded-by-user)"
       restoreTime: 7,
     });
     expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("usePlayerSession save dual-write (lastSessionKv regression)", () => {
+  it("O: pause-save dual-writes kv lastSessionKv so the load fallback reads a written key", () => {
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: makeTrack("t1", "q1"),
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(10);
+    vi.mocked(audioMock.getDuration).mockReturnValue(240);
+
+    makeHook();
+    const pauseHandler = audioMock.on.mock.calls.find(
+      (c) => c[0] === "pause",
+    )?.[1];
+    expect(pauseHandler).toBeTypeOf("function");
+    act(() => {
+      pauseHandler?.();
+    });
+
+    expect(mockedKvSet).toHaveBeenCalledWith(
+      SESSION_STORAGE_KEY,
+      expect.objectContaining({
+        time: 10,
+        duration: 240,
+      }),
+    );
   });
 });

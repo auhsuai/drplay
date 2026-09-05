@@ -224,7 +224,14 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe("backoffDelay", () => {
   it("honors numeric Retry-After in seconds (capped at MAX_DELAY_MS)", () => {
-    expect(backoffDelay(0, "5")).toBe(5000);
+    // Pin the default-path jitter to its floor (Retry-After is jittered since
+    // the thundering-herd fix): 5000 + zero jitter = 5000.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      expect(backoffDelay(0, "5")).toBe(5000);
+    } finally {
+      vi.restoreAllMocks();
+    }
     expect(backoffDelay(0, "100")).toBe(32000); // 100s > 32s cap
   });
 
@@ -468,28 +475,35 @@ describe("driveFetch retry", () => {
   });
 
   it("honors Retry-After: 5 on a 503 → waits a full 5s before the retry", async () => {
-    const retryAfterResponse = {
-      status: 503,
-      ok: false,
-      headers: {
-        get: (name: string) =>
-          name.toLowerCase() === "retry-after" ? "5" : null,
-      },
-      json: () => ({}),
-    } as unknown as Response;
-    mockedFetch
-      .mockResolvedValueOnce(retryAfterResponse)
-      .mockResolvedValueOnce(makeResponse(200));
+    // Pin the default-path jitter to its floor so the 5s Retry-After waits
+    // exactly 5000ms (Retry-After is jittered since the thundering-herd fix).
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const retryAfterResponse = {
+        status: 503,
+        ok: false,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "retry-after" ? "5" : null,
+        },
+        json: () => ({}),
+      } as unknown as Response;
+      mockedFetch
+        .mockResolvedValueOnce(retryAfterResponse)
+        .mockResolvedValueOnce(makeResponse(200));
 
-    const p = driveFetch("https://www.googleapis.com/drive/v3/files");
-    // backoffDelay(0, "5") is deterministic (no jitter): 5000ms. At t=4000 the
-    // retry must NOT have fired yet — only the original call.
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(2000);
-    const res = await p;
-    expect(res.status).toBe(200);
-    expect(mockedFetch).toHaveBeenCalledTimes(2);
+      const p = driveFetch("https://www.googleapis.com/drive/v3/files");
+      // backoffDelay(0, "5") with jitter pinned to 0: 5000ms. At t=4000 the
+      // retry must NOT have fired yet — only the original call.
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2000);
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 
@@ -3366,38 +3380,45 @@ describe("uploadFileResumableChunked", () => {
   // Upgrade 1: the chunk retry delay must come from backoffDelay, which honors
   // Retry-After (RFC 6585/9110). Old fixed delay [1000, 3000] ignored the
   // header and re-fired the 429 after 1s; with Retry-After: 5 the retry must
-  // wait a full 5000ms (backoffDelay(0, "5") is deterministic — no jitter).
+  // wait a full 5000ms (jitter pinned to 0 so the floor is exactly 5000ms).
   it("chunk 429 with Retry-After: 5 → waits the full 5s before the retry", async () => {
     vi.useFakeTimers();
-    const retryAfterResponse = {
-      status: 429,
-      ok: false,
-      headers: {
-        get: (name: string) =>
-          name.toLowerCase() === "retry-after" ? "5" : null,
-      },
-      json: () => ({}),
-    } as unknown as Response;
-    mockedFetch
-      .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
-      .mockResolvedValueOnce(retryAfterResponse)
-      .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
+    // Pin the default-path jitter to its floor (Retry-After is jittered since
+    // the thundering-herd fix); restored in finally so no other test sees it.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const retryAfterResponse = {
+        status: 429,
+        ok: false,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "retry-after" ? "5" : null,
+        },
+        json: () => ({}),
+      } as unknown as Response;
+      mockedFetch
+        .mockResolvedValueOnce(makeLocationResponse(200, LOCATION))
+        .mockResolvedValueOnce(retryAfterResponse)
+        .mockResolvedValueOnce(makeJsonResponse(201, uploadedFile));
 
-    const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
-    const p = uploadFileResumableChunked("tok", {
-      name: "big.flac",
-      parentId: "p",
-      totalSize: CHUNK_SIZE,
-      readChunk: reader.readChunk,
-    });
-    // Old code: delay[attempt 0] = 1000ms → retry already fired at t=1000
-    // (3rd fetch). New code: Retry-After "5" → 5000ms → still only 2 calls.
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(mockedFetch).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(await p).toEqual(uploadedFile);
-    expect(mockedFetch).toHaveBeenCalledTimes(3);
-    expect(reader.offsets).toEqual([0]);
+      const reader = makeReader(makePayload(CHUNK_SIZE), CHUNK_SIZE);
+      const p = uploadFileResumableChunked("tok", {
+        name: "big.flac",
+        parentId: "p",
+        totalSize: CHUNK_SIZE,
+        readChunk: reader.readChunk,
+      });
+      // Old code: delay[attempt 0] = 1000ms → retry already fired at t=1000
+      // (3rd fetch). New code: Retry-After "5" → 5000ms → still only 2 calls.
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(await p).toEqual(uploadedFile);
+      expect(mockedFetch).toHaveBeenCalledTimes(3);
+      expect(reader.offsets).toEqual([0]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   // Upgrade 1: without Retry-After, the delay must come from backoffDelay's

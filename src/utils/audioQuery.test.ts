@@ -46,6 +46,20 @@ describe("getFolderAudioQuery", () => {
   });
 });
 
+describe("getFolderAudioQuery escapes folderId (quote-injection guard)", () => {
+  it("escapes a single quote so the query stays valid", () => {
+    expect(getFolderAudioQuery("a'b").startsWith("'a\\'b' in parents")).toBe(
+      true,
+    );
+  });
+
+  it("escapes backslashes before quotes", () => {
+    expect(getFolderAudioQuery("a\\b").startsWith("'a\\\\b' in parents")).toBe(
+      true,
+    );
+  });
+});
+
 describe("getAudioFilesQuery", () => {
   it("matches the frozen query contract", () => {
     expect(getAudioFilesQuery()).toBe(AUDIO_FILES_QUERY);

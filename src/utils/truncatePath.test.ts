@@ -1,5 +1,26 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { truncatePathMiddle } from "./truncatePath";
+
+// Lone surrogates render as U+FFFD in the WebView: any truncation must only
+// cut between whole grapheme clusters, never inside one.
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+function graphemeCount(value: string): number {
+  // tsconfig lib is ES2020: no Intl.Segmenter types, so use a structural cast.
+  const intlRef = globalThis as unknown as {
+    Intl?: {
+      Segmenter?: new (
+        locales?: string,
+        options?: { granularity?: string },
+      ) => { segment(input: string): Iterable<{ segment: string }> };
+    };
+  };
+  const Ctor = intlRef.Intl?.Segmenter;
+  if (typeof Ctor !== "function") return value.length;
+  return [...new Ctor(undefined, { granularity: "grapheme" }).segment(value)]
+    .length;
+}
 
 describe("truncatePathMiddle", () => {
   it("returns short paths unchanged without ellipsis", () => {
@@ -69,5 +90,42 @@ describe("truncatePathMiddle", () => {
   it("defensively handles non-string input", () => {
     expect(truncatePathMiddle(undefined as unknown as string)).toBe("");
     expect(truncatePathMiddle(null as unknown as string)).toBe("");
+  });
+
+  it("never splits a ZWJ emoji sequence when clipping the suffix", () => {
+    const family = "👨‍👩‍👧‍👦"; // 1 grapheme, 11 UTF-16 units
+    const long = "C:\\Users\\a\\" + family.repeat(10);
+    const result = truncatePathMiddle(long);
+    expect(result).not.toMatch(LONE_SURROGATE);
+    // The clipped suffix must end on a grapheme boundary (old UTF-16
+    // slicing left a partial third sequence here).
+    expect(result.endsWith(family.repeat(2))).toBe(true);
+    expect(graphemeCount(result)).toBeLessThanOrEqual(40);
+  });
+
+  it("never splits combining marks when clipping the suffix", () => {
+    const eAcute = "é"; // e + combining acute: 1 grapheme, 2 UTF-16 units
+    const long = "C:\\Users\\a\\" + eAcute.repeat(30);
+    const result = truncatePathMiddle(long);
+    expect(result).not.toMatch(LONE_SURROGATE);
+    expect(graphemeCount(result)).toBeLessThanOrEqual(40);
+    // The whole 29-grapheme budget goes to complete e+acute pairs (old
+    // UTF-16 slicing kept 14 pairs plus a stripped trailing "e").
+    expect(result.endsWith(eAcute.repeat(29))).toBe(true);
+  });
+
+  it("falls back to legacy slicing when Intl.Segmenter is unavailable", async () => {
+    vi.resetModules();
+    vi.stubGlobal("Intl", { Segmenter: undefined });
+    let fresh: typeof import("./truncatePath");
+    try {
+      fresh = await import("./truncatePath");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const ascii = "C:\\Users\\thinkpad\\Desktop\\Antigravity\\drplay\\Music";
+    expect(fresh.truncatePathMiddle(ascii)).toBe("C:\\Users\\…\\Music");
+    expect(fresh.truncatePathMiddle("C:\\Music")).toBe("C:\\Music");
+    vi.resetModules();
   });
 });

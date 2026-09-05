@@ -86,9 +86,9 @@ async function estimateMetadataBytes(): Promise<number> {
       .where("key")
       .startsWith(METADATA_KEY_PREFIX)
       .toArray();
-    // Estimate: UTF-16 code units of the JSON-serialized entry (~2 bytes each
-    // for ASCII) as a proxy for the stored record size — not an exact byte
-    // count of the on-disk IndexedDB record.
+    // Estimate: character count of the JSON-serialized entry as a rough byte
+    // proxy (one per ASCII char) — not an exact byte count of the on-disk
+    // IndexedDB record.
     return rows.reduce((sum, row) => sum + JSON.stringify(row.entry).length, 0);
   } catch (e: unknown) {
     await captureError({

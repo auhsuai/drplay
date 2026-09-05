@@ -1,11 +1,8 @@
 import { driveFetch, FOLDER_MIME } from "./driveApi";
 import type { DriveFileItem, DriveFolderItem } from "./driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "./driveFiles";
-import { PAGINATION_PAGE_SIZE } from "./driveConstants";
-
-// Worst-case safety cap: 10 pages = up to 10,000 results per call. Guards
-// against a misbehaving server that keeps issuing nextPageToken forever.
-const MAX_PAGINATION_PAGES = 10;
+import { MAX_PAGINATION_PAGES, PAGINATION_PAGE_SIZE } from "./driveConstants";
+import { captureError } from "./errorLog";
 
 // Aggregate ALL pages of a Drive files.list query. Drive caps each request at
 // PAGINATION_PAGE_SIZE and signals more results via nextPageToken
@@ -52,6 +49,17 @@ async function fetchAllPages<T>(
     if (data.files) all.push(...data.files);
     pageToken = data.nextPageToken;
     if (!pageToken) break;
+  }
+  if (pageToken !== undefined && !(signal?.aborted ?? false)) {
+    // Why: the loop above stops at MAX_PAGINATION_PAGES, so a leftover
+    // nextPageToken means results were dropped — warn instead of truncating
+    // silently. Return contract unchanged (fetched pages only, no throw);
+    // the token itself is never logged (opaque server cursor).
+    void captureError({
+      level: "warn",
+      source: "drivePagination",
+      message: `pagination truncated at ${String(MAX_PAGINATION_PAGES)} pages while ${failureLabel}: server still returns nextPageToken, returned ${String(all.length)} items`,
+    });
   }
   return all;
 }
