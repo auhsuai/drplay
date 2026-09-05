@@ -48,6 +48,32 @@ describe("sw.js EXTENSION_TO_MIME guard", () => {
   });
 });
 
+// ---- sw.js source-encoding guard. The SW carries Vietnamese comments; a
+// tool that re-reads them through a legacy code page (e.g. PowerShell 5.1
+// Get-Content without -Encoding UTF8) displays them as "Ki?m tra..." mojibake
+// and a "repair" through such a lens would CORRUPT the real UTF-8 bytes. The
+// ?raw import serves the file's true bytes as UTF-8, so these asserts pin the
+// intact state: any future edit that flattens the accents must fail here.
+describe("sw.js source encoding health (Vietnamese comments intact)", () => {
+  it("contains no U+FFFD replacement characters", () => {
+    expect(swSource.includes(String.fromCharCode(0xfffd))).toBe(false);
+  });
+
+  it("keeps the known Vietnamese comment lines intact", () => {
+    const intactLines = [
+      "Bỏ qua trạng thái waiting, active ngay lập tức",
+      "Claim các client hiện tại ngay lập tức để không cần reload trang",
+      "Lắng nghe token từ App.tsx gửi sang",
+      "Giữ nguyên các header gốc (đặc biệt là header Range: bytes=...)",
+      "Kiểm tra xem đây có phải là request ảo để stream nhạc không",
+      "Thực thi fetch trực tiếp lên Google Drive và trả về cho thẻ audio",
+    ];
+    for (const line of intactLines) {
+      expect(swSource).toContain(line);
+    }
+  });
+});
+
 // ---- Behavioral tests: run the real sw.js in a sandbox (same pattern as
 // src/hooks/swTokenRetry.test.ts) and assert the Content-Type override.
 type SwListener = (event: unknown) => void;

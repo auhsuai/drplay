@@ -33,17 +33,19 @@ export async function processCovers(
     const pic = pictures[0];
     if (pic) {
       if (pic.data.byteLength > COVER_MAX_BYTES) {
+        // Expected degradation, not a failure: text metadata survives and the
+        // entry still lands at v:8, so this is informational by design.
         await captureError({
-          level: "warn",
+          level: "info",
           source: META_MODULE,
-          message: `cover-skip-too-large (fileId=${fileId}, bytes=${String(pic.data.byteLength)})`,
+          message: `cover-degraded-too-large (fileId=${fileId}, bytes=${String(pic.data.byteLength)}): oversized cover skipped, text metadata kept (entry v:8)`,
           kind: "CoverTooLarge",
         });
       } else if (isImageTruncated(pic.data)) {
         await captureError({
-          level: "warn",
+          level: "info",
           source: META_MODULE,
-          message: `cover-skip-truncated (fileId=${fileId}, format=${pic.format})`,
+          message: `cover-degraded-truncated (fileId=${fileId}, format=${pic.format}): picture bytes truncated, skipped, text metadata kept`,
           kind: "CoverTruncated",
         });
       } else {

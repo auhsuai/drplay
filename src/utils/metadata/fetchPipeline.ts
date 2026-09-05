@@ -265,19 +265,26 @@ async function getTrackMetadataImpl(
       });
     } catch (e: unknown) {
       if (e instanceof BudgetExceededError) {
-        await logMetaWarn(
-          `cover-budget-exceeded (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
-          "BudgetExceededError",
-        );
+        // Expected degradation, not a failure: the skipCovers retry below
+        // salvages the text metadata, so this is informational by design
+        // (logMetaWarn pins level "warn" — this site deliberately logs lower).
+        await captureError({
+          level: "info",
+          source: META_MODULE,
+          message: `cover-degraded-budget (fileId=${fileId}, size=${String(size)}): cover read exceeded range budget, cover skipped, text metadata kept (entry v:8): ${classifyMetaError(e).message}`,
+          kind: "BudgetExceededError",
+        });
         // Re-parse with covers skipped on a FRESH tokenizer: the old one has
         // exhausted its fetch budget (even its tail-scan would throw again).
         // A fresh budget plus ignore()-advancing past the cover reads only the
-        // tag region — no full-file download.
-        const retryTokenizer = new DriveRangeTokenizer(
-          fileId,
-          parseSize,
-          signal ? { abortSignal: signal } : {},
-        );
+        // tag region — no full-file download. The retry needs the raised
+        // TAG_BUDGET_MAX (32MB) budget: skipCovers still parses the whole
+        // ID3v2 tag up-front, so a 20-32MB tag blows the 20MB default on the
+        // second attempt too and falls to the placeholder.
+        const retryTokenizer = new DriveRangeTokenizer(fileId, parseSize, {
+          ...(signal ? { abortSignal: signal } : {}),
+          budgetBytes: TAG_BUDGET_MAX,
+        });
         metadata = await parseFromTokenizer(retryTokenizer, {
           skipCovers: true,
           duration: true,

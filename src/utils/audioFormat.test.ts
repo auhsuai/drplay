@@ -86,6 +86,25 @@ describe("detectFormat", () => {
     );
   });
 
+  it("prefers the ftyp magic over the .aac extension (AAC-in-MP4 mislabel → m4a)", () => {
+    // A file named song.aac whose head is an MP4 container (ftyp at offset 4)
+    // is NOT ADTS: detection is magic-bytes-only — the ftyp check precedes the
+    // ADTS syncword check and the extension is only consulted for .opus — so
+    // the file is routed to the m4a (MP4) parser, which is correct for
+    // AAC-in-MP4 content (the extension is the mislabel).
+    const b = new Uint8Array(32);
+    b.set(textAsBytes("ftyp"), 4);
+    expect(detectFormat(b, "song.aac")).toBe("m4a");
+  });
+
+  it("prefers the ADTS syncword over a misleading .mp3 extension", () => {
+    // Mirror case: real ADTS bytes named .mp3 still detect as aac — the
+    // extension never overrides magic bytes.
+    expect(detectFormat(buf(0xff, 0xf1, 0x50, 0x80, 0x00), "song.mp3")).toBe(
+      "aac",
+    );
+  });
+
   it("does NOT misdetect an MP3 frame header (layer 01) as aac", () => {
     // 0xFF 0xFB = MPEG1 Layer III frame sync
     expect(detectFormat(buf(0xff, 0xfb, 0x90, 0x00), "x.mp3")).toBe("unknown");
