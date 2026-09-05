@@ -288,8 +288,11 @@ export const SongCard = React.memo(
               </div>
             </div>
             {!hideMenu && (
+              // Why IS_MOBILE-gated: touch devices have no :hover, so the
+              // trigger must stay visible on mobile; desktop keeps the old
+              // hover-reveal (open/uploading/uploaded/flash force visible).
               <div
-                className={`transition-opacity ml-2 shrink-0 ${uploadState === "uploading" || uploadState === "uploaded" || isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                className={`transition-opacity ml-2 shrink-0 ${IS_MOBILE || uploadState === "uploading" || uploadState === "uploaded" || isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
               >
                 {uploadState === "uploading" || uploadState === "uploaded" ? (
                   <UploadBadge

@@ -230,4 +230,28 @@ describe("TopNavigationBar mobile search (IS_MOBILE)", () => {
     expect(screen.getByText("Current")).toBeTruthy();
     expect(screen.queryByTestId("mobile-search-collapsed")).toBeNull();
   });
+
+  it("mobile: right action group hugs together (gap-1.5, not gap-3)", () => {
+    platformMock.IS_MOBILE = true;
+    render(<TopNavigationBar {...makeProps()} />);
+    // Mobile collapsed search renders a button, not an input — scope via the
+    // collapsed-search testid's closest shrink-0 action group instead.
+    const collapsed = screen.getByTestId("mobile-search-collapsed");
+    const group = collapsed.closest("div.shrink-0");
+    expect(group).not.toBeNull();
+    expect(group?.className).toContain("gap-1.5");
+    expect(group?.className).not.toContain("gap-3");
+  });
+
+  it("desktop: right action group keeps gap-3 (not gap-1.5)", () => {
+    platformMock.IS_MOBILE = false;
+    render(<TopNavigationBar {...makeProps()} />);
+    // Scope via the search input: the breadcrumb also renders div.shrink-0
+    // wrappers earlier in the tree, so a bare querySelector would match those.
+    const input = screen.getByRole("textbox");
+    const group = input.closest("div.shrink-0");
+    expect(group).not.toBeNull();
+    expect(group?.className).toContain("gap-3");
+    expect(group?.className).not.toContain("gap-1.5");
+  });
 });

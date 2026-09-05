@@ -297,7 +297,11 @@ export function TopNavigationBar({
       )}
 
       {!isSelectionMode && !(IS_MOBILE && searchExpanded) && (
-        <div className="flex items-center gap-3 shrink-0">
+        // Why IS_MOBILE-gated: search + sort + New Folder sit tighter on
+        // mobile so the row fits narrow screens; desktop keeps gap-3.
+        <div
+          className={`flex items-center shrink-0 ${IS_MOBILE ? "gap-1.5" : "gap-3"}`}
+        >
           {/* Search Input */}
           {IS_MOBILE ? (
             // Mobile collapsed: a bare icon button (size of the SVG) — the

@@ -1609,3 +1609,63 @@ describe("SongCard desktop font (Task 8)", () => {
     expect(container.querySelector("h3")?.className).toContain("text-[15px]");
   });
 });
+
+describe("menu trigger visibility (mobile always-visible vs desktop hover-reveal)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      size: 0,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    platformMock.IS_MOBILE = false;
+    cleanup();
+  });
+
+  it("mobile idle row renders the trigger wrapper always visible (opacity-100, no hover-reveal)", () => {
+    platformMock.IS_MOBILE = true;
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const trigger = container.querySelector('button[aria-haspopup="menu"]');
+    expect(trigger).not.toBeNull();
+    // The trigger sits inside MoreMenu's own div.relative root — the
+    // hover-reveal wrapper is SongCard's div.ml-2 one level above that.
+    const wrapper = trigger?.closest("div.ml-2");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("opacity-100");
+    expect(wrapper?.className).not.toContain("opacity-0");
+  });
+
+  it("mobile folder rows also keep the trigger always visible", () => {
+    platformMock.IS_MOBILE = true;
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({ isFolder: true, trackInfo: undefined })}
+      />,
+    );
+    const trigger = container.querySelector('button[aria-haspopup="menu"]');
+    expect(trigger).not.toBeNull();
+    const wrapper = trigger?.closest("div.ml-2");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("opacity-100");
+    expect(wrapper?.className).not.toContain("opacity-0");
+  });
+
+  it("desktop idle row keeps hover-reveal (opacity-0 + group-hover:opacity-100, no standalone opacity-100)", () => {
+    platformMock.IS_MOBILE = false;
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const trigger = container.querySelector('button[aria-haspopup="menu"]');
+    expect(trigger).not.toBeNull();
+    const wrapper = trigger?.closest("div.ml-2");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("opacity-0");
+    expect(wrapper?.className).toContain("group-hover:opacity-100");
+    expect(wrapper?.className).not.toMatch(/(^|\s)opacity-100(\s|$)/);
+  });
+});

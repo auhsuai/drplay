@@ -140,7 +140,10 @@ export function FullRecentView({
   return (
     <main className="flex-1 bg-white dark:bg-[#121212] overflow-hidden flex flex-col relative transition-colors duration-300 h-full">
       <div className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
-        <div className="flex items-center justify-between">
+        {/* Why flex-wrap + gap-2: at 360px the title + search/sort row would
+            otherwise overflow horizontally — wrapping drops the controls to a
+            second line instead of clipping past the viewport edge. */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-medium">
             <button
               onClick={onBack}
@@ -155,14 +158,12 @@ export function FullRecentView({
               >
                 {resolvedTitle}
               </span>
-              <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-[#202124] px-2.5 py-0.5 rounded-full">
-                {filteredItems.length}
-              </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            {/* Search Input */}
+          <div className="flex min-w-0 items-center gap-3 shrink-0">
+            {/* Search Input — why w-28 base: w-40 overflows at 360px next to
+                the sort chip; sm:w-56 keeps the desktop width byte-identical. */}
             <div className="relative">
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -172,7 +173,7 @@ export function FullRecentView({
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
                 }}
-                className="w-40 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-brand-primary/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
+                className="w-28 sm:w-56 pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-brand-primary/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
               />
               {searchQuery && (
                 <button
