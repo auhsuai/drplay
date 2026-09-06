@@ -14,7 +14,7 @@ import type { DriveItem } from "../../types";
 
 // Phase B fix (2026-08-23): the highlight-scroll effect had no consume-once
 // latch keyed by highlightedFileId.ts, so every new filteredItems identity
-// inside the highlight window (upload ticks, search, Dexie writes) re-ran the
+// inside the highlight window (search refreshes, Dexie writes) re-ran the
 // effect and re-yanked scrollToIndex(center). These tests pin:
 //   B2 — data churn with the SAME ts scrolls exactly once;
 //   pagination path — switching to the target page still scrolls exactly once
@@ -60,13 +60,6 @@ vi.mock("../../utils/normalizeText", () => ({
 vi.mock("../../hooks/useDriveExplorer", () => ({
   useDriveExplorer: useDriveExplorerMock,
   ITEMS_PER_PAGE: 5,
-}));
-
-// uploadManager stays REAL (isUploading drives Select All); only the unmount
-// cleanup hook is spied out — same split as MainContent.windowing.test.tsx.
-vi.mock("../../utils/uploadManager", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../utils/uploadManager")>()),
-  clearUploadedTint: vi.fn(),
 }));
 
 vi.mock("./components/SongCard", () => ({
@@ -141,7 +134,7 @@ const baseProps = {
 // highlight object is carried through every churn: its ts is what must stop
 // the re-scroll while the data identity changes underneath it. The churned
 // listing keeps the SAME shape (itemCount) so any highlighted id stays
-// resolvable — only the array identity is new, like real Dexie/upload ticks.
+// resolvable — only the array identity is new, like real Dexie writes.
 function simulateDataChurn(
   rerender: (ui: React.ReactElement) => void,
   highlight: { id: string; ts: number; folderId: string },
@@ -194,7 +187,7 @@ describe("MainContent highlight-scroll consume-once latch (Phase B fix 2026-08-2
     expect(scrollToIndexSpy).toHaveBeenCalledTimes(1);
     expect(scrollToIndexSpy).toHaveBeenCalledWith(1, { align: "center" });
 
-    // Upload tick / search / Dexie write: brand-new array identities, same ts.
+    // Search refresh / Dexie write: brand-new array identities, same ts.
     simulateDataChurn(rerender, highlight);
     simulateDataChurn(rerender, highlight);
 

@@ -14,9 +14,6 @@ interface DefaultMenuItemsProps {
     setIsOpen: (o: boolean) => void,
   ) => void;
   openDeleteConfirm: (item: DriveItem) => void;
-  uploadingBlocked: (extraClass: string) => string;
-  isTargetUploading: boolean;
-  uploadBlockedTitle: string | undefined;
   setIsOpen: (open: boolean) => void;
   onClose?: (() => void) | undefined;
   onSelectMultiple?: (() => void) | undefined;
@@ -33,9 +30,6 @@ export function DefaultMenuItems({
   token,
   handleDownloadClick,
   openDeleteConfirm,
-  uploadingBlocked,
-  isTargetUploading,
-  uploadBlockedTitle,
   setIsOpen,
   onClose,
   onSelectMultiple,
@@ -58,9 +52,7 @@ export function DefaultMenuItems({
               onClose?.();
               onSelectMultiple?.();
             }}
-            className={uploadingBlocked(MENU_ITEM_BASE_CLASS)}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={MENU_ITEM_BASE_CLASS}
             iconClassName="w-4 h-4 text-gray-400 group-hover:text-brand-primary"
             truncateLabel={false}
           />
@@ -79,9 +71,7 @@ export function DefaultMenuItems({
                 onClose?.();
               }
             }}
-            className={uploadingBlocked(MENU_ITEM_BASE_CLASS)}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={MENU_ITEM_BASE_CLASS}
           />
           <MoreMenuItem
             icon={Trash2}
@@ -98,9 +88,7 @@ export function DefaultMenuItems({
                 onClose?.();
               }
             }}
-            className={uploadingBlocked(MENU_ITEM_DELETE_CLASS)}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={MENU_ITEM_DELETE_CLASS}
           />
         </>
       )}
@@ -112,11 +100,7 @@ export function DefaultMenuItems({
           onClick={(e) => {
             handleDownloadClick(e, track, setIsOpen);
           }}
-          className={uploadingBlocked(
-            `${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`,
-          )}
-          disabled={isTargetUploading}
-          title={uploadBlockedTitle}
+          className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
         />
       )}
     </>

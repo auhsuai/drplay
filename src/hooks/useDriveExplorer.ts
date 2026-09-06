@@ -9,12 +9,10 @@ export const ITEMS_PER_PAGE = 50;
 /**
  * Drive explorer logic for one folder view: keeps the local Dexie mirror warm
  * (on-demand Drive pagination when a folder has no cached rows), derives the
- * sorted/pinned item list, search (global name search over the local DB),
- * pagination, and the folder/bulk operations (create folder, bulk delete,
- * bulk move) — with items still uploading excluded from bulk ops. One hook
- * per open folder; pass the current folder + token so it re-fetches on
- * navigation. Uploads pin to the top of the list while active and keep their
- * freshly-done green check visible via uploadManager state.
+ * sorted item list, search (global name search over the local DB), pagination,
+ * and the folder/bulk operations (create folder, bulk delete, bulk move).
+ * One hook per open folder; pass the current folder + token so it re-fetches
+ * on navigation.
  * @param currentFolderId Drive id of the folder being explored.
  * @param currentFolderName Its display name (used for track parentName).
  * @param token Drive access token; null (signed out) disables network ops.

@@ -177,7 +177,7 @@ describe("schema v10 migration", () => {
         .equals(["other@example.com", "folderA"])
         .count(),
     ).toBe(0);
-    // Standalone "id" index kept for the upload queue ghost sweep.
+    // Standalone "id" index survives the v10 migration.
     const pending = await upgraded.files
       .where("id")
       .startsWith("pending-")

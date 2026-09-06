@@ -17,9 +17,6 @@ vi.mock("../utils/stopPlayback", () => ({
   stopPlaybackIfTrack: stopPlaybackIfTrackMock,
 }));
 
-const isUploadingMock = vi.hoisted(() => vi.fn());
-vi.mock("../utils/uploadManager", () => ({ isUploading: isUploadingMock }));
-
 const showErrorToastMock = vi.hoisted(() => vi.fn());
 vi.mock("../utils/simpleToast", () => ({
   showErrorToast: showErrorToastMock,
@@ -38,7 +35,6 @@ function makeItem(overrides: Partial<DriveItem> = {}): DriveItem {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  isUploadingMock.mockReturnValue(false);
   deleteFileMock.mockResolvedValue(undefined);
   dbMock.files.delete.mockResolvedValue(undefined);
 });

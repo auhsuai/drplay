@@ -15,12 +15,10 @@ import { NewFolderModal } from "./components/NewFolderModal";
 
 import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
 import { useEventListener } from "../../hooks/useEventListener";
-import { isUploading, clearUploadedTint } from "../../utils/uploadManager";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { PaginationControls } from "./components/PaginationControls";
-import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 import { SkeletonRowList } from "../components/Skeleton";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
@@ -107,10 +105,6 @@ export const MainContent = React.memo(function MainContent({
   const [debugTotalPages, setDebugTotalPages] = React.useState<number | null>(
     null,
   );
-  // While a native drag is in flight (DropZone announces it), the header
-  // chrome and pagination hide so the drop target area is unambiguous; the
-  // file-list container also doubles as the scoped dim region ([data-drop-region]).
-  const [isDragActive, setIsDragActive] = React.useState(false);
 
   // Recompute the skeleton row count on resize so the loading state keeps
   // filling the list area after a window size change.
@@ -134,24 +128,8 @@ export const MainContent = React.memo(function MainContent({
     sortOption,
   );
 
-  const handleDragActive = (e: Event) => {
-    // detail is typed | null because a CustomEvent constructed without the
-    // detail option defaults to null at runtime.
-    const detail = (e as CustomEvent<{ active: boolean } | null>).detail;
-    setIsDragActive(detail?.active ?? false);
-  };
-  useEventListener(DRAG_ACTIVE_EVENT, handleDragActive);
-
   useEffect(() => {
     isInitialMount.current = false;
-  }, []);
-
-  // Leaving the My Drive tab unmounts MainContent â€” clear every transient
-  // "uploaded" check so a fresh visit shows no stale completion tint.
-  useEffect(() => {
-    return () => {
-      clearUploadedTint();
-    };
   }, []);
 
   // Keyboard shortcuts
@@ -214,7 +192,7 @@ export const MainContent = React.memo(function MainContent({
   const virtualizedListRef = useRef<VirtualizedSongListHandle>(null);
 
   // Consume-once latch for highlight scrolling: the ts of the last locate we
-  // actually scrolled to. Data churn (upload ticks, search, Dexie writes)
+  // actually scrolled to. Data churn (search refreshes, Dexie writes)
   // keeps re-creating filteredItems while the SAME highlight is active — the
   // effect re-runs on every new identity but must not re-yank the viewport:
   // one locate = one scroll.
@@ -335,7 +313,7 @@ export const MainContent = React.memo(function MainContent({
 
       <div
         data-testid="main-header-chrome"
-        className={`sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200 ${isDragActive ? "opacity-0 pointer-events-none" : "opacity-100"}`}
+        className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200"
       >
         <TopNavigationBar
           isSelectionMode={explorer.isSelectionMode}
@@ -369,14 +347,7 @@ export const MainContent = React.memo(function MainContent({
           onToggleSelectAll={() => {
             explorer.setSelectedIds((prev) => {
               if (prev.size === explorer.filteredItems.length) return new Set();
-              // Uploading items must never join the selection (their pending
-              // rows cannot be bulk-deleted/moved); Select All picks only the
-              // items that are safe to operate on.
-              return new Set(
-                explorer.filteredItems
-                  .filter((i) => !isUploading(i.id))
-                  .map((i) => i.id),
-              );
+              return new Set(explorer.filteredItems.map((i) => i.id));
             });
           }}
           onBulkMoveClick={handleBulkMoveClick}
@@ -441,7 +412,7 @@ export const MainContent = React.memo(function MainContent({
 
             <div
               data-testid="main-pagination-chrome"
-              className={`sticky bottom-0 py-1 transition-opacity duration-200 ${isDragActive ? "opacity-0 pointer-events-none" : "opacity-100"}`}
+              className="sticky bottom-0 py-1 transition-opacity duration-200"
             >
               <PaginationControls
                 currentPage={explorer.currentPage}

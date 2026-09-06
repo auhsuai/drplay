@@ -4,9 +4,7 @@ import { db, type DriveFile } from "./db";
 import {
   canonicalParent,
   upsertFileRows,
-  upsertPendingCardRows,
   wipeFileRowsForUser,
-  type PendingFileCard,
   type UpsertableFileRow,
 } from "./fileRows";
 import { ROOT_FOLDER_ID } from "../utils/driveConstants";
@@ -223,108 +221,6 @@ describe("upsertFileRows", () => {
         ROOT_FOLDER_ID,
       );
     });
-  });
-});
-
-// Pending upload cards: synthesized db.files rows standing in for in-flight
-// uploads BEFORE Drive knows the file exists (ids "pending-<uuid>"). They have
-// no Drive response behind them, so there is no parents[] to canonically
-// derive from — the card's self-managed parentId IS the truth for that row.
-describe("upsertPendingCardRows", () => {
-  afterEach(async () => {
-    await db.files.clear();
-  });
-
-  function makeCard(
-    overrides: Partial<PendingFileCard> & Pick<PendingFileCard, "id">,
-  ): PendingFileCard {
-    return {
-      name: "song.mp3",
-      mimeType: "audio/mpeg",
-      parentId: "folder-K",
-      isFolder: false,
-      ...overrides,
-    };
-  }
-
-  it("keeps the card's self-managed parentId verbatim (no canonical root fallback)", async () => {
-    await upsertPendingCardRows(
-      [makeCard({ id: "pending-1" })],
-      "user@example.com",
-    );
-
-    const row = await db.files.get(["user@example.com", "pending-1"]);
-    expect(row?.parentId).toBe("folder-K");
-  });
-
-  it("stamps ownerEmail and trashed=false, defaulting modifiedTime when absent", async () => {
-    const before = Date.now();
-    await upsertPendingCardRows(
-      [makeCard({ id: "pending-2" })],
-      "owner@example.com",
-    );
-
-    const row = await db.files.get(["owner@example.com", "pending-2"]);
-    expect(row).toMatchObject({
-      id: "pending-2",
-      name: "song.mp3",
-      mimeType: "audio/mpeg",
-      parentId: "folder-K",
-      trashed: false,
-      isFolder: false,
-      userEmail: "owner@example.com",
-    });
-    expect(row?.modifiedTime).toBeDefined();
-    expect(Date.parse(row?.modifiedTime ?? "")).toBeGreaterThanOrEqual(before);
-  });
-
-  it("honours an explicit modifiedTime instead of defaulting", async () => {
-    await upsertPendingCardRows(
-      [makeCard({ id: "pending-3", modifiedTime: "2026-01-01T00:00:00Z" })],
-      "user@example.com",
-    );
-
-    expect(
-      (await db.files.get(["user@example.com", "pending-3"]))?.modifiedTime,
-    ).toBe("2026-01-01T00:00:00Z");
-  });
-
-  it("is idempotent per PK: re-putting the same card overwrites, never duplicates", async () => {
-    await upsertPendingCardRows(
-      [makeCard({ id: "pending-4", parentId: "folder-A" })],
-      "user@example.com",
-    );
-    await upsertPendingCardRows(
-      [makeCard({ id: "pending-4", parentId: "folder-B" })],
-      "user@example.com",
-    );
-
-    const all = await db.files.toArray();
-    expect(all).toHaveLength(1);
-    expect(all[0]?.parentId).toBe("folder-B");
-  });
-
-  it("throws a named TypeError on empty/whitespace ownerEmail BEFORE writing anything", async () => {
-    await upsertPendingCardRows(
-      [makeCard({ id: "keep-pending" })],
-      "ok@example.com",
-    );
-
-    await expect(
-      upsertPendingCardRows([makeCard({ id: "x" })], ""),
-    ).rejects.toThrow(TypeError);
-    await expect(
-      upsertPendingCardRows([makeCard({ id: "x" })], "   "),
-    ).rejects.toThrow(/ownerEmail/);
-    await expect(
-      upsertPendingCardRows([makeCard({ id: "nope" })], ""),
-    ).rejects.toThrow(TypeError);
-
-    // Fail fast: the invalid calls must not have touched existing rows.
-    expect(await db.files.get(["ok@example.com", "nope"])).toBeUndefined();
-    expect(
-      await db.files.get(["ok@example.com", "keep-pending"]),
-    ).toBeDefined();
   });
 });
 

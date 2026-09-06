@@ -3,10 +3,6 @@ import { createPortal } from "react-dom";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
-import {
-  isUploading,
-  subscribe as subscribeUploads,
-} from "../../utils/uploadManager";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
@@ -29,12 +25,7 @@ import {
   getContextMenuStyle,
   shouldOpenUpwards,
 } from "./MoreMenu/menuPositioning";
-import {
-  EVENT_LOCATE_FILE,
-  MENU_ITEM_UPLOADING_BLOCKED_CLASS,
-  bumpUploadStatusVersion,
-  getUploadStatusVersion,
-} from "./MoreMenu/constants";
+import { EVENT_LOCATE_FILE } from "./MoreMenu/constants";
 import type { MoreMenuVariant } from "./MoreMenu/constants";
 
 export type { MoreMenuVariant } from "./MoreMenu/constants";
@@ -93,28 +84,6 @@ export function MoreMenu({
   // legacy switch so PlayerBar does not need to change its call site.
   const mode: MoreMenuVariant =
     variant ?? (isPlayerBarMode ? "playerbar" : "default");
-
-  // Re-render whenever an upload starts/finishes so the destructive actions
-  // pick up the freshest isUploading() verdict while the menu is open (a menu
-  // opened before the upload would otherwise keep stale enabled buttons).
-  React.useSyncExternalStore(
-    (onStoreChange) =>
-      subscribeUploads(() => {
-        bumpUploadStatusVersion();
-        onStoreChange();
-      }),
-    () => getUploadStatusVersion(),
-  );
-
-  const guardedId = driveItem?.id ?? track?.id;
-  const isTargetUploading = guardedId !== undefined && isUploading(guardedId);
-  const uploadBlockedTitle = isTargetUploading
-    ? t("upload.uploading_blocked")
-    : undefined;
-  const uploadingBlocked = (extraClass: string): string =>
-    isTargetUploading
-      ? `${extraClass}${MENU_ITEM_UPLOADING_BLOCKED_CLASS}`
-      : extraClass;
 
   // -- Hooks --
   const {
@@ -207,9 +176,6 @@ export function MoreMenu({
           track={track}
           handleDownloadClick={handleDownloadClick}
           handleNavigateClick={handleNavigateClick}
-          uploadingBlocked={uploadingBlocked}
-          isTargetUploading={isTargetUploading}
-          uploadBlockedTitle={uploadBlockedTitle}
           setIsOpen={setIsOpen}
           t={t}
         />
@@ -221,9 +187,6 @@ export function MoreMenu({
           handleDownloadClick={handleDownloadClick}
           handleNavigateClick={handleNavigateClick}
           openDeleteConfirm={openDeleteConfirm}
-          uploadingBlocked={uploadingBlocked}
-          isTargetUploading={isTargetUploading}
-          uploadBlockedTitle={uploadBlockedTitle}
           setIsOpen={setIsOpen}
           onClose={onClose}
           t={t}
@@ -235,9 +198,6 @@ export function MoreMenu({
           token={token}
           handleDownloadClick={handleDownloadClick}
           openDeleteConfirm={openDeleteConfirm}
-          uploadingBlocked={uploadingBlocked}
-          isTargetUploading={isTargetUploading}
-          uploadBlockedTitle={uploadBlockedTitle}
           setIsOpen={setIsOpen}
           onClose={onClose}
           onSelectMultiple={onSelectMultiple}
@@ -260,9 +220,6 @@ export function MoreMenu({
         playlists={playlists}
         handleAddToPlaylist={handleAddToPlaylist}
         handleToggleSubmenu={handleToggleSubmenu}
-        uploadingBlocked={uploadingBlocked}
-        isTargetUploading={isTargetUploading}
-        uploadBlockedTitle={uploadBlockedTitle}
         setIsOpen={setIsOpen}
         onClose={onClose}
         t={t}

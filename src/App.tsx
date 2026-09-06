@@ -25,8 +25,6 @@ import { useAuth } from "./hooks/useAuth";
 import { usePlayer } from "./hooks/usePlayer";
 import { useDrive } from "./hooks/useDrive";
 import { useTheme } from "./hooks/useTheme";
-import { resumeInterruptedUploads } from "./utils/uploadManager";
-import { getCurrentUserEmail } from "./utils/storageKeys";
 
 import { useServiceWorker } from "./hooks/useServiceWorker";
 import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
@@ -293,16 +291,6 @@ function App() {
             refresh_token: tokens.refresh_token,
             expires_in: tokens.expires_in,
           });
-          // Fire-and-forget: resumeInterruptedUploads guards itself against
-          // double-runs and never rejects (every step is caught inside — a
-          // failure only surfaces as a warn log and/or the aggregated
-          // interrupted toast). getCurrentUserEmail is the SAME source the
-          // manager persists session rows under, so the scan always queries
-          // the exact key the interrupted rows were written with.
-          void resumeInterruptedUploads(
-            tokens.access_token,
-            getCurrentUserEmail(),
-          );
         }}
       />
 

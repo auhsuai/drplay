@@ -15,9 +15,6 @@ interface RecentMenuItemsProps {
   ) => void;
   handleNavigateClick: (e: React.MouseEvent) => void;
   openDeleteConfirm: (item: DriveItem) => void;
-  uploadingBlocked: (extraClass: string) => string;
-  isTargetUploading: boolean;
-  uploadBlockedTitle: string | undefined;
   setIsOpen: (open: boolean) => void;
   onClose?: (() => void) | undefined;
   t: import("i18next").TFunction;
@@ -30,9 +27,6 @@ export function RecentMenuItems({
   handleDownloadClick,
   handleNavigateClick,
   openDeleteConfirm,
-  uploadingBlocked,
-  isTargetUploading,
-  uploadBlockedTitle,
   setIsOpen,
   onClose,
   t,
@@ -49,9 +43,7 @@ export function RecentMenuItems({
             setIsOpen(false);
             onClose?.();
           }}
-          className={uploadingBlocked(MENU_ITEM_DELETE_CLASS)}
-          disabled={isTargetUploading}
-          title={uploadBlockedTitle}
+          className={MENU_ITEM_DELETE_CLASS}
         />
       )}
 
@@ -63,11 +55,7 @@ export function RecentMenuItems({
             onClick={(e) => {
               handleDownloadClick(e, track, setIsOpen);
             }}
-            className={uploadingBlocked(
-              `${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`,
-            )}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
           />
 
           <MoreMenuItem

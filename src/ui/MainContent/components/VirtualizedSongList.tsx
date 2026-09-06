@@ -3,18 +3,6 @@ import { useVirtualizer, type ScrollToOptions } from "@tanstack/react-virtual";
 import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
 import { SongCard } from "./SongCard";
-import {
-  getUploadProgress,
-  getUploadState,
-  isUploading,
-  subscribe as subscribeUploads,
-} from "../../../utils/uploadManager";
-
-// Monotonic upload-status version: bumped on every uploadManager notify so the
-// virtualized list can re-derive each card's uploadState. Module-level (not
-// component state) so a list remounted mid-upload still starts from the latest
-// version — useSyncExternalStore re-reads the snapshot right after subscribing.
-let uploadVersion = 0;
 
 // Estimated height of one virtualized row: SongCard (~80px) + pb-3 wrapper (12px).
 // Must match the real rendered height or the virtualizer miscalculates scroll
@@ -77,25 +65,6 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
     directDomUpdates: true,
   });
 
-  // External-store subscription to uploadManager: every status change bumps
-  // uploadVersion and re-renders this list; each visible card then re-derives
-  // its own uploadState via getUploadState(item.id) and the SongCard memo
-  // comparator skips cards whose state did not change.
-  // Stable subscribe identity: useSyncExternalStore re-subscribes every time a
-  // different subscribe function is passed on a re-render (react.dev caveat) —
-  // this list re-renders on every scroll frame, so memoize the wrapper to keep
-  // the subscription stable.
-  const subscribeUploadsStable = React.useCallback(
-    (onStoreChange: () => void) =>
-      subscribeUploads(() => {
-        uploadVersion += 1;
-        onStoreChange();
-      }),
-    [],
-  );
-
-  React.useSyncExternalStore(subscribeUploadsStable, () => uploadVersion);
-
   React.useImperativeHandle(ref, () => ({
     scrollToIndex: (index, options) => {
       rowVirtualizer.scrollToIndex(index, options);
@@ -106,10 +75,6 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
 
   const handleToggleSelection = React.useCallback(
     (id: string) => {
-      // Upload race guard (UI layer): an uploading item must never be toggled
-      // into the selection — bulk ops on it are impossible and the pending row
-      // disappears when the upload finishes.
-      if (isUploading(id)) return;
       setSelectedIds((prev) => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id);
@@ -122,7 +87,6 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
 
   const handleEnableSelectionMode = React.useCallback(
     (id: string) => {
-      if (isUploading(id)) return;
       setIsSelectionMode(true);
       setSelectedIds(new Set([id]));
     },
@@ -180,8 +144,6 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
               onEnableSelectionMode={handleEnableSelectionMode}
               onBulkMoveClick={onBulkMoveClick}
               onBulkDeleteClick={onBulkDeleteClick}
-              uploadState={getUploadState(item.id)}
-              uploadProgress={getUploadProgress(item.id)}
             />
           </div>
         );

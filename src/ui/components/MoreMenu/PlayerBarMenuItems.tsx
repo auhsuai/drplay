@@ -11,9 +11,6 @@ interface PlayerBarMenuItemsProps {
     setIsOpen: (o: boolean) => void,
   ) => void;
   handleNavigateClick: (e: React.MouseEvent) => void;
-  uploadingBlocked: (extraClass: string) => string;
-  isTargetUploading: boolean;
-  uploadBlockedTitle: string | undefined;
   setIsOpen: (open: boolean) => void;
   t: import("i18next").TFunction;
 }
@@ -22,9 +19,6 @@ export function PlayerBarMenuItems({
   track,
   handleDownloadClick,
   handleNavigateClick,
-  uploadingBlocked,
-  isTargetUploading,
-  uploadBlockedTitle,
   setIsOpen,
   t,
 }: PlayerBarMenuItemsProps) {
@@ -38,11 +32,7 @@ export function PlayerBarMenuItems({
             onClick={(e) => {
               handleDownloadClick(e, track, setIsOpen);
             }}
-            className={uploadingBlocked(
-              `${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`,
-            )}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
           />
 
           <MoreMenuItem

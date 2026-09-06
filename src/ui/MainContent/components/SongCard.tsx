@@ -1,27 +1,17 @@
 import React, { useState } from "react";
-import {
-  Folder,
-  Music,
-  Square,
-  SquareCheckBig,
-  LoaderCircle,
-} from "lucide-react";
+import { Folder, Music, Square, SquareCheckBig } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
 import { formatBytes } from "../../../utils/formatBytes";
-import { dismissUploaded } from "../../../utils/uploadManager";
-import type { UploadState } from "../../../utils/uploadManager";
 import { MoreMenu } from "../../components/MoreMenu";
 import type { MoreMenuVariant } from "../../components/MoreMenu";
 import { formatDuration } from "../utils/formatDuration";
-import { UploadBadge } from "./UploadBadge";
 import {
   useHighlightFlash,
   ACCENT_CARD_TINT,
   ACCENT_CARD_TINT_HOVER,
 } from "../hooks/useHighlightFlash";
-import { useDragFolderHover } from "../hooks/useDragFolderHover";
 import { useSongCardMetadata } from "../hooks/useSongCardMetadata";
 
 interface SongCardProps {
@@ -45,8 +35,6 @@ interface SongCardProps {
   menuVariant?: MoreMenuVariant;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
-  uploadState?: UploadState | undefined;
-  uploadProgress?: number | undefined;
 }
 
 // Card state precedence mirrors the old nested ternary: flash overrides
@@ -92,8 +80,6 @@ export const SongCard = React.memo(
     menuVariant,
     onBulkMoveClick,
     onBulkDeleteClick,
-    uploadState = "none",
-    uploadProgress,
   }: SongCardProps) {
     const { t } = useTranslation();
     const cardRef = React.useRef<HTMLDivElement>(null);
@@ -108,39 +94,15 @@ export const SongCard = React.memo(
       highlightTrigger,
       cardRef,
     });
-    const isDragHovered = useDragFolderHover({
-      itemId: item.id,
-      isFolder: item.isFolder,
-    });
     const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
     const [isThreeDotsMenuOpen, setIsThreeDotsMenuOpen] = useState(false);
     const [contextMenuPos, setContextMenuPos] = useState<{
       x: number;
       y: number;
     } | null>(null);
-    // Drag-over ("drop target") visual mirrors the real mouse-hover classes 1:1
-    // (shadow-md + -translate-y-1, gray bg in the idle branch, accent tint in
-    // the selected branch) but rendered unconditionally — there is no :hover
-    // state while the OS drag is in flight. The bg classes carry the Tailwind
-    // important modifier (trailing !) because the card base bg (`bg-[#F8F9FA]
-    // dark:bg-[#202124]`) has the same specificity and generated-CSS order
-    // would otherwise decide — the existing bg-[#4285F4]/10! icon pattern is
-    // the same trick. The flash branch keeps its own bg: it is transient
-    // (400ms) and already overrides every other state.
-    const dragHoverClasses = isDragHovered
-      ? `shadow-md -translate-y-1 ${isSelected ? "bg-brand-primary/20! dark:bg-brand-primary/30!" : isFlashOn ? "" : "bg-gray-100! dark:bg-[#2a2b2f]!"}`
-      : "";
-    // Shared by the idle and uploading title rows; the uploading row adds
-    // flex-1 min-w-0 so the h3 truncates instead of pushing the ring out.
-    // Drag-over mirrors the real group-hover accent on the title too — during
-    // an OS drag there is no :hover, so the accent must be forced on.
-    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isDragHovered || isFlashOn || isPlaying ? "text-brand-primary!" : "text-gray-800 dark:text-gray-200"} ${isDragHovered ? "" : "group-hover:text-brand-primary"}`;
+    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isFlashOn || isPlaying ? "text-brand-primary!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-primary`;
 
     const handleCardActivate = () => {
-      // Upload race guard (UI layer): an item that is still uploading must not
-      // play / open / select. pointer-events-none handles the mouse; keyboard
-      // (Enter/Space) reaches this handler directly, so the guard lives here.
-      if (uploadState === "uploading") return;
       if (isSelectionMode) {
         onToggleSelection?.(item.id);
         return;
@@ -149,9 +111,6 @@ export const SongCard = React.memo(
         onOpenFolder(item.id, meta.title);
         return;
       }
-      // Playing the item clears the transient "uploaded" check — the row goes
-      // back to the idle MoreMenu (the check is only a completion cue).
-      dismissUploaded(item.id);
       const track = item.trackInfo;
       if (!track) return;
       onPlay({
@@ -183,10 +142,10 @@ export const SongCard = React.memo(
             setContextMenuPos({ x: e.clientX, y: e.clientY });
             setIsContextMenuOpen(true);
           }}
-          className={`group group/upload w-full rounded-xl cursor-pointer ${uploadState === "uploading" ? "opacity-50 pointer-events-none" : ""}`}
+          className={`group w-full rounded-xl cursor-pointer`}
         >
           <div
-            className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${cardStateClass(isFlashOn, isSelected, isPlaying)} ${dragHoverClasses}`}
+            className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${cardStateClass(isFlashOn, isSelected, isPlaying)}`}
           >
             {isSelectionMode && (
               <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
@@ -252,45 +211,32 @@ export const SongCard = React.memo(
             </div>
             {!hideMenu && (
               <div
-                className={`transition-opacity ml-2 shrink-0 ${uploadState === "uploading" || uploadState === "uploaded" || isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                className={`transition-opacity ml-2 shrink-0 ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
               >
-                {uploadState === "uploading" || uploadState === "uploaded" ? (
-                  <UploadBadge
-                    state={uploadState}
-                    progress={uploadProgress}
-                    itemId={item.id}
-                  />
-                ) : (
-                  <MoreMenu
-                    track={item.trackInfo}
-                    driveItem={item}
-                    token={token}
-                    currentFolderId={currentFolderId}
-                    currentFolderName={currentFolderName}
-                    folderHistory={folderHistory}
-                    onRefresh={onRefresh}
-                    onRemoveItem={onRemoveItem}
-                    variant={menuVariant}
-                    forceOpen={isContextMenuOpen}
-                    onClose={() => {
-                      setIsContextMenuOpen(false);
-                      setContextMenuPos(null);
-                    }}
-                    anchorPoint={contextMenuPos}
-                    onOpenChange={setIsThreeDotsMenuOpen}
-                    onSelectMultiple={() => {
-                      onEnableSelectionMode?.(item.id);
-                    }}
-                    isBulkSelected={isSelectionMode && isSelected}
-                    onBulkMoveClick={onBulkMoveClick}
-                    onBulkDeleteClick={onBulkDeleteClick}
-                  />
-                )}
-              </div>
-            )}
-            {uploadState === "parent-uploading" && (
-              <div className="absolute top-2 right-2 pointer-events-none">
-                <LoaderCircle className="w-4 h-4 animate-spin text-brand-primary" />
+                <MoreMenu
+                  track={item.trackInfo}
+                  driveItem={item}
+                  token={token}
+                  currentFolderId={currentFolderId}
+                  currentFolderName={currentFolderName}
+                  folderHistory={folderHistory}
+                  onRefresh={onRefresh}
+                  onRemoveItem={onRemoveItem}
+                  variant={menuVariant}
+                  forceOpen={isContextMenuOpen}
+                  onClose={() => {
+                    setIsContextMenuOpen(false);
+                    setContextMenuPos(null);
+                  }}
+                  anchorPoint={contextMenuPos}
+                  onOpenChange={setIsThreeDotsMenuOpen}
+                  onSelectMultiple={() => {
+                    onEnableSelectionMode?.(item.id);
+                  }}
+                  isBulkSelected={isSelectionMode && isSelected}
+                  onBulkMoveClick={onBulkMoveClick}
+                  onBulkDeleteClick={onBulkDeleteClick}
+                />
               </div>
             )}
           </div>
@@ -310,9 +256,7 @@ export const SongCard = React.memo(
       prev.isSelected === next.isSelected &&
       prev.isSelectionMode === next.isSelectionMode &&
       prev.isHighlighted === next.isHighlighted &&
-      prev.highlightTrigger === next.highlightTrigger &&
-      prev.uploadState === next.uploadState &&
-      prev.uploadProgress === next.uploadProgress
+      prev.highlightTrigger === next.highlightTrigger
     );
   },
 );

@@ -31,7 +31,7 @@ export interface DebugEventMap {
 }
 
 // Same window-CustomEvent pattern the rest of the app uses (favorites.ts,
-// playlists.ts, upload/events.ts): a plain dispatch, no try/catch — dispatching
+// playlists.ts): a plain dispatch, no try/catch — dispatching
 // without listeners is a safe no-op, and a throw here would be a real bug that
 // must surface instead of being swallowed.
 export function dispatchDebugEvent<K extends keyof DebugEventMap>(

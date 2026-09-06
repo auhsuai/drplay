@@ -66,28 +66,6 @@ export interface MetadataCacheRow {
   entry: unknown;
 }
 
-// One row per ACTIVE or INTERRUPTED upload (schema v9). Written by
-// uploadManager at processEntry (status 'active'), deleted at any terminal
-// transition (done/error/cancel). On the next launch, rows whose upload was
-// interrupted mid-flight are the resume source (slice 5.2); 'bytes' rows carry
-// no diskPath — their payload is gone with the old process, so they can only
-// be reported as interrupted, never resumed.
-export interface UploadSessionRow {
-  id: string; // = entry.id ('pending-<uuid>') — PK
-  userEmail: string; // per-user (index)
-  name: string;
-  isFolder: boolean;
-  kind: "diskFile" | "folderChildFile" | "folderRoot" | "folderChild" | "bytes";
-  diskPath?: string; // undefined cho bytes
-  parentId: string;
-  totalSize?: number; // undefined khi chưa stat / bytes
-  uploadUri?: string; // session URI Google — undefined khi chưa initiate
-  clientGeneratedId?: string;
-  status: "active" | "interrupted";
-  createdAt: number;
-  updatedAt: number;
-}
-
 /**
  * Local IndexedDB mirror of the signed-in user's Drive data (file list,
  * favorites, play history, play counts, folder visits, error logs, app
@@ -114,7 +92,6 @@ export class DriveDatabase extends Dexie {
   playCounts!: Table<PlayCountRow, [string, string]>;
   folderVisits!: Table<FolderVisitRow, [string, string]>;
   metadataCache!: Table<MetadataCacheRow, string>;
-  uploadSessions!: Table<UploadSessionRow, string>; // Primary key is 'id'
   // Compound-key tables that replaced the raw-id versions (schema v7).
   recentTracksV2!: Table<RecentTrackRow, [string, string]>;
   playCountsV2!: Table<PlayCountRow, [string, string]>;
@@ -273,9 +250,8 @@ export class DriveDatabase extends Dexie {
     // so — same precedent as v7 — this version adds filesV2 with a compound
     // [userEmail+id] primary key and copies the old rows into it. The
     // standalone "id" index is kept ON PURPOSE even though id is part of the
-    // compound PK: upload/queue.ts ghost sweep reads
-    // where("id").startsWith("pending-") across owners, and
-    // [userEmail+parentId] gives the listing its per-user folder query.
+    // compound PK: [userEmail+parentId] gives the listing its per-user folder
+    // query.
     this.version(10)
       .stores({
         filesV2:
@@ -314,6 +290,15 @@ export class DriveDatabase extends Dexie {
           })),
         );
       });
+
+    // Version 11 drops the uploadSessions table (added in v9 for the
+    // upload-resume feature) — the file/folder upload mechanism has been
+    // removed from the app. Deleting a table via `null` in a new version is
+    // the Dexie-documented pattern (same as v8's raw-id table drops); old
+    // rows are discarded, every other table is untouched.
+    this.version(11).stores({
+      uploadSessions: null,
+    });
 
     // Bind the public table names to the new compound-key tables so app code
     // (history.ts / favorites.ts) keeps talking to db.recentTracks etc.

@@ -8,7 +8,6 @@ import {
   fireEvent,
 } from "@testing-library/react";
 import { MainContent } from "./MainContent";
-import { DRAG_ACTIVE_EVENT } from "../components/DropZone";
 import type { DriveItem } from "../../types";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 
@@ -55,17 +54,6 @@ const { useDriveExplorerMock } = vi.hoisted(() => ({
 
 vi.mock("../../hooks/useDriveExplorer", () => ({
   useDriveExplorer: useDriveExplorerMock,
-}));
-
-// uploadManager stays REAL (isUploading drives Select All) except
-// clearUploadedTint — spied so the unmount cleanup can be asserted.
-const { clearUploadedTintMock } = vi.hoisted(() => ({
-  clearUploadedTintMock: vi.fn(),
-}));
-
-vi.mock("../../utils/uploadManager", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../utils/uploadManager")>()),
-  clearUploadedTint: clearUploadedTintMock,
 }));
 
 vi.mock("./components/SongCard", () => ({
@@ -172,7 +160,7 @@ describe("MainContent paginated rendering", () => {
   });
 });
 
-describe("MainContent drag-active chrome hiding (DRAG_ACTIVE_EVENT)", () => {
+describe("MainContent file-list container", () => {
   beforeEach(() => {
     useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
   });
@@ -180,62 +168,10 @@ describe("MainContent drag-active chrome hiding (DRAG_ACTIVE_EVENT)", () => {
   afterEach(() => {
     cleanup();
   });
-
-  const dispatchDragActive = (active: boolean): void => {
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent(DRAG_ACTIVE_EVENT, { detail: { active } }),
-      );
-    });
-  };
 
   it("marks the file-list container as the drop region ([data-drop-region])", () => {
     render(<MainContent {...baseProps} />);
     expect(document.querySelector("[data-drop-region]")).not.toBeNull();
-  });
-
-  it("hides the header chrome (TopNavigationBar + SelectionToolbar) and pagination while dragging, restores on leave", () => {
-    useDriveExplorerMock.mockReturnValue({
-      ...makeExplorerState(makeItems(3)),
-      totalPages: 3,
-    });
-    render(<MainContent {...baseProps} />);
-    const chrome = screen.getByTestId("main-header-chrome");
-    const pagination = screen.getByTestId("main-pagination-chrome");
-    expect(chrome.className).toContain("opacity-100");
-    expect(pagination.className).toContain("opacity-100");
-
-    dispatchDragActive(true);
-    expect(chrome.className).toContain("opacity-0");
-    expect(chrome.className).toContain("pointer-events-none");
-    expect(pagination.className).toContain("opacity-0");
-
-    dispatchDragActive(false);
-    expect(chrome.className).not.toContain("opacity-0");
-    expect(pagination.className).not.toContain("opacity-0");
-  });
-});
-
-describe("MainContent clears the uploaded tint on unmount (tab switch)", () => {
-  beforeEach(() => {
-    clearUploadedTintMock.mockClear();
-    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
-  });
-
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("calls clearUploadedTint when unmounting (leaving My Drive tab → every uploaded check disappears)", () => {
-    const { unmount } = render(<MainContent {...baseProps} />);
-    expect(clearUploadedTintMock).not.toHaveBeenCalled();
-    unmount();
-    expect(clearUploadedTintMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not call clearUploadedTint while mounted", () => {
-    render(<MainContent {...baseProps} />);
-    expect(clearUploadedTintMock).not.toHaveBeenCalled();
   });
 });
 

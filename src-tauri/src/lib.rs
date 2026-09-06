@@ -127,31 +127,6 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
-// Extend the fs READ scope for the user-picked upload source (drag-drop or
-// folder picker). Directories are allowed recursively so walkDiskFolder can
-// descend; single files get a file pattern. The plugin's resolve_path checks
-// `fs_scope.scope.is_allowed()` (runtime-extended scope) as an OR against the
-// capability paths, so bare fs:allow-read-* capabilities + this extension are
-// sufficient (verified against plugins-workspace v2 fs commands.rs 2026-08-02).
-#[tauri::command]
-fn register_upload_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    use tauri_plugin_fs::FsExt;
-    // Dir-vs-file is decided on the canonical path so a symlink to a directory
-    // is registered recursively (the webview reads through the original link).
-    let canonical = validate_path_for_scope(&path)?;
-    let scope = app.fs_scope();
-    if canonical.is_dir() {
-        scope
-            .allow_directory(path, true)
-            .map_err(|e| format!("failed to extend fs scope for upload dir: {e}"))?;
-    } else {
-        scope
-            .allow_file(path)
-            .map_err(|e| format!("failed to extend fs scope for upload file: {e}"))?;
-    }
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivityEvent) {
     if let Some(webview_window) = window.get_webview_window("main") {
@@ -213,7 +188,6 @@ pub fn run() {
             login_google_native,
             refresh_google_token,
             register_download_path,
-            register_upload_path,
             update_minimize_to_tray,
             clear_local_cache,
             get_cache_info,

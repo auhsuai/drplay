@@ -7,7 +7,6 @@ import {
   Eraser,
   Archive,
   Cloud,
-  CloudUpload,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
@@ -18,9 +17,7 @@ import { CacheManagerModal } from "./components/CacheManagerModal";
 
 import type { ThemeType } from "../../hooks/useTheme";
 import { truncatePathMiddle } from "../../utils/truncatePath";
-import { useEffect, useState } from "react";
-import { subscribe, getEntries, cancelUpload } from "../../utils/uploadManager";
-import type { UploadEntry } from "../../utils/uploadManager";
+import { useState } from "react";
 import { useDownloadPathSetting } from "./useDownloadPathSetting";
 import { useSeedImport } from "./useSeedImport";
 
@@ -33,25 +30,6 @@ interface SettingsTabProps {
   setShowTrashScreen: (val: boolean) => void;
 }
 
-// Shown while a queued entry waits for its turn in the sequential upload queue.
-const QUEUED_UPLOAD_LABEL = "Queued...";
-// Upload progress is a 0..1 fraction; the UI renders it as a percentage.
-const PROGRESS_PERCENT_SCALE = 100;
-
-// The in-progress uploads section only lists live entries — terminal
-// (done/error) entries are pruned by the manager right after they notify.
-function isActiveUpload(entry: UploadEntry): boolean {
-  return entry.status === "queued" || entry.status === "uploading";
-}
-
-function uploadProgressLabel(entry: UploadEntry): string {
-  if (entry.status === "uploading") {
-    const percent = Math.round((entry.progress ?? 0) * PROGRESS_PERCENT_SCALE);
-    return `${String(percent)}%`;
-  }
-  return QUEUED_UPLOAD_LABEL;
-}
-
 export function SettingsTab({
   theme,
   setTheme,
@@ -62,20 +40,8 @@ export function SettingsTab({
 }: SettingsTabProps) {
   const { t } = useTranslation();
   const [showCacheManager, setShowCacheManager] = useState(false);
-  const [uploadEntries, setUploadEntries] = useState<UploadEntry[]>(getEntries);
   const { downloadPath, handlePickDownloadPath } = useDownloadPathSetting();
   const { importingSeed, handleImportSeed } = useSeedImport();
-
-  // Live snapshot of the upload queue: subscribe returns an unsubscribe, so
-  // the effect's cleanup unsubscribes on unmount (no leaked subscriber).
-  useEffect(() => {
-    const unsubscribeFromUploads = subscribe(() => {
-      setUploadEntries(getEntries());
-    });
-    return unsubscribeFromUploads;
-  }, []);
-
-  const activeUploads = uploadEntries.filter(isActiveUpload);
 
   return (
     <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto px-8 py-10 relative transition-colors duration-300">
@@ -114,50 +80,6 @@ export function SettingsTab({
               </button>
             </div>
           </div>
-
-          {/* In-progress uploads: hidden entirely while the queue is idle.
-              Entries disappear from this list the moment they turn terminal
-              (manager notifies + prunes), so cancel keeps working live. */}
-          {activeUploads.length > 0 && (
-            <div className="flex flex-col gap-2 mt-6">
-              <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
-                {t("settings.uploads_section")}
-              </h2>
-              <div className="flex flex-col">
-                {activeUploads.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="flex items-center justify-between py-4 pb-6"
-                  >
-                    <div className="flex items-center gap-4 min-w-0">
-                      <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
-                        <CloudUpload className="w-6 h-6 text-brand-primary" />
-                      </div>
-                      <div className="min-w-0">
-                        <p
-                          title={entry.name}
-                          className="text-base font-semibold text-gray-900 dark:text-gray-100 truncate"
-                        >
-                          {truncatePathMiddle(entry.name)}
-                        </p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {uploadProgressLabel(entry)}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        cancelUpload(entry.id);
-                      }}
-                      className="px-4 py-2 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
-                    >
-                      {t("settings.uploads_cancel")}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="flex flex-col gap-2 mt-6">
             <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">

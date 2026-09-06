@@ -94,13 +94,13 @@ function getErrorMessage(errData: unknown): string | null {
   return typeof message === "string" ? message : null;
 }
 
-// signal?: AbortSignal wires a caller cancel (uploadManager batch controller)
-// into the request; driveFetch already turns a caller abort into an immediate
-// non-retried rejection. Optional: callers like useDriveExplorer omit it.
+// signal?: AbortSignal wires a caller cancel into the request; driveFetch
+// already turns a caller abort into an immediate non-retried rejection.
+// Optional: callers like useDriveExplorer omit it.
 /**
  * Create a folder on Drive. Shared by the explorer's "new folder" flow and
- * the upload manager's folder batches (which pass a cancel signal so an
- * aborted upload cannot leave half-created folders behind).
+ * any other caller that passes a cancel signal so an aborted create cannot
+ * leave half-created folders behind.
  * @param token Drive access token.
  * @param name Display name of the new folder.
  * @param parentId Drive id of the parent folder.

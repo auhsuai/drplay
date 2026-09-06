@@ -58,16 +58,6 @@ vi.mock("../../utils/downloadPath", () => ({
   setCustomDownloadPath: vi.fn(),
 }));
 
-// The uploads section (slice 5.3) imports uploadManager, which transitively
-// pulls Tauri APIs (diskFs) that must not load in the jsdom env — the section
-// is covered in SettingsTab.test.tsx, so a minimal mock keeps this file
-// focused on the cache-toast flow.
-vi.mock("../../utils/uploadManager", () => ({
-  subscribe: () => () => {},
-  getEntries: () => [],
-  cancelUpload: vi.fn(),
-}));
-
 vi.mock("./components/LanguageDropdown", () => ({
   LanguageDropdown: () => null,
 }));
