@@ -67,6 +67,14 @@ export class NativeAudioEngine implements PlaybackEngine {
   //    so no seek(restoreA)/play(A) ever lands on the newer source.
   private playSeq = 0;
   private playChain: Promise<void> = Promise.resolve();
+  // Rapid-seek coalescing (latest-wins), the CF-2 mechanism applied to seek:
+  // seeks ride the SAME playChain FIFO (so a seek never interleaves with a
+  // running load's set_source/play), gated by their own seekSeq generation —
+  // a queued seek that has been superseded by a newer seek exits silently
+  // (dropped), mirroring ExoPlayer's pending-seek coalescing. seek() does NOT
+  // bump playSeq (a seek must never invalidate a load) and playTrack does NOT
+  // bump seekSeq (a queued seek stays valid across a superseded load).
+  private seekSeq = 0;
   // Load-intent window (spinner fix): true while a JS-initiated playTrack
   // chain is executing (set_source/seek/play round-trips). Inside this window
   // Media3 reports isPlaying=false while buffering (isPlaying only flips true
@@ -267,9 +275,28 @@ export class NativeAudioEngine implements PlaybackEngine {
     }
   }
 
+  /** Rapid seeks coalesce latest-wins on the shared playChain FIFO: older
+   *  queued seeks are dropped when a newer one arrives, a seek waits for any
+   *  running load chain instead of interleaving with set_source, and a
+   *  rejected seek does not poison the queue for later commands. */
   async seek(time: number): Promise<void> {
     if (!IS_MOBILE) return;
+    const seq = ++this.seekSeq;
+    const turn = this.playChain.then(() => this.runSeekChain(seq, time));
+    // Same anti-poison contract as playTrack: the failure still reaches THIS
+    // call's caller (useSeekDrag recovery, media-session, seekRelative),
+    // while later queued commands start settled.
+    this.playChain = turn.catch(() => undefined);
+    return turn;
+  }
+
+  /** One serialized seek turn — runs only after earlier chain turns settled.
+   *  `seq` staleness is re-checked after the FIFO wait so a superseded seek
+   *  is dropped entirely (latest-wins) instead of firing a stale seek_to. */
+  private async runSeekChain(seq: number, time: number): Promise<void> {
+    if (seq !== this.seekSeq) return;
     await this.initOnce().catch(() => undefined);
+    if (seq !== this.seekSeq) return;
     await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
       position: time,
     });
@@ -312,8 +339,11 @@ export class NativeAudioEngine implements PlaybackEngine {
     // bump): runPlayChain re-checks seq after each await, so no chain may
     // set_source/seek/play past a release (logout/stop) — same meaning as
     // usePlayer handleStop's abort guards (7484592). playTrack keeps working:
-    // it assigns itself a fresh, newer seq.
+    // it assigns itself a fresh, newer seq. Seeks now ride the same queue, so
+    // their generation is invalidated too: a queued user seek must not fire
+    // seek_to on a released (stopped) player.
     this.playSeq++;
+    this.seekSeq++;
     this.currentTrackId = null;
     this.currentTrack = null;
     this.token = null;

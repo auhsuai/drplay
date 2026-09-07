@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePlayerStore } from "../store/playerStore";
+import { captureError } from "../utils/errorLog";
 import { getPlaybackEngine } from "../lib/nativeAudioBridge";
 import { seekRelative, SEEK_STEP_SECONDS } from "./player/utils";
 
@@ -104,7 +105,19 @@ export function useMediaSession(options: UseMediaSessionOptions) {
     });
     register("seekto", (details) => {
       if (details.seekTime === undefined) return;
-      void getPlaybackEngine().seek(details.seekTime);
+      // The native engine rethrows after reporting (invokeStateful
+      // log-then-rethrow); a bare fire-and-forget would surface as an
+      // unhandled rejection when the seek fails or times out. Sync-void
+      // desktop engine: Promise.resolve makes the catch a no-op.
+      Promise.resolve(getPlaybackEngine().seek(details.seekTime)).catch(
+        (err: unknown) => {
+          void captureError({
+            level: "warn",
+            source: "useMediaSession",
+            message: `seek-failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        },
+      );
       updatePositionState();
     });
     register("seekbackward", (details) => {

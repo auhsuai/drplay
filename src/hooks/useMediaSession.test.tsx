@@ -21,6 +21,11 @@ vi.mock("../lib/nativeAudioBridge", () => ({
   getPlaybackEngine: () => audioMock,
 }));
 
+const captureError = vi.hoisted(() => vi.fn());
+vi.mock("../utils/errorLog", () => ({
+  captureError,
+}));
+
 // jsdom does not implement the Media Session API (no navigator.mediaSession,
 // no MediaMetadata constructor) — tests install their own minimal stand-ins.
 class MediaMetadataMock implements MediaMetadata {
@@ -284,6 +289,28 @@ describe("useMediaSession action handlers", () => {
       invoke("seekto", {});
     });
     expect(audioMock.seek).not.toHaveBeenCalled();
+  });
+
+  // Native engine seek rethrows after reporting (invokeStateful
+  // log-then-rethrow): a bare `void engine.seek()` here surfaces as an
+  // unhandled rejection when the native call fails or times out.
+  it("seekto: promise seek bị reject → được catch + log qua captureError (no unhandled rejection)", async () => {
+    const { invoke } = installSessionMock();
+    audioMock.seek.mockReturnValue(Promise.reject(new Error("seek exploded")));
+    makeHook();
+
+    act(() => {
+      invoke("seekto", { seekTime: 120 });
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const logged = captureError.mock.calls[0]?.[0] as {
+      level: string;
+      message: string;
+    };
+    expect(logged.level).toBe("warn");
+    expect(logged.message).toContain("seek-failed");
   });
 
   it("seekbackward/seekforward: dùng seekOffset nếu có; fallback SEEK_STEP 5s; clamp [0, duration]", () => {

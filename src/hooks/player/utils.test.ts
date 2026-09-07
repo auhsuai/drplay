@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   classifyPlayerError,
   isAbortError,
   seekRelative,
   SEEK_STEP_SECONDS,
 } from "./utils";
+
+vi.mock("../../utils/errorLog", () => ({
+  captureError: vi.fn(),
+}));
+
+import { captureError } from "../../utils/errorLog";
 
 describe("isAbortError (duck-typed)", () => {
   it("true cho DOMException AbortError thật", () => {
@@ -37,7 +43,11 @@ describe("isAbortError (duck-typed)", () => {
 
 describe("seekRelative (chung cho keyboard seek + media session)", () => {
   function makeAudio(
-    overrides: { currentTime?: number; duration?: number } = {},
+    overrides: {
+      currentTime?: number;
+      duration?: number;
+      seekResult?: unknown;
+    } = {},
   ) {
     const audio = {
       currentTime: overrides.currentTime ?? 0,
@@ -45,6 +55,9 @@ describe("seekRelative (chung cho keyboard seek + media session)", () => {
       seekCalls: [] as number[],
       seek(time: number) {
         audio.seekCalls.push(time);
+        // Default: sync-void (desktop AudioController contract). Tests for
+        // the async rejection path override this via seekResult.
+        return overrides.seekResult as void | Promise<void>;
       },
       getCurrentTime() {
         return audio.currentTime;
@@ -55,6 +68,10 @@ describe("seekRelative (chung cho keyboard seek + media session)", () => {
     };
     return audio;
   }
+
+  beforeEach(() => {
+    vi.mocked(captureError).mockClear();
+  });
 
   it("duration 0 (chưa load metadata) → KHÔNG seek (giữ vị trí, không seek về 0)", () => {
     const audio = makeAudio({ currentTime: 30, duration: 0 });
@@ -82,5 +99,37 @@ describe("seekRelative (chung cho keyboard seek + media session)", () => {
 
   it("SEEK_STEP_SECONDS là 1 nguồn chung (5s)", () => {
     expect(SEEK_STEP_SECONDS).toBe(5);
+  });
+
+  // Native engine seek rethrows after reporting (invokeStateful
+  // log-then-rethrow): a bare fire-and-forget promise surfaces as an
+  // unhandled rejection when the native seek fails or times out.
+  it("seek promise bị reject → được catch + log qua captureError (no unhandled rejection)", async () => {
+    const audio = makeAudio({
+      currentTime: 50,
+      duration: 100,
+      seekResult: Promise.reject(new Error("seek exploded")),
+    });
+
+    seekRelative(audio, 5);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(audio.seekCalls).toEqual([55]);
+    const logged = vi.mocked(captureError).mock.calls[0]?.[0] as {
+      level: string;
+      message: string;
+    };
+    expect(logged.level).toBe("warn");
+    expect(logged.message).toContain("seek-failed");
+  });
+
+  it("desktop engine sync-void seek → không log lỗi (catch là no-op)", () => {
+    const audio = makeAudio({ currentTime: 50, duration: 100 });
+
+    seekRelative(audio, 5);
+
+    expect(audio.seekCalls).toEqual([55]);
+    expect(captureError).not.toHaveBeenCalled();
   });
 });
