@@ -10,20 +10,25 @@ import {
 } from "./proSyncManager";
 import type { ProSyncHandlerDeps, WorkerMsgType } from "./proSyncManager";
 import { captureError } from "./errorLog";
+import { DEFAULT_USER_EMAIL, getCurrentUserEmail } from "./storageKeys";
 
 vi.mock("./errorLog", () => ({ captureError: vi.fn() }));
 
 // Hybrid mock: keep the real storageKeys module intact, but pin the account
 // email to a real (non-sentinel) address so the wire-email guard in
 // proSyncManager lets sync/token messages through, exactly like a logged-in
-// user (see resolveWireUserEmail / DEFAULT_USER_EMAIL sentinel guard).
+// user (see resolveWireUserEmail / DEFAULT_USER_EMAIL sentinel guard). The
+// mock is a vi.fn so individual tests can override the returned email
+// (sentinel-guard coverage) without re-declaring the module mock.
 vi.mock("./storageKeys", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./storageKeys")>();
   return {
     ...actual,
-    getCurrentUserEmail: () => "sync-owner@example.com",
+    getCurrentUserEmail: vi.fn((): string => "sync-owner@example.com"),
   };
 });
+
+const mockedGetCurrentUserEmail = vi.mocked(getCurrentUserEmail);
 
 function makeDeps(overrides: Partial<ProSyncHandlerDeps> = {}): {
   deps: ProSyncHandlerDeps;
@@ -351,6 +356,11 @@ describe("triggerProSync", () => {
 
   afterEach(() => {
     stopProSyncWorker();
+    // Restore the default real-account email so the sentinel override in
+    // individual tests never leaks into the next test.
+    mockedGetCurrentUserEmail.mockImplementation(
+      () => "sync-owner@example.com",
+    );
     vi.unstubAllGlobals();
   });
 
@@ -367,6 +377,42 @@ describe("triggerProSync", () => {
       triggerProSync();
     }).not.toThrow();
     expect(FakeWorker.instances).toHaveLength(0);
+  });
+
+  it("logs a distinct warn when the worker was never started (observable no-op)", () => {
+    stopProSyncWorker();
+
+    triggerProSync();
+
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "proSyncManager",
+        message: "pro-sync skipped: worker not started",
+      }),
+    );
+    expect(FakeWorker.instances).toHaveLength(0);
+  });
+
+  it("logs a distinct warn when the owner email is not resolved yet (sentinel guard), without posting a sync", () => {
+    mockedGetCurrentUserEmail.mockReturnValue(DEFAULT_USER_EMAIL);
+
+    // startProSyncWorker sets the token and creates the worker; its own
+    // initial sync is skipped by the same sentinel guard.
+    startProSyncWorker("tok-1");
+    const worker = lastWorker();
+    worker.postMessage.mockClear();
+
+    triggerProSync();
+
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "proSyncManager",
+        message: "pro-sync skipped: owner email not resolved yet",
+      }),
+    );
+    expect(worker.postMessage).not.toHaveBeenCalled();
   });
 
   it("is a no-op (no throw) when no token was ever provided (fresh module state)", async () => {

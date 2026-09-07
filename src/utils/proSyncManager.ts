@@ -94,11 +94,29 @@ export function updateWorkerToken(token: string) {
 // account email has not landed (sentinel guard — see resolveWireUserEmail);
 // the poller only runs while logged in, so all three cases are transient. The
 // worker's own isBusy guard turns an overlapping sync into a harmless
-// SYNC_BUSY.
+// SYNC_BUSY. Every skip logs a distinct warn so a stalled auto-update chain
+// is diagnosable from the error log alone — the no-op behavior itself is
+// unchanged (the 60s poller retries on its next tick).
 export function triggerProSync(): void {
-  if (!globalWorker || !lastToken) return;
+  if (!globalWorker || !lastToken) {
+    void captureError({
+      level: "warn",
+      source: "proSyncManager",
+      message: !lastToken
+        ? "pro-sync skipped: no token yet"
+        : "pro-sync skipped: worker not started",
+    });
+    return;
+  }
   const userEmail = resolveWireUserEmail();
-  if (!userEmail) return;
+  if (!userEmail) {
+    void captureError({
+      level: "warn",
+      source: "proSyncManager",
+      message: "pro-sync skipped: owner email not resolved yet",
+    });
+    return;
+  }
   globalWorker.postMessage({
     type: WORKER_REQUEST_TYPES.sync,
     token: lastToken,
