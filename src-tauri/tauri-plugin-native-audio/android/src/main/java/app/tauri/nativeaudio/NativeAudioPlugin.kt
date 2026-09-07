@@ -193,6 +193,21 @@ object NativeAudioRuntime {
                             exoPlayer.playbackState == Player.STATE_READY &&
                             lastError == null
                     if (shouldRecoverPlayback) exoPlayer.play()
+                    // DrPlay fork: reaching this branch means the seek has been
+                    // APPLIED by ExoPlayer (Player.java: DISCONTINUITY_REASON_SEEK
+                    // fires for "seek within the current period or to another
+                    // period"; SEEK_ADJUSTMENT is its inexact-position variant).
+                    // Clear the pending marker BEFORE the snapshot below so
+                    // effectiveBuffering reports the player's real buffering state
+                    // instead of staying masked false for up to
+                    // SEEK_STATE_STALE_MS after the seek lands. If a newer seek
+                    // was dispatched in the meantime, dropping its mask early only
+                    // surfaces the truth sooner (TS coalesces seeks since 8c43bf2),
+                    // so no revision tracking is needed here.
+                    if (pendingSeek != null) {
+                        pendingSeekState = null
+                        Log.i(TAG, "seek landed, cleared pendingSeekState shouldResume=$shouldResume")
+                    }
                     appContext?.let { persistProgressCheckpointLocked(it, snapshotLocked(), force = true) }
                 }
             }
