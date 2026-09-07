@@ -29,3 +29,11 @@ export const PAGINATION_PAGE_SIZE = 1000;
 // NOTE: shared with the fetchAllPages loop in drivePagination.ts (imports it
 // from here) — keep the value in sync with that loop's truncation warning.
 export const MAX_PAGINATION_PAGES = 10;
+
+// Window event fired whenever a writer adds rows to the local db.files mirror
+// outside the 60s delta-sync poller (currently: on-demand folder fetch, upload
+// terminal). HomeTab listens to it and delta-refreshes "Recently Added" —
+// the event-driven invalidation half of the write-through mirror pattern.
+// Lives here (not in the upload module) because non-upload writers dispatch
+// it and must not depend on the upload stack.
+export const DRIVE_FILES_CHANGED_EVENT = "drive-files-changed";
