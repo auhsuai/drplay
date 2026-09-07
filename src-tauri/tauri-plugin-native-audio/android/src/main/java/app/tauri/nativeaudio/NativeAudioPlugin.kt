@@ -344,6 +344,23 @@ object NativeAudioRuntime {
         emitState()
     }
 
+    // DrPlay fork: Media3 puts the player into STATE_IDLE after onPlayerError,
+    // and only prepare() leaves that state (ExoPlayerImplInternal.prepareInternal
+    // resets the error and resumes loading from the retained position; the
+    // doSomeWork loop bails out with "Prepare (in case of IDLE) will resume").
+    // ExoPlayer.retry() does not exist in media3 1.4.1 (added in 1.5.0), so
+    // prepare() is the correct recovery call for this dependency set. Without
+    // it, a latched error turned play()/seekTo() into silent no-ops and the
+    // JS side saw a fake-success snapshot (status "error", position frozen).
+    // Caller must hold the lock. Returns true when recovery ran.
+    private fun prepareIfErrorLatchedLocked(exoPlayer: ExoPlayer): Boolean {
+        if (lastError == null) return false
+        Log.i(TAG, "recovering latched error via prepare(), state=${exoPlayer.playbackState}")
+        lastError = null
+        exoPlayer.prepare()
+        return true
+    }
+
     fun play(context: Context) {
         // ensure() first: the service's onCreate reads the runtime session to
         // build the notification manager. Starting the service before the
@@ -351,13 +368,13 @@ object NativeAudioRuntime {
         synchronized(lock) {
             ensure(context)
             val exoPlayer = player ?: return
+            prepareIfErrorLatchedLocked(exoPlayer)
             if (exoPlayer.playbackState == Player.STATE_ENDED) {
                 exoPlayer.seekTo(0L)
             }
             pendingSeekState = null
             exoPlayer.playWhenReady = true
             exoPlayer.play()
-            lastError = null
             syncTickingLocked()
         }
         startService(context)
@@ -381,6 +398,14 @@ object NativeAudioRuntime {
             ensure(context)
             val safeMs = max(0L, (positionSec * 1000.0).toLong())
             val exoPlayer = player ?: return@synchronized
+            // Recover BEFORE the seek: in the post-error STATE_IDLE a raw seekTo
+            // resolves through the masking layer but the internal player stays
+            // idle, so without prepare() this command returned a fake-success
+            // snapshot and never moved playback. prepare() first puts the player
+            // into BUFFERING (still with the previous media item), then the seek
+            // below is a regular buffered seek and the position discontinuity
+            // handler resumes playback if shouldResume.
+            prepareIfErrorLatchedLocked(exoPlayer)
             val shouldResume = exoPlayer.playWhenReady || exoPlayer.isPlaying
             pendingSeekState = PendingSeekState(shouldResume = shouldResume, startedAtMs = System.currentTimeMillis())
             if (!shouldResume && exoPlayer.playWhenReady) exoPlayer.pause()
