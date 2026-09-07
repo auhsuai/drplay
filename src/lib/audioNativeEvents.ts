@@ -127,6 +127,21 @@ export function createNativeEventHandlers(
     }
   };
 
+  // `waiting` set isBuffering=true, but `playing` was the only clear path —
+  // a seek made while PAUSED never reaches `playing`, so the flag stuck true
+  // until the next resume (fake spinner flash). `canplay` is the spec'd
+  // recovery counterpart of `waiting`: it fires as soon as readyState rises
+  // to HAVE_FUTURE_DATA (data at the current position is renderable), paused
+  // or playing, so it clears the flag without needing playback. Emitting
+  // false when already false is an idempotent no-op for consumers (same
+  // pattern as the `playing` handler below).
+  // MDN: https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/canplay_event
+  handlers.canplay = () => {
+    if (deps.isActive(audio)) {
+      deps.emit("buffering", { isBuffering: false });
+    }
+  };
+
   handlers.playing = () => {
     if (deps.isActive(audio)) {
       deps.emit("buffering", { isBuffering: false });

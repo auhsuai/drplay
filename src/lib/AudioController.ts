@@ -350,9 +350,21 @@ export class AudioController implements PlaybackEngine {
   }
 
   public seek(time: number) {
+    // readyState 0 = metadata not loaded yet: assigning currentTime is
+    // unspecified browser behavior, and the value would be dropped anyway.
+    // The "seek to a position on load" case is owned by playTrack()'s
+    // pending-seek machinery, so keeping the no-seek path here is safe —
+    // but the drop must stay observable (a silent drop left the caller's
+    // UI playhead stuck on a ghost position until playback resumed).
     if (this.activeAudio.readyState > 0) {
       this.activeAudio.currentTime = time;
+      return;
     }
+    void captureError({
+      level: "warn",
+      source: "AudioController",
+      message: `seek dropped: readyState=0 (metadata not loaded), requested=${String(time)}s`,
+    });
   }
 
   public getCurrentTime() {
