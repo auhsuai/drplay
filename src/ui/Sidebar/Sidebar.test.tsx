@@ -35,14 +35,7 @@ vi.mock("react-i18next", () => {
 });
 
 vi.mock("lucide-react", () => {
-  const icons = [
-    "Home",
-    "HardDrive",
-    "Settings",
-    "LogOut",
-    "Gauge",
-    "CloudUpload",
-  ];
+  const icons = ["Home", "HardDrive", "Settings", "LogOut", "Gauge"];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });
@@ -60,11 +53,6 @@ vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 vi.mock("../../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
 }));
-// UploadButton (rendered in the header when token is set) pulls in the real
-// uploadManager (dexie/db chain) and the Tauri dialog plugin — neither is
-// exercised by these tests, so stand-ins keep the jsdom environment isolated.
-vi.mock("../../utils/uploadManager", () => ({ startUploads: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const GB = 1024 * 1024 * 1024;
 
@@ -568,68 +556,6 @@ describe("Sidebar storage quota", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("storage-quota")).toBeNull();
     });
-  });
-});
-
-describe('Sidebar UploadButton (header "+")', () => {
-  afterEach(() => {
-    cleanup();
-    vi.clearAllMocks();
-  });
-
-  // Uploads only make sense while My Drive is active — these tests pin the
-  // active tab so the button is enabled (title = upload.button_title).
-  const myDriveProps = { activeTab: "My Drive", token: "tok-1" } as const;
-
-  it("renders the UploadButton when the sidebar is expanded", () => {
-    render(<Sidebar {...baseProps(myDriveProps)} />);
-    expect(screen.getByTitle("Upload")).toBeTruthy();
-  });
-
-  it("hides the UploadButton when the sidebar is collapsed", () => {
-    render(
-      <Sidebar
-        {...baseProps({
-          isSidebarOpen: false,
-          token: "tok-1",
-          activeTab: "My Drive",
-        })}
-      />,
-    );
-    expect(screen.queryByTitle("Upload")).toBeNull();
-  });
-
-  it("pushes the upload button to the right of the header via an ml-auto wrapper (centered against the heading, not trailing the DrPlay text)", () => {
-    render(<Sidebar {...baseProps(myDriveProps)} />);
-    const btn = screen.getByTitle("Upload");
-    // The button itself lives inside UploadButton's own div — the ml-auto
-    // wrapper sits between it and the header <h1>.
-    expect(btn.closest(".ml-auto")).not.toBeNull();
-  });
-
-  it("keeps the upload wrapper inside the header padding (no negative margin — button stays within px-7, vertically centered)", () => {
-    render(<Sidebar {...baseProps(myDriveProps)} />);
-    const btn = screen.getByTitle("Upload");
-    const wrapper = btn.closest(".ml-auto");
-    expect(wrapper).not.toBeNull();
-    if (wrapper) {
-      expect(wrapper.className).toContain("flex items-center");
-      expect(wrapper.className).not.toContain("-mr-3");
-    }
-  });
-
-  it("renders no UploadButton when not logged in (no token), even expanded", () => {
-    render(<Sidebar {...baseProps({ token: null })} />);
-    expect(screen.queryByTitle("Upload")).toBeNull();
-  });
-
-  it("dims the UploadButton and disables it while a non-MyDrive tab is active", () => {
-    render(<Sidebar {...baseProps({ activeTab: "Settings" })} />);
-    // The i18n mock resolves t(key, fallback) to the fallback string.
-    const btn = screen.getByTitle("Open My Drive to upload");
-    expect(btn.className).toContain("opacity-40");
-    expect(btn.className).toContain("cursor-not-allowed");
-    expect(btn.getAttribute("aria-disabled")).toBe("true");
   });
 });
 

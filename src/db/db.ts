@@ -58,12 +58,10 @@ export interface MetadataCacheRow {
   entry: unknown;
 }
 
-// One row per ACTIVE or INTERRUPTED upload (schema v9). Written by
-// uploadManager at processEntry (status 'active'), deleted at any terminal
-// transition (done/error/cancel). On the next launch, rows whose upload was
-// interrupted mid-flight are the resume source (slice 5.2); 'bytes' rows carry
-// no diskPath — their payload is gone with the old process, so they can only
-// be reported as interrupted, never resumed.
+// HISTORICAL (upload feature removed): one row per ACTIVE or INTERRUPTED
+// upload was written by the old uploadManager. The table itself stays in the
+// schema — Dexie versions are forward-only, so dropping it would require a
+// new schema version bump — but no code writes or reads it anymore.
 export interface UploadSessionRow {
   id: string; // = entry.id ('pending-<uuid>') — PK
   userEmail: string; // per-user (index)
@@ -101,6 +99,7 @@ export class DriveDatabase extends Dexie {
   playCounts!: Table<PlayCountRow, [string, string]>;
   folderVisits!: Table<FolderVisitRow, [string, string]>;
   metadataCache!: Table<MetadataCacheRow, string>;
+  // Inert since the upload removal — kept for the forward-only schema path.
   uploadSessions!: Table<UploadSessionRow, string>; // Primary key is 'id'
   // Compound-key tables that replaced the raw-id versions (schema v7).
   recentTracksV2!: Table<RecentTrackRow, [string, string]>;
@@ -241,10 +240,11 @@ export class DriveDatabase extends Dexie {
       favoritesV2: "[userEmail+id], createdAt",
     });
 
-    // Version 9 adds the uploadSessions table (upload-resume feature, slice
-    // 5.1) without touching the existing tables — forward-only, same as every
-    // earlier version. Rows are indexed by userEmail (resume is per-account)
-    // and status ('active' vs 'interrupted').
+    // Version 9 added the uploadSessions table (upload-resume feature; the
+    // upload feature has since been removed — the table is now inert, kept
+    // for the forward-only upgrade path) without touching the existing
+    // tables — forward-only, same as every earlier version. Rows are indexed
+    // by userEmail (resume is per-account) and status.
     this.version(9).stores({
       files: "id, parentId, name, isFolder",
       syncState: "key",
@@ -265,8 +265,7 @@ export class DriveDatabase extends Dexie {
     // so — same precedent as v7 — this version adds filesV2 with a compound
     // [userEmail+id] primary key and copies the old rows into it. The
     // standalone "id" index is kept ON PURPOSE even though id is part of the
-    // compound PK: upload/queue.ts ghost sweep reads
-    // where("id").startsWith("pending-") across owners, and
+    // compound PK: historical upload code swept pending rows by id prefix, and
     // [userEmail+parentId] gives the listing its per-user folder query.
     this.version(10)
       .stores({

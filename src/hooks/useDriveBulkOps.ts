@@ -9,30 +9,16 @@ import {
   FOLDER_MIME,
 } from "../utils/driveApi";
 import { stopPlaybackIfTrack } from "../utils/stopPlayback";
-import { isUploading } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { t } from "i18next";
 import { captureError } from "../utils/errorLog";
 import { getCurrentUserEmail } from "../utils/storageKeys";
 
-// Bulk ops must never touch items that are still uploading (a pending row can
-// not be deleted/moved — it has no Drive id yet). Excluded ids get a toast and
-// the rest of the batch proceeds unchanged.
-function filterUploading(ids: string[]): string[] {
-  return ids.filter((id) => !isUploading(id));
-}
-
-// Shared pre-flight for bulk delete/move: drop ids still uploading, toast once
-// if any were excluded, and return null when the whole selection was blocked
-// (caller bails out early, selection stays untouched).
-function prepareBulkSelection(
-  selectedIds: Set<string>,
-  toast: typeof showErrorToast,
-): string[] | null {
-  const ids = filterUploading([...selectedIds]);
-  if (ids.length < selectedIds.size) {
-    toast(t("upload.uploading_blocked"));
-  }
+// Shared pre-flight for bulk delete/move: return the selection as a plain id
+// list, or null when it is empty (caller bails out early, selection stays
+// untouched).
+function prepareBulkSelection(selectedIds: Set<string>): string[] | null {
+  const ids = [...selectedIds];
   return ids.length === 0 ? null : ids;
 }
 
@@ -139,7 +125,7 @@ export function useDriveBulkOps({
   const handleBulkDelete = async (onComplete: () => void) => {
     if (!token || selectedIds.size === 0) return;
 
-    const itemsToDelete = prepareBulkSelection(selectedIds, showErrorToast);
+    const itemsToDelete = prepareBulkSelection(selectedIds);
     if (itemsToDelete === null) return;
 
     // Same-tick race guard (see the refs above): must run before any state
@@ -210,7 +196,7 @@ export function useDriveBulkOps({
   ) => {
     if (!token || selectedIds.size === 0) return;
 
-    const itemsToMove = prepareBulkSelection(selectedIds, showErrorToast);
+    const itemsToMove = prepareBulkSelection(selectedIds);
     if (itemsToMove === null) return;
 
     setSelectedIds(new Set());

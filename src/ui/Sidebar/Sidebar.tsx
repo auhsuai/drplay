@@ -1,7 +1,6 @@
 import { Home, HardDrive } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { TABS, type TabKey } from "../../utils/driveConstants";
-import { DropZone } from "../components/DropZone";
 import { NavItem } from "./NavItem";
 import { SidebarHeader } from "./SidebarHeader";
 import { StorageQuotaCard } from "./StorageQuotaCard";
@@ -37,8 +36,6 @@ export function Sidebar({
       <SidebarHeader
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={onToggleSidebar}
-        token={token}
-        activeTab={activeTab}
       />
       <nav className="px-4 space-y-1 mb-2">
         <NavItem
@@ -68,7 +65,6 @@ export function Sidebar({
         activeTab={activeTab}
         onTabChange={onTabChange}
       />
-      <DropZone token={token} />
     </aside>
   );
 }

@@ -43,7 +43,7 @@ vi.mock("../../utils/platform", () => ({
 }));
 
 // S2: observe the seek-failure log without touching IndexedDB (jsdom has no
-// IDB); same hoisted-mock pattern as DropZone.test / MoreMenu.test.
+// IDB); same hoisted-mock pattern as MoreMenu.test.
 const { captureErrorMock } = vi.hoisted(() => ({
   captureErrorMock: vi.fn(() => Promise.resolve()),
 }));

@@ -66,13 +66,6 @@ vi.mock("../../hooks/useDriveExplorer", () => ({
   ITEMS_PER_PAGE: 5,
 }));
 
-// uploadManager stays REAL (isUploading drives Select All); only the unmount
-// cleanup hook is spied out — same split as MainContent.windowing.test.tsx.
-vi.mock("../../utils/uploadManager", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../utils/uploadManager")>()),
-  clearUploadedTint: vi.fn(),
-}));
-
 vi.mock("./components/SongCard", () => ({
   SongCard: vi.fn(({ item }: { item: DriveItem }) => (
     <div data-testid="song-card" data-item-id={item.id} />

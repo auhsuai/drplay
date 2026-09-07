@@ -15,7 +15,6 @@ import { CreditsSection } from "./components/CreditsSection";
 import { ErrorLogSection } from "./components/ErrorLogSection";
 import { CacheManagerModal } from "./components/CacheManagerModal";
 import { MobileUserHeader } from "./components/MobileUserHeader";
-import { UploadsSection } from "./components/UploadsSection";
 import { SettingsRow, SettingsSectionHeading } from "./components/SettingsRow";
 import { useDownloadPathSetting } from "./useDownloadPathSetting";
 import { useSeedImport } from "./useSeedImport";
@@ -100,8 +99,6 @@ export function SettingsTab({
               </button>
             </SettingsRow>
           </div>
-
-          <UploadsSection />
 
           <div className="flex flex-col gap-2 mt-6">
             <SettingsSectionHeading title={t("settings.preferences")} />

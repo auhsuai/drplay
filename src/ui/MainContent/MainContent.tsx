@@ -15,7 +15,6 @@ import { BulkDeleteConfirmModal } from "./components/BulkDeleteConfirmModal";
 import { NewFolderModal } from "./components/NewFolderModal";
 
 import { useDriveExplorer } from "../../hooks/useDriveExplorer";
-import { isUploading, clearUploadedTint } from "../../utils/uploadManager";
 import { useHardwareBack } from "../../hooks/useHardwareBack";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
@@ -25,7 +24,6 @@ import { SkeletonRowList } from "../components/Skeleton";
 
 import { HEADER_CHROME_HEIGHT_PX } from "./utils/layoutMetrics";
 import { useSkeletonRows } from "./hooks/useSkeletonRows";
-import { useDragActiveState } from "./hooks/useDragActiveState";
 import { useKeyboardSearchShortcuts } from "./hooks/useKeyboardSearchShortcuts";
 import { useHighlightScrollToRow } from "./hooks/useHighlightScrollToRow";
 import { useDebugTriggers } from "./hooks/useDebugTriggers";
@@ -90,7 +88,6 @@ export const MainContent = React.memo(function MainContent({
   // Recompute the skeleton row count on resize so the loading state keeps
   // filling the list area after a window size change.
   const skeletonRows = useSkeletonRows();
-  const isDragActive = useDragActiveState();
 
   const explorer = useDriveExplorer(
     currentFolderId,
@@ -103,14 +100,6 @@ export const MainContent = React.memo(function MainContent({
 
   useEffect(() => {
     isInitialMount.current = false;
-  }, []);
-
-  // Leaving the My Drive tab unmounts MainContent — clear every transient
-  // "uploaded" check so a fresh visit shows no stale completion tint.
-  useEffect(() => {
-    return () => {
-      clearUploadedTint();
-    };
   }, []);
 
   useKeyboardSearchShortcuts(searchInputRef, explorer.setSearchQuery);
@@ -215,7 +204,7 @@ export const MainContent = React.memo(function MainContent({
 
       <div
         data-testid="main-header-chrome"
-        className={`sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200 ${isDragActive ? "opacity-0 pointer-events-none" : "opacity-100"}`}
+        className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200 opacity-100"
       >
         <TopNavigationBar
           isSelectionMode={explorer.isSelectionMode}
@@ -249,14 +238,7 @@ export const MainContent = React.memo(function MainContent({
           onToggleSelectAll={() => {
             explorer.setSelectedIds((prev) => {
               if (prev.size === explorer.filteredItems.length) return new Set();
-              // Uploading items must never join the selection (their pending
-              // rows cannot be bulk-deleted/moved); Select All picks only the
-              // items that are safe to operate on.
-              return new Set(
-                explorer.filteredItems
-                  .filter((i) => !isUploading(i.id))
-                  .map((i) => i.id),
-              );
+              return new Set(explorer.filteredItems.map((i) => i.id));
             });
           }}
           onBulkMoveClick={handleBulkMoveClick}
@@ -321,7 +303,7 @@ export const MainContent = React.memo(function MainContent({
 
             <div
               data-testid="main-pagination-chrome"
-              className={`sticky bottom-0 py-1 transition-opacity duration-200 ${isDragActive ? "opacity-0 pointer-events-none" : "opacity-100"}`}
+              className="sticky bottom-0 py-1 transition-opacity duration-200 opacity-100"
             >
               <PaginationControls
                 currentPage={explorer.currentPage}

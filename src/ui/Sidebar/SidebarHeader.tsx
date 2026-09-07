@@ -1,19 +1,13 @@
 import { HardDrive } from "lucide-react";
-import { TABS, type TabKey } from "../../utils/driveConstants";
-import { UploadButton } from "../components/UploadButton";
 
 interface SidebarHeaderProps {
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
-  token?: string | null | undefined;
-  activeTab: TabKey;
 }
 
 export function SidebarHeader({
   isSidebarOpen,
   onToggleSidebar,
-  token,
-  activeTab,
 }: SidebarHeaderProps) {
   return (
     <div
@@ -38,14 +32,6 @@ export function SidebarHeader({
         >
           <span className="truncate">DrPlay</span>
         </div>
-        {/* ml-auto pushes the upload button to the header's right edge,
-            vertically centered against the heading — no negative margin
-            so it stays inside the header's px-7 padding. */}
-        {isSidebarOpen && (
-          <div className="ml-auto flex items-center">
-            <UploadButton token={token} disabled={activeTab !== TABS.myDrive} />
-          </div>
-        )}
       </h1>
     </div>
   );

@@ -26,8 +26,7 @@ vi.mock("../utils/errorLog", () => ({
 // executor only where deterministic response ordering is required (debounce /
 // race / unmount / error tests).
 // Fake ONLY timers (never setImmediate) so Dexie chains progress on the real
-// event loop while the debounce/invalidate timers stay controllable — the
-// same pattern as uploadManager.test.ts.
+// event loop while the debounce/invalidate timers stay controllable.
 const FAKE_TIMERS_TOFAKE = [
   "setTimeout",
   "clearTimeout",

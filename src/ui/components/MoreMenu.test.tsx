@@ -27,13 +27,6 @@ const mocks = vi.hoisted(() => ({
   },
   captureError: vi.fn(),
   showErrorToast: vi.fn(),
-  uploadManager: {
-    isUploading: vi.fn(),
-    subscribe: vi.fn((cb: () => void) => {
-      void cb;
-      return () => {};
-    }),
-  },
 }));
 
 vi.mock("react-i18next", () => {
@@ -73,7 +66,6 @@ vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 vi.mock("../../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
 }));
-vi.mock("../../utils/uploadManager", () => mocks.uploadManager);
 
 function makeTrack(over: Partial<Track> = {}): Track {
   return {
@@ -371,150 +363,6 @@ describe("MoreMenu playerbar variant regression", () => {
   });
 });
 
-describe("MoreMenu upload race guards", () => {
-  let notify: (() => void) | undefined;
-
-  beforeEach(() => {
-    notify = undefined;
-    mocks.uploadManager.isUploading.mockReset();
-    mocks.uploadManager.isUploading.mockReturnValue(false);
-    mocks.uploadManager.subscribe.mockImplementation((cb: () => void) => {
-      notify = cb;
-      return () => {};
-    });
-  });
-
-  it("disables every destructive item with the blocking tooltip when driveItem is uploading (default variant)", () => {
-    mocks.uploadManager.isUploading.mockReturnValue(true);
-    render(
-      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
-    );
-    openTrigger();
-    const buttons = within(menuEl()).getAllByRole("button");
-    for (const name of [
-      "Select multiple items",
-      "Move to...",
-      "Delete",
-      "Download Song",
-    ]) {
-      const btn = buttons.find((b) => b.textContent?.trim() === name);
-      expect(btn, `button ${name} should exist`).toBeDefined();
-      expect(
-        (btn as HTMLButtonElement).disabled,
-        `button ${name} disabled`,
-      ).toBe(true);
-      expect((btn as HTMLButtonElement).title, `button ${name} tooltip`).toBe(
-        "This item is already uploading. Wait a moment.",
-      );
-    }
-  });
-
-  it("leaves all items enabled and tooltip-free when the item is not uploading (old behavior)", () => {
-    render(
-      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
-    );
-    openTrigger();
-    const buttons = within(menuEl()).getAllByRole("button");
-    for (const name of [
-      "Select multiple items",
-      "Move to...",
-      "Delete",
-      "Download Song",
-    ]) {
-      const btn = buttons.find((b) => b.textContent?.trim() === name);
-      expect(btn, `button ${name} should exist`).toBeDefined();
-      expect(
-        (btn as HTMLButtonElement).disabled,
-        `button ${name} not disabled`,
-      ).toBe(false);
-      expect(
-        (btn as HTMLButtonElement).title,
-        `button ${name} no tooltip`,
-      ).toBe("");
-    }
-  });
-
-  it("disables Download Song for a track uploading in playerbar mode, keeps Locate File enabled", () => {
-    mocks.uploadManager.isUploading.mockReturnValue(true);
-    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
-    openTrigger();
-    const buttons = within(menuEl()).getAllByRole("button");
-    const byName = (name: string) =>
-      buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
-    expect(byName("Download Song").disabled).toBe(true);
-    expect(byName("Locate File").disabled).toBe(false);
-    expect(byName("Locate File").title).toBe("");
-  });
-
-  it("disables Delete for an uploading driveItem in recent variant, keeps Locate File enabled", () => {
-    mocks.uploadManager.isUploading.mockReturnValue(true);
-    render(
-      <MoreMenu
-        variant="recent"
-        track={makeTrack()}
-        driveItem={makeDriveItem()}
-        token="tok"
-      />,
-    );
-    openTrigger();
-    const buttons = within(menuEl()).getAllByRole("button");
-    const byName = (name: string) =>
-      buttons.find((b) => b.textContent?.trim() === name) as HTMLButtonElement;
-    expect(byName("Delete").disabled).toBe(true);
-    expect(byName("Delete").title).toBe(
-      "This item is already uploading. Wait a moment.",
-    );
-    expect(byName("Locate File").disabled).toBe(false);
-  });
-
-  it("re-renders and disables the destructive items when an upload starts while the menu is open (subscription)", () => {
-    render(
-      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
-    );
-    openTrigger();
-    expect(
-      within(menuEl()).getByRole<HTMLButtonElement>("button", {
-        name: "Delete",
-      }).disabled,
-    ).toBe(false);
-
-    mocks.uploadManager.isUploading.mockReturnValue(true);
-    act(() => {
-      notify?.();
-    });
-
-    const btn = within(menuEl()).getByRole<HTMLButtonElement>("button", {
-      name: "Delete",
-    });
-    expect(btn.disabled).toBe(true);
-    expect(btn.title).toBe("This item is already uploading. Wait a moment.");
-  });
-
-  it("blocks the delete confirm action when the upload starts after the dialog is open (handler guard)", () => {
-    render(
-      <MoreMenu
-        variant="recent"
-        track={makeTrack()}
-        driveItem={makeDriveItem()}
-        token="tok"
-        onRefresh={vi.fn()}
-      />,
-    );
-    openTrigger();
-    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
-    expect(screen.getByText("Move to Trash?")).toBeTruthy();
-
-    mocks.uploadManager.isUploading.mockReturnValue(true);
-    act(() => notify?.());
-
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(mocks.driveApi.deleteFile).not.toHaveBeenCalled();
-    expect(mocks.showErrorToast).toHaveBeenCalledWith(
-      "This item is already uploading. Wait a moment.",
-    );
-  });
-});
-
 describe("MoreMenu compact trigger (Task 13 mobile sizing)", () => {
   it("compact renders the smaller trigger (h-7 w-7 target, 16px ellipsis)", () => {
     render(<MoreMenu isPlayerBarMode compact track={makeTrack()} />);
@@ -693,13 +541,6 @@ describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
   // every menu item closes the dropdown THEN opens its dialog/screen â€” so the
   // back handler never has to peel dialog-off-menu, only dialog-or-menu.
 
-  beforeEach(() => {
-    // Earlier describe blocks (upload race guards) leave isUploading returning
-    // truthy across tests; reset it so the new test renders the live menu.
-    mocks.uploadManager.isUploading.mockReset();
-    mocks.uploadManager.isUploading.mockReturnValue(false);
-  });
-
   afterEach(() => {
     cleanup();
   });
@@ -867,11 +708,6 @@ describe("MoreMenu hardware-back closes UI (batch fix 2026-08-17)", () => {
 // orphaning the dialog. Escape must mirror the exact LIFO priority of the
 // hardware-back handler in MoreMenu.tsx (Download > Delete > Move > menu).
 describe("MoreMenu Escape respects overlay priority (bugfix 2026-08-23)", () => {
-  beforeEach(() => {
-    mocks.uploadManager.isUploading.mockReset();
-    mocks.uploadManager.isUploading.mockReturnValue(false);
-  });
-
   afterEach(() => {
     cleanup();
   });

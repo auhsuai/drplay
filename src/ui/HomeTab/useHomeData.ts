@@ -12,7 +12,7 @@ import { getCurrentUserEmail } from "../../utils/storageKeys";
 import { hasAudioExtension } from "../../utils/audioQuery";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
-import { DRIVE_FILES_CHANGED_EVENT } from "../../utils/upload/errors";
+import { DRIVE_FILES_CHANGED_EVENT } from "../../utils/driveConstants";
 import rawGreetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { captureError } from "../../utils/errorLog";
@@ -28,12 +28,11 @@ const HOME_TAB_MODULE = "HomeTab";
 // Trailing-edge debounce window for the delta refresh (lodash
 // `_.debounce(func, wait)` default semantics — fire once, `wait` ms after
 // the LAST call of a burst; lodash/debounce.js 4.17.21: leading=false,
-// trailing=true). uploadManager dispatches drive-files-changed once per
-// completed file, so an N-file batch is N events in quick succession; 1000ms
-// collapses the burst into ONE refetch fired 1s after the batch ends, while
-// a single upload's result still appears promptly. A batch can never starve
-// the trailing fire (no maxWait needed): an upload session terminates, so
-// the last completion always starts the final timer.
+// trailing=true). A burst of drive-files-changed / pro-sync-complete events
+// collapses into ONE refetch fired 1s after the burst ends, while a single
+// event's result still appears promptly. A burst can never starve the
+// trailing fire (no maxWait needed): each event resets the same timer, so the
+// last event always starts the final timer.
 const DELTA_REFRESH_DEBOUNCE_MS = 1000;
 
 // "Recently Added to Drive" cap. Bounds the rendered list and must exceed
@@ -57,9 +56,8 @@ export function useHomeData(token: string | null, isActive: boolean) {
     FolderVisitEntry[] | null
   >(null);
   const [recentlyAdded, setRecentlyAdded] = useState<Track[] | null>(null);
-  // Guards the Recently Added refetch against overlapping responses:
-  // uploadManager fires drive-files-changed once per completed file, so a
-  // multi-file batch triggers overlapping fetches. Every call bumps the
+  // Guards the Recently Added refetch against overlapping responses: a burst
+  // of change events triggers overlapping fetches. Every call bumps the
   // generation and only the NEWEST call may write state — a slow stale
   // response must never clobber the fresh result. The same bump in the effect
   // cleanup also invalidates in-flight fetches after unmount.
@@ -221,10 +219,10 @@ export function useHomeData(token: string | null, isActive: boolean) {
       );
     };
     // Delta sync: refresh ONLY the Recently Added section (light, no re-running
-    // the heavy local loads). Fired by uploads completing in-app
-    // (drive-files-changed) and by the proSync worker completing a background
-    // poll (pro-sync-complete — the only way files added from OTHER devices/web
-    // reach the UI without a reload). Both paths funnel through a trailing
+    // the heavy local loads). Fired by the proSync worker completing a
+    // background poll (pro-sync-complete — the only way files added from OTHER
+    // devices/web reach the UI without a reload); drive-files-changed remains
+    // a generic remote-change signal. Both paths funnel through a trailing
     // debounce (see DELTA_REFRESH_DEBOUNCE_MS) so a burst of per-file events
     // collapses into a single refetch instead of jumping the list N times.
     // The initial load and 'recent-updated' (a user-driven full reload of all

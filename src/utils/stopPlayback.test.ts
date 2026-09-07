@@ -30,9 +30,6 @@ vi.mock("../utils/driveApi", () => ({ deleteFile: mocks.deleteFile }));
 vi.mock("../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
 }));
-vi.mock("../utils/uploadManager", () => ({
-  isUploading: vi.fn(() => false),
-}));
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 vi.mock("../db/db", () => ({
   db: { files: { bulkDelete: mocks.bulkDelete } },

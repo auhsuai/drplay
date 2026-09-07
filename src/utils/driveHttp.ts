@@ -54,9 +54,9 @@ export function classifyDriveError(err: unknown): string {
   return "unknown";
 }
 
-// Retryable-by-status predicate for the resumable-upload loops and
-// shouldRetryDriveResponse's default (429 + any 5xx, Google handle-errors
-// guidance); the main-thread driveFetch keeps a NARROWER historical
+// Retryable-by-status predicate backing shouldRetryDriveResponse's default
+// (429 + any 5xx, Google handle-errors guidance); the main-thread driveFetch
+// keeps a NARROWER historical
 // whitelist (isDriveFetchRetryableStatus) — unifying the two would change
 // driveFetch's retry math for 501/505+, so both are preserved and the shared
 // helper takes the predicate as a parameter. The predicate itself lives in
@@ -68,14 +68,13 @@ const isDriveFetchRetryableStatus = (status: number): boolean =>
   RETRYABLE_STATUS.has(status);
 
 /**
- * Shared retryable-status decision for the three Drive retry loops (driveFetch,
- * queryResumableStatus, putChunkWithRetry): true when the response's status
+ * Shared retryable-status decision for Drive retry loops (driveFetch and any
+ * future loop sharing the helper): true when the response's status
  * warrants ANOTHER attempt — 429/5xx by status alone, or a 403 whose body
  * reports a Drive rate-limit reason. The 403 body is read via a clone ONLY
  * while retries remain (attempt < maxRetries), so the final attempt never
  * consumes the response body. Does NOT enforce the retry budget for the status
- * match itself — each loop applies its own budget and exhausted behavior
- * (driveFetch returns the final response; the upload loops throw).
+ * match itself — each loop applies its own budget and exhausted behavior.
  */
 export async function shouldRetryDriveResponse(
   response: Response,

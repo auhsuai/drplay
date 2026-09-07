@@ -15,9 +15,6 @@ interface DefaultMenuItemsProps {
     setIsOpen: (o: boolean) => void,
   ) => void;
   openDeleteConfirm: (item: DriveItem) => void;
-  uploadingBlocked: (extraClass: string) => string;
-  isTargetUploading: boolean;
-  uploadBlockedTitle: string | undefined;
   setIsOpen: (open: boolean) => void;
   onClose?: (() => void) | undefined;
   onSelectMultiple?: (() => void) | undefined;
@@ -34,9 +31,6 @@ export function DefaultMenuItems({
   token,
   handleDownloadClick,
   openDeleteConfirm,
-  uploadingBlocked,
-  isTargetUploading,
-  uploadBlockedTitle,
   setIsOpen,
   onClose,
   onSelectMultiple,
@@ -61,9 +55,7 @@ export function DefaultMenuItems({
               onClose?.();
               onSelectMultiple?.();
             }}
-            className={uploadingBlocked(baseClass)}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={baseClass}
             iconClassName="w-4 h-4 text-gray-400 group-hover:text-brand-primary"
             truncateLabel={false}
           />
@@ -82,9 +74,7 @@ export function DefaultMenuItems({
                 onClose?.();
               }
             }}
-            className={uploadingBlocked(baseClass)}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={baseClass}
           />
           <MoreMenuItem
             icon={Trash2}
@@ -101,9 +91,7 @@ export function DefaultMenuItems({
                 onClose?.();
               }
             }}
-            className={uploadingBlocked(deleteClass)}
-            disabled={isTargetUploading}
-            title={uploadBlockedTitle}
+            className={deleteClass}
           />
         </>
       )}
@@ -115,11 +103,7 @@ export function DefaultMenuItems({
           onClick={(e) => {
             handleDownloadClick(e, track, setIsOpen);
           }}
-          className={uploadingBlocked(
-            `${baseClass} disabled:opacity-50 disabled:cursor-not-allowed`,
-          )}
-          disabled={isTargetUploading}
-          title={uploadBlockedTitle}
+          className={baseClass}
         />
       )}
     </>

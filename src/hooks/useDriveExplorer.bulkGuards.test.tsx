@@ -12,21 +12,14 @@ import {
   driveFetch,
 } from "../utils/driveApi";
 import type { DriveFileItem } from "../utils/driveApi";
-import { isUploading, getUploadState } from "../utils/uploadManager";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
 
 // Network layer mocked (mirrors useDriveExplorer.fetchOnDemand.test.tsx);
-// uploadManager/driveApi/simpleToast mocked so bulk guards can be asserted
+// driveApi/simpleToast mocked so bulk guard behavior can be asserted
 // in isolation. Dexie stays real (fake-indexeddb).
 vi.mock("../utils/apiClient", () => ({
   fetchWithAuth: vi.fn(),
-}));
-vi.mock("../utils/uploadManager", () => ({
-  isUploading: vi.fn(),
-  getUploadingIds: vi.fn(),
-  getUploadState: vi.fn(),
-  subscribe: vi.fn(() => () => {}),
 }));
 vi.mock("../utils/driveApi", () => ({
   deleteFile: vi.fn(),
@@ -42,12 +35,10 @@ vi.mock("../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
 
-const mockedIsUploading = vi.mocked(isUploading);
 const mockedDeleteFile = vi.mocked(deleteFile);
 const mockedMoveFile = vi.mocked(moveFile);
 const mockedCreateFolder = vi.mocked(createFolder);
 const mockedShowErrorToast = vi.mocked(showErrorToast);
-const mockedGetUploadState = vi.mocked(getUploadState);
 const mockedDriveFetch = vi.mocked(driveFetch);
 const mockedCaptureError = vi.mocked(captureError);
 
@@ -57,10 +48,6 @@ const TOKEN = "bulk-token";
 beforeEach(async () => {
   await db.files.clear();
   useDriveStore.setState({ isLoadingTracks: false });
-  mockedIsUploading.mockReset();
-  mockedIsUploading.mockReturnValue(false);
-  mockedGetUploadState.mockReset();
-  mockedGetUploadState.mockReturnValue("none");
   mockedDeleteFile.mockReset();
   mockedDeleteFile.mockResolvedValue({
     id: "x",
@@ -107,45 +94,10 @@ function setupSelection(ids: string[]) {
   return result;
 }
 
-function uploadingId(id: string) {
-  mockedIsUploading.mockImplementation((candidate: string) => candidate === id);
-}
-
-describe("useDriveExplorer bulk guard: upload-uploading items are never deleted", () => {
-  it("skips uploading ids, deletes the rest, and toasts exactly once (mixed selection)", async () => {
-    uploadingId("c");
-    const result = setupSelection(["a", "b", "c"]);
-    const onComplete = vi.fn();
-
-    await act(async () => {
-      await result.current.handleBulkDelete(onComplete);
-    });
-
-    expect(mockedDeleteFile).toHaveBeenCalledTimes(2);
-    expect(mockedDeleteFile).toHaveBeenCalledWith(TOKEN, "a");
-    expect(mockedDeleteFile).toHaveBeenCalledWith(TOKEN, "b");
-    expect(mockedDeleteFile).not.toHaveBeenCalledWith(TOKEN, "c");
-    expect(mockedShowErrorToast).toHaveBeenCalledTimes(1);
-    expect(onComplete).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns early without deleting anything when every selected id is uploading", async () => {
-    uploadingId("a");
-    const result = setupSelection(["a"]);
-    const onComplete = vi.fn();
-
-    await act(async () => {
-      await result.current.handleBulkDelete(onComplete);
-    });
-
-    expect(mockedDeleteFile).not.toHaveBeenCalled();
-    expect(mockedShowErrorToast).toHaveBeenCalledTimes(1);
-    expect(result.current.selectedIds.has("a")).toBe(true);
-    expect(result.current.isBulkOperating).toBe(false);
-  });
-
-  it("keeps the old behavior (no toast, no filtering) when nothing is uploading", async () => {
+describe("useDriveExplorer bulk delete/move operate on the full selection", () => {
+  it("deletes every selected id with no toast (upload filtering removed)", async () => {
     const result = setupSelection(["a", "b"]);
+    const onComplete = vi.fn();
 
     try {
       await act(async () => {
@@ -158,48 +110,10 @@ describe("useDriveExplorer bulk guard: upload-uploading items are never deleted"
 
     expect(mockedDeleteFile).toHaveBeenCalledTimes(2);
     expect(mockedShowErrorToast).not.toHaveBeenCalled();
-  });
-});
-
-describe("useDriveExplorer bulk guard: upload-uploading items are never moved", () => {
-  it("skips uploading ids, moves the rest, and toasts exactly once (mixed selection)", async () => {
-    uploadingId("b");
-    const result = setupSelection(["a", "b"]);
-
-    await act(async () => {
-      await result.current.handleBulkMove("dest-folder", vi.fn());
-    });
-
-    expect(mockedMoveFile).toHaveBeenCalledTimes(1);
-    expect(mockedMoveFile).toHaveBeenCalledWith(
-      TOKEN,
-      "a",
-      FOLDER_ID,
-      "dest-folder",
-    );
-    expect(mockedMoveFile).not.toHaveBeenCalledWith(
-      TOKEN,
-      "b",
-      FOLDER_ID,
-      "dest-folder",
-    );
-    expect(mockedShowErrorToast).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it("returns early without moving anything when every selected id is uploading", async () => {
-    uploadingId("a");
-    const result = setupSelection(["a"]);
-
-    await act(async () => {
-      await result.current.handleBulkMove("dest-folder", vi.fn());
-    });
-
-    expect(mockedMoveFile).not.toHaveBeenCalled();
-    expect(mockedShowErrorToast).toHaveBeenCalledTimes(1);
-    expect(result.current.selectedIds.has("a")).toBe(true);
-  });
-
-  it("keeps the old behavior (no toast, no filtering) when nothing is uploading", async () => {
+  it("moves every selected id with no toast (upload filtering removed)", async () => {
     const result = setupSelection(["a", "b"]);
 
     await act(async () => {
@@ -313,20 +227,6 @@ describe("useDriveBulkOps closes the confirm dialog immediately (action runs in 
     expect(result.current.selectedIds.size).toBe(0);
   });
 
-  it("bulk delete: pre-flight failure (every id uploading) never calls onComplete — the dialog stays open", async () => {
-    uploadingId("a");
-    const result = setupSelection(["a"]);
-    const onComplete = vi.fn();
-
-    await act(async () => {
-      await result.current.handleBulkDelete(onComplete);
-    });
-
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(mockedDeleteFile).not.toHaveBeenCalled();
-    expect(result.current.selectedIds.has("a")).toBe(true);
-  });
-
   it("bulk delete: onComplete fires early even when an item fails later — the error toast still surfaces", async () => {
     let rejectDelete!: (e: Error) => void;
     mockedDeleteFile.mockImplementation(
@@ -391,19 +291,6 @@ describe("useDriveBulkOps closes the confirm dialog immediately (action runs in 
     );
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(result.current.isBulkOperating).toBe(false);
-  });
-
-  it("bulk move: pre-flight failure (every id uploading) never calls onComplete — the screen stays open", async () => {
-    uploadingId("a");
-    const result = setupSelection(["a"]);
-    const onComplete = vi.fn();
-
-    await act(async () => {
-      await result.current.handleBulkMove("dest-folder", onComplete);
-    });
-
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(mockedMoveFile).not.toHaveBeenCalled();
   });
 });
 

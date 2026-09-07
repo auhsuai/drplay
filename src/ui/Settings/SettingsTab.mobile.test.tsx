@@ -94,12 +94,6 @@ vi.mock("../../utils/downloadPath", () => ({
 
 vi.mock("../../utils/errorLog", () => ({ captureError: vi.fn() }));
 
-vi.mock("../../utils/uploadManager", () => ({
-  subscribe: vi.fn(() => () => {}),
-  getEntries: vi.fn(() => []),
-  cancelUpload: vi.fn(),
-}));
-
 vi.mock("./components/LanguageDropdown", () => ({
   LanguageDropdown: () => null,
 }));

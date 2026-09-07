@@ -1,7 +1,6 @@
-// Shared path helpers for the upload flows (diskFs, uploadManager,
-// UploadButton, DropZone). Before this module, the exact same basename body
-// was copy-pasted in 4 places — edge cases (trailing separators, root paths)
-// now live in ONE tested spot.
+// Shared path helpers. Before this module, the exact same basename body was
+// copy-pasted in several call sites — edge cases (trailing separators, root
+// paths) now live in ONE tested spot.
 
 const TRAILING_SEPARATORS = /[\\/]+$/;
 const SEPARATOR_SPLIT = /[\\/]/;

@@ -64,9 +64,8 @@ export function SortDropdown({
     showSortMenu,
   );
 
-  // Desktop keyboard: Escape closes the menu while open (UploadButton
-  // pattern); the listener exists only while the menu is open and other
-  // keys pass through untouched.
+  // Desktop keyboard: Escape closes the menu while open; the listener exists
+  // only while the menu is open and other keys pass through untouched.
   useEffect(() => {
     if (!showSortMenu) return;
     const handleKeyDown = (event: KeyboardEvent) => {

@@ -7,8 +7,6 @@ import {
   getMobileDownloadFolder,
 } from "../utils/downloadPath";
 import { DRIVE_FILES_URL } from "../utils/driveFiles";
-import { isUploading } from "../utils/uploadManager";
-import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
 import { IS_MOBILE } from "../utils/platform";
 import type { Track } from "../types";
@@ -86,13 +84,6 @@ export function useMenuDownload(t: TFunction) {
   ) => {
     e.stopPropagation();
     if (!track) return;
-    // Race guard (2nd layer behind the disabled menu item): an item that is
-    // still uploading has no playable media yet — downloading it would fetch a
-    // non-existent file.
-    if (isUploading(track.id)) {
-      showErrorToast(t("upload.uploading_blocked"));
-      return;
-    }
     setDownloadTrack(track);
     setDownloadFileName(
       `${track.title} - ${track.artist || t("common.unknown")}`,
