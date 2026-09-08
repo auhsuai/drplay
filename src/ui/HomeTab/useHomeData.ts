@@ -11,6 +11,7 @@ import { db } from "../../db/db";
 import { getCurrentUserEmail } from "../../utils/storageKeys";
 import { hasAudioExtension } from "../../utils/audioQuery";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
+import { DRIVE_FILES_CHANGED_EVENT } from "../../utils/driveConstants";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import rawGreetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
@@ -237,9 +238,15 @@ export function useHomeData(token: string | null) {
     };
     window.addEventListener("recent-updated", handleUpdate);
     window.addEventListener(SYNC_EVENT_NAMES.complete, handleDeltaRefresh);
+    // On-demand folder fetch writes pages straight into the db.files mirror
+    // without going through the pro-sync worker, so its writes never fire
+    // pro-sync-complete. This event is its write-through invalidation signal
+    // — same debounced delta-refresh path, one refetch per burst.
+    window.addEventListener(DRIVE_FILES_CHANGED_EVENT, handleDeltaRefresh);
     return () => {
       window.removeEventListener("recent-updated", handleUpdate);
       window.removeEventListener(SYNC_EVENT_NAMES.complete, handleDeltaRefresh);
+      window.removeEventListener(DRIVE_FILES_CHANGED_EVENT, handleDeltaRefresh);
       // Cancel a pending debounced delta refresh: no fetch may run after
       // unmount (a stale list write or a captureError with no UI left).
       if (deltaTimerRef.current !== null) {

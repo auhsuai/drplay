@@ -169,4 +169,104 @@ describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
     const count = await db.files.where("parentId").equals(FOLDER_ID).count();
     expect(count).toBe(0);
   });
+
+  it("dispatches drive-files-changed after each written page (count = page rows)", async () => {
+    // Literal matches the HomeTab listener tests' existing pattern (this file
+    // asserts the wire contract, not the constant's home module).
+    const EVENT = "drive-files-changed";
+
+    mockedFetch
+      .mockResolvedValueOnce(
+        makePage(
+          [0, 1, 2, 3, 4].map((i) => makeDriveFile(1, i)),
+          "token-2",
+        ),
+      )
+      .mockResolvedValueOnce(makePage([0, 1].map((i) => makeDriveFile(2, i))));
+
+    const events: CustomEvent[] = [];
+    const listener = (e: Event): void => {
+      events.push(e as CustomEvent);
+    };
+    window.addEventListener(EVENT, listener);
+
+    try {
+      renderHook(() =>
+        useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+      );
+
+      await waitFor(async () => {
+        const count = await db.files
+          .where("parentId")
+          .equals(FOLDER_ID)
+          .count();
+        expect(count).toBe(7);
+      });
+
+      // The dispatch is synchronous immediately after each page's bulkPut
+      // resolves, so by the time the DB shows all rows both events have fired.
+      // One event per written page; detail.count = that page's row count.
+      expect(events.length).toBe(2);
+      expect(events[0]?.detail).toEqual({ count: 5 });
+      expect(events[1]?.detail).toEqual({ count: 2 });
+    } finally {
+      window.removeEventListener(EVENT, listener);
+    }
+  });
+
+  it("does not dispatch drive-files-changed for an empty page", async () => {
+    const EVENT = "drive-files-changed";
+    mockedFetch.mockResolvedValueOnce(makePage([]));
+
+    const listener = vi.fn();
+    window.addEventListener(EVENT, listener);
+
+    try {
+      renderHook(() =>
+        useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+      );
+
+      // Let the no-op page resolve and the loop finish.
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(await db.files.where("parentId").equals(FOLDER_ID).count()).toBe(
+        0,
+      );
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(EVENT, listener);
+    }
+  });
+
+  it("does not dispatch drive-files-changed when the Dexie write fails", async () => {
+    const EVENT = "drive-files-changed";
+    mockedFetch.mockResolvedValueOnce(
+      makePage([0, 1].map((i) => makeDriveFile(1, i))),
+    );
+
+    const bulkPutSpy = vi
+      .spyOn(db.files, "bulkPut")
+      .mockRejectedValueOnce(new Error("QuotaExceededError"));
+    const listener = vi.fn();
+    window.addEventListener(EVENT, listener);
+
+    try {
+      renderHook(() =>
+        useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+      );
+
+      await waitFor(() => {
+        expect(bulkPutSpy).toHaveBeenCalledTimes(1);
+      });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(await db.files.where("parentId").equals(FOLDER_ID).count()).toBe(
+        0,
+      );
+    } finally {
+      window.removeEventListener(EVENT, listener);
+      bulkPutSpy.mockRestore();
+    }
+  });
 });

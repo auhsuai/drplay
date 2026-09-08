@@ -24,3 +24,12 @@ export type TabKey = (typeof TABS)[keyof typeof TABS] | `playlist_${string}`;
 // above 1000 are coerced to 1000). Single source of truth for the page size
 // used by the paginated listers in drivePagination.
 export const PAGINATION_PAGE_SIZE = 1000;
+
+// Window event fired whenever a writer adds rows to the local db.files mirror
+// outside the 60s delta-sync poller — currently: on-demand folder fetch;
+// future mirror writers dispatch it too. HomeTab listens to it and
+// delta-refreshes "Recently Added" — the event-driven invalidation half of
+// the write-through mirror pattern. Lives here (not tied to any single
+// feature module) because non-upload writers dispatch it and must not
+// depend on another feature stack.
+export const DRIVE_FILES_CHANGED_EVENT = "drive-files-changed";

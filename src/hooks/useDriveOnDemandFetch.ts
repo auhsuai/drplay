@@ -7,6 +7,7 @@ import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { getFolderAudioQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
+import { DRIVE_FILES_CHANGED_EVENT } from "../utils/driveConstants";
 import { getCurrentUserEmail } from "../utils/storageKeys";
 
 const DRIVE_PAGE_SIZE = 1000;
@@ -115,6 +116,17 @@ export function useDriveOnDemandFetch({
               });
               break;
             }
+            // Write-through invalidation: this page just landed in the mirror,
+            // so HomeTab's Recently Added must refresh now instead of waiting
+            // up to the 60s delta-sync poll. Reached only after a successful
+            // write (empty page, HTTP/network error, abort and Dexie failure
+            // all skip/break above); one event per page is fine — the HomeTab
+            // listener collapses bursts with a 1s trailing debounce.
+            window.dispatchEvent(
+              new CustomEvent(DRIVE_FILES_CHANGED_EVENT, {
+                detail: { count: rowsToUpsert.length },
+              }),
+            );
           }
 
           pageToken = data?.nextPageToken;
