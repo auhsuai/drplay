@@ -43,6 +43,10 @@ function makeSingleSegmentBuffered(end: number): TimeRanges {
  *  export the class type so tests can type the singleton. */
 export class NativeAudioEngine implements PlaybackEngine {
   private static readonly TIMEUPDATE_THROTTLE_MS = 200;
+  // Safety net for the seek-intent window: Media3's seek-BUFFERING dip
+  // settles well under a second; 2s bounds a wedged seek without masking
+  // pause edges for long (mirrors Kotlin SEEK_STATE_STALE_MS, 1.5s).
+  private static readonly SEEK_INTENT_STALE_MS = 2_000;
 
   private listeners: {
     [K in keyof NativeAudioEventMap]?: NativeAudioEventHandler<K>[];
@@ -85,6 +89,18 @@ export class NativeAudioEngine implements PlaybackEngine {
   // before; an explicit pause() closes the window first so a genuine pause
   // always wins, even mid-buffer.
   private loadIntentActive = false;
+  // Seek-intent window (seek-while-playing fix): true between a seek()
+  // dispatch and the first post-seek state that proves the seek settled.
+  // Media3 1.4.1 (ExoPlayerImplInternal.seekToPeriodPosition) enters
+  // STATE_BUFFERING on EVERY seek from READY — even fully-buffered targets —
+  // so the plugin pushes {isPlaying:false, buffering:true} mid-seek while
+  // wasPlaying is still true. That read as a "pause" edge and flipped the
+  // store, which PlayerBar's play/pause effect turned into a REAL pause
+  // (silent stop). Mirrors Kotlin's pendingSeekState mask. Only
+  // buffering-shaped pause edges are suppressed: a real user pause
+  // (buffering=false) always wins.
+  private seekIntentActive = false;
+  private seekIntentTimer: ReturnType<typeof setTimeout> | undefined;
   // Long-suspend recovery: the visibilitychange listener is attached once per
   // engine (on first initOnce) and never re-attached on re-init, so a
   // recovered bridge never accumulates duplicate listeners.
@@ -282,6 +298,10 @@ export class NativeAudioEngine implements PlaybackEngine {
   async seek(time: number): Promise<void> {
     if (!IS_MOBILE) return;
     const seq = ++this.seekSeq;
+    // Open BEFORE the FIFO wait: the masked resolve snapshot (and Media3's
+    // transient BUFFERING dip behind it) can arrive as soon as the queued
+    // turn fires, and rapid seeks re-arm the same window latest-wins.
+    this.openSeekIntentWindow();
     const turn = this.playChain.then(() => this.runSeekChain(seq, time));
     // Same anti-poison contract as playTrack: the failure still reaches THIS
     // call's caller (useSeekDrag recovery, media-session, seekRelative),
@@ -297,9 +317,35 @@ export class NativeAudioEngine implements PlaybackEngine {
     if (seq !== this.seekSeq) return;
     await this.initOnce().catch(() => undefined);
     if (seq !== this.seekSeq) return;
-    await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
-      position: time,
-    });
+    try {
+      await this.invokeStateful(PLUGIN_COMMAND.seekTo, {
+        position: time,
+      });
+    } catch (e: unknown) {
+      // A dead seek must not leave the window suppressing pause edges until
+      // the stale timeout — close it so later real pauses sync the store.
+      this.closeSeekIntentWindow();
+      throw e;
+    }
+  }
+
+  /** Open (or re-open latest-wins) the seek-intent window and arm the stale
+   *  safety net; every close path clears the timer so nothing leaks. */
+  private openSeekIntentWindow(): void {
+    this.seekIntentActive = true;
+    if (this.seekIntentTimer !== undefined) clearTimeout(this.seekIntentTimer);
+    this.seekIntentTimer = setTimeout(() => {
+      this.seekIntentActive = false;
+      this.seekIntentTimer = undefined;
+    }, NativeAudioEngine.SEEK_INTENT_STALE_MS);
+  }
+
+  private closeSeekIntentWindow(): void {
+    this.seekIntentActive = false;
+    if (this.seekIntentTimer !== undefined) {
+      clearTimeout(this.seekIntentTimer);
+      this.seekIntentTimer = undefined;
+    }
   }
 
   getCurrentTime(): number {
@@ -344,6 +390,7 @@ export class NativeAudioEngine implements PlaybackEngine {
     // seek_to on a released (stopped) player.
     this.playSeq++;
     this.seekSeq++;
+    this.closeSeekIntentWindow();
     this.currentTrackId = null;
     this.currentTrack = null;
     this.token = null;
@@ -455,12 +502,16 @@ export class NativeAudioEngine implements PlaybackEngine {
       // Parity with AudioController: error → ended → auto-advance.
       this.emit("ended", undefined);
       this.wasPlaying = false;
+      // The seek is gone with the player: never let its window suppress
+      // later pause edges until the stale timeout.
+      this.closeSeekIntentWindow();
       return;
     }
 
     if (state.status === "ended") {
       this.emit("ended", undefined);
       this.wasPlaying = false;
+      this.closeSeekIntentWindow();
       return;
     }
 
@@ -470,6 +521,24 @@ export class NativeAudioEngine implements PlaybackEngine {
       this.emit("buffering", { isBuffering: false });
     }
 
+    // Close the seek-intent window as soon as the native state proves the
+    // seek settled: playback actually resumed (isPlaying + not buffering —
+    // the masked resolve/ack snapshots carry isPlaying=true while still
+    // buffering and must NOT close the window) or a real pause landed
+    // (not buffering, not playing — the pause edge below must fire).
+    if (this.seekIntentActive && !state.buffering) {
+      this.closeSeekIntentWindow();
+    }
+
+    // Fake-seek-pause shape (computed before the edges): Media3 1.4.1
+    // (ExoPlayerImplInternal.seekToPeriodPosition: stopRenderers +
+    // setState) enters STATE_BUFFERING on EVERY seek from READY — even
+    // fully-buffered targets — pushing a transient {isPlaying:false,
+    // buffering:true} while the user is still logically playing. Inside
+    // the seek-intent window that is the seek, not a user pause.
+    const fakeSeekPause =
+      this.seekIntentActive && state.buffering && !state.isPlaying;
+
     if (state.isPlaying && !this.wasPlaying) {
       this.emit("play", undefined);
       usePlayerStore.getState().setIsPlaying(true);
@@ -478,12 +547,23 @@ export class NativeAudioEngine implements PlaybackEngine {
       this.wasPlaying &&
       // Inside a JS-initiated load window Media3 reports isPlaying=false
       // while buffering — that is the load, not a pause. See loadIntentActive.
-      !this.loadIntentActive
+      !this.loadIntentActive &&
+      // See fakeSeekPause: only buffering-shaped edges inside the seek
+      // window are suppressed — a real pause (buffering=false) always
+      // syncs the store.
+      !fakeSeekPause
     ) {
       this.emit("pause", undefined);
       usePlayerStore.getState().setIsPlaying(false);
     }
-    this.wasPlaying = state.isPlaying;
+    // A suppressed fake pause must not corrupt the play-state memory: keep
+    // wasPlaying=true through it so a REAL pause right after the seek
+    // (buffering=false) still has its edge, and the resumed-READY tick
+    // needs no phantom "play" (the store never flipped). Load-window
+    // snapshots keep the old clobber — the READY play edge re-affirms it.
+    if (!fakeSeekPause) {
+      this.wasPlaying = state.isPlaying;
+    }
 
     if (state.duration !== prev?.duration && state.duration > 0) {
       this.emit("durationchange", { duration: state.duration });
