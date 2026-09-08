@@ -173,6 +173,21 @@ export async function parseDriveJson<T = Record<string, unknown>>(
     const data: unknown = await res.json();
     return data as T;
   } catch (err) {
+    // AbortSignal.timeout covers the body read too: the fetch promise already
+    // resolved (status 200) but res.json() rejects with a raw DOMException
+    // AbortError once the body stream outlives the budget. That is an abort —
+    // rethrow as the typed WorkerAbortError so fullSync/deltaSync's
+    // `instanceof WorkerAbortError` guard clean-stops (poller retries) instead
+    // of reporting SYNC_ERROR for a non-failure.
+    if (classifyWorkerError(err) === "abort") {
+      logWorkerError(
+        "proSync/" + ctx,
+        { status: res.status, kind: "body-abort" },
+        err,
+        "warn",
+      );
+      throw new WorkerAbortError(`aborted during ${ctx}`);
+    }
     logWorkerError(
       "proSync/" + ctx,
       { status: res.status, kind: "parse" },

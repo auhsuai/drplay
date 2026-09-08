@@ -1002,6 +1002,85 @@ describe("full-sync reports SYNC_ERROR when a later page fails to parse", () => 
   });
 });
 
+describe("body-read abort during parse is a clean stop (regression)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  // AbortSignal.timeout cuts a slow body read too: the fetch promise already
+  // resolved (status 200) but res.json() rejects with a raw DOMException
+  // AbortError. That is an abort (poller retries), not a parse/hard failure —
+  // parseDriveJson must rethrow the typed WorkerAbortError so the sync loops
+  // clean-stop instead of posting SYNC_ERROR.
+  it("full-sync: page json() aborts → no SYNC_ERROR, no SYNC_COMPLETE, no stored token", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-ab" }), {
+          status: 200,
+        }),
+      )
+      // Headers arrived in time; the body read is cut by the fetch timeout.
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.reject(
+            new DOMException("The user aborted a request.", "AbortError"),
+          ),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: {
+        type: "sync",
+        token: "tok-abort-full",
+        userEmail: FIXTURE_EMAIL,
+      },
+    } as MessageEvent);
+
+    expect(posted).not.toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toBeUndefined();
+  });
+
+  it("delta-sync: changes json() aborts → no SYNC_ERROR, no SYNC_COMPLETE, stored token untouched", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.reject(
+          new DOMException("The user aborted a request.", "AbortError"),
+        ),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: {
+        type: "sync",
+        token: "tok-abort-delta",
+        userEmail: FIXTURE_EMAIL,
+      },
+    } as MessageEvent);
+
+    expect(posted).not.toContainEqual({ type: "SYNC_ERROR" });
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+});
+
 describe("full-sync reports SYNC_ERROR when bulkPut fails mid-sync", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
