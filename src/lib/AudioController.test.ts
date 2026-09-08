@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Track } from "../types";
 import { usePlayerStore } from "../store/playerStore";
+import { captureError } from "../utils/errorLog";
 
 vi.mock("../store/playerStore", () => ({
   usePlayerStore: {
@@ -380,6 +381,25 @@ describe("AudioController retry lifecycle", () => {
     expect(audioEl(1).src).toBe("/drive-stream/no-url-2");
   });
 
+  it("seek: readyState 0 drops the seek but logs a warn (no silent drop, no throw)", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    await ctrl.playTrack(trackA);
+    const audio = audioEl(1); // FakeAudio default readyState = 0 (metadata loading)
+
+    // captureError is a shared module mock without a per-test reset in this
+    // file — clear it so the count assertion below is scoped to this test.
+    vi.mocked(captureError).mockClear();
+
+    expect(() => {
+      ctrl.seek(30);
+    }).not.toThrow();
+    expect(audio.currentTime).toBe(0); // still not seeked — unchanged behavior
+    expect(captureError).toHaveBeenCalledTimes(1);
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", source: "AudioController" }),
+    );
+  });
+
   it("safePlay: calls audio.play() when resuming a paused track (same-track path)", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
@@ -534,12 +554,13 @@ describe("AudioController retry lifecycle", () => {
   });
 
   describe("AudioController event-listener lifecycle", () => {
-    it("registers exactly 11 native listeners, one per event type, on each element", () => {
+    it("registers exactly 12 native listeners, one per event type, on each element", () => {
       AudioControllerClass.getInstance();
       const expected = [
         "timeupdate",
         "durationchange",
         "waiting",
+        "canplay",
         "playing",
         "pause",
         "ended",
