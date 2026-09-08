@@ -9,9 +9,34 @@ const MAX_DELAY_MS = 32000;
 /**
  * Delay helper (exported for tests). Resolves after `ms` milliseconds via
  * setTimeout; the retry backoff this module exposes lives in backoffDelay.
+ * An optional caller `signal` makes a long sleep (Retry-After up to 32s)
+ * cancellable mid-wait: an already-aborted signal rejects at once, otherwise
+ * the abort event clears the timer and rejects with `signal.reason`.
+ * Omitting it keeps the historical resolve-after-ms behavior.
  */
-export const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    const rejectWithReason = (): void => {
+      // AbortSignal.reason is intentionally `any` per DOM (MDN): the contract
+      // is to reject with the caller's own reason verbatim, so the rule's
+      // Error-only preference is waived here on purpose.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      reject(signal?.reason);
+    };
+    if (signal?.aborted === true) {
+      rejectWithReason();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      rejectWithReason();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 // Merge a caller-supplied abort signal with a fresh timeout signal so a
 // stalled network still fails after timeoutMs. A caller signal must NOT

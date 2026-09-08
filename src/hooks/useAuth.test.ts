@@ -533,6 +533,7 @@ describe("useAuth profile fetch abort handling (isAbortError unified)", () => {
   };
 
   afterEach(() => {
+    vi.useRealTimers();
     authState.isLoggedIn = false;
     authState.accessToken = null;
   });
@@ -567,11 +568,15 @@ describe("useAuth profile fetch abort handling (isAbortError unified)", () => {
       message: "boom",
     });
 
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     renderLoggedIn();
+    // The final error log only fires after the retry budget is exhausted:
+    // attempt 1 immediately, attempt 2 after 2s, attempt 3 after 4s.
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(6_500);
     });
 
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(3);
     expect(
       mockedCaptureError.mock.calls.some(([c]) =>
         c.message.includes("Failed to fetch user profile (best-effort)"),
@@ -582,15 +587,153 @@ describe("useAuth profile fetch abort handling (isAbortError unified)", () => {
   it("still logs a plain Error reject (network failure path preserved)", async () => {
     mockedFetchWithAuth.mockRejectedValue(new Error("network down"));
 
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     renderLoggedIn();
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(6_500);
     });
 
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(3);
     expect(
       mockedCaptureError.mock.calls.some(([c]) =>
         c.message.includes("Failed to fetch user profile (best-effort)"),
       ),
     ).toBe(true);
+  });
+});
+
+describe("useAuth profile fetch retry (cold-start resilience)", () => {
+  const RETRY_EMAIL = "retry@example.com";
+  const successResponse = () =>
+    ({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          email: RETRY_EMAIL,
+          name: "Retry User",
+          picture: "",
+        }),
+    }) as unknown as Response;
+
+  const renderLoggedIn = () => {
+    authState.isLoggedIn = true;
+    authState.accessToken = "tok-123";
+    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
+    return renderHook(() => useAuth());
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    authState.isLoggedIn = false;
+    authState.accessToken = null;
+  });
+
+  it("retries transient failures and persists the email + dispatches user-changed when an attempt succeeds", async () => {
+    const changedListener = vi.fn();
+    window.addEventListener("user-changed", changedListener);
+    try {
+      vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+      mockedFetchWithAuth
+        .mockRejectedValueOnce(new Error("net fail 1"))
+        .mockRejectedValueOnce(new Error("net fail 2"))
+        .mockResolvedValueOnce(successResponse());
+
+      renderLoggedIn();
+
+      // Backoff schedule: attempt 1 immediately, attempt 2 after 2s,
+      // attempt 3 after 4s — 6.5s of advanced time covers all of it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_500);
+      });
+
+      expect(mockedFetchWithAuth).toHaveBeenCalledTimes(3);
+      expect(localStorage.getItem(USER_EMAIL_KEY)).toBe(RETRY_EMAIL);
+      expect(changedListener).toHaveBeenCalledTimes(1);
+      // Each failed attempt warns (attempt number included); the success
+      // path logs nothing more.
+      const warnAttempts = mockedCaptureError.mock.calls.filter(([c]) =>
+        c.message.includes("Profile fetch attempt"),
+      );
+      expect(warnAttempts).toHaveLength(2);
+      expect(warnAttempts[0]?.[0].message).toContain("attempt 1");
+      expect(warnAttempts[1]?.[0].message).toContain("attempt 2");
+      expect(
+        mockedCaptureError.mock.calls.some(([c]) => c.level === "error"),
+      ).toBe(false);
+    } finally {
+      window.removeEventListener("user-changed", changedListener);
+    }
+  });
+
+  it("logs the final error after exhausting all retry attempts when every attempt fails", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+    mockedFetchWithAuth.mockRejectedValue(new Error("always down"));
+    const changedListener = vi.fn();
+    window.addEventListener("user-changed", changedListener);
+
+    try {
+      renderLoggedIn();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_500);
+      });
+
+      expect(mockedFetchWithAuth).toHaveBeenCalledTimes(3);
+      expect(localStorage.getItem(USER_EMAIL_KEY)).toBeNull();
+      expect(changedListener).not.toHaveBeenCalled();
+      expect(
+        mockedCaptureError.mock.calls.filter(
+          ([c]) => c.level === "warn" && c.message.includes("attempt"),
+        ),
+      ).toHaveLength(2);
+      const finalError = mockedCaptureError.mock.calls.find(
+        ([c]) => c.level === "error",
+      );
+      expect(finalError?.[0].message).toContain(
+        "Failed to fetch user profile (best-effort)",
+      );
+    } finally {
+      window.removeEventListener("user-changed", changedListener);
+    }
+  });
+
+  it("does not retry after an AbortError reject (single attempt, no logs)", async () => {
+    mockedFetchWithAuth.mockRejectedValue(
+      new DOMException("The operation was aborted", "AbortError"),
+    );
+
+    const { unmount } = renderLoggedIn();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    unmount();
+
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+
+  it("stops retrying when unmount aborts mid-backoff (no further fetch, no logs)", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
+    mockedFetchWithAuth
+      .mockRejectedValueOnce(new Error("fail once"))
+      .mockResolvedValue(successResponse());
+
+    const { unmount } = renderLoggedIn();
+    // Flush attempt 1 (fails, warn logged) so the 2s backoff timer is armed.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(1);
+
+    unmount(); // aborts the pending backoff sleep
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(
+      mockedCaptureError.mock.calls.some(([c]) =>
+        c.message.includes("Failed to fetch user profile"),
+      ),
+    ).toBe(false);
   });
 });

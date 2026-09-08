@@ -83,6 +83,28 @@ describe("sleep", () => {
     await p;
     expect(resolved).toBe(true);
   });
+
+  it("rejects with signal.reason when the signal is already aborted", async () => {
+    vi.useFakeTimers();
+    const stop = new Error("stop");
+    const controller = new AbortController();
+    controller.abort(stop);
+    const assertion = expect(sleep(5000, controller.signal)).rejects.toBe(stop);
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
+  it("rejects with signal.reason when aborted mid-sleep", async () => {
+    vi.useFakeTimers();
+    const stop = new Error("stop");
+    const controller = new AbortController();
+    const assertion = expect(sleep(30_000, controller.signal)).rejects.toBe(
+      stop,
+    );
+    controller.abort(stop);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+  });
 });
 
 describe("mergeWithTimeoutSignal", () => {
