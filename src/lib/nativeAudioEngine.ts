@@ -20,6 +20,7 @@ import {
 } from "./nativeAudioInvoke";
 import { buildSetQueuePayload, selectQueueTransport } from "./nativeAudioQueue";
 import { NativeStateMapper } from "./nativeAudioStateMapper";
+import { NativeBridgeHealth } from "./nativeAudioHealth";
 
 /** Empty TimeRanges for getBuffered(): the plugin exposes no buffered-range
  *  info, so the buffer bar renders empty on mobile (position fill only). */
@@ -48,7 +49,6 @@ export class NativeAudioEngine implements PlaybackEngine {
     [K in keyof NativeAudioEventMap]?: NativeAudioEventHandler<K>[];
   } = {};
 
-  private initPromise: Promise<void> | undefined;
   private token: string | null = null;
   private currentTrackId: string | null = null;
   // The full Track bound to the current source — read in the error path to
@@ -93,103 +93,61 @@ export class NativeAudioEngine implements PlaybackEngine {
   // before; an explicit pause() closes the window first so a genuine pause
   // always wins, even mid-buffer.
   private loadIntentActive = false;
-  // Long-suspend recovery: the visibilitychange listener is attached once per
-  // engine (on first initOnce) and never re-attached on re-init, so a
-  // recovered bridge never accumulates duplicate listeners.
-  // resumeCheckInFlight guards two overlapping visible transitions.
-  private resumeCheckListenerAttached = false;
-  private resumeCheckInFlight = false;
+  // Init idempotency + long-suspend recovery (tauri#15671 family) live in
+  // NativeBridgeHealth; this engine injects the real IPC, keeps the gate.
+  private health = new NativeBridgeHealth({
+    initOnceCommand: () => this.runInitCommands(),
+    probeState: () => this.probeStateSnapshot(),
+    onState: (state) => {
+      this.onNativeState(state);
+    },
+    report: (context, e) => {
+      this.report(context, e);
+    },
+  });
 
   /** Initialize the plugin once (notification permission on Android 13+ is
    *  requested by the plugin during initialize()). Safe to call repeatedly. */
   initOnce(): Promise<void> {
     if (!IS_MOBILE) return Promise.resolve();
-    if (!this.initPromise) {
-      this.initPromise = (async () => {
-        // The resume health-check listener rides on the first init so it
-        // exists even when this first initialize() fails — the probe's
-        // re-init path is then the only recovery.
-        this.attachResumeHealthCheck();
-        // Bounded like every other invoke: a wedged bridge must fail here
-        // (and reset initPromise below) instead of hanging the first load
-        // chain — or the resume re-init — forever.
-        await invokeWithTimeout(
-          invoke(PLUGIN_COMMAND.initialize),
-          TRANSPORT_INVOKE_TIMEOUT_MS,
-          PLUGIN_COMMAND.initialize,
-        );
-        // Listener lives for the whole app session (no per-track teardown).
-        await invokeWithTimeout(
-          addPluginListener(
-            "native-audio",
-            "native_audio_state",
-            (state: NativeAudioState) => {
-              this.onNativeState(state);
-            },
-          ),
-          TRANSPORT_INVOKE_TIMEOUT_MS,
-          "plugin:native-audio|register_listener",
-        );
-      })().catch((e: unknown) => {
-        // Reset so a later retry (e.g. after permission grant) can re-init.
-        this.initPromise = undefined;
-        throw e;
-      });
-    }
-    return this.initPromise;
+    return this.health.initOnce();
   }
 
-  /** Long-suspend recovery (tauri#15671 family): after the activity survives
-   *  a long device sleep, the plugin event channel or the invoke bridge can
-   *  be dead while the UI keeps rendering the cached lastState — progress
-   *  freezes silently. On each visible transition, probe the bridge with the
-   *  read-only get_state command; on failure reset the cached init, re-run
-   *  initOnce() (re-subscribes the state listener) and re-pull the
-   *  authoritative state through the normal onNativeState path. */
-  private attachResumeHealthCheck(): void {
-    if (this.resumeCheckListenerAttached) return;
-    this.resumeCheckListenerAttached = true;
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState !== "visible") return;
-      void this.runResumeHealthCheck();
-    });
+  /** The real init IPC behind health.initOnce (idempotency lives there):
+   *  bounded initialize + the session-long state listener registration —
+   *  the health-check listener attaches before these (health unit), so the
+   *  order stays attach → initialize → register. */
+  private async runInitCommands(): Promise<void> {
+    // Bounded like every other invoke: a wedged bridge must fail here
+    // (and reset initPromise below) instead of hanging the first load
+    // chain — or the resume re-init — forever.
+    await invokeWithTimeout(
+      invoke(PLUGIN_COMMAND.initialize),
+      TRANSPORT_INVOKE_TIMEOUT_MS,
+      PLUGIN_COMMAND.initialize,
+    );
+    // Listener lives for the whole app session (no per-track teardown).
+    await invokeWithTimeout(
+      addPluginListener(
+        "native-audio",
+        "native_audio_state",
+        (state: NativeAudioState) => {
+          this.onNativeState(state);
+        },
+      ),
+      TRANSPORT_INVOKE_TIMEOUT_MS,
+      "plugin:native-audio|register_listener",
+    );
   }
 
-  private async runResumeHealthCheck(): Promise<void> {
-    if (this.resumeCheckInFlight) return;
-    this.resumeCheckInFlight = true;
-    try {
-      await this.pullCurrentState();
-    } catch (e: unknown) {
-      this.report("resume health-check failed, re-initializing", e);
-      // Drop the cached init (possibly a dead listener registration) and
-      // rebuild it; initOnce re-subscribes the plugin listener.
-      this.initPromise = undefined;
-      try {
-        await this.initOnce();
-        await this.pullCurrentState();
-      } catch (reinitError: unknown) {
-        // Still dead: everything stays reset so the NEXT visible transition
-        // retries once more (bounded — no polling, no infinite loop).
-        this.report("resume re-init failed", reinitError);
-      }
-    } finally {
-      this.resumeCheckInFlight = false;
-    }
-  }
-
-  /** Pull the authoritative player state once and feed it through the same
-   *  onNativeState path as live events, so store + UI re-sync after a
-   *  suspend: a still-playing foreground service resumes ticking into the
-   *  fresh listener, and play/pause edges fire exactly as they would for
-   *  live events (identical-state pushes are no-ops by design). */
-  private async pullCurrentState(): Promise<void> {
-    const state = await invokeWithTimeout(
+  /** Raw get_state probe (no media work); undefined-skip + onNativeState
+   *  fan-out stay in the health unit (verbatim pullCurrentState). */
+  private async probeStateSnapshot(): Promise<NativeAudioState | undefined> {
+    return invokeWithTimeout(
       invoke<NativeAudioState | undefined>(PLUGIN_COMMAND.getState),
       RESUME_HEALTH_CHECK_TIMEOUT_MS,
       PLUGIN_COMMAND.getState,
     );
-    if (state) this.onNativeState(state);
   }
 
   /** Access token for the Authorization header — kept in memory only, never

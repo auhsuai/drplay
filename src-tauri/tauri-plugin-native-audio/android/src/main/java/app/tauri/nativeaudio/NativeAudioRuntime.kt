@@ -1,49 +1,34 @@
 package app.tauri.nativeaudio
 
-import android.app.ActivityManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.os.PowerManager
 import android.util.Log
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
-import com.google.common.util.concurrent.Futures
-import com.google.common.util.concurrent.ListenableFuture
 import kotlin.math.max
 
 object NativeAudioRuntime {
-    private val lock = Any()
-    private val tickHandler = Handler(Looper.getMainLooper())
-    private var tickScheduled = false
+    internal val lock = Any()
+    internal val ticker = PlaybackTicker(this)
+    private val playerListener = NativePlayerListener(this)
 
-    private var player: ExoPlayer? = null
-    private var appContext: Context? = null
+    internal var player: ExoPlayer? = null
+    internal var appContext: Context? = null
     private var mediaSession: MediaSession? = null
     private var mediaSessionPlayer: Player? = null
-    private var lastError: String? = null
-    private var pendingSeekState: PendingSeekState? = null
+    internal var lastError: String? = null
+    internal var pendingSeekState: PendingSeekState? = null
     private var currentStoryId: Long? = null
     // DrPlay fork: media id (track id string) of the current item, tracked at
     // every media-item transition and shipped in the state snapshot so the
     // JS side can sync its store on native auto-advance. currentStoryId
     // (Long) stays authoritative for the progress checkpoint flow.
-    private var currentMediaId: String? = null
+    internal var currentMediaId: String? = null
     private var lastProgressPersistedAtMs = 0L
     private var lastProgressPersistedStoryId: Long? = null
     private var lastProgressPersistedTimeSec: Double? = null
@@ -58,174 +43,9 @@ object NativeAudioRuntime {
     // per-track headers right before setMediaItem so every new source starts
     // with the right Authorization header.
     @OptIn(UnstableApi::class)
-    private val httpDataSourceFactory: DefaultHttpDataSource.Factory =
+    internal val httpDataSourceFactory: DefaultHttpDataSource.Factory =
         DefaultHttpDataSource.Factory()
 
-    // DrPlay fork: process-death resumption hook (Bug 2). media3 1.4.1 puts
-    // onPlaybackResumption on MediaSession.Callback — NOT on MediaSessionService
-    // (verified against MediaSessionService.java / MediaSession.java at tag
-    // 1.4.1) — so it is attached to the session builder in ensure(). Returning
-    // a failed future when nothing is persisted mirrors the default
-    // implementation (immediateFailedFuture(UnsupportedOperationException)).
-    // Pure data work only (prefs read + object build), no player access.
-    @OptIn(UnstableApi::class)
-    private val resumptionSessionCallback = object : MediaSession.Callback {
-        override fun onPlaybackResumption(
-            mediaSession: MediaSession,
-            controller: MediaSession.ControllerInfo,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val context = appContext
-            if (context == null) {
-                Log.w(TAG, "onPlaybackResumption: runtime not initialized, cannot resume")
-                return Futures.immediateFailedFuture(
-                    IllegalStateException("native audio runtime not initialized")
-                )
-            }
-            val data = AudioResumeStore.resumptionSnapshot(context)
-            if (data == null) {
-                Log.w(TAG, "onPlaybackResumption: no resumable audio state persisted")
-                return Futures.immediateFailedFuture(
-                    IllegalStateException("no resumable audio state persisted")
-                )
-            }
-            // Re-apply the persisted headers BEFORE the session prepares the
-            // player: a fresh process starts with an empty default header set,
-            // so an authenticated (Drive) source would 401 without this.
-            // Header values are never logged.
-            httpDataSourceFactory.setDefaultRequestProperties(data.headers ?: emptyMap())
-            val mediaItem = buildMediaItem(data.src, data.title, data.artist, data.artworkUrl, data.trackId)
-            return Futures.immediateFuture(
-                MediaSession.MediaItemsWithStartPosition(
-                    listOf(mediaItem), 0, (data.positionSec * 1000.0).toLong(),
-                )
-            )
-        }
-    }
-
-    private val tickRunnable = object : Runnable {
-        override fun run() {
-            val shouldContinue = synchronized(lock) {
-                val snapshot = snapshotLocked()
-                appContext?.let { persistProgressCheckpointLocked(it, snapshot, force = false) }
-                NativeAudioPlugin.emitToActive(snapshot)
-                val isPlaying = player?.isPlaying == true
-                tickScheduled = isPlaying
-                isPlaying
-            }
-            if (shouldContinue) {
-                val delay = synchronized(lock) { nextProgressTickDelayLocked() }
-                tickHandler.postDelayed(this, delay)
-            }
-        }
-    }
-
-    private val playerListener = object : Player.Listener {
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) {
-                synchronized(lock) {
-                    appContext?.let { persistProgressCheckpointLocked(it, snapshotLocked(), force = true) }
-                }
-            }
-            syncTicking()
-            emitState()
-        }
-
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            syncTicking()
-            emitState()
-        }
-
-        // DrPlay fork: with a queue, ExoPlayer advances to the next item
-        // NATIVELY on STATE_ENDED — no WebView round-trip needed (Bug 3: a
-        // backgrounded WebView gets suspended and the JS-driven advance
-        // never runs). The listener also keeps the progress checkpoint and
-        // the process-death resume snapshot in sync with the new item.
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            synchronized(lock) {
-                // Track the item id as a raw string (Drive file ids are not
-                // numeric); setMediaId on queue items keeps this non-empty,
-                // while setSource items keep the default "" and are ignored.
-                val id = mediaItem?.mediaId?.takeIf { it.isNotEmpty() }
-                if (id != null) currentMediaId = id
-                appContext?.let { persistProgressCheckpointLocked(it, snapshotLocked(), force = true) }
-                persistResumeDataLocked(mediaItem)
-            }
-            syncTicking()
-            emitState()
-        }
-
-        // DrPlay fork: the buffer bar must also grow while PAUSED. The 25ms
-        // progress tick only runs while isPlaying, and Media3 has no event
-        // dedicated to buffered-position changes — EVENT_IS_LOADING_CHANGED
-        // is the closest signal (Player.java). Each emitState ships a fresh
-        // getBufferedPosition() estimate; the JS bridge diffs values before
-        // surfacing "progress", so unchanged pushes are free.
-        override fun onIsLoadingChanged(isLoading: Boolean) {
-            syncTicking()
-            emitState()
-        }
-
-        override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) {
-            emitState()
-        }
-
-        override fun onPositionDiscontinuity(
-            oldPosition: Player.PositionInfo,
-            newPosition: Player.PositionInfo,
-            reason: Int,
-        ) {
-            if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
-                synchronized(lock) {
-                    val exoPlayer = player ?: return@synchronized
-                    val pendingSeek = pendingSeekState
-                    val shouldResume = pendingSeek?.shouldResume ?: exoPlayer.playWhenReady
-                    if (!shouldResume && exoPlayer.playWhenReady) exoPlayer.pause()
-                    val shouldRecoverPlayback =
-                        shouldResume &&
-                            !exoPlayer.isPlaying &&
-                            exoPlayer.playbackState == Player.STATE_READY &&
-                            lastError == null
-                    if (shouldRecoverPlayback) exoPlayer.play()
-                    // DrPlay fork: reaching this branch means the seek has been
-                    // APPLIED by ExoPlayer (Player.java: DISCONTINUITY_REASON_SEEK
-                    // fires for "seek within the current period or to another
-                    // period"; SEEK_ADJUSTMENT is its inexact-position variant).
-                    // Clear the pending marker BEFORE the snapshot below so
-                    // effectiveBuffering reports the player's real buffering state
-                    // instead of staying masked false for up to
-                    // SEEK_STATE_STALE_MS after the seek lands. If a newer seek
-                    // was dispatched in the meantime, dropping its mask early only
-                    // surfaces the truth sooner (TS coalesces seeks since 8c43bf2),
-                    // so no revision tracking is needed here.
-                    if (pendingSeek != null) {
-                        pendingSeekState = null
-                        Log.i(TAG, "seek landed, cleared pendingSeekState shouldResume=$shouldResume")
-                    }
-                    appContext?.let { persistProgressCheckpointLocked(it, snapshotLocked(), force = true) }
-                }
-            }
-            syncTicking()
-            emitState()
-        }
-
-        override fun onPlayerError(error: PlaybackException) {
-            Log.e(TAG, "onPlayerError code=${error.errorCodeName} message=${error.message}", error)
-            synchronized(lock) {
-                // DrPlay fork: forward the real error code name (e.g.
-                // ERROR_CODE_PARSER_CONTAINER_UNSUPPORTED / ERROR_CODE_IO_*)
-                // instead of a bare message so the JS side can tell a
-                // container/seek failure (m4a moov-at-end) apart from a
-                // network or decoder one. The JS still maps every error to
-                // code "format_error" — only the diagnostics text changes.
-                lastError = "${error.errorCodeName}: ${error.message ?: "unknown"}"
-                pendingSeekState = null
-            }
-            syncTicking()
-            emitState()
-        }
-    }
-
-    @OptIn(UnstableApi::class)
     fun ensure(context: Context) {
         synchronized(lock) {
             if (player != null && mediaSession != null) return
@@ -233,86 +53,16 @@ object NativeAudioRuntime {
             val ctx = context.applicationContext
             appContext = ctx
 
-            val audioAttributes = AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                .build()
-
-            val exoPlayer = ExoPlayer.Builder(ctx)
-                .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
-                .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
-                .setMediaSourceFactory(
-                    DefaultMediaSourceFactory(httpDataSourceFactory, DefaultExtractorsFactory())
-                )
-                .build()
-            exoPlayer.setAudioAttributes(audioAttributes, true)
-            exoPlayer.setHandleAudioBecomingNoisy(true)
-            exoPlayer.setWakeMode(C.WAKE_MODE_LOCAL)
-            exoPlayer.addListener(playerListener)
-            player = exoPlayer
-            mediaSessionPlayer = object : ForwardingPlayer(exoPlayer) {
-                override fun getAvailableCommands(): Player.Commands {
-                    return super.getAvailableCommands()
-                        .buildUpon()
-                        .add(Player.COMMAND_SEEK_BACK)
-                        .add(Player.COMMAND_SEEK_FORWARD)
-                        .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                        .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                        .add(Player.COMMAND_SEEK_TO_NEXT)
-                        .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                        .build()
-                }
-
-                override fun isCommandAvailable(command: Int): Boolean {
-                    if (command == Player.COMMAND_SEEK_BACK || command == Player.COMMAND_SEEK_FORWARD) return true
-                    if (command == Player.COMMAND_SEEK_TO_PREVIOUS || command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) return true
-                    if (command == Player.COMMAND_SEEK_TO_NEXT || command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) return true
-                    return super.isCommandAvailable(command)
-                }
-
-                override fun seekToPrevious() {
-                    exoPlayer.seekBack()
-                }
-
-                override fun seekToPreviousMediaItem() {
-                    exoPlayer.seekBack()
-                }
-
-                override fun seekToNext() {
-                    exoPlayer.seekForward()
-                }
-
-                override fun seekToNextMediaItem() {
-                    exoPlayer.seekForward()
-                }
-
-                override fun play() {
-                    // Route media-session/notification play through the runtime
-                    // recovery path (seekTo(0) after STATE_ENDED, prepare()
-                    // after a latched error) — a raw exoPlayer.play() is a
-                    // silent no-op in both terminal states. Runtime.play() calls
-                    // play() on the raw ExoPlayer field, so this does not recurse.
-                    appContext?.let { NativeAudioRuntime.play(it) }
-                }
+            val session = buildAudioSession(ctx, httpDataSourceFactory) {
+                appContext?.let { NativeAudioRuntime.play(it) }
             }
-
-            val launchIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
-            val pendingIntent = launchIntent?.let {
-                val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-                    (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                PendingIntent.getActivity(ctx, 0, it, flags)
-            }
-
-            val sessionPlayer = mediaSessionPlayer ?: exoPlayer
-            mediaSession = MediaSession.Builder(ctx, sessionPlayer)
-                .apply {
-                    if (pendingIntent != null) setSessionActivity(pendingIntent)
-                    setCallback(resumptionSessionCallback)
-                }
-                .build()
+            session.player.addListener(playerListener)
+            player = session.player
+            mediaSessionPlayer = session.mediaSessionPlayer
+            mediaSession = session.mediaSession
 
             lastError = null
-            syncTickingLocked()
+            ticker.syncTickingLocked()
         }
     }
 
@@ -372,7 +122,7 @@ object NativeAudioRuntime {
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
             lastError = null
-            syncTickingLocked()
+            ticker.syncTickingLocked()
         }
         emitState()
     }
@@ -413,7 +163,7 @@ object NativeAudioRuntime {
             if (entries.isEmpty()) {
                 lastError = "set_queue: no playable items"
                 Log.w(TAG, lastError ?: "")
-                syncTickingLocked()
+                ticker.syncTickingLocked()
                 return
             }
 
@@ -448,7 +198,7 @@ object NativeAudioRuntime {
             // currentMediaId is updated naturally by onMediaItemTransition
             // (queue items carry the track id as mediaId).
             lastError = null
-            syncTickingLocked()
+            ticker.syncTickingLocked()
         }
         emitState()
     }
@@ -484,7 +234,7 @@ object NativeAudioRuntime {
             pendingSeekState = null
             exoPlayer.playWhenReady = true
             exoPlayer.play()
-            syncTickingLocked()
+            ticker.syncTickingLocked()
         }
         startService(context)
         emitState()
@@ -495,7 +245,7 @@ object NativeAudioRuntime {
             ensure(context)
             pendingSeekState = null
             player?.pause()
-            syncTickingLocked()
+            ticker.syncTickingLocked()
             persistProgressCheckpointLocked(context.applicationContext, snapshotLocked(), force = true)
         }
         emitState()
@@ -573,7 +323,7 @@ object NativeAudioRuntime {
     // to AudioResumeStore; this wrapper resolves the current QueueEntry from
     // the runtime playlist mirror (player index, then track-id match) and
     // forwards it with the last applied headers as plain parameters.
-    private fun persistResumeDataLocked(mediaItem: MediaItem?) {
+    internal fun persistResumeDataLocked(mediaItem: MediaItem?) {
         val entry: QueueEntry? = if (mediaItem != null) {
             // Prefer the in-memory mirror, resolved by the current playlist
             // index; fall back to matching by track id for safety.
@@ -593,8 +343,7 @@ object NativeAudioRuntime {
     fun dispose(context: Context) {
         synchronized(lock) {
             persistProgressCheckpointLocked(context.applicationContext, snapshotLocked(), force = true)
-            tickHandler.removeCallbacks(tickRunnable)
-            tickScheduled = false
+            ticker.stopLocked()
 
             player?.removeListener(playerListener)
             player?.release()
@@ -632,51 +381,12 @@ object NativeAudioRuntime {
         }
     }
 
-    private fun syncTicking() {
-        synchronized(lock) {
-            syncTickingLocked()
-        }
-    }
-
-    private fun syncTickingLocked() {
-        val isPlaying = player?.isPlaying == true
-        if (isPlaying && !tickScheduled) {
-            tickScheduled = true
-            tickHandler.removeCallbacks(tickRunnable)
-            tickHandler.post(tickRunnable)
-            return
-        }
-        if (!isPlaying && tickScheduled) {
-            tickScheduled = false
-            tickHandler.removeCallbacks(tickRunnable)
-        }
-    }
-
-    private fun nextProgressTickDelayLocked(): Long {
-        val context = appContext ?: return BACKGROUND_PROGRESS_TICK_MS
-        val isForeground = isAppInForeground()
-        val isInteractive = isDeviceInteractive(context)
-        return if (isForeground && isInteractive) FOREGROUND_PROGRESS_TICK_MS else BACKGROUND_PROGRESS_TICK_MS
-    }
-
-    private fun isAppInForeground(): Boolean {
-        val processInfo = ActivityManager.RunningAppProcessInfo()
-        ActivityManager.getMyMemoryState(processInfo)
-        return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-            processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-    }
-
-    private fun isDeviceInteractive(context: Context): Boolean {
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-        return powerManager?.isInteractive ?: true
-    }
-
-    private fun emitState() {
+    internal fun emitState() {
         val snapshot = synchronized(lock) { snapshotLocked() }
         NativeAudioPlugin.emitToActive(snapshot)
     }
 
-    private fun persistProgressCheckpointLocked(context: Context, snapshot: NativeAudioState, force: Boolean) {
+    internal fun persistProgressCheckpointLocked(context: Context, snapshot: NativeAudioState, force: Boolean) {
         val storyId = currentStoryId ?: return
         if (storyId <= 0L) return
         if (!snapshot.currentTime.isFinite() || snapshot.currentTime <= PROGRESS_NEAR_START_EPSILON_SEC) return
@@ -702,31 +412,7 @@ object NativeAudioRuntime {
         lastProgressPersistedTimeSec = snapshot.currentTime
     }
 
-    private fun buildMediaItem(
-        src: String,
-        title: String?,
-        artist: String?,
-        artworkUrl: String?,
-        mediaId: String? = null,
-    ): MediaItem {
-        val metadataBuilder = MediaMetadata.Builder()
-        if (!title.isNullOrBlank()) metadataBuilder.setTitle(title)
-        if (!artist.isNullOrBlank()) metadataBuilder.setArtist(artist)
-        if (!artworkUrl.isNullOrBlank()) {
-            runCatching { Uri.parse(artworkUrl) }
-                .onSuccess { metadataBuilder.setArtworkUri(it) }
-        }
-        val itemBuilder = MediaItem.Builder()
-            .setUri(src)
-            .setMediaMetadata(metadataBuilder.build())
-        // Queue items carry the track id as mediaId so onMediaItemTransition
-        // (and the JS state sync) can identify the current item; the default
-        // mediaId is "" and is left untouched for setSource items.
-        if (!mediaId.isNullOrEmpty()) itemBuilder.setMediaId(mediaId)
-        return itemBuilder.build()
-    }
-
-    private fun snapshotLocked(): NativeAudioState {
+    internal fun snapshotLocked(): NativeAudioState {
         val exoPlayer = player
             ?: return NativeAudioState(
                 status = "idle",
