@@ -18,6 +18,8 @@ import {
   buildDriveStreamUrl,
   invokeWithTimeout,
 } from "./nativeAudioInvoke";
+import { buildSetQueuePayload, selectQueueTransport } from "./nativeAudioQueue";
+import { NativeStateMapper } from "./nativeAudioStateMapper";
 
 /** Empty TimeRanges for getBuffered(): the plugin exposes no buffered-range
  *  info, so the buffer bar renders empty on mobile (position fill only). */
@@ -42,8 +44,6 @@ function makeSingleSegmentBuffered(end: number): TimeRanges {
 /** Native ExoPlayer engine implementing the shared PlaybackEngine contract —
  *  export the class type so tests can type the singleton. */
 export class NativeAudioEngine implements PlaybackEngine {
-  private static readonly TIMEUPDATE_THROTTLE_MS = 200;
-
   private listeners: {
     [K in keyof NativeAudioEventMap]?: NativeAudioEventHandler<K>[];
   } = {};
@@ -56,8 +56,11 @@ export class NativeAudioEngine implements PlaybackEngine {
   // moov-at-end flagged by the metadata pipeline). Cleared on release().
   private currentTrack: Track | null = null;
   private lastState: NativeAudioState | null = null;
-  private lastTimeUpdate = 0;
-  private wasPlaying = false;
+  // State→event mapping (wasPlaying/lastTimeUpdate bookkeeping included)
+  // lives in the pure NativeStateMapper; this engine only fans its queued
+  // events out and keeps the engine-side state (lastState, queueMirror,
+  // loadIntentActive, currentTrack) that feeds it.
+  private mapper = new NativeStateMapper();
   // Native-queue mirror (set_queue path): the last playlist pushed to the
   // plugin. A native ExoPlayer auto-advance reports the new item's mediaId;
   // the JS side resolves it here to sync the store (UI + session save track
@@ -244,25 +247,23 @@ export class NativeAudioEngine implements PlaybackEngine {
       // single-item queue keeps the plain setSource path. seek/play below
       // act on the startIndex item.
       const { playbackQueue, playMode } = usePlayerStore.getState();
-      const queueIdx = playbackQueue.findIndex((t) => t.id === track.id);
-      const useNativeQueue = playbackQueue.length > 1 && queueIdx !== -1;
+      const { useNativeQueue, queueMirror } = selectQueueTransport(
+        track,
+        playbackQueue,
+      );
       if (useNativeQueue) {
-        this.queueMirror = playbackQueue;
-        await this.invokeStateful(PLUGIN_COMMAND.setQueue, {
-          items: playbackQueue.map((t) => ({
-            src: buildDriveStreamUrl(t.id),
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-          })),
-          startIndex: queueIdx,
-          headers: this.token
-            ? { Authorization: `Bearer ${this.token}` }
-            : undefined,
-          repeatMode: playMode,
-        });
+        this.queueMirror = queueMirror;
+        await this.invokeStateful(
+          PLUGIN_COMMAND.setQueue,
+          buildSetQueuePayload(
+            playbackQueue,
+            playbackQueue.findIndex((t) => t.id === track.id),
+            this.token ? { Authorization: `Bearer ${this.token}` } : undefined,
+            playMode,
+          ),
+        );
       } else {
-        this.queueMirror = [track];
+        this.queueMirror = queueMirror;
         await this.invokeStateful(PLUGIN_COMMAND.setSource, {
           src: buildDriveStreamUrl(track.id),
           title: track.title,
@@ -473,7 +474,10 @@ export class NativeAudioEngine implements PlaybackEngine {
   }
 
   /** Map plugin state events onto the AudioController event surface so the
-   *  desktop UI layer (PlayerBar/SeekBar/session save) behaves identically. */
+   *  desktop UI layer (PlayerBar/SeekBar/session save) behaves identically.
+   *  The mapping itself lives in the pure NativeStateMapper; this method
+   *  keeps only the engine-side bookkeeping (prev/lastState + the native
+   *  auto-advance mediaId sync) and fans the mapper's queued events out. */
   private onNativeState(state: NativeAudioState): void {
     const prev = this.lastState;
     this.lastState = state;
@@ -497,106 +501,43 @@ export class NativeAudioEngine implements PlaybackEngine {
       }
     }
 
-    if (state.status === "error") {
-      const message = state.error ?? "native playback error";
-      // m4a moov-at-end (streamUnplayable): ExoPlayer can only play it if the
-      // server honors byte ranges; when it still fails, say why instead of a
-      // bare format_error. The code stays "format_error" and the ended emit
-      // below (auto-advance parity) is untouched.
-      const hint = this.currentTrack?.streamUnplayable
-        ? " (m4a moov-at-end — file không phát trực tiếp được)"
-        : "";
-      this.emit("error", {
-        message: `${message}${hint}`,
-        code: "format_error",
-      });
-      // Parity with AudioController: error → ended → auto-advance.
-      this.emit("ended", undefined);
-      this.wasPlaying = false;
-      return;
-    }
-
-    if (state.status === "ended") {
-      this.emit("ended", undefined);
-      this.wasPlaying = false;
-      return;
-    }
-
-    if (state.buffering && !prev?.buffering) {
-      this.emit("buffering", { isBuffering: true });
-    } else if (!state.buffering && prev?.buffering) {
-      this.emit("buffering", { isBuffering: false });
-    }
-
-    // Media3 collapses isPlaying to false while STATE_BUFFERING (isPlaying =
-    // READY && playWhenReady && !suppressed), so a buffering snapshot can
-    // never distinguish "buffering after a seek / slow network — the user
-    // still intends playback" from "user paused mid-buffer". Only a SETTLED
-    // not-playing snapshot ({isPlaying:false, buffering:false}) proves a
-    // pause: Kotlin's pause() flips playWhileReady while the player stays
-    // READY, so a real pause always lands with buffering=false.
-    const pausedWhileBuffering = state.buffering && !state.isPlaying;
-
-    if (state.isPlaying && !this.wasPlaying) {
-      this.emit("play", undefined);
-      usePlayerStore.getState().setIsPlaying(true);
-    } else if (
-      !state.isPlaying &&
-      this.wasPlaying &&
-      // Inside a JS-initiated load window Media3 reports isPlaying=false
-      // while buffering — that is the load, not a pause. See loadIntentActive.
-      !this.loadIntentActive &&
-      // See pausedWhileBuffering: buffering snapshots never fire the edge,
-      // no matter how long the buffering lasts — no time-window heuristic.
-      !pausedWhileBuffering
-    ) {
-      this.emit("pause", undefined);
-      usePlayerStore.getState().setIsPlaying(false);
-    }
-    // A buffering-shaped not-playing snapshot must not corrupt the play-state
-    // memory OUTSIDE the load window: keep wasPlaying=true through it so a
-    // REAL pause right after (or during) the buffering still has its edge
-    // once buffering settles, and the resumed-READY tick needs no phantom
-    // "play" (the store never flipped). Load-window snapshots keep the old
-    // unconditional clobber — the READY play edge re-affirms it.
-    if (!pausedWhileBuffering || this.loadIntentActive) {
-      this.wasPlaying = state.isPlaying;
-    }
-
-    if (state.duration !== prev?.duration && state.duration > 0) {
-      this.emit("durationchange", { duration: state.duration });
-    }
-
-    // Buffer-bar input: emit "progress" only when the buffered estimate
-    // actually MOVED. The plugin ticks at 40Hz, so emitting unconditionally
-    // would spam DOM writes; Media3 has no dedicated buffered-position event
-    // (EVENT_IS_LOADING_CHANGED is the closest and carries no position), so
-    // the JS-side diff mirrors desktop AudioController's throttled native
-    // `progress` handler. Emitted outside the timeupdate throttle gate so
-    // paused-loading buffer growth still refreshes the bar.
-    if (state.bufferedPosition !== prev?.bufferedPosition) {
-      this.emit("progress", undefined);
-    }
-
-    // Idle snapshots (initialize/get_state/pause right after a cold-start
-    // session restore) must not surface as timeupdate: AudioController never
-    // emits one without real media state, and SeekBar applies the payload
-    // unconditionally, so a {0,0} push wipes the restored duration/position
-    // seed to 0:00. The edge emits above must keep running untouched — only
-    // the throttled tick is gated.
-    if (state.duration > 0 || state.currentTime > 0) {
-      // Throttle to ~5/s (desktop THROTTLE_MS parity) — the plugin ticks every
-      // 25ms in foreground.
-      const now = performance.now();
-      if (
-        now - this.lastTimeUpdate >=
-        NativeAudioEngine.TIMEUPDATE_THROTTLE_MS
-      ) {
-        this.lastTimeUpdate = now;
-        this.emit("timeupdate", {
-          currentTime: state.currentTime,
-          duration: state.duration,
-        });
+    const result = this.mapper.apply(prev, state, {
+      loadIntentActive: this.loadIntentActive,
+      currentTrackStreamUnplayable:
+        this.currentTrack?.streamUnplayable ?? false,
+      onStorePlaying: (playing) => {
+        usePlayerStore.getState().setIsPlaying(playing);
+      },
+    });
+    for (const item of result.emit) {
+      // Per-variant switch: each case narrows the discriminated pair so the
+      // event key and its payload stay correlated — a fully typed fan-out,
+      // no casts. Push order in the mapper IS the emit order here.
+      switch (item.event) {
+        case "error":
+          this.emit("error", item.payload);
+          break;
+        case "ended":
+          this.emit("ended", item.payload);
+          break;
+        case "buffering":
+          this.emit("buffering", item.payload);
+          break;
+        case "play":
+          this.emit("play", item.payload);
+          break;
+        case "pause":
+          this.emit("pause", item.payload);
+          break;
+        case "durationchange":
+          this.emit("durationchange", item.payload);
+          break;
+        case "progress":
+          this.emit("progress", item.payload);
+          break;
+        case "timeupdate":
+          this.emit("timeupdate", item.payload);
+          break;
       }
     }
   }
