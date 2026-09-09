@@ -58,6 +58,11 @@ export class NativeAudioEngine implements PlaybackEngine {
   private lastState: NativeAudioState | null = null;
   private lastTimeUpdate = 0;
   private wasPlaying = false;
+  // Native-queue mirror (set_queue path): the last playlist pushed to the
+  // plugin. A native ExoPlayer auto-advance reports the new item's mediaId;
+  // the JS side resolves it here to sync the store (UI + session save track
+  // the real playing item). reset by release().
+  private queueMirror: Track[] = [];
   // CF-2 fix (rapid A→B playTrack interleave): two mechanisms combined.
   // 1) playChain serializes load chains FIFO so one chain's set_source/
   //    seek_to/play commands can never interleave with another chain's.
@@ -233,14 +238,40 @@ export class NativeAudioEngine implements PlaybackEngine {
       }
 
       this.currentTrackId = track.id;
-      await this.invokeStateful(PLUGIN_COMMAND.setSource, {
-        src: buildDriveStreamUrl(track.id),
-        title: track.title,
-        artist: track.artist,
-        headers: this.token
-          ? { Authorization: `Bearer ${this.token}` }
-          : undefined,
-      });
+      // Native queue push: when the track belongs to a multi-item store
+      // queue, load the WHOLE playlist so ExoPlayer auto-advances natively
+      // (a backgrounded WebView cannot run the JS advance — Bug 3). A
+      // single-item queue keeps the plain setSource path. seek/play below
+      // act on the startIndex item.
+      const { playbackQueue, playMode } = usePlayerStore.getState();
+      const queueIdx = playbackQueue.findIndex((t) => t.id === track.id);
+      const useNativeQueue = playbackQueue.length > 1 && queueIdx !== -1;
+      if (useNativeQueue) {
+        this.queueMirror = playbackQueue;
+        await this.invokeStateful(PLUGIN_COMMAND.setQueue, {
+          items: playbackQueue.map((t) => ({
+            src: buildDriveStreamUrl(t.id),
+            id: t.id,
+            title: t.title,
+            artist: t.artist,
+          })),
+          startIndex: queueIdx,
+          headers: this.token
+            ? { Authorization: `Bearer ${this.token}` }
+            : undefined,
+          repeatMode: playMode,
+        });
+      } else {
+        this.queueMirror = [track];
+        await this.invokeStateful(PLUGIN_COMMAND.setSource, {
+          src: buildDriveStreamUrl(track.id),
+          title: track.title,
+          artist: track.artist,
+          headers: this.token
+            ? { Authorization: `Bearer ${this.token}` }
+            : undefined,
+        });
+      }
       if (seq !== this.playSeq) return;
 
       if (startTime !== undefined && startTime > 0) {
@@ -348,6 +379,9 @@ export class NativeAudioEngine implements PlaybackEngine {
     this.seekSeq++;
     this.currentTrackId = null;
     this.currentTrack = null;
+    // The mirror is dead state once the player stops: a late native snapshot
+    // carrying an old mediaId must not resurrect a track into the store.
+    this.queueMirror = [];
     this.token = null;
     if (!IS_MOBILE) return;
     try {
@@ -404,8 +438,11 @@ export class NativeAudioEngine implements PlaybackEngine {
 
   // set_source performs the network load + container prepare (the one
   // legitimately slow command); every other command is fast local IPC.
+  // set_queue is the queue flavour of set_source (same full playlist load +
+  // container prepare) — it gets the same large budget.
   private invokeBudgetMs(command: string): number {
-    return command === PLUGIN_COMMAND.setSource
+    return command === PLUGIN_COMMAND.setSource ||
+      command === PLUGIN_COMMAND.setQueue
       ? SET_SOURCE_INVOKE_TIMEOUT_MS
       : TRANSPORT_INVOKE_TIMEOUT_MS;
   }
@@ -440,6 +477,25 @@ export class NativeAudioEngine implements PlaybackEngine {
   private onNativeState(state: NativeAudioState): void {
     const prev = this.lastState;
     this.lastState = state;
+
+    // Native auto-advance sync (BEFORE every status branch): with a queue
+    // loaded, ExoPlayer moves to the next item on its own and reports it via
+    // mediaId. Adopt the matching mirror track into the engine + store so
+    // the UI and session save track the real playing item. PlayerBar's
+    // effect then fires playTrack(next), which the same-track fast path
+    // turns into a harmless no-op play() invoke. The status here is
+    // playing/loading (NOT ended), so the JS auto-advance naturally stays
+    // idle — no double-advance. "ended" (queue exhausted in normal mode)
+    // still flows through the branches below untouched.
+    const mediaId = state.mediaId;
+    if (mediaId && mediaId !== this.currentTrack?.id) {
+      const next = this.queueMirror.find((t) => t.id === mediaId);
+      if (next) {
+        this.currentTrack = next;
+        this.currentTrackId = next.id;
+        usePlayerStore.getState().setCurrentTrack(next);
+      }
+    }
 
     if (state.status === "error") {
       const message = state.error ?? "native playback error";

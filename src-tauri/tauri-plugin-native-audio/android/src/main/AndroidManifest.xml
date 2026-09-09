@@ -15,5 +15,16 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- Required for playback resumption after process death: routes the
+             MEDIA_BUTTON intent to the MediaSessionService, which then calls
+             MediaSession.Callback.onPlaybackResumption (androidx media #672). -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

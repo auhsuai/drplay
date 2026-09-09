@@ -5,6 +5,7 @@ permissions = [
   "allow-register-listener",
   "allow-remove-listener",
   "allow-set-source",
+  "allow-set-queue",
   "allow-play",
   "allow-pause",
   "allow-seek-to",

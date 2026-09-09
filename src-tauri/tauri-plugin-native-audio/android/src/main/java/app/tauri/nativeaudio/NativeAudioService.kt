@@ -29,6 +29,13 @@ class NativeAudioService : MediaSessionService() {
         return NativeAudioRuntime.mediaSession()
     }
 
+    // DrPlay fork: process-death resumption is handled by the MediaSession
+    // Callback installed in NativeAudioRuntime.ensure() — media3 1.4.1 has
+    // NO onPlaybackResumption override on MediaSessionService itself (verified
+    // against MediaSessionService.java at tag 1.4.1). The service keeps its
+    // default behavior; onCreate() already calls NativeAudioRuntime.ensure()
+    // so the resumption callback exists as soon as the session does.
+
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         // PlayerNotificationManager is the single source for media controls in notification shade.
         // Retry setup if the service started before the runtime session was ready (the manager

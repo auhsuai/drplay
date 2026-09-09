@@ -17,6 +17,10 @@ export type NativeAudioState = {
   // undefined → treated as 0) and a newer plugin's extra key is ignored by
   // JS structural typing — no version handshake needed.
   bufferedPosition?: number;
+  // Media3 mediaId of the currently loaded item (Drive file id for queue
+  // items, empty for setSource). Optional for the same skew-safety reason as
+  // bufferedPosition: an older plugin omits the key — no handshake needed.
+  mediaId?: string;
   error?: string;
 };
 

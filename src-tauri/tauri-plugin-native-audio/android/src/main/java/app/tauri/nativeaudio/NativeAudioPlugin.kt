@@ -29,12 +29,15 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
+import org.json.JSONObject
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import kotlin.math.max
 
 private const val TAG = "plugin/native-audio"
@@ -53,6 +56,24 @@ private const val PROGRESS_KEY_CURRENT_TIME = "current_time"
 private const val PROGRESS_KEY_UPDATED_AT_MS = "updated_at_ms"
 private const val PROGRESS_KEY_STATUS = "status"
 
+// DrPlay fork: resume-snapshot keys in the same prefs file. These persist the
+// minimum data needed to rebuild one MediaItem after process death (Bug 2):
+// src is mandatory; metadata + headers are best-effort extras.
+private const val RESUME_KEY_SRC = "resume_src"
+private const val RESUME_KEY_TITLE = "resume_title"
+private const val RESUME_KEY_ARTIST = "resume_artist"
+private const val RESUME_KEY_ARTWORK = "resume_artwork"
+private const val RESUME_KEY_HEADERS_JSON = "resume_headers_json"
+// Track id (Drive file id, a String) of the resumed item — distinct from the
+// progress checkpoint's story id (PROGRESS_KEY_STORY_ID, a numeric Long).
+private const val RESUME_KEY_TRACK_ID = "resume_track_id"
+
+// Repeat-mode strings accepted by set_queue. Anything else (including null)
+// maps to REPEAT_MODE_OFF, i.e. normal end-of-queue behavior.
+private const val REPEAT_MODE_ONE = "repeat-one"
+private const val REPEAT_MODE_ALL = "repeat-all"
+private const val REPEAT_MODE_SHUFFLE = "shuffle"
+
 data class NativeAudioState(
     val status: String,
     val currentTime: Double,
@@ -67,6 +88,10 @@ data class NativeAudioState(
     // buffered range".
     val bufferedPosition: Double = 0.0,
     val error: String? = null,
+    // DrPlay fork: media id (track id string) of the currently loaded item.
+    // Default null keeps every existing call site compiling; JS uses it to
+    // sync the store when ExoPlayer auto-advances inside a native queue.
+    val mediaId: String? = null,
 )
 
 data class NativeAudioProgressCheckpoint(
@@ -99,6 +124,53 @@ class SetRateArgs {
     var rate: Double? = null
 }
 
+// DrPlay fork: one queue entry for set_queue. Items without a src are dropped
+// at the runtime layer (they can never be played).
+@InvokeArg
+class QueueItemArg {
+    var src: String? = null
+    // Drive file id — a String (numeric ids do not fit a Long).
+    var id: String? = null
+    var title: String? = null
+    var artist: String? = null
+    var artworkUrl: String? = null
+}
+
+@InvokeArg
+class SetQueueArgs {
+    var items: List<QueueItemArg> = emptyList()
+    var startIndex: Int? = null
+    // One batch of headers shared by the whole queue (Drive: same token for
+    // every track). Never logged.
+    var headers: Map<String, String>? = null
+    var repeatMode: String? = null
+}
+
+// DrPlay fork: in-memory mirror of one playlist entry, used to persist the
+// resume snapshot on media-item transitions (setSource keeps a single-element
+// list; set_queue replaces it wholesale). trackId is the Drive file id string
+// (the progress checkpoint's story id Long is unrelated and unchanged).
+private data class QueueEntry(
+    val src: String,
+    val trackId: String?,
+    val title: String?,
+    val artist: String?,
+    val artworkUrl: String?,
+)
+
+// DrPlay fork: everything needed to rebuild a MediaItem after process death.
+// Read from prefs in resumptionSnapshot; consumed by the MediaSession
+// onPlaybackResumption callback.
+data class ResumptionData(
+    val src: String,
+    val title: String?,
+    val artist: String?,
+    val artworkUrl: String?,
+    val headers: Map<String, String>?,
+    val positionSec: Double,
+    val trackId: String?,
+)
+
 private data class PendingSeekState(
     val shouldResume: Boolean,
     val startedAtMs: Long,
@@ -116,9 +188,19 @@ object NativeAudioRuntime {
     private var lastError: String? = null
     private var pendingSeekState: PendingSeekState? = null
     private var currentStoryId: Long? = null
+    // DrPlay fork: media id (track id string) of the current item, tracked at
+    // every media-item transition and shipped in the state snapshot so the
+    // JS side can sync its store on native auto-advance. currentStoryId
+    // (Long) stays authoritative for the progress checkpoint flow.
+    private var currentMediaId: String? = null
     private var lastProgressPersistedAtMs = 0L
     private var lastProgressPersistedStoryId: Long? = null
     private var lastProgressPersistedTimeSec: Double? = null
+    // DrPlay fork: playlist mirror for resume persistence (see QueueEntry) and
+    // the last header batch applied to httpDataSourceFactory. Both live under
+    // `lock`.
+    private var queueItems: List<QueueEntry> = emptyList()
+    private var lastAppliedHeaders: Map<String, String>? = null
 
     // DrPlay fork: single HTTP data source factory for authenticated streaming.
     // setDefaultRequestProperties is mutable — setSource applies the current
@@ -127,6 +209,47 @@ object NativeAudioRuntime {
     @OptIn(UnstableApi::class)
     private val httpDataSourceFactory: DefaultHttpDataSource.Factory =
         DefaultHttpDataSource.Factory()
+
+    // DrPlay fork: process-death resumption hook (Bug 2). media3 1.4.1 puts
+    // onPlaybackResumption on MediaSession.Callback — NOT on MediaSessionService
+    // (verified against MediaSessionService.java / MediaSession.java at tag
+    // 1.4.1) — so it is attached to the session builder in ensure(). Returning
+    // a failed future when nothing is persisted mirrors the default
+    // implementation (immediateFailedFuture(UnsupportedOperationException)).
+    // Pure data work only (prefs read + object build), no player access.
+    @OptIn(UnstableApi::class)
+    private val resumptionSessionCallback = object : MediaSession.Callback {
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            val context = appContext
+            if (context == null) {
+                Log.w(TAG, "onPlaybackResumption: runtime not initialized, cannot resume")
+                return Futures.immediateFailedFuture(
+                    IllegalStateException("native audio runtime not initialized")
+                )
+            }
+            val data = resumptionSnapshot(context)
+            if (data == null) {
+                Log.w(TAG, "onPlaybackResumption: no resumable audio state persisted")
+                return Futures.immediateFailedFuture(
+                    IllegalStateException("no resumable audio state persisted")
+                )
+            }
+            // Re-apply the persisted headers BEFORE the session prepares the
+            // player: a fresh process starts with an empty default header set,
+            // so an authenticated (Drive) source would 401 without this.
+            // Header values are never logged.
+            httpDataSourceFactory.setDefaultRequestProperties(data.headers ?: emptyMap())
+            val mediaItem = buildMediaItem(data.src, data.title, data.artist, data.artworkUrl, data.trackId)
+            return Futures.immediateFuture(
+                MediaSession.MediaItemsWithStartPosition(
+                    listOf(mediaItem), 0, (data.positionSec * 1000.0).toLong(),
+                )
+            )
+        }
+    }
 
     private val tickRunnable = object : Runnable {
         override fun run() {
@@ -157,6 +280,25 @@ object NativeAudioRuntime {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            syncTicking()
+            emitState()
+        }
+
+        // DrPlay fork: with a queue, ExoPlayer advances to the next item
+        // NATIVELY on STATE_ENDED — no WebView round-trip needed (Bug 3: a
+        // backgrounded WebView gets suspended and the JS-driven advance
+        // never runs). The listener also keeps the progress checkpoint and
+        // the process-death resume snapshot in sync with the new item.
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            synchronized(lock) {
+                // Track the item id as a raw string (Drive file ids are not
+                // numeric); setMediaId on queue items keeps this non-empty,
+                // while setSource items keep the default "" and are ignored.
+                val id = mediaItem?.mediaId?.takeIf { it.isNotEmpty() }
+                if (id != null) currentMediaId = id
+                appContext?.let { persistProgressCheckpointLocked(it, snapshotLocked(), force = true) }
+                appContext?.let { persistResumeDataLocked(it, mediaItem) }
+            }
             syncTicking()
             emitState()
         }
@@ -292,6 +434,15 @@ object NativeAudioRuntime {
                 override fun seekToNextMediaItem() {
                     exoPlayer.seekForward()
                 }
+
+                override fun play() {
+                    // Route media-session/notification play through the runtime
+                    // recovery path (seekTo(0) after STATE_ENDED, prepare()
+                    // after a latched error) — a raw exoPlayer.play() is a
+                    // silent no-op in both terminal states. Runtime.play() calls
+                    // play() on the raw ExoPlayer field, so this does not recurse.
+                    appContext?.let { NativeAudioRuntime.play(it) }
+                }
             }
 
             val launchIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
@@ -305,6 +456,7 @@ object NativeAudioRuntime {
             mediaSession = MediaSession.Builder(ctx, sessionPlayer)
                 .apply {
                     if (pendingIntent != null) setSessionActivity(pendingIntent)
+                    setCallback(resumptionSessionCallback)
                 }
                 .build()
 
@@ -346,13 +498,104 @@ object NativeAudioRuntime {
             // before loading. The factory is read by the media source on
             // prepare(), so mutating it here is safe for the next setMediaItem.
             httpDataSourceFactory.setDefaultRequestProperties(headers ?: emptyMap())
+            lastAppliedHeaders = headers
 
             val mediaItem = buildMediaItem(src, title, artist, artworkUrl)
 
             pendingSeekState = null
             currentStoryId = storyId?.takeIf { it > 0 }
+            // The new source carries no string media id — clear any queue-era
+            // value so snapshots cannot surface a stale track id.
+            currentMediaId = null
+            // Single-item queue mirror: persistResumeDataLocked reads the
+            // current item uniformly by index for both setSource and set_queue.
+            queueItems = listOf(
+                QueueEntry(
+                    src = src,
+                    trackId = null,
+                    title = title,
+                    artist = artist,
+                    artworkUrl = artworkUrl,
+                )
+            )
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
+            lastError = null
+            syncTickingLocked()
+        }
+        emitState()
+    }
+
+    // DrPlay fork: queue playback so ExoPlayer auto-advances NATIVELY when a
+    // track ends (Bug 3 — the previous advance path went through the WebView,
+    // which the system suspends in background and the music stops between
+    // tracks). Mirrors setSource: prepare only, never auto-play (JS calls
+    // play() itself). One shared header batch covers the whole queue (Drive:
+    // same token for every track).
+    @OptIn(UnstableApi::class)
+    fun setQueue(
+        context: Context,
+        items: List<QueueItemArg>,
+        startIndex: Int,
+        headers: Map<String, String>?,
+        repeatMode: String?,
+    ) {
+        synchronized(lock) {
+            ensure(context)
+            val exoPlayer = player ?: return
+
+            val entries = items.mapNotNull { item ->
+                val src = item.src?.trim().orEmpty()
+                if (src.isEmpty()) {
+                    Log.w(TAG, "set_queue: dropping item without src (id=${item.id})")
+                    null
+                } else {
+                    QueueEntry(
+                        src = src,
+                        trackId = item.id?.takeIf { it.isNotBlank() },
+                        title = item.title,
+                        artist = item.artist,
+                        artworkUrl = item.artworkUrl,
+                    )
+                }
+            }
+            if (entries.isEmpty()) {
+                lastError = "set_queue: no playable items"
+                Log.w(TAG, lastError ?: "")
+                syncTickingLocked()
+                return
+            }
+
+            httpDataSourceFactory.setDefaultRequestProperties(headers ?: emptyMap())
+            lastAppliedHeaders = headers
+
+            val repeatModeFlag = when (repeatMode) {
+                REPEAT_MODE_ONE -> Player.REPEAT_MODE_ONE
+                REPEAT_MODE_ALL, REPEAT_MODE_SHUFFLE -> Player.REPEAT_MODE_ALL
+                else -> Player.REPEAT_MODE_OFF
+            }
+            exoPlayer.repeatMode = repeatModeFlag
+            // Guarantee the "no auto-play" contract: a set_queue arriving while
+            // the player is mid-playback must NOT silently start the new queue;
+            // the JS side calls play() itself.
+            exoPlayer.playWhenReady = false
+            // Mirror assigned BEFORE setMediaItems: onMediaItemTransition (which
+            // persists the resume snapshot by playlist index) reads queueItems,
+            // and ExoPlayer may deliver the transition callback as soon as the
+            // playlist changes.
+            queueItems = entries
+            exoPlayer.setMediaItems(
+                entries.map { entry ->
+                    buildMediaItem(entry.src, entry.title, entry.artist, entry.artworkUrl, entry.trackId)
+                },
+                startIndex.coerceIn(0, entries.size - 1),
+                0L,
+            )
+            exoPlayer.prepare()
+
+            pendingSeekState = null
+            // currentMediaId is updated naturally by onMediaItemTransition
+            // (queue items carry the track id as mediaId).
             lastError = null
             syncTickingLocked()
         }
@@ -475,6 +718,91 @@ object NativeAudioRuntime {
         }
     }
 
+    // ---- DrPlay fork: process-death resume snapshot (Bug 2) ----
+    // Persisted in the same app-private prefs file as the progress checkpoint
+    // (no secrets in logs; header values are sensitive but stored only in
+    // app-private storage, mirroring where the JS side already keeps the
+    // token, and wiped on dispose()).
+
+    private fun persistResumeDataLocked(context: Context, mediaItem: MediaItem?) {
+        val entry: QueueEntry? = if (mediaItem != null) {
+            // Prefer the in-memory mirror, resolved by the current playlist
+            // index; fall back to matching by track id for safety.
+            val index = player?.currentMediaItemIndex
+            queueItems.getOrNull(index ?: -1)
+                ?: mediaItem.mediaId.takeIf { it.isNotEmpty() }?.let { id ->
+                    queueItems.firstOrNull { it.trackId == id }
+                }
+        } else {
+            null
+        }
+        if (entry == null) return
+
+        progressPrefs(context).edit()
+            .putString(RESUME_KEY_SRC, entry.src)
+            .putString(RESUME_KEY_TITLE, entry.title)
+            .putString(RESUME_KEY_ARTIST, entry.artist)
+            .putString(RESUME_KEY_ARTWORK, entry.artworkUrl)
+            .putString(RESUME_KEY_HEADERS_JSON, encodeHeaders(lastAppliedHeaders))
+            .putString(RESUME_KEY_TRACK_ID, entry.trackId)
+            .apply()
+    }
+
+    private fun clearResumeData(context: Context) {
+        progressPrefs(context).edit()
+            .remove(RESUME_KEY_SRC)
+            .remove(RESUME_KEY_TITLE)
+            .remove(RESUME_KEY_ARTIST)
+            .remove(RESUME_KEY_ARTWORK)
+            .remove(RESUME_KEY_HEADERS_JSON)
+            .remove(RESUME_KEY_TRACK_ID)
+            .apply()
+    }
+
+    fun resumptionSnapshot(context: Context): ResumptionData? {
+        val prefs = progressPrefs(context.applicationContext)
+        val src = prefs.getString(RESUME_KEY_SRC, null)?.trim().orEmpty()
+        if (src.isEmpty()) return null
+        val positionSec = prefs.getFloat(PROGRESS_KEY_CURRENT_TIME, 0f).toDouble()
+        if (!positionSec.isFinite() || positionSec <= 0.0) return null
+        val trackId = prefs.getString(RESUME_KEY_TRACK_ID, null)?.trim()?.takeIf { it.isNotEmpty() }
+        return ResumptionData(
+            src = src,
+            title = prefs.getString(RESUME_KEY_TITLE, null),
+            artist = prefs.getString(RESUME_KEY_ARTIST, null),
+            artworkUrl = prefs.getString(RESUME_KEY_ARTWORK, null),
+            headers = decodeHeaders(prefs.getString(RESUME_KEY_HEADERS_JSON, null)),
+            positionSec = positionSec,
+            trackId = trackId,
+        )
+    }
+
+    // org.json is part of the Android platform (no extra dependency). Logs
+    // carry the header KEY COUNT only — never key names or values.
+    private fun encodeHeaders(headers: Map<String, String>?): String? {
+        if (headers.isNullOrEmpty()) return null
+        return runCatching { JSONObject(headers).toString() }
+            .onFailure { error ->
+                Log.w(TAG, "encodeHeaders failed for ${headers.size} headers", error)
+            }
+            .getOrNull()
+    }
+
+    private fun decodeHeaders(json: String?): Map<String, String>? {
+        if (json.isNullOrBlank()) return null
+        return runCatching {
+            val obj = JSONObject(json)
+            val out = LinkedHashMap<String, String>()
+            for (key in obj.keys()) {
+                out[key] = obj.getString(key)
+            }
+            out
+        }.onFailure { error ->
+            // Value-less log: key count only, no values (Authorization Bearer).
+            Log.w(TAG, "decodeHeaders failed for json with ${json.length} chars", error)
+        }.getOrNull()
+    }
+
     fun dispose(context: Context) {
         synchronized(lock) {
             persistProgressCheckpointLocked(context.applicationContext, snapshotLocked(), force = true)
@@ -492,8 +820,15 @@ object NativeAudioRuntime {
             lastError = null
             pendingSeekState = null
             currentStoryId = null
+            currentMediaId = null
+            queueItems = emptyList()
+            lastAppliedHeaders = null
             appContext = null
         }
+        // Clear outside the runtime lock: dispose() intentionally wipes the
+        // resume snapshot too — after an explicit JS dispose there is nothing
+        // meaningful to resume after process death.
+        clearResumeData(context.applicationContext)
         stopService(context)
         emitState()
     }
@@ -583,7 +918,13 @@ object NativeAudioRuntime {
         lastProgressPersistedTimeSec = snapshot.currentTime
     }
 
-    private fun buildMediaItem(src: String, title: String?, artist: String?, artworkUrl: String?): MediaItem {
+    private fun buildMediaItem(
+        src: String,
+        title: String?,
+        artist: String?,
+        artworkUrl: String?,
+        mediaId: String? = null,
+    ): MediaItem {
         val metadataBuilder = MediaMetadata.Builder()
         if (!title.isNullOrBlank()) metadataBuilder.setTitle(title)
         if (!artist.isNullOrBlank()) metadataBuilder.setArtist(artist)
@@ -591,10 +932,14 @@ object NativeAudioRuntime {
             runCatching { Uri.parse(artworkUrl) }
                 .onSuccess { metadataBuilder.setArtworkUri(it) }
         }
-        return MediaItem.Builder()
+        val itemBuilder = MediaItem.Builder()
             .setUri(src)
             .setMediaMetadata(metadataBuilder.build())
-            .build()
+        // Queue items carry the track id as mediaId so onMediaItemTransition
+        // (and the JS state sync) can identify the current item; the default
+        // mediaId is "" and is left untouched for setSource items.
+        if (!mediaId.isNullOrEmpty()) itemBuilder.setMediaId(mediaId)
+        return itemBuilder.build()
     }
 
     private fun snapshotLocked(): NativeAudioState {
@@ -653,6 +998,7 @@ object NativeAudioRuntime {
             buffering = effectiveBuffering,
             rate = exoPlayer.playbackParameters.speed.toDouble(),
             error = lastError,
+            mediaId = currentMediaId,
         )
     }
 
@@ -711,6 +1057,34 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.resolve(toJsObject(NativeAudioRuntime.getState(activity.applicationContext)))
         }.onFailure {
             invoke.reject(it.message ?: "setSource failed")
+        }
+    }
+
+    @Command
+    fun setQueue(invoke: Invoke) {
+        val args = invoke.parseArgs(SetQueueArgs::class.java)
+        val startIndex = args.startIndex ?: 0
+        if (startIndex < 0) {
+            invoke.reject("startIndex must be >= 0")
+            return
+        }
+        if (args.items.isEmpty()) {
+            invoke.reject("items must not be empty")
+            return
+        }
+
+        runCatching {
+            NativeAudioRuntime.setQueue(
+                activity.applicationContext,
+                args.items,
+                startIndex,
+                args.headers,
+                args.repeatMode,
+            )
+        }.onSuccess {
+            invoke.resolve(toJsObject(NativeAudioRuntime.getState(activity.applicationContext)))
+        }.onFailure {
+            invoke.reject(it.message ?: "setQueue failed")
         }
     }
 
@@ -852,6 +1226,7 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
         payload.put("isPlaying", state.isPlaying)
         payload.put("buffering", state.buffering)
         payload.put("rate", state.rate)
+        if (state.mediaId != null) payload.put("mediaId", state.mediaId)
         if (!state.error.isNullOrBlank()) payload.put("error", state.error)
         return payload
     }

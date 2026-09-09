@@ -35,7 +35,16 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 const setStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../store/playerStore", () => ({
-  usePlayerStore: { getState: () => ({ setIsPlaying: setStateMock }) },
+  usePlayerStore: {
+    getState: () => ({
+      setIsPlaying: setStateMock,
+      // Default single/empty queue state: runPlayChain reads the queue to
+      // decide between set_queue and set_source — the default keeps every
+      // pre-queue test on the plain setSource path.
+      playbackQueue: [] as unknown[],
+      playMode: "normal",
+    }),
+  },
 }));
 
 vi.mock("../utils/errorLog", () => ({

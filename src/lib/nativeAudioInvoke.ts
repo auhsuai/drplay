@@ -10,6 +10,9 @@ export const PLUGIN_COMMAND = {
   play: "plugin:native-audio|play",
   pause: "plugin:native-audio|pause",
   setSource: "plugin:native-audio|set_source",
+  // Native playlist push (ExoPlayer auto-advance between items happens
+  // natively, no WebView round-trip) — see NativeAudioPlugin.setQueue.
+  setQueue: "plugin:native-audio|set_queue",
   seekTo: "plugin:native-audio|seek_to",
   // Read-only state probe (Kotlin NativeAudioPlugin.getState) — no audio, no
   // transport mutation. The resume health-check uses it both to verify the

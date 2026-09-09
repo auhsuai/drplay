@@ -3,6 +3,7 @@ const COMMANDS: &[&str] = &[
     "register_listener",
     "remove_listener",
     "set_source",
+    "set_queue",
     "play",
     "pause",
     "seek_to",
