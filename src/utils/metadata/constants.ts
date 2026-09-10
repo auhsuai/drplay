@@ -18,6 +18,12 @@ export const FRESH_WRITE_WINDOW_MS = 5_000;
 // placeholder). These constants bound the raised per-file budget.
 export const TAG_BUDGET_MAX = 32 * 1024 * 1024; // hard cap for the raised budget
 export const COVER_SLACK_BYTES = 1 * 1024 * 1024; // 64KB chunk alignment + frame overhead
+// Blind head fetch (slice 2): ONE request covers format detection, the m4a
+// box walk AND a typical ID3v2 tag body — the old 128KB head forced a byte-0
+// refetch whenever the tag spilled past it (the tag prefetch started at 0).
+// 24 x 64KB chunks, and 64KB-aligned so the tag-remainder prefetch starts
+// exactly at this boundary without re-fetching a byte of the head.
+export const HEAD_TAG_FETCH_BYTES = 1_572_864; // 1.5MB
 // Fix E: files at/above this size get a HEAD-CLAMPED parse (see
 // getTrackMetadataImpl). Evidence: every range-fetch timeout observed in
 // production was on 152-297MB files; nothing below 101MB ever timed out.

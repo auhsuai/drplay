@@ -92,6 +92,7 @@ import {
   METADATA_NETWORK_COOLDOWN_MS,
   REAL_METADATA_VERSION,
   INFLIGHT_TIMEOUT,
+  HEAD_TAG_FETCH_BYTES,
 } from "./metadata/constants";
 import {
   BUDGET_CAP,
@@ -1048,9 +1049,11 @@ describe("getTrackMetadata head fetch + transient network failures", () => {
     );
   });
 
-  it("fetches the 128KB head in a single range request (large file)", async () => {
-    // 140KB ID3v2 tag body -> file > HEAD_BYTES: the head read must NOT be
-    // split into two 64KB chunk fetches (one request for bytes=0-131071).
+  it("fetches the whole sub-1.5MB file in a single blind head request (140KB tag)", async () => {
+    // SLICE 2 CONTRACT CHANGE: the blind head fetch (1.5MB, clamped to the
+    // file size) covers the ENTIRE file — one request, no byte-0 tag
+    // refetch. (Old contract: 128KB head + a byte-0 tag-region refetch = 2
+    // requests for this same fixture.)
     const fixture = buildHugeTagMp3(140 * 1024, {
       title: "Head Song",
       artist: "Head Artist",
@@ -1067,9 +1070,8 @@ describe("getTrackMetadata head fetch + transient network failures", () => {
       "head.mp3",
     );
     expect(r.v).toBe(8);
-    expect(calls[0]?.range).toBe("bytes=0-131071");
-    // prefetch head (1) + the chunk past the head the tag-body parse needs (1)
-    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(fixture.length - 1)}`);
+    expect(calls).toHaveLength(1);
   });
 
   it("recovers from a transient timeout on the head request and parses", async () => {
@@ -2318,7 +2320,7 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
     }
   });
 
-  it("exactly-100MB CBR file (at the threshold, NOT large): full parse path with tail ID3v1 read, real duration", async () => {
+  it("exactly-100MB CBR file (at the threshold, NOT large): full parse path, real duration", async () => {
     const fixture = buildLargeCbrMp3({
       title: "Boundary Song",
       artist: "Boundary Artist",
@@ -2343,9 +2345,18 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
         44100,
       6,
     );
-    // NOT clamped: the ID3v1 tail read beyond the head region still fires
-    // (same as any small file — below-threshold parses are untouched).
-    expect(calls.some((c) => rangeStart(c.range) >= HEAD_BYTES)).toBe(true);
+    // SLICE 2 CONTRACT CHANGE: the blind 1.5MB head replaced the 128KB head +
+    // byte-0 tag refetch. skipPostHeaders drops the ID3v1 tag-parse for
+    // tagged files, but music-metadata's core scanAppendingHeaders
+    // (ParserFactory, NOT gated by skipPostHeaders) still probes fileSize-128
+    // + the APE footer — ONE request for the last 64KB chunk on any
+    // non-clamped file (pre-existing behavior, unchanged by the slice; old
+    // contract: head + tag refetch + this same probe = 3 requests).
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(100 * 1024 * 1024 - 65536)}-${String(100 * 1024 * 1024 - 1)}`,
+    );
   });
 
   it("100MB+1 CBR file (just above the threshold): real size granted, no tail fetch", async () => {
@@ -2378,7 +2389,7 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
     }
   });
 
-  it("90MB file (below threshold) keeps the full parse path — tail ID3v1 read still attempted", async () => {
+  it("90MB file (below threshold) keeps the full parse path — Xing duration, blind head + EOF probe", async () => {
     const fixture = buildLargeMp3({
       title: "Mid Song",
       artist: "Mid Artist",
@@ -2398,8 +2409,17 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
     );
     expect(r.v).toBe(8);
     expect(r.duration).toBeCloseTo((1_000 * 1152) / 44100, 6);
-    // NOT clamped: the ID3v1 tail read still fires beyond HEAD_BYTES.
-    expect(calls.some((c) => rangeStart(c.range) >= HEAD_BYTES)).toBe(true);
+    // SLICE 2 CONTRACT CHANGE: the blind 1.5MB head replaced the 128KB head +
+    // byte-0 tag refetch (3 requests → 2). The remaining tail request is the
+    // pre-existing scanAppendingHeaders EOF probe (music-metadata core, NOT
+    // gated by skipPostHeaders): exactly ONE last-64KB chunk, no ID3v1
+    // tag-parse and no chunk-scan of the body (old contract asserted that a
+    // tail read fires; it still does — but it is now only the probe).
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(90 * 1024 * 1024 - 65536)}-${String(90 * 1024 * 1024 - 1)}`,
+    );
   });
 
   it("LARGE m4a (150MB) with moov at the tail: clamped head-only fetch, no tail request, no streamUnplayable marking", async () => {
@@ -2475,7 +2495,7 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
   });
 
-  it("MP3 with a 600KB ID3v2 tag: head + ONE tag-region prefetch (2 requests, was ~9 chunk requests)", async () => {
+  it("MP3 with a 600KB ID3v2 tag: the whole file arrives in ONE blind head request (was head + byte-0 refetch)", async () => {
     const fixture = buildHugeTagMp3(600 * 1024, {
       title: "Big Tag",
       artist: "Big Artist",
@@ -2493,11 +2513,12 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     );
     expect(r.v).toBe(8);
     expect(r.title).toBe("Big Tag");
-    // head prefetch (1) + tag-region prefetch (1); the whole parse reads from
-    // the seeded cache — before the fix the tag body alone cost 8 chunk reads.
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.range).toBe("bytes=0-131071");
-    expect(calls[1]?.range).toBe(`bytes=0-${String(fixture.length - 1)}`);
+    // SLICE 2 CONTRACT CHANGE: the file (~615KB) fits the 1.5MB blind head,
+    // so ONE request covers head + the whole tag — the old byte-0 tag-region
+    // refetch (calls[1] = bytes=0-{len-1}) is gone by design. Before the
+    // blind fetch existed the tag body alone cost 8 chunk reads.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(fixture.length - 1)}`);
   });
 
   it("MP3 with a 4MB ID3v2 tag (fits the chunk-cache LRU): 2 requests total (was ~64)", async () => {
@@ -2571,8 +2592,12 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     expect(calls.length).toBeLessThanOrEqual(4);
   });
 
-  it("a failed tag prefetch falls back to the chunked parse and still yields v:8", async () => {
-    const fixture = buildHugeTagMp3(600 * 1024, {
+  it("a failed tag-remainder prefetch falls back to the chunked parse and still yields v:8", async () => {
+    // SLICE 2 CONTRACT CHANGE: the tag prefetch now covers ONLY the part past
+    // the blind head, so the fixture needs a 2MB tag for the prefetch
+    // ([1.5MB, EOF)) to fire at all (the old 600KB fixture fit the blind
+    // head entirely and no longer triggers it).
+    const fixture = buildHugeTagMp3(2 * 1024 * 1024, {
       title: "Big Tag",
       artist: "Big Artist",
       album: "Big Album",
@@ -2582,8 +2607,9 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     const serveSlice = mock.getMockImplementation();
     if (!serveSlice)
       throw new Error("makeFetchMock must install an implementation");
-    // head succeeds; the tag-region prefetch request fails; everything after
-    // is served normally so the chunked fallback can complete the parse.
+    // blind head succeeds; the tag-remainder prefetch request fails;
+    // everything after is served normally so the chunked fallback can
+    // complete the parse.
     mock
       .mockImplementationOnce((...args) => serveSlice(...args))
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
@@ -2598,8 +2624,9 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     );
     expect(r.v).toBe(8);
     expect(r.title).toBe("Big Tag");
-    // the fallback re-read the tag region chunked (8 chunks past the head)
-    expect(mock).toHaveBeenCalledTimes(10);
+    // 1 blind head + 1 failed remainder prefetch + 9 chunked reads of the
+    // tag tail past the blind head (chunks 24-32 of the 2MB tag body).
+    expect(mock).toHaveBeenCalledTimes(11);
   });
 
   it("LARGE file (150MB) with a tag larger than the clamped head: NO tag prefetch, head-only fetch", async () => {
@@ -2618,6 +2645,91 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     // the head prefetch is the ONLY request: the tag region must NOT be
     // re-fetched for a large file whose tag cannot fit the clamped head.
     expect(calls).toHaveLength(1);
+    // SLICE 2 GUARD: the blind fetch still clamps to the 128KB head for
+    // large files (min(HEAD_TAG_FETCH_BYTES, parseSize) == HEAD_BYTES) —
+    // byte pattern identical to the pre-slice behavior.
+    expect(calls[0]?.range).toBe("bytes=0-131071");
+  });
+});
+
+describe("getTrackMetadata blind head fetch (1.5MB head, no byte-0 tag refetch)", () => {
+  const fresh = () => import("./metadata");
+
+  function mockCompress(thumbBytes: Uint8Array, fullBytes: Uint8Array) {
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data: v.maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(compressCoverVariants).mockReset();
+    mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
+  });
+
+  it("tag > 1.5MB: request 2 fetches ONLY the remainder (bytes=1572864-...), never a byte-0 refetch", async () => {
+    // 4MB tag body: the blind 1.5MB head covers the first chunk of the tag;
+    // the tag-region prefetch must start AT the blind boundary (64KB-aligned)
+    // and run to EOF, so the whole parse is served from exactly 2 requests.
+    const fixture = buildHugeTagMp3(4 * 1024 * 1024, {
+      title: "Blind Split",
+      artist: "Blind Artist",
+      album: "Blind Album",
+      image: makeJpeg(),
+    });
+    const { calls } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "blind-split",
+      "tok",
+      fixture.length,
+      "blind-split.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Blind Split");
+    expect(r.pictureData).toEqual(new Uint8Array([1, 2, 3]));
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(HEAD_TAG_FETCH_BYTES)}-${String(fixture.length - 1)}`,
+    );
+  });
+
+  it("passes skipPostHeaders: true to every parseFromTokenizer call (drops the EOF-probe request)", async () => {
+    const fixture = buildMp3WithPicture(
+      "Post Headers",
+      "Post Artist",
+      "Post Album",
+      makeJpeg(),
+    );
+    makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "post-headers",
+      "tok",
+      fixture.length,
+      "post.mp3",
+    );
+    expect(r.v).toBe(8);
+    const mm = await import("music-metadata");
+    const optionSets = vi
+      .mocked(mm.parseFromTokenizer)
+      .mock.calls.map((call) => call[1]);
+    expect(optionSets.length).toBeGreaterThan(0);
+    for (const opt of optionSets) {
+      expect(opt?.skipPostHeaders).toBe(true);
+    }
   });
 });
 

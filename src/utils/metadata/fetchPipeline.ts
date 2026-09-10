@@ -33,6 +33,7 @@ import {
 import {
   COVER_SLACK_BYTES,
   FALLBACK_AUDIO_FILENAME,
+  HEAD_TAG_FETCH_BYTES,
   LARGE_FILE_THRESHOLD,
   METADATA_KEY_PREFIX,
   METADATA_NETWORK_COOLDOWN_MS,
@@ -191,10 +192,13 @@ async function getTrackMetadataImpl(
       signal ? { abortSignal: signal } : {},
     );
 
-    // 2. Head fetch (128KB in ONE range request — a readRange would split it
-    //    into two 64KB chunks, doubling the requests a large-file metadata
-    //    load must survive) — format detection + m4a box walk
-    const head = await tokenizer.prefetchHead(Math.min(HEAD_BYTES, parseSize));
+    // 2. Head fetch (one blind range request — 1.5MB or the whole file when
+    //    smaller): format detection + m4a box walk + a typical ID3v2 tag
+    //    body in the SAME request. The old 128KB head made every file whose
+    //    tag spilled past it re-fetch the head region from byte 0.
+    const head = await tokenizer.prefetchHead(
+      Math.min(HEAD_TAG_FETCH_BYTES, parseSize),
+    );
     format = detectFormat(head, name);
 
     if (format === "mp3") {
@@ -214,23 +218,25 @@ async function getTrackMetadataImpl(
           ...(signal ? { abortSignal: signal } : {}),
         });
       }
-      // Metadata-load latency: a tag extending past the prefetched head was
+      // Metadata-load latency: a tag extending past the blind head fetch was
       // read chunk-by-chunk (64KB per request) — a 600KB tag alone cost ~9
       // range requests, a 25MB tag ~400, all queued behind the app-wide
-      // CONCURRENCY-3 semaphore. Prefetch the tag region in ONE request so
-      // the parse reads it from the seeded cache. Best-effort: on budget or
-      // network failure the prefetch is skipped and the parse re-reads the
-      // region chunked exactly as before (the raised-budget retry /
-      // skipCovers fallbacks are untouched). For LARGE files the region is
-      // clamped to the head (prefetchEnd == headRegion → never re-fetches the
-      // head; a tag that cannot fit the clamped head keeps failing its parse
-      // into the placeholder — behavior unchanged).
+      // CONCURRENCY-3 semaphore. Prefetch ONLY the part past the blind head
+      // (which already cached [0, HEAD_TAG_FETCH_BYTES)) so no byte is
+      // re-fetched: HEAD_TAG_FETCH_BYTES is 64KB-aligned, so the range starts
+      // exactly at the boundary. Best-effort: on budget or network failure
+      // the prefetch is skipped and the parse re-reads the region chunked
+      // exactly as before (the raised-budget retry / skipCovers fallbacks
+      // are untouched). For LARGE files parseSize is clamped to HEAD_BYTES,
+      // so prefetchEnd < HEAD_TAG_FETCH_BYTES → this never fires (byte
+      // pattern identical to the pre-slice clamp; a tag that cannot fit the
+      // clamped head keeps failing its parse into the placeholder — behavior
+      // unchanged).
       if (tagSize > 0) {
-        const headRegion = Math.min(HEAD_BYTES, parseSize);
         const prefetchEnd = Math.min(tagBudgetNeeded, parseSize);
-        if (prefetchEnd > headRegion) {
+        if (prefetchEnd > HEAD_TAG_FETCH_BYTES) {
           try {
-            await tokenizer.prefetchRange(0, prefetchEnd);
+            await tokenizer.prefetchRange(HEAD_TAG_FETCH_BYTES, prefetchEnd);
           } catch (e: unknown) {
             void logMetaWarn(
               `tag-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
@@ -261,6 +267,12 @@ async function getTrackMetadataImpl(
       metadata = await parseFromTokenizer(tokenizer, {
         skipCovers: false,
         duration: true,
+        // Skips the ID3v1/APE post-header EOF probe (AbstractID3Parser skips
+        // it when tags were already found, hasAny()) — the probe range-fetched
+        // the REAL file tail (fileInfo.size is the real size on non-clamped
+        // files): one extra request per parse, gone. ID3v1-only files (no
+        // ID3v2 tag → hasAny() false) still probe and parse their tag.
+        skipPostHeaders: true,
       });
     } catch (e: unknown) {
       if (e instanceof BudgetExceededError) {
@@ -287,6 +299,7 @@ async function getTrackMetadataImpl(
         metadata = await parseFromTokenizer(retryTokenizer, {
           skipCovers: true,
           duration: true,
+          skipPostHeaders: true,
         });
       } else {
         throw e;
@@ -353,7 +366,15 @@ async function getTrackMetadataImpl(
     //    exists to avoid (streamUnplayable is not marked for them).
     let streamUnplayable = false;
     if (format === "m4a" && !isLargeFile) {
-      const walk = walkMp4TopBoxes(head, size);
+      // The walk must keep seeing the OLD 128KB head window: the blind fetch
+      // now covers up to 1.5MB, and a moov reached inside the wider head (a
+      // small non-faststart file whose moov sits past 128KB) would flip
+      // moovBeforeMdat and silently un-mark files the old contract flagged.
+      // Slice 2 keeps the streamUnplayable semantics byte-identical.
+      const walk = walkMp4TopBoxes(
+        head.subarray(0, Math.min(HEAD_BYTES, head.length)),
+        size,
+      );
       if (walk.mdatBeforeMoov && !walk.moovBeforeMdat) {
         streamUnplayable = true;
         // The cached entry must carry the flag so the player's pre-play gate
