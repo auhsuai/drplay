@@ -9,6 +9,7 @@ import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import { DRIVE_FILES_CHANGED_EVENT } from "../utils/driveConstants";
 import { getCurrentUserEmail } from "../utils/storageKeys";
+import { rememberTotalSizesInServiceWorker } from "../utils/swPrefetch";
 
 const DRIVE_PAGE_SIZE = 1000;
 
@@ -116,6 +117,19 @@ export function useDriveOnDemandFetch({
               });
               break;
             }
+            // Seed the SW's total-size cache from the listing's parsed `size`
+            // (REMEMBER_TOTAL_SIZES) so byte-cache serving covers files never
+            // streamed yet. Fire-and-forget: listing never waits on it, and a
+            // missing controller is a no-op inside the util.
+            rememberTotalSizesInServiceWorker(
+              rowsToUpsert.flatMap((row) =>
+                typeof row.size === "number" &&
+                Number.isSafeInteger(row.size) &&
+                row.size >= 1
+                  ? [{ fileId: row.id, size: row.size }]
+                  : [],
+              ),
+            );
             // Write-through invalidation: this page just landed in the mirror,
             // so HomeTab's Recently Added must refresh now instead of waiting
             // up to the 60s delta-sync poll. Reached only after a successful

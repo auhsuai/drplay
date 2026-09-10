@@ -685,6 +685,32 @@ self.addEventListener('message', (event) => {
     accessToken = event.data.token;
     // Wake every 401 waiter; each one checks whether ITS stale token changed.
     tokenWaiters.forEach((notify) => notify());
+  } else if (event.data && event.data.type === 'REMEMBER_TOTAL_SIZES') {
+    // Page-side seed: Drive listing `size` fills total-size MISSES so the
+    // byte-cache serve gate works for files never streamed yet. A total
+    // learned from a real stream response is exact and already in the Map —
+    // the (possibly stale) listing size must never overwrite it, so only
+    // misses are seeded. Invalid entries are skipped (one warn total, no
+    // throw); empty/non-array entries are a silent no-op.
+    const entries = event.data.entries;
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    let invalidCount = 0;
+    for (const entry of entries) {
+      const fileId = entry && typeof entry.fileId === 'string' ? entry.fileId : '';
+      const size = entry ? entry.size : undefined;
+      if (fileId === '' || !Number.isSafeInteger(size) || size < 1) {
+        invalidCount += 1;
+        continue;
+      }
+      if (!totalSizeByFileId.has(fileId)) rememberTotalSize(fileId, size);
+    }
+    if (invalidCount > 0) {
+      byteCacheLog(
+        'warn',
+        `rememberTotalSizes skipped ${String(invalidCount)} invalid entries`,
+        new Error('invalid REMEMBER_TOTAL_SIZES entries')
+      );
+    }
   } else if (event.data && event.data.type === 'PREFETCH_TRACK') {
     // Slice 2: warm the byte-cache for the next track (best-effort).
     const fileId = typeof event.data.fileId === 'string' ? event.data.fileId : '';

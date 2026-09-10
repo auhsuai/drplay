@@ -10,8 +10,15 @@ import { useDriveStore } from "../store/driveStore";
 vi.mock("../utils/apiClient", () => ({
   fetchWithAuth: vi.fn(),
 }));
+// Mock the SW wire so the seed call is observed without a real worker.
+vi.mock("../utils/swPrefetch", () => ({
+  prefetchTrackInServiceWorker: vi.fn(),
+  rememberTotalSizesInServiceWorker: vi.fn(),
+}));
 import { fetchWithAuth } from "../utils/apiClient";
+import { rememberTotalSizesInServiceWorker } from "../utils/swPrefetch";
 const mockedFetch = vi.mocked(fetchWithAuth);
+const mockedRemember = vi.mocked(rememberTotalSizesInServiceWorker);
 
 const FOLDER_ID = "folder-under-test";
 
@@ -41,6 +48,7 @@ describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
     await db.files.clear();
     useDriveStore.setState({ isLoadingTracks: false });
     mockedFetch.mockReset();
+    mockedRemember.mockClear();
   });
 
   afterEach(async () => {
@@ -268,5 +276,58 @@ describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
       window.removeEventListener(EVENT, listener);
       bulkPutSpy.mockRestore();
     }
+  });
+
+  it("seeds SW total sizes from each persisted page (folders and sizeless rows excluded)", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makePage([
+        ...[0, 1, 2].map((i) => makeDriveFile(1, i)),
+        {
+          id: "p1-fold",
+          name: "subfolder",
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [FOLDER_ID],
+        },
+      ]),
+    );
+
+    renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+    );
+
+    // Fires only after the page's Dexie write resolved: rows are visible AND
+    // the seed message carries exactly the parsed sizes of that page.
+    await waitFor(async () => {
+      const count = await db.files.where("parentId").equals(FOLDER_ID).count();
+      expect(count).toBe(4);
+    });
+    expect(mockedRemember).toHaveBeenCalledTimes(1);
+    expect(mockedRemember).toHaveBeenCalledWith([
+      { fileId: "p1-f0", size: 1000 },
+      { fileId: "p1-f1", size: 1000 },
+      { fileId: "p1-f2", size: 1000 },
+    ]);
+  });
+
+  it("does not seed SW sizes when the Dexie write fails", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      makePage([0, 1].map((i) => makeDriveFile(1, i))),
+    );
+
+    const bulkPutSpy = vi
+      .spyOn(db.files, "bulkPut")
+      .mockRejectedValueOnce(new Error("QuotaExceededError"));
+
+    renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+    );
+
+    await waitFor(() => {
+      expect(bulkPutSpy).toHaveBeenCalledTimes(1);
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(mockedRemember).not.toHaveBeenCalled();
+    bulkPutSpy.mockRestore();
   });
 });
