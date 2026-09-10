@@ -2081,6 +2081,17 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
   // present — both are required for music-metadata to set a Xing duration.
   // byte2 defaults to 0x90 (MPEG1 Layer III 128kbps 44.1kHz); callers can
   // pass another value (e.g. 0xa0 = 160kbps) to build a VBR stream.
+  // Frame sizes follow the MPEG1 Layer III math floor(144 * bitrate / 44100):
+  // 128kbps → 417 bytes, 160kbps → 522 bytes. Frames MUST sit at their
+  // computed sizes — music-metadata advances frame-to-frame by the COMPUTED
+  // size, so undersized frames make its walk skip the next frame header,
+  // frameCount stalls below 4 and NONE of its quit paths (CBR / Xing /
+  // duration flag) ever fire (the parse then sync-scans to EOF regardless of
+  // options.duration).
+  const FRAME_BYTES_BY_BYTE2: Record<number, number> = {
+    0x90: 417, // 128kbps
+    0xa0: 522, // 160kbps
+  };
   function buildMpegFrame(
     withXing: boolean,
     numFrames: number,
@@ -2088,11 +2099,12 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
   ): number[] {
     const header = [0xff, 0xfb, byte2, 0x00];
     const sideInfo = new Array<number>(32).fill(0);
+    const frameBytes = FRAME_BYTES_BY_BYTE2[byte2] ?? FRAME_BYTES;
     if (!withXing) {
       return [
         ...header,
         ...sideInfo,
-        ...new Array<number>(FRAME_BYTES - 4 - 32).fill(0),
+        ...new Array<number>(frameBytes - 4 - 32).fill(0),
       ];
     }
     const xing = [
@@ -2419,6 +2431,110 @@ describe("getTrackMetadata large-file head-only parse (Fix E)", () => {
     expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
     expect(calls[1]?.range).toBe(
       `bytes=${String(90 * 1024 * 1024 - 65536)}-${String(90 * 1024 * 1024 - 1)}`,
+    );
+  });
+
+  // ---- Slice 3 (duration:false): no file may scan its audio region for a
+  // duration. music-metadata only stream-scans when options.duration is set
+  // (MpegParser.js:419-421); Xing/LAME durations are set unconditionally
+  // (544-551) and CBR is size-derived in finalize() (298-307, quit at
+  // 407-414). All three tests pin the same request pattern: blind head +
+  // the pre-parse scanAppendingHeaders EOF probe, nothing else.
+
+  it("4MB MP3 VBR without Xing: duration 0 + estimated, only head + EOF-probe requests (no audio scan)", async () => {
+    // Virtual 4MB file, only the head materialized: any duration scan past
+    // the 1.5MB blind head shows up as ~39 extra 64KB chunk requests.
+    const virtualSize = 4 * 1024 * 1024;
+    const fixture = buildLargeMp3({
+      title: "Small VBR Song",
+      artist: "Small VBR Artist",
+      album: "Small VBR Album",
+      image: makeJpeg(),
+      withXing: false,
+      numFrames: 0,
+      vbr: true,
+    });
+    const { calls } = makeFetchMock(fixture, { virtualSize });
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "small-vbr-noxing",
+      "tok",
+      virtualSize,
+      "vbr.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Small VBR Song");
+    // No Xing tag and no CBR proof — the only honest duration is "unknown":
+    // 0 + estimated (the old duration:true scanned the whole file for it).
+    expect(r.duration).toBe(0);
+    expect(r.durationEstimated).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(virtualSize - 65536)}-${String(virtualSize - 1)}`,
+    );
+  });
+
+  it("4MB MP3 with Xing: exact Xing duration, only head + EOF-probe requests (slice-2 pattern)", async () => {
+    const virtualSize = 4 * 1024 * 1024;
+    const fixture = buildLargeMp3({
+      title: "Small Xing Song",
+      artist: "Small Xing Artist",
+      album: "Small Xing Album",
+      image: makeJpeg(),
+      withXing: true,
+      numFrames: 1_000,
+    });
+    const { calls } = makeFetchMock(fixture, { virtualSize });
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "small-xing",
+      "tok",
+      virtualSize,
+      "xing.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.durationEstimated).toBe(false);
+    expect(r.duration).toBeCloseTo((1_000 * 1152) / 44100, 6);
+    // The parser quits at frame 4 (duration already set by the Xing tag):
+    // re-enabling a stream scan here would blow past 2 requests.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(virtualSize - 65536)}-${String(virtualSize - 1)}`,
+    );
+  });
+
+  it("4MB CBR MP3 (small, no Xing): exact size-derived duration, only head + EOF-probe requests", async () => {
+    const virtualSize = 4 * 1024 * 1024;
+    const fixture = buildLargeCbrMp3({
+      title: "Small CBR Song",
+      artist: "Small CBR Artist",
+      album: "Small CBR Album",
+      image: makeJpeg(),
+    });
+    const { calls } = makeFetchMock(fixture.bytes, { virtualSize });
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "small-cbr",
+      "tok",
+      virtualSize,
+      "cbr.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.durationEstimated).toBe(false);
+    // finalize() derives CBR duration from the (non-clamped) tokenizer size.
+    const expectedDuration =
+      (Math.round((virtualSize - fixture.tagEnd) / FRAME_BYTES) * 1152) / 44100;
+    expect(r.duration).toBeCloseTo(expectedDuration, 6);
+    expect(r.duration).toBeGreaterThan(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(virtualSize - 65536)}-${String(virtualSize - 1)}`,
     );
   });
 

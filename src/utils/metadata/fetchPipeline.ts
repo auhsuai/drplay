@@ -177,7 +177,8 @@ async function getTrackMetadataImpl(
   // range fetch that timed out (metadata-fetch-failed storm on 152-297MB
   // files). Everything the app needs from a large file lives in the head:
   // ID3v2 tags + embedded cover + a Xing duration tag (when present).
-  // Accepted consequence: no-Xing large files parse to duration 0 /
+  // Accepted consequence: no-Xing files — any size, since the slice-3
+  // duration:false below — parse to duration 0 /
   // durationEstimated (the UI shows "–" via Fix F instead of a fake time);
   // a moov-at-tail m4a fails its parse (placeholder, no tail fetch).
   // Fix G: large CBR MP3s get their EXACT duration substituted from the real
@@ -266,7 +267,15 @@ async function getTrackMetadataImpl(
     try {
       metadata = await parseFromTokenizer(tokenizer, {
         skipCovers: false,
-        duration: true,
+        // duration:false: music-metadata only stream-scans frames for a
+        // duration when this flag is set (MpegParser.js:419-421) — that scan
+        // is the 51-request/255s range-fetch storm on VBR-no-Xing MP3s.
+        // Durations still arrive without it: Xing/LAME are set
+        // unconditionally (MpegParser.js:544-551) and CBR is derived from the
+        // file size in finalize() (MpegParser.js:298-307, quit at 407-414).
+        // Accepted loss: VBR-no-Xing MP3s (and Ogg tail-page scans) report
+        // duration 0 / estimated instead of a scan-derived value.
+        duration: false,
         // Skips the ID3v1/APE post-header EOF probe (AbstractID3Parser skips
         // it when tags were already found, hasAny()) — the probe range-fetched
         // the REAL file tail (fileInfo.size is the real size on non-clamped
@@ -298,7 +307,9 @@ async function getTrackMetadataImpl(
         });
         metadata = await parseFromTokenizer(retryTokenizer, {
           skipCovers: true,
-          duration: true,
+          // Same duration:false rationale as the initial parse above — the
+          // retry must not re-introduce the audio-region scan.
+          duration: false,
           skipPostHeaders: true,
         });
       } else {
