@@ -745,7 +745,12 @@ async function prefetchTrackBytes(fileId) {
         headers,
         mode: 'cors',
         credentials: 'omit',
-        cache: 'no-store'
+        cache: 'no-store',
+        // Bound each attempt (fresh signal per buildRequest/retry) so a
+        // stalled Drive fetch cannot become a zombie holding a connection
+        // and the SW alive; an abort only loses warm-cache and lands in the
+        // 'prefetch failed' catch below.
+        signal: AbortSignal.timeout(PREFETCH_DEADLINE_MS)
       });
     };
     const response = await fetchWithBackoff(buildRequest);
@@ -777,6 +782,9 @@ async function prefetchTrackBytes(fileId) {
 const SW_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 // Bounded backoff (2 retries): ~one RTT, then a longer jitter catch.
 const SW_RETRY_DELAYS_MS = [400, 1200];
+// Prefetch is best-effort: bound every attempt wide enough for a legit
+// full-track download (120s) but never infinite.
+const PREFETCH_DEADLINE_MS = 120_000;
 
 function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

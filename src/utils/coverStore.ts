@@ -7,6 +7,7 @@
 import { createSemaphore } from "./asyncLimit";
 import { captureError } from "./errorLog";
 import { classifyMetaError } from "./metadata/cache";
+import { backoffDelay, sleep } from "./retryDelay";
 
 const COVER_STORE_MODULE = "coverStore";
 const COVER_SCHEME = "drplay://";
@@ -132,6 +133,9 @@ async function performPostWithRetry(
       const status = await performPostOnce(fileId, thumb, bytes);
       if (status === 200) return;
       if (isRetryableStatus(status) && retriesLeft > 0) {
+        // Back off before retrying (retry-storm guard): a transient 5xx/429
+        // must not hammer the disk handler back-to-back.
+        await sleep(backoffDelay(POST_MAX_RETRIES - retriesLeft));
         retriesLeft -= 1;
         continue;
       }

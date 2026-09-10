@@ -212,6 +212,30 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
     await first;
   });
 
+  it("backs off between retry attempts (no immediate retry-storm on a transient 5xx)", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(statusResponse(500))
+        .mockResolvedValueOnce(okResponse());
+      vi.stubGlobal("fetch", fetchMock);
+
+      const post = postCoverToCache("backoff-id", true, new Uint8Array([1]));
+      // First attempt fires immediately; the retry must NOT (backoff pending).
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // backoffDelay(0) = 1000ms base + up to 50% jitter -> advancing 2000ms
+      // is safely past any jittered value; the retry fires only after it.
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await post;
+      expect(mockedCaptureError).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // ORDER MATTERS from here on: the two tests below both flip the module-level
   // schemeUnavailable flag on the SHARED module instance, so they must stay at
   // the end of this file — any test declared after them would see the scheme
