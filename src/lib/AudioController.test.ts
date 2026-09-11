@@ -4,6 +4,11 @@
 // singleton, the delegation wiring, and the events reaching `on()` consumers.
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../types";
+// Task 4 guard: the web audio path was deleted with the mpv cutover — these
+// sources must never reference DOM audio (or the removed factory) again.
+import audioControllerSource from "../lib/AudioController.ts?raw";
+import mpvAudioSource from "../lib/mpvAudio.ts?raw";
+import audioNativeEventsSource from "../lib/audioNativeEvents.ts?raw";
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -224,5 +229,20 @@ describe("AudioController facade over the mpv engine", () => {
     tauriMocks.invoke.mockClear();
     ctrl.togglePlay();
     expect(mpvCommands()).toEqual([["set_property", "pause", "no"]]);
+  });
+});
+
+describe("guard: web audio path stays removed (mpv cutover)", () => {
+  it("facade, engine and event-contract sources contain no DOM audio code", () => {
+    const sources = [
+      ["AudioController.ts", audioControllerSource],
+      ["mpvAudio.ts", mpvAudioSource],
+      ["audioNativeEvents.ts", audioNativeEventsSource],
+    ] as const;
+    for (const [file, source] of sources) {
+      expect(source, `${file} must not reference DOM audio`).not.toMatch(
+        /new Audio\(|HTMLAudioElement|createNativeEventHandlers/,
+      );
+    }
   });
 });
