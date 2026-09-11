@@ -108,6 +108,9 @@ export function useDriveListing({
         isFolder: file.isFolder,
         size: file.size,
         modifiedTime: file.modifiedTime,
+        // Same top-level parent contract as the search mapper: here it always
+        // equals the listed folder, so navigation treats it as a drill-down.
+        parentId: file.parentId,
         trackInfo: file.isFolder
           ? undefined
           : {

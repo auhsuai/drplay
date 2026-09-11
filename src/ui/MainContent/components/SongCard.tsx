@@ -17,7 +17,11 @@ import { useSongCardMetadata } from "../hooks/useSongCardMetadata";
 interface SongCardProps {
   item: DriveItem;
   onPlay: (track: Track) => void;
-  onOpenFolder: (id: string, name: string) => void;
+  // Optional parentId: search folder hits carry their real Drive parent so
+  // navigation can rebuild a cross-branch breadcrumb; listing rows and legacy
+  // callers omit it (plain drill-down append). Kept optional so the 2-arg
+  // call shape stays valid where the parent is unknown.
+  onOpenFolder: (id: string, name: string, parentId?: string) => void;
   token?: string | null;
   currentFolderId: string;
   currentFolderName: string;
@@ -108,7 +112,14 @@ export const SongCard = React.memo(
         return;
       }
       if (item.isFolder) {
-        onOpenFolder(item.id, meta.title);
+        // meta.title is the async-resolved display name (not item.title) —
+        // only the parentId plumbing is new here. Two-arg call when the
+        // parent is unknown preserves the drill-down path exactly.
+        if (item.parentId !== undefined) {
+          onOpenFolder(item.id, meta.title, item.parentId);
+        } else {
+          onOpenFolder(item.id, meta.title);
+        }
         return;
       }
       const track = item.trackInfo;
@@ -249,6 +260,7 @@ export const SongCard = React.memo(
       prev.item.id === next.item.id &&
       prev.item.title === next.item.title &&
       prev.item.isFolder === next.item.isFolder &&
+      prev.item.parentId === next.item.parentId &&
       prev.item.trackInfo?.id === next.item.trackInfo?.id &&
       prev.item.trackInfo?.queueItemId === next.item.trackInfo?.queueItemId &&
       prev.item.size === next.item.size &&

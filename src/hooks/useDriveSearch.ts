@@ -20,6 +20,10 @@ function mapSearchHitToDriveItem(hit: SearchHit): DriveItem {
     isFolder: hit.isFolder,
     size: hit.size,
     modifiedTime: hit.modifiedTime,
+    // Top-level parent (NOT in trackInfo): folder hits must keep
+    // trackInfo === undefined, but navigation still needs the real parent to
+    // tell a same-folder drill-down from a cross-branch search jump.
+    parentId: hit.parentId,
     trackInfo: hit.isFolder
       ? undefined
       : {

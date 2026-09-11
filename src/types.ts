@@ -38,6 +38,10 @@ export type DriveItem = {
   trackInfo?: Track | undefined;
   size?: number | undefined;
   modifiedTime?: string | undefined;
+  // Real Drive parent id, kept top-level (not in trackInfo) so folder hits
+  // from global search can carry it while trackInfo stays undefined for
+  // folders. Absent for rows whose parent is unknown.
+  parentId?: string | undefined;
 };
 
 // moved from App.tsx
