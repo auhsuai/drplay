@@ -85,3 +85,6 @@ r2_config.json
 # Local plan files (kept locally, not tracked)
 kế hoạch tối ưu toàn diện.md
 skeleton_refactor_ui.md
+
+# mpv sidecar binary (downloaded via scripts/fetch-mpv.mjs)
+src-tauri/bin/

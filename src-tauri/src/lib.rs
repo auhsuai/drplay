@@ -10,9 +10,13 @@ mod tray;
 mod memory;
 mod token_store;
 mod seed;
+#[cfg(windows)]
+mod mpv;
 
 use auth::{login_google_native, refresh_google_token};
 use memory::{apply_window_activity, WindowActivityEvent};
+#[cfg(windows)]
+use mpv::{mpv_command, mpv_get_property, mpv_shutdown, mpv_spawn};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 
@@ -197,6 +201,10 @@ pub fn run() {
             token_store::set_refresh_token,
             token_store::get_refresh_token,
             token_store::delete_refresh_token,
+            #[cfg(windows)] mpv_spawn,
+            #[cfg(windows)] mpv_command,
+            #[cfg(windows)] mpv_get_property,
+            #[cfg(windows)] mpv_shutdown,
         ])
         .build(tauri::generate_context!());
 
