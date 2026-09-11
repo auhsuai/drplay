@@ -49,7 +49,7 @@ function fail(stage, error) {
   process.exit(1);
 }
 
-function curl(url, outFile, timeoutSecs) {
+function curl(url, outFile, timeoutSecs, useAuth = false) {
   // curl.exe ships with Windows 10 1803+ and handled GitHub's CDN reliably
   // where other clients were cut off mid-transfer.
   const result = spawnSync(
@@ -68,6 +68,9 @@ function curl(url, outFile, timeoutSecs) {
       String(timeoutSecs),
       "-A",
       "drplay-fetch",
+      ...(useAuth && process.env.GITHUB_TOKEN
+        ? ["-H", `Authorization: Bearer ${process.env.GITHUB_TOKEN}`]
+        : []),
       "-o",
       outFile,
       url,
@@ -99,7 +102,7 @@ try {
 
   // 1. Latest release metadata
   const releaseTmp = join(workDir, "release.json");
-  curl(MPV_WINBUILD_RELEASES_URL, releaseTmp, HTTP_TIMEOUT_SECS);
+  curl(MPV_WINBUILD_RELEASES_URL, releaseTmp, HTTP_TIMEOUT_SECS, true);
   const release = JSON.parse(readFileSync(releaseTmp, "utf8"));
   if (!release.tag_name || !Array.isArray(release.assets)) {
     fail(

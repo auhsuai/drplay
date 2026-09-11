@@ -33,6 +33,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Fetch mpv sidecar binary
+        run: node scripts/fetch-mpv.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build Tauri app
         run: npm run tauri build -- --bundles msi
         env:
