@@ -31,6 +31,7 @@ import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
 import { useDriveStore } from "./store/driveStore";
 import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
+import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
 
 import type { Track, UserProfile, TabKey } from "./types";
 export type { Track, UserProfile };
@@ -228,6 +229,14 @@ function App() {
   const onExpandNowPlaying = useCallback(() => {
     setIsNowPlayingOpen((prev) => !prev);
   }, []);
+  const onCloseNowPlaying = useCallback(() => {
+    setIsNowPlayingOpen(false);
+  }, []);
+  useNowPlayingShortcuts({
+    isOpen: isNowPlayingOpen,
+    onClose: onCloseNowPlaying,
+    onToggle: onExpandNowPlaying,
+  });
 
   const handlePlayTrack = (
     track: Track,
