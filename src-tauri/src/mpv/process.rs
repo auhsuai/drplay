@@ -36,13 +36,22 @@ pub(crate) fn mpv_flags(pipe_name: &str) -> Vec<String> {
         "--gapless-audio=yes".to_string(),
         "--prefetch-playlist=no".to_string(),
         "--demuxer-readahead-secs=30".to_string(),
+        // The demuxer window above is seconds-based, but the stream-cache
+        // layer (--cache=yes, default cache-secs is ~1000h = effectively
+        // unbounded) would read the whole file ahead independently. Cap it
+        // at the same 30s window so RAM stays predictable for heavy files.
+        "--cache-secs=30".to_string(),
+        // Resume quickly after a seek/underrun: the upstream TTFB (~2s to
+        // Drive on slow links) already dominates, so don't add another full
+        // second of resume-wait on top. 0.2s is enough with a 30s cache.
+        "--cache-pause-wait=0.2".to_string(),
         // Narrow demuxer windows keep RAM low for large files (FLAC ~50MB
         // would otherwise be fully resident, ~90MB private). Backward seeks
         // past the back-buffer are cheap here: every stream is served through
         // the localhost proxy, which returns proper 206 Range responses
         // (verified), so mpv simply re-requests the dropped range.
         "--demuxer-max-back-bytes=8MiB".to_string(),
-        "--demuxer-max-bytes=32MiB".to_string(),
+        "--demuxer-max-bytes=64MiB".to_string(),
         "--cache=yes".to_string(),
         "--force-media-title=no".to_string(),
     ]
@@ -153,8 +162,10 @@ mod tests {
             "--gapless-audio=yes",
             "--prefetch-playlist=no",
             "--demuxer-readahead-secs=30",
+            "--cache-secs=30",
+            "--cache-pause-wait=0.2",
             "--demuxer-max-back-bytes=8MiB",
-            "--demuxer-max-bytes=32MiB",
+            "--demuxer-max-bytes=64MiB",
             "--cache=yes",
             "--force-media-title=no",
         ];

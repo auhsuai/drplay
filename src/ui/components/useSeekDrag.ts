@@ -8,6 +8,8 @@ import { clamp01 } from "./seekMath";
 
 const SEEK_BAR_MODULE = "SeekBar";
 const DRAG_RELEASE_DELAY_MS = 150;
+/** Failsafe: a drag with no move for this long auto-clears the guard. */
+const DRAG_HARD_TIMEOUT_MS = 2000;
 
 export interface UseSeekDragOptions {
   audio: AudioController;
@@ -50,17 +52,30 @@ export function useSeekDrag({
   const pointerMoveRef = useRef<(e: PointerEvent) => void>(() => {});
   const pointerUpRef = useRef<(e: PointerEvent) => void>(() => {});
   const pointerCancelRef = useRef<(e: PointerEvent) => void>(() => {});
+  const blurRef = useRef<() => void>(() => {});
+  const lostCaptureRef = useRef<() => void>(() => {});
+  const hardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Unmount safety net: if the component unmounts mid-drag (view closed /
   // track switched while dragging), the window listeners added by
-  // handlePointerDown would otherwise never be removed.
+  // handlePointerDown would otherwise never be removed. Also clears the
+  // failsafe listeners and the hard timeout so nothing fires post-unmount.
   useEffect(
     () => () => {
       window.removeEventListener("pointermove", pointerMoveRef.current);
       window.removeEventListener("pointerup", pointerUpRef.current);
       window.removeEventListener("pointercancel", pointerCancelRef.current);
+      window.removeEventListener("blur", blurRef.current);
+      progressBarRef.current?.removeEventListener(
+        "lostpointercapture",
+        lostCaptureRef.current,
+      );
+      if (hardTimerRef.current !== null) {
+        clearTimeout(hardTimerRef.current);
+        hardTimerRef.current = null;
+      }
     },
-    [],
+    [progressBarRef],
   );
 
   // Drag-to-seek: pointer capture on the bar, clamped percent -> time math,
@@ -123,12 +138,68 @@ export function useSeekDrag({
     setIsDragging(true);
     updateTime(e.clientX);
 
+    // Session teardown contract: commit() is the happy path (seek + 150ms
+    // stale-flush window). Everything else — lostpointercapture, window
+    // blur, or DRAG_HARD_TIMEOUT_MS of silence after the last move — funnels
+    // through failsafeClear(), which drops the guard IMMEDIATELY so the bar
+    // unfreezes. `sessionDone` makes every clear path idempotent and keeps a
+    // trailing lostpointercapture (fired by the browser after a normal
+    // pointerup) from disturbing the commit's delayed clear.
+    let sessionDone = false;
+
+    const armHardTimeout = () => {
+      if (hardTimerRef.current !== null) clearTimeout(hardTimerRef.current);
+      hardTimerRef.current = setTimeout(() => {
+        hardTimerRef.current = null;
+        failsafeClear();
+      }, DRAG_HARD_TIMEOUT_MS);
+    };
     const onMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== ownerPointerId) return;
+      armHardTimeout();
       updateTime(moveEvent.clientX);
+    };
+    const onUp = (upEvent: PointerEvent) => {
+      commit(upEvent);
+    };
+    const onCancel = (cancelEvent: PointerEvent) => {
+      commit(cancelEvent);
+    };
+    const onBlur = () => {
+      failsafeClear();
+    };
+    const onLostCapture = () => {
+      failsafeClear();
+    };
+    const detachSessionListeners = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onBlur);
+      progressBarRef.current?.removeEventListener(
+        "lostpointercapture",
+        onLostCapture,
+      );
+    };
+    const failsafeClear = () => {
+      if (sessionDone) return;
+      sessionDone = true;
+      if (hardTimerRef.current !== null) {
+        clearTimeout(hardTimerRef.current);
+        hardTimerRef.current = null;
+      }
+      detachSessionListeners();
+      isDraggingRef.current = false;
+      setIsDragging(false);
     };
     const commit = (upEvent: PointerEvent) => {
       if (upEvent.pointerId !== ownerPointerId) return;
+      sessionDone = true;
+      if (hardTimerRef.current !== null) {
+        clearTimeout(hardTimerRef.current);
+        hardTimerRef.current = null;
+      }
+      detachSessionListeners();
       // Desktop AudioController.seek is sync void, but the engine contract
       // allows promise-returning implementations (android native bridge) —
       // widen the engine type so TS cannot narrow the union to never.
@@ -169,23 +240,22 @@ export function useSeekDrag({
         isDraggingRef.current = false;
         setIsDragging(false);
       }, DRAG_RELEASE_DELAY_MS);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onCancel);
-    };
-    const onUp = (upEvent: PointerEvent) => {
-      commit(upEvent);
-    };
-    const onCancel = (cancelEvent: PointerEvent) => {
-      commit(cancelEvent);
     };
 
     pointerMoveRef.current = onMove;
     pointerUpRef.current = onUp;
     pointerCancelRef.current = onCancel;
+    blurRef.current = onBlur;
+    lostCaptureRef.current = onLostCapture;
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onBlur);
+    progressBarRef.current.addEventListener(
+      "lostpointercapture",
+      onLostCapture,
+    );
+    armHardTimeout();
   };
 
   return { isDragging, handlePointerDown };

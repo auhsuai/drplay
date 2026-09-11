@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import type { Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -36,6 +36,16 @@ export const NowPlayingView = memo(function NowPlayingView({
 
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
+
+  // Buffering state for the play-button spinner — same source/condition
+  // as PlayerBar (audio "buffering" event + isPlaying).
+  const [isBuffering, setIsBuffering] = useState(false);
+  useEffect(() => {
+    const audio = AudioController.getInstance();
+    return audio.on("buffering", ({ isBuffering: buffering }) => {
+      setIsBuffering(buffering);
+    });
+  }, []);
 
   if (!currentTrack) {
     return (
@@ -132,6 +142,7 @@ export const NowPlayingView = memo(function NowPlayingView({
             <div className="w-full flex flex-col items-center justify-center max-w-[800px] mx-auto">
               <NowPlayingControls
                 isPlaying={isPlaying}
+                isBuffering={isBuffering}
                 onTogglePlay={onTogglePlay}
                 onNextTrack={onNextTrack}
                 onPrevTrack={onPrevTrack}

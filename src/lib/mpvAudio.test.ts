@@ -9,11 +9,17 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({ setIsPlaying: vi.fn() }));
+const storeMocks = vi.hoisted(() => ({
+  setIsPlaying: vi.fn(),
+  isPlaying: false,
+}));
 
 vi.mock("../store/playerStore", () => ({
   usePlayerStore: {
-    getState: vi.fn(() => ({ setIsPlaying: storeMocks.setIsPlaying })),
+    getState: vi.fn(() => ({
+      setIsPlaying: storeMocks.setIsPlaying,
+      isPlaying: storeMocks.isPlaying,
+    })),
   },
 }));
 
@@ -21,6 +27,7 @@ vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
 import { captureError } from "../utils/errorLog";
+import { resetWarnThrottleForTest } from "./mpvProtocol";
 
 const PROXY_PORT = 51234;
 const PROXY_URL_PREFIX = "http://127.0.0.1:51234/stream/";
@@ -282,9 +289,18 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
     expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(true);
   });
 
-  it("paused-for-cache -> buffering {isBuffering} in order", () => {
+  it("paused-for-cache -> buffering {isBuffering} in order (sustained stall passes the delay)", () => {
+    // playTrack arms a pending request — settle it via two ticks so this test
+    // asserts only the genuine mpv stall path (transition true->false).
+    fireProperty("time-pos", 0.5);
+    fireProperty("time-pos", 1);
+    events.length = 0;
+
     fireProperty("paused-for-cache", true);
-    fireProperty("paused-for-cache", false);
+    expect(emitted("buffering")).toEqual([]); // not yet — stall unconfirmed
+
+    vi.advanceTimersByTime(250); // stall sustained -> shown
+    fireProperty("paused-for-cache", false); // stall over -> settle
     expect(emitted("buffering")).toEqual([
       { isBuffering: true },
       { isBuffering: false },
@@ -620,5 +636,357 @@ describe("MpvAudioController — release lifecycle", () => {
     expect(buffered.duration).toBe(0);
     expect(buffered.currentTime).toBe(0);
     expect(buffered.buffered.length).toBe(0);
+  });
+});
+
+describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
+  let ctrl: MpvAudioController;
+  let buffering: Array<{ isBuffering: boolean }>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000);
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    storeMocks.setIsPlaying.mockClear();
+    vi.mocked(captureError).mockClear();
+    attachMocks();
+    ctrl = new MpvAudioController();
+    buffering = [];
+    // Subscribe BEFORE any playTrack — request() fires inside playTrack/seek.
+    ctrl.on("buffering", (payload) => {
+      buffering.push(payload);
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Two time-pos ticks inside the window = playback truly progressing. */
+  function settleViaTicks(): void {
+    fireProperty("time-pos", 0.5);
+    fireProperty("time-pos", 1);
+  }
+
+  it("new playTrack: NO immediate emit — true only after the 250ms display delay", async () => {
+    await ctrl.playTrack(trackA);
+    expect(buffering).toEqual([]);
+
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+  });
+
+  it("load settled inside the delay window never emits true (in-buffer anti-flash)", async () => {
+    await ctrl.playTrack(trackA);
+    settleViaTicks();
+    expect(buffering).toEqual([]);
+
+    vi.advanceTimersByTime(8000);
+    expect(buffering).toEqual([]);
+  });
+
+  it("shown spinner settles on the 2nd time-pos tick within 1s — false exactly once", async () => {
+    await ctrl.playTrack(trackA);
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+
+    fireProperty("time-pos", 1); // tick 1 — mpv may still be stalling
+    expect(buffering).toEqual([{ isBuffering: true }]);
+    fireProperty("time-pos", 2); // tick 2 within 1s — playback progressing
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+
+    fireProperty("time-pos", 3);
+    expect(buffering).toHaveLength(2); // dedupe: no duplicate false
+  });
+
+  it("seek: pending only — no immediate emit, command still sent", async () => {
+    await ctrl.playTrack(trackA);
+    settleViaTicks();
+    buffering.length = 0;
+    tauriMocks.invoke.mockClear();
+
+    ctrl.seek(42);
+    expect(buffering).toEqual([]);
+    expect(mpvCommands()).toEqual([["seek", "42", "absolute"]]);
+  });
+
+  it("seek outside buffer: true at exactly ~250ms, held until ticks settle -> false once", async () => {
+    await ctrl.playTrack(trackA);
+    settleViaTicks();
+    buffering.length = 0;
+
+    ctrl.seek(120);
+    vi.advanceTimersByTime(249);
+    expect(buffering).toEqual([]); // 1ms before the delay elapses
+    vi.advanceTimersByTime(1);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+
+    vi.advanceTimersByTime(150);
+    fireProperty("time-pos", 120); // tick 1 (stalled position report)
+    fireProperty("time-pos", 120.5); // tick 2 — actually playing again
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+  });
+
+  it("seek into an already-cached range with fast ticks never flashes", async () => {
+    await ctrl.playTrack(trackA);
+    settleViaTicks();
+    fireProperty("demuxer-cache-state", {
+      "seekable-ranges": [{ start: 0, end: 180 }],
+    });
+    buffering.length = 0;
+
+    ctrl.seek(60);
+    fireProperty("time-pos", 60);
+    fireProperty("time-pos", 60.5);
+    expect(buffering).toEqual([]);
+
+    vi.advanceTimersByTime(8000);
+    expect(buffering).toEqual([]);
+  });
+
+  it("playTrack with startTime: file-loaded no longer force-clears; ticks settle after delay", async () => {
+    await ctrl.playTrack(trackB, 120);
+    expect(buffering).toEqual([]); // pending — no immediate emit
+
+    fireMpvEvent("file-loaded");
+    expect(mpvCommands()).toContainEqual(["seek", "120", "absolute"]);
+    expect(buffering).toEqual([]); // spinner survives the deferred seek
+
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+    fireProperty("time-pos", 120);
+    fireProperty("time-pos", 121);
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+  });
+
+  it("same-track resume + togglePlay never request (no pending, no events)", async () => {
+    await ctrl.playTrack(trackA);
+    settleViaTicks();
+    buffering.length = 0;
+    fireProperty("pause", true);
+    tauriMocks.invoke.mockClear();
+
+    await ctrl.playTrack(trackA); // resume path — no request
+    ctrl.togglePlay(); // pause again — still no request
+    vi.advanceTimersByTime(8000);
+    expect(buffering).toEqual([]);
+  });
+
+  it("paused-for-cache=true sustained >250ms shows without waiting for more ticks", async () => {
+    await ctrl.playTrack(trackA); // pending
+    fireProperty("paused-for-cache", true); // genuine stall report
+    expect(buffering).toEqual([]); // not before the sustain window
+
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+  });
+
+  it("paused-for-cache=true while shown extends the net instead of duplicating", async () => {
+    await ctrl.playTrack(trackA);
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+
+    fireProperty("paused-for-cache", true); // stall ongoing while shown
+    vi.advanceTimersByTime(7999); // original net would have fired here
+    expect(buffering).toEqual([{ isBuffering: true }]);
+    vi.advanceTimersByTime(1);
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+  });
+
+  it("paused-for-cache=false while idle emits nothing; repeat true does not double-arm", async () => {
+    await ctrl.playTrack(trackA);
+    settleViaTicks();
+    buffering.length = 0;
+
+    fireProperty("paused-for-cache", false);
+    expect(buffering).toEqual([]);
+
+    fireProperty("paused-for-cache", true);
+    fireProperty("paused-for-cache", true); // second report — no extra timer
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+    fireProperty("paused-for-cache", false);
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+  });
+
+  it("safety net: shown auto-settles 8s after request", async () => {
+    await ctrl.playTrack(trackA);
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+
+    vi.advanceTimersByTime(7750); // 8000ms total from request
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+  });
+
+  it("request while shown keeps the spinner (no duplicate emit) and re-arms the net", async () => {
+    await ctrl.playTrack(trackA);
+    vi.advanceTimersByTime(250);
+    expect(buffering).toEqual([{ isBuffering: true }]);
+    vi.advanceTimersByTime(7000);
+
+    await ctrl.playTrack(trackB); // new track mid-stall
+    expect(buffering).toEqual([{ isBuffering: true }]); // no duplicate true
+
+    vi.advanceTimersByTime(7999); // re-armed net not yet fired
+    expect(buffering).toEqual([{ isBuffering: true }]);
+    vi.advanceTimersByTime(1);
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+  });
+
+  it("timers are cleaned up: request re-arms (no stacking), settle drains, release cancels", async () => {
+    await ctrl.playTrack(trackA);
+    settleViaTicks();
+    expect(vi.getTimerCount()).toBe(0); // settle drained everything
+
+    ctrl.seek(10);
+    expect(vi.getTimerCount()).toBe(2); // display + deadline
+    ctrl.seek(20); // re-request — must not stack
+    expect(vi.getTimerCount()).toBe(2);
+    fireProperty("time-pos", 20);
+    fireProperty("time-pos", 20.5);
+    expect(vi.getTimerCount()).toBe(0); // settled
+    expect(buffering).toEqual([]); // never shown
+
+    ctrl.seek(30);
+    expect(vi.getTimerCount()).toBe(2);
+    ctrl.release();
+    expect(vi.getTimerCount()).toBe(0); // release cancelled silently
+    vi.advanceTimersByTime(9000);
+    expect(buffering).toEqual([]);
+  });
+});
+
+describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13695)", () => {
+  let ctrl: MpvAudioController;
+  let events: { name: string; payload: unknown }[];
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000);
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    storeMocks.setIsPlaying.mockClear();
+    // Mirror the real store: setIsPlaying flips the isPlaying the watchdog reads.
+    storeMocks.setIsPlaying.mockImplementation(
+      (playing: boolean | ((prev: boolean) => boolean)) => {
+        storeMocks.isPlaying =
+          typeof playing === "function"
+            ? playing(storeMocks.isPlaying)
+            : playing;
+      },
+    );
+    storeMocks.isPlaying = false;
+    resetWarnThrottleForTest(); // module-level warn rate limit: isolate per test
+    vi.mocked(captureError).mockClear();
+    attachMocks();
+    ctrl = new MpvAudioController();
+    events = [];
+    for (const name of ["timeupdate", "buffering", "play", "pause"] as const) {
+      ctrl.on(name, (payload) => {
+        events.push({ name, payload });
+      });
+    }
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function emitted(name: string): unknown[] {
+    return events.filter((e) => e.name === name).map((e) => e.payload);
+  }
+
+  it("push stall >1.2s while playing: polls mpv_get_property and backfills through the real onTimeUpdate path", async () => {
+    fireProperty("pause", false); // engine path that flips store isPlaying -> true
+    expect(storeMocks.isPlaying).toBe(true);
+    tauriMocks.invoke.mockImplementation((command: string) =>
+      command === "mpv_get_property"
+        ? Promise.resolve(90)
+        : command === "stream_proxy_start"
+          ? Promise.resolve(PROXY_PORT)
+          : Promise.resolve(undefined),
+    );
+
+    // No time-pos pushes at all — the mpv #13695 nil window.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+      "mpv_get_property",
+      expect.anything(),
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("mpv_get_property", {
+      prop: "time-pos",
+    });
+    // Backfill goes through onTimeUpdate: clock + throttle emit + tick.
+    expect(ctrl.getCurrentTime()).toBe(90);
+    expect(emitted("timeupdate")).toEqual([{ currentTime: 90, duration: 0 }]);
+  });
+
+  it("regular pushes keep the watchdog quiet (no mpv_get_property)", async () => {
+    fireProperty("pause", false);
+    tauriMocks.invoke.mockClear();
+
+    for (let i = 0; i < 8; i++) {
+      fireProperty("time-pos", i);
+      await vi.advanceTimersByTimeAsync(500);
+    }
+
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+      "mpv_get_property",
+      expect.anything(),
+    );
+  });
+
+  it("paused (isPlaying=false): watchdog never polls", async () => {
+    fireProperty("pause", true);
+    expect(storeMocks.isPlaying).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+      "mpv_get_property",
+      expect.anything(),
+    );
+  });
+
+  it("release() cancels the watchdog interval (no timer leak)", async () => {
+    fireProperty("pause", false);
+    tauriMocks.invoke.mockClear();
+
+    ctrl.release();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+      "mpv_get_property",
+      expect.anything(),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("nil poll result during the seek window: skipped round, rate-limited warn from mpvProtocol, no timeupdate", async () => {
+    fireProperty("pause", false);
+    tauriMocks.invoke.mockImplementation((command: string) =>
+      command === "mpv_get_property"
+        ? Promise.resolve(null)
+        : command === "stream_proxy_start"
+          ? Promise.resolve(PROXY_PORT)
+          : Promise.resolve(undefined),
+    );
+
+    await vi.advanceTimersByTimeAsync(2 * 1200);
+
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", source: "mpvProtocol" }),
+    );
+    expect(emitted("timeupdate")).toEqual([]);
+    expect(ctrl.getCurrentTime()).toBe(0);
   });
 });

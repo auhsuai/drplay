@@ -924,3 +924,148 @@ describe("SeekBar drag pointer ownership (S1 multi-touch)", () => {
     expect(screen.getByText("1:00")).toBeTruthy();
   });
 });
+
+describe("SeekBar drag failsafe (lost capture / blur / hard timeout)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    fakeController._handlers = {};
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function startDrag(): HTMLElement {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    return bar;
+  }
+
+  it("lostpointercapture mid-drag clears the drag guard immediately (bar unfreezes, stray pointerup cannot seek)", () => {
+    const bar = startDrag();
+
+    // Drag is live: a timeupdate must NOT move the fill (guard active).
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 60, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+
+    // The browser dropped the capture without a pointerup (element removed,
+    // pointer died). Idempotent: fire twice.
+    act(() => {
+      fireEvent.lostPointerCapture(bar, { pointerId: 1 });
+      fireEvent.lostPointerCapture(bar, { pointerId: 1 });
+    });
+
+    // Guard cleared: the next timeupdate reaches the fill again.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 120, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("50%");
+
+    // The orphaned pointerup must not commit a seek (listeners torn down).
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+  });
+
+  it("window blur mid-drag clears the drag guard immediately", () => {
+    startDrag();
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 60, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+  });
+
+  it("hard timeout: 2s after the last move the drag auto-clears (un-frozen bar, no stray seek)", () => {
+    startDrag();
+
+    // 1.5s after pointerdown: still dragging — guard must hold.
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 60, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+
+    // A move re-arms the hard timeout...
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+    });
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 60, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("50%");
+
+    // ...so only 2s past the LAST move clears it.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 90, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("37.5%");
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
+    });
+    expect(fakeController.seek).not.toHaveBeenCalled();
+  });
+
+  it("normal commit is untouched: pointerup seeks, the 150ms release window holds, a trailing lostpointercapture is a no-op", () => {
+    const bar = startDrag();
+
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+
+    // Browser fires lostpointercapture right after the implicit release —
+    // it must not disturb the delayed clear.
+    act(() => {
+      fireEvent.lostPointerCapture(bar, { pointerId: 1 });
+    });
+
+    // Within the 150ms window stale timeupdates are still ignored...
+    act(() => {
+      vi.advanceTimersByTime(149);
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 180, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("50%");
+
+    // ...then the guard drops and the fill tracks the engine again.
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 180, duration: 240 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("75%");
+  });
+});

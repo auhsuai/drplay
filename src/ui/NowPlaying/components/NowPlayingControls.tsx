@@ -6,10 +6,12 @@ import {
   Repeat,
   Repeat1,
   Shuffle,
+  LoaderCircle,
 } from "lucide-react";
 
 interface NowPlayingControlsProps {
   isPlaying: boolean;
+  isBuffering: boolean;
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
@@ -19,6 +21,7 @@ interface NowPlayingControlsProps {
 
 export function NowPlayingControls({
   isPlaying,
+  isBuffering,
   onTogglePlay,
   onNextTrack,
   onPrevTrack,
@@ -42,7 +45,9 @@ export function NowPlayingControls({
           onClick={onTogglePlay}
           className="w-10 h-10 flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90"
         >
-          {isPlaying ? (
+          {isBuffering && isPlaying ? (
+            <LoaderCircle className="w-5 h-5 animate-spin [transform-box:view-box] origin-center" />
+          ) : isPlaying ? (
             <Pause className="w-5 h-5" />
           ) : (
             <Play className="w-5 h-5 ml-0.5" />

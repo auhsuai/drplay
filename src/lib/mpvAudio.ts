@@ -6,26 +6,28 @@ import { usePlayerStore } from "../store/playerStore";
 import type { BufferedSource } from "../utils/bufferedRange";
 import type { AudioEventMap, AudioEventHandler } from "./audioNativeEvents";
 import {
+  BufferingTracker,
   describeError,
   dispatchMpvEvent,
   dispatchPropertyEvent,
+  freshThrottleClocks,
   MPV_BOOL,
   MPV_COMMANDS,
   MPV_PROPERTY_ARGS,
+  MPV_PROPERTIES,
   PROXY_ORIGIN,
   STREAM_PATH,
   TAURI_COMMANDS,
   TAURI_EVENTS,
   THROTTLE_MS,
+  TimePosWatchdog,
   toTimeRanges,
   VOLUME_SCALE,
   type MpvEventCallbacks,
   type MpvRange,
 } from "./mpvProtocol";
 
-/** MpvEngine — mpv sidecar playback over Tauri JSON IPC (plan 2026-09-11 2.3).
- *  Rust contract fixed by Tasks 1+2 (constants/dispatch in mpvProtocol.ts),
- *  mapped onto the AudioEventMap payloads of audioNativeEvents.ts. */
+/** MpvEngine — mpv sidecar playback over Tauri JSON IPC; Rust contract + watchdog in mpvProtocol.ts. */
 
 const LOGGER_SOURCE = "MpvAudioController";
 
@@ -45,15 +47,24 @@ export class MpvAudioController {
   private pendingSeek: number | null = null;
   private volume = 1;
   private muted = false;
-  private throttle = {
-    lastTimeUpdate: { last: 0 },
-    lastProgressEmit: { last: 0 },
-  };
+  private throttle = freshThrottleClocks();
+  private buffering = new BufferingTracker((isBuffering) => {
+    this.emit("buffering", { isBuffering });
+  });
+  private watchdog = new TimePosWatchdog(
+    () => usePlayerStore.getState().isPlaying,
+    () =>
+      invoke(TAURI_COMMANDS.mpvGetProperty, { prop: MPV_PROPERTIES.timePos }),
+    (time) => {
+      this.events.onTimeUpdate(time);
+    },
+  );
 
-  // Stable dispatch callbacks — created once; property events are frequent.
   private readonly events: MpvEventCallbacks = {
     onTimeUpdate: (time) => {
       this.currentTime = time;
+      this.watchdog.noteEmit();
+      this.buffering.onTimeTick();
       this.emitTimeupdate(time);
     },
     onDuration: (dur) => {
@@ -63,15 +74,18 @@ export class MpvAudioController {
     onPauseChange: (paused) => {
       this.paused = paused;
       if (paused) {
+        this.watchdog.stop();
         this.emit("pause", undefined);
         usePlayerStore.getState().setIsPlaying(false);
       } else {
+        this.buffering.onPlayEvent();
         this.emit("play", undefined);
         usePlayerStore.getState().setIsPlaying(true);
+        this.watchdog.start();
       }
     },
     onBuffering: (isBuffering) => {
-      this.emit("buffering", { isBuffering });
+      this.buffering.reportMpvBuffering(isBuffering);
     },
     onCacheState: (ranges) => {
       this.cacheRanges = ranges;
@@ -114,7 +128,7 @@ export class MpvAudioController {
   private emit<K extends keyof AudioEventMap>(
     event: K,
     payload: AudioEventMap[K],
-  ): void {
+  ) {
     const handlers = this.listeners[event];
     if (handlers) {
       handlers.forEach((h) => {
@@ -133,8 +147,7 @@ export class MpvAudioController {
 
   private throttled(clock: { last: number }, emit: () => void): void {
     const now = Date.now();
-    // `last === 0` sentinel: the FIRST event always emits (web-engine
-    // pattern). Date.now() is monotonic and > 0 in real sessions.
+    // `last === 0` sentinel: FIRST event always emits; Date.now() is monotonic.
     if (clock.last === 0 || now - clock.last > THROTTLE_MS) {
       clock.last = now;
       emit();
@@ -143,10 +156,7 @@ export class MpvAudioController {
 
   private emitTimeupdate(time: number): void {
     this.throttled(this.throttle.lastTimeUpdate, () => {
-      this.emit("timeupdate", {
-        currentTime: time,
-        duration: this.duration,
-      });
+      this.emit("timeupdate", { currentTime: time, duration: this.duration });
     });
   }
 
@@ -162,8 +172,7 @@ export class MpvAudioController {
       message: "File lỗi định dạng, đang bỏ qua...",
       code: "format_error",
     });
-    // Plan 2.3 contract: error does NOT emit `ended`. PlayerBar marks the
-    // track broken from the format_error code; auto-advance stays manual.
+    // Plan 2.3: error does NOT emit `ended` — PlayerBar marks it broken from the code.
   }
 
   private async sendCommand(cmd: string[]): Promise<void> {
@@ -199,8 +208,7 @@ export class MpvAudioController {
     }
     this.unlistenFns = attached;
     this.started = true;
-    // A fresh mpv process starts at volume 100 — re-apply the stored (or
-    // muted) facade volume so pre-playback volume/mute choices survive spawn.
+    // Fresh mpv starts at volume 100 — re-apply the stored (or muted) volume.
     this.applyVolume();
   }
 
@@ -226,16 +234,12 @@ export class MpvAudioController {
     this.lastTrack = track;
     this.currentTrackId = track.id;
     this.playbackFinished = false;
-    // mpv resets the playhead on loadfile replace, but its property event may
-    // lag — report 0 immediately (plan 2.3 race rule).
+    // mpv resets the playhead on loadfile replace — report 0 immediately (plan 2.3 race rule).
     this.currentTime = 0;
     this.duration = 0;
     this.cacheRanges = [];
     this.pendingSeek = startTime ?? null;
-    this.throttle = {
-      lastTimeUpdate: { last: 0 },
-      lastProgressEmit: { last: 0 },
-    };
+    this.throttle = freshThrottleClocks();
     if (this.paused) {
       // mpv's pause flag is process-global: a loadfile while paused would
       // start the new track frozen. Clear it so the new track actually plays.
@@ -262,8 +266,7 @@ export class MpvAudioController {
   public async playTrack(track: Track, startTime?: number): Promise<void> {
     try {
       if (this.currentTrackId === track.id && !this.playbackFinished) {
-        // Same-track replay (PlayerBar re-invokes playTrack on resume):
-        // paused -> resume only; already playing -> no-op (web parity).
+        // Same-track replay: paused -> resume only; playing -> no-op (web parity).
         if (this.paused) {
           await this.sendCommand([
             MPV_COMMANDS.setProperty,
@@ -281,6 +284,7 @@ export class MpvAudioController {
         MPV_COMMANDS.replace,
       ]);
       this.beginTrack(track, startTime);
+      this.buffering.request();
     } catch (e: unknown) {
       this.playbackFailure("play-track-failed", e);
     }
@@ -318,6 +322,7 @@ export class MpvAudioController {
       this.logWarn(`seek dropped: no track loaded, requested=${String(time)}s`);
       return;
     }
+    this.buffering.request();
     void this.sendCommand([
       MPV_COMMANDS.seek,
       String(time),
@@ -329,8 +334,7 @@ export class MpvAudioController {
 
   public setVolume(vol: number): void {
     this.volume = Math.max(0, Math.min(1, vol));
-    // While muted the facade keeps volume silent at 0 (unmute restores the
-    // stored value); before spawn it just stores — applied in ensureStarted.
+    // Muted: keep silent at 0 (unmute restores); pre-spawn it just stores — applied in ensureStarted.
     if (!this.muted && this.started) this.applyVolume();
   }
 
@@ -343,11 +347,9 @@ export class MpvAudioController {
   public getVolume(): number {
     return this.volume;
   }
-
   public isMuted(): boolean {
     return this.muted;
   }
-
   public getCurrentTime(): number {
     return this.currentTime;
   }
@@ -377,10 +379,9 @@ export class MpvAudioController {
     this.duration = 0;
     this.cacheRanges = [];
     this.pendingSeek = null;
-    this.throttle = {
-      lastTimeUpdate: { last: 0 },
-      lastProgressEmit: { last: 0 },
-    };
+    this.buffering.cancel();
+    this.watchdog.stop();
+    this.throttle = freshThrottleClocks();
     void invoke(TAURI_COMMANDS.mpvShutdown).catch((e: unknown) => {
       this.logWarn(`mpv-shutdown-failed: ${describeError(e)}`);
     });
