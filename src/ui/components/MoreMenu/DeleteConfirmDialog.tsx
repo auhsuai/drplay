@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { LoaderCircle, Trash2 } from "lucide-react";
 import type { DriveItem } from "../../../types";
 
@@ -18,6 +19,19 @@ export function DeleteConfirmDialog({
   onConfirm,
   t,
 }: DeleteConfirmDialogProps) {
+  // Escape cancels the dialog (same guard as backdrop click/Cancel:
+  // ignored while a delete is in flight).
+  useEffect(() => {
+    if (!show) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isDeleting) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [show, onClose, isDeleting]);
+
   if (!show) return null;
 
   return (

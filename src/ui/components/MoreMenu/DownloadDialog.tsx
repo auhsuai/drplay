@@ -28,6 +28,19 @@ export function DownloadDialog({
     if (show) nameInputRef.current?.focus();
   }, [show]);
 
+  // Escape cancels the dialog (same guard as X/Cancel: ignored while a
+  // download is in flight).
+  useEffect(() => {
+    if (!show) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isDownloadingFile) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [show, onClose, isDownloadingFile]);
+
   if (!show) return null;
 
   return (

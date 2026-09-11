@@ -1,7 +1,10 @@
 import React, { useRef, useEffect, useCallback } from "react";
 import type { Track } from "../../types";
 import { useTranslation } from "react-i18next";
-import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
+import {
+  FolderSelectionScreen,
+  MOVE_PICKER_OPEN_ATTR,
+} from "../FolderSelection/FolderSelectionScreen";
 
 import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { TABS, type TabKey } from "../../utils/driveConstants";
@@ -68,6 +71,10 @@ interface MainContentProps {
   currentTrack?: Track | null;
   sortOption?: string;
   onSortChange?: (option: string) => void;
+  // True while the fullscreen NowPlaying overlay is open (plumbed from App):
+  // Backspace must not navigate behind it. Optional so existing call sites
+  // and tests keep compiling; absent means "overlay closed".
+  isNowPlayingOpen?: boolean;
 }
 
 export const MainContent = React.memo(function MainContent({
@@ -88,6 +95,7 @@ export const MainContent = React.memo(function MainContent({
   currentTrack,
   sortOption = "name_natural",
   onSortChange,
+  isNowPlayingOpen = false,
 }: MainContentProps) {
   const { t } = useTranslation();
   const isInitialMount = useRef(true);
@@ -149,9 +157,66 @@ export const MainContent = React.memo(function MainContent({
     ) {
       searchInputRef.current?.blur();
       explorer.setSearchQuery("");
+      return;
+    }
+    // Escape outside editable fields exits selection mode (staged: a press
+    // inside the search input only clears the search above, the next press
+    // exits selection). The editable guard keeps this handler from
+    // double-firing alongside modal/page-edit inputs that own their own Esc.
+    if (e.key === "Escape" && explorer.isSelectionMode) {
+      const active = document.activeElement;
+      const focusedEditable =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable);
+      if (!focusedEditable) {
+        explorer.setSelectedIds(new Set());
+        explorer.setIsSelectionMode(false);
+      }
+    }
+    // Backspace navigates back one folder (slice B). It never clears search,
+    // exits selection, or closes modals — that is Esc's job (above). Guard
+    // order: editable focus first (Backspace deletes text there), then
+    // modifier chords, then any overlay stacked above this view. The move
+    // picker owns the press via its body attribute flag (its state lives in
+    // per-row MoreMenu and is invisible here); context menus render only as
+    // a portalled [role="menu"] while open. No stopImmediatePropagation:
+    // each layer stands down on its own guard instead of depending on
+    // listener registration order.
+    if (e.key === "Backspace") {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const active = document.activeElement;
+      const focusedEditable =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable);
+      if (focusedEditable) return;
+      if (showNewFolderModal || showBulkMoveScreen || showBulkDeleteConfirm)
+        return;
+      if (isNowPlayingOpen) return;
+      if (
+        document.body.hasAttribute(MOVE_PICKER_OPEN_ATTR) ||
+        document.querySelector('[role="menu"]') !== null
+      )
+        return;
+      if (!hasHistory) return;
+      onBack();
     }
   };
-  useEventListener("keydown", handleKeyDown, [explorer.setSearchQuery]);
+  useEventListener("keydown", handleKeyDown, [
+    explorer.setSearchQuery,
+    explorer.isSelectionMode,
+    explorer.setSelectedIds,
+    explorer.setIsSelectionMode,
+    onBack,
+    hasHistory,
+    showNewFolderModal,
+    showBulkMoveScreen,
+    showBulkDeleteConfirm,
+    isNowPlayingOpen,
+  ]);
 
   // Enable selection mode from events
   const handleEnableSelection = (e: Event) => {

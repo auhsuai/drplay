@@ -26,6 +26,19 @@ export function NewFolderModal({
     if (isOpen) nameInputRef.current?.focus();
   }, [isOpen]);
 
+  // Escape cancels the modal (same guard as backdrop click/X/Cancel:
+  // ignored while a create is in flight).
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isCreating) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onClose, isCreating]);
+
   if (!isOpen) return null;
 
   const handleCreate = async () => {

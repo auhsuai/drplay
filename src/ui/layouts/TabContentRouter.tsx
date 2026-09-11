@@ -57,6 +57,9 @@ interface TabContentRouterProps {
   setMinimizeToTray: (minimize: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
+  // Fullscreen NowPlaying overlay state (from App): Backspace must stay a
+  // no-op behind it in every tab it reaches.
+  isNowPlayingOpen: boolean;
 }
 
 export function TabContentRouter({
@@ -84,6 +87,7 @@ export function TabContentRouter({
   setMinimizeToTray,
   setShowFolderSelection,
   setShowTrashScreen,
+  isNowPlayingOpen,
 }: TabContentRouterProps) {
   const { t } = useTranslation();
 
@@ -116,6 +120,7 @@ export function TabContentRouter({
           token={token}
           userProfile={userProfile}
           currentTrack={currentTrack}
+          isNowPlayingOpen={isNowPlayingOpen}
         />
       </div>
       {activeTab !== TABS.home &&
@@ -141,6 +146,7 @@ export function TabContentRouter({
               /* useLiveQuery handles UI updates automatically now */
             }}
             sortOption={sortOption}
+            isNowPlayingOpen={isNowPlayingOpen}
             onSortChange={(val) => {
               setSortOption(val);
               try {

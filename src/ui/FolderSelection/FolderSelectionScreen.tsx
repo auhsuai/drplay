@@ -23,6 +23,15 @@ interface FolderSelectionScreenProps {
   allowEscapeRoot?: boolean;
 }
 
+// Body attribute flag marking that a move picker is mounted. The picker's
+// navigation state lives deep inside per-row MoreMenu state, so ancestors
+// (MainContent) cannot see it through props — they read this flag to stand
+// down their own Backspace handler and avoid a double navigation. Single
+// source of truth: set on mount, removed on unmount below. (An attribute
+// instead of dataset: set/remove/hasAttribute keeps the linter's
+// no-dynamic-delete rule happy.)
+export const MOVE_PICKER_OPEN_ATTR = "data-move-picker-open";
+
 export function FolderSelectionScreen({
   token,
   onSelectFolder,
@@ -101,6 +110,57 @@ export function FolderSelectionScreen({
     allowEscapeRoot,
     resolvedAppRoot,
   });
+
+  // Announce this picker's presence to ancestor views (see flag contract
+  // above). Every instance (bulk-move, per-row move, setup gates) sets it —
+  // only one picker is ever mounted at a time, so a plain set/delete pair
+  // cannot leak a stale flag.
+  useEffect(() => {
+    document.body.setAttribute(MOVE_PICKER_OPEN_ATTR, "true");
+    return () => {
+      document.body.removeAttribute(MOVE_PICKER_OPEN_ATTR);
+    };
+  }, []);
+
+  // Backspace steps back one UI level inside the picker: pop the picker's own
+  // history (or walk to the Drive parent, same as the toolbar Back button),
+  // and close the picker when already at its root. Shared guards: editable
+  // focus (Backspace deletes text there), modifier chords, in-flight load.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Backspace") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const active = document.activeElement;
+      const focusedEditable =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable);
+      if (focusedEditable) return;
+      if (isLoading) return;
+      const atPickerRoot =
+        folderHistory.length === 0 &&
+        (currentFolderId === ROOT_FOLDER_ID ||
+          (!allowEscapeRoot && currentFolderId === resolvedAppRoot));
+      if (atPickerRoot) {
+        onCancel?.();
+        return;
+      }
+      void handleBack();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    folderHistory,
+    handleBack,
+    onCancel,
+    isLoading,
+    currentFolderId,
+    resolvedAppRoot,
+    allowEscapeRoot,
+  ]);
 
   return (
     <div

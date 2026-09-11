@@ -387,6 +387,7 @@ function App() {
             setMinimizeToTray={setMinimizeToTray}
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
+            isNowPlayingOpen={isNowPlayingOpen}
           />
         }
       />

@@ -22,6 +22,7 @@ export function HomeTab({
   userProfile,
   currentTrack,
   isActive = true,
+  isNowPlayingOpen = false,
 }: {
   onPlay: (track: Track, contextQueue?: Track[]) => void;
   onOpenFolder: (id: string, name: string) => void;
@@ -29,6 +30,10 @@ export function HomeTab({
   userProfile?: UserProfile | null;
   currentTrack?: Track | null;
   isActive?: boolean;
+  // True while the fullscreen NowPlaying overlay is open (plumbed from App
+  // through TabContentRouter, same as MainContent): Backspace must not close
+  // the full view behind it. Optional; absent means "overlay closed".
+  isNowPlayingOpen?: boolean;
 }) {
   const { t } = useTranslation();
   const {
@@ -58,12 +63,31 @@ export function HomeTab({
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
         e.preventDefault();
       }
+      // Backspace closes the open full view (back to the grid). Same guard
+      // discipline as the other Backspace owners: gated on isActive (this
+      // tab is keep-alive), editable focus and modifier chords are skipped,
+      // and the NowPlaying overlay on top wins.
+      if (e.key !== "Backspace") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const active = document.activeElement;
+      const focusedEditable =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable);
+      if (focusedEditable) return;
+      if (isNowPlayingOpen) return;
+      if (showFullRecent) {
+        setShowFullRecent(false);
+      } else if (showFullRecentlyAdded) {
+        setShowFullRecentlyAdded(false);
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isActive]);
+  }, [isActive, showFullRecent, showFullRecentlyAdded, isNowPlayingOpen]);
 
   const visibleCount = useResponsiveItems();
 
