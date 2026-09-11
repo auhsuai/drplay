@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { formatTime } from "../../utils/formatTime";
 import { BUFFER_HEAD_PAD_PCT } from "../../utils/bufferedRange";
@@ -25,7 +25,7 @@ export function useSeekHover({
   duration,
 }: UseSeekHoverOptions): {
   isHovering: boolean;
-  handlePointerEnter: () => void;
+  handlePointerEnter: (e: ReactPointerEvent<HTMLDivElement>) => void;
   handlePointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
   handlePointerLeave: () => void;
 } {
@@ -34,65 +34,96 @@ export function useSeekHover({
   // hot-path pattern as the timeupdate handler).
   const [isHovering, setIsHovering] = useState(false);
 
+  // Latest pointer x, written synchronously inside the event handler (refs
+  // commit instantly, unlike state) so the post-mount layout effect below can
+  // position a tooltip whose node did not exist yet when enter/move fired.
+  const lastClientXRef = useRef<number | null>(null);
+
+  // Shared write-point for the hover preview (tooltip + buffer highlight),
+  // used both by the per-move hot path (DOM-direct, no re-render) and by the
+  // post-mount layout effect that repairs the edge-stop race.
+  const applyHoverAt = useCallback(
+    (clientX: number) => {
+      if (duration === 0 || !progressBarRef.current) return;
+      const bounds = progressBarRef.current.getBoundingClientRect();
+      if (bounds.width <= 0) return;
+      const percent = clamp01((clientX - bounds.left) / bounds.width);
+
+      if (tooltipRef.current) {
+        tooltipRef.current.textContent = formatTime(percent * duration);
+        // Center the tooltip on the pointer but keep its edges inside the bar:
+        // the anchor is clamped to [halfWidth, width - halfWidth] of the
+        // tooltip's own measured width (-translate-x-1/2 centers it on it).
+        const halfWidth =
+          (tooltipRef.current.offsetWidth || SEEK_TOOLTIP_FALLBACK_WIDTH_PX) /
+          2;
+        tooltipRef.current.style.left = `${String(
+          clamp(
+            percent * bounds.width,
+            halfWidth,
+            Math.max(halfWidth, bounds.width - halfWidth),
+          ),
+        )}px`;
+      }
+
+      if (bufferPreviewRef.current) {
+        // The highlight only makes sense ahead of the playhead ("would buffer to
+        // here"); hovering behind the playhead shows nothing.
+        // Playhead source: the mirrored UI playhead (throttled timeupdate / drag /
+        // restore) — the SAME value the blue fill is showing. Reading the raw
+        // media clock instead would start the preview ~200ms ahead of the fill
+        // while playing (timeupdate is throttled), splitting the bar into a gap
+        // or an overlap at the preview head.
+        const playheadPercent = clamp01(playheadRef.current / duration);
+        if (percent > playheadPercent) {
+          // Negative head, same seam geometry as the buffered segments
+          // (bufferedRange BUFFER_HEAD_PAD_PCT): the flat left edge is pulled
+          // back 2% (clamped to the rail start) so it tucks UNDER the fill's
+          // round cap — the fill drawn on top covers the padded strip, so the
+          // seam shows only the fill's convex cap instead of a square corner.
+          const headPercent = Math.max(
+            0,
+            playheadPercent * 100 - BUFFER_HEAD_PAD_PCT,
+          );
+          bufferPreviewRef.current.style.left = `${String(headPercent)}%`;
+          bufferPreviewRef.current.style.width = `${String(
+            percent * 100 - headPercent,
+          )}%`;
+        } else {
+          bufferPreviewRef.current.style.width = "0%";
+        }
+      }
+    },
+    [duration, progressBarRef, tooltipRef, bufferPreviewRef, playheadRef],
+  );
+
   // Hover preview: tooltip + buffer highlight + thumb visibility. Position and
   // text are written DOM-direct on every pointermove (hot path, no re-render);
   // only the visibility toggle (enter/leave) goes through React state.
-  const handlePointerEnter = () => {
+  const handlePointerEnter = (e: ReactPointerEvent<HTMLDivElement>) => {
+    lastClientXRef.current = e.clientX;
     setIsHovering(true);
   };
   const handlePointerLeave = () => {
+    lastClientXRef.current = null;
     setIsHovering(false);
   };
   const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (duration === 0 || !progressBarRef.current) return;
-    const bounds = progressBarRef.current.getBoundingClientRect();
-    if (bounds.width <= 0) return;
-    const percent = clamp01((e.clientX - bounds.left) / bounds.width);
-
-    if (tooltipRef.current) {
-      tooltipRef.current.textContent = formatTime(percent * duration);
-      // Center the tooltip on the pointer but keep its edges inside the bar:
-      // the anchor is clamped to [halfWidth, width - halfWidth] of the
-      // tooltip's own measured width (-translate-x-1/2 centers it on it).
-      const halfWidth =
-        (tooltipRef.current.offsetWidth || SEEK_TOOLTIP_FALLBACK_WIDTH_PX) / 2;
-      tooltipRef.current.style.left = `${String(
-        clamp(
-          percent * bounds.width,
-          halfWidth,
-          Math.max(halfWidth, bounds.width - halfWidth),
-        ),
-      )}px`;
-    }
-
-    if (bufferPreviewRef.current) {
-      // The highlight only makes sense ahead of the playhead ("would buffer to
-      // here"); hovering behind the playhead shows nothing.
-      // Playhead source: the mirrored UI playhead (throttled timeupdate / drag /
-      // restore) — the SAME value the blue fill is showing. Reading the raw
-      // media clock instead would start the preview ~200ms ahead of the fill
-      // while playing (timeupdate is throttled), splitting the bar into a gap
-      // or an overlap at the preview head.
-      const playheadPercent = clamp01(playheadRef.current / duration);
-      if (percent > playheadPercent) {
-        // Negative head, same seam geometry as the buffered segments
-        // (bufferedRange BUFFER_HEAD_PAD_PCT): the flat left edge is pulled
-        // back 2% (clamped to the rail start) so it tucks UNDER the fill's
-        // round cap — the fill drawn on top covers the padded strip, so the
-        // seam shows only the fill's convex cap instead of a square corner.
-        const headPercent = Math.max(
-          0,
-          playheadPercent * 100 - BUFFER_HEAD_PAD_PCT,
-        );
-        bufferPreviewRef.current.style.left = `${String(headPercent)}%`;
-        bufferPreviewRef.current.style.width = `${String(
-          percent * 100 - headPercent,
-        )}%`;
-      } else {
-        bufferPreviewRef.current.style.width = "0%";
-      }
-    }
+    lastClientXRef.current = e.clientX;
+    applyHoverAt(e.clientX);
   };
+
+  // Edge-stop repair: when the cursor lands on the rail and stops, the
+  // enter/move pair fires before React commits the tooltip's mount, so the
+  // ref write above is skipped and the tooltip would stick at its "0:00" /
+  // left-0 placeholder forever. Re-apply the last known position once the
+  // tooltip exists. Layout (not passive) effect so the placeholder never
+  // paints. Re-runs when the duration resolves mid-hover for the same reason.
+  useLayoutEffect(() => {
+    if (isHovering && lastClientXRef.current !== null) {
+      applyHoverAt(lastClientXRef.current);
+    }
+  }, [isHovering, applyHoverAt]);
 
   return {
     isHovering,

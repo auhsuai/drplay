@@ -1069,3 +1069,105 @@ describe("SeekBar drag failsafe (lost capture / blur / hard timeout)", () => {
     expect(screen.getByTestId("progress-fill").style.width).toBe("75%");
   });
 });
+
+describe("SeekBar hover tooltip edge-stop race", () => {
+  it("BUG regression: tooltip shows the correct time when pointerenter + pointermove land in the same commit (no '0:00' stuck)", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    // Raw dispatches inside ONE act: React cannot commit the tooltip mount
+    // between them, so the move runs while tooltipRef is still null — the
+    // exact edge-stop sequence from the bug report. (fireEvent wraps each
+    // dispatch in its own act flush, which would commit between the two and
+    // hide the race. The enter side uses pointerover because React
+    // synthesizes onPointerEnter from pointerover/pointerout — a raw
+    // pointerenter never reaches the React handler.)
+    act(() => {
+      bar.dispatchEvent(
+        new PointerEvent("pointerover", {
+          bubbles: true,
+          clientX: 100,
+          pointerId: 1,
+        }),
+      );
+      bar.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: 100,
+          pointerId: 1,
+        }),
+      );
+    });
+
+    // 100px of 200px = 50% of 240s = 2:00 — not the "0:00" placeholder.
+    const tooltip = screen.getByTestId("seek-tooltip");
+    expect(tooltip.textContent).toBe("2:00");
+    expect(tooltip.style.left).toBe("100px");
+  });
+
+  it("BUG regression: tooltip shows the correct time on pointerenter alone (cursor stops without any move)", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerEnter(bar, { clientX: 10, pointerId: 1 });
+    });
+
+    // 10px of 200px = 5% of 240s = 0:12, left clamped to half the tooltip
+    // width (22px fallback) so the edge stays inside the rail.
+    const tooltip = screen.getByTestId("seek-tooltip");
+    expect(tooltip.textContent).toBe("0:12");
+    expect(tooltip.style.left).toBe("22px");
+  });
+
+  it("hover moves after commit keep updating the tooltip (pre-existing behavior)", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerEnter(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerMove(bar, { clientX: 100, pointerId: 1 });
+    });
+    expect(screen.getByTestId("seek-tooltip").textContent).toBe("2:00");
+    act(() => {
+      fireEvent.pointerMove(bar, { clientX: 150, pointerId: 1 });
+    });
+    expect(screen.getByTestId("seek-tooltip").textContent).toBe("3:00");
+  });
+
+  it("hover with duration=0 renders no tooltip and does not crash (same root cause variant)", () => {
+    renderSeekBar();
+    const bar = mockBarRect();
+
+    // pointerover: React synthesizes onPointerEnter from it (see above).
+    act(() => {
+      bar.dispatchEvent(
+        new PointerEvent("pointerover", {
+          bubbles: true,
+          clientX: 100,
+          pointerId: 1,
+        }),
+      );
+      bar.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: 100,
+          pointerId: 1,
+        }),
+      );
+    });
+
+    expect(screen.queryByTestId("seek-tooltip")).toBeNull();
+  });
+});

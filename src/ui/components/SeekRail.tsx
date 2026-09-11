@@ -12,7 +12,7 @@ export interface SeekRailProps {
   isDragging: boolean;
   duration: number;
   onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
-  onPointerEnter: () => void;
+  onPointerEnter: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerLeave: () => void;
 }
