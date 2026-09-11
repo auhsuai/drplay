@@ -12,6 +12,7 @@ mod token_store;
 mod seed;
 #[cfg(windows)]
 mod mpv;
+mod stream_proxy;
 
 use auth::{login_google_native, refresh_google_token};
 use memory::{apply_window_activity, WindowActivityEvent};
@@ -201,6 +202,7 @@ pub fn run() {
             token_store::set_refresh_token,
             token_store::get_refresh_token,
             token_store::delete_refresh_token,
+            stream_proxy::stream_proxy_start,
             #[cfg(windows)] mpv_spawn,
             #[cfg(windows)] mpv_command,
             #[cfg(windows)] mpv_get_property,
