@@ -36,8 +36,13 @@ pub(crate) fn mpv_flags(pipe_name: &str) -> Vec<String> {
         "--gapless-audio=yes".to_string(),
         "--prefetch-playlist=no".to_string(),
         "--demuxer-readahead-secs=30".to_string(),
-        "--demuxer-max-back-bytes=64MiB".to_string(),
-        "--demuxer-max-bytes=256MiB".to_string(),
+        // Narrow demuxer windows keep RAM low for large files (FLAC ~50MB
+        // would otherwise be fully resident, ~90MB private). Backward seeks
+        // past the back-buffer are cheap here: every stream is served through
+        // the localhost proxy, which returns proper 206 Range responses
+        // (verified), so mpv simply re-requests the dropped range.
+        "--demuxer-max-back-bytes=8MiB".to_string(),
+        "--demuxer-max-bytes=32MiB".to_string(),
         "--cache=yes".to_string(),
         "--force-media-title=no".to_string(),
     ]
@@ -148,8 +153,8 @@ mod tests {
             "--gapless-audio=yes",
             "--prefetch-playlist=no",
             "--demuxer-readahead-secs=30",
-            "--demuxer-max-back-bytes=64MiB",
-            "--demuxer-max-bytes=256MiB",
+            "--demuxer-max-back-bytes=8MiB",
+            "--demuxer-max-bytes=32MiB",
             "--cache=yes",
             "--force-media-title=no",
         ];
