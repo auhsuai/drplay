@@ -1,11 +1,10 @@
 import { useCallback } from "react";
 import type { Track, PlayMode } from "../../types";
-import { set as idbSet } from "../../db/kv";
 import { captureError } from "../../utils/errorLog";
-import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { MY_DRIVE_TAB, type TabKey } from "../../utils/driveConstants";
-import { classifyPlayerError, resolveNextTrack, sameTrack } from "./utils";
+import { ensureQueueItemId, resolveNextTrack, sameTrack } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
+import { persistQueue } from "../../store/queueOps";
 
 export interface QueueDriveItem {
   isFolder?: boolean;
@@ -19,13 +18,7 @@ const NEXT_MODE: Record<PlayMode, PlayMode> = {
   "repeat-one": "normal",
 };
 
-export function ensureQueueItemId(track: Track): Track {
-  return track.queueItemId
-    ? track
-    : { ...track, queueItemId: crypto.randomUUID() };
-}
-
-export { sameTrack } from "./utils";
+export { ensureQueueItemId, sameTrack };
 
 export function shuffleQueueWithCurrent(
   queue: Track[],
@@ -138,23 +131,34 @@ export function usePlayerQueue(
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
 
-  const handleTogglePlayMode = useCallback(() => {
-    const queue = originalQueue;
-    const track = currentTrack;
-    const nextMode = NEXT_MODE[playMode];
+  const handleSetPlayMode = useCallback(
+    (mode: PlayMode): void => {
+      if (mode === playMode) return;
 
-    if (nextMode === "shuffle") {
-      if (queue.length > 0 && track) {
-        setPlaybackQueue(
-          shuffleQueueWithCurrent(queue, track, ensureQueueItemId(track)),
-        );
+      const queue = originalQueue;
+      const track = currentTrack;
+
+      if (mode === "shuffle") {
+        // Entering shuffle: rebuild the play order with the current track at
+        // the head so playback continues seamlessly.
+        if (queue.length > 0 && track) {
+          setPlaybackQueue(
+            shuffleQueueWithCurrent(queue, track, ensureQueueItemId(track)),
+          );
+        }
+      } else if (playMode === "shuffle") {
+        // Leaving shuffle: restore the user's original order.
+        setPlaybackQueue([...queue]);
       }
-    } else if (playMode === "shuffle") {
-      setPlaybackQueue([...queue]);
-    }
 
-    setPlayMode(nextMode);
-  }, [playMode, originalQueue, currentTrack, setPlayMode, setPlaybackQueue]);
+      setPlayMode(mode);
+    },
+    [playMode, originalQueue, currentTrack, setPlayMode, setPlaybackQueue],
+  );
+
+  const handleTogglePlayMode = useCallback(() => {
+    handleSetPlayMode(NEXT_MODE[playMode]);
+  }, [handleSetPlayMode, playMode]);
 
   const updateQueueContext = useCallback(
     (
@@ -182,15 +186,7 @@ export function usePlayerQueue(
 
       if (newOriginalQueue.length > 0) {
         setOriginalQueue(newOriginalQueue);
-        idbSet(SESSION_CLEANUP_KEYS.queueKv, newOriginalQueue).catch(
-          (e: unknown) => {
-            void captureError({
-              level: "warn",
-              source: "usePlayerQueue",
-              message: `queue-save-fail: ${classifyPlayerError(e).message}`,
-            });
-          },
-        );
+        persistQueue(newOriginalQueue);
         if (playMode === "shuffle") {
           const shuffled = shuffleQueueWithCurrent(
             newOriginalQueue,
@@ -214,13 +210,7 @@ export function usePlayerQueue(
       } else {
         targetTrack = ensureQueueItemId(targetTrack);
         setPlaybackQueue([targetTrack]);
-        idbSet(SESSION_CLEANUP_KEYS.queueKv, []).catch((e: unknown) => {
-          void captureError({
-            level: "warn",
-            source: "usePlayerQueue",
-            message: `queue-clear-fail: ${classifyPlayerError(e).message}`,
-          });
-        });
+        persistQueue([]);
       }
       return targetTrack;
     },
@@ -231,6 +221,7 @@ export function usePlayerQueue(
     handleNextTrack,
     handlePrevTrack,
     handleTogglePlayMode,
+    handleSetPlayMode,
     updateQueueContext,
   };
 }

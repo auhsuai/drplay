@@ -45,6 +45,18 @@ export function sameTrack(a: Track, b: Track): boolean {
   return a.id === b.id;
 }
 
+/**
+ * Guarantee per-entry queue identity: a track that already carries a
+ * queueItemId is returned as-is, otherwise a clone with a fresh UUID. The id
+ * survives reordering (shuffle) so removal/multi-select can address one exact
+ * queue entry even when the same Drive file appears twice in the queue.
+ */
+export function ensureQueueItemId(track: Track): Track {
+  return track.queueItemId
+    ? track
+    : { ...track, queueItemId: crypto.randomUUID() };
+}
+
 export function resolveNextTrack(
   playbackQueue: readonly Track[],
   currentTrack: Track,

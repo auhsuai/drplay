@@ -27,7 +27,11 @@ const baseTrack: Track = {
   streamUrl: "https://stream.example/t1",
 };
 
-const makeTrack = (id: string): Track => ({ ...baseTrack, id });
+const makeTrack = (id: string, extra: Partial<Track> = {}): Track => ({
+  ...baseTrack,
+  id,
+  ...extra,
+});
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -186,6 +190,152 @@ describe("handleTogglePlayMode", () => {
     expect(shuffled[0]?.id).toBe("t9");
     expect(shuffled[0]?.queueItemId).toBeTypeOf("string");
     expect(new Set(shuffled)).toHaveLength(3);
+  });
+});
+
+describe("handleSetPlayMode", () => {
+  const setup = (
+    playMode: PlayMode,
+    originalQueue: Track[],
+    currentTrack: Track | null,
+  ) => {
+    const setPlaybackQueue = vi.fn();
+    const setOriginalQueue = vi.fn();
+    const setPlayMode = vi.fn();
+    const handlePlayTrack = vi.fn();
+
+    const { result } = renderHook(() =>
+      usePlayerQueue(
+        currentTrack,
+        [],
+        originalQueue,
+        playMode,
+        setPlaybackQueue,
+        setOriginalQueue,
+        setPlayMode,
+        handlePlayTrack,
+      ),
+    );
+
+    const lastCall = (mock: ReturnType<typeof vi.fn>): unknown => {
+      const calls = mock.mock.calls;
+      return calls[calls.length - 1]?.[0];
+    };
+
+    return { result, setPlaybackQueue, setPlayMode, lastCall };
+  };
+
+  it("normal → shuffle (có queue + current): shuffle đủ phần tử, current ở head với queueItemId", () => {
+    const queue = [
+      makeTrack("t1", { queueItemId: "q-t1" }),
+      makeTrack("t2", { queueItemId: "q-t2" }),
+      makeTrack("t3", { queueItemId: "q-t3" }),
+    ];
+    const third = queue[2];
+    if (third === undefined) throw new Error("expected track at index 2");
+    const { result, setPlaybackQueue, setPlayMode, lastCall } = setup(
+      "normal",
+      queue,
+      third,
+    );
+
+    act(() => {
+      result.current.handleSetPlayMode("shuffle");
+    });
+
+    const shuffled = lastCall(setPlaybackQueue) as Track[];
+    expect(shuffled).toHaveLength(3);
+    expect(new Set(shuffled.map((t) => t.id))).toEqual(
+      new Set(["t1", "t2", "t3"]),
+    );
+    expect(shuffled[0]?.id).toBe("t3");
+    expect(shuffled[0]?.queueItemId).toBe("q-t3");
+    expect(lastCall(setPlayMode)).toBe("shuffle");
+  });
+
+  it("shuffle → normal: restore đúng thứ tự originalQueue", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const first = queue[0];
+    if (first === undefined) throw new Error("expected track at index 0");
+    const { result, setPlaybackQueue, setPlayMode, lastCall } = setup(
+      "shuffle",
+      queue,
+      first,
+    );
+
+    act(() => {
+      result.current.handleSetPlayMode("normal");
+    });
+
+    const restored = lastCall(setPlaybackQueue) as Track[];
+    expect(restored.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+    expect(lastCall(setPlayMode)).toBe("normal");
+  });
+
+  it.each(["repeat-all", "repeat-one"] as const)(
+    "normal → %s: chỉ đổi mode, không đụng queue",
+    (mode) => {
+      const queue = [makeTrack("t1"), makeTrack("t2")];
+      const first = queue[0];
+      if (first === undefined) throw new Error("expected track at index 0");
+      const { result, setPlaybackQueue, setPlayMode } = setup(
+        "normal",
+        queue,
+        first,
+      );
+
+      act(() => {
+        result.current.handleSetPlayMode(mode);
+      });
+
+      expect(setPlaybackQueue).not.toHaveBeenCalled();
+      expect(setPlayMode).toHaveBeenCalledTimes(1);
+      expect(setPlayMode).toHaveBeenCalledWith(mode);
+    },
+  );
+
+  it("set trùng mode đang bật → no-op (không set state)", () => {
+    const queue = [makeTrack("t1")];
+    const first = queue[0];
+    if (first === undefined) throw new Error("expected track at index 0");
+    const { result, setPlaybackQueue, setPlayMode } = setup(
+      "shuffle",
+      queue,
+      first,
+    );
+
+    act(() => {
+      result.current.handleSetPlayMode("shuffle");
+    });
+
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+  });
+
+  it("queue rỗng + set shuffle → chỉ đổi mode", () => {
+    const { result, setPlaybackQueue, setPlayMode } = setup("normal", [], null);
+
+    act(() => {
+      result.current.handleSetPlayMode("shuffle");
+    });
+
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).toHaveBeenCalledWith("shuffle");
+  });
+
+  it("có queue nhưng chưa có current + set shuffle → chỉ đổi mode", () => {
+    const { result, setPlaybackQueue, setPlayMode } = setup(
+      "normal",
+      [makeTrack("t1")],
+      null,
+    );
+
+    act(() => {
+      result.current.handleSetPlayMode("shuffle");
+    });
+
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).toHaveBeenCalledWith("shuffle");
   });
 });
 
