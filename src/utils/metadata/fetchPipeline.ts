@@ -83,6 +83,48 @@ const logMetaWarn = (message: string, kind?: string): Promise<void> =>
     ...(kind ? { kind } : {}),
   });
 
+// FLAC metadata-block layout (xiph.org/flac/format.html): after the 4-byte
+// 'fLaC' marker every block carries a 4-byte header — 1 flag/type byte (top
+// bit = last-block flag, low 7 bits = type) + 24-bit big-endian length.
+const FLAC_MARKER_LEN = 4;
+const FLAC_BLOCK_HEADER_LEN = 4;
+const FLAC_BLOCK_TYPE_MASK = 0x7f;
+const FLAC_LAST_BLOCK_FLAG = 0x80;
+const FLAC_BLOCK_TYPE_PICTURE = 6;
+
+/**
+ * End offset (exclusive) of the furthest PICTURE block whose header already
+ * sits inside `head`, or 0 when no picture header is visible. Reads ONLY the
+ * block headers from the already-fetched head — never the network — so a
+ * picture spilling past the blind head still reveals its full extent through
+ * its 24-bit length field. A header truncated by the head edge stops the walk
+ * (the extent is unknowable without another fetch, and the chunked parse
+ * below stays the fallback).
+ */
+function flacPictureEnd(head: Uint8Array): number {
+  if (head.length < FLAC_MARKER_LEN + FLAC_BLOCK_HEADER_LEN) return 0;
+  let pictureEnd = 0;
+  let offset = FLAC_MARKER_LEN;
+  while (offset + FLAC_BLOCK_HEADER_LEN <= head.length) {
+    const flagType = head[offset] ?? 0;
+    const type = flagType & FLAC_BLOCK_TYPE_MASK;
+    const last = (flagType & FLAC_LAST_BLOCK_FLAG) !== 0;
+    const len =
+      ((head[offset + 1] ?? 0) << 16) |
+      ((head[offset + 2] ?? 0) << 8) |
+      (head[offset + 3] ?? 0);
+    const blockEnd = offset + FLAC_BLOCK_HEADER_LEN + len;
+    if (type === FLAC_BLOCK_TYPE_PICTURE && blockEnd > pictureEnd) {
+      pictureEnd = blockEnd;
+    }
+    // A last-marked block ends the chain; a block running past the head edge
+    // hides every later header (including any further PICTURE), so stop.
+    if (last || blockEnd > head.length) break;
+    offset = blockEnd;
+  }
+  return pictureEnd;
+}
+
 async function getTrackMetadataImpl(
   fileId: string,
   _token?: string,
@@ -243,6 +285,33 @@ async function getTrackMetadataImpl(
               `tag-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
             );
           }
+        }
+      }
+    }
+
+    if (format === "flac") {
+      // A FLAC cover lives in a PICTURE block AFTER the vorbis comments, so a
+      // ~2MB cover spills past the 1.5MB blind head and its remainder was read
+      // chunk-by-chunk (64KB per request, ~8 requests queued behind the
+      // app-wide CONCURRENCY-3 semaphore). The PICTURE header (with its
+      // 24-bit length) sits at a tiny offset inside the head, so the spill
+      // extent is known WITHOUT another fetch — prefetch ONLY the part past
+      // the blind head (which already cached [0, HEAD_TAG_FETCH_BYTES)), the
+      // exact mirror of the MP3 tag-remainder prefetch above. Best-effort: on
+      // budget or network failure the parse re-reads the region chunked
+      // exactly as before. Clamped to parseSize so large files (whose head is
+      // only HEAD_BYTES) never fire this; the per-file budget itself is
+      // enforced by prefetchRange's assertBudget (a BudgetExceededError lands
+      // in the same warn-and-continue path, keeping the cover-degraded-budget
+      // retry for 2x12MB FLACs intact).
+      const pictureEnd = Math.min(flacPictureEnd(head), parseSize);
+      if (pictureEnd > HEAD_TAG_FETCH_BYTES) {
+        try {
+          await tokenizer.prefetchRange(HEAD_TAG_FETCH_BYTES, pictureEnd);
+        } catch (e: unknown) {
+          void logMetaWarn(
+            `picture-prefetch-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+          );
         }
       }
     }

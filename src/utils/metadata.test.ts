@@ -2768,6 +2768,134 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
   });
 });
 
+describe("getTrackMetadata FLAC picture prefetch (one request past the head, was ~8 chunk requests)", () => {
+  const fresh = () => import("./metadata");
+
+  function mockCompress(thumbBytes: Uint8Array, fullBytes: Uint8Array) {
+    vi.mocked(compressCoverVariants).mockImplementation(
+      (_data, _fmt, variants) =>
+        Promise.resolve(
+          variants.map((v) => ({
+            ok: true as const,
+            result: {
+              data: v.maxSize >= FULL_MAX_SIZE ? fullBytes : thumbBytes,
+              format: "image/jpeg",
+              keptOriginal: false,
+            },
+          })),
+        ),
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(compressCoverVariants).mockReset();
+    mockCompress(new Uint8Array([1, 2, 3]), new Uint8Array([9, 8, 7]));
+  });
+
+  it("FLAC with a ~2MB picture spilling past the head: head + 1 prefetch (was ~10 requests)", async () => {
+    const fixture = buildFlacWithPicture("FLAC Cover", "FLAC Artist", [
+      makeJpeg(2 * 1024 * 1024),
+    ]);
+    const { calls } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "flac-prefetch-2m",
+      "tok",
+      fixture.length,
+      "cover.flac",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("FLAC Cover");
+    expect(r.pictureData).toEqual(new Uint8Array([1, 2, 3]));
+    // head (1) + ONE picture-remainder prefetch (1); the EOF probe chunk is
+    // already seeded by the prefetch so no third request is needed.
+    expect(calls.length).toBeLessThanOrEqual(3);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(HEAD_TAG_FETCH_BYTES)}-${String(fixture.length - 1)}`,
+    );
+  });
+
+  it("FLAC without a picture block: no extra prefetch request (pattern unchanged)", async () => {
+    const fixture = buildFlacWithPicture("Plain FLAC", "Plain Artist", []);
+    const { mock } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "flac-prefetch-plain",
+      "tok",
+      fixture.length,
+      "plain.flac",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Plain FLAC");
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed FLAC picture prefetch falls back to chunked reads and still yields v:8", async () => {
+    const fixture = buildFlacWithPicture("FLAC Fallback", "FLAC Artist", [
+      makeJpeg(2 * 1024 * 1024),
+    ]);
+    const { mock } = makeFetchMock(fixture);
+    const serveSlice = mock.getMockImplementation();
+    if (!serveSlice)
+      throw new Error("makeFetchMock must install an implementation");
+    // blind head succeeds; the picture-remainder prefetch fails (network
+    // errors are NOT retried by the chunk fetcher); the chunked fallback
+    // serves the rest.
+    mock
+      .mockImplementationOnce((...args) => serveSlice(...args))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementation((...args) => serveSlice(...args));
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "flac-prefetch-fail",
+      "tok",
+      fixture.length,
+      "fallback.flac",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("FLAC Fallback");
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "picture-prefetch-failed",
+        ) as unknown as string,
+      }),
+    );
+    // head + failed prefetch + EOF probe + 8 chunked picture reads.
+    expect(mock.mock.calls.length).toBeGreaterThan(3);
+  });
+
+  it("MP3 typical pattern unchanged: 2MB tag still head + 1 remainder prefetch (2 requests)", async () => {
+    const fixture = buildHugeTagMp3(2 * 1024 * 1024, {
+      title: "MP3 Guard",
+      artist: "MP3 Artist",
+      album: "MP3 Album",
+      image: makeJpeg(),
+    });
+    const { calls } = makeFetchMock(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "mp3-prefetch-guard",
+      "tok",
+      fixture.length,
+      "guard.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("MP3 Guard");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
+    expect(calls[1]?.range).toBe(
+      `bytes=${String(HEAD_TAG_FETCH_BYTES)}-${String(fixture.length - 1)}`,
+    );
+  });
+});
+
 describe("getTrackMetadata blind head fetch (1.5MB head, no byte-0 tag refetch)", () => {
   const fresh = () => import("./metadata");
 
