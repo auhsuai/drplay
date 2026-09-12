@@ -54,6 +54,10 @@ bytes = "1.6.0"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38.2"
 windows-core = "0.61.2"
+# Orphan guarantee for the mpv sidecar: Windows Job Object with
+# KILL_ON_JOB_CLOSE (see src/mpv/job.rs). Pinned to 0.59 to reuse the
+# version already in Cargo.lock (no new graph nodes).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 uuid = { version = "1.8.0", features = ["v4"] }
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }

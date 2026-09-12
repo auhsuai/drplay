@@ -5,6 +5,7 @@
 //! - `mpv-event`    → `{ event: String, reason: Option<String> }` (`end-file`, `shutdown`, ...)
 
 mod ipc;
+mod job;
 mod process;
 
 use serde_json::{json, Value};
@@ -24,10 +25,15 @@ const OBSERVED_PROPERTIES: &[(u64, &str)] = &[
     (5, "demuxer-cache-state"),
 ];
 
-/// Handle for one running mpv sidecar: IPC connection + child process.
+/// Handle for one running mpv sidecar: IPC connection + child process + the
+/// kill-on-close job pinning the child to the app's lifetime. The job MUST be
+/// stored here (not dropped after spawn): closing its last handle terminates
+/// the sidecar, so it has to stay alive exactly as long as the child.
 struct MpvHandle {
     ipc: MpvIpc,
     child: tokio::process::Child,
+    #[allow(dead_code)]
+    job: job::JobHandle,
     pipe_name: String,
 }
 
@@ -83,7 +89,9 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     let pipe_name = process::new_pipe_name();
-    let mut child = process::spawn_mpv(&pipe_name)?;
+    let spawned = process::spawn_mpv(&pipe_name)?;
+    let mut child = spawned.child;
+    let job = spawned.job;
     let client = match process::connect_pipe(&pipe_name).await {
         Ok(client) => client,
         Err(connect_error) => {
@@ -111,7 +119,7 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     log::info!("[mpv] sidecar ready (pipe: {pipe_name})");
-    *slot = Some(MpvHandle { ipc, child, pipe_name });
+    *slot = Some(MpvHandle { ipc, child, job, pipe_name });
     Ok(())
 }
 
@@ -153,6 +161,29 @@ pub async fn mpv_shutdown() -> Result<(), String> {
     let _ = handle.child.wait().await; // reap the child either way
     log::info!("[mpv] sidecar shut down (pipe: {})", handle.pipe_name);
     Ok(())
+}
+
+/// Best-effort synchronous kill for process-exit paths (`RunEvent::Exit`,
+/// tray Quit) that cannot `.await` the async `mpv_shutdown`. Non-blocking by
+/// design: `try_lock` never waits (a contended lock means the async owner is
+/// shutting down already) and `start_kill` only signals termination. The Job
+/// Object is the real orphan guarantee here — this just speeds the graceful
+/// quit so `mpv.exe` is gone within ~ms instead of at handle teardown.
+pub(crate) fn mpv_kill_sync_best_effort(app: &tauri::AppHandle) {
+    let state = mpv_state(app);
+    let Ok(mut slot) = state.try_lock() else {
+        return;
+    };
+    if let Some(handle) = slot.as_mut() {
+        // Already exited (or unpollable): nothing to kill; the slot keeps the
+        // reaped handle until process teardown, when the closed job finishes
+        // any remainder via KILL_ON_JOB_CLOSE.
+        if let Ok(None) = handle.child.try_wait() {
+            if let Err(kill_error) = handle.child.start_kill() {
+                log::warn!("[mpv] sync exit kill failed: {kill_error}");
+            }
+        }
+    }
 }
 
 /// Lock the state slot (owned guard, so the slot outlives this helper) and

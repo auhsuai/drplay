@@ -17,7 +17,7 @@ mod stream_proxy;
 use auth::{login_google_native, refresh_google_token};
 use memory::{apply_window_activity, WindowActivityEvent};
 #[cfg(windows)]
-use mpv::{mpv_command, mpv_get_property, mpv_shutdown, mpv_spawn};
+use mpv::{mpv_command, mpv_get_property, mpv_kill_sync_best_effort, mpv_shutdown, mpv_spawn};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 
@@ -218,9 +218,15 @@ pub fn run() {
         }
     };
 
-    app.run(|_app_handle, event| match event {
+    app.run(|app_handle, event| match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 IS_QUITTING.store(true, Ordering::SeqCst);
+                // Belt-and-suspenders next to the Job Object guarantee: signal
+                // mpv now (sync; cannot await mpv_shutdown here) so the child
+                // is gone within ~ms on graceful quit. Abrupt deaths that skip
+                // this handler entirely are still covered by KILL_ON_JOB_CLOSE.
+                #[cfg(windows)]
+                mpv_kill_sync_best_effort(app_handle);
             }
             _ => {}
     });

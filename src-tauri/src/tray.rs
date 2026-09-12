@@ -29,6 +29,11 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "quit" => {
                 IS_QUITTING.store(true, Ordering::SeqCst);
+                // Best-effort sync kill before exit: the async mpv_shutdown
+                // cannot run here, and the Job Object (the real guarantee)
+                // reaps anything this misses at handle teardown.
+                #[cfg(windows)]
+                crate::mpv::mpv_kill_sync_best_effort(app);
                 app.exit(0);
             }
             "show" => {

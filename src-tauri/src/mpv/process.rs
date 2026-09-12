@@ -82,8 +82,20 @@ pub(crate) fn resolve_mpv_exe() -> Result<PathBuf, String> {
     Ok(candidate)
 }
 
+/// A freshly spawned sidecar plus the kill-on-close job pinning it to the
+/// app's lifetime. Both must be stored together: dropping the job early would
+/// terminate mpv mid-session, and leaving the child outside the job orphans
+/// it on abrupt parent death.
+pub(crate) struct SpawnedSidecar {
+    pub(crate) child: tokio::process::Child,
+    pub(crate) job: super::job::JobHandle,
+}
+
 /// Spawn the sidecar detached from any console with the engine flag set.
-pub(crate) fn spawn_mpv(pipe_name: &str) -> Result<tokio::process::Child, String> {
+/// The child joins a kill-on-close job BEFORE this returns: job creation or
+/// assignment failure kills the partial child and surfaces Err (fail loud —
+/// never hand back a running orphan).
+pub(crate) fn spawn_mpv(pipe_name: &str) -> Result<SpawnedSidecar, String> {
     let exe = resolve_mpv_exe()?;
     let flags = mpv_flags(pipe_name);
     log::info!(
@@ -101,7 +113,7 @@ pub(crate) fn spawn_mpv(pipe_name: &str) -> Result<tokio::process::Child, String
         // kills mpv — the sidecar must not outlive the app.
         .kill_on_drop(true);
     command.creation_flags(CREATE_NO_WINDOW);
-    command.spawn().map_err(|spawn_error| match spawn_error.kind() {
+    let child = command.spawn().map_err(|spawn_error| match spawn_error.kind() {
         std::io::ErrorKind::NotFound => format!(
             "mpv sidecar spawn failed: executable missing or not launchable at {}",
             exe.display()
@@ -111,7 +123,29 @@ pub(crate) fn spawn_mpv(pipe_name: &str) -> Result<tokio::process::Child, String
             exe.display()
         ),
         _ => format!("mpv sidecar spawn failed for {}: {spawn_error}", exe.display()),
-    })
+    })?;
+    // Pin the child to the kill-on-close job immediately: without this, any
+    // abrupt parent death (taskkill /F, crash, MSI restart) orphans mpv.
+    // kill_on_drop below cannot cover those paths (destructors never run).
+    // Every failure below kills the partial child first (fail loud, no orphan).
+    let job = match super::job::JobHandle::create_with_kill_on_close() {
+        Ok(job) => job,
+        Err(job_error) => {
+            let mut child = child;
+            if let Err(kill_error) = child.start_kill() {
+                log::error!("[mpv] job creation failed AND partial-child kill failed: {kill_error} ({job_error})");
+            }
+            return Err(job_error);
+        }
+    };
+    if let Err(assign_error) = job.assign(&child) {
+        let mut child = child;
+        if let Err(kill_error) = child.start_kill() {
+            log::error!("[mpv] job assign failed AND partial-child kill failed: {kill_error} ({assign_error})");
+        }
+        return Err(assign_error);
+    }
+    Ok(SpawnedSidecar { child, job })
 }
 
 /// Connect to mpv's pipe server, retrying while mpv is still starting up
@@ -212,7 +246,11 @@ mod tests {
             .expect("spike needs a local wav sample");
 
         let pipe_name = new_pipe_name();
-        let mut child = spawn_mpv(&pipe_name).expect("sidecar must spawn");
+        let spawned = spawn_mpv(&pipe_name).expect("sidecar must spawn");
+        let mut child = spawned.child;
+        // Keep the job alive for the spike duration: dropping it would
+        // terminate mpv via KILL_ON_JOB_CLOSE before the pipeline runs.
+        let _job = spawned.job;
         println!("[spike] spawned mpv (pipe: {pipe_name})");
 
         let client = connect_pipe(&pipe_name).await.expect("pipe must connect");
