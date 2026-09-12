@@ -5,35 +5,50 @@ const CANVAS_SIZE = 64;
 const SAMPLE_STEP = 16;
 const DARKEN_FACTOR = 0.5;
 const BG_ALPHA = 0.8;
+// Light mode reuses the same (darkened) rgb but a low alpha so the tint
+// composites over the light player background (#f3f4f6) instead of painting
+// near-black blobs on it; dark keeps the original alpha tuned for #121212.
+const LIGHT_BG_ALPHA = 0.3;
+
+export type PaletteMode = "light" | "dark";
 
 // P0-2 regression: decoding a cover image + running 4 quadrant getImageData
 // loops is expensive. getPalette was called on EVERY cover load (every track
 // switch / auto-advance) with the FULL (often multi-MB) cover URL and no
 // memoization, burning CPU on the main thread. Cache the resolved palette per
-// URL so an identical cover is decoded at most once; we return the SAME array
-// reference on a cache hit (lets tests assert a memo hit cheaply).
+// (url, mode) so an identical cover is decoded at most once per theme; we
+// return the SAME array reference on a cache hit (lets tests assert a memo hit
+// cheaply).
 const MAX_PALETTE_CACHE = 500;
 const paletteCache = new Map<string, string[]>();
 
-function getPaletteCached(url: string): string[] | undefined {
-  const hit = paletteCache.get(url);
+function paletteCacheKey(mode: PaletteMode, url: string): string {
+  return `${mode}:${url}`;
+}
+
+function getPaletteCached(cacheKey: string): string[] | undefined {
+  const hit = paletteCache.get(cacheKey);
   if (hit !== undefined) {
-    paletteCache.delete(url);
-    paletteCache.set(url, hit);
+    paletteCache.delete(cacheKey);
+    paletteCache.set(cacheKey, hit);
   }
   return hit;
 }
 
-function setPaletteCached(url: string, palette: string[]): void {
+function setPaletteCached(cacheKey: string, palette: string[]): void {
   if (paletteCache.size >= MAX_PALETTE_CACHE) {
     const oldest = paletteCache.keys().next().value;
     if (oldest !== undefined) paletteCache.delete(oldest);
   }
-  paletteCache.set(url, palette);
+  paletteCache.set(cacheKey, palette);
 }
 
-export const getPalette = (imgUrl: string): Promise<string[]> => {
-  const cached = getPaletteCached(imgUrl);
+export const getPalette = (
+  imgUrl: string,
+  mode: PaletteMode = "dark",
+): Promise<string[]> => {
+  const cacheKey = paletteCacheKey(mode, imgUrl);
+  const cached = getPaletteCached(cacheKey);
   if (cached) {
     return Promise.resolve(cached);
   }
@@ -106,14 +121,15 @@ export const getPalette = (imgUrl: string): Promise<string[]> => {
           }
 
           const darken = DARKEN_FACTOR;
+          const alpha = mode === "light" ? LIGHT_BG_ALPHA : BG_ALPHA;
           const palette = sum.map((s) => {
-            if (s.n === 0) return `rgba(0,0,0,${String(BG_ALPHA)})`;
+            if (s.n === 0) return `rgba(0,0,0,${String(alpha)})`;
             const r = Math.floor((s.r / s.n) * darken);
             const g = Math.floor((s.g / s.n) * darken);
             const b = Math.floor((s.b / s.n) * darken);
-            return `rgba(${String(r)}, ${String(g)}, ${String(b)}, ${String(BG_ALPHA)})`;
+            return `rgba(${String(r)}, ${String(g)}, ${String(b)}, ${String(alpha)})`;
           });
-          setPaletteCached(imgUrl, palette);
+          setPaletteCached(cacheKey, palette);
           resolve(palette);
         } catch (e: unknown) {
           // fire-and-forget: logging must not throw in this sync callback

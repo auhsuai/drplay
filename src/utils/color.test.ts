@@ -146,3 +146,51 @@ describe("getPalette — memoization (P0-2 regression)", () => {
     });
   });
 });
+
+// Regression: getPalette was theme-blind — it always composited the darkened
+// cover colors with alpha 0.8, which reads as muddy near-black blobs on the
+// LIGHT player background (#f3f4f6). Light mode must keep the same rgb but a
+// low alpha tint (0.3), and the memo cache must be keyed by (url, mode) so
+// light and dark never hand each other their palette.
+describe("getPalette — theme-aware palette (light mode regression)", () => {
+  const DARK_ALPHA_PATTERN = /, 0\.8\)$/;
+  const LIGHT_ALPHA_PATTERN = /, 0\.3\)$/;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("light mode caps every entry at alpha 0.3 while dark keeps the original 0.8", async () => {
+    installImageStubs();
+
+    const url = "http://x/theme-cover?id=1&thumb=true";
+    const light = await getPalette(url, "light");
+    for (const entry of light) {
+      expect(entry).toMatch(LIGHT_ALPHA_PATTERN);
+    }
+
+    const dark = await getPalette(url, "dark");
+    for (const entry of dark) {
+      expect(entry).toMatch(DARK_ALPHA_PATTERN);
+    }
+    expect(dark).not.toBe(light);
+    // One-arg call keeps the dark back-compat default and shares dark's cache.
+    expect(await getPalette(url)).toBe(dark);
+  });
+
+  it("memoizes per (url, mode): same mode hits cache, other mode decodes separately", async () => {
+    const ImageCtor = installImageStubs();
+
+    const url = "http://x/theme-cover?id=2&thumb=true";
+    const lightFirst = await getPalette(url, "light");
+    const lightAgain = await getPalette(url, "light");
+    const darkFirst = await getPalette(url, "dark");
+    const darkAgain = await getPalette(url, "dark");
+
+    expect(lightAgain).toBe(lightFirst);
+    expect(darkAgain).toBe(darkFirst);
+    expect(darkFirst).not.toBe(lightFirst);
+    // One decode per mode, not one per call.
+    expect(ImageCtor.instances.length).toBe(2);
+  });
+});

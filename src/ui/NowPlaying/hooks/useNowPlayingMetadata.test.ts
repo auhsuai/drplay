@@ -126,7 +126,7 @@ describe("useNowPlayingMetadata blob cover URL (picture bytes, no drplay://)", (
 
     expect(result.current.coverUrl).toBe(BLOB_URL);
     expect(mockedGetPalette).toHaveBeenCalledTimes(1);
-    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL);
+    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL, "dark");
   });
 
   it("builds the cover from the thumb picture bytes when no full picture exists", async () => {
@@ -140,7 +140,7 @@ describe("useNowPlayingMetadata blob cover URL (picture bytes, no drplay://)", (
 
     expect(result.current.coverUrl).toBe(BLOB_URL);
     expect(mockedGetPalette).toHaveBeenCalledTimes(1);
-    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL);
+    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL, "dark");
   });
 
   it("keeps coverUrl null and skips the palette when there is no picture at all", async () => {
@@ -240,5 +240,152 @@ describe("useNowPlayingMetadata blob cover URL (picture bytes, no drplay://)", (
     await flushMicrotasks();
 
     expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+});
+
+describe("useNowPlayingMetadata theme-aware palette", () => {
+  const DARK_COLORS = ["rgba(0, 0, 0, 0.8)"];
+  const LIGHT_COLORS = ["rgba(0, 0, 0, 0.15)"];
+
+  function paletteByMode(_url: string, mode?: string): Promise<string[]> {
+    return Promise.resolve(mode === "light" ? LIGHT_COLORS : DARK_COLORS);
+  }
+
+  // Tests unmount their hook before this reset so no observer reacts to it.
+  afterEach(() => {
+    document.documentElement.className = "";
+  });
+
+  it("requests the light palette when <html> has class 'light'", async () => {
+    document.documentElement.className = "light";
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+    mockedGetPalette.mockImplementation(paletteByMode);
+
+    const { result, unmount } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+
+    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL, "light");
+    expect(result.current.bgPalette).toEqual(LIGHT_COLORS);
+    expect(result.current.bgColor).toBe(LIGHT_COLORS[0]);
+    unmount();
+  });
+
+  it("treats a missing theme class as dark (back-compat with the old behavior)", async () => {
+    document.documentElement.className = "";
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+    mockedGetPalette.mockImplementation(paletteByMode);
+
+    const { result, unmount } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+
+    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL, "dark");
+    expect(result.current.bgPalette).toEqual(DARK_COLORS);
+    unmount();
+  });
+
+  it("recomputes the palette for the new mode when the theme class toggles while a cover is loaded", async () => {
+    document.documentElement.className = "dark";
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+    mockedGetPalette.mockImplementation(paletteByMode);
+
+    const { result, unmount } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+    expect(result.current.bgPalette).toEqual(DARK_COLORS);
+
+    await act(async () => {
+      document.documentElement.className = "light";
+      await Promise.resolve();
+    });
+    await flushMicrotasks();
+
+    expect(mockedGetPalette).toHaveBeenCalledWith(BLOB_URL, "light");
+    expect(result.current.bgPalette).toEqual(LIGHT_COLORS);
+    // Same track throughout: the theme change must not refetch metadata.
+    expect(mockedGetTrackMetadata).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("stops recomputing the palette after unmount (observer disconnected)", async () => {
+    // Unique cover URL: hooks left mounted by earlier tests still resolve
+    // immediately, so only this track's palette calls are countable.
+    const unique = "blob:observer-cleanup-cover";
+    createObjectURLSpy.mockReturnValue(unique);
+    document.documentElement.className = "dark";
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+    mockedGetPalette.mockImplementation(paletteByMode);
+    const callsForCover = () =>
+      mockedGetPalette.mock.calls.filter(([url]) => url === unique).length;
+
+    const { unmount } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+    expect(callsForCover()).toBe(1);
+
+    await act(async () => {
+      document.documentElement.className = "light";
+      await Promise.resolve();
+    });
+    await flushMicrotasks();
+    expect(callsForCover()).toBe(2);
+
+    unmount();
+    await act(async () => {
+      document.documentElement.className = "dark";
+      await Promise.resolve();
+    });
+    await flushMicrotasks();
+    expect(callsForCover()).toBe(2);
+  });
+
+  it("drops a stale palette response when the theme toggles again mid-flight", async () => {
+    const unique = "blob:stale-race-cover";
+    const resolvers: Array<(colors: string[]) => void> = [];
+    createObjectURLSpy.mockReturnValue(unique);
+    document.documentElement.className = "dark";
+    mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
+    // Only this track's requests are deferred so their resolve order is
+    // controlled; other mounted hooks from earlier tests resolve immediately.
+    mockedGetPalette.mockImplementation((url) =>
+      url === unique
+        ? new Promise<string[]>((resolve) => resolvers.push(resolve))
+        : Promise.resolve(DARK_COLORS),
+    );
+
+    const { result, unmount } = renderHook(() =>
+      useNowPlayingMetadata(makeTrack(), "token"),
+    );
+    await flushMicrotasks();
+    expect(resolvers.length).toBe(1);
+    resolvers[0]?.(DARK_COLORS);
+    await flushMicrotasks();
+    expect(result.current.bgPalette).toEqual(DARK_COLORS);
+
+    await act(async () => {
+      document.documentElement.className = "light";
+      await Promise.resolve();
+    });
+    await act(async () => {
+      document.documentElement.className = "dark";
+      await Promise.resolve();
+    });
+    await flushMicrotasks();
+    // Initial load + one reload per toggle.
+    expect(resolvers.length).toBe(3);
+
+    // Newest (dark) resolves first, stale (light) last: light must be dropped.
+    resolvers[2]?.(DARK_COLORS);
+    await flushMicrotasks();
+    resolvers[1]?.(LIGHT_COLORS);
+    await flushMicrotasks();
+
+    expect(result.current.bgPalette).toEqual(DARK_COLORS);
+    unmount();
   });
 });
