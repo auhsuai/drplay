@@ -990,3 +990,121 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
     expect(ctrl.getCurrentTime()).toBe(0);
   });
 });
+
+describe("MpvAudioController — engine time interpolator (push-gap clock)", () => {
+  let ctrl: MpvAudioController;
+  let timeupdates: { currentTime: number; duration: number }[];
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000);
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    storeMocks.setIsPlaying.mockClear();
+    // Mirror the real store: setIsPlaying flips the isPlaying the interpolator reads.
+    storeMocks.setIsPlaying.mockImplementation(
+      (playing: boolean | ((prev: boolean) => boolean)) => {
+        storeMocks.isPlaying =
+          typeof playing === "function"
+            ? playing(storeMocks.isPlaying)
+            : playing;
+      },
+    );
+    storeMocks.isPlaying = false;
+    vi.mocked(captureError).mockClear();
+    attachMocks();
+    ctrl = new MpvAudioController();
+    await ctrl.playTrack(trackA);
+    timeupdates = [];
+    ctrl.on("timeupdate", (payload) => timeupdates.push(payload));
+    tauriMocks.invoke.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("push gap while playing: interpolated timeupdates fill the silence (0:00 -> 0:03 fix)", async () => {
+    fireProperty("pause", false); // playing — interpolation armed
+    fireProperty("time-pos", 0.2); // the only real push, then mpv goes quiet
+    timeupdates.length = 0;
+
+    await vi.advanceTimersByTimeAsync(3000);
+
+    const filled = timeupdates.filter(
+      (p) => p.currentTime > 0.5 && p.currentTime < 2.5,
+    );
+    expect(filled.length).toBeGreaterThanOrEqual(1);
+    let prev = 0.2;
+    for (const p of timeupdates) {
+      expect(p.currentTime).toBeGreaterThan(prev);
+      prev = p.currentTime;
+    }
+  });
+
+  it("pause(true) mid-interpolation: synthetic emits stop immediately", async () => {
+    fireProperty("pause", false);
+    fireProperty("time-pos", 1);
+    await vi.advanceTimersByTimeAsync(300);
+    // Real push emit + at least one interpolated emit while playing.
+    expect(timeupdates.length).toBeGreaterThanOrEqual(2);
+
+    fireProperty("pause", true);
+    timeupdates.length = 0;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(timeupdates).toEqual([]);
+  });
+
+  it("track change: before the new track's first real push, nothing interpolates from the old clock", async () => {
+    fireProperty("pause", false);
+    fireProperty("time-pos", 50);
+    await vi.advanceTimersByTimeAsync(300);
+
+    await ctrl.playTrack(trackB); // beginTrack resets the interpolation base
+    fireProperty("pause", false); // mpv playing again — still no real time-pos
+    timeupdates.length = 0;
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(timeupdates).toEqual([]);
+  });
+
+  it("dense real pushes (<250ms apart): no synthetic emits — timeupdate frequency unchanged", async () => {
+    fireProperty("pause", false);
+    timeupdates.length = 0;
+
+    for (let i = 0; i < 15; i++) {
+      fireProperty("time-pos", i * 0.2);
+      await vi.advanceTimersByTimeAsync(200);
+    }
+
+    // Every emission must carry a real pushed value (no synthetic drift).
+    const realValues = new Set(Array.from({ length: 15 }, (_, i) => i * 0.2));
+    expect(timeupdates.length).toBeGreaterThan(0);
+    for (const p of timeupdates) {
+      expect(realValues.has(p.currentTime)).toBe(true);
+    }
+  });
+
+  it("watchdog backfill during the gap resyncs the interpolation base (truth wins)", async () => {
+    fireProperty("pause", false);
+    fireProperty("time-pos", 0.2);
+    timeupdates.length = 0;
+    tauriMocks.invoke.mockImplementation((command: string) =>
+      command === "mpv_get_property"
+        ? Promise.resolve(1.9)
+        : command === "stream_proxy_start"
+          ? Promise.resolve(PROXY_PORT)
+          : Promise.resolve(undefined),
+    );
+
+    await vi.advanceTimersByTimeAsync(2250); // gap: interpolation + watchdog poll
+
+    const values = timeupdates.map((p) => p.currentTime);
+    const last = values[values.length - 1] ?? Number.NaN;
+    // Interpolation continues from the watchdog truth (1.9), not the drifted clock.
+    expect(last).toBeGreaterThan(1.9);
+    expect(last).toBeLessThan(2.2);
+  });
+});

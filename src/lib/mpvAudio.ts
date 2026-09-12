@@ -26,6 +26,7 @@ import {
   type MpvEventCallbacks,
   type MpvRange,
 } from "./mpvProtocol";
+import { TimeInterpolator } from "./timeInterpolator";
 
 /** MpvEngine — mpv sidecar playback over Tauri JSON IPC; Rust contract + watchdog in mpvProtocol.ts. */
 
@@ -59,10 +60,21 @@ export class MpvAudioController {
       this.events.onTimeUpdate(time);
     },
   );
+  private interpolator = new TimeInterpolator(
+    () => usePlayerStore.getState().isPlaying,
+    (time) => {
+      // Interpolated emit: clock + consumer event only — deliberately NOT
+      // watchdog.noteEmit/buffering.onTimeTick, so the watchdog keeps polling
+      // during a push gap (its poll is the truth resync that re-bases this).
+      this.currentTime = time;
+      this.emitTimeupdate(time);
+    },
+  );
 
   private readonly events: MpvEventCallbacks = {
     onTimeUpdate: (time) => {
       this.currentTime = time;
+      this.interpolator.noteRealTime(time);
       this.watchdog.noteEmit();
       this.buffering.onTimeTick();
       this.emitTimeupdate(time);
@@ -74,6 +86,9 @@ export class MpvAudioController {
     onPauseChange: (paused) => {
       this.paused = paused;
       if (paused) {
+        // Drop the base: elapsed wall time during the pause must never drift
+        // into the interpolation when playback resumes.
+        this.interpolator.reset();
         this.watchdog.stop();
         this.emit("pause", undefined);
         usePlayerStore.getState().setIsPlaying(false);
@@ -82,6 +97,7 @@ export class MpvAudioController {
         this.emit("play", undefined);
         usePlayerStore.getState().setIsPlaying(true);
         this.watchdog.start();
+        this.interpolator.start();
       }
     },
     onBuffering: (isBuffering) => {
@@ -96,6 +112,7 @@ export class MpvAudioController {
     },
     onEndFile: (outcome) => {
       this.playbackFinished = true;
+      this.interpolator.reset();
       if (outcome === "eof") {
         this.emit("ended", undefined);
         return;
@@ -240,6 +257,10 @@ export class MpvAudioController {
     this.cacheRanges = [];
     this.pendingSeek = startTime ?? null;
     this.throttle = freshThrottleClocks();
+    // New track: no truth for it yet — the interpolator stays silent until
+    // the first real time-pos push of THIS track (never drift from the old).
+    this.interpolator.reset();
+    this.interpolator.start();
     if (this.paused) {
       // mpv's pause flag is process-global: a loadfile while paused would
       // start the new track frozen. Clear it so the new track actually plays.
@@ -381,6 +402,7 @@ export class MpvAudioController {
     this.pendingSeek = null;
     this.buffering.cancel();
     this.watchdog.stop();
+    this.interpolator.reset();
     this.throttle = freshThrottleClocks();
     void invoke(TAURI_COMMANDS.mpvShutdown).catch((e: unknown) => {
       this.logWarn(`mpv-shutdown-failed: ${describeError(e)}`);
