@@ -135,6 +135,28 @@
     "exception_toast": "Đã xảy ra lỗi. Mở Developer Tools (Ctrl+Shift+I) để xem chi tiết.",
     "playback_failed": "Không thể phát bài này. Vui lòng thử bài khác."
   },
+  "queue": {
+    "title": "Hàng đợi phát",
+    "search_placeholder": "Tìm trong hàng đợi",
+    "empty": "Hàng đợi trống",
+    "no_results": "Không tìm thấy bài hát phù hợp",
+    "select_multiple": "Chọn nhiều",
+    "select_all": "Chọn tất cả",
+    "unselect_all": "Bỏ chọn tất cả",
+    "selected_count": "Đã chọn {{count}}",
+    "remove_selected": "Xoá mục đã chọn ({{count}})",
+    "exit_selection": "Thoát chọn",
+    "remove_from_queue": "Xoá khỏi hàng đợi",
+    "remove_folder": "Xoá thư mục khỏi hàng đợi",
+    "current_cannot_remove": "Không thể xoá bài đang phát",
+    "mode_normal": "Phát thường",
+    "mode_shuffle": "Phát ngẫu nhiên",
+    "mode_repeat_all": "Lặp tất cả",
+    "mode_repeat_one": "Lặp một bài",
+    "open": "Hàng đợi phát",
+    "selected_count_other": "Đã chọn {{count}}",
+    "remove_selected_other": "Xoá mục đã chọn ({{count}})"
+  },
   "menu": {
     "remove_from_liked": "Bỏ khỏi Đã thích",
     "add_to_playlist": "Thêm vào danh sách phát",

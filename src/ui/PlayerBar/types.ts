@@ -1,4 +1,4 @@
-import type { Track } from "../../types";
+import type { Track, PlayMode } from "../../types";
 
 export interface PlayerBarProps {
   currentTrack: Track | null;
@@ -11,4 +11,6 @@ export interface PlayerBarProps {
   playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
   onTogglePlayMode: () => void;
   onExpandNowPlaying: () => void;
+  onSetPlayMode: (mode: PlayMode) => void;
+  onSelectTrack: (track: Track) => void;
 }

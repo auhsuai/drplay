@@ -18,6 +18,7 @@ import { DownloadDialog } from "./MoreMenu/DownloadDialog";
 import { DownloadToast } from "./MoreMenu/DownloadToast";
 import { MoreMenuTrigger } from "./MoreMenu/MoreMenuTrigger";
 import { PlayerBarMenuItems } from "./MoreMenu/PlayerBarMenuItems";
+import { QueueMenuItems } from "./MoreMenu/QueueMenuItems";
 import { RecentMenuItems } from "./MoreMenu/RecentMenuItems";
 import { useMenuMove } from "./MoreMenu/useMenuMove";
 import { useMoreMenuEvents } from "./MoreMenu/useMoreMenuEvents";
@@ -49,6 +50,9 @@ export interface MoreMenuProps {
   isBulkSelected?: boolean | undefined;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
+  onRemoveFromQueue?: (() => void) | undefined;
+  disableRemoveFromQueue?: boolean | undefined;
+  onRemoveFolderFromQueue?: (() => void) | undefined;
 }
 
 export function MoreMenu({
@@ -70,6 +74,9 @@ export function MoreMenu({
   isBulkSelected,
   onBulkMoveClick,
   onBulkDeleteClick,
+  onRemoveFromQueue,
+  disableRemoveFromQueue,
+  onRemoveFolderFromQueue,
 }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -171,7 +178,18 @@ export function MoreMenu({
 
   const renderMenuContent = () => (
     <>
-      {mode === "playerbar" ? (
+      {mode === "queue" ? (
+        <QueueMenuItems
+          track={track}
+          handleDownloadClick={handleDownloadClick}
+          handleNavigateClick={handleNavigateClick}
+          onRemoveFromQueue={onRemoveFromQueue}
+          disableRemoveFromQueue={disableRemoveFromQueue}
+          onRemoveFolderFromQueue={onRemoveFolderFromQueue}
+          setIsOpen={setIsOpen}
+          t={t}
+        />
+      ) : mode === "playerbar" ? (
         <PlayerBarMenuItems
           track={track}
           handleDownloadClick={handleDownloadClick}

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
-import type { Track, TabKey, UserProfile } from "../../types";
+import type { Track, TabKey, UserProfile, PlayMode } from "../../types";
 import { Sidebar } from "../Sidebar/Sidebar";
 import { PlayerBar } from "../PlayerBar/PlayerBar";
 
@@ -27,6 +27,8 @@ interface AppShellProps {
   isDownloading: boolean;
   playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
   onTogglePlayMode: () => void;
+  onSetPlayMode: (mode: PlayMode) => void;
+  onSelectTrack: (track: Track) => void;
   onExpandNowPlaying: () => void;
   tabContent: ReactNode;
 }
@@ -52,6 +54,8 @@ export function AppShell({
   isDownloading,
   playMode,
   onTogglePlayMode,
+  onSetPlayMode,
+  onSelectTrack,
   onExpandNowPlaying,
   tabContent,
 }: AppShellProps) {
@@ -106,6 +110,8 @@ export function AppShell({
             isDownloading={isDownloading}
             playMode={playMode}
             onTogglePlayMode={onTogglePlayMode}
+            onSetPlayMode={onSetPlayMode}
+            onSelectTrack={onSelectTrack}
             onExpandNowPlaying={onExpandNowPlaying}
           />
         </div>

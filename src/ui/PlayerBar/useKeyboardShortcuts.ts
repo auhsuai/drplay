@@ -5,17 +5,19 @@ export interface UseKeyboardShortcutsParams {
   onPrevTrack: () => void;
   onTogglePlay: () => void;
   onTogglePlayMode: () => void;
+  onToggleQueue: () => void;
 }
 
-// Global transport shortcuts (space/n/p/s), only active while the PlayerBar
-// is mounted. Seek (arrow) and volume (arrow/m) keys live in SeekBar /
-// VolumeSlider next to the state they own, so each handler touches only its
-// local component (PLAN v2 — render-critical isolation).
+// Global transport shortcuts (space/n/p/s + Ctrl+Q queue panel), only active
+// while the PlayerBar is mounted. Seek (arrow) and volume (arrow/m) keys live
+// in SeekBar / VolumeSlider next to the state they own, so each handler
+// touches only its local component (PLAN v2 — render-critical isolation).
 export function useKeyboardShortcuts({
   onNextTrack,
   onPrevTrack,
   onTogglePlay,
   onTogglePlayMode,
+  onToggleQueue,
 }: UseKeyboardShortcutsParams) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -26,6 +28,19 @@ export function useKeyboardShortcuts({
         activeEl?.isContentEditable
       )
         return;
+
+      // Ctrl+Q (Cmd+Q on mac) toggles the queue panel. Alt is excluded so
+      // AltGr-adjacent layouts cannot trip it; the plain keys below keep
+      // their modifier-free behavior.
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        e.key.toLowerCase() === "q"
+      ) {
+        e.preventDefault();
+        onToggleQueue();
+        return;
+      }
 
       switch (e.key) {
         case "n":
@@ -53,5 +68,5 @@ export function useKeyboardShortcuts({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onNextTrack, onPrevTrack, onTogglePlay, onTogglePlayMode]);
+  }, [onNextTrack, onPrevTrack, onTogglePlay, onTogglePlayMode, onToggleQueue]);
 }

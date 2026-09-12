@@ -63,6 +63,7 @@ const queueMock = vi.hoisted(() => ({
   handleNextTrack: vi.fn(),
   handlePrevTrack: vi.fn(),
   handleTogglePlayMode: vi.fn(),
+  handleSetPlayMode: vi.fn(),
   updateQueueContext: vi.fn((track: Track) => track),
 }));
 
@@ -292,6 +293,7 @@ describe("usePlayer media session integration (Task A mount)", () => {
     expect(typeof result.current.handlePrevTrack).toBe("function");
     expect(typeof result.current.handleTogglePlay).toBe("function");
     expect(typeof result.current.handleTogglePlayMode).toBe("function");
+    expect(typeof result.current.handleSetPlayMode).toBe("function");
     expect(typeof result.current.setIsPlaying).toBe("function");
     expect(result.current.isPlaying).toBe(false);
     expect(result.current.currentTrack).toBeNull();

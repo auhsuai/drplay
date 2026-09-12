@@ -33,7 +33,7 @@ import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
 
-import type { Track, UserProfile, TabKey } from "./types";
+import type { Track, UserProfile, TabKey, PlayMode } from "./types";
 export type { Track, UserProfile };
 
 import {
@@ -176,6 +176,7 @@ function App() {
     handlePrevTrack,
     handleTogglePlay,
     handleTogglePlayMode,
+    handleSetPlayMode,
     loadNonce,
   } = usePlayer(accessToken);
 
@@ -215,16 +216,41 @@ function App() {
   const stableHandleTogglePlayMode = useCallback(() => {
     handleTogglePlayModeRef.current?.();
   }, []);
+  const handleSetPlayModeRef = useRef<typeof handleSetPlayMode>(undefined);
+  const stableHandleSetPlayMode = useCallback((mode: PlayMode) => {
+    handleSetPlayModeRef.current?.(mode);
+  }, []);
+  // Track selection from the queue panel is navigation, not a queue rebuild —
+  // same contract as clicking a song row (isNavigation=true). The handler and
+  // activeTab are read through refs so the stable wrapper never closes over a
+  // stale queue/tab while PlayerBar's memo comparator ignores handler props.
+  const playerPlayTrackRef = useRef<typeof playerPlayTrack>(undefined);
+  const activeTabRef = useRef(activeTab);
+  const stableHandleSelectTrack = useCallback((track: Track) => {
+    void playerPlayTrackRef.current?.(
+      track,
+      undefined,
+      true,
+      [],
+      activeTabRef.current,
+    );
+  }, []);
   useEffect(() => {
     handleTogglePlayRef.current = handleTogglePlay;
     handleNextTrackRef.current = handleNextTrack;
     handlePrevTrackRef.current = handlePrevTrack;
     handleTogglePlayModeRef.current = handleTogglePlayMode;
+    handleSetPlayModeRef.current = handleSetPlayMode;
+    playerPlayTrackRef.current = playerPlayTrack;
+    activeTabRef.current = activeTab;
   }, [
     handleTogglePlay,
     handleNextTrack,
     handlePrevTrack,
     handleTogglePlayMode,
+    handleSetPlayMode,
+    playerPlayTrack,
+    activeTab,
   ]);
   const onExpandNowPlaying = useCallback(() => {
     setIsNowPlayingOpen((prev) => !prev);
@@ -360,6 +386,8 @@ function App() {
         isDownloading={isDownloading}
         playMode={playMode}
         onTogglePlayMode={stableHandleTogglePlayMode}
+        onSetPlayMode={stableHandleSetPlayMode}
+        onSelectTrack={stableHandleSelectTrack}
         onExpandNowPlaying={onExpandNowPlaying}
         tabContent={
           <TabContentRouter

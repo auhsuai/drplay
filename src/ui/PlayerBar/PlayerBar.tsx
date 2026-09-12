@@ -1,5 +1,6 @@
 import { memo, useCallback, useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { List } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
 import type { PlayerBarProps } from "./types";
@@ -8,6 +9,7 @@ import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
 import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
+import { QueuePanel } from "./QueuePanel";
 import { ErrorToast } from "./ErrorToast";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
@@ -35,6 +37,8 @@ function PlayerBarImpl({
   playMode,
   onTogglePlayMode,
   onExpandNowPlaying,
+  onSetPlayMode,
+  onSelectTrack,
 }: PlayerBarProps) {
   const { t } = useTranslation();
   const audio = AudioController.getInstance();
@@ -43,10 +47,19 @@ function PlayerBarImpl({
   // is owned by SeekBar/VolumeSlider/TrackInfo — this composition layer only
   // keeps transport-level state (PLAN v2 — render-critical isolation).
   const [isBuffering, setIsBuffering] = useState(false);
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{
     message: string;
     code: string;
   } | null>(null);
+
+  const toggleQueue = useCallback(() => {
+    setIsQueueOpen((prev) => !prev);
+  }, []);
+
+  const closeQueue = useCallback(() => {
+    setIsQueueOpen(false);
+  }, []);
 
   // Fix I — storm guard state. Refs (not state): the counter must be read and
   // written from AudioController event callbacks without re-rendering the
@@ -209,6 +222,7 @@ function PlayerBarImpl({
     onPrevTrack: handleManualPrev,
     onTogglePlay: handleManualTogglePlay,
     onTogglePlayMode,
+    onToggleQueue: toggleQueue,
   });
 
   // Handle Play/Pause from Props (Syncing)
@@ -260,8 +274,34 @@ function PlayerBarImpl({
         <SeekBar currentTrack={currentTrack} audio={audio} />
       </div>
 
-      {/* Right: Volume Controls */}
-      <VolumeSlider audio={audio} />
+      {/* Right: Volume Controls (queue button leads the volume icon) */}
+      <VolumeSlider
+        audio={audio}
+        leading={
+          <button
+            type="button"
+            onClick={toggleQueue}
+            aria-label={t("queue.open")}
+            title={t("queue.open")}
+            aria-expanded={isQueueOpen}
+            className={`p-2 rounded-full transition-all active:scale-[0.92] shrink-0 ${
+              isQueueOpen
+                ? "text-brand-primary bg-brand-primary/10"
+                : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"
+            }`}
+          >
+            <List className="w-5 h-5" />
+          </button>
+        }
+      />
+
+      {/* Play Queue Panel */}
+      <QueuePanel
+        open={isQueueOpen}
+        onClose={closeQueue}
+        onSetPlayMode={onSetPlayMode}
+        onSelectTrack={onSelectTrack}
+      />
 
       {/* Error Toast */}
       <ErrorToast errorInfo={errorInfo} errorText={errorText} />

@@ -98,6 +98,7 @@ export const usePlayer = (accessToken: string | null) => {
     handleNextTrack,
     handlePrevTrack,
     handleTogglePlayMode,
+    handleSetPlayMode,
     updateQueueContext,
   } = usePlayerQueue(
     currentTrack,
@@ -225,5 +226,6 @@ export const usePlayer = (accessToken: string | null) => {
     handlePrevTrack,
     handleTogglePlay,
     handleTogglePlayMode,
+    handleSetPlayMode,
   };
 };

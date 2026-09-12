@@ -62,6 +62,14 @@ vi.mock("lucide-react", () => {
     "Maximize2",
     "RefreshCw",
     "Heart",
+    // Queue panel icons (button + panel chrome).
+    "List",
+    "ListX",
+    "FolderMinus",
+    "SquareCheckBig",
+    "Search",
+    "X",
+    "Check",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
@@ -169,6 +177,8 @@ function renderPlayer(overrides: Partial<PlayerBarProps> = {}) {
       playMode="normal"
       onTogglePlayMode={vi.fn()}
       onExpandNowPlaying={vi.fn()}
+      onSetPlayMode={vi.fn()}
+      onSelectTrack={vi.fn()}
       {...overrides}
     />,
   );
@@ -189,6 +199,8 @@ function StoreWiredPlayerBar(overrides: Partial<PlayerBarProps> = {}) {
       playMode="normal"
       onTogglePlayMode={vi.fn()}
       onExpandNowPlaying={vi.fn()}
+      onSetPlayMode={vi.fn()}
+      onSelectTrack={vi.fn()}
       {...overrides}
     />
   );
@@ -408,6 +420,8 @@ describe("PlayerBar buffer bar", () => {
         playMode="normal"
         onTogglePlayMode={vi.fn()}
         onExpandNowPlaying={vi.fn()}
+        onSetPlayMode={vi.fn()}
+        onSelectTrack={vi.fn()}
       />,
     );
     expect(buffer.childElementCount).toBe(0);
@@ -1127,6 +1141,8 @@ describe("PlayerBar favorite (heart) button", () => {
         playMode="normal"
         onTogglePlayMode={vi.fn()}
         onExpandNowPlaying={vi.fn()}
+        onSetPlayMode={vi.fn()}
+        onSelectTrack={vi.fn()}
       />,
     );
     await screen.findByRole("button", { name: "Add to favorites" });
@@ -1178,6 +1194,8 @@ describe("PlayerBar favorite (heart) button", () => {
         playMode="normal"
         onTogglePlayMode={vi.fn()}
         onExpandNowPlaying={vi.fn()}
+        onSetPlayMode={vi.fn()}
+        onSelectTrack={vi.fn()}
       />,
     );
     await screen.findByRole("button", { name: "Add to favorites" });
@@ -1213,6 +1231,8 @@ describe("PlayerBar favorite (heart) button", () => {
         playMode="normal"
         onTogglePlayMode={vi.fn()}
         onExpandNowPlaying={vi.fn()}
+        onSetPlayMode={vi.fn()}
+        onSelectTrack={vi.fn()}
       />,
     );
 
@@ -1779,6 +1799,8 @@ describe("PlayerBar track cover in TrackInfo (full picture, no drplay://)", () =
         playMode="normal"
         onTogglePlayMode={vi.fn()}
         onExpandNowPlaying={vi.fn()}
+        onSetPlayMode={vi.fn()}
+        onSelectTrack={vi.fn()}
       />,
     );
 
@@ -1905,5 +1927,32 @@ describe("PlayerBar TrackInfo folds fetched tags into the store (tags fix)", () 
     });
     expect(captureErrorSpy).not.toHaveBeenCalled();
     expect(usePlayerStore.getState().currentTrack?.title).toBe("Song");
+  });
+});
+
+describe("PlayerBar queue panel shortcut (Ctrl+Q)", () => {
+  it("Ctrl+Q mở panel (dialog xuất hiện) rồi Ctrl+Q đóng", () => {
+    renderPlayer();
+    expect(screen.queryByTestId("queue-panel")).toBeNull();
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "q", ctrlKey: true });
+    });
+    expect(screen.getByTestId("queue-panel")).toBeTruthy();
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "q", ctrlKey: true });
+    });
+    expect(screen.queryByTestId("queue-panel")).toBeNull();
+  });
+
+  it("plain 'q' KHÔNG toggle panel", () => {
+    renderPlayer();
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "q" });
+    });
+
+    expect(screen.queryByTestId("queue-panel")).toBeNull();
   });
 });

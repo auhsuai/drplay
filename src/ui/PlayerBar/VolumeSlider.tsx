@@ -6,9 +6,11 @@ const VOLUME_STEP = 0.1;
 
 export interface VolumeSliderProps {
   audio: AudioController;
+  /** Optional control rendered left of the volume icon (e.g. the queue button). */
+  leading?: React.ReactNode;
 }
 
-export function VolumeSlider({ audio }: VolumeSliderProps) {
+export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
   // Volume UI state is owned here: it only feeds this component's icon +
   // bar width, so updates stay local instead of re-rendering the whole
   // PlayerBar tree (render-critical isolation).
@@ -104,6 +106,7 @@ export function VolumeSlider({ audio }: VolumeSliderProps) {
 
   return (
     <div className="flex items-center justify-end w-[30%] min-w-[120px] pl-2 gap-3">
+      {leading}
       <VolumeIcon
         className="w-5 h-5 text-gray-500 hover:text-white cursor-pointer"
         onClick={toggleMute}
