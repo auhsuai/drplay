@@ -42,7 +42,7 @@ export function SeekRail({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className="flex-1 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
+      className="flex-1 h-1.5 bg-gray-300 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerMove={onPointerMove}

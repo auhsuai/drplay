@@ -167,9 +167,9 @@ describe("Sidebar storage quota", () => {
       "ease-in-out",
     );
     // Track background matches the PlayerBar seekbar track color exactly
-    // (light: gray-200 / dark: #2A2A2A), not the old generic gray-700.
+    // (light: gray-300 / dark: #2A2A2A), not the old generic gray-700.
     expect(screen.getByTestId("storage-quota-track").className).toContain(
-      "bg-gray-200",
+      "bg-gray-300",
     );
     expect(screen.getByTestId("storage-quota-track").className).toContain(
       "dark:bg-[#2A2A2A]",

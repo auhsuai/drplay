@@ -130,7 +130,7 @@ export function StorageQuotaCard({
             {quota.limit !== null && (
               <div
                 data-testid="storage-quota-track"
-                className={`h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full overflow-hidden transition-all duration-300 ease-in-out ml-3 flex items-stretch ${isSidebarOpen ? STORAGE_BAR_WIDTH_CLASS : "w-11"}`}
+                className={`h-1.5 bg-gray-300 dark:bg-[#2A2A2A] rounded-full overflow-hidden transition-all duration-300 ease-in-out ml-3 flex items-stretch ${isSidebarOpen ? STORAGE_BAR_WIDTH_CLASS : "w-11"}`}
               >
                 <div
                   data-testid="storage-quota-bar"

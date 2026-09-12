@@ -26,9 +26,9 @@ const MODE_ICONS: Record<PlayMode, LucideIcon> = {
   "repeat-one": Repeat1,
 };
 
-const ACTIVE_CLASS = "text-brand-primary bg-brand-primary/10";
+const ACTIVE_CLASS = "text-brand-primary hover:bg-brand-primary/10";
 const IDLE_CLASS =
-  "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]";
+  "text-gray-500 hover:text-brand-primary hover:bg-brand-primary/10";
 
 export interface QueueControlsProps {
   playMode: PlayMode;
@@ -52,6 +52,7 @@ export function QueueControls({
         {MODE_ORDER.map((mode) => {
           const Icon = MODE_ICONS[mode];
           const isActive = playMode === mode;
+          const isHighlighted = isActive && mode !== "normal";
           return (
             <button
               key={mode}
@@ -63,12 +64,10 @@ export function QueueControls({
               aria-label={t(MODE_LABEL_KEYS[mode])}
               title={t(MODE_LABEL_KEYS[mode])}
               className={`p-2 rounded-full transition-all active:scale-[0.92] ${
-                isActive ? ACTIVE_CLASS : IDLE_CLASS
+                isHighlighted ? ACTIVE_CLASS : IDLE_CLASS
               }`}
             >
-              <Icon
-                className={`w-5 h-5 ${mode === "normal" ? "opacity-40" : ""}`}
-              />
+              <Icon className="w-5 h-5" />
             </button>
           );
         })}

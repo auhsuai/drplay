@@ -78,7 +78,7 @@ export function NowPlayingControls({
             {playMode === "shuffle" && <Shuffle className="w-5 h-5" />}
             {playMode === "repeat-all" && <Repeat className="w-5 h-5" />}
             {playMode === "repeat-one" && <Repeat1 className="w-5 h-5" />}
-            {playMode === "normal" && <Repeat className="w-5 h-5 opacity-40" />}
+            {playMode === "normal" && <Repeat className="w-5 h-5" />}
           </button>
         </div>
       </div>
