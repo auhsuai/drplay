@@ -2,6 +2,7 @@ import { driveFetch, FOLDER_MIME } from "./driveApi";
 import type { DriveFileItem, DriveFolderItem } from "./driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "./driveFiles";
 import { PAGINATION_PAGE_SIZE } from "./driveConstants";
+import { getFolderAudioQuery } from "./audioQuery";
 
 // Worst-case safety cap: 10 pages = up to 10,000 results per call. Guards
 // against a misbehaving server that keeps issuing nextPageToken forever.
@@ -124,5 +125,23 @@ export async function getTrashedFiles(
     "fetch trashed files",
     signal,
     "folder,name",
+  );
+}
+
+// List a folder's immediate children that are playable audio files or
+// subfolders (getFolderAudioQuery builds that condition), with every page
+// aggregated. The recursive add-to-queue collector walks the tree one folder
+// per call; `size` is included so the mapped Track carries it.
+export async function listFolderAudioFiles(
+  token: string,
+  folderId: string,
+  signal?: AbortSignal,
+): Promise<DriveFileItem[]> {
+  return fetchAllPages<DriveFileItem>(
+    token,
+    getFolderAudioQuery(folderId),
+    "nextPageToken,files(id,name,mimeType,size)",
+    "list folder audio files",
+    signal,
   );
 }

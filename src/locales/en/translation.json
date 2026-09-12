@@ -157,7 +157,14 @@
     "selected_count_one": "{{count}} selected",
     "selected_count_other": "{{count}} selected",
     "remove_selected_one": "Remove selected ({{count}})",
-    "remove_selected_other": "Remove selected ({{count}})"
+    "remove_selected_other": "Remove selected ({{count}})",
+    "added_toast_one": "Added {{count}} song to the queue",
+    "added_toast_other": "Added {{count}} songs to the queue",
+    "add_empty": "No playable songs found in this folder",
+    "add_failed": "Couldn't add to the queue. Please try again.",
+    "add_truncated": "Queue is capped at {{count}} songs — only the first ones were added",
+    "add_truncated_one": "Queue is capped at {{count}} songs — only the first ones were added",
+    "add_truncated_other": "Queue is capped at {{count}} songs — only the first ones were added"
   },
   "menu": {
     "remove_from_liked": "Remove from Liked Songs",
@@ -176,6 +183,7 @@
     "download_failed": "Download failed",
     "create": "Create",
     "select_multiple": "Select multiple items",
+    "add_to_queue": "Add to queue",
     "saving": "Saving...",
     "save": "Save",
     "untitled": "Untitled"

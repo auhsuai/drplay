@@ -11,6 +11,7 @@ import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 import { useMenuDownload } from "../../hooks/useMenuDownload";
 import { useMenuDelete } from "../../hooks/useMenuDelete";
 import { useMenuPlaylists } from "../../hooks/useMenuPlaylists";
+import { useMenuAddToQueue } from "../../hooks/useMenuAddToQueue";
 import { AddToPlaylistItem } from "./MoreMenu/AddToPlaylistItem";
 import { DefaultMenuItems } from "./MoreMenu/DefaultMenuItems";
 import { DeleteConfirmDialog } from "./MoreMenu/DeleteConfirmDialog";
@@ -114,6 +115,8 @@ export function MoreMenu({
     openDeleteConfirm,
   } = useMenuDelete(t);
 
+  const { isAddingToQueue, handleAddToQueueClick } = useMenuAddToQueue(t);
+
   const {
     showPlaylistsSubmenu,
     playlistSearchQuery,
@@ -215,6 +218,8 @@ export function MoreMenu({
           driveItem={driveItem}
           token={token}
           handleDownloadClick={handleDownloadClick}
+          handleAddToQueueClick={handleAddToQueueClick}
+          isAddingToQueue={isAddingToQueue}
           openDeleteConfirm={openDeleteConfirm}
           setIsOpen={setIsOpen}
           onClose={onClose}

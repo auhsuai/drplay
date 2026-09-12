@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   },
   captureError: vi.fn(),
   showErrorToast: vi.fn(),
+  showSuccessToast: vi.fn(),
   getPlaylists: vi.fn(),
   addTrackToPlaylist: vi.fn(),
 }));
@@ -56,6 +57,7 @@ vi.mock("../../db/db", () => ({ db: mocks.db }));
 vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 vi.mock("../../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
+  showSuccessToast: mocks.showSuccessToast,
 }));
 vi.mock("../../utils/playlists", () => ({
   getPlaylists: mocks.getPlaylists,
@@ -276,13 +278,14 @@ describe("MoreMenu recent variant", () => {
 });
 
 describe("MoreMenu default variant regression (file list)", () => {
-  it("keeps the original 5 items (Select Multiple / Move to / Delete / Download / Add to Playlist)", () => {
+  it("keeps the original 6 items (Select Multiple / Add to Queue / Move to / Delete / Download / Add to Playlist)", () => {
     render(
       <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
     );
     openTrigger();
     expect(menuButtonNames().sort()).toEqual([
       "Add to Playlist",
+      "Add to queue",
       "Delete",
       "Download Song",
       "Move to...",
@@ -302,11 +305,32 @@ describe("MoreMenu default variant regression (file list)", () => {
     openTrigger();
     expect(menuButtonNames().sort()).toEqual([
       "Add to Playlist",
+      "Add to queue",
       "Delete",
       "Download Song",
       "Move to...",
       "Select multiple items",
     ]);
+  });
+});
+
+describe("MoreMenu default variant add-to-queue item", () => {
+  it("renders Add to queue when driveItem and token are present", () => {
+    render(
+      <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
+    );
+    openTrigger();
+    expect(
+      within(menuEl()).getByRole("button", { name: "Add to queue" }),
+    ).toBeTruthy();
+  });
+
+  it("hides Add to queue when token is missing", () => {
+    render(<MoreMenu track={makeTrack()} driveItem={makeDriveItem()} />);
+    openTrigger();
+    expect(
+      within(menuEl()).queryByRole("button", { name: "Add to queue" }),
+    ).toBeNull();
   });
 });
 

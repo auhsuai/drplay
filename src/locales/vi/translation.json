@@ -155,7 +155,12 @@
     "mode_repeat_one": "Lặp một bài",
     "open": "Hàng đợi phát",
     "selected_count_other": "Đã chọn {{count}}",
-    "remove_selected_other": "Xoá mục đã chọn ({{count}})"
+    "remove_selected_other": "Xoá mục đã chọn ({{count}})",
+    "added_toast_other": "Đã thêm {{count}} bài vào hàng đợi",
+    "add_empty": "Không tìm thấy bài hát nào trong thư mục này",
+    "add_failed": "Không thể thêm vào hàng đợi. Vui lòng thử lại.",
+    "add_truncated": "Hàng đợi giới hạn {{count}} bài — chỉ thêm các bài đầu tiên",
+    "add_truncated_other": "Hàng đợi giới hạn {{count}} bài — chỉ thêm các bài đầu tiên"
   },
   "menu": {
     "remove_from_liked": "Bỏ khỏi Đã thích",
@@ -174,6 +179,7 @@
     "download_failed": "Tải xuống thất bại",
     "create": "Tạo",
     "select_multiple": "Chọn nhiều mục",
+    "add_to_queue": "Thêm vào hàng đợi",
     "saving": "Đang lưu...",
     "save": "Lưu",
     "untitled": "Không tên"
