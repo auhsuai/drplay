@@ -3,7 +3,9 @@
  * chain stalls 2-3s at head-of-file, mpv#13695 — the watchdog only backfills
  * after >1.2s of silence, so seconds 1-2 never reach the UI). A 250ms tick
  * emits the interpolated position lastRealTime + (now - lastRealAt) whenever
- * no real push arrived within the tick window. Real pushes (property push,
+ * no real push arrived within the tick window. Frozen while the buffering
+ * spinner is shown (paused-for-cache keeps isPlaying true, so without this
+ * gate the fill/clock would run during the stall). Real pushes (property push,
  * watchdog backfill, post-seek report) only resync the base — never
  * double-emit. Emissions ride the SAME emitTimeupdate throttle, so consumers
  * are unchanged; the watchdog stays the truth resync on total push loss.
@@ -19,10 +21,16 @@ export class TimeInterpolator {
   /** Date.now() of the last real push. */
   private baseAt = 0;
   private readonly isPlaying: () => boolean;
+  private readonly isBuffering: () => boolean;
   private readonly emit: (time: number) => void;
 
-  constructor(isPlaying: () => boolean, emit: (time: number) => void) {
+  constructor(
+    isPlaying: () => boolean,
+    emit: (time: number) => void,
+    isBuffering: () => boolean = () => false,
+  ) {
     this.isPlaying = isPlaying;
+    this.isBuffering = isBuffering;
     this.emit = emit;
   }
 
@@ -61,6 +69,14 @@ export class TimeInterpolator {
       return;
     }
     if (this.baseTime === null) return; // fresh track, no truth yet
+    // Why: mpv paused-for-cache keeps isPlaying true while no audio flows —
+    // without this gate the clock/fill would run during the spinner. Re-anchor
+    // instead of just skipping so the stall wall-time never pays out as a
+    // catch-up jump when buffering settles.
+    if (this.isBuffering()) {
+      this.baseAt = Date.now();
+      return;
+    }
     const elapsedMs = Date.now() - this.baseAt;
     // A real push inside the last tick window: real data is fresher — skip.
     if (elapsedMs < INTERPOLATOR_TICK_MS) return;

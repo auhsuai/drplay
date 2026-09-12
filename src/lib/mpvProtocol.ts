@@ -168,6 +168,11 @@ export class BufferingTracker {
     if (this.state !== "idle") this.settle();
   }
 
+  /** True while the spinner is visible — the engine clock must freeze then. */
+  isShown(): boolean {
+    return this.state === "shown";
+  }
+
   cancel(): void {
     this.clearTimers();
     this.lastTickAt = null;

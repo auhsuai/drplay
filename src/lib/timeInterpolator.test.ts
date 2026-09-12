@@ -94,4 +94,58 @@ describe("TimeInterpolator (engine clock, push-gap backfill)", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(emitted).toEqual([]);
   });
+
+  it("buffering shown: no synthetic emits while stalled (clock frozen)", async () => {
+    let buffering = false;
+    emitted = [];
+    interp = new TimeInterpolator(
+      () => isPlaying,
+      (time) => {
+        emitted.push(time);
+      },
+      () => buffering,
+    );
+    interp.noteRealTime(111);
+    interp.start();
+
+    buffering = true; // mpv paused-for-cache promoted to shown
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(emitted).toEqual([]);
+  });
+
+  it("buffering settle: resumes from truth without paying out stalled wall-time", async () => {
+    let buffering = false;
+    emitted = [];
+    interp = new TimeInterpolator(
+      () => isPlaying,
+      (time) => {
+        emitted.push(time);
+      },
+      () => buffering,
+    );
+    interp.noteRealTime(111);
+    interp.start();
+
+    buffering = true;
+    await vi.advanceTimersByTimeAsync(5000); // long stall — stays silent
+    expect(emitted).toEqual([]);
+
+    buffering = false; // spinner settles, no real push yet
+    await vi.advanceTimersByTimeAsync(INTERPOLATOR_TICK_MS * 2);
+    // At most ~0.5s of drift from the frozen base — never the 5s stall jump.
+    for (const t of emitted) {
+      expect(t - 111).toBeLessThan(1);
+    }
+
+    // Real push after settle re-bases the truth and the clock follows it.
+    emitted = [];
+    interp.noteRealTime(112);
+    await vi.advanceTimersByTimeAsync(INTERPOLATOR_TICK_MS * 2);
+    expect(emitted.length).toBeGreaterThan(0);
+    for (const t of emitted) {
+      expect(t).toBeGreaterThanOrEqual(112);
+      expect(t - 112).toBeLessThan(1);
+    }
+  });
 });

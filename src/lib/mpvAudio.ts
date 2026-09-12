@@ -72,6 +72,9 @@ export class MpvAudioController {
       this.currentTime = time;
       this.emitTimeupdate(time);
     },
+    // Why: paused-for-cache stalls keep isPlaying true — gate the synthetic
+    // clock on the spinner so fill/clock freeze instead of running blind.
+    () => this.buffering.isShown(),
   );
 
   private readonly events: MpvEventCallbacks = {

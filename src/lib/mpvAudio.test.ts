@@ -1107,4 +1107,46 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
     expect(last).toBeGreaterThan(1.9);
     expect(last).toBeLessThan(2.2);
   });
+
+  it("buffering shown mid-track: synthetic clock freezes until truth returns", async () => {
+    fireProperty("pause", false);
+    fireProperty("time-pos", 111);
+    fireProperty("time-pos", 111.5); // settle the playTrack pending
+    timeupdates.length = 0;
+
+    fireProperty("paused-for-cache", true); // genuine mpv stall
+    await vi.advanceTimersByTimeAsync(300); // sustain window -> shown
+    timeupdates.length = 0;
+
+    await vi.advanceTimersByTimeAsync(2000); // stall with no real push
+    expect(timeupdates).toEqual([]);
+  });
+
+  it("buffering settle: resumes from new truth without the stalled wall-time jump", async () => {
+    fireProperty("pause", false);
+    fireProperty("time-pos", 111);
+    fireProperty("time-pos", 111.5);
+    timeupdates.length = 0;
+
+    fireProperty("paused-for-cache", true);
+    await vi.advanceTimersByTimeAsync(300);
+    timeupdates.length = 0;
+    await vi.advanceTimersByTimeAsync(5000); // long stall — stays frozen
+    expect(timeupdates).toEqual([]);
+
+    // Truth returns: two ticks within 1s settle the spinner.
+    fireProperty("time-pos", 112);
+    await vi.advanceTimersByTimeAsync(250);
+    fireProperty("time-pos", 112.5);
+    const settled = timeupdates.map((p) => p.currentTime);
+    expect(settled).toContain(112);
+    expect(settled).toContain(112.5);
+
+    timeupdates.length = 0;
+    await vi.advanceTimersByTimeAsync(500);
+    // Continues from 112.5 truth — never pays out the 5s stall as a jump.
+    for (const p of timeupdates) {
+      expect(p.currentTime - 112.5).toBeLessThan(1);
+    }
+  });
 });
