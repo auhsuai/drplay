@@ -13,6 +13,11 @@ export type AudioEventMap = {
   ended: undefined;
   play: undefined;
   pause: undefined;
+  /** First real time-pos push of the current track (mpv onTimeUpdate path
+   *  only — never the TimeInterpolator synthetic emits). Proves audio bytes
+   *  are flowing; lets callers defer display-only work (e.g. Drive metadata
+   *  fetch) off the critical first-byte path. Emitted once per track. */
+  "first-audio": undefined;
 };
 
 export type AudioEventHandler<K extends keyof AudioEventMap> = (

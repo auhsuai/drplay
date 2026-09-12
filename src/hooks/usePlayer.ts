@@ -30,6 +30,13 @@ import { useMediaSession } from "./useMediaSession";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
+// Why: fallback for the deferred metadata fetch — >> typical first-audio
+// (<2s on a healthy network) so it never fires early on a normal play,
+// << user patience and the ~30s Drive throttle/first-byte spike so
+// duration/cover still arrive when the signal is missed (staged-preload
+// pattern: display-only data loads only after playback is confirmed).
+const METADATA_DEFER_FALLBACK_MS = 9_000;
+
 const errMsg = (e: unknown): string =>
   e instanceof Error ? e.message : String(e);
 
@@ -295,26 +302,73 @@ export const usePlayer = (accessToken: string | null) => {
           void logUsePlayer("warn", `recordPlay-fail: ${errMsg(e)}`);
         });
 
-        void (async () => {
-          try {
-            const metadata = await getTrackMetadata(
-              targetTrack.id,
-              freshToken,
-              targetTrack.size,
-              targetTrack.originalName,
-              signal,
-            );
-            if (metadata.duration && !signal.aborted) {
-              setCurrentTrack((prev) =>
-                prev ? { ...prev, restoreDuration: metadata.duration } : prev,
-              );
-            }
-          } catch (e: unknown) {
-            if (!isAbortError(e)) {
-              void logUsePlayer("warn", `metadata-prefetch-fail: ${errMsg(e)}`);
-            }
+        // Why: FLAC metadata (1.5MB head + 64KB chunks + next-track
+        // prefetch) races mpv's first bytes for Drive quota right when its
+        // cache is empty — defer this display-only fetch until audio
+        // provably flows (first-audio) or the fallback fires, so the stream
+        // TTFB never competes with metadata. mpv decodes from its own
+        // stream header; restoreDuration only feeds SeekBar text + session.
+        let metadataSettled = false;
+        let metadataTimer: ReturnType<typeof setTimeout> | undefined;
+        const metadataAudio = AudioController.getInstance();
+        let unsubFirstAudio: (() => void) | undefined;
+        let unsubMetadataError: (() => void) | undefined;
+        const cleanupMetadataDefer = (): void => {
+          if (metadataTimer !== undefined) {
+            clearTimeout(metadataTimer);
+            metadataTimer = undefined;
           }
-        })();
+          unsubFirstAudio?.();
+          unsubFirstAudio = undefined;
+          unsubMetadataError?.();
+          unsubMetadataError = undefined;
+          signal.removeEventListener("abort", dropMetadataDefer);
+        };
+        const fireMetadataDefer = (): void => {
+          if (metadataSettled || signal.aborted) return;
+          metadataSettled = true;
+          cleanupMetadataDefer();
+          void (async () => {
+            try {
+              const metadata = await getTrackMetadata(
+                targetTrack.id,
+                freshToken,
+                targetTrack.size,
+                targetTrack.originalName,
+                signal,
+              );
+              if (metadata.duration && !signal.aborted) {
+                setCurrentTrack((prev) =>
+                  prev ? { ...prev, restoreDuration: metadata.duration } : prev,
+                );
+              }
+            } catch (e: unknown) {
+              if (!isAbortError(e)) {
+                void logUsePlayer(
+                  "warn",
+                  `metadata-prefetch-fail: ${errMsg(e)}`,
+                );
+              }
+            }
+          })();
+        };
+        function dropMetadataDefer(): void {
+          if (metadataSettled) return;
+          metadataSettled = true;
+          cleanupMetadataDefer();
+        }
+        unsubFirstAudio = metadataAudio.on("first-audio", fireMetadataDefer);
+        // Why: a failed playback must not fetch display-only metadata for a
+        // dead track — drop the pending fetch instead of wasting quota.
+        unsubMetadataError = metadataAudio.on("error", dropMetadataDefer);
+        // Why: track change (createAbortSignal aborts the previous signal)
+        // and unmount (cleanup effect aborts) both land here — drop the
+        // stale track's fetch and free its timer/listeners.
+        signal.addEventListener("abort", dropMetadataDefer, { once: true });
+        metadataTimer = setTimeout(
+          fireMetadataDefer,
+          METADATA_DEFER_FALLBACK_MS,
+        );
       } catch (e: unknown) {
         if (isAbortError(e)) return;
         void logUsePlayer("error", `network-playback-error: ${errMsg(e)}`);

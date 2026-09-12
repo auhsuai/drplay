@@ -49,6 +49,9 @@ export class MpvAudioController {
   private volume = 1;
   private muted = false;
   private throttle = freshThrottleClocks();
+  // Why: guards the once-per-track `first-audio` emit so interpolated
+  // timeupdates (which bypass onTimeUpdate) can never fake it.
+  private firstAudioEmitted = false;
   private buffering = new BufferingTracker((isBuffering) => {
     this.emit("buffering", { isBuffering });
   });
@@ -77,6 +80,12 @@ export class MpvAudioController {
       this.interpolator.noteRealTime(time);
       this.watchdog.noteEmit();
       this.buffering.onTimeTick();
+      // Why: only the REAL mpv push path proves audio bytes flow — the
+      // interpolator calls emitTimeupdate directly and never lands here.
+      if (!this.firstAudioEmitted) {
+        this.firstAudioEmitted = true;
+        this.emit("first-audio", undefined);
+      }
       this.emitTimeupdate(time);
     },
     onDuration: (dur) => {
@@ -257,6 +266,8 @@ export class MpvAudioController {
     this.cacheRanges = [];
     this.pendingSeek = startTime ?? null;
     this.throttle = freshThrottleClocks();
+    // Why: a new track has produced no audio yet — re-arm first-audio.
+    this.firstAudioEmitted = false;
     // New track: no truth for it yet — the interpolator stays silent until
     // the first real time-pos push of THIS track (never drift from the old).
     this.interpolator.reset();
@@ -400,6 +411,9 @@ export class MpvAudioController {
     this.duration = 0;
     this.cacheRanges = [];
     this.pendingSeek = null;
+    // Why: torn-down engine owns no track — stale flag must not suppress
+    // the next track's first-audio after re-spawn.
+    this.firstAudioEmitted = false;
     this.buffering.cancel();
     this.watchdog.stop();
     this.interpolator.reset();
