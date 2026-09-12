@@ -1,10 +1,7 @@
 import React, { useRef, useEffect, useCallback } from "react";
 import type { Track } from "../../types";
 import { useTranslation } from "react-i18next";
-import {
-  FolderSelectionScreen,
-  MOVE_PICKER_OPEN_ATTR,
-} from "../FolderSelection/FolderSelectionScreen";
+import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 
 import { clearPrefetchedStreams } from "../../utils/streamPrefetcher";
 import { TABS, type TabKey } from "../../utils/driveConstants";
@@ -16,42 +13,19 @@ import {
 import { BulkDeleteConfirmModal } from "./components/BulkDeleteConfirmModal";
 import { NewFolderModal } from "./components/NewFolderModal";
 
-import { useDriveExplorer, ITEMS_PER_PAGE } from "../../hooks/useDriveExplorer";
-import { useEventListener } from "../../hooks/useEventListener";
+import { useDriveExplorer } from "../../hooks/useDriveExplorer";
+import {
+  useSkeletonRows,
+  HEADER_CHROME_HEIGHT_PX,
+} from "./hooks/useSkeletonRows";
+import { useHighlightScroll } from "./hooks/useHighlightScroll";
+import { useMainContentKeyboard } from "./hooks/useMainContentKeyboard";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { PaginationControls } from "./components/PaginationControls";
 import { SkeletonRowList } from "../components/Skeleton";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
-
-// Fallback delay for the cross-page highlight scroll: normally the page
-// commit itself re-runs the highlight effect, whose cleanup cancels this
-// timer before it fires; the timeout only performs the scroll when the new
-// page renders slower than the delay (slow devices/commits).
-const SCROLL_HIGHLIGHT_DELAY_MS = 50;
-
-// Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar)
-// â€” the file-list container sizes itself to fill the viewport below it
-// (applied as min-height: calc(100% - 140px) on the [data-drop-region] div).
-const HEADER_CHROME_HEIGHT_PX = 140;
-
-// Skeleton row â‰ˆ 72px tall: 48px icon + p-3 (12px) padding top/bottom.
-const SKELETON_ROW_HEIGHT_PX = 72;
-// Minimum skeleton rows so short viewports never collapse the loading UI.
-const SKELETON_MIN_ROWS = 4;
-
-// Skeleton rows must fill the whole list area on every screen size â€” a
-// fixed count leaves a blank band on tall/wide displays. Estimate the
-// count from the viewport and recompute on resize, like Spotify/YouTube
-// skeletons do.
-const calcSkeletonRows = () =>
-  Math.max(
-    SKELETON_MIN_ROWS,
-    Math.ceil(
-      (window.innerHeight - HEADER_CHROME_HEIGHT_PX) / SKELETON_ROW_HEIGHT_PX,
-    ),
-  );
 
 interface MainContentProps {
   activeTab: TabKey;
@@ -106,26 +80,15 @@ export const MainContent = React.memo(function MainContent({
   const [showBulkMoveScreen, setShowBulkMoveScreen] = React.useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] =
     React.useState(false);
-  // DEV-only override (Ctrl+Shift+D panel â†’ "Pagination"): totalPages is
+  // DEV-only override (Ctrl+Shift+D panel → "Pagination"): totalPages is
   // DERIVED from real data (Math.ceil(filteredItems.length / ITEMS_PER_PAGE)),
-  // so it cannot be set directly â€” a local override forces the controls to
+  // so it cannot be set directly — a local override forces the controls to
   // render while the real setCurrentPage stays wired underneath.
   const [debugTotalPages, setDebugTotalPages] = React.useState<number | null>(
     null,
   );
 
-  // Recompute the skeleton row count on resize so the loading state keeps
-  // filling the list area after a window size change.
-  const [skeletonRows, setSkeletonRows] = React.useState(calcSkeletonRows);
-  React.useEffect(() => {
-    const onResize = () => {
-      setSkeletonRows(calcSkeletonRows());
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
+  const skeletonRows = useSkeletonRows();
 
   const explorer = useDriveExplorer(
     currentFolderId,
@@ -140,170 +103,32 @@ export const MainContent = React.memo(function MainContent({
     isInitialMount.current = false;
   }, []);
 
-  // Keyboard shortcuts
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
-      e.preventDefault();
-      if (document.activeElement === searchInputRef.current) {
-        searchInputRef.current?.blur();
-        explorer.setSearchQuery("");
-      } else {
-        searchInputRef.current?.focus();
-      }
-    }
-    if (
-      e.key === "Escape" &&
-      document.activeElement === searchInputRef.current
-    ) {
-      searchInputRef.current?.blur();
-      explorer.setSearchQuery("");
-      return;
-    }
-    // Escape outside editable fields exits selection mode (staged: a press
-    // inside the search input only clears the search above, the next press
-    // exits selection). The editable guard keeps this handler from
-    // double-firing alongside modal/page-edit inputs that own their own Esc.
-    if (e.key === "Escape" && explorer.isSelectionMode) {
-      const active = document.activeElement;
-      const focusedEditable =
-        active instanceof HTMLElement &&
-        (active.tagName === "INPUT" ||
-          active.tagName === "TEXTAREA" ||
-          active.isContentEditable);
-      if (!focusedEditable) {
-        explorer.setSelectedIds(new Set());
-        explorer.setIsSelectionMode(false);
-      }
-    }
-    // Backspace navigates back one folder (slice B). It never clears search,
-    // exits selection, or closes modals — that is Esc's job (above). Guard
-    // order: editable focus first (Backspace deletes text there), then
-    // modifier chords, then any overlay stacked above this view. The move
-    // picker owns the press via its body attribute flag (its state lives in
-    // per-row MoreMenu and is invisible here); context menus render only as
-    // a portalled [role="menu"] while open. No stopImmediatePropagation:
-    // each layer stands down on its own guard instead of depending on
-    // listener registration order.
-    if (e.key === "Backspace") {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const active = document.activeElement;
-      const focusedEditable =
-        active instanceof HTMLElement &&
-        (active.tagName === "INPUT" ||
-          active.tagName === "TEXTAREA" ||
-          active.isContentEditable);
-      if (focusedEditable) return;
-      if (showNewFolderModal || showBulkMoveScreen || showBulkDeleteConfirm)
-        return;
-      if (isNowPlayingOpen) return;
-      if (
-        document.body.hasAttribute(MOVE_PICKER_OPEN_ATTR) ||
-        document.querySelector('[role="menu"]') !== null
-      )
-        return;
-      if (!hasHistory) return;
-      onBack();
-    }
-  };
-  useEventListener("keydown", handleKeyDown, [
-    explorer.setSearchQuery,
-    explorer.isSelectionMode,
-    explorer.setSelectedIds,
-    explorer.setIsSelectionMode,
-    onBack,
-    hasHistory,
+  useMainContentKeyboard({
+    searchInputRef,
+    setSearchQuery: explorer.setSearchQuery,
+    isSelectionMode: explorer.isSelectionMode,
+    setSelectedIds: explorer.setSelectedIds,
+    setIsSelectionMode: explorer.setIsSelectionMode,
     showNewFolderModal,
     showBulkMoveScreen,
     showBulkDeleteConfirm,
     isNowPlayingOpen,
-  ]);
-
-  // Enable selection mode from events
-  const handleEnableSelection = (e: Event) => {
-    // detail is typed | null because a CustomEvent constructed without the
-    // detail option defaults to null at runtime.
-    const customEvent = e as CustomEvent<{ id?: string } | null>;
-    if (customEvent.detail?.id) {
-      explorer.setIsSelectionMode(true);
-      explorer.setSelectedIds(new Set([customEvent.detail.id]));
-    }
-  };
-  useEventListener("enable-selection-mode", handleEnableSelection, [
-    explorer.setIsSelectionMode,
-    explorer.setSelectedIds,
-  ]);
-
-  // Scroll to top on folder change — unless a LIVE locate highlight belongs
-  // to the destination folder itself (the highlight effect will land on the
-  // row anyway). The highlight carries the folderId it was produced for, so a
-  // highlight from another folder no longer suppresses this scroll when the
-  // user navigates manually within the 5s window (audit B3: the old check was
-  // folder-blind and skipped scroll-to-top unfairly).
-  const prevFolderRef = useRef(currentFolderId);
-  useEffect(() => {
-    if (mainRef.current) {
-      const isFolderChange = currentFolderId !== prevFolderRef.current;
-      const isLiveHighlightForDestination =
-        highlightedFileId != null &&
-        highlightedFileId.folderId === currentFolderId;
-      if (isFolderChange && !isLiveHighlightForDestination) {
-        mainRef.current.scrollTo({ top: 0, behavior: "smooth" });
-      }
-      prevFolderRef.current = currentFolderId;
-    }
-  }, [currentFolderId, highlightedFileId]);
+    hasHistory,
+    onBack,
+  });
 
   // Virtualizer is now isolated inside VirtualizedSongList
   const virtualizedListRef = useRef<VirtualizedSongListHandle>(null);
 
-  // Consume-once latch for highlight scrolling: the ts of the last locate we
-  // actually scrolled to. Data churn (search refreshes, Dexie writes)
-  // keeps re-creating filteredItems while the SAME highlight is active — the
-  // effect re-runs on every new identity but must not re-yank the viewport:
-  // one locate = one scroll.
-  const lastScrolledTsRef = useRef<number | null>(null);
-
-  // Handle highlight scrolling — consume-once per locate (keyed by ts). The
-  // latch is written ONLY where a scrollToIndex actually executes, never at
-  // effect entry. The cross-page path relies on this: Run 1 only switches
-  // pages and schedules the fallback timer; committing the new page re-runs
-  // this effect and its cleanup cancels that timer — an entry-latch would
-  // make Run 2 skip and lose the scroll entirely.
-  useEffect(() => {
-    if (!highlightedFileId || explorer.filteredItems.length === 0) return;
-    if (lastScrolledTsRef.current === highlightedFileId.ts) return;
-    const index = explorer.filteredItems.findIndex(
-      (item) => item.id === highlightedFileId.id,
-    );
-    if (index === -1) return;
-    const scrollToHighlightedRow = () => {
-      virtualizedListRef.current?.scrollToIndex(index % ITEMS_PER_PAGE, {
-        align: "center",
-      });
-      lastScrolledTsRef.current = highlightedFileId.ts;
-    };
-    const targetPage = Math.floor(index / ITEMS_PER_PAGE) + 1;
-    if (targetPage !== explorer.currentPage) {
-      explorer.setCurrentPage(targetPage);
-      const timerId = setTimeout(
-        scrollToHighlightedRow,
-        SCROLL_HIGHLIGHT_DELAY_MS,
-      );
-      return () => {
-        clearTimeout(timerId);
-      };
-    }
-    scrollToHighlightedRow();
-    // The effect only reads the enumerated explorer members (adding the whole
-    // explorer object would re-run the highlight-scroll on every render since
-    // useDriveExplorer returns a fresh object each render).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
+  useHighlightScroll({
+    mainRef,
+    virtualizedListRef,
+    currentFolderId,
     highlightedFileId,
-    explorer.currentPage,
-    explorer.filteredItems,
-    explorer.setCurrentPage,
-  ]);
+    filteredItems: explorer.filteredItems,
+    currentPage: explorer.currentPage,
+    setCurrentPage: explorer.setCurrentPage,
+  });
 
   useEffect(() => {
     clearPrefetchedStreams();
@@ -326,7 +151,7 @@ export const MainContent = React.memo(function MainContent({
     setShowBulkDeleteConfirm(true);
   }, []);
 
-  // DEV-only debug triggers (Ctrl+Shift+D panel â†’ "Loading / MainContent"):
+  // DEV-only debug triggers (Ctrl+Shift+D panel → "Loading / MainContent"):
   // bulk-delete modal and selection toolbar drive the SAME local/explorer
   // state the real flows use, so every subsequent interaction (close modal,
   // exit selection, bulk action) keeps working unchanged. onDebugEvent no-ops
