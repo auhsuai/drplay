@@ -3,6 +3,7 @@ import type { Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
+import { usePlayerStore } from "../../store/playerStore";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { SeekBar } from "../components/SeekBar";
@@ -33,6 +34,12 @@ export const NowPlayingView = memo(function NowPlayingView({
   token,
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
+
+  // Same store source PlayerBar's transport row resolves isDownloading from
+  // (playerStore.isDownloading, set by usePlayer.handlePlayTrack) — it covers
+  // the "preparing to play" intent window (token fetch → stream URL →
+  // loadfile) where the buffering event has not fired yet.
+  const isDownloading = usePlayerStore((state) => state.isDownloading);
 
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
@@ -143,6 +150,7 @@ export const NowPlayingView = memo(function NowPlayingView({
               <NowPlayingControls
                 isPlaying={isPlaying}
                 isBuffering={isBuffering}
+                isDownloading={isDownloading}
                 onTogglePlay={onTogglePlay}
                 onNextTrack={onNextTrack}
                 onPrevTrack={onPrevTrack}

@@ -12,6 +12,10 @@ import {
 interface NowPlayingControlsProps {
   isPlaying: boolean;
   isBuffering: boolean;
+  // Same intent window as TransportControls: true between a track-selection
+  // click and the actual loadfile — the button must show the spinner and
+  // reject re-clicks instead of flashing ▲/⏸.
+  isDownloading: boolean;
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
@@ -22,6 +26,7 @@ interface NowPlayingControlsProps {
 export function NowPlayingControls({
   isPlaying,
   isBuffering,
+  isDownloading,
   onTogglePlay,
   onNextTrack,
   onPrevTrack,
@@ -43,9 +48,10 @@ export function NowPlayingControls({
 
         <button
           onClick={onTogglePlay}
+          disabled={isDownloading}
           className="w-10 h-10 flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90"
         >
-          {isBuffering && isPlaying ? (
+          {isDownloading || (isBuffering && isPlaying) ? (
             <LoaderCircle className="w-5 h-5 animate-spin [transform-box:view-box] origin-center" />
           ) : isPlaying ? (
             <Pause className="w-5 h-5" />
