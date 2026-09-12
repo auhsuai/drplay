@@ -4,7 +4,7 @@ import { set as idbSet } from "../../db/kv";
 import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { MY_DRIVE_TAB, type TabKey } from "../../utils/driveConstants";
-import { classifyPlayerError } from "./utils";
+import { classifyPlayerError, resolveNextTrack, sameTrack } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
 
 export interface QueueDriveItem {
@@ -25,10 +25,7 @@ export function ensureQueueItemId(track: Track): Track {
     : { ...track, queueItemId: crypto.randomUUID() };
 }
 
-export function sameTrack(a: Track, b: Track): boolean {
-  if (a.queueItemId && b.queueItemId) return a.queueItemId === b.queueItemId;
-  return a.id === b.id;
-}
+export { sameTrack } from "./utils";
 
 export function shuffleQueueWithCurrent(
   queue: Track[],
@@ -96,22 +93,12 @@ export function usePlayerQueue(
     // un-marked by updateQueueContext when the user explicitly plays one.
     const wraps = playMode === "repeat-all" || playMode === "shuffle";
     const { brokenTrackIds, setIsPlaying } = usePlayerStore.getState();
-    const isBroken = (track: Track): boolean =>
-      brokenTrackIds.includes(track.id);
-
-    let target: Track | null = null;
-    for (let step = 1; step <= playbackQueue.length; step++) {
-      let index = currentIndex + step;
-      if (index >= playbackQueue.length) {
-        if (!wraps) break;
-        index -= playbackQueue.length;
-      }
-      const candidate = playbackQueue[index];
-      if (candidate !== undefined && !isBroken(candidate)) {
-        target = candidate;
-        break;
-      }
-    }
+    const target = resolveNextTrack(
+      playbackQueue,
+      currentTrack,
+      playMode,
+      brokenTrackIds,
+    );
 
     if (target) {
       handlePlayTrack(target, undefined, true);

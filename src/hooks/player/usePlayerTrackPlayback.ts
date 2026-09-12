@@ -11,7 +11,7 @@ import {
 } from "../../utils/streamPrefetcher";
 import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchTrackInServiceWorker } from "../../utils/swPrefetch";
-import { isAbortError } from "./utils";
+import { isAbortError, resolveNextTrack } from "./utils";
 import { onceAfterFirstAudio } from "./deferOnce";
 import { errMsg, logUsePlayer } from "./usePlayerLifecycle";
 import type { QueueDriveItem } from "./usePlayerQueue";
@@ -232,9 +232,14 @@ export function usePlayerTrackPlayback(
         // change — there is no cancel protocol down to the SW.
         onceAfterFirstAudio(metadataAudio, signal, {
           onFire: () => {
-            const freshNext = usePlayerStore
-              .getState()
-              .playbackQueue.find((t) => t.id !== targetTrack.id && t.id);
+            const { playbackQueue, playMode, brokenTrackIds } =
+              usePlayerStore.getState();
+            const freshNext = resolveNextTrack(
+              playbackQueue,
+              targetTrack,
+              playMode,
+              brokenTrackIds,
+            );
             if (freshNext) prefetchTrackInServiceWorker(freshNext.id);
           },
           // Why: a failed playback must not prefetch for a dead track — the

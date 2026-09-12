@@ -128,6 +128,7 @@ function resetStoreWithQueue(queue: Track[]): void {
     playMode: "normal",
     originalQueue: [],
     playbackQueue: queue,
+    brokenTrackIds: [],
   });
 }
 
@@ -178,10 +179,10 @@ describe("usePlayer prefetch defer until first-audio", () => {
   });
 
   it("track change before signal -> old track NEVER prefetches; new track prefetches on its own signal", async () => {
-    // Note: next-track predicate is the pre-existing `find(t => t.id !==
-    // current.id)` (first non-current), preserved as-is — only the timing
-    // moves. Queues are swapped between plays so each track's expected next
-    // is unambiguous under that predicate.
+    // Note: next-track predicate resolves the track AFTER current in queue
+    // order (skipping broken tracks), in line with handleNextTrack — only the
+    // timing moves. Queues are swapped between plays so each track's expected
+    // next is unambiguous.
     resetStoreWithQueue([makeTrack("t-old"), makeTrack("t-old-next")]);
     const { result } = renderHook(() => usePlayer("test-token"));
 
@@ -270,6 +271,86 @@ describe("usePlayer prefetch defer until first-audio", () => {
     const prefetch = vi.mocked(prefetchTrackInServiceWorker);
     expect(prefetch).toHaveBeenCalledTimes(1);
     expect(prefetch).toHaveBeenCalledWith("t3");
+  });
+
+  it("normal mode mid-queue: prefetch the track AFTER current, not the queue head", async () => {
+    resetStoreWithQueue([makeTrack("t-a"), makeTrack("t-b"), makeTrack("t-c")]);
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t-b"), [
+        makeTrack("t-b"),
+      ]);
+    });
+    await act(async () => {
+      emitAudio("first-audio", undefined);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const prefetch = vi.mocked(prefetchTrackInServiceWorker);
+    expect(prefetch).toHaveBeenCalledTimes(1);
+    expect(prefetch).toHaveBeenCalledWith("t-c");
+  });
+
+  it("normal mode last track: no prefetch (no wrap)", async () => {
+    resetStoreWithQueue([makeTrack("t-a"), makeTrack("t-b"), makeTrack("t-c")]);
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t-c"), [
+        makeTrack("t-c"),
+      ]);
+    });
+    await act(async () => {
+      emitAudio("first-audio", undefined);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(vi.mocked(prefetchTrackInServiceWorker)).not.toHaveBeenCalled();
+  });
+
+  it("repeat-all wrap: last track prefetches queue head", async () => {
+    resetStoreWithQueue([makeTrack("t-a"), makeTrack("t-b"), makeTrack("t-c")]);
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t-c"), [
+        makeTrack("t-c"),
+      ]);
+    });
+    act(() => {
+      usePlayerStore.setState({ playMode: "repeat-all" });
+    });
+    await act(async () => {
+      emitAudio("first-audio", undefined);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const prefetch = vi.mocked(prefetchTrackInServiceWorker);
+    expect(prefetch).toHaveBeenCalledTimes(1);
+    expect(prefetch).toHaveBeenCalledWith("t-a");
+  });
+
+  it("skips broken next: prefetch the first non-broken track after current", async () => {
+    resetStoreWithQueue([makeTrack("t-a"), makeTrack("t-b"), makeTrack("t-c")]);
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t-a"), [
+        makeTrack("t-a"),
+      ]);
+    });
+    act(() => {
+      usePlayerStore.setState({ brokenTrackIds: ["t-b"] });
+    });
+    await act(async () => {
+      emitAudio("first-audio", undefined);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const prefetch = vi.mocked(prefetchTrackInServiceWorker);
+    expect(prefetch).toHaveBeenCalledTimes(1);
+    expect(prefetch).toHaveBeenCalledWith("t-c");
   });
 
   it("stuck track (never first-audio) -> NO prefetch, no fallback timer", async () => {
