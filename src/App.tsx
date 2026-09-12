@@ -187,6 +187,7 @@ function App() {
   // value; anything else (missing/corrupt) opens — see sidebarState.
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
 
   // F1 fix — TRUE ref-delegate wrappers (pattern: usePlayer.ts
@@ -257,6 +258,16 @@ function App() {
   }, []);
   const onCloseNowPlaying = useCallback(() => {
     setIsNowPlayingOpen(false);
+  }, []);
+  // Queue drawer state lives at App level: the pane is docked in AppShell's
+  // content row, not inside the memoized PlayerBar. Both wrappers keep a
+  // stable identity (empty-dep useCallback + functional update), so the bar
+  // is driven purely by the isQueueOpen prop.
+  const stableHandleToggleQueue = useCallback(() => {
+    setIsQueueOpen((prev) => !prev);
+  }, []);
+  const stableHandleCloseQueue = useCallback(() => {
+    setIsQueueOpen(false);
   }, []);
   useNowPlayingShortcuts({
     isOpen: isNowPlayingOpen,
@@ -389,6 +400,9 @@ function App() {
         onSetPlayMode={stableHandleSetPlayMode}
         onSelectTrack={stableHandleSelectTrack}
         onExpandNowPlaying={onExpandNowPlaying}
+        isQueueOpen={isQueueOpen}
+        onToggleQueue={stableHandleToggleQueue}
+        onCloseQueue={stableHandleCloseQueue}
         tabContent={
           <TabContentRouter
             activeTab={activeTab}

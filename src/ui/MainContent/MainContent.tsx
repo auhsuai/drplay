@@ -203,6 +203,7 @@ export const MainContent = React.memo(function MainContent({
 
       <div
         data-testid="main-header-chrome"
+        data-view-header
         className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200"
       >
         <TopNavigationBar

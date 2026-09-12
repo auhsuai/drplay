@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { PlayMode, Track } from "../../types";
+import type { PlayMode, TabKey, Track } from "../../types";
 import { usePlayerStore } from "../../store/playerStore";
 import {
   removeTracksByFolderFromQueue,
@@ -38,20 +37,24 @@ export interface QueuePanelProps {
   onClose: () => void;
   onSetPlayMode: (mode: PlayMode) => void;
   onSelectTrack: (track: Track) => void;
+  activeTab: TabKey;
 }
 
 /**
- * Play-queue modal: the actual playback order (playbackQueue), with search,
- * per-row menu, multi-select bulk removal and a direct play-mode switch.
- * Rendered through a portal because the PlayerBar ancestor creates a z-10 /
- * overflow context the fixed overlay must escape.
+ * Play-queue drawer docked to the right edge of the tab-content row in
+ * AppShell: the actual playback order (playbackQueue), with search, per-row
+ * menu, multi-select bulk removal and a direct play-mode switch. Rendered
+ * inline (no portal/overlay) — the app stays usable while the pane slides
+ * over the right side of the list, matching the sidebar's 300ms rhythm.
  */
 export function QueuePanel({
   open,
   onClose,
   onSetPlayMode,
   onSelectTrack,
+  activeTab,
 }: QueuePanelProps) {
+  const { t } = useTranslation();
   const { playbackQueue, currentTrack, playMode } = usePlayerStore(
     useShallow((s) => ({
       playbackQueue: s.playbackQueue,
@@ -64,11 +67,17 @@ export function QueuePanel({
 
   // Reset transient UI on every reopen — adjusted during render (React
   // "adjusting state during render" pattern) so no setState runs inside an
-  // effect.
+  // effect. hasOpened flips once: after the first open the pane CONTENT stays
+  // mounted so the slide-out transition can play (and scroll/selection survive
+  // a close); before that first open only the empty shell renders — mounting
+  // the virtualized list and its row menus for a drawer nobody has seen is
+  // pure waste.
   const [lastOpen, setLastOpen] = useState(open);
+  const [hasOpened, setHasOpened] = useState(open);
   if (lastOpen !== open) {
     setLastOpen(open);
     if (open) {
+      setHasOpened(true);
       setQuery("");
       selection.exitSelection();
     }
@@ -78,6 +87,45 @@ export function QueuePanel({
     () => filterQueue(playbackQueue, query),
     [playbackQueue, query],
   );
+
+  // The drawer top aligns with the sticky header of the ACTIVE view: the
+  // header is measured at runtime, so a view without one (LikedSongs,
+  // Settings) keeps top 0. HomeTab keeps its other views mounted but hidden
+  // (display:none → offsetParent null) — only VISIBLE headers count.
+  // ResizeObserver also fires its initial observation right after observe(),
+  // which is how the first measurement lands (no synchronous setState in the
+  // effect body).
+  const paneRef = useRef<HTMLElement | null>(null);
+  const [topOffset, setTopOffset] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const scope = paneRef.current?.parentElement;
+    if (!scope) return;
+
+    const measure = () => {
+      const headers = scope.querySelectorAll<HTMLElement>("[data-view-header]");
+      for (const header of headers) {
+        if (header.offsetParent !== null) {
+          setTopOffset(header.offsetHeight);
+          return;
+        }
+      }
+      setTopOffset(0);
+    };
+
+    const observer = new ResizeObserver(measure);
+    // Observe the scope itself too: with no header (or a still-hidden one the
+    // observer cannot observe) the initial observation still fires and
+    // resolves topOffset back to 0 — a stale height from the previous tab
+    // must never leak into the new one.
+    observer.observe(scope);
+    for (const header of scope.querySelectorAll("[data-view-header]")) {
+      observer.observe(header);
+    }
+    return () => {
+      observer.disconnect();
+    };
+  }, [open, activeTab]);
 
   useEffect(() => {
     if (!open) return;
@@ -90,38 +138,41 @@ export function QueuePanel({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
-
-  return createPortal(
-    <div
-      data-testid="queue-overlay"
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4"
-      role="presentation"
-      onClick={(e) => {
-        // Only the backdrop itself closes the panel, never a dialog click.
-        if (e.target === e.currentTarget) onClose();
-      }}
+  return (
+    // eslint-disable-next-line jsx-a11y/no-redundant-roles -- explicit role is part of the drawer's fixed contract; <aside> implies the same complementary role.
+    <aside
+      ref={paneRef}
+      data-testid="queue-panel"
+      role="complementary"
+      aria-label={t("queue.title")}
+      aria-hidden={!open}
+      inert={!open}
+      style={{ top: topOffset }}
+      className={`absolute right-0 bottom-0 w-[400px] flex flex-col bg-white dark:bg-[#202124] border-l border-gray-200/50 dark:border-gray-800/50 transition-transform duration-300 ease-in-out ${
+        open ? "translate-x-0" : "translate-x-full"
+      }`}
     >
-      <QueuePanelDialog
-        onClose={onClose}
-        playMode={playMode}
-        onSetPlayMode={onSetPlayMode}
-        selection={selection}
-        query={query}
-        onQueryChange={setQuery}
-        items={items}
-        currentTrack={currentTrack}
-        emptyKey={
-          playbackQueue.length === 0 ? "queue.empty" : "queue.no_results"
-        }
-        onSelectTrack={onSelectTrack}
-        onRemoveFromQueue={(key) => {
-          removeTracksFromQueue([key]);
-        }}
-        onRemoveFolderFromQueue={removeTracksByFolderFromQueue}
-      />
-    </div>,
-    document.body,
+      {hasOpened ? (
+        <QueuePanelDialog
+          onClose={onClose}
+          playMode={playMode}
+          onSetPlayMode={onSetPlayMode}
+          selection={selection}
+          query={query}
+          onQueryChange={setQuery}
+          items={items}
+          currentTrack={currentTrack}
+          emptyKey={
+            playbackQueue.length === 0 ? "queue.empty" : "queue.no_results"
+          }
+          onSelectTrack={onSelectTrack}
+          onRemoveFromQueue={(key) => {
+            removeTracksFromQueue([key]);
+          }}
+          onRemoveFolderFromQueue={removeTracksByFolderFromQueue}
+        />
+      ) : null}
+    </aside>
   );
 }
 
@@ -140,7 +191,7 @@ interface QueuePanelDialogProps {
   onRemoveFolderFromQueue: (parentId: string) => void;
 }
 
-/** Dialog chrome: header, controls, search, bulk toolbar, list, footer. */
+/** Drawer content: header, controls, search, bulk toolbar, list. */
 function QueuePanelDialog({
   onClose,
   playMode,
@@ -158,13 +209,7 @@ function QueuePanelDialog({
   const { t } = useTranslation();
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("queue.title")}
-      data-testid="queue-panel"
-      className="bg-white dark:bg-[#202124] rounded-2xl p-6 w-full max-w-lg shadow-2xl flex flex-col gap-4 max-h-[75vh]"
-    >
+    <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-bold text-gray-900 dark:text-white">
           {t("queue.title")}
@@ -209,16 +254,6 @@ function QueuePanelDialog({
         onRemoveFromQueue={onRemoveFromQueue}
         onRemoveFolderFromQueue={onRemoveFolderFromQueue}
       />
-
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onClose}
-          className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors"
-        >
-          {t("settings.close")}
-        </button>
-      </div>
     </div>
   );
 }

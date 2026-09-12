@@ -155,6 +155,11 @@ vi.mock("./ui/PlayerBar/PlayerBar", () => ({
     return null;
   },
 }));
+// AppShell renders the queue drawer directly now (it no longer rides inside
+// PlayerBar): the real QueuePanel drags MoreMenu → src/i18n, which calls
+// i18n.use(initReactI18next) on the stubbed react-i18next module. The drawer
+// itself is covered by QueuePanel.test.tsx + AppShell.test.tsx.
+vi.mock("./ui/PlayerBar/QueuePanel", () => ({ QueuePanel: () => null }));
 
 describe("App stable transport wrappers (F1 — ref-delegate, stale handler guard)", () => {
   beforeEach(() => {

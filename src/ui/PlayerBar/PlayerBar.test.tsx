@@ -179,6 +179,8 @@ function renderPlayer(overrides: Partial<PlayerBarProps> = {}) {
       onExpandNowPlaying={vi.fn()}
       onSetPlayMode={vi.fn()}
       onSelectTrack={vi.fn()}
+      isQueueOpen={false}
+      onToggleQueue={vi.fn()}
       {...overrides}
     />,
   );
@@ -201,6 +203,8 @@ function StoreWiredPlayerBar(overrides: Partial<PlayerBarProps> = {}) {
       onExpandNowPlaying={vi.fn()}
       onSetPlayMode={vi.fn()}
       onSelectTrack={vi.fn()}
+      isQueueOpen={false}
+      onToggleQueue={vi.fn()}
       {...overrides}
     />
   );
@@ -422,6 +426,8 @@ describe("PlayerBar buffer bar", () => {
         onExpandNowPlaying={vi.fn()}
         onSetPlayMode={vi.fn()}
         onSelectTrack={vi.fn()}
+        isQueueOpen={false}
+        onToggleQueue={vi.fn()}
       />,
     );
     expect(buffer.childElementCount).toBe(0);
@@ -1143,6 +1149,8 @@ describe("PlayerBar favorite (heart) button", () => {
         onExpandNowPlaying={vi.fn()}
         onSetPlayMode={vi.fn()}
         onSelectTrack={vi.fn()}
+        isQueueOpen={false}
+        onToggleQueue={vi.fn()}
       />,
     );
     await screen.findByRole("button", { name: "Add to favorites" });
@@ -1196,6 +1204,8 @@ describe("PlayerBar favorite (heart) button", () => {
         onExpandNowPlaying={vi.fn()}
         onSetPlayMode={vi.fn()}
         onSelectTrack={vi.fn()}
+        isQueueOpen={false}
+        onToggleQueue={vi.fn()}
       />,
     );
     await screen.findByRole("button", { name: "Add to favorites" });
@@ -1233,6 +1243,8 @@ describe("PlayerBar favorite (heart) button", () => {
         onExpandNowPlaying={vi.fn()}
         onSetPlayMode={vi.fn()}
         onSelectTrack={vi.fn()}
+        isQueueOpen={false}
+        onToggleQueue={vi.fn()}
       />,
     );
 
@@ -1801,6 +1813,8 @@ describe("PlayerBar track cover in TrackInfo (full picture, no drplay://)", () =
         onExpandNowPlaying={vi.fn()}
         onSetPlayMode={vi.fn()}
         onSelectTrack={vi.fn()}
+        isQueueOpen={false}
+        onToggleQueue={vi.fn()}
       />,
     );
 
@@ -1930,29 +1944,63 @@ describe("PlayerBar TrackInfo folds fetched tags into the store (tags fix)", () 
   });
 });
 
-describe("PlayerBar queue panel shortcut (Ctrl+Q)", () => {
-  it("Ctrl+Q mở panel (dialog xuất hiện) rồi Ctrl+Q đóng", () => {
-    renderPlayer();
-    expect(screen.queryByTestId("queue-panel")).toBeNull();
+describe("PlayerBar queue toggle (nút List + Ctrl+Q)", () => {
+  it("Ctrl+Q gọi onToggleQueue (drawer do App quản lý, không còn render trong PlayerBar)", () => {
+    const onToggleQueue = vi.fn();
+    renderPlayer({ onToggleQueue });
 
     act(() => {
       fireEvent.keyDown(window, { key: "q", ctrlKey: true });
     });
-    expect(screen.getByTestId("queue-panel")).toBeTruthy();
+    expect(onToggleQueue).toHaveBeenCalledTimes(1);
 
     act(() => {
       fireEvent.keyDown(window, { key: "q", ctrlKey: true });
     });
-    expect(screen.queryByTestId("queue-panel")).toBeNull();
+    expect(onToggleQueue).toHaveBeenCalledTimes(2);
   });
 
-  it("plain 'q' KHÔNG toggle panel", () => {
-    renderPlayer();
+  it("plain 'q' KHÔNG toggle queue", () => {
+    const onToggleQueue = vi.fn();
+    renderPlayer({ onToggleQueue });
 
     act(() => {
       fireEvent.keyDown(window, { key: "q" });
     });
 
-    expect(screen.queryByTestId("queue-panel")).toBeNull();
+    expect(onToggleQueue).not.toHaveBeenCalled();
+  });
+
+  it("nút List: aria-expanded theo prop isQueueOpen; click → onToggleQueue", () => {
+    const onToggleQueue = vi.fn();
+    const { rerender } = renderPlayer({ isQueueOpen: false, onToggleQueue });
+
+    const closedButton = screen.getByRole("button", { name: en.queue.open });
+    expect(closedButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(closedButton);
+    expect(onToggleQueue).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PlayerBar
+        currentTrack={makeTrack()}
+        isPlaying={false}
+        onTogglePlay={vi.fn()}
+        onNextTrack={vi.fn()}
+        onPrevTrack={vi.fn()}
+        playMode="normal"
+        onTogglePlayMode={vi.fn()}
+        onExpandNowPlaying={vi.fn()}
+        onSetPlayMode={vi.fn()}
+        onSelectTrack={vi.fn()}
+        isQueueOpen={true}
+        onToggleQueue={onToggleQueue}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: en.queue.open })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 });

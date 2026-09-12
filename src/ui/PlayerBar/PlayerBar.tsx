@@ -9,7 +9,6 @@ import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
 import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
-import { QueuePanel } from "./QueuePanel";
 import { ErrorToast } from "./ErrorToast";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
@@ -37,8 +36,8 @@ function PlayerBarImpl({
   playMode,
   onTogglePlayMode,
   onExpandNowPlaying,
-  onSetPlayMode,
-  onSelectTrack,
+  isQueueOpen,
+  onToggleQueue,
 }: PlayerBarProps) {
   const { t } = useTranslation();
   const audio = AudioController.getInstance();
@@ -47,19 +46,10 @@ function PlayerBarImpl({
   // is owned by SeekBar/VolumeSlider/TrackInfo — this composition layer only
   // keeps transport-level state (PLAN v2 — render-critical isolation).
   const [isBuffering, setIsBuffering] = useState(false);
-  const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [errorInfo, setErrorInfo] = useState<{
     message: string;
     code: string;
   } | null>(null);
-
-  const toggleQueue = useCallback(() => {
-    setIsQueueOpen((prev) => !prev);
-  }, []);
-
-  const closeQueue = useCallback(() => {
-    setIsQueueOpen(false);
-  }, []);
 
   // Fix I — storm guard state. Refs (not state): the counter must be read and
   // written from AudioController event callbacks without re-rendering the
@@ -222,7 +212,7 @@ function PlayerBarImpl({
     onPrevTrack: handleManualPrev,
     onTogglePlay: handleManualTogglePlay,
     onTogglePlayMode,
-    onToggleQueue: toggleQueue,
+    onToggleQueue,
   });
 
   // Handle Play/Pause from Props (Syncing)
@@ -280,7 +270,7 @@ function PlayerBarImpl({
         leading={
           <button
             type="button"
-            onClick={toggleQueue}
+            onClick={onToggleQueue}
             aria-label={t("queue.open")}
             title={t("queue.open")}
             aria-expanded={isQueueOpen}
@@ -295,14 +285,6 @@ function PlayerBarImpl({
         }
       />
 
-      {/* Play Queue Panel */}
-      <QueuePanel
-        open={isQueueOpen}
-        onClose={closeQueue}
-        onSetPlayMode={onSetPlayMode}
-        onSelectTrack={onSelectTrack}
-      />
-
       {/* Error Toast */}
       <ErrorToast errorInfo={errorInfo} errorText={errorText} />
     </div>
@@ -315,6 +297,9 @@ export const PlayerBar = memo(PlayerBarImpl, (prevProps, nextProps) => {
     prevProps.isPlaying === nextProps.isPlaying &&
     prevProps.playMode === nextProps.playMode &&
     prevProps.isDownloading === nextProps.isDownloading &&
-    prevProps.loadNonce === nextProps.loadNonce
+    prevProps.loadNonce === nextProps.loadNonce &&
+    // The queue drawer lives in App/AppShell now; without this the memoized
+    // bar would keep the stale button highlight + aria-expanded.
+    prevProps.isQueueOpen === nextProps.isQueueOpen
   );
 });

@@ -22,7 +22,7 @@ export function QueueSearchInput({ value, onChange }: QueueSearchInputProps) {
         }}
         placeholder={placeholder}
         aria-label={placeholder}
-        className="w-full pl-9 pr-3 py-2 text-sm rounded-xl border border-gray-200 dark:border-[#3a3b40] bg-white dark:bg-[#2a2b2f] text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:border-brand-primary"
+        className="w-full pl-9 pr-3 py-1.5 text-sm font-medium bg-gray-100 dark:bg-[#1a1b1e] text-gray-900 dark:text-gray-100 rounded-lg outline-none focus:ring-2 focus:ring-brand-primary/50 border border-transparent focus:border-transparent transition-all placeholder:text-gray-400"
       />
     </div>
   );

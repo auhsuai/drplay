@@ -13,4 +13,6 @@ export interface PlayerBarProps {
   onExpandNowPlaying: () => void;
   onSetPlayMode: (mode: PlayMode) => void;
   onSelectTrack: (track: Track) => void;
+  isQueueOpen: boolean;
+  onToggleQueue: () => void;
 }
