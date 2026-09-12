@@ -1,11 +1,21 @@
 import { findMpegDataStart, type AudioFormat } from "../audioFormat";
+import { captureError } from "../errorLog";
 import { stripAudioExtension } from "../pathUtils";
 import {
   DURATION_TAG_SCAN_BYTES,
+  META_MODULE,
   UNKNOWN_ARTIST,
   V_PLACEHOLDER,
 } from "./constants";
 import type { CachedMetadata } from "./types";
+
+export const logMetaWarn = (message: string, kind?: string): Promise<void> =>
+  captureError({
+    level: "warn",
+    source: META_MODULE,
+    message,
+    ...(kind ? { kind } : {}),
+  });
 
 const stripExtension = (name: string): string => stripAudioExtension(name);
 

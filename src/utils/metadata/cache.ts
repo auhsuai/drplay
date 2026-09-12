@@ -14,7 +14,7 @@ import {
   META_MODULE,
   V_PLACEHOLDER,
 } from "./constants";
-import { clearNetworkCooldown } from "./fetchPipeline";
+import { clearNetworkCooldown } from "./cooldown";
 import type { CacheEntry, CachedMetadata } from "./types";
 
 // 6 điểm log trong file dùng chung một shape { level, source: META_MODULE,
