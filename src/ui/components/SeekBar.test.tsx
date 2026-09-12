@@ -1171,3 +1171,85 @@ describe("SeekBar hover tooltip edge-stop race", () => {
     expect(screen.queryByTestId("seek-tooltip")).toBeNull();
   });
 });
+
+describe("BUG regression: fill survives currentTrack reference change while playing/paused", () => {
+  it("keeps the fill at 25% when currentTrack object reference changes (same id, metadata defer) without a new timeupdate", () => {
+    const { rerender } = render(
+      <SeekBar
+        currentTrack={makeTrack({ id: "track-A" })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 25, duration: 100 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+
+    // usePlayer.ts:334 defers metadata (restoreDuration) via setCurrentTrack,
+    // producing a NEW object with the SAME id while the track keeps
+    // playing/paused. The sync effect must NOT re-run on this reference swap.
+    rerender(
+      <SeekBar
+        currentTrack={makeTrack({ id: "track-A", restoreDuration: 100 })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+  });
+
+  it("keeps the fill correct after a reference change AND a further timeupdate (resume playing)", () => {
+    const { rerender } = render(
+      <SeekBar
+        currentTrack={makeTrack({ id: "track-A" })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 25, duration: 100 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+
+    rerender(
+      <SeekBar
+        currentTrack={makeTrack({ id: "track-A", restoreDuration: 100 })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 30, duration: 100 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("30%");
+  });
+
+  it("resets the fill to the new track's restoreTime/restoreDuration on a REAL track id change", () => {
+    const { rerender } = render(
+      <SeekBar
+        currentTrack={makeTrack({ id: "track-A" })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 25, duration: 100 });
+    });
+    expect(screen.getByTestId("progress-fill").style.width).toBe("25%");
+
+    // A genuine track switch: different id plus restored session values.
+    rerender(
+      <SeekBar
+        currentTrack={makeTrack({
+          id: "track-B",
+          restoreTime: 50,
+          restoreDuration: 100,
+        })}
+        audio={fakeController as unknown as AudioController}
+      />,
+    );
+
+    expect(screen.getByTestId("progress-fill").style.width).toBe("50%");
+  });
+});

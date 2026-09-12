@@ -1028,7 +1028,8 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
 
   it("push gap while playing: interpolated timeupdates fill the silence (0:00 -> 0:03 fix)", async () => {
     fireProperty("pause", false); // playing — interpolation armed
-    fireProperty("time-pos", 0.2); // the only real push, then mpv goes quiet
+    fireProperty("time-pos", 0.2); // real pushes, then mpv goes quiet
+    fireProperty("time-pos", 0.4); // 2nd tick confirms playback (settles pending spinner)
     timeupdates.length = 0;
 
     await vi.advanceTimersByTimeAsync(3000);
@@ -1037,7 +1038,7 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
       (p) => p.currentTime > 0.5 && p.currentTime < 2.5,
     );
     expect(filled.length).toBeGreaterThanOrEqual(1);
-    let prev = 0.2;
+    let prev = 0.4;
     for (const p of timeupdates) {
       expect(p.currentTime).toBeGreaterThan(prev);
       prev = p.currentTime;
@@ -1047,6 +1048,7 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
   it("pause(true) mid-interpolation: synthetic emits stop immediately", async () => {
     fireProperty("pause", false);
     fireProperty("time-pos", 1);
+    fireProperty("time-pos", 1.2); // 2nd tick confirms playback (settles pending spinner)
     await vi.advanceTimersByTimeAsync(300);
     // Real push emit + at least one interpolated emit while playing.
     expect(timeupdates.length).toBeGreaterThanOrEqual(2);
@@ -1090,6 +1092,7 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
   it("watchdog backfill during the gap resyncs the interpolation base (truth wins)", async () => {
     fireProperty("pause", false);
     fireProperty("time-pos", 0.2);
+    fireProperty("time-pos", 0.4); // 2nd tick confirms playback (settles pending spinner)
     timeupdates.length = 0;
     tauriMocks.invoke.mockImplementation((command: string) =>
       command === "mpv_get_property"

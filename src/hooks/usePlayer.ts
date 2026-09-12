@@ -289,7 +289,6 @@ export const usePlayer = (accessToken: string | null) => {
         setCurrentTrack({ ...targetTrack, streamUrl });
         triggerReload();
         setIsPlaying(true);
-        setIsDownloading(false);
 
         recordPlay(targetTrack).catch((e: unknown) => {
           void logUsePlayer("warn", `recordPlay-fail: ${errMsg(e)}`);
@@ -321,6 +320,11 @@ export const usePlayer = (accessToken: string | null) => {
           if (metadataSettled || signal.aborted) return;
           metadataSettled = true;
           cleanupMetadataDefer();
+          // Why: first-audio (or the fallback timer) is the "playback
+          // confirmed" exit — the optimistic loading state ends HERE, not at
+          // URL-set time, so the spinner/disabled play button actually cover
+          // the window where the new track has produced no audio yet.
+          setIsDownloading(false);
           void (async () => {
             try {
               const metadata = await getTrackMetadata(
@@ -349,6 +353,9 @@ export const usePlayer = (accessToken: string | null) => {
           if (metadataSettled) return;
           metadataSettled = true;
           cleanupMetadataDefer();
+          // Error/abort/track-change exit: the optimistic loading state must
+          // not outlive the play attempt it belonged to.
+          setIsDownloading(false);
         }
         unsubFirstAudio = metadataAudio.on("first-audio", fireMetadataDefer);
         // Why: a failed playback must not fetch display-only metadata for a
@@ -419,10 +426,7 @@ export const usePlayer = (accessToken: string | null) => {
             "An exception occurred! Open Developer Tools (Ctrl+Shift+I) for details.",
           ),
         );
-      } finally {
-        if (!signal.aborted) {
-          setIsDownloading(false);
-        }
+        setIsDownloading(false);
       }
     },
     [

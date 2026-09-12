@@ -5,6 +5,7 @@ import type { AudioController } from "../../lib/AudioController";
 import type { Track } from "../../types";
 import { SeekClock } from "./SeekClock";
 import { SeekRail } from "./SeekRail";
+import { clamp } from "./seekMath";
 import { useSeekDrag } from "./useSeekDrag";
 import { useSeekHover } from "./useSeekHover";
 import { useSeekKeyboard } from "./useSeekKeyboard";
@@ -99,6 +100,25 @@ export function SeekBar({
   // below stays live to keep the buffer bar populated while inactive.
   useEffect(() => {
     if (!active) return;
+
+    // One-shot resync when this effect (re)subscribes: on mount and when the
+    // NowPlaying view opens (active false->true). The inactive instance
+    // ignores every timeupdate by design, so opening the view while PAUSED
+    // would show 0:00 / 0% forever — no further event arrives to repaint.
+    // Read the engine truth once; duration 0 means no track/metadata yet, so
+    // leave the restore path (below) untouched.
+    const engineDuration = audio.getDuration();
+    if (engineDuration > 0 && engineDuration !== durationRef.current) {
+      durationRef.current = engineDuration;
+      setDuration(engineDuration);
+    }
+    if (engineDuration > 0 && !isDraggingRef.current) {
+      const engineTime = audio.getCurrentTime();
+      if (currentTimeTextRef.current)
+        currentTimeTextRef.current.textContent = formatTime(engineTime);
+      playheadRef.current = engineTime;
+      setFillWidth(clamp((engineTime / engineDuration) * 100, 0, 100));
+    }
 
     const unsubTime = audio.on("timeupdate", ({ currentTime, duration }) => {
       setDuration(duration);
@@ -201,12 +221,15 @@ export function SeekBar({
         setFillWidth(0);
       }
     }
-    // ``duration`` is intentionally not a dependency: the effect only runs
-    // when the TRACK changes, and reads the latest duration closure value
-    // for tracks without a restoreDuration. Adding duration would reset the
-    // time display back to restoreTime on every timeupdate.
+    // The effect depends on the TRACK ID, not the track object reference:
+    // usePlayer.ts defers metadata (e.g. restoreDuration) via setCurrentTrack,
+    // producing a new object with the SAME id. Depending on the raw reference
+    // re-ran this effect on every such update, resetting the fill to 0% while
+    // playing/paused (no timeupdate arrives to repaint it). ``duration`` is
+    // also intentionally not a dependency — the effect reads the latest
+    // duration closure value for tracks without a restoreDuration.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTrack]);
+  }, [currentTrack?.id]);
 
   const {
     isHovering,

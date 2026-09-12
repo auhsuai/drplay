@@ -89,8 +89,9 @@ export function freshThrottleClocks(): {
  *   re-emit, pending would force a duplicate true when promoted).
  * - settle(): playback confirmed — the 2nd time-pos tick within
  *   TICK_WINDOW_MS (mpv stalls keep time-pos frozen, so a changed tick
- *   means real progress) or the pause=false event. pending -> idle is
- *   SILENT (never showed, no emit — anti-flash); shown emits false once.
+ *   means real progress) or the pause=false event while shown. pending ->
+ *   idle is SILENT (never showed, no emit — anti-flash); shown emits false
+ *   once.
  * - reportMpvBuffering(): mpv's genuine paused-for-cache signal. true
  *   sustained for SPINNER_DELAY_MS promotes pending/idle to shown
  *   immediately (skips the remaining display delay); while shown it
@@ -165,7 +166,14 @@ export class BufferingTracker {
   }
 
   onPlayEvent(): void {
-    if (this.state !== "idle") this.settle();
+    // Only a SHOWN spinner settles on pause=false. That event also follows a
+    // track switch made while paused (beginTrack clears mpv's process-global
+    // pause flag), i.e. before any audio of the new track flowed — settling
+    // `pending` there killed the spinner window silently (switch while
+    // paused never showed loading). Pending still resolves via the 250ms
+    // promote, the 2-tick truth-settle, reportMpvBuffering(false), or the
+    // 8s safety net.
+    if (this.state === "shown") this.settle();
   }
 
   /** True while the spinner is visible — the engine clock must freeze then. */
