@@ -266,13 +266,6 @@ export const usePlayer = (accessToken: string | null) => {
       // `cache: 'no-store'`, so a page-side Range warm-up never lands in the
       // Chromium HTTP cache (and re-enabling that cache is not safe — see the
       // sw.js comment on Chromium bug #1026867 / PIPELINE_ERROR_READ).
-      // Slice 2 instead asks the SW to warm its own IDB byte-cache for the
-      // NEXT track in queue (the current one streams through the SW anyway
-      // and write-through caches it as it plays).
-      const nextTrack = playbackQueue.find(
-        (t) => t.id !== targetTrack.id && t.id,
-      );
-      if (nextTrack) prefetchTrackInServiceWorker(nextTrack.id);
 
       const prefetchedUrl = getPrefetchedStreamUrl(targetTrack.id);
 
@@ -369,6 +362,54 @@ export const usePlayer = (accessToken: string | null) => {
           fireMetadataDefer,
           METADATA_DEFER_FALLBACK_MS,
         );
+
+        // Why: the SW next-track prefetch is a full-file background download
+        // that raced loadfile + metadata for Drive quota inside the critical
+        // first-byte window (empty mpv cache), so it waits for first-audio —
+        // the same signal as the metadata defer above. "Low-priority" here
+        // means timing-deferral past the critical window, not a QoS bit.
+        // Why no timeout fallback (unlike metadata): nothing displayed or
+        // played depends on the prefetch, so firing late into a dead/stuck
+        // session only wastes quota — drop-until-signal is correct and a
+        // stuck track simply never prefetches. The next track is resolved
+        // fresh at fire time because the queue may change while waiting.
+        // An already-fired prefetch is intentionally left running on track
+        // change — there is no cancel protocol down to the SW.
+        let prefetchSettled = false;
+        let unsubPrefetchFirstAudio: (() => void) | undefined;
+        let unsubPrefetchError: (() => void) | undefined;
+        const cleanupPrefetchDefer = (): void => {
+          unsubPrefetchFirstAudio?.();
+          unsubPrefetchFirstAudio = undefined;
+          unsubPrefetchError?.();
+          unsubPrefetchError = undefined;
+          signal.removeEventListener("abort", dropPrefetchDefer);
+        };
+        const firePrefetchDefer = (): void => {
+          if (prefetchSettled || signal.aborted) return;
+          prefetchSettled = true;
+          cleanupPrefetchDefer();
+          const freshNext = usePlayerStore
+            .getState()
+            .playbackQueue.find((t) => t.id !== targetTrack.id && t.id);
+          if (freshNext) prefetchTrackInServiceWorker(freshNext.id);
+        };
+        function dropPrefetchDefer(): void {
+          if (prefetchSettled) return;
+          prefetchSettled = true;
+          cleanupPrefetchDefer();
+        }
+        unsubPrefetchFirstAudio = metadataAudio.on(
+          "first-audio",
+          firePrefetchDefer,
+        );
+        // Why: a failed playback must not prefetch for a dead track — the
+        // next track's own play handles its own prefetch.
+        unsubPrefetchError = metadataAudio.on("error", dropPrefetchDefer);
+        // Why: track change (createAbortSignal aborts the previous signal)
+        // and unmount (cleanup effect aborts) both land here — the stale
+        // track never prefetches and its listeners are freed.
+        signal.addEventListener("abort", dropPrefetchDefer, { once: true });
       } catch (e: unknown) {
         if (isAbortError(e)) return;
         void logUsePlayer("error", `network-playback-error: ${errMsg(e)}`);
@@ -391,7 +432,6 @@ export const usePlayer = (accessToken: string | null) => {
       setIsPlaying,
       setIsDownloading,
       setCurrentTrack,
-      playbackQueue,
       t,
     ],
   );
