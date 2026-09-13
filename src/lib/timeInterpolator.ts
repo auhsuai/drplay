@@ -20,6 +20,15 @@ export class TimeInterpolator {
   private baseTime: number | null = null;
   /** Date.now() of the last real push. */
   private baseAt = 0;
+  /**
+   * Why: a repeated-or-lower truth (watchdog poll backfilling a frozen
+   * head-of-file position) proves the playhead is NOT advancing. Extrapolating
+   * over it emits a forward run that the next frozen poll snaps back — the
+   * 1-2-1-2 clock/fill oscillation before audio actually flows. While stalled
+   * the tick stays silent at the truth; a truth that is actually higher clears
+   * it (mpv#13695 push-gap case is untouched: no frozen truth arrives there).
+   */
+  private stalled = false;
   private readonly isPlaying: () => boolean;
   private readonly isBuffering: () => boolean;
   private readonly emit: (time: number) => void;
@@ -36,6 +45,8 @@ export class TimeInterpolator {
 
   /** A real push arrived (push, watchdog backfill, seek report): resync base only. */
   noteRealTime(time: number): void {
+    // `<=` (not `<`): an identical value is a frozen poll, not progress.
+    this.stalled = this.baseTime !== null && time <= this.baseTime;
     this.baseTime = time;
     this.baseAt = Date.now();
   }
@@ -45,8 +56,9 @@ export class TimeInterpolator {
     this.stop();
     // Dropping the base matters as much as stopping: elapsed time during a
     // pause, or a finished track's position, must never drift into the next
-    // interpolation run.
+    // interpolation run. The stall flag dies with the base it described.
     this.baseTime = null;
+    this.stalled = false;
   }
 
   /** Arm the tick interval while playing; silent until the first real push. */
@@ -69,6 +81,10 @@ export class TimeInterpolator {
       return;
     }
     if (this.baseTime === null) return; // fresh track, no truth yet
+    // Why: truth repeated its previous value — the playhead is frozen (no
+    // audio flowing yet). Hold at the truth instead of extrapolating: each
+    // frozen poll would otherwise snap the forward run back (1-2-1-2).
+    if (this.stalled) return;
     // Why: mpv paused-for-cache keeps isPlaying true while no audio flows —
     // without this gate the clock/fill would run during the spinner. Re-anchor
     // instead of just skipping so the stall wall-time never pays out as a

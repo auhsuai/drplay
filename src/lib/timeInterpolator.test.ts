@@ -148,4 +148,66 @@ describe("TimeInterpolator (engine clock, push-gap backfill)", () => {
       expect(t - 112).toBeLessThan(1);
     }
   });
+
+  it("frozen truth (watchdog poll repeats the value): clock parks at the truth, no extrapolation", async () => {
+    interp.noteRealTime(5);
+    interp.start();
+    await vi.advanceTimersByTimeAsync(INTERPOLATOR_TICK_MS * 2);
+    expect(emitted.length).toBeGreaterThan(0); // forward run before the poll
+
+    emitted = [];
+    interp.noteRealTime(5); // frozen poll: identical value — not progress
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(emitted).toEqual([]);
+  });
+
+  it("truth lower than the base: also treated as frozen (no forward run to snap back)", async () => {
+    interp.noteRealTime(5.6);
+    interp.start();
+    await vi.advanceTimersByTimeAsync(INTERPOLATOR_TICK_MS);
+    emitted = [];
+
+    interp.noteRealTime(5.5); // poll backfilled an older position
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(emitted).toEqual([]);
+  });
+
+  it("truth advancing again after a frozen report: extrapolation resumes from the new base", async () => {
+    interp.noteRealTime(5);
+    interp.start();
+    interp.noteRealTime(5); // frozen — paused base, nothing emitted yet
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(emitted).toEqual([]);
+
+    interp.noteRealTime(6); // playback actually moving again
+    emitted = [];
+    await vi.advanceTimersByTimeAsync(INTERPOLATOR_TICK_MS * 2);
+
+    expect(emitted.length).toBeGreaterThan(0);
+    for (const t of emitted) {
+      expect(t).toBeGreaterThan(6);
+      expect(t - 6).toBeLessThan(1);
+    }
+  });
+
+  it("reset() clears the stall: a re-armed run extrapolates from the next truth", async () => {
+    interp.noteRealTime(5);
+    interp.start();
+    interp.noteRealTime(5); // stalled
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(emitted).toEqual([]);
+
+    interp.reset(); // pause / seek / track change
+    interp.noteRealTime(5); // same value is a fresh base after the reset
+    interp.start();
+    await vi.advanceTimersByTimeAsync(INTERPOLATOR_TICK_MS * 2);
+
+    expect(emitted.length).toBeGreaterThan(0);
+    for (const t of emitted) {
+      expect(t).toBeGreaterThan(5);
+      expect(t - 5).toBeLessThan(1);
+    }
+  });
 });
