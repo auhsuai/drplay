@@ -671,21 +671,21 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     fireProperty("time-pos", 1);
   }
 
-  it("new playTrack: NO immediate emit — true only after the 250ms display delay", async () => {
+  it("new playTrack: immediate promote (S2) — true right away, no spinner gap before first-audio", async () => {
     await ctrl.playTrack(trackA);
-    expect(buffering).toEqual([]);
+    expect(buffering).toEqual([{ isBuffering: true }]);
 
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(250); // no duplicate from a display-delay timer
     expect(buffering).toEqual([{ isBuffering: true }]);
   });
 
-  it("load settled inside the delay window never emits true (in-buffer anti-flash)", async () => {
+  it("load settled right after playTrack: immediate true then tick-settle — false exactly once", async () => {
     await ctrl.playTrack(trackA);
     settleViaTicks();
-    expect(buffering).toEqual([]);
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
 
     vi.advanceTimersByTime(8000);
-    expect(buffering).toEqual([]);
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
   });
 
   it("shown spinner settles on the 2nd time-pos tick within 1s — false exactly once", async () => {
@@ -747,13 +747,13 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     expect(buffering).toEqual([]);
   });
 
-  it("playTrack with startTime: file-loaded no longer force-clears; ticks settle after delay", async () => {
+  it("playTrack with startTime: spinner already shown (v3); the deferred seek keeps it and ticks settle", async () => {
     await ctrl.playTrack(trackB, 120);
-    expect(buffering).toEqual([]); // pending — no immediate emit
+    expect(buffering).toEqual([{ isBuffering: true }]); // v3: immediate promote
 
     fireMpvEvent("file-loaded");
     expect(mpvCommands()).toContainEqual(["seek", "120", "absolute"]);
-    expect(buffering).toEqual([]); // spinner survives the deferred seek
+    expect(buffering).toEqual([{ isBuffering: true }]); // shown dedupe on the deferred seek
 
     vi.advanceTimersByTime(250);
     expect(buffering).toEqual([{ isBuffering: true }]);
@@ -775,13 +775,13 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     expect(buffering).toEqual([]);
   });
 
-  it("paused-for-cache=true sustained >250ms shows without waiting for more ticks", async () => {
-    await ctrl.playTrack(trackA); // pending
+  it("paused-for-cache=true while already shown (v3 immediate promote) re-arms without a duplicate", async () => {
+    await ctrl.playTrack(trackA); // v3: already shown at playTrack
     fireProperty("paused-for-cache", true); // genuine stall report
-    expect(buffering).toEqual([]); // not before the sustain window
+    expect(buffering).toEqual([{ isBuffering: true }]);
 
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([{ isBuffering: true }]); // no duplicate true
   });
 
   it("paused-for-cache=true while shown extends the net instead of duplicating", async () => {
@@ -836,26 +836,26 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
   });
 
-  it("timers are cleaned up: request re-arms (no stacking), settle drains, release cancels", async () => {
+  it("timers are cleaned up: seek arms display+deadline+failsafe, settle drains, release cancels", async () => {
     await ctrl.playTrack(trackA);
     settleViaTicks();
     expect(vi.getTimerCount()).toBe(0); // settle drained everything
 
     ctrl.seek(10);
-    expect(vi.getTimerCount()).toBe(2); // display + deadline
+    expect(vi.getTimerCount()).toBe(3); // display + deadline + seek failsafe
     ctrl.seek(20); // re-request — must not stack
-    expect(vi.getTimerCount()).toBe(2);
-    fireProperty("time-pos", 20);
-    fireProperty("time-pos", 20.5);
-    expect(vi.getTimerCount()).toBe(0); // settled
-    expect(buffering).toEqual([]); // never shown
+    expect(vi.getTimerCount()).toBe(3);
+    fireProperty("time-pos", 20); // acks seek(20) + tick 1
+    fireProperty("time-pos", 20.5); // tick 2 — settles
+    expect(vi.getTimerCount()).toBe(0); // settled (ack cleared the failsafe)
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]); // v3: shown at playTrack, settled by the ticks
 
     ctrl.seek(30);
-    expect(vi.getTimerCount()).toBe(2);
+    expect(vi.getTimerCount()).toBe(3);
     ctrl.release();
     expect(vi.getTimerCount()).toBe(0); // release cancelled silently
     vi.advanceTimersByTime(9000);
-    expect(buffering).toEqual([]);
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
   });
 });
 

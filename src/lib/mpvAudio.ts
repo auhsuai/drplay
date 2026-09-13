@@ -16,6 +16,8 @@ import {
   MPV_PROPERTY_ARGS,
   MPV_PROPERTIES,
   PROXY_ORIGIN,
+  SEEK_ACK_TIMEOUT_MS,
+  SEEK_ACK_TOLERANCE_SECS,
   STREAM_PATH,
   TAURI_COMMANDS,
   TAURI_EVENTS,
@@ -51,6 +53,11 @@ export class MpvAudioController {
   private duration = 0;
   private cacheRanges: MpvRange[] = [];
   private pendingSeek: number | null = null;
+  // Why (S1): mpv's time-pos push chain + watchdog polls can still carry
+  // pre-seek values in flight. Until a report lands within tolerance of the
+  // requested target, every time-pos is either stale or unacknowledged.
+  private seekTarget: number | null = null;
+  private seekFailsafe: ReturnType<typeof setTimeout> | null = null;
   private volume = 1;
   private muted = false;
   private throttle = freshThrottleClocks();
@@ -84,10 +91,18 @@ export class MpvAudioController {
 
   private readonly events: MpvEventCallbacks = {
     onTimeUpdate: (time) => {
+      if (this.seekTarget !== null) {
+        // Seek ack (S1): drop every report that is not close to the target —
+        // queued pre-seek pushes and in-flight watchdog polls both land here,
+        // so this single filter protects the clock, the interpolator base,
+        // first-audio and the spinner tick from stale regressions.
+        if (Math.abs(time - this.seekTarget) > SEEK_ACK_TOLERANCE_SECS) return;
+        this.clearSeekAck();
+      }
       this.currentTime = time;
       this.interpolator.noteRealTime(time);
       this.watchdog.noteEmit();
-      this.buffering.onTimeTick();
+      this.buffering.onTimeTick(time);
       // Why: only the REAL mpv push path proves audio bytes flow — the
       // interpolator calls emitTimeupdate directly and never lands here.
       if (!this.firstAudioEmitted) {
@@ -110,7 +125,9 @@ export class MpvAudioController {
         this.emit("pause", undefined);
         usePlayerStore.getState().setIsPlaying(false);
       } else {
-        this.buffering.onPlayEvent();
+        // v3: pause=false no longer settles the spinner (S3/S4) — it also
+        // follows a switch-while-paused clearing mpv's global flag, proving
+        // nothing about audio flow. Truth settles via ticks/end-file/mpv.
         this.emit("play", undefined);
         usePlayerStore.getState().setIsPlaying(true);
         this.watchdog.start();
@@ -130,6 +147,10 @@ export class MpvAudioController {
     onEndFile: (outcome) => {
       this.playbackFinished = true;
       this.interpolator.reset();
+      // Why (S4): the track is terminal — no more ticks can confirm progress,
+      // so the spinner must not ride the 8s safety net (eof and error alike).
+      this.buffering.settle();
+      this.watchdog.stop();
       if (outcome === "eof") {
         this.emit("ended", undefined);
         return;
@@ -307,6 +328,8 @@ export class MpvAudioController {
     this.duration = 0;
     this.cacheRanges = [];
     this.pendingSeek = startTime ?? null;
+    // Why: a new track invalidates any seek filter from the previous one.
+    this.clearSeekAck();
     this.throttle = freshThrottleClocks();
     // Why: a new track has produced no audio yet — re-arm first-audio.
     this.firstAudioEmitted = false;
@@ -330,6 +353,9 @@ export class MpvAudioController {
 
   private playbackFailure(where: string, e: unknown): void {
     this.logError(`${where}: ${describeError(e)}`);
+    // Why (S4): a failed command means no ticks will ever confirm progress —
+    // never leave the spinner hanging on a dead path.
+    this.buffering.settle();
     this.emit("error", {
       message: "Không phát được bài hát này, hãy thử lại.",
       code: "network_interrupted",
@@ -364,7 +390,10 @@ export class MpvAudioController {
       ]);
       if (this.isStale(epoch)) return;
       this.beginTrack(track, startTime);
-      this.buffering.request();
+      // v3 (S2): a new track promotes the spinner immediately — waiting for
+      // the 250ms display delay left a no-source gap between first-audio and
+      // the promote (the button flashed the Pause icon mid-load).
+      this.buffering.request(true);
     } catch (e: unknown) {
       // Why: a command failing because release() tore the engine down is not
       // a playback failure — release paths are deliberately silent.
@@ -405,14 +434,7 @@ export class MpvAudioController {
       this.logWarn(`seek dropped: no track loaded, requested=${String(time)}s`);
       return;
     }
-    this.buffering.request();
-    void this.sendCommand([
-      MPV_COMMANDS.seek,
-      String(time),
-      MPV_COMMANDS.absolute,
-    ]).catch((e: unknown) => {
-      this.logWarn(`seek-failed: ${describeError(e)}`);
-    });
+    this.sendSeek(time);
   }
 
   public setVolume(vol: number): void {
@@ -466,6 +488,7 @@ export class MpvAudioController {
     this.duration = 0;
     this.cacheRanges = [];
     this.pendingSeek = null;
+    this.clearSeekAck();
     // Why: torn-down engine owns no track — stale flag must not suppress
     // the next track's first-audio after re-spawn.
     this.firstAudioEmitted = false;
@@ -478,16 +501,53 @@ export class MpvAudioController {
     });
   }
 
-  private applyPendingSeek(): void {
-    if (this.pendingSeek === null) return;
-    const target = this.pendingSeek;
-    this.pendingSeek = null;
+  /**
+   * S1 seek-ack: snap the clock to the target, filter stale pre-seek reports
+   * until mpv confirms, and re-arm the spinner (display-delay anti-flash).
+   */
+  private sendSeek(target: number): void {
+    this.clearSeekAck();
+    this.seekTarget = target;
+    this.currentTime = target;
+    // Snap the UI immediately: `last === 0` is the throttle's force-emit
+    // sentinel, so the clock never sits on the old position after a drag.
+    this.throttle.lastTimeUpdate.last = 0;
+    this.emitTimeupdate(target);
+    // Why: reset() drops the pre-seek interpolation base (E1); start() keeps
+    // the synthetic clock alive afterwards, silent until the ack resyncs it
+    // (same reset+start pattern as beginTrack).
+    this.interpolator.reset();
+    this.interpolator.start();
+    this.seekFailsafe = setTimeout(() => {
+      this.seekFailsafe = null;
+      this.seekTarget = null;
+    }, SEEK_ACK_TIMEOUT_MS);
+    this.buffering.request();
     void this.sendCommand([
       MPV_COMMANDS.seek,
       String(target),
       MPV_COMMANDS.absolute,
     ]).catch((e: unknown) => {
-      this.logWarn(`pending-seek-failed: ${describeError(e)}`);
+      // A failed seek cannot ack: unfilter at once instead of waiting out the
+      // failsafe timer.
+      this.clearSeekAck();
+      this.logWarn(`seek-failed: ${describeError(e)}`);
     });
+  }
+
+  /** Drops the seek-ack filter + its failsafe (ack, new track, release). */
+  private clearSeekAck(): void {
+    this.seekTarget = null;
+    if (this.seekFailsafe !== null) {
+      clearTimeout(this.seekFailsafe);
+      this.seekFailsafe = null;
+    }
+  }
+
+  private applyPendingSeek(): void {
+    if (this.pendingSeek === null) return;
+    const target = this.pendingSeek;
+    this.pendingSeek = null;
+    this.sendSeek(target);
   }
 }

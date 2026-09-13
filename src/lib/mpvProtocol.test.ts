@@ -260,19 +260,38 @@ describe("time-pos nil-drop warn (push path, rate-limited 1/30s)", () => {
   });
 });
 
-describe("BufferingTracker v2 settle rules unchanged (spinner contract guard)", () => {
-  it("two ticks within 1s settle; the watchdog reuses onTimeTick without altering the rule", () => {
+describe("BufferingTracker v3 settle rules (spinner contract guard)", () => {
+  it("request(true) promotes at once; two CHANGED ticks within 1s settle; the watchdog reuses onTimeTick without altering the rule", () => {
     vi.useFakeTimers();
     try {
       const emitted: boolean[] = [];
       const tracker = new BufferingTracker((b) => emitted.push(b));
-      tracker.request();
-      vi.advanceTimersByTime(250);
+      tracker.request(true); // playTrack path: immediate promote (S2)
       expect(emitted).toEqual([true]);
 
-      tracker.onTimeTick();
+      tracker.onTimeTick(1);
+      tracker.onTimeTick(1); // same value — not progress (S4)
       vi.advanceTimersByTime(100);
-      tracker.onTimeTick();
+      tracker.onTimeTick(2); // 2nd CHANGED value within 1s
+      expect(emitted).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("request() default keeps the 250ms display delay (seek anti-flash) and settles on two changed ticks", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(); // seek path
+      vi.advanceTimersByTime(249);
+      expect(emitted).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(emitted).toEqual([true]);
+
+      tracker.onTimeTick(10);
+      tracker.onTimeTick(10.5);
       expect(emitted).toEqual([true, false]);
     } finally {
       vi.useRealTimers();

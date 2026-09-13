@@ -66,6 +66,13 @@ export const SPINNER_DELAY_MS = 250;
 export const BUFFERING_TIMEOUT_MS = 8000;
 /** Two time-pos ticks within this window = playback truly progressing. */
 export const TICK_WINDOW_MS = 1000;
+/** Seek ack (S1): a reported time-pos within this many seconds of the seek
+ *  target counts as mpv acknowledging the seek — anything farther is a stale
+ *  pre-seek value and must be dropped. */
+export const SEEK_ACK_TOLERANCE_SECS = 1;
+/** Seek ack failsafe (S1): stop filtering stale time-pos this long after a
+ *  seek so a lost/failed seek command can never freeze the clock forever. */
+export const SEEK_ACK_TIMEOUT_MS = 4000;
 /** Watchdog poll backfill (mpv #13695): poll cadence + push-staleness threshold. */
 export const WATCHDOG_INTERVAL_MS = 1000;
 export const WATCHDOG_STALE_MS = 1200;
@@ -81,17 +88,22 @@ export function freshThrottleClocks(): {
 }
 
 /**
- * Display-delay buffering tracker (Spotify/YT-Music spinner pattern).
+ * Display-delay buffering tracker (Spotify/YT-Music spinner pattern) — v3.
  * Three states: idle -> pending (request armed, SPINNER_DELAY_MS timer
  * running) -> shown (spinner visible).
- * - request(): an optimistic operation started (new playTrack / seek).
- *   From shown it keeps the spinner on and re-arms the net (dedupe: no
- *   re-emit, pending would force a duplicate true when promoted).
- * - settle(): playback confirmed — the 2nd time-pos tick within
- *   TICK_WINDOW_MS (mpv stalls keep time-pos frozen, so a changed tick
- *   means real progress) or the pause=false event while shown. pending ->
- *   idle is SILENT (never showed, no emit — anti-flash); shown emits false
- *   once.
+ * - request(true): a new track load (playTrack) — idle/pending promote
+ *   IMMEDIATELY (emit true + arm the deadline) so the spinner covers the
+ *   pre-audio window from the first frame. From shown it re-arms the net
+ *   (dedupe: no re-emit).
+ * - request(): seek — keeps the 250ms display delay (anti-flash when the
+ *   seek target is already cached).
+ * - settle(): playback confirmed — the 2nd time-pos tick with a CHANGED
+ *   value within TICK_WINDOW_MS (a frozen value is not progress, mpv stalls
+ *   keep time-pos pinned) or reportMpvBuffering(false) while shown.
+ *   pause=false never settles: it follows a track switch made while paused
+ *   (beginTrack clears mpv's process-global pause flag), proving nothing
+ *   about audio flow (S3/S4). pending -> idle is SILENT (never showed, no
+ *   emit — anti-flash); shown emits false once.
  * - reportMpvBuffering(): mpv's genuine paused-for-cache signal. true
  *   sustained for SPINNER_DELAY_MS promotes pending/idle to shown
  *   immediately (skips the remaining display delay); while shown it
@@ -109,17 +121,23 @@ export class BufferingTracker {
   private sustainTimer: ReturnType<typeof setTimeout> | null = null;
   private deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   private lastTickAt: number | null = null;
+  private lastTickValue: number | null = null;
   private readonly emit: (isBuffering: boolean) => void;
 
   constructor(emit: (isBuffering: boolean) => void) {
     this.emit = emit;
   }
 
-  request(): void {
+  request(immediate = false): void {
     this.clearTimers();
     this.lastTickAt = null;
+    this.lastTickValue = null;
     if (this.state === "shown") {
       this.rearmDeadline();
+      return;
+    }
+    if (immediate) {
+      this.promote();
       return;
     }
     this.state = "pending";
@@ -133,6 +151,7 @@ export class BufferingTracker {
   settle(): void {
     this.clearTimers();
     this.lastTickAt = null;
+    this.lastTickValue = null;
     if (this.state === "shown") this.emit(false);
     this.state = "idle";
   }
@@ -155,25 +174,19 @@ export class BufferingTracker {
     if (this.state === "shown") this.settle();
   }
 
-  onTimeTick(): void {
+  onTimeTick(value: number): void {
     if (this.state === "idle") return;
+    // Why (S4): a frozen time-pos re-pushed (or re-sampled by the watchdog)
+    // without change is NOT progress — only a CHANGED value can pair into
+    // the 2-tick settle.
+    if (this.lastTickValue !== null && value === this.lastTickValue) return;
     const now = Date.now();
     if (this.lastTickAt !== null && now - this.lastTickAt <= TICK_WINDOW_MS) {
       this.settle();
       return;
     }
     this.lastTickAt = now;
-  }
-
-  onPlayEvent(): void {
-    // Only a SHOWN spinner settles on pause=false. That event also follows a
-    // track switch made while paused (beginTrack clears mpv's process-global
-    // pause flag), i.e. before any audio of the new track flowed — settling
-    // `pending` there killed the spinner window silently (switch while
-    // paused never showed loading). Pending still resolves via the 250ms
-    // promote, the 2-tick truth-settle, reportMpvBuffering(false), or the
-    // 8s safety net.
-    if (this.state === "shown") this.settle();
+    this.lastTickValue = value;
   }
 
   /** True while the spinner is visible — the engine clock must freeze then. */
@@ -184,6 +197,7 @@ export class BufferingTracker {
   cancel(): void {
     this.clearTimers();
     this.lastTickAt = null;
+    this.lastTickValue = null;
     this.state = "idle";
   }
 

@@ -1,12 +1,9 @@
 /**
- * INVESTIGATION-ONLY tests for Bug B ("chuyển bài chưa có nhạc mà chưa
- * trigger spinner loading"). Engine-level: proves the optimistic spinner
- * request armed by `playTrack` is silently cancelled by the mpv `pause=false`
- * confirmation that always follows a track switch made while paused.
- *
- * B1 is the control (switch while PLAYING: spinner promotes normally).
- * B2 is RED today (switch while PAUSED: no spinner at all while the new
- * track has no audio, even though the app already reports isPlaying=true).
+ * REGRESSION tests for Bug B ("chuyển bài chưa có nhạc mà chưa trigger
+ * spinner loading"). Engine-level, updated to contract v3: `playTrack` calls
+ * `buffering.request(true)` (immediate promote) and `pause=false` never
+ * settles the tracker, so a track switch — playing or paused — always keeps a
+ * spinner source on while the new track has no audio.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
@@ -117,17 +114,25 @@ describe("Bug B investigation — spinner gone on track switch", () => {
     vi.restoreAllMocks();
   });
 
-  it("B1 (control): switching tracks while PLAYING promotes the spinner after the display delay", async () => {
+  it("B1 (control): switching tracks while PLAYING — A's promoted spinner stays on through the switch (shown dedupe, no drop)", async () => {
     await ctrl.playTrack(trackA);
+    expect(buffering).toEqual([{ isBuffering: true }]); // v3: immediate promote
     buffering.length = 0;
 
     await ctrl.playTrack(trackB);
     vi.advanceTimersByTime(SPINNER_DELAY_MS);
 
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    // Shown -> shown dedupe: no duplicate true and — crucially — no false
+    // while B has not produced audio yet.
+    expect(buffering).toEqual([]);
+
+    // Tracker is alive: B's progressing ticks settle it exactly once.
+    fireProperty("time-pos", 1);
+    fireProperty("time-pos", 2);
+    expect(buffering).toEqual([{ isBuffering: false }]);
   });
 
-  it("B2 (RED today): switching tracks while PAUSED — mpv's async pause=false silently cancels the pending spinner, no buffering=true while the new track has no audio", async () => {
+  it("B2 (fixed): switching tracks while PAUSED — the spinner stays on for B; mpv's async pause=false no longer cancels it", async () => {
     await ctrl.playTrack(trackA);
 
     // User pauses track A: PlayerBar effect -> audio.pause(); mpv confirms.
@@ -138,8 +143,8 @@ describe("Bug B investigation — spinner gone on track switch", () => {
     tauriMocks.invoke.mockClear();
 
     // User clicks track B while paused. beginTrack clears the process-global
-    // pause flag (mpvAudio.ts:278-289) and playTrack arms the optimistic
-    // spinner request (mpvAudio.ts:322).
+    // pause flag and playTrack re-arms the spinner request (v3: immediate
+    // promote, shown -> shown dedupe since A's spinner is still shown).
     await ctrl.playTrack(trackB);
     expect(mpvCommands()).toContainEqual([
       "loadfile",
@@ -147,21 +152,22 @@ describe("Bug B investigation — spinner gone on track switch", () => {
       "replace",
     ]);
     expect(mpvCommands()).toContainEqual(["set_property", "pause", "no"]);
-    expect(buffering).toEqual([]); // pending — the 250ms display delay is running
+    expect(buffering).toEqual([]); // no duplicate true — but never a false
 
     // mpv applies the unpause and pushes pause=false (async, well within the
-    // display delay). The app treats this as "playback confirmed" and settles
-    // the pending spinner SILENTLY — but it only proves the global pause flag
-    // was cleared, not that any audio of track B flowed.
+    // display delay). v3: this is NOT a settle signal — the button keeps the
+    // spinner for track B while no audio of B has flowed.
     fireProperty("pause", false);
     vi.advanceTimersByTime(SPINNER_DELAY_MS);
+    expect(buffering).toEqual([]); // no false, no duplicate true
 
-    // The button must still show the loading spinner for track B (isPlaying is
-    // already true). Actual on the working tree: [] — spinner never shows.
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    // Tracker is still alive: B's first progressing ticks settle it once.
+    fireProperty("time-pos", 1);
+    fireProperty("time-pos", 1.5);
+    expect(buffering).toEqual([{ isBuffering: false }]);
   });
 
-  it("B2b (variant): consecutive paused switches — every async pause=false leaves the pending spinner alive", async () => {
+  it("B2b (variant): consecutive paused switches — every async pause=false leaves the spinner alive", async () => {
     const trackC: Track = {
       id: "C",
       title: "Track C",
@@ -175,20 +181,24 @@ describe("Bug B investigation — spinner gone on track switch", () => {
     buffering.length = 0;
 
     // Switch 1 (A -> B while paused): beginTrack clears mpv's process-global
-    // pause flag, so its async pause=false confirmation arrives while the
-    // pending spinner request is still inside the 250ms display delay.
+    // pause flag; its async pause=false confirmation must not settle.
     await ctrl.playTrack(trackB);
     fireProperty("pause", false);
     expect(buffering).toEqual([]);
 
     // User pauses again before track B produced any audio, then switches to C
-    // — the same confirmation races the re-armed pending request.
+    // — the same confirmation races the re-armed shown tracker.
     ctrl.pause();
     fireProperty("pause", true);
     await ctrl.playTrack(trackC);
     fireProperty("pause", false);
     vi.advanceTimersByTime(SPINNER_DELAY_MS);
+    // v3: settle only comes from truth, so nothing is emitted at all here.
+    expect(buffering).toEqual([]);
 
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    // Alive check: C's progressing ticks settle the spinner exactly once.
+    fireProperty("time-pos", 1);
+    fireProperty("time-pos", 1.5);
+    expect(buffering).toEqual([{ isBuffering: false }]);
   });
 });
