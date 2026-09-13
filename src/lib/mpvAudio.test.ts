@@ -784,15 +784,16 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     expect(buffering).toEqual([{ isBuffering: true }]); // no duplicate true
   });
 
-  it("paused-for-cache=true while shown extends the net instead of duplicating", async () => {
+  it("paused-for-cache=true while shown re-arms the net instead of settling (v4 spin-hold)", async () => {
     await ctrl.playTrack(trackA);
     vi.advanceTimersByTime(250);
     expect(buffering).toEqual([{ isBuffering: true }]);
 
     fireProperty("paused-for-cache", true); // stall ongoing while shown
-    vi.advanceTimersByTime(7999); // original net would have fired here
+    vi.advanceTimersByTime(8000); // v4: net fires -> re-arms, spinner holds
     expect(buffering).toEqual([{ isBuffering: true }]);
-    vi.advanceTimersByTime(1);
+
+    fireProperty("paused-for-cache", false); // stall over -> the only settle
     expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
   });
 
@@ -1137,7 +1138,9 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
     await vi.advanceTimersByTimeAsync(5000); // long stall — stays frozen
     expect(timeupdates).toEqual([]);
 
-    // Truth returns: two ticks within 1s settle the spinner.
+    // mpv reports the stall over (v4 settle signal), then truth returns:
+    // report(false) settles the spinner exactly once.
+    fireProperty("paused-for-cache", false);
     fireProperty("time-pos", 112);
     await vi.advanceTimersByTimeAsync(250);
     fireProperty("time-pos", 112.5);

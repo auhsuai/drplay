@@ -110,10 +110,16 @@ export function freshThrottleClocks(): {
  *   re-arms the net. false cancels the sustain timer and settles a
  *   shown spinner (a false while pending is just mpv's observe report —
  *   ignored, otherwise it would kill the spinner before the first tick).
+ *   v4: the last reported value is cached — while mpv says the playhead is
+ *   pinned, ticks and the safety net may NOT settle (only report(false),
+ *   terminal events or release() end a genuine stall).
  * - Safety net (BUFFERING_TIMEOUT_MS from the last request/report): shown
- *   auto-settles; a stuck pending force-promotes (defensive branch).
+ *   auto-settles, EXCEPT while mpv reports paused-for-cache — then the net
+ *   re-arms (a real stall is open-ended; a long buffer must keep spinning).
+ *   A stuck pending force-promotes (defensive branch).
  * Emits ONLY on idle->shown / shown->idle transitions.
- * cancel() resets silently for release() — no emit on a torn-down engine.
+ * cancel() resets silently for release() — no emit on a torn-down engine,
+ * and the dead mpv's stall flag dies with it.
  */
 export class BufferingTracker {
   private state: "idle" | "pending" | "shown" = "idle";
@@ -122,6 +128,8 @@ export class BufferingTracker {
   private deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   private lastTickAt: number | null = null;
   private lastTickValue: number | null = null;
+  /** Last paused-for-cache value mpv reported (v4 spin-hold gate). */
+  private mpvBuffering = false;
   private readonly emit: (isBuffering: boolean) => void;
 
   constructor(emit: (isBuffering: boolean) => void) {
@@ -157,6 +165,10 @@ export class BufferingTracker {
   }
 
   reportMpvBuffering(isBuffering: boolean): void {
+    // Why (v4): cached because mpv's stall signal outranks time-pos pairing —
+    // a changed tick while paused-for-cache is not proof that audio flows, and
+    // letting it settle killed the spinner ~1s before the sound started.
+    this.mpvBuffering = isBuffering;
     if (isBuffering) {
       if (this.state === "shown") {
         this.rearmDeadline();
@@ -176,6 +188,10 @@ export class BufferingTracker {
 
   onTimeTick(value: number): void {
     if (this.state === "idle") return;
+    // Why (v4): mpv reports paused-for-cache — the playhead is pinned, so a
+    // changed time-pos cannot be confirmed progress (stale queued ticks used
+    // to settle the spinner and un-gate the clock before audio flowed).
+    if (this.mpvBuffering) return;
     // Why (S4): a frozen time-pos re-pushed (or re-sampled by the watchdog)
     // without change is NOT progress — only a CHANGED value can pair into
     // the 2-tick settle.
@@ -199,6 +215,10 @@ export class BufferingTracker {
     this.lastTickAt = null;
     this.lastTickValue = null;
     this.state = "idle";
+    // Why (v4): release() tears the mpv process down — its last
+    // paused-for-cache report is dead state and must not suppress the next
+    // engine's tick-settle.
+    this.mpvBuffering = false;
   }
 
   private promote(): void {
@@ -211,6 +231,13 @@ export class BufferingTracker {
   private deadlineFire(): void {
     this.deadlineTimer = null;
     if (this.state === "shown") {
+      // Why (v4): while mpv reports paused-for-cache the stall is real and
+      // open-ended — re-arm instead of settling; a long buffer must not drop
+      // the spinner mid-stall (report(false)/terminal/release still settle).
+      if (this.mpvBuffering) {
+        this.rearmDeadline();
+        return;
+      }
       this.settle();
       return;
     }

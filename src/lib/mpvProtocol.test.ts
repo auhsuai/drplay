@@ -6,6 +6,7 @@ vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 import { captureError } from "../utils/errorLog";
 import {
   BufferingTracker,
+  BUFFERING_TIMEOUT_MS,
   WATCHDOG_INTERVAL_MS,
   WATCHDOG_STALE_MS,
   dispatchPropertyEvent,
@@ -293,6 +294,106 @@ describe("BufferingTracker v3 settle rules (spinner contract guard)", () => {
       tracker.onTimeTick(10);
       tracker.onTimeTick(10.5);
       expect(emitted).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
+  it("a changed tick pair never settles while mpv reports paused-for-cache=true; report(false) is the settle signal", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      expect(emitted).toEqual([true]);
+
+      tracker.reportMpvBuffering(true);
+      tracker.onTimeTick(1);
+      tracker.onTimeTick(2); // changed within 1s — v3 settled here
+      expect(emitted, "tick pair settled during a real stall").toEqual([true]);
+      expect(tracker.isShown()).toBe(true);
+
+      tracker.reportMpvBuffering(false); // mpv: stall over
+      expect(emitted).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the safety net re-arms while paused-for-cache=true instead of settling a shown spinner", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      tracker.reportMpvBuffering(true);
+
+      vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS);
+      expect(emitted, "safety net settled during the stall").toEqual([true]);
+      vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS); // re-armed net fires too
+      expect(emitted).toEqual([true]);
+      expect(tracker.isShown()).toBe(true);
+
+      tracker.reportMpvBuffering(false);
+      expect(emitted).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the safety net still settles a shown spinner when mpv is NOT buffering (no regression)", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS);
+      expect(emitted).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("report(false) re-opens tick-settle for the next request", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      tracker.reportMpvBuffering(true);
+      tracker.onTimeTick(1);
+      tracker.onTimeTick(2); // blocked
+      tracker.reportMpvBuffering(false); // shown -> settle
+      expect(emitted).toEqual([true, false]);
+
+      tracker.request(true);
+      tracker.onTimeTick(3);
+      tracker.onTimeTick(3.5);
+      expect(emitted).toEqual([true, false, true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancel() drops the stall flag: a dead mpv report never blocks the next engine's ticks", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      tracker.reportMpvBuffering(true);
+
+      tracker.cancel(); // release path: silent
+      vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS + 1);
+      expect(emitted).toEqual([true]);
+      expect(tracker.isShown()).toBe(false);
+
+      tracker.request(true);
+      tracker.onTimeTick(1);
+      tracker.onTimeTick(2);
+      expect(emitted).toEqual([true, true, false]);
     } finally {
       vi.useRealTimers();
     }
