@@ -37,6 +37,11 @@ export class MpvAudioController {
     {};
   private unlistenFns: UnlistenFn[] = [];
   private started = false;
+  // Why: release() must invalidate every async continuation still in flight
+  // (listener attach / spawn / loadfile) so none resurrects engine state.
+  private lifecycleEpoch = 0;
+  /** Shared in-flight spawn attempt — concurrent playTrack calls join it. */
+  private startPromise: Promise<boolean> | null = null;
   private proxyPort: number | null = null;
   private lastTrack: Track | null = null;
   private currentTrackId: string | null = null;
@@ -218,19 +223,41 @@ export class MpvAudioController {
     }
   }
 
-  private async ensureStarted(): Promise<void> {
-    if (this.started) return;
+  private async ensureStarted(): Promise<boolean> {
+    if (this.started) return true;
+    // Why: dedupe concurrent playTrack calls — one spawn attempt wins, the
+    // rest join it instead of attaching a second listener set.
+    if (this.startPromise) return this.startPromise;
+    const attempt = this.startEngine();
+    this.startPromise = attempt;
+    try {
+      return await attempt;
+    } finally {
+      // Identity check: only this exact attempt owns the memo — a release or
+      // a newer attempt must never be clobbered here.
+      if (this.startPromise === attempt) this.startPromise = null;
+    }
+  }
+
+  /** Spawn attempt body. Returns false when release() made it stale mid-flight. */
+  private async startEngine(): Promise<boolean> {
+    const epoch = this.lifecycleEpoch;
     const attached: UnlistenFn[] = [];
     try {
       attached.push(
         await listen(TAURI_EVENTS.property, (event) => {
           dispatchPropertyEvent(event.payload, this.events);
         }),
+      );
+      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
+      attached.push(
         await listen(TAURI_EVENTS.event, (event) => {
           dispatchMpvEvent(event.payload, this.events);
         }),
       );
+      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
       await invoke(TAURI_COMMANDS.mpvSpawn);
+      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
     } catch (e: unknown) {
       this.detachListeners(attached);
       throw e;
@@ -239,6 +266,18 @@ export class MpvAudioController {
     this.started = true;
     // Fresh mpv starts at volume 100 — re-apply the stored (or muted) volume.
     this.applyVolume();
+    return true;
+  }
+
+  /** True when release() bumped the epoch past the captured one. */
+  private isStale(epoch: number): boolean {
+    return epoch !== this.lifecycleEpoch;
+  }
+
+  /** A stale start owns handles release() never saw: drop them, touch no state. */
+  private disposeStaleStart(attached: UnlistenFn[]): boolean {
+    this.detachListeners(attached);
+    return false;
   }
 
   private async ensureProxyPort(): Promise<number> {
@@ -299,6 +338,7 @@ export class MpvAudioController {
   }
 
   public async playTrack(track: Track, startTime?: number): Promise<void> {
+    const epoch = this.lifecycleEpoch;
     try {
       if (this.currentTrackId === track.id && !this.playbackFinished) {
         // Same-track replay: paused -> resume only; playing -> no-op (web parity).
@@ -311,16 +351,24 @@ export class MpvAudioController {
         }
         return;
       }
-      await this.ensureStarted();
+      if (!(await this.ensureStarted())) return;
+      // Why: release() mid-start must abort silently — no loadfile into a
+      // shutdown mpv and no state resurrection after the teardown.
+      if (this.isStale(epoch)) return;
       const port = await this.ensureProxyPort();
+      if (this.isStale(epoch)) return;
       await this.sendCommand([
         MPV_COMMANDS.loadfile,
         `${PROXY_ORIGIN}:${String(port)}${STREAM_PATH}${track.id}`,
         MPV_COMMANDS.replace,
       ]);
+      if (this.isStale(epoch)) return;
       this.beginTrack(track, startTime);
       this.buffering.request();
     } catch (e: unknown) {
+      // Why: a command failing because release() tore the engine down is not
+      // a playback failure — release paths are deliberately silent.
+      if (this.isStale(epoch)) return;
       this.playbackFailure("play-track-failed", e);
     }
   }
@@ -402,6 +450,10 @@ export class MpvAudioController {
   }
 
   public release(): void {
+    // Why: bump FIRST so every in-flight continuation (listener attach, spawn,
+    // loadfile) observes the teardown at its next await boundary and aborts.
+    this.lifecycleEpoch += 1;
+    this.startPromise = null;
     this.detachListeners(this.unlistenFns);
     this.unlistenFns = [];
     this.started = false;
