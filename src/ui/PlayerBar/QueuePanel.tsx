@@ -116,7 +116,10 @@ export function QueuePanel({
   // (display:none → offsetParent null) — only VISIBLE headers count.
   // ResizeObserver also fires its initial observation right after observe(),
   // which is how the first measurement lands (no synchronous setState in the
-  // effect body).
+  // effect body). Tab content is lazy (Suspense), so on a first visit the
+  // header mounts AFTER this effect ran; if the scope keeps its size no
+  // ResizeObserver tick follows and topOffset would stay stuck at the
+  // previous view's value — hence the MutationObserver below.
   const paneRef = useRef<HTMLElement | null>(null);
   const [topOffset, setTopOffset] = useState(0);
   useLayoutEffect(() => {
@@ -128,6 +131,10 @@ export function QueuePanel({
       const headers = scope.querySelectorAll<HTMLElement>("[data-view-header]");
       for (const header of headers) {
         if (header.offsetParent !== null) {
+          // A header that mounted after this effect ran was never observed
+          // (the loop below only saw the then-existing nodes): observing it
+          // here is idempotent, missing it would freeze its measured size.
+          observer.observe(header);
           setTopOffset(header.offsetHeight);
           return;
         }
@@ -144,8 +151,30 @@ export function QueuePanel({
     for (const header of scope.querySelectorAll("[data-view-header]")) {
       observer.observe(header);
     }
+
+    // Lazy tab content mounts its header after the effect ran; catch that
+    // insert/removal directly. Filtering to nodes that are (or carry) a
+    // [data-view-header] keeps ordinary re-renders inside the scope — the
+    // panel itself lives here — from triggering needless measurements.
+    const mutationObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
+          if (!(node instanceof Element)) continue;
+          if (
+            node.matches("[data-view-header]") ||
+            node.querySelector("[data-view-header]")
+          ) {
+            measure();
+            return;
+          }
+        }
+      }
+    });
+    mutationObserver.observe(scope, { childList: true, subtree: true });
+
     return () => {
       observer.disconnect();
+      mutationObserver.disconnect();
     };
   }, [open, activeTab]);
 

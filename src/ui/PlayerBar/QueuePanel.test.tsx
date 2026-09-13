@@ -268,6 +268,50 @@ describe("QueuePanel top offset (sticky view header)", () => {
 
     expect(screen.getByTestId("queue-panel").style.top).toBe("0px");
   });
+
+  it("header mount MUỘN (tab content lazy) → MutationObserver đo lại, top = chiều cao header", async () => {
+    const { view } = renderPanel(true);
+    // Home: chưa có header nào (tab lazy chưa mount) → top 0.
+    expect(screen.getByTestId("queue-panel").style.top).toBe("0px");
+
+    // MyDrive header mount SAU khi effect đo đã chạy; scope không đổi size
+    // nên ResizeObserver không fire — chỉ MutationObserver bắt được.
+    mountHeader(view.container, 112, true);
+    await act(async () => {});
+
+    expect(screen.getByTestId("queue-panel").style.top).toBe("112px");
+  });
+
+  it("header mount muộn vẫn được ResizeObserver observe: đổi offsetHeight + resize → top cập nhật", async () => {
+    const { view } = renderPanel(true);
+
+    const header = mountHeader(view.container, 112, true);
+    await act(async () => {});
+    expect(screen.getByTestId("queue-panel").style.top).toBe("112px");
+
+    Object.defineProperty(header, "offsetHeight", {
+      configurable: true,
+      value: 70,
+    });
+    act(() => {
+      triggerResize();
+    });
+
+    expect(screen.getByTestId("queue-panel").style.top).toBe("70px");
+  });
+
+  it("header bị remove (rời tab) → MutationObserver đo lại, top về 0px", async () => {
+    const { view } = renderPanel(true);
+
+    const header = mountHeader(view.container, 112, true);
+    await act(async () => {});
+    expect(screen.getByTestId("queue-panel").style.top).toBe("112px");
+
+    header.remove();
+    await act(async () => {});
+
+    expect(screen.getByTestId("queue-panel").style.top).toBe("0px");
+  });
 });
 
 describe("QueuePanel content", () => {
