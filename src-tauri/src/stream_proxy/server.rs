@@ -1,18 +1,28 @@
-//! Proxy engine: tiny_http accept loop + reqwest upstream fetch with manual
-//! redirect following (Authorization re-applied per hop) and a blocking
-//! reader that streams the upstream body through to the client.
+//! Proxy engine: hyper 1.x HTTP/1 server + reqwest upstream fetch with manual
+//! redirect following (Authorization re-applied per hop).
 //!
-//! Threading model: tiny_http is a blocking server, so `spawn_proxy` starts
-//! N plain worker threads that each pull requests via `Server::recv()`. The
-//! async parts (upstream fetch, token refresh) run on the shared tokio
-//! runtime through `Handle::block_on`, keeping reqwest's async client.
+//! Why hyper: a body-stream error makes hyper abort the connection (the h1
+//! dispatcher maps it to `new_user_body`; the socket is dropped with the
+//! connection future), so mpv sees a read error and reconnects. tiny_http
+//! 0.12 could not close keep-alive connections from the server side (its
+//! close decision came only from the REQUEST header) — that is why vòng-1's
+//! idle timeout alone left mpv on a silent socket (incident 2026-09-13).
+//! Each connection is its own tokio task; no worker threads to starve.
 
-use std::io::{self, Read};
-use std::sync::mpsc::{sync_channel, Receiver};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    convert::Infallible, future::Future, io, net::TcpListener, pin::Pin, sync::Arc,
+    task::{Context, Poll}, time::Duration,
+};
 
-use tokio::runtime::Handle;
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
+use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, StreamBody};
+use hyper::body::{Frame, Incoming};
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{header, Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use tokio::time::{Instant, Sleep};
 
 use super::TokenSource;
 
@@ -21,138 +31,219 @@ pub(crate) type ErrorSink = Arc<dyn Fn(String, u16) + Send + Sync>;
 
 /// Redirect hops we are willing to follow manually before giving up (502).
 const MAX_REDIRECTS: usize = 5;
-/// Dedicated accept threads; must exceed the largest expected burst of
-/// concurrent media requests so a slow client cannot starve others.
-const PROXY_WORKER_THREADS: usize = 4;
-/// Bounded channel between the async body feeder and the blocking reader:
-/// provides backpressure so a fast upstream cannot buffer unboundedly when
-/// the client (mpv) reads slowly.
-const BODY_CHANNEL_CAPACITY: usize = 8;
-/// Pause before retrying after a recv() failure, to avoid a hot error loop.
-const RECV_RETRY_DELAY: Duration = Duration::from_millis(200);
+/// Pause before retrying after an accept() failure, to avoid a hot error loop.
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(200);
+/// A poll gap this much longer than the idle deadline counts as consumer
+/// backpressure (hyper stops polling us while the client is not reading).
+const BACKPRESSURE_GRACE: Duration = Duration::from_millis(100);
+/// Upstream response headers mirrored to the client untouched. Content-Length
+/// is included on purpose: hyper then frames the response with that length,
+/// so an aborted body reaches the client as an incomplete message.
+const PASSTHROUGH_HEADERS: [header::HeaderName; 6] = [
+    header::CONTENT_TYPE, header::CONTENT_RANGE, header::ACCEPT_RANGES,
+    header::ETAG, header::LAST_MODIFIED, header::CONTENT_LENGTH,
+];
 
 struct ProxyContext {
     client: reqwest::Client,
     base_url: String,
     tokens: Arc<dyn TokenSource>,
     headers_timeout: Duration,
+    body_idle_timeout: Duration,
     sink: ErrorSink,
-    runtime: Handle,
 }
+
+/// Fixed-message or streamed upstream body. Un-sync because reqwest's byte
+/// stream is `Send` but not provably `Sync`; hyper only needs `Send`.
+type ProxyBody = UnsyncBoxBody<Bytes, io::Error>;
 
 pub(crate) fn spawn_proxy(
     sink: ErrorSink,
     drive_base_url: String,
     tokens: Arc<dyn TokenSource>,
     upstream_headers_timeout: Duration,
-    runtime: Handle,
+    upstream_body_idle_timeout: Duration,
 ) -> Result<u16, String> {
-    let http_server = tiny_http::Server::http("127.0.0.1:0")
+    // Bind synchronously so the port is live the moment spawn_proxy returns.
+    let listener = TcpListener::bind("127.0.0.1:0")
         .map_err(|e| format!("stream proxy: failed to bind 127.0.0.1:0: {e}"))?;
-    let port = http_server
-        .server_addr()
-        .to_ip()
-        .ok_or_else(|| "stream proxy: bound address has no IP".to_string())?
-        .port();
-    let http_server = Arc::new(http_server);
+    listener.set_nonblocking(true).map_err(|e| format!("stream proxy: set_nonblocking: {e}"))?;
+    let port = listener.local_addr().map_err(|e| format!("stream proxy: local_addr: {e}"))?.port();
+    let listener = tokio::net::TcpListener::from_std(listener)
+        .map_err(|e| format!("stream proxy: register with tokio: {e}"))?;
     // Redirects are followed by hand (see fetch_upstream): automatic following
     // strips the Authorization header on cross-origin hops.
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| format!("stream proxy: failed to build upstream HTTP client: {e}"))?;
+        .map_err(|e| format!("stream proxy: upstream client: {e}"))?;
     let context = Arc::new(ProxyContext {
-        client,
-        base_url: drive_base_url,
-        tokens,
-        headers_timeout: upstream_headers_timeout,
-        sink,
-        runtime,
+        client, base_url: drive_base_url, tokens, sink,
+        headers_timeout: upstream_headers_timeout, body_idle_timeout: upstream_body_idle_timeout,
     });
-    for _ in 0..PROXY_WORKER_THREADS {
-        let http_server = Arc::clone(&http_server);
-        let context = Arc::clone(&context);
-        std::thread::spawn(move || worker_loop(http_server, context));
-    }
+    // Ambient runtime: callers (the Tauri command, tests) are always inside
+    // one, and it keeps hyper's I/O driver alive for the process lifetime.
+    tokio::spawn(accept_loop(listener, context));
     log::info!("[stream-proxy] listening on 127.0.0.1:{port}");
     Ok(port)
 }
 
-fn worker_loop(http_server: Arc<tiny_http::Server>, context: Arc<ProxyContext>) {
+async fn accept_loop(listener: tokio::net::TcpListener, context: Arc<ProxyContext>) {
     loop {
-        match http_server.recv() {
-            Ok(request) => handle_request(request, &context),
-            Err(recv_error) => {
-                log::error!("[stream-proxy] failed to receive request: {recv_error}");
-                std::thread::sleep(RECV_RETRY_DELAY);
+        let stream = match listener.accept().await {
+            Ok((stream, _peer)) => stream,
+            Err(accept_error) => {
+                log::error!("[stream-proxy] failed to accept connection: {accept_error}");
+                tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
+                continue;
             }
-        }
+        };
+        let context = Arc::clone(&context);
+        tokio::spawn(async move {
+            let service = service_fn(move |request| {
+                let context = Arc::clone(&context);
+                async move { Ok::<_, Infallible>(handle_request(request, context).await) }
+            });
+            // Errors are routine: the client may hang up, or the idle abort
+            // below closes the connection on purpose.
+            if let Err(e) = http1::Builder::new().serve_connection(TokioIo::new(stream), service).await {
+                log::debug!("[stream-proxy] connection ended: {e}");
+            }
+        });
     }
 }
 
-fn handle_request(request: tiny_http::Request, context: &ProxyContext) {
-    if *request.method() != tiny_http::Method::Get {
-        let _ = request.respond(error_response(405, "only GET is supported"));
-        return;
+async fn handle_request(request: Request<Incoming>, context: Arc<ProxyContext>) -> Response<ProxyBody> {
+    if request.method() != Method::GET {
+        return message_response(StatusCode::METHOD_NOT_ALLOWED, "only GET is supported");
     }
-    let Some(path_and_query) = request.url().strip_prefix("/stream/") else {
-        let _ = request.respond(error_response(404, "unknown path; expected /stream/{fileId}"));
-        return;
+    // uri().path() already excludes the query string.
+    let Some(file_id) = request.uri().path().strip_prefix("/stream/") else {
+        return message_response(StatusCode::NOT_FOUND, "unknown path; expected /stream/{fileId}");
     };
-    let file_id = path_and_query.split('?').next().unwrap_or_default().to_string();
-    if !is_valid_file_id(&file_id) {
-        let _ = request.respond(error_response(400, "invalid file id"));
-        return;
+    if !is_valid_file_id(file_id) {
+        return message_response(StatusCode::BAD_REQUEST, "invalid file id");
     }
-    let range = request
-        .headers()
-        .iter()
-        .find(|header| header.field.as_str().as_str().eq_ignore_ascii_case("range"))
-        .map(|header| header.value.as_str().to_string());
-
-    match context.runtime.block_on(serve(context, &file_id, range)) {
-        Ok(response) => {
-            if let Err(respond_error) = request.respond(response) {
-                log::warn!("[stream-proxy] client disconnected while streaming {file_id}: {respond_error}");
-            }
-        }
+    let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).map(str::to_string);
+    match fetch_stream(&context, file_id, range).await {
+        Ok(response) => response,
         Err((status, message)) => {
             log::warn!("[stream-proxy] file {file_id}: responding {status}: {message}");
             if matches!(status, 502 | 504) {
                 (context.sink)(file_id.to_string(), status);
             }
-            let _ = request.respond(error_response(status, &message));
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+            message_response(status, &message)
         }
     }
 }
 
-async fn serve(
+async fn fetch_stream(
     context: &ProxyContext,
     file_id: &str,
     range: Option<String>,
-) -> Result<tiny_http::Response<Box<dyn Read + Send>>, (u16, String)> {
-    // Seed a token up front (single-flight when several workers start cold).
-    let token: String = match context.tokens.current() {
+) -> Result<Response<ProxyBody>, (u16, String)> {
+    // Seed a token up front (single-flight when several requests start cold).
+    let token = match context.tokens.current() {
         Some(token) => token,
-        None => Arc::clone(&context.tokens)
-            .refresh(false)
-            .await
+        None => Arc::clone(&context.tokens).refresh(false).await
             .map_err(|e| (502u16, format!("failed to obtain access token: {e}")))?,
     };
     let url = build_upstream_url(&context.base_url, file_id)?;
     let mut upstream = fetch_upstream(context, url.clone(), Some(&token), range.as_deref()).await?;
     if upstream.status() == reqwest::StatusCode::UNAUTHORIZED {
         // Exactly one refresh, then one retry; a second 401 is terminal (502).
-        let fresh = Arc::clone(&context.tokens)
-            .refresh(true)
-            .await
+        let fresh = Arc::clone(&context.tokens).refresh(true).await
             .map_err(|e| (502u16, format!("token refresh failed after upstream 401: {e}")))?;
         upstream = fetch_upstream(context, url.clone(), Some(&fresh), range.as_deref()).await?;
         if upstream.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err((502, "upstream rejected the request again after a token refresh".to_string()));
         }
     }
-    Ok(pass_through_response(context, upstream))
+    Ok(stream_response(context, file_id, upstream))
+}
+
+/// Mirror the upstream response to the client: status, media headers, and the
+/// upstream body wrapped in the idle-deadline stream. An error from that
+/// stream is what makes hyper close the connection and release the player.
+fn stream_response(context: &ProxyContext, file_id: &str, upstream: reqwest::Response) -> Response<ProxyBody> {
+    let mut builder = Response::builder().status(upstream.status().as_u16());
+    for name in PASSTHROUGH_HEADERS {
+        if let Some(value) = upstream.headers().get(&name) {
+            builder = builder.header(name, value.clone());
+        }
+    }
+    let frames = upstream.bytes_stream().map(|chunk| match chunk {
+        Ok(bytes) => Ok(Frame::data(bytes)),
+        Err(body_error) => Err(io::Error::other(format!("upstream body error: {body_error}"))),
+    });
+    let body =
+        StreamBody::new(IdleTimeoutStream::new(frames, context.body_idle_timeout, file_id.to_string())).boxed_unsync();
+    builder.body(body).expect("hyper response builder always accepts this body")
+}
+
+/// Fails once the wrapped stream has been silent longer than `idle_timeout`
+/// (a gap between chunks, not the total duration). The clock restarts on
+/// every item and on a poll arriving more than `BACKPRESSURE_GRACE` after
+/// its deadline — such a gap is consumer backpressure, not upstream silence.
+struct IdleTimeoutStream<S> {
+    inner: S,
+    idle_timeout: Duration,
+    file_id: String,
+    deadline: Pin<Box<Sleep>>,
+    last_poll: Instant,
+    tripped: bool,
+}
+
+impl<S> IdleTimeoutStream<S> {
+    fn new(inner: S, idle_timeout: Duration, file_id: String) -> Self {
+        let deadline = Box::pin(tokio::time::sleep(idle_timeout));
+        Self { inner, idle_timeout, file_id, deadline, last_poll: Instant::now(), tripped: false }
+    }
+}
+
+impl<S> Stream for IdleTimeoutStream<S>
+where
+    S: Stream<Item = Result<Frame<Bytes>, io::Error>> + Unpin,
+{
+    type Item = Result<Frame<Bytes>, io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.tripped {
+            return Poll::Ready(None);
+        }
+        match this.inner.poll_next_unpin(cx) {
+            Poll::Ready(Some(item)) => {
+                this.deadline.as_mut().reset(Instant::now() + this.idle_timeout);
+                Poll::Ready(Some(item))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => {
+                let now = Instant::now();
+                let poll_gap = now.duration_since(this.last_poll);
+                let deadline_ready = this.deadline.as_mut().poll(cx).is_ready();
+                this.last_poll = now;
+                if !deadline_ready {
+                    return Poll::Pending;
+                }
+                if poll_gap > this.idle_timeout + BACKPRESSURE_GRACE {
+                    // That gap was consumer backpressure: restart the clock.
+                    this.deadline.as_mut().reset(now + this.idle_timeout);
+                    return Poll::Pending;
+                }
+                log::warn!(
+                    "[stream-proxy] upstream body idle for {:?} (file {}) — aborting response",
+                    this.idle_timeout, this.file_id
+                );
+                this.tripped = true;
+                Poll::Ready(Some(Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("upstream body idle for {:?}", this.idle_timeout),
+                ))))
+            }
+        }
+    }
 }
 
 fn build_upstream_url(base_url: &str, file_id: &str) -> Result<url::Url, (u16, String)> {
@@ -183,20 +274,14 @@ async fn fetch_upstream(
             request = request.header(reqwest::header::RANGE, range);
         }
         let sent = match tokio::time::timeout(context.headers_timeout, request.send()).await {
-            Err(_elapsed) => {
-                return Err((504, format!("upstream did not respond within {:?}", context.headers_timeout)))
-            }
+            Err(_elapsed) => return Err((504, format!("upstream did not respond within {:?}", context.headers_timeout))),
             Ok(Err(send_error)) => return Err((502, format!("upstream request failed: {send_error}"))),
             Ok(Ok(sent)) => sent,
         };
         if sent.status().is_redirection() {
-            let location = sent
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|value| value.to_str().ok())
+            let location = sent.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok())
                 .ok_or_else(|| (502u16, "upstream redirect without Location header".to_string()))?;
-            url = url
-                .join(location)
+            url = url.join(location)
                 .map_err(|e| (502u16, format!("upstream redirect has invalid Location: {e}")))?;
             continue;
         }
@@ -205,98 +290,12 @@ async fn fetch_upstream(
     Err((502, format!("upstream exceeded {MAX_REDIRECTS} redirects")))
 }
 
-/// Mirror the upstream response to the client: status, media headers, and a
-/// streaming body (unknown length → chunked; known → Content-Length).
-fn pass_through_response(
-    context: &ProxyContext,
-    upstream: reqwest::Response,
-) -> tiny_http::Response<Box<dyn Read + Send>> {
-    let status = upstream.status().as_u16();
-    let mut outgoing = tiny_http::Response::from_data(Vec::new()).with_status_code(status);
-    for header_name in [
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::CONTENT_RANGE,
-        reqwest::header::ACCEPT_RANGES,
-        reqwest::header::ETAG,
-        reqwest::header::LAST_MODIFIED,
-    ] {
-        if let Some(value) = upstream.headers().get(&header_name).and_then(|value| value.to_str().ok()) {
-            if let Ok(header) = tiny_http::Header::from_bytes(header_name.as_str().as_bytes(), value.as_bytes()) {
-                outgoing.add_header(header);
-            }
-        }
-    }
-    let content_length = upstream
-        .headers()
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<usize>().ok());
-    let reader = spawn_body_reader(context.runtime.clone(), upstream);
-    outgoing.with_data(Box::new(reader), content_length).boxed()
+fn message_response(status: StatusCode, message: &str) -> Response<ProxyBody> {
+    let body = Full::new(Bytes::from(message.to_string()))
+        .map_err(|never: Infallible| -> io::Error { match never {} })
+        .boxed_unsync();
+    Response::builder().status(status).body(body).expect("static response always builds")
 }
-
-/// Bridge the async upstream body into a blocking `Read` for tiny_http via a
-/// bounded channel fed by a runtime task.
-fn spawn_body_reader(runtime: Handle, mut upstream: reqwest::Response) -> ChunkReader {
-    let (sender, receiver) = sync_channel::<Result<Vec<u8>, String>>(BODY_CHANNEL_CAPACITY);
-    runtime.spawn(async move {
-        loop {
-            match upstream.chunk().await {
-                Ok(Some(chunk)) => {
-                    if sender.send(Ok(chunk.to_vec())).is_err() {
-                        break; // client went away; stop pulling from upstream
-                    }
-                }
-                Ok(None) => break,
-                Err(body_error) => {
-                    let _ = sender.send(Err(format!("upstream body error: {body_error}")));
-                    break;
-                }
-            }
-        }
-    });
-    ChunkReader { receiver, buffer: Vec::new(), position: 0, failed: false }
-}
-
-struct ChunkReader {
-    receiver: Receiver<Result<Vec<u8>, String>>,
-    buffer: Vec<u8>,
-    position: usize,
-    failed: bool,
-}
-
-impl Read for ChunkReader {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        if self.position >= self.buffer.len() {
-            self.buffer.clear();
-            self.position = 0;
-            if self.failed {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "upstream body already failed"));
-            }
-            match self.receiver.recv() {
-                Ok(Ok(chunk)) => self.buffer = chunk,
-                Ok(Err(body_error)) => {
-                    self.failed = true;
-                    log::error!("[stream-proxy] upstream body failed mid-stream: {body_error}");
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "upstream body failed"));
-                }
-                Err(_) => return Ok(0), // feeder dropped its sender → clean EOF
-            }
-        }
-        let available = self.buffer.len() - self.position;
-        let count = available.min(out.len());
-        out[..count].copy_from_slice(&self.buffer[self.position..self.position + count]);
-        self.position += count;
-        Ok(count)
-    }
-}
-
-fn error_response(status: u16, message: &str) -> tiny_http::Response<Box<dyn Read + Send>> {
-    tiny_http::Response::from_string(message.to_string())
-        .with_status_code(status)
-        .boxed()
-}
-
 #[cfg(test)]
 mod spike_tests {
     //! Manual spike against the real Google Drive API (mirrors the Task 1
@@ -307,7 +306,6 @@ mod spike_tests {
 
     use super::*;
     use crate::stream_proxy::DriveTokenSource;
-    use std::time::Duration;
 
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "spike against the real Google Drive API"]
@@ -366,7 +364,7 @@ mod spike_tests {
             "https://www.googleapis.com".to_string(),
             tokens,
             Duration::from_secs(15),
-            Handle::current(),
+            crate::stream_proxy::UPSTREAM_BODY_IDLE_TIMEOUT,
         )
         .expect("proxy must start");
 

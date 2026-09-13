@@ -42,6 +42,14 @@ futures-util = "0.3.30"
 symphonia = { version = "0.5.4", features = ["all"] }
 lofty = "0.24.0"
 tiny_http = "0.12.0"
+# Proxy engine (src/stream_proxy/server.rs). tiny_http cannot close a
+# keep-alive connection from the server side, so an aborted upstream body
+# left mpv on a silent socket (incident 2026-09-13); hyper aborts the
+# connection as soon as the response body stream errors. Versions reuse the
+# exact crates already pinned in Cargo.lock via reqwest.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 hmac = "0.12.1"
 sha2 = "0.10.8"
 
