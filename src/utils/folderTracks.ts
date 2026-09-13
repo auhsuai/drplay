@@ -33,6 +33,8 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 /**
  * Walk a Drive folder tree breadth-first and collect every playable audio
  * file as a queue Track (parentId/parentName point at the containing folder).
+ * Every track is also stamped with the root folder as folderGroupId/Name so
+ * the queue can collapse the whole walk into one folder entry.
  * An explicit FIFO queue keeps this iterative — a deep tree cannot overflow
  * the call stack. Listing errors and aborts propagate to the caller.
  */
@@ -73,6 +75,10 @@ export async function collectFolderTracks(
         originalName: entry.name,
         parentId: folder.id,
         parentName: folder.name,
+        // Group stamp = the root folder of THIS walk, not the direct parent:
+        // the queue renders one folder entry per add-to-queue action.
+        folderGroupId: rootFolderId,
+        folderGroupName: rootFolderName,
       });
 
       if (tracks.length >= MAX_ADD_TO_QUEUE_TRACKS) {

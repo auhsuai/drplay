@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { PlayMode, TabKey, Track } from "../../types";
+import type { TabKey, Track } from "../../types";
 import { usePlayerStore } from "../../store/playerStore";
 import {
   removeTracksByFolderFromQueue,
   removeTracksFromQueue,
 } from "../../store/queueOps";
+import { buildQueueView } from "./queueView";
+import type { QueueViewItem } from "./queueView";
 import { QueueControls } from "./QueueControls";
 import { QueueList } from "./QueueList";
 import { QueueSearchInput } from "./QueueSearchInput";
@@ -35,7 +37,6 @@ function filterQueue(queue: Track[], query: string): Track[] {
 export interface QueuePanelProps {
   open: boolean;
   onClose: () => void;
-  onSetPlayMode: (mode: PlayMode) => void;
   onSelectTrack: (track: Track) => void;
   activeTab: TabKey;
 }
@@ -43,26 +44,25 @@ export interface QueuePanelProps {
 /**
  * Play-queue drawer docked to the right edge of the tab-content row in
  * AppShell: the actual playback order (playbackQueue), with search, per-row
- * menu, multi-select bulk removal and a direct play-mode switch. Rendered
+ * menu and multi-select bulk removal. Rendered
  * inline (no portal/overlay) — the app stays usable while the pane slides
  * over the right side of the list, matching the sidebar's 300ms rhythm.
  */
 export function QueuePanel({
   open,
   onClose,
-  onSetPlayMode,
   onSelectTrack,
   activeTab,
 }: QueuePanelProps) {
   const { t } = useTranslation();
-  const { playbackQueue, currentTrack, playMode } = usePlayerStore(
+  const { playbackQueue, currentTrack } = usePlayerStore(
     useShallow((s) => ({
       playbackQueue: s.playbackQueue,
       currentTrack: s.currentTrack,
-      playMode: s.playMode,
     })),
   );
   const [query, setQuery] = useState("");
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null);
   const selection = useQueueSelection(playbackQueue, currentTrack);
 
   // Reset transient UI on every reopen — adjusted during render (React
@@ -79,14 +79,36 @@ export function QueuePanel({
     if (open) {
       setHasOpened(true);
       setQuery("");
+      setOpenFolderId(null);
       selection.exitSelection();
     }
   }
 
-  const items = useMemo(
-    () => filterQueue(playbackQueue, query),
-    [playbackQueue, query],
+  // The open folder must still have members in the queue (bulk removal can
+  // empty it): a stale id degrades to the root view during render — no
+  // setState round-trip, no render loop.
+  const effectiveFolderId =
+    openFolderId !== null &&
+    playbackQueue.some((track) => track.folderGroupId === openFolderId)
+      ? openFolderId
+      : null;
+
+  const viewItems = useMemo(
+    () =>
+      buildQueueView(
+        filterQueue(playbackQueue, query),
+        effectiveFolderId,
+        currentTrack,
+      ),
+    [playbackQueue, query, effectiveFolderId, currentTrack],
   );
+
+  const openFolderName =
+    effectiveFolderId === null
+      ? null
+      : (playbackQueue.find(
+          (track) => track.folderGroupId === effectiveFolderId,
+        )?.folderGroupName ?? "");
 
   // The drawer top aligns with the sticky header of the ACTIVE view: the
   // header is measured at runtime, so a view without one (LikedSongs,
@@ -148,20 +170,19 @@ export function QueuePanel({
       aria-hidden={!open}
       inert={!open}
       style={{ top: topOffset }}
-      className={`absolute right-0 bottom-0 w-[400px] flex flex-col bg-white dark:bg-[#202124] border-l border-gray-200/50 dark:border-gray-800/50 transition-transform duration-300 ease-in-out ${
+      className={`absolute right-0 bottom-0 w-[400px] flex flex-col bg-white dark:bg-[#121212] border-l border-gray-200/50 dark:border-gray-800/50 transition-transform duration-300 ease-in-out ${
         open ? "translate-x-0" : "translate-x-full"
       }`}
     >
       {hasOpened ? (
         <QueuePanelDialog
           onClose={onClose}
-          playMode={playMode}
-          onSetPlayMode={onSetPlayMode}
           selection={selection}
           query={query}
           onQueryChange={setQuery}
-          items={items}
+          items={viewItems}
           currentTrack={currentTrack}
+          openFolderName={openFolderName}
           emptyKey={
             playbackQueue.length === 0 ? "queue.empty" : "queue.no_results"
           }
@@ -170,6 +191,10 @@ export function QueuePanel({
             removeTracksFromQueue([key]);
           }}
           onRemoveFolderFromQueue={removeTracksByFolderFromQueue}
+          onOpenFolder={setOpenFolderId}
+          onCloseFolder={() => {
+            setOpenFolderId(null);
+          }}
         />
       ) : null}
     </aside>
@@ -178,33 +203,35 @@ export function QueuePanel({
 
 interface QueuePanelDialogProps {
   onClose: () => void;
-  playMode: PlayMode;
-  onSetPlayMode: (mode: PlayMode) => void;
   selection: QueueSelection;
   query: string;
   onQueryChange: (value: string) => void;
-  items: Track[];
+  items: QueueViewItem[];
   currentTrack: Track | null;
+  openFolderName: string | null;
   emptyKey: "queue.empty" | "queue.no_results";
   onSelectTrack: (track: Track) => void;
   onRemoveFromQueue: (key: string) => void;
-  onRemoveFolderFromQueue: (parentId: string) => void;
+  onRemoveFolderFromQueue: (folderId: string) => void;
+  onOpenFolder: (folderId: string) => void;
+  onCloseFolder: () => void;
 }
 
-/** Drawer content: header, controls, search, bulk toolbar, list. */
+/** Drawer content: header, search+select row, bulk toolbar, list. */
 function QueuePanelDialog({
   onClose,
-  playMode,
-  onSetPlayMode,
   selection,
   query,
   onQueryChange,
   items,
   currentTrack,
+  openFolderName,
   emptyKey,
   onSelectTrack,
   onRemoveFromQueue,
   onRemoveFolderFromQueue,
+  onOpenFolder,
+  onCloseFolder,
 }: QueuePanelDialogProps) {
   const { t } = useTranslation();
 
@@ -224,14 +251,13 @@ function QueuePanelDialog({
         </button>
       </div>
 
-      <QueueControls
-        playMode={playMode}
-        onSetPlayMode={onSetPlayMode}
-        selectionMode={selection.selectionMode}
-        onToggleSelectionMode={selection.toggleSelectionMode}
-      />
-
-      <QueueSearchInput value={query} onChange={onQueryChange} />
+      <div className="flex flex-row items-center gap-2">
+        <QueueSearchInput value={query} onChange={onQueryChange} />
+        <QueueControls
+          selectionMode={selection.selectionMode}
+          onToggleSelectionMode={selection.toggleSelectionMode}
+        />
+      </div>
 
       {selection.selectionMode && (
         <QueueSelectionToolbar
@@ -241,6 +267,23 @@ function QueuePanelDialog({
           onRemove={selection.removeSelected}
           onExit={selection.exitSelection}
         />
+      )}
+
+      {openFolderName !== null && (
+        <div className="flex min-w-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onCloseFolder}
+            aria-label={t("queue.back")}
+            title={t("queue.back")}
+            className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors shrink-0"
+          >
+            <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+          </button>
+          <span className="text-sm font-semibold truncate">
+            {openFolderName}
+          </span>
+        </div>
       )}
 
       <QueueList
@@ -253,6 +296,7 @@ function QueuePanelDialog({
         onToggleSelected={selection.toggleSelected}
         onRemoveFromQueue={onRemoveFromQueue}
         onRemoveFolderFromQueue={onRemoveFolderFromQueue}
+        onOpenFolder={onOpenFolder}
       />
     </div>
   );

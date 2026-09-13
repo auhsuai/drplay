@@ -82,14 +82,21 @@ export function removeTracksFromQueue(itemIds: readonly string[]): number {
 
 /**
  * Remove every entry that came from the given Drive folder (excluding the
- * currently playing track). Empty/absent parentId is a defensive no-op.
+ * currently playing track). Matches BOTH:
+ * - folderGroupId: a root folder added via "add folder to queue", whose
+ *   recursive walk stamped every member (even in subfolders); and
+ * - parentId: legacy behavior for direct parent-folder entries.
+ * Empty/absent folderId is a defensive no-op.
  */
-export function removeTracksByFolderFromQueue(parentId: string): number {
-  if (!parentId) return 0;
+export function removeTracksByFolderFromQueue(folderId: string): number {
+  if (!folderId) return 0;
 
   const { originalQueue, currentTrack } = usePlayerStore.getState();
   const ids = originalQueue
-    .filter((track) => track.parentId === parentId)
+    .filter(
+      (track) =>
+        track.folderGroupId === folderId || track.parentId === folderId,
+    )
     .filter((track) => currentTrack === null || !sameTrack(track, currentTrack))
     .map((track) => track.queueItemId ?? track.id);
 

@@ -149,10 +149,6 @@
     "remove_from_queue": "Remove from Queue",
     "remove_folder": "Remove Folder from Queue",
     "current_cannot_remove": "Can't remove the currently playing track",
-    "mode_normal": "Normal",
-    "mode_shuffle": "Shuffle",
-    "mode_repeat_all": "Repeat all",
-    "mode_repeat_one": "Repeat one",
     "open": "Play Queue",
     "selected_count_one": "{{count}} selected",
     "selected_count_other": "{{count}} selected",
@@ -164,7 +160,10 @@
     "add_failed": "Couldn't add to the queue. Please try again.",
     "add_truncated": "Queue is capped at {{count}} songs — only the first ones were added",
     "add_truncated_one": "Queue is capped at {{count}} songs — only the first ones were added",
-    "add_truncated_other": "Queue is capped at {{count}} songs — only the first ones were added"
+    "add_truncated_other": "Queue is capped at {{count}} songs — only the first ones were added",
+    "back": "Back",
+    "folder_item_count_one": "{{count}} song",
+    "folder_item_count_other": "{{count}} songs"
   },
   "menu": {
     "remove_from_liked": "Remove from Liked Songs",

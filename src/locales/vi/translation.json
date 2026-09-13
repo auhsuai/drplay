@@ -149,10 +149,6 @@
     "remove_from_queue": "Xoá khỏi hàng đợi",
     "remove_folder": "Xoá thư mục khỏi hàng đợi",
     "current_cannot_remove": "Không thể xoá bài đang phát",
-    "mode_normal": "Phát thường",
-    "mode_shuffle": "Phát ngẫu nhiên",
-    "mode_repeat_all": "Lặp tất cả",
-    "mode_repeat_one": "Lặp một bài",
     "open": "Hàng đợi phát",
     "selected_count_other": "Đã chọn {{count}}",
     "remove_selected_other": "Xoá mục đã chọn ({{count}})",
@@ -160,7 +156,10 @@
     "add_empty": "Không tìm thấy bài hát nào trong thư mục này",
     "add_failed": "Không thể thêm vào hàng đợi. Vui lòng thử lại.",
     "add_truncated": "Hàng đợi giới hạn {{count}} bài — chỉ thêm các bài đầu tiên",
-    "add_truncated_other": "Hàng đợi giới hạn {{count}} bài — chỉ thêm các bài đầu tiên"
+    "add_truncated_other": "Hàng đợi giới hạn {{count}} bài — chỉ thêm các bài đầu tiên",
+    "back": "Quay lại",
+    "folder_item_count_one": "{{count}} bài",
+    "folder_item_count_other": "{{count}} bài"
   },
   "menu": {
     "remove_from_liked": "Bỏ khỏi Đã thích",

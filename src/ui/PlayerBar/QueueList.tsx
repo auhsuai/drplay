@@ -2,14 +2,14 @@ import { useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Track } from "../../types";
 import { sameTrack } from "../../hooks/player/utils";
+import { QueueFolderRow } from "./QueueFolderRow";
 import { QueueRow, QUEUE_ROW_HEIGHT } from "./QueueRow";
+import type { QueueViewItem } from "./queueView";
 
 const QUEUE_OVERSCAN = 10;
 
-const trackKey = (track: Track): string => track.queueItemId ?? track.id;
-
 export interface QueueListProps {
-  items: Track[];
+  items: QueueViewItem[];
   currentTrack: Track | null;
   selectionMode: boolean;
   selected: ReadonlySet<string>;
@@ -17,13 +17,14 @@ export interface QueueListProps {
   onSelectTrack: (track: Track) => void;
   onToggleSelected: (key: string) => void;
   onRemoveFromQueue: (key: string) => void;
-  onRemoveFolderFromQueue: (parentId: string) => void;
+  onRemoveFolderFromQueue: (folderId: string) => void;
+  onOpenFolder: (folderId: string) => void;
 }
 
 /**
  * Scrollable virtualized queue list. Owns the virtualizer so the scroll
  * container and its measurements stay local; QueuePanel only feeds it the
- * already-filtered items and callbacks.
+ * already-filtered view items (folder rows collapsed) and callbacks.
  */
 export function QueueList({
   items,
@@ -35,6 +36,7 @@ export function QueueList({
   onToggleSelected,
   onRemoveFromQueue,
   onRemoveFolderFromQueue,
+  onOpenFolder,
 }: QueueListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -43,14 +45,13 @@ export function QueueList({
     getScrollElement: () => scrollRef.current,
     estimateSize: () => QUEUE_ROW_HEIGHT,
     overscan: QUEUE_OVERSCAN,
-    getItemKey: (index) => {
-      const track = items[index];
-      return track ? trackKey(track) : index;
-    },
+    getItemKey: (index) => items[index]?.key ?? index,
   });
 
   const currentIndex = currentTrack
-    ? items.findIndex((track) => sameTrack(track, currentTrack))
+    ? items.findIndex(
+        (item) => item.kind === "track" && sameTrack(item.track, currentTrack),
+      )
     : -1;
 
   // Keep the playing row in view when the panel opens or the track changes.
@@ -75,10 +76,41 @@ export function QueueList({
         >
           {virtualizer.getVirtualItems().map((virtualRow) => {
             // Stale index while items shrink — guard like VirtualizedSongList.
-            const track = items[virtualRow.index];
-            if (!track) return null;
-            const key = trackKey(track);
-            const parentId = track.parentId;
+            const item = items[virtualRow.index];
+            if (!item) return null;
+            if (item.kind === "folder") {
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: QUEUE_ROW_HEIGHT,
+                    transform: `translateY(${String(virtualRow.start)}px)`,
+                  }}
+                >
+                  <QueueFolderRow
+                    folderId={item.folderId}
+                    folderName={item.folderName}
+                    count={item.count}
+                    containsCurrent={item.containsCurrent}
+                    selectionMode={selectionMode}
+                    onOpen={() => {
+                      onOpenFolder(item.folderId);
+                    }}
+                    onRemoveFolder={() => {
+                      onRemoveFolderFromQueue(item.folderId);
+                    }}
+                  />
+                </div>
+              );
+            }
+            const { track, key } = item;
+            // Root-folder removal: prefer the "add folder to queue" group id
+            // (indexed in slice 1), fall back to the legacy direct parent.
+            const folderId = track.folderGroupId ?? track.parentId;
             return (
               <div
                 key={virtualRow.key}
@@ -109,9 +141,9 @@ export function QueueList({
                     onRemoveFromQueue(key);
                   }}
                   onRemoveFolderFromQueue={
-                    parentId
+                    folderId
                       ? () => {
-                          onRemoveFolderFromQueue(parentId);
+                          onRemoveFolderFromQueue(folderId);
                         }
                       : undefined
                   }

@@ -245,6 +245,62 @@ describe("removeTracksByFolderFromQueue", () => {
     expect(state.playbackQueue.map((t) => t.id)).toEqual(["cur", "o"]);
   });
 
+  it("xoá cả group theo folderGroupId dù parentId khác nhau, giữ current track trong group", () => {
+    const g1 = makeTrack("g1", {
+      folderGroupId: "folder-1",
+      parentId: "sub-a",
+      queueItemId: "q-g1",
+    });
+    const cur = makeTrack("cur", {
+      folderGroupId: "folder-1",
+      parentId: "sub-b",
+      queueItemId: "q-cur",
+    });
+    const g2 = makeTrack("g2", {
+      folderGroupId: "folder-1",
+      parentId: "sub-c",
+      queueItemId: "q-g2",
+    });
+    const legacy = makeTrack("legacy", {
+      parentId: "folder-1",
+      queueItemId: "q-legacy",
+    });
+    const loose = makeTrack("loose", {
+      parentId: "folder-2",
+      queueItemId: "q-loose",
+    });
+    seed({
+      originalQueue: [g1, cur, g2, legacy, loose],
+      playbackQueue: [g1, cur, g2, legacy, loose],
+      currentTrack: cur,
+    });
+
+    expect(removeTracksByFolderFromQueue("folder-1")).toBe(3);
+
+    const state = usePlayerStore.getState();
+    expect(state.originalQueue.map((t) => t.id)).toEqual(["cur", "loose"]);
+    expect(state.playbackQueue.map((t) => t.id)).toEqual(["cur", "loose"]);
+  });
+
+  it("xoá member chỉ khớp folderGroupId (parentId nằm trong subfolder khác)", () => {
+    const a = makeTrack("a", {
+      folderGroupId: "root-1",
+      parentId: "nested-1",
+      queueItemId: "q-a",
+    });
+    const b = makeTrack("b", {
+      folderGroupId: "root-1",
+      parentId: "nested-2",
+      queueItemId: "q-b",
+    });
+    seed({ originalQueue: [a, b], playbackQueue: [a, b] });
+
+    expect(removeTracksByFolderFromQueue("root-1")).toBe(2);
+
+    expect(usePlayerStore.getState().originalQueue).toEqual([]);
+    expect(usePlayerStore.getState().playbackQueue).toEqual([]);
+  });
+
   it("parentId rỗng → return 0, no-op", () => {
     seed({ originalQueue: [makeTrack("f1", { parentId: "folder-1" })] });
 

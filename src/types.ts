@@ -15,6 +15,12 @@ export type Track = {
   parentId?: string;
   parentName?: string;
   queueItemId?: string;
+  // Stamped ONLY by collectFolderTracks: the root folder the user picked for
+  // "add folder to queue". Every recursively collected member shares this id
+  // so the queue can collapse a whole added tree into one folder entry, while
+  // parentId/parentName keep pointing at the direct containing folder.
+  folderGroupId?: string;
+  folderGroupName?: string;
 };
 
 /** The signed-in Google account's display profile. */

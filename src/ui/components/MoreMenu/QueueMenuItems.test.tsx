@@ -97,4 +97,29 @@ describe("QueueMenuItems", () => {
     fireEvent.click(screen.getByRole("button", { name: "menu.navigate" }));
     expect(props.handleNavigateClick).toHaveBeenCalledTimes(1);
   });
+
+  it("folder branch (không track): CHỈ Navigate + Remove Folder, click gọi đúng handler", () => {
+    const onRemoveFolderFromQueue = vi.fn();
+    const props = renderItems({
+      track: undefined,
+      queueFolder: { id: "f1", name: "Album F1" },
+      onRemoveFolderFromQueue,
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "menu.download_song" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "queue.remove_from_queue" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "menu.navigate" }));
+    expect(props.handleNavigateClick).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "queue.remove_folder" }),
+    );
+    expect(props.setIsOpen).toHaveBeenCalledWith(false);
+    expect(onRemoveFolderFromQueue).toHaveBeenCalledTimes(1);
+  });
 });

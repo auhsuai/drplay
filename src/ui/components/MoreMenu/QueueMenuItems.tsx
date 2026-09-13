@@ -5,6 +5,7 @@ import { MoreMenuItem } from "./MoreMenuItem";
 
 interface QueueMenuItemsProps {
   track?: Track | undefined;
+  queueFolder?: { id: string; name: string } | undefined;
   handleDownloadClick: (
     e: React.MouseEvent,
     track: Track | undefined,
@@ -23,9 +24,12 @@ interface QueueMenuItemsProps {
  * locate) plus queue edits (remove entry / remove whole source folder).
  * File-management actions (move/delete) are deliberately absent — the queue
  * is a playback list, not a Drive browser.
+ * A collapsed folder row (no track) gets its own smaller set: locate the
+ * folder in MyDrive and remove the whole group from the queue.
  */
 export function QueueMenuItems({
   track,
+  queueFolder,
   handleDownloadClick,
   handleNavigateClick,
   onRemoveFromQueue,
@@ -34,6 +38,30 @@ export function QueueMenuItems({
   setIsOpen,
   t,
 }: QueueMenuItemsProps) {
+  if (!track && queueFolder) {
+    return (
+      <>
+        <MoreMenuItem
+          icon={MapPin}
+          label={t("menu.navigate")}
+          onClick={handleNavigateClick}
+          className={MENU_ITEM_BASE_CLASS}
+        />
+
+        <MoreMenuItem
+          icon={FolderMinus}
+          label={t("queue.remove_folder")}
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsOpen(false);
+            onRemoveFolderFromQueue?.();
+          }}
+          className={MENU_ITEM_BASE_CLASS}
+        />
+      </>
+    );
+  }
+
   return (
     <>
       {track && (

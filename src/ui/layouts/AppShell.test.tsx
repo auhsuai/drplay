@@ -59,7 +59,6 @@ function baseProps() {
     isDownloading: false,
     playMode: "normal" as const,
     onTogglePlayMode: vi.fn(),
-    onSetPlayMode: vi.fn(),
     onSelectTrack: vi.fn(),
     onExpandNowPlaying: vi.fn(),
     isQueueOpen: true,
@@ -106,7 +105,6 @@ describe("AppShell queue drawer", () => {
       activeTab: TABS.home,
     });
     expect(mocks.queueProps.value?.onClose).toBe(props.onCloseQueue);
-    expect(mocks.queueProps.value?.onSetPlayMode).toBe(props.onSetPlayMode);
     expect(mocks.queueProps.value?.onSelectTrack).toBe(props.onSelectTrack);
     expect(mocks.playerProps.value?.isQueueOpen).toBe(true);
     expect(mocks.playerProps.value?.onToggleQueue).toBe(props.onToggleQueue);

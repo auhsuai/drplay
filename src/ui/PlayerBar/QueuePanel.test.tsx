@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
@@ -12,6 +13,7 @@ import { TABS } from "../../utils/driveConstants";
 import { QueuePanel } from "./QueuePanel";
 import type { QueuePanelProps } from "./QueuePanel";
 import { usePlayerStore } from "../../store/playerStore";
+import { removeTracksByFolderFromQueue } from "../../store/queueOps";
 import en from "../../locales/en/translation.json";
 
 vi.mock("react-i18next", () => {
@@ -28,9 +30,32 @@ vi.mock("react-i18next", () => {
     }
     return typeof acc === "string" ? acc : undefined;
   };
+  const interpolate = (value: string, options: unknown): string =>
+    typeof options === "object" && options !== null
+      ? value.replace(/\{\{(\w+)\}\}/g, (match, token: string) => {
+          const replacement = (options as Record<string, unknown>)[token];
+          return typeof replacement === "string" ||
+            typeof replacement === "number"
+            ? String(replacement)
+            : match;
+        })
+      : value;
   return {
     useTranslation: () => ({
-      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+      // i18next parity for the shapes used here: plural suffix by count +
+      // {{var}} interpolation (the queue renders counts via t(key, {count})).
+      t: (key: string, options?: unknown): string => {
+        const count =
+          typeof options === "object" && options !== null
+            ? (options as { count?: unknown }).count
+            : undefined;
+        const resolved =
+          (typeof count === "number"
+            ? resolveKey(`${key}_${count === 1 ? "one" : "other"}`)
+            : undefined) ?? resolveKey(key);
+        if (resolved !== undefined) return interpolate(resolved, options);
+        return typeof options === "string" ? options : key;
+      },
     }),
   };
 });
@@ -38,6 +63,7 @@ vi.mock("react-i18next", () => {
 // jsdom has no layout, so the real virtualizer reports an empty range and
 // renders nothing. Mock it to render every item — virtualization itself is
 // covered by the MainContent windowing tests; here the rows are the subject.
+// Start/total stride mirrors QUEUE_ROW_HEIGHT (QueueRow) — bump together.
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: vi.fn(
     ({
@@ -51,9 +77,9 @@ vi.mock("@tanstack/react-virtual", () => ({
         Array.from({ length: count }, (_, index) => ({
           index,
           key: getItemKey ? getItemKey(index) : index,
-          start: index * 56,
+          start: index * 84,
         })),
-      getTotalSize: () => count * 56,
+      getTotalSize: () => count * 84,
       measureElement: vi.fn(),
       scrollToIndex: vi.fn(),
     }),
@@ -65,9 +91,12 @@ vi.mock("../../db/kv", () => ({
   set: vi.fn(() => Promise.resolve()),
 }));
 
-// MoreMenu owns dropdown/portal plumbing with its own test suite; the queue
-// panel only mounts it per row.
-vi.mock("../components/MoreMenu", () => ({ MoreMenu: () => null }));
+// MoreMenu's playlist submenu loads playlists from IndexedDB when a track
+// menu opens; the DB is out of scope here (the menu's own suite covers it).
+vi.mock("../../utils/playlists", () => ({
+  getPlaylists: vi.fn(() => Promise.resolve([])),
+  addTrackToPlaylist: vi.fn(() => Promise.resolve()),
+}));
 
 type ResizeCallback = (
   entries: ResizeObserverEntry[],
@@ -140,7 +169,6 @@ function makeProps(open: boolean): QueuePanelProps {
   return {
     open,
     onClose: vi.fn(),
-    onSetPlayMode: vi.fn(),
     onSelectTrack: vi.fn(),
     activeTab: TABS.home,
   };
@@ -282,25 +310,23 @@ describe("QueuePanel content", () => {
     expect(screen.getByText(en.queue.no_results)).toBeTruthy();
   });
 
-  it("mode selector: aria-pressed đúng theo playMode; click shuffle → onSetPlayMode('shuffle')", () => {
-    const { props } = renderPanel();
+  it("không còn 4 nút mode (guard chống tái xuất hiện) nhưng search + select_multiple vẫn hiện", () => {
+    renderPanel();
 
-    expect(
-      screen
-        .getByRole("button", { name: en.queue.mode_normal })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      screen
-        .getByRole("button", { name: en.queue.mode_shuffle })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
+    // Play-mode switch moved to the PlayerBar cycle: none of the 4 direct
+    // mode buttons may reappear in the drawer. Labels are literals on
+    // purpose — the queue.mode_* i18n keys were deleted with the buttons.
+    for (const label of ["Normal", "Shuffle", "Repeat all", "Repeat one"]) {
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+    }
 
-    fireEvent.click(
-      screen.getByRole("button", { name: en.queue.mode_shuffle }),
-    );
-    expect(props.onSetPlayMode).toHaveBeenCalledTimes(1);
-    expect(props.onSetPlayMode).toHaveBeenCalledWith("shuffle");
+    // Search + multi-select entry point stay on the same row.
+    expect(
+      screen.getByPlaceholderText(en.queue.search_placeholder),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: en.queue.select_multiple }),
+    ).toBeTruthy();
   });
 
   it("selection: checkbox chỉ ở row không phải current; bulk remove xoá đúng 2 item, giữ current, thoát selection mode", () => {
@@ -357,7 +383,7 @@ describe("QueuePanel content", () => {
   });
 });
 
-describe("QueuePanel flat rows (không hiệu ứng khối) + 1 nút close", () => {
+describe("QueuePanel card rows (SongCard clone) + 1 nút close", () => {
   it("drawer chỉ còn 1 nút close (X), không có nút Close footer", () => {
     renderPanel(true);
 
@@ -366,14 +392,228 @@ describe("QueuePanel flat rows (không hiệu ứng khối) + 1 nút close", () 
     ).toHaveLength(1);
   });
 
-  it("hàng queue phẳng, không hiệu ứng khối", () => {
+  it("hàng queue clone SongCard: card bg + hover lift/shadow, cao 84px", () => {
     renderPanel(true);
 
+    // Row presentation now clones SongCard (48px tile + p-3 card): the idle
+    // card bg, hover lift and shadow live on the inner card, the outer row
+    // root pins QUEUE_ROW_HEIGHT (84 = 72 card [48 tile + 12+12 padding]
+    // + 12 gap mirroring the file tab pb-3 spacing).
     const row = rowFor("Song t1");
-    expect(row.className).not.toContain("hover:-translate-y-1");
-    expect(row.className).not.toContain("shadow-md");
-    expect(row.className).not.toContain("bg-[#F8F9FA]");
-    expect(row.className).toContain("hover:bg-gray-100");
-    expect(row.style.height).toBe("56px");
+    const card = row.firstElementChild as HTMLElement;
+    expect(card.className).toContain("bg-[#F8F9FA]");
+    expect(card.className).toContain("hover:shadow-md");
+    expect(card.className).toContain("group-hover:-translate-y-1");
+    expect(row.style.height).toBe("84px");
+  });
+});
+
+describe("QueuePanel folder drill-down", () => {
+  const F1A = makeTrack("f1a", {
+    folderGroupId: "f1",
+    folderGroupName: "Album F1",
+  });
+  const F1B = makeTrack("f1b", {
+    folderGroupId: "f1",
+    folderGroupName: "Album F1",
+  });
+  const F1C = makeTrack("f1c", {
+    folderGroupId: "f1",
+    folderGroupName: "Album F1",
+  });
+  const LOOSE = makeTrack("loose");
+
+  function seedFolderQueue(currentTrack: Track | null = null): void {
+    usePlayerStore.setState({
+      playbackQueue: [F1A, F1B, LOOSE, F1C],
+      originalQueue: [F1A, F1B, LOOSE, F1C],
+      currentTrack,
+      playMode: "normal",
+    });
+  }
+
+  it("root view: folder row hiện 1 lần (tên + count), 3 bài con ẩn, loose track hiện", () => {
+    seedFolderQueue();
+    renderPanel();
+
+    const folderRows = screen.getAllByTestId("queue-folder-row");
+    expect(folderRows).toHaveLength(1);
+    expect(folderRows[0]?.textContent).toContain("Album F1");
+    expect(folderRows[0]?.textContent).toContain("3 songs");
+
+    expect(screen.queryByText("Song f1a")).toBeNull();
+    expect(screen.queryByText("Song f1b")).toBeNull();
+    expect(screen.queryByText("Song f1c")).toBeNull();
+    expect(screen.getByText("Song loose")).toBeTruthy();
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(1);
+  });
+
+  it("click folder row → drill-down: 3 file con + nút back; click back → về root", () => {
+    seedFolderQueue();
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId("queue-folder-row"));
+
+    expect(screen.queryByTestId("queue-folder-row")).toBeNull();
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(3);
+    for (const title of ["Song f1a", "Song f1b", "Song f1c"]) {
+      expect(screen.getByText(title)).toBeTruthy();
+    }
+    expect(screen.queryByText("Song loose")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: en.queue.back }));
+
+    expect(screen.getAllByTestId("queue-folder-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(1);
+    expect(screen.getByText("Song loose")).toBeTruthy();
+  });
+
+  it("containsCurrent: current nằm trong folder → title folder row dùng text-brand-primary!", () => {
+    seedFolderQueue(F1B);
+    renderPanel();
+
+    const title = screen.getByTestId("queue-folder-row").querySelector("h3");
+    expect(title?.className).toContain("text-brand-primary!");
+    expect(title?.className).not.toContain("text-gray-800");
+  });
+
+  it("xoá hết member khi đang mở folder → tự về root, không kẹt view", () => {
+    seedFolderQueue();
+    renderPanel();
+    fireEvent.click(screen.getByTestId("queue-folder-row"));
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(3);
+
+    act(() => {
+      removeTracksByFolderFromQueue("f1");
+    });
+
+    expect(screen.queryByTestId("queue-folder-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: en.queue.back })).toBeNull();
+    expect(screen.getByText("Song loose")).toBeTruthy();
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(1);
+  });
+
+  it("search trong folder view lọc children đúng", () => {
+    seedFolderQueue();
+    renderPanel();
+    fireEvent.click(screen.getByTestId("queue-folder-row"));
+
+    fireEvent.change(screen.getByPlaceholderText(en.queue.search_placeholder), {
+      target: { value: "f1b" },
+    });
+
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(1);
+    expect(screen.getByText("Song f1b")).toBeTruthy();
+    expect(screen.queryByText("Song f1a")).toBeNull();
+  });
+
+  it("đóng rồi mở lại panel → luôn về root view", () => {
+    seedFolderQueue();
+    const { props, view } = renderPanel(true);
+    fireEvent.click(screen.getByTestId("queue-folder-row"));
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(3);
+
+    view.rerender(<QueuePanel {...props} open={false} />);
+    view.rerender(<QueuePanel {...props} open={true} />);
+
+    expect(screen.getAllByTestId("queue-folder-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(1);
+    expect(screen.getByText("Song loose")).toBeTruthy();
+  });
+
+  function openFolderMenu(): void {
+    fireEvent.click(
+      within(screen.getByTestId("queue-folder-row")).getByRole("button"),
+    );
+  }
+
+  function openMenuButtonNames(): string[] {
+    const menu = document.body.querySelector('[role="menu"]');
+    expect(menu).not.toBeNull();
+    return within(menu as HTMLElement)
+      .getAllByRole("button")
+      .map((b) => b.textContent?.trim() ?? "");
+  }
+
+  it("folder row có menu: mở thấy đúng Navigate + Remove Folder from Queue, không mở drill-down", () => {
+    seedFolderQueue();
+    renderPanel();
+
+    openFolderMenu();
+
+    // Root view stays: no drill-down (no back button, no child rows).
+    expect(screen.queryByRole("button", { name: en.queue.back })).toBeNull();
+    expect(screen.queryByText("Song f1a")).toBeNull();
+    expect(screen.getByTestId("queue-folder-row")).toBeTruthy();
+    // Exactly the 2 folder actions — no download/playlist/remove-single leak.
+    expect(openMenuButtonNames()).toEqual([
+      en.menu.navigate,
+      en.queue.remove_folder,
+    ]);
+  });
+
+  it("click Remove Folder from Queue → cả group rời queue, ở lại root, không drill-down", () => {
+    seedFolderQueue();
+    renderPanel();
+
+    openFolderMenu();
+    fireEvent.click(
+      screen.getByRole("button", { name: en.queue.remove_folder }),
+    );
+
+    const state = usePlayerStore.getState();
+    expect(state.playbackQueue).toEqual([LOOSE]);
+    expect(state.originalQueue).toEqual([LOOSE]);
+
+    expect(screen.queryByTestId("queue-folder-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: en.queue.back })).toBeNull();
+    expect(screen.getByText("Song loose")).toBeTruthy();
+    expect(screen.getAllByTestId("queue-row")).toHaveLength(1);
+  });
+
+  it("click Navigate → locate-file CHỈ { fileId: 'f1' }, không mở drill-down", () => {
+    const spy = vi.fn();
+    window.addEventListener("locate-file", spy);
+    try {
+      seedFolderQueue();
+      renderPanel();
+
+      openFolderMenu();
+      fireEvent.click(screen.getByRole("button", { name: en.menu.navigate }));
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [event] = spy.mock.calls[0] as [CustomEvent];
+      expect(event.detail).toEqual({ fileId: "f1" });
+
+      expect(screen.getAllByTestId("queue-folder-row")).toHaveLength(1);
+      expect(screen.queryByRole("button", { name: en.queue.back })).toBeNull();
+      expect(screen.queryByText("Song f1a")).toBeNull();
+    } finally {
+      window.removeEventListener("locate-file", spy);
+    }
+  });
+
+  it("selectionMode → folder row KHÔNG render menu", () => {
+    seedFolderQueue();
+    renderPanel();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: en.queue.select_multiple }),
+    );
+
+    const folderRow = screen.getByTestId("queue-folder-row");
+    expect(within(folderRow).queryByRole("button")).toBeNull();
+  });
+
+  it("regression: menu track row giữ nguyên items cũ, không lộ remove_folder", () => {
+    renderPanel();
+    fireEvent.click(within(rowFor("Song t1")).getByRole("button"));
+
+    expect(openMenuButtonNames()).toEqual([
+      en.menu.download_song,
+      en.menu.navigate,
+      en.queue.remove_from_queue,
+      en.menu.add_to_playlist,
+    ]);
   });
 });

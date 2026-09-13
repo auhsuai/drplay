@@ -54,6 +54,7 @@ export interface MoreMenuProps {
   onRemoveFromQueue?: (() => void) | undefined;
   disableRemoveFromQueue?: boolean | undefined;
   onRemoveFolderFromQueue?: (() => void) | undefined;
+  queueFolder?: { id: string; name: string } | undefined;
 }
 
 export function MoreMenu({
@@ -78,6 +79,7 @@ export function MoreMenu({
   onRemoveFromQueue,
   disableRemoveFromQueue,
   onRemoveFolderFromQueue,
+  queueFolder,
 }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -165,16 +167,28 @@ export function MoreMenu({
 
   const handleNavigateClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!track) return;
-    window.dispatchEvent(
-      new CustomEvent(EVENT_LOCATE_FILE, {
-        detail: {
-          fileId: track.id,
-          parentId: track.parentId,
-          parentName: track.parentName,
-        },
-      }),
-    );
+    if (track) {
+      window.dispatchEvent(
+        new CustomEvent(EVENT_LOCATE_FILE, {
+          detail: {
+            fileId: track.id,
+            parentId: track.parentId,
+            parentName: track.parentName,
+          },
+        }),
+      );
+    } else if (queueFolder) {
+      // Queue is not a Drive browser: the locate flow fetches the parent
+      // chain itself from fileId (useLocateFile), so a folder row only needs
+      // its own id.
+      window.dispatchEvent(
+        new CustomEvent(EVENT_LOCATE_FILE, {
+          detail: { fileId: queueFolder.id },
+        }),
+      );
+    } else {
+      return;
+    }
     setIsOpen(false);
     onClose?.();
   };
@@ -184,6 +198,7 @@ export function MoreMenu({
       {mode === "queue" ? (
         <QueueMenuItems
           track={track}
+          queueFolder={queueFolder}
           handleDownloadClick={handleDownloadClick}
           handleNavigateClick={handleNavigateClick}
           onRemoveFromQueue={onRemoveFromQueue}

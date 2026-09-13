@@ -51,6 +51,8 @@ describe("collectFolderTracks", () => {
         originalName: "Alpha.mp3",
         parentId: "root",
         parentName: "My Folder",
+        folderGroupId: "root",
+        folderGroupName: "My Folder",
       },
       {
         id: "a2",
@@ -61,6 +63,8 @@ describe("collectFolderTracks", () => {
         originalName: "Beta.flac",
         parentId: "root",
         parentName: "My Folder",
+        folderGroupId: "root",
+        folderGroupName: "My Folder",
       },
       {
         id: "a3",
@@ -71,7 +75,16 @@ describe("collectFolderTracks", () => {
         originalName: "NoSize.ogg",
         parentId: "root",
         parentName: "My Folder",
+        folderGroupId: "root",
+        folderGroupName: "My Folder",
       },
+    ]);
+    expect(
+      result.tracks.map((t) => [t.folderGroupId, t.folderGroupName]),
+    ).toEqual([
+      ["root", "My Folder"],
+      ["root", "My Folder"],
+      ["root", "My Folder"],
     ]);
     expect(listFolderAudioFilesMock).toHaveBeenCalledWith(
       "tok",
@@ -99,6 +112,13 @@ describe("collectFolderTracks", () => {
       ["root", "Root"],
       ["S1", "Sub One"],
       ["S2", "Sub Two"],
+    ]);
+    // Every nested member carries the ROOT folder as its group, no matter how
+    // deep it sits — that is what "add folder to queue" needs to collapse.
+    expect(tracks.map((t) => [t.folderGroupId, t.folderGroupName])).toEqual([
+      ["root", "Root"],
+      ["root", "Root"],
+      ["root", "Root"],
     ]);
   });
 
