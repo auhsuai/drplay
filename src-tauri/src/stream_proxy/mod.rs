@@ -32,9 +32,13 @@ const UPSTREAM_HEADERS_TIMEOUT: std::time::Duration = std::time::Duration::from_
 /// for minutes, but silence for this long means the network died mid-stream:
 /// without this deadline the body feeder parks on `chunk()` forever, the
 /// worker never returns to `recv()` and mpv never gets a read error to end
-/// the file (incident 2026-09-13). 30s matches the player's `--cache-secs=30`
-/// cache window.
-const UPSTREAM_BODY_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// the file (incident 2026-09-13). 20s sits below the player's `--cache-secs=30`
+/// window on purpose: when upstream goes silent the abort lands while the
+/// audio buffer is usually still playing, so mpv's reconnect with `Range`
+/// barely misses audio; a hard network death also gets its verdict at ~20s +
+/// headers timeout instead of ~30s + headers timeout. Still above Drive's
+/// normal short chunk stalls, so healthy streams are not cut.
+const UPSTREAM_BODY_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Source of Drive access tokens, injected so tests can run without real
 /// credentials while production reuses the exact auth.rs/token_store.rs logic.
