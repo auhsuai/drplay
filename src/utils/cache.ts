@@ -53,12 +53,15 @@ function errorMessage(e: unknown): string {
 }
 
 export async function getCacheSizes(): Promise<CacheCategoryInfo[]> {
-  const [metadataBytes, filesBytes, coversBytes, prefetchBytes] = [
-    await estimateMetadataBytes(),
-    await estimateFilesBytes(),
-    await estimateCoversBytes(),
-    estimatePrefetchBytes(),
-  ];
+  // The three async estimates are independent (2 IndexedDB reads + the Rust
+  // recursive dir walk over covers, by far the slowest) — run them together
+  // instead of stacking their latencies; the destructure keeps the order.
+  const [metadataBytes, filesBytes, coversBytes] = await Promise.all([
+    estimateMetadataBytes(),
+    estimateFilesBytes(),
+    estimateCoversBytes(),
+  ]);
+  const prefetchBytes = estimatePrefetchBytes();
   return [
     {
       id: "metadata",
@@ -233,8 +236,21 @@ export async function clearAppCache(
   }
   if (selected.includes("covers")) {
     await clearCategory("covers", "clear_local_cache", failures, async () => {
-      await invoke(CLEAR_LOCAL_CACHE_CMD);
-      await invoke(CLEAR_THUMBNAIL_DIR_CMD);
+      // Two independent commands: clear_local_cache only invalidates the
+      // in-RAM moka cache (cover.rs), clear_thumbnail_dir is the disk wipe.
+      // Run both — a failure of the first must not skip the second, or every
+      // retry fails on step one and the disk is never reclaimed.
+      const results = await Promise.allSettled([
+        invoke(CLEAR_LOCAL_CACHE_CMD),
+        invoke(CLEAR_THUMBNAIL_DIR_CMD),
+      ]);
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      );
+      if (rejected.length > 0) {
+        // Single failure keeps its original message; both failures aggregate.
+        throw new Error(rejected.map((r) => errorMessage(r.reason)).join("; "));
+      }
     });
   }
   if (selected.includes("prefetch")) {

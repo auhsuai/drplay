@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCoverUrl, postCoverToCache } from "./coverStore";
+import {
+  buildCoverUrl,
+  postCoverToCache,
+  POST_MAX_PENDING,
+} from "./coverStore";
 import { captureError } from "./errorLog";
 
 vi.mock("./errorLog", () => ({
@@ -234,6 +238,52 @@ describe("postCoverToCache (POST /cover/{id}?thumb= contract)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("drops new POSTs once the pending queue is full (backpressure cap)", async () => {
+    const resolvers: Array<(r: Response) => void> = [];
+    const fetchMock = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Fill the queue to the cap: only POST_MAX_CONCURRENT of them actually
+    // start fetching, the rest park in the semaphore holding their bytes.
+    const posts = Array.from({ length: POST_MAX_PENDING }, (_, i) =>
+      postCoverToCache(`cap-${String(i)}`, true, new Uint8Array([1])),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Over the cap: dropped immediately (no fetch, no throw) — the cover
+    // stays out of the Rust cache until the next parse, which is the
+    // documented non-fatal failure mode. Deliberately not awaited here: on
+    // the un-capped code this call parks in the queue instead of resolving.
+    const overflow = postCoverToCache(
+      "cap-overflow",
+      true,
+      new Uint8Array([9]),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const flushMicrotasks = async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    };
+    while (resolvers.length > 0) {
+      const release = resolvers.shift();
+      release?.(okResponse());
+      await flushMicrotasks();
+    }
+    await Promise.all([...posts, overflow]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(POST_MAX_PENDING);
+    const urls = fetchMock.mock.calls.map(([url]) => url);
+    expect(urls).not.toContain("drplay://cover/cap-overflow?thumb=true");
+    expect(mockedCaptureError).not.toHaveBeenCalled();
   });
 
   // ORDER MATTERS from here on: the two tests below both flip the module-level

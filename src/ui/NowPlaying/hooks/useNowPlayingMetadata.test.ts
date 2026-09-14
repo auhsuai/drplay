@@ -159,18 +159,26 @@ describe("useNowPlayingMetadata blob cover URL (picture bytes, no drplay://)", (
     expect(mockedGetPalette).not.toHaveBeenCalled();
   });
 
-  it("creates exactly one blob URL from the picture bytes and never revokes it", async () => {
+  it("creates exactly one blob URL from the picture bytes and revokes it on unmount", async () => {
     mockedGetTrackMetadata.mockResolvedValue(metadataWithPicture());
     mockedGetPalette.mockResolvedValue(["rgba(0, 0, 0, 0.8)"]);
 
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useNowPlayingMetadata(makeTrack(), "token"),
     );
     await flushMicrotasks();
 
     expect(result.current.coverUrl).toBe(BLOB_URL);
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+    // Still displayed -> nothing revoked yet.
     expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+
+    unmount();
+
+    // New contract (B05-2): the hook revokes the blob URL it created once the
+    // cover is no longer displayed (unmount/cleanup).
+    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith(BLOB_URL);
   });
 
   it("resets the palette when the blob palette decode fails (one attempt only)", async () => {

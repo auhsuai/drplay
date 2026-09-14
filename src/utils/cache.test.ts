@@ -139,6 +139,27 @@ describe("clearAppCache", () => {
     expect(mocks.deleteMock).not.toHaveBeenCalled();
   });
 
+  it("still runs clear_thumbnail_dir when clear_local_cache fails (independent commands)", async () => {
+    // clear_local_cache only invalidates the in-RAM moka cache; the disk wipe
+    // is clear_thumbnail_dir. A failure of the first must not skip the second,
+    // or the disk can never be reclaimed (every retry fails on step one).
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "clear_local_cache"
+        ? Promise.reject(new Error("ipc down"))
+        : Promise.resolve(undefined),
+    );
+
+    await expect(clearAppCache(["covers"])).rejects.toThrow("ipc down");
+
+    expect(invokeMock).toHaveBeenCalledWith("clear_local_cache");
+    expect(invokeMock).toHaveBeenCalledWith("clear_thumbnail_dir");
+    expect(
+      captureErrorMock.mock.calls.some(([c]) =>
+        c.message.includes("clear_local_cache failed"),
+      ),
+    ).toBe(true);
+  });
+
   it("clears prefetch state when selected is [prefetch]", async () => {
     await expect(clearAppCache(["prefetch"])).resolves.toBeUndefined();
 

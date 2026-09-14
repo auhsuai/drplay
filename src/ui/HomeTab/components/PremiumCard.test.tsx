@@ -233,20 +233,23 @@ describe("PremiumCard blob cover URL (picture bytes, no drplay://)", () => {
     expect(container.querySelector(".lucide-music")).toBeNull();
   });
 
-  it("creates exactly one blob URL from the picture bytes and never revokes it", async () => {
+  it("creates exactly one blob URL from the picture bytes and revokes it on unmount", async () => {
     const { unmount } = render(<PremiumCard {...baseProps()} />);
     await screen.findByAltText("Fetched Title");
     const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
     expect(blobArg).toBeInstanceOf(Blob);
     expect(blobArg.type).toBe("image/png");
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
 
     unmount();
     await flushMicrotasks();
 
-    // The blob is intentionally never revoked (covers are small; the browser
-    // drops blob URLs on page unload).
-    expect(revokeObjectURLSpy).not.toHaveBeenCalled();
+    // New contract (B05-2): the hook owns the blob URL it created and revokes
+    // it once the <img> no longer references it — Tauri/WebView2 never unloads
+    // the page, so an unrevoked URL would pin its bytes until the app closes.
+    expect(revokeObjectURLSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith("blob:mock-premium-cover");
   });
 });
 

@@ -19,6 +19,13 @@ const DEFAULT_COVER_MIME = "image/jpeg";
 // local disk write. 4xx (bad id / empty / oversized payload) are permanent.
 const POST_MAX_RETRIES = 1;
 const POST_MAX_CONCURRENT = 3;
+// Backpressure cap on outstanding POSTs (in-flight + queued). Each queued task
+// pins its Uint8Array, and the parse pipeline fires one POST per track for
+// every scan — a stuck disk handler (10s timeout + 1 retry per attempt) would
+// otherwise grow the queue with the whole library. Over the cap the request is
+// dropped, which matches the documented POST failure mode: non-fatal, the
+// cover stays out of the Rust cache until the next parse.
+export const POST_MAX_PENDING = 32;
 const THUMB_TRUE = "true";
 const THUMB_FALSE = "false";
 
@@ -71,9 +78,10 @@ export function buildCoverUrl(fileId: string, thumb: boolean): string {
  * very picture metadata already parsed, so no extra network/disk read is
  * needed. Returns null when there are no bytes (nothing to fall back to —
  * the caller keeps its icon).
- * The blob is intentionally NOT revoked: covers are small (≤256px thumb /
- * ≤1000px full) and revoking while an <img> may still reference it risks
- * broken covers; the browser drops blob URLs on page unload.
+ * Caller-owned lifetime: whoever calls buildCoverBlobUrl owns the URL and must
+ * release it with revokeCoverBlobUrl once no <img>/decoder references it —
+ * the browser does NOT drop blob URLs while the page lives, and a Tauri
+ * WebView2 page lives for the whole session.
  */
 export function buildCoverBlobUrl(
   pictureData: Uint8Array | null,
@@ -83,6 +91,16 @@ export function buildCoverBlobUrl(
   return URL.createObjectURL(
     new Blob([pictureData], { type: pictureFormat ?? DEFAULT_COVER_MIME }),
   );
+}
+
+/**
+ * Release a blob URL created by buildCoverBlobUrl. Null-safe so callers can
+ * pass a tracked URL without branching. NEVER pass a URL this module did not
+ * create (drplay:// GET URLs, consumer-owned URLs).
+ */
+export function revokeCoverBlobUrl(url: string | null): void {
+  if (url === null) return;
+  URL.revokeObjectURL(url);
 }
 
 function buildPostUrl(fileId: string, thumb: boolean): string {
@@ -114,6 +132,7 @@ export async function postCoverToCache(
   }
   const key = postKey(fileId, thumb);
   if (inflightPostKeys.has(key)) return;
+  if (inflightPostKeys.size >= POST_MAX_PENDING) return;
   inflightPostKeys.add(key);
   try {
     await postSemaphore.run(() => performPostWithRetry(fileId, thumb, bytes));

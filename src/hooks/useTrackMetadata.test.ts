@@ -8,7 +8,11 @@ import {
 } from "./useTrackMetadata";
 import type { TrackMetadataOptions } from "./useTrackMetadata";
 import { getTrackMetadata } from "../utils/metadata";
-import { buildCoverBlobUrl, buildCoverUrl } from "../utils/coverStore";
+import {
+  buildCoverBlobUrl,
+  buildCoverUrl,
+  revokeCoverBlobUrl,
+} from "../utils/coverStore";
 import type { CachedMetadata } from "../utils/metadata";
 
 vi.mock("../utils/metadata", () => ({
@@ -18,11 +22,13 @@ vi.mock("../utils/metadata", () => ({
 vi.mock("../utils/coverStore", () => ({
   buildCoverBlobUrl: vi.fn(),
   buildCoverUrl: vi.fn(),
+  revokeCoverBlobUrl: vi.fn(),
 }));
 
 const mockedFetch = vi.mocked(getTrackMetadata);
 const mockedBuildCover = vi.mocked(buildCoverBlobUrl);
 const mockedBuildCoverUrl = vi.mocked(buildCoverUrl);
+const mockedRevokeBlob = vi.mocked(revokeCoverBlobUrl);
 
 function makeMetadata(overrides: Partial<CachedMetadata> = {}): CachedMetadata {
   return {
@@ -76,6 +82,7 @@ beforeEach(() => {
   mockedBuildCover.mockReturnValue("blob:mock-cover");
   mockedBuildCoverUrl.mockReset();
   mockedBuildCoverUrl.mockReturnValue("drplay:mock-cover-url");
+  mockedRevokeBlob.mockReset();
 });
 
 afterEach(() => {
@@ -279,6 +286,76 @@ describe("useTrackMetadata cover blob URL", () => {
       result.current.setCoverUrl(null);
     });
     expect(result.current.coverUrl).toBeNull();
+  });
+
+  it("revokes the hook-created blob URL on unmount (caller-owned revocation)", async () => {
+    mockedFetch.mockResolvedValue(
+      makeMetadata({ pictureData: new Uint8Array([1]) }),
+    );
+    const { result, unmount } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("blob:mock-cover");
+    });
+    // Still displayed -> nothing revoked yet.
+    expect(mockedRevokeBlob).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(mockedRevokeBlob).toHaveBeenCalledTimes(1);
+    expect(mockedRevokeBlob).toHaveBeenCalledWith("blob:mock-cover");
+  });
+
+  it("revokes the previous blob URL when a refetch replaces it (after the state swap)", async () => {
+    mockedBuildCover
+      .mockReturnValueOnce("blob:cover-1")
+      .mockReturnValueOnce("blob:cover-2");
+    mockedFetch.mockResolvedValue(
+      makeMetadata({ pictureData: new Uint8Array([1]) }),
+    );
+    const { result } = renderTrackMetadata({ listenMetadataUpdated: true });
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("blob:cover-1");
+    });
+
+    window.dispatchEvent(
+      new CustomEvent("metadata-updated", { detail: { fileId: "file-1" } }),
+    );
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("blob:cover-2");
+    });
+
+    expect(mockedRevokeBlob).toHaveBeenCalledTimes(1);
+    expect(mockedRevokeBlob).toHaveBeenCalledWith("blob:cover-1");
+  });
+
+  it("revokes the hook-created URL when the consumer clears the cover (setCoverUrl(null))", async () => {
+    mockedFetch.mockResolvedValue(
+      makeMetadata({ pictureData: new Uint8Array([1]) }),
+    );
+    const { result } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("blob:mock-cover");
+    });
+
+    act(() => {
+      result.current.setCoverUrl(null);
+    });
+
+    expect(result.current.coverUrl).toBeNull();
+    expect(mockedRevokeBlob).toHaveBeenCalledTimes(1);
+    expect(mockedRevokeBlob).toHaveBeenCalledWith("blob:mock-cover");
+  });
+
+  it("never revokes the drplay:// disk URL (not hook-created)", async () => {
+    mockedFetch.mockResolvedValue(makeMetadata({ coverOnDisk: true }));
+    const { result, unmount } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("drplay:mock-cover-url");
+    });
+
+    unmount();
+
+    expect(mockedRevokeBlob).not.toHaveBeenCalled();
   });
 });
 

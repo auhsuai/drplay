@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { isAbortError } from "./player/utils";
 import { getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
 import { METADATA_UPDATED_EVENT } from "../utils/metadata/constants";
-import { buildCoverBlobUrl, buildCoverUrl } from "../utils/coverStore";
+import {
+  buildCoverBlobUrl,
+  buildCoverUrl,
+  revokeCoverBlobUrl,
+} from "../utils/coverStore";
 
 // Single source of truth for the metadata-fetch debounce window shared by the
 // card-style consumers (SongCard / PremiumCard): fetch only if the consumer
@@ -71,7 +75,22 @@ export function useTrackMetadata({
   coverUrl: string | null;
   setCoverUrl: (url: string | null) => void;
 } {
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [coverUrl, setCoverUrlState] = useState<string | null>(null);
+  // Blob URL last created by THIS hook with buildCoverBlobUrl (null while the
+  // cover is a drplay:// GET URL, no cover, or already released). Tracked
+  // across effect runs so the hook revokes exactly the URL it owns — never a
+  // consumer-owned URL — and only after the URL stopped being displayed.
+  const hookBlobUrlRef = useRef<string | null>(null);
+  // Consumer-facing clear (e.g. <img> error): the hook-created URL is no
+  // longer referenced by state, so release its bytes. Non-null URLs are set
+  // as-is (consumers only ever clear; ownership of their URLs stays theirs).
+  const setCoverUrl = useCallback((url: string | null) => {
+    if (url === null && hookBlobUrlRef.current !== null) {
+      revokeCoverBlobUrl(hookBlobUrlRef.current);
+      hookBlobUrlRef.current = null;
+    }
+    setCoverUrlState(url);
+  }, []);
 
   useEffect(() => {
     if (!enabled || !fileId) return;
@@ -97,12 +116,29 @@ export function useTrackMetadata({
         // — render the drplay:// GET URL instead (Rust disk + moka cache),
         // asking for the FULL variant when bytes exist, the thumb otherwise.
         const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
-        const nextCoverUrl = metadata.coverOnDisk
-          ? buildCoverUrl(fileId, !metadata.pictureDataFull)
-          : coverBytes
-            ? buildCoverBlobUrl(coverBytes, metadata.pictureFormat)
-            : null;
-        setCoverUrl(nextCoverUrl);
+        let nextCoverUrl: string | null;
+        let nextHookBlobUrl: string | null = null;
+        if (metadata.coverOnDisk) {
+          nextCoverUrl = buildCoverUrl(fileId, !metadata.pictureDataFull);
+        } else if (coverBytes) {
+          nextCoverUrl = buildCoverBlobUrl(coverBytes, metadata.pictureFormat);
+          nextHookBlobUrl = nextCoverUrl;
+        } else {
+          nextCoverUrl = null;
+        }
+        // Release the previous hook-owned blob only AFTER the state swap to
+        // the new URL: several consumers (the <img>, NowPlaying's palette
+        // decode) may still hold the displayed URL, so it must not be cut
+        // while it is the one on screen.
+        const previousHookBlobUrl = hookBlobUrlRef.current;
+        hookBlobUrlRef.current = nextHookBlobUrl;
+        setCoverUrlState(nextCoverUrl);
+        if (
+          previousHookBlobUrl !== null &&
+          previousHookBlobUrl !== nextCoverUrl
+        ) {
+          revokeCoverBlobUrl(previousHookBlobUrl);
+        }
         onMetadata(metadata, nextCoverUrl, controller.signal);
       } catch (error) {
         // Deliberate cleanup abort (or an AbortError from the fetch layer) is
@@ -145,6 +181,12 @@ export function useTrackMetadata({
       if (timerId !== undefined) clearTimeout(timerId);
       controller.abort();
       if (imgElement) imgElement.src = "";
+      // The <img> no longer references the cover: release the hook-owned blob
+      // URL (an already-decoded bitmap stays painted after revocation).
+      if (hookBlobUrlRef.current !== null) {
+        revokeCoverBlobUrl(hookBlobUrlRef.current);
+        hookBlobUrlRef.current = null;
+      }
       removeMetadataListener?.();
       onCleanup?.();
     };

@@ -176,6 +176,7 @@ describe("favorites (Dexie-backed)", () => {
   });
 
   it("isFavorite returns false and logs via captureError when the IDB read fails", async () => {
+    setUser(EMAIL_A);
     const getSpy = vi
       .spyOn(store, "get")
       .mockRejectedValueOnce(new Error("boom"));
@@ -232,5 +233,74 @@ describe("favorites (Dexie-backed)", () => {
       "liked_songs.remove_failed",
     );
     deleteSpy.mockRestore();
+  });
+});
+
+describe("favorites sentinel guard (no real email resolved yet)", () => {
+  // getCurrentUserEmail() (storageKeys.ts) returns the shared "default"
+  // sentinel while USER_EMAIL_KEY is missing — the login window before the
+  // userinfo fetch lands and every post-logout moment. Reads must return
+  // empty and writes must be dropped instead of stamping the shared
+  // "default" bucket (same hazard proSyncManager.ts guards against).
+  it("getFavorites returns [] and warns without touching the DB", async () => {
+    const whereSpy = vi.spyOn(store, "where");
+
+    const result = await getFavorites();
+
+    expect(result).toEqual([]);
+    expect(whereSpy).not.toHaveBeenCalled();
+    expect(captureError).toHaveBeenCalledTimes(1);
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].level).toBe("warn");
+    expect(firstCall[0].source).toBe("favorites");
+    expect(firstCall[0].message).toContain("get-skipped-no-email");
+    whereSpy.mockRestore();
+  });
+
+  it("addFavorite drops the write, warns, and shows the add_failed toast", async () => {
+    const putSpy = vi.spyOn(store, "put");
+
+    await addFavorite(track("1"));
+
+    expect(putSpy).not.toHaveBeenCalled();
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith("liked_songs.add_failed");
+    expect(captureError).toHaveBeenCalledTimes(1);
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].level).toBe("warn");
+    expect(firstCall[0].source).toBe("favorites");
+    expect(firstCall[0].message).toContain("add-skipped-no-email");
+    putSpy.mockRestore();
+  });
+
+  it("removeFavorite drops the delete, warns, and shows the remove_failed toast", async () => {
+    const deleteSpy = vi.spyOn(store, "delete");
+
+    await removeFavorite("1");
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith(
+      "liked_songs.remove_failed",
+    );
+    expect(captureError).toHaveBeenCalledTimes(1);
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].level).toBe("warn");
+    expect(firstCall[0].message).toContain("remove-skipped-no-email");
+    deleteSpy.mockRestore();
+  });
+
+  it("isFavorite returns false without touching the DB and without logging (no per-track spam)", async () => {
+    const getSpy = vi.spyOn(store, "get");
+
+    const result = await isFavorite("1");
+
+    expect(result).toBe(false);
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(captureError).not.toHaveBeenCalled();
+    getSpy.mockRestore();
   });
 });
