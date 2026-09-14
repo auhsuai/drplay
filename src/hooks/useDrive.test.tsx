@@ -1,17 +1,22 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { wipeFileRowsForUser } from "../db/fileRows";
 import { useDrive } from "./useDrive";
 import { useDriveStore } from "../store/driveStore";
-import { ROOT_FOLDER_KEY, USER_EMAIL_KEY } from "../utils/storageKeys";
+import {
+  ROOT_FOLDER_KEY,
+  USER_EMAIL_KEY,
+  DB_NAV_STATE_KEY,
+} from "../utils/storageKeys";
 import { MY_DRIVE_TAB, ROOT_FOLDER_ID } from "../utils/driveConstants";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { getAppConfig, saveAppConfig } from "../utils/driveApi";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
+import { captureError } from "../utils/errorLog";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -57,6 +62,7 @@ const mockedFetchWithAuth = vi.mocked(fetchWithAuth);
 const mockedGetAppConfig = vi.mocked(getAppConfig);
 const mockedSaveAppConfig = vi.mocked(saveAppConfig);
 const mockedWipeFileRowsForUser = vi.mocked(wipeFileRowsForUser);
+const mockedCaptureError = vi.mocked(captureError);
 
 function makeOkFolderResponse() {
   return {
@@ -93,8 +99,12 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // No vitest globals -> RTL has no auto-cleanup: without this, hooks stay
+  // mounted across tests and keep writing the SHARED zustand store / syncState.
+  cleanup();
   vi.restoreAllMocks();
   await db.files.clear();
+  await db.syncState.clear();
 });
 
 describe("useDrive initApp root-change guard (B-regression: unconditional db.files.clear)", () => {
@@ -121,7 +131,10 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
 
     // Regression: pre-fix the effect re-ran initApp on every token refresh
     // and cleared db.files unconditionally (git 6bcaee), making the My Drive
-    // listing vanish until the next fetch. A same-root re-init must be a no-op.
+    // listing vanish until the next fetch. A same-root re-init must be a
+    // no-op: re-verify the config, but keep the cache AND the live nav state
+    // (B12-1: no hydratedRef reset, no nav restore; transient verify failures
+    // keep the previous root).
     expect(clearSpy).toHaveBeenCalledTimes(0);
     expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
     expect(mockedInvoke).not.toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
@@ -200,5 +213,142 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
 
     expect(clearSpy).toHaveBeenCalledTimes(1);
     expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDrive initApp re-init & user race (B12)", () => {
+  it("keeps nav state the user changed mid-window when the token rotates and the config resolves (B12-1)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    await db.syncState.put({
+      key: DB_NAV_STATE_KEY,
+      value: { id: "old-folder", name: "Old Folder", history: [] },
+    });
+    let resolveConfig: (v: Record<string, unknown> | null) => void = () => {};
+    mockedGetAppConfig
+      .mockResolvedValueOnce({ rootFolderId: "root-A" })
+      .mockImplementationOnce(
+        () =>
+          new Promise<Record<string, unknown> | null>((resolve) => {
+            resolveConfig = resolve;
+          }),
+      );
+
+    const { rerender } = renderHook(
+      ({ token }: { token: string | null }) => useDrive(true, token),
+      { initialProps: { token: "tok1" } },
+    );
+
+    // First init restores the persisted nav position ("old-folder").
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("old-folder");
+    });
+
+    // Proactive token rotation: the re-verify's getAppConfig is now pending.
+    act(() => {
+      rerender({ token: "tok2" });
+    });
+    await waitFor(() => {
+      expect(mockedGetAppConfig).toHaveBeenCalledTimes(2);
+    });
+
+    // The user navigates while the re-init window is open.
+    act(() => {
+      useDriveStore.getState().setCurrentFolderId("folder-X");
+    });
+
+    // Remote config resolves with the SAME root: the re-init must not re-apply
+    // the persisted snapshot over the live navigation.
+    await act(async () => {
+      resolveConfig({ rootFolderId: "root-A" });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(useDriveStore.getState().currentFolderId).toBe("folder-X");
+  });
+
+  it("keeps the previous app root when the re-verify request fails transiently on token rotation (B12-1)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-A" });
+
+    const { rerender } = renderHook(
+      ({ token }: { token: string | null }) => useDrive(true, token),
+      { initialProps: { token: "tok1" } },
+    );
+    await waitForInit();
+
+    // Token rotation: the re-verify request rejects (network/timeout).
+    mockedFetchWithAuth.mockRejectedValue(new Error("network down"));
+
+    act(() => {
+      rerender({ token: "tok2" });
+    });
+
+    // The rejection is handled (logged)...
+    await waitFor(() => {
+      expect(mockedCaptureError).toHaveBeenCalled();
+    });
+
+    // ...and must NOT null the root: that would open the folder gate mid-session
+    // on a transient network blip.
+    expect(useDriveStore.getState().appRootFolder).toBe("root-A");
+  });
+
+  it("lets a root the user picked mid-init win over the in-flight remote config (B12-3)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    let resolveConfig: (v: Record<string, unknown> | null) => void = () => {};
+    mockedGetAppConfig.mockImplementationOnce(
+      () =>
+        new Promise<Record<string, unknown> | null>((resolve) => {
+          resolveConfig = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() => useDrive(true, "tok1"));
+    await waitFor(() => {
+      expect(mockedGetAppConfig).toHaveBeenCalledTimes(1);
+    });
+
+    // User changes the root (Settings -> Change folder) while init is in flight.
+    await act(async () => {
+      await result.current.handleSelectRootFolder("root-B");
+    });
+    expect(useDriveStore.getState().appRootFolder).toBe("root-B");
+
+    // The pending remote config still reports the OLD root.
+    await act(async () => {
+      resolveConfig({ rootFolderId: "root-A" });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // The user's selection must not be reverted (state nor localStorage).
+    expect(useDriveStore.getState().appRootFolder).toBe("root-B");
+    expect(localStorage.getItem(ROOT_FOLDER_KEY)).toBe("root-B");
+  });
+
+  it("lands on the new remote root instead of restoring nav from the old root (B12-5)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
+    await db.syncState.put({
+      key: DB_NAV_STATE_KEY,
+      value: {
+        id: "old-folder",
+        name: "Old Folder",
+        history: [{ id: "root-A", name: MY_DRIVE_TAB }],
+      },
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().appRootFolder).toBe("root-B");
+    });
+    // The persisted nav points inside the OLD root: it must be discarded.
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("root-B");
+    });
+
+    expect(useDriveStore.getState().currentFolderName).toBe(MY_DRIVE_TAB);
+    expect(useDriveStore.getState().folderHistory).toEqual([]);
   });
 });

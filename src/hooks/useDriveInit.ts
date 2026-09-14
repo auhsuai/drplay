@@ -71,7 +71,16 @@ export const useDriveInit = ({
     let cancelled = false;
     const controller = new AbortController();
     const isCancelled = () => cancelled;
-    hydratedRef.current = false;
+
+    // B12-1: a re-init is a re-run on an already-hydrated mount (typically the
+    // ~45' proactive token rotation). It must not re-gate nav persistence nor
+    // re-apply the persisted nav snapshot: the user may have navigated while
+    // the re-verify is in flight, and overwriting that would revert their
+    // position (the gated window would also silently drop their saves).
+    const isReInit = hydratedRef.current;
+    if (!isReInit) {
+      hydratedRef.current = false;
+    }
 
     const initApp = async () => {
       // Outer try/finally guarantees hydration always reaches a safe state.
@@ -93,6 +102,19 @@ export const useDriveInit = ({
           ROOT_FOLDER_KEY,
           "root-folder-read",
         );
+        // B12-3: snapshot the stored root before the first await. The user can
+        // pick a new root via handleSelectRootFolder (Settings -> Change
+        // folder) while this init is in flight; any later mismatch on the key
+        // means THIS run's remote config is stale and the user's choice wins
+        // (no adopt, no LS write, no wipe, no nav restore).
+        const lsRootAtStart = localRoot;
+        const rootChangedByUser = () =>
+          safeLocalStorageGet(ROOT_FOLDER_KEY, "root-folder-read") !==
+          lsRootAtStart;
+        // B12-5: set when this run's remote root differs from the stored root
+        // — the cached listing is invalidated below and the persisted nav
+        // snapshot (which points inside the OLD root) must be discarded.
+        let rootChanged = false;
 
         if (isLoggedIn && accessToken) {
           try {
@@ -105,12 +127,17 @@ export const useDriveInit = ({
               );
               if (isCancelled()) return;
               if (remoteConfig && remoteConfig.rootFolderId) {
+                // B12-3: the user picked a root while getAppConfig was in
+                // flight — their selection wins; abandon this run's
+                // config/root decisions entirely.
+                if (rootChangedByUser()) return;
                 // The config id is a Drive file id (string) by contract; the
                 // typeof guard keeps String() off a truthy-narrowed value.
                 const rootIdRaw: unknown = remoteConfig.rootFolderId;
                 const rootId =
                   typeof rootIdRaw === "string" ? rootIdRaw : String(rootIdRaw);
                 if (rootId !== localRoot) {
+                  rootChanged = true;
                   localRoot = rootId;
                 }
                 const verifyUrl = `${DRIVE_FILES_URL}/${localRoot}?fields=id,name,driveId,mimeType`;
@@ -122,13 +149,24 @@ export const useDriveInit = ({
                 });
                 if (isCancelled()) return;
                 if (!verifyRes.ok) {
-                  void captureError({
-                    level: "warn",
-                    source: "useDrive",
-                    message:
-                      "verify-root-inaccessible: saved root no longer accessible",
-                  });
-                  localRoot = null;
+                  if (verifyRes.status >= 500 && isReInit && !rootChanged) {
+                    // B12-1: a transient (5xx) re-verify failure during a
+                    // token rotation keeps the previous root — nulling it
+                    // would open the folder gate mid-session.
+                    void captureError({
+                      level: "warn",
+                      source: "useDrive",
+                      message: `reverify-transient: keeping previous root (HTTP ${String(verifyRes.status)})`,
+                    });
+                  } else {
+                    void captureError({
+                      level: "warn",
+                      source: "useDrive",
+                      message:
+                        "verify-root-inaccessible: saved root no longer accessible",
+                    });
+                    localRoot = null;
+                  }
                 } else {
                   const verifyData = (await verifyRes.json()) as {
                     mimeType?: unknown;
@@ -157,6 +195,8 @@ export const useDriveInit = ({
                     ROOT_FOLDER_KEY,
                     "root-folder-read",
                   );
+                  // B12-3: the user picked a root during the verify await.
+                  if (rootChangedByUser()) return;
                   if (remoteConfig.rootFolderId !== savedRoot) {
                     safeLocalStorageSet(
                       ROOT_FOLDER_KEY,
@@ -198,12 +238,23 @@ export const useDriveInit = ({
             }
           } catch (e: unknown) {
             if (isCancelled()) return;
-            void captureError({
-              level: "error",
-              source: "useDrive",
-              message: `sync-config-failed: ${classifyError(e)}`,
-            });
-            localRoot = null;
+            if (isReInit && !rootChanged) {
+              // B12-1: a transient failure (network/timeout) during a re-init
+              // with an unchanged root must keep the previous root instead of
+              // opening the folder gate mid-session.
+              void captureError({
+                level: "warn",
+                source: "useDrive",
+                message: `reverify-transient: keeping previous root (${classifyError(e)})`,
+              });
+            } else {
+              void captureError({
+                level: "error",
+                source: "useDrive",
+                message: `sync-config-failed: ${classifyError(e)}`,
+              });
+              localRoot = null;
+            }
           }
         }
 
@@ -216,6 +267,22 @@ export const useDriveInit = ({
             setCurrentFolderId(localRoot);
             setCurrentFolderName(MY_DRIVE_TAB);
           };
+
+          // B12-5: the configured root changed in this run — the cached
+          // listing was just invalidated and the persisted nav snapshot
+          // points inside the OLD root (out of the new app root's scope).
+          // Land on the new root instead of resuming a stale folder.
+          if (rootChanged) {
+            fallbackToRoot();
+            setFolderHistory([]);
+            return;
+          }
+          if (isReInit) {
+            // B12-1: token-rotation re-verify with an unchanged root — leave
+            // the live nav state alone. Re-applying the persisted snapshot
+            // would revert navigation made while the re-verify was in flight.
+            return;
+          }
 
           try {
             const state = await db.syncState.get(DB_NAV_STATE_KEY);

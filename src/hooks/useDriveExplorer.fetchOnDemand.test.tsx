@@ -5,6 +5,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { db } from "../db/db";
 import { useDriveExplorer } from "./useDriveExplorer";
 import { useDriveStore } from "../store/driveStore";
+import { USER_EMAIL_KEY } from "../utils/storageKeys";
 
 // Mock network layer only; keep real Dexie (fake-indexeddb) to assert DB writes.
 vi.mock("../utils/apiClient", () => ({
@@ -46,6 +47,7 @@ function makePage(
 describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
   beforeEach(async () => {
     await db.files.clear();
+    localStorage.clear();
     useDriveStore.setState({ isLoadingTracks: false });
     mockedFetch.mockReset();
     mockedRemember.mockClear();
@@ -329,5 +331,63 @@ describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
 
     expect(mockedRemember).not.toHaveBeenCalled();
     bulkPutSpy.mockRestore();
+  });
+
+  it("shows the loading skeleton when only ANOTHER account has rows for the folder (B12-2)", async () => {
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    await db.files.put({
+      id: "other-account-row",
+      name: "other.mp3",
+      mimeType: "audio/mpeg",
+      parentId: FOLDER_ID,
+      trashed: false,
+      isFolder: false,
+      userEmail: "b@x",
+    });
+    // The fetch stays pending so the skeleton state is observable.
+    mockedFetch.mockImplementation(() => new Promise<Response>(() => {}));
+
+    renderHook(() =>
+      useDriveExplorer(FOLDER_ID, "Folder", "fake-token", () => {}),
+    );
+
+    // The unscoped count would see b@x's row and skip the skeleton even though
+    // THIS account has no rows for the folder yet.
+    await waitFor(() => {
+      expect(useDriveStore.getState().isLoadingTracks).toBe(true);
+    });
+  });
+
+  it("clears the loading skeleton when navigating to a folder that already has cached rows (B12-4)", async () => {
+    await db.files.put({
+      id: "cached-row",
+      name: "cached.mp3",
+      mimeType: "audio/mpeg",
+      parentId: "folder-B",
+      trashed: false,
+      isFolder: false,
+      userEmail: "default",
+    });
+    // Never-resolving fetch: only an explicit clear can turn the flag off.
+    mockedFetch.mockImplementation(() => new Promise<Response>(() => {}));
+
+    const { rerender } = renderHook(
+      ({ folderId }: { folderId: string }) =>
+        useDriveExplorer(folderId, "Folder", "fake-token", () => {}),
+      { initialProps: { folderId: "folder-A" } },
+    );
+
+    // Folder A is empty: the skeleton is on while its fetch runs.
+    await waitFor(() => {
+      expect(useDriveStore.getState().isLoadingTracks).toBe(true);
+    });
+
+    rerender({ folderId: "folder-B" });
+
+    // Folder B already has a cached row: the stale TRUE flag from folder A
+    // (whose cleanup skipped its finally) must be cleared.
+    await waitFor(() => {
+      expect(useDriveStore.getState().isLoadingTracks).toBe(false);
+    });
   });
 });

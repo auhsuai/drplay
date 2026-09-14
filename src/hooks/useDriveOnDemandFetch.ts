@@ -35,11 +35,17 @@ export function useDriveOnDemandFetch({
 
     const fetchOnDemand = async () => {
       try {
+        // B12-2: scope the gate to the current account — another account's
+        // rows for the same folder must not suppress the skeleton (compound
+        // index [userEmail+parentId], parity with useDriveListing).
         const count = await db.files
-          .where("parentId")
-          .equals(currentFolderId)
+          .where("[userEmail+parentId]")
+          .equals([getCurrentUserEmail(), currentFolderId])
           .count();
-        if (count === 0) setIsLoadingTracks(true);
+        // B12-4: set both ways. A stale TRUE from a previous (empty) folder
+        // survives that run's skipped finally, so a cached folder must be able
+        // to clear it instead of showing the skeleton until this fetch settles.
+        setIsLoadingTracks(count === 0);
 
         const q = getFolderAudioQuery(currentFolderId);
         let hasMore = true;
