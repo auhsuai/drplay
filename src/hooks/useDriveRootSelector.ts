@@ -2,13 +2,18 @@ import { useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
+import { wipeFileRowsForUser } from "../db/fileRows";
 import { saveAppConfig } from "../utils/driveApi";
 import { getValidToken } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { MY_DRIVE_TAB } from "../utils/driveConstants";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
-import { ROOT_FOLDER_KEY } from "../utils/storageKeys";
+import {
+  DEFAULT_USER_EMAIL,
+  getCurrentUserEmail,
+  ROOT_FOLDER_KEY,
+} from "../utils/storageKeys";
 import { classifyError } from "./useDriveShared";
 
 export const useDriveRootSelector = () => {
@@ -42,7 +47,16 @@ export const useDriveRootSelector = () => {
       setCurrentFolderName(MY_DRIVE_TAB);
       setFolderHistory([]);
       try {
-        await db.files.clear();
+        const email = getCurrentUserEmail();
+        if (email === DEFAULT_USER_EMAIL) {
+          // Sentinel owner (no real account email known yet): legacy rows have
+          // no account fingerprint to scope by — keep the store-wide clear.
+          await db.files.clear();
+        } else {
+          // Account-scoped invalidation (schema v10 scoping): a store-wide
+          // clear would destroy every OTHER account's mirror too.
+          await wipeFileRowsForUser(email);
+        }
         await invoke(CLEAR_LOCAL_CACHE_CMD);
         const freshToken = await getValidToken();
         if (freshToken) {

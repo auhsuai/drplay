@@ -4,9 +4,10 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
+import { wipeFileRowsForUser } from "../db/fileRows";
 import { useDrive } from "./useDrive";
 import { useDriveStore } from "../store/driveStore";
-import { ROOT_FOLDER_KEY } from "../utils/storageKeys";
+import { ROOT_FOLDER_KEY, USER_EMAIL_KEY } from "../utils/storageKeys";
 import { MY_DRIVE_TAB, ROOT_FOLDER_ID } from "../utils/driveConstants";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { getAppConfig, saveAppConfig } from "../utils/driveApi";
@@ -31,6 +32,17 @@ vi.mock("../utils/cache", () => ({
   CLEAR_LOCAL_CACHE_CMD: "clear_local_cache",
 }));
 
+// Partial mock: every other fileRows helper stays real, but the wipe becomes
+// observable. The mock calls through to the real account-scoped delete, so the
+// isolation assertions exercise the actual Dexie query.
+vi.mock("../db/fileRows", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../db/fileRows")>();
+  return {
+    ...actual,
+    wipeFileRowsForUser: vi.fn(actual.wipeFileRowsForUser),
+  };
+});
+
 vi.mock("../utils/history", () => ({
   recordFolderVisit: vi.fn(),
 }));
@@ -44,6 +56,7 @@ const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedFetchWithAuth = vi.mocked(fetchWithAuth);
 const mockedGetAppConfig = vi.mocked(getAppConfig);
 const mockedSaveAppConfig = vi.mocked(saveAppConfig);
+const mockedWipeFileRowsForUser = vi.mocked(wipeFileRowsForUser);
 
 function makeOkFolderResponse() {
   return {
@@ -79,8 +92,9 @@ beforeEach(() => {
   mockedSaveAppConfig.mockResolvedValue(true);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await db.files.clear();
 });
 
 describe("useDrive initApp root-change guard (B-regression: unconditional db.files.clear)", () => {
@@ -109,10 +123,71 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
     // and cleared db.files unconditionally (git 6bcaee), making the My Drive
     // listing vanish until the next fetch. A same-root re-init must be a no-op.
     expect(clearSpy).toHaveBeenCalledTimes(0);
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
     expect(mockedInvoke).not.toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
   });
 
-  it("clears the local file cache when the remote root folder CHANGES", async () => {
+  it("wipes ONLY the current account's rows when the remote root folder CHANGES", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
+    const clearSpy = vi.spyOn(db.files, "clear");
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().appRootFolder).toBe("root-B");
+    });
+
+    // Switching the configured root invalidates the cached listing, but the
+    // invalidation is account-scoped: the whole-store clear would destroy
+    // every OTHER account's mirror too.
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledTimes(1);
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledWith("a@x");
+    expect(clearSpy).toHaveBeenCalledTimes(0);
+    expect(mockedInvoke).toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+  });
+
+  it("keeps OTHER accounts' mirrors when the remote root folder changes (2-account isolation)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
+    await db.files.bulkPut([
+      {
+        id: "mine",
+        name: "mine.mp3",
+        mimeType: "audio/mpeg",
+        parentId: "root-A",
+        trashed: false,
+        isFolder: false,
+        userEmail: "a@x",
+      },
+      {
+        id: "theirs",
+        name: "theirs.mp3",
+        mimeType: "audio/mpeg",
+        parentId: "root-A",
+        trashed: false,
+        isFolder: false,
+        userEmail: "b@x",
+      },
+    ]);
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().appRootFolder).toBe("root-B");
+    });
+
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledWith("a@x");
+    expect(await db.files.get(["a@x", "mine"])).toBeUndefined();
+    expect(await db.files.get(["b@x", "theirs"])).toBeDefined();
+  });
+
+  it("falls back to the legacy full clear while the owner is still the sentinel", async () => {
+    // No USER_EMAIL_KEY: getCurrentUserEmail() returns the "default" sentinel,
+    // so legacy rows have no real account fingerprint and the store-wide clear
+    // is preserved for this branch.
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
     mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
     const clearSpy = vi.spyOn(db.files, "clear");
@@ -123,9 +198,7 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
       expect(useDriveStore.getState().appRootFolder).toBe("root-B");
     });
 
-    // Switching the configured root invalidates the cached listing: clearing
-    // is still required in this case (original ed12e81 behavior).
     expect(clearSpy).toHaveBeenCalledTimes(1);
-    expect(mockedInvoke).toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
   });
 });

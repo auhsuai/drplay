@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import Dexie from "dexie";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { db, type DriveFile } from "./db";
 import {
@@ -38,6 +39,7 @@ describe("canonicalParent", () => {
 
 describe("upsertFileRows", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await db.files.clear();
   });
 
@@ -74,6 +76,33 @@ describe("upsertFileRows", () => {
     const all = await db.files.toArray();
     expect(all).toHaveLength(1);
     expect(all[0]?.parentId).toBe("folder-Z");
+  });
+
+  it("performs the read-modify-write inside ONE rw transaction (atomic against interleaved writers)", async () => {
+    // Call-through spies: the real Dexie methods must keep running inside
+    // whatever transaction scope the writer establishes. A plain-promise stub
+    // would break the transaction zone (and measure nothing).
+    const realBulkGet = db.files.bulkGet.bind(db.files);
+    const realBulkPut = db.files.bulkPut.bind(db.files);
+    const seenTransactions: unknown[] = [];
+    vi.spyOn(db.files, "bulkGet").mockImplementation((keys) => {
+      seenTransactions.push(Dexie.currentTransaction);
+      return realBulkGet(keys);
+    });
+    vi.spyOn(db.files, "bulkPut").mockImplementation((rows) => {
+      seenTransactions.push(Dexie.currentTransaction);
+      return realBulkPut(rows);
+    });
+
+    await upsertFileRows([makeRow({ id: "atomic" })], "user@example.com");
+
+    // Both halves must run inside the SAME explicit transaction. As two
+    // auto-committing table calls they were separate transactions, so a
+    // competing writer (e.g. fetchPipeline's db.files.update) could land
+    // between the read and the write and be overwritten by the stale snapshot.
+    expect(seenTransactions).toHaveLength(2);
+    expect(seenTransactions[0]).toBeTruthy();
+    expect(seenTransactions[0]).toBe(seenTransactions[1]);
   });
 
   it("throws a named TypeError on empty/whitespace ownerEmail BEFORE writing anything", async () => {

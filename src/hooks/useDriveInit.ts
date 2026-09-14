@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
+import { wipeFileRowsForUser } from "../db/fileRows";
 import { getAppConfig, FOLDER_MIME } from "../utils/driveApi";
 import { getValidToken, fetchWithAuth } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
@@ -11,6 +12,8 @@ import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import {
+  DEFAULT_USER_EMAIL,
+  getCurrentUserEmail,
   ROOT_FOLDER_KEY,
   CURRENT_FOLDER_ID_KEY,
   CURRENT_FOLDER_NAME_KEY,
@@ -165,7 +168,18 @@ export const useDriveInit = ({
                     // proactive token refresh; wiping db.files then would
                     // blank the My Drive UI until the next folder fetch.
                     try {
-                      await db.files.clear();
+                      const email = getCurrentUserEmail();
+                      if (email === DEFAULT_USER_EMAIL) {
+                        // Sentinel owner (no real account email known yet):
+                        // legacy rows have no account fingerprint to scope by —
+                        // keep the store-wide clear.
+                        await db.files.clear();
+                      } else {
+                        // Account-scoped invalidation (schema v10 scoping): a
+                        // store-wide clear would destroy every OTHER account's
+                        // mirror too.
+                        await wipeFileRowsForUser(email);
+                      }
                       await invoke(CLEAR_LOCAL_CACHE_CMD);
                     } catch (e: unknown) {
                       void captureError({

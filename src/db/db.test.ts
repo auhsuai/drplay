@@ -202,3 +202,31 @@ describe("schema v10 migration", () => {
     upgraded.close();
   });
 });
+
+// Schema v12 drop: v10 copied the legacy `files` rows into filesV2 and rebound
+// db.files to filesV2, so the raw-id table is dead weight — a full duplicate of
+// every account's mirror that no wipe path (logout / root change) can reach.
+// v12 removes it with the same Dexie-documented `null` drop as v8 and v11.
+describe("schema v12 migration", () => {
+  beforeEach(async () => {
+    await Dexie.delete(DB_NAME);
+  });
+
+  afterEach(async () => {
+    await Dexie.delete(DB_NAME);
+  });
+
+  it("drops the legacy raw-id `files` store after the v10 copy", async () => {
+    await seedLegacyFiles(LEGACY_ROWS);
+
+    const upgraded = new DriveDatabase();
+    await upgraded.open();
+    const tableNames = upgraded.tables.map((t) => t.name);
+    const copiedCount = await upgraded.files.count();
+    upgraded.close();
+
+    expect(tableNames).not.toContain("files");
+    // Dropping the legacy store must not lose the v10-copied rows.
+    expect(copiedCount).toBe(LEGACY_ROWS.length);
+  });
+});

@@ -81,12 +81,20 @@ export async function upsertFileRows(
   const keys = ownedRows.map(
     (row) => [row.userEmail, row.id] as [string, string],
   );
-  const existingRows = await db.files.bulkGet(keys);
-  ownedRows.forEach((row, i) => {
-    if (row.metadata === undefined) row.metadata = existingRows[i]?.metadata;
-  });
+  // The read-modify-write MUST be atomic: as two auto-committing table calls
+  // (bulkGet, then bulkPut) a competing writer can land between them and be
+  // overwritten by the stale snapshot — e.g. the metadata pipeline's
+  // db.files.update (fetchPipeline.ts). ONE readwrite transaction keeps the
+  // snapshot and the write-back under the same store lock; only Dexie promises
+  // may be awaited inside it (a non-Dexie await drops out of the zone).
+  await db.transaction("rw", db.files, async () => {
+    const existingRows = await db.files.bulkGet(keys);
+    ownedRows.forEach((row, i) => {
+      if (row.metadata === undefined) row.metadata = existingRows[i]?.metadata;
+    });
 
-  await db.files.bulkPut(ownedRows);
+    await db.files.bulkPut(ownedRows);
+  });
 }
 
 /**

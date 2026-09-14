@@ -300,6 +300,16 @@ export class DriveDatabase extends Dexie {
       uploadSessions: null,
     });
 
+    // Version 12 drops the legacy raw-id `files` table: v10 copied every row
+    // into filesV2 and rebound db.files to it (see constructor), so nothing
+    // reads the old table any more. Keeping it would leave a stale full
+    // duplicate of every account's mirror plus logout residue the per-account
+    // wipe in fileRows never reaches. Deleting a table via `null` in a new
+    // version is the Dexie-documented pattern (same as v8 and v11).
+    this.version(12).stores({
+      files: null,
+    });
+
     // Bind the public table names to the new compound-key tables so app code
     // (history.ts / favorites.ts) keeps talking to db.recentTracks etc.
     this.files = this.filesV2;
