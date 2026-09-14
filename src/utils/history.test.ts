@@ -142,6 +142,28 @@ describe("history (Dexie-backed)", () => {
     expect(ids).toEqual(["a"]);
   });
 
+  it("B07-1 regression: corrupt cache envelopes are skipped without wiping the valid discoveries", async () => {
+    await db.metadataCache.bulkPut([
+      { key: "metadata_null_entry", entry: null },
+      { key: "metadata_null_data", entry: { version: 2, data: null, ts: 2 } },
+      {
+        key: "metadata_nonnum_v",
+        entry: { version: 2, data: { v: "8" }, ts: 3 },
+      },
+      {
+        key: "metadata_stale_version",
+        entry: { version: 1, data: { v: 8 }, ts: 4 },
+      },
+      { key: "metadata_scalar_entry", entry: "garbage" },
+      { key: "metadata_real_a", entry: { version: 2, data: { v: 8 }, ts: 6 } },
+      { key: "metadata_real_b", entry: { version: 2, data: { v: 8 }, ts: 7 } },
+    ]);
+
+    const discoveries = await getRandomDiscoveries();
+    const ids = discoveries.map((t) => t.id).sort();
+    expect(ids).toEqual(["real_a", "real_b"]);
+  });
+
   it("getRandomDiscoveries caps at limit with unique entries when table has more valid rows", async () => {
     const rows: MetadataCacheRow[] = [];
     for (let i = 0; i < 20; i++) {

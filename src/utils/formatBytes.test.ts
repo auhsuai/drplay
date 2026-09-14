@@ -25,6 +25,12 @@ describe("formatBytes", () => {
     expect(formatBytes(1.5 * KB)).toBe("1.5 KB");
   });
 
+  it("B07-2 regression: rounding up to 1024 promotes to the next unit", () => {
+    expect(formatBytes(1023.96)).toBe("1 KB");
+    expect(formatBytes(MB - 40)).toBe("1 MB");
+    expect(formatBytes(GB - 40)).toBe("1 GB");
+  });
+
   it("formats GB quota values and trims trailing '.0'", () => {
     expect(formatBytes(15 * GB)).toBe("15 GB");
     expect(formatBytes(2.4 * GB)).toBe("2.4 GB");
