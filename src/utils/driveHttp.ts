@@ -140,7 +140,10 @@ export async function driveFetch(
         // lands in the catch block, which rethrows it because
         // options.signal.aborted is true (same exit as a mid-fetch abort).
         if (!(options.signal?.aborted ?? false)) {
-          await sleep(backoffDelay(attempt, res.headers.get("Retry-After")));
+          await sleep(
+            backoffDelay(attempt, res.headers.get("Retry-After")),
+            options.signal ?? undefined,
+          );
           continue;
         }
         throw new DOMException("aborted", "AbortError");
@@ -156,7 +159,7 @@ export async function driveFetch(
       }
       // Network failure or timeout (AbortError) — transient, retry with backoff.
       if (attempt < MAX_RETRIES) {
-        await sleep(backoffDelay(attempt));
+        await sleep(backoffDelay(attempt), options.signal ?? undefined);
         continue;
       }
       throw err;

@@ -75,7 +75,14 @@ export async function getAppConfig(
 
     if (downloadRes.ok) {
       const config: unknown = await downloadRes.json();
-      return config as Record<string, unknown> | null;
+      if (
+        typeof config !== "object" ||
+        config === null ||
+        Array.isArray(config)
+      ) {
+        return null;
+      }
+      return config as Record<string, unknown>;
     }
     await captureError({
       level: "warn",

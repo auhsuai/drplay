@@ -50,7 +50,7 @@ async function fetchAllPages<T>(
       // show a meaningful message. Never log the raw body (may be huge/opaque).
       throw new Error(`Failed to ${failureLabel} (malformed response)`);
     }
-    if (data.files) all.push(...data.files);
+    if (Array.isArray(data.files)) all.push(...data.files);
     pageToken = data.nextPageToken;
     if (!pageToken) break;
   }

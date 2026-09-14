@@ -587,6 +587,81 @@ describe("driveFetch caller abort (Bug 1b)", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(1); // no doomed second attempt
   });
 
+  // B02-1: abort arrives DURING the backoff sleep (the guard above only covers
+  // an abort that already happened when the response resolved). The sleep must
+  // be signal-aware so the loop exits at once instead of parking for the full
+  // Retry-After (up to MAX_DELAY_MS = 32s) and then firing a doomed retry.
+  it("aborts the backoff sleep immediately when the caller aborts mid-wait", async () => {
+    const controller = new AbortController();
+    const retryAfterResponse = {
+      status: 500,
+      ok: false,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "retry-after" ? "32" : null,
+      },
+      json: () => ({}),
+    } as unknown as Response;
+    mockedFetch.mockResolvedValue(retryAfterResponse);
+
+    let settled = false;
+    const guarded = driveFetch("https://www.googleapis.com/drive/v3/files", {
+      signal: controller.signal,
+    }).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // Let the retryable response resolve and the loop enter the 32s sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(false);
+
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(settled).toBe(true); // not parked in the full 32s Retry-After
+    const err = await guarded;
+    expect(err).toMatchObject({ name: "AbortError" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1); // no doomed second attempt
+  });
+
+  // B02-1 (catch path): the network-error/timeout branch sleeps too — an abort
+  // mid-wait must exit at once instead of parking for the exponential backoff.
+  it("aborts the catch-path backoff sleep immediately when the caller aborts mid-wait", async () => {
+    const controller = new AbortController();
+    mockedFetch.mockRejectedValue(new Error("network down"));
+
+    let settled = false;
+    const guarded = driveFetch("https://www.googleapis.com/drive/v3/files", {
+      signal: controller.signal,
+    }).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // First attempt rejects as a network error; the loop enters the backoff sleep.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(false);
+
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(settled).toBe(true);
+    const err = await guarded;
+    expect(err).toMatchObject({ name: "AbortError" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1); // no doomed second attempt
+  });
+
   // Variation guard: only a USER abort stops the retry chain. An AbortError
   // fired by our own merged timeout (caller signal still NOT aborted) must
   // keep retrying as a transient failure — otherwise the 1b fix would also
@@ -1198,6 +1273,26 @@ describe("drivePagination malformed JSON body", () => {
     );
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
+
+  // B02-2: `files` must be a real array — a 200 body with a non-array `files`
+  // (server bug / truncated payload) must degrade to an empty page instead of
+  // throwing a raw TypeError (number) or spreading garbage chars (string).
+  it("ignores a non-array `files` field (number) instead of throwing a raw TypeError", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, { files: 7 }));
+
+    await expect(searchFolders("tok", "name contains 'foo'")).resolves.toEqual(
+      [],
+    );
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a string `files` field instead of pushing its characters", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, { files: "ab" }));
+
+    await expect(searchFolders("tok", "name contains 'foo'")).resolves.toEqual(
+      [],
+    );
+  });
 });
 
 // Regression: getDriveStorageQuota (sidebar storage quota display) must reuse
@@ -1515,4 +1610,32 @@ describe("driveConfig encodes config fileId in download URL (getAppConfig mirror
       `https://www.googleapis.com/drive/v3/files/${encodedId}?alt=media`,
     );
   });
+});
+
+// B02-3: a valid JSON body that is not a plain object (array/string/number)
+// must not be returned as a config — the declared Record<string, unknown>
+// contract would be lying and future callers would trust it.
+describe("getAppConfig non-object JSON body (B02-3)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    { label: "array", body: [1, 2] },
+    { label: "string", body: "abc" },
+    { label: "number", body: 42 },
+  ])(
+    "returns null when the downloaded config JSON is a non-object ($label)",
+    async ({ body }) => {
+      mockedFetch
+        .mockResolvedValueOnce(
+          makeJsonResponse(200, { files: [{ id: "file-1" }] }),
+        ) // search finds the config file
+        .mockResolvedValueOnce(makeJsonResponse(200, body)); // alt=media download
+
+      await expect(getAppConfig("tok-1")).resolves.toBeNull();
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    },
+  );
 });
