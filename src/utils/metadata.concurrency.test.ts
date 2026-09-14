@@ -36,14 +36,11 @@ vi.mock("../db/db", () => ({
         memoryStore.delete(key);
         return Promise.resolve();
       },
-      // Mirrors Table.toCollection().primaryKeys() for the account-boundary
-      // wipe (wipePersistedMetadataCache): all primary keys currently stored.
-      toCollection: () => ({
-        primaryKeys: () => Promise.resolve([...memoryStore.keys()]),
-      }),
-      bulkDelete: (keys: string[]) => {
-        keys.forEach((k) => memoryStore.delete(k));
-        return Promise.resolve(0);
+      // Mirrors Dexie Table.clear() for the account-boundary wipe
+      // (wipePersistedMetadataCache): drops every row in the store.
+      clear: () => {
+        memoryStore.clear();
+        return Promise.resolve();
       },
     },
   },

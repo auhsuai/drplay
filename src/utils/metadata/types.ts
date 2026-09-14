@@ -7,6 +7,12 @@ export interface CachedMetadata {
   pictureData: Uint8Array | null;
   pictureDataFull: Uint8Array | null;
   pictureFormat?: string;
+  // Format of `pictureDataFull` when it differs from the thumb's
+  // pictureFormat: each cover variant is compressed independently, so a
+  // >THUMB_MAX_SIZE PNG/WebP source yields a re-encoded JPEG thumb with the
+  // ORIGINAL PNG/WebP kept for the full variant. The persist gate and the
+  // consumer blob MIME must judge the full bytes by their own format.
+  pictureFullFormat?: string;
   bitrate?: number;
   size?: number;
   v: number;

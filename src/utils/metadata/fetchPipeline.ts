@@ -312,13 +312,17 @@ async function getTrackMetadataImpl(
     }
 
     // 6. IDB + memory cache (setCache keeps the generation guard + score rules)
+    // B09-5: a consumer that aborted while the pipeline was in its CPU phase
+    // (parse/cover — neither checks the signal) is already gone, so the late
+    // write must be dropped. Otherwise a logout/clear wipe that raced this
+    // pipeline gets its row resurrected after the generation bump: setCache
+    // reads the generation at CALL time, i.e. the post-bump one.
+    if (signal?.aborted === true) {
+      return entry;
+    }
     cacheTrackMetadata(fileId, entry);
     return entry;
   } catch (e: unknown) {
-    await logMetaWarn(
-      `metadata-fetch-failed (fileId=${fileId}, size=${String(size)}, format=${format}): ${classifyMetaError(e).message}`,
-      classifyMetaError(e).name,
-    );
     const placeholder = makePlaceholder(safeName, size);
     // A caller abort (scroll unmounted the card mid-fetch) surfaces here as a
     // RangeFetchNetworkError — the tokenizer classifies the AbortError as
@@ -327,10 +331,17 @@ async function getTrackMetadataImpl(
     // cancellation made the card re-mount as a stuck placeholder for a full
     // minute despite zero network trouble. Mirror the network branch's
     // no-pin semantics WITHOUT the cooldown: return the placeholder to THIS
-    // caller only; the next mount re-fetches immediately.
+    // caller only; the next mount re-fetches immediately. Checked BEFORE the
+    // failure log: a deliberate abort is not a failure and must not feed
+    // metadata-fetch-failed noise into the error log (see useTrackMetadata:
+    // "deliberate cleanup abort is not an error — stay silent").
     if (signal?.aborted === true) {
       return placeholder;
     }
+    await logMetaWarn(
+      `metadata-fetch-failed (fileId=${fileId}, size=${String(size)}, format=${format}): ${classifyMetaError(e).message}`,
+      classifyMetaError(e).name,
+    );
     // A transient network/timeout failure must NOT pin the v:9 placeholder
     // into the memory cache — that made every card show 00:00:00 until app
     // reload (the mem entry shadows any later fetch). Deterministic failures

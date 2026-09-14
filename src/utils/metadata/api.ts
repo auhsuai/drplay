@@ -1,21 +1,33 @@
 import { captureError } from "../errorLog";
-import {
-  classifyMetaError,
-  getCacheEntry,
-  getMemCacheEntry,
-  mergeFullPicture,
-  putCacheEntry,
-} from "./cache";
-import {
-  INFLIGHT_TIMEOUT,
-  METADATA_KEY_PREFIX,
-  METADATA_UPDATED_EVENT,
-  META_MODULE,
-} from "./constants";
+import { raceWithAbortSignal } from "../apiClientShared";
+import { getMemCacheEntry, mergeFullPicture } from "./cache";
+import { INFLIGHT_TIMEOUT, META_MODULE } from "./constants";
 import { getTrackMetadataImpl } from "./fetchPipeline";
 import type { CachedMetadata } from "./types";
 
-const inflightMetadata = new Map<string, Promise<CachedMetadata>>();
+// In-flight dedupe entry. The shared work is bound to the entry's OWN
+// AbortController — never to a caller's signal: one consumer unmounting must
+// not cancel the parse another mounted consumer (TrackInfo/NowPlaying/SongCard
+// all fetch the same fileId) is still waiting on. Every caller, creator
+// included, races the entry promise with its own signal and drops the
+// refcount when it leaves; the shared work is aborted only when the LAST
+// caller is gone (refs === 0).
+interface InflightEntry {
+  promise: Promise<CachedMetadata>;
+  controller: AbortController;
+  refs: number;
+}
+
+const inflightMetadata = new Map<string, InflightEntry>();
+
+// Dedupe identity includes the arguments the pipeline is built from. Keying on
+// fileId alone let a joiner inherit a result computed for DIFFERENT args: a
+// caller with size<=0 pins its placeholder in the memory cache by fileId
+// (fetchPipeline), so every later caller — real size included — was served
+// that placeholder until a clear/forceNetwork. Same args still dedupe.
+function inflightKey(fileId: string, size?: number, name?: string): string {
+  return `${fileId}|${String(size ?? 0)}|${name ?? ""}`;
+}
 
 export async function getTrackMetadata(
   fileId: string,
@@ -31,27 +43,41 @@ export async function getTrackMetadata(
     if (cached) return mergeFullPicture(fileId, cached);
   }
 
+  const key = inflightKey(fileId, size, name);
+
   if (!forceNetwork) {
-    const existing = inflightMetadata.get(fileId);
-    if (existing) return existing;
+    const existing = inflightMetadata.get(key);
+    if (existing) {
+      existing.refs += 1;
+      try {
+        // The joiner escapes as soon as ITS signal aborts without touching
+        // the shared promise (raceWithAbortSignal: abort is per-caller).
+        return await raceWithAbortSignal(existing.promise, signal);
+      } finally {
+        existing.refs -= 1;
+        if (existing.refs === 0) existing.controller.abort();
+      }
+    }
   }
 
+  const controller = new AbortController();
   const promise = getTrackMetadataImpl(
     fileId,
     token,
     size,
     name,
-    signal,
+    controller.signal,
     forceNetwork,
   );
+  const entry: InflightEntry = { promise, controller, refs: 1 };
 
-  inflightMetadata.set(fileId, promise);
+  inflightMetadata.set(key, entry);
 
   let settled = false;
   const removeFromInflight = () => {
     settled = true;
-    if (inflightMetadata.get(fileId) === promise) {
-      inflightMetadata.delete(fileId);
+    if (inflightMetadata.get(key) === entry) {
+      inflightMetadata.delete(key);
     }
   };
   // The inflight entry must live for the whole [start → settle] window: a
@@ -90,39 +116,15 @@ export async function getTrackMetadata(
     },
   );
 
-  return promise;
-}
-
-export async function updateTrackDuration(
-  fileId: string,
-  accurateDuration: number,
-): Promise<void> {
-  // fileId with no cached entry is undefined at runtime — guard it.
-  const memEntry = getMemCacheEntry(fileId);
-  if (memEntry) {
-    memEntry.duration = accurateDuration;
-    memEntry.durationEstimated = false;
-  }
-  // IDB persistence is best-effort: the memory cache above is the source of
-  // truth for the current session, so a store failure must not reject the
-  // caller — log and still notify listeners (they re-read from memory).
   try {
-    const key = `${METADATA_KEY_PREFIX}${fileId}`;
-    const entry = await getCacheEntry(key);
-    if (entry?.data) {
-      entry.data.duration = accurateDuration;
-      entry.data.durationEstimated = false;
-      entry.ts = Date.now();
-      await putCacheEntry(key, entry);
-    }
-  } catch (e: unknown) {
-    await captureError({
-      level: "warn",
-      source: META_MODULE,
-      message: `duration-persist-failed (fileId=${fileId}): ${classifyMetaError(e).message}`,
-    });
+    // Same per-caller escape as the joiner path above: the creator's signal
+    // must not be wired into the shared work (that is exactly the bug where
+    // the first consumer's unmount poisoned every other consumer), and the
+    // creator must not be left waiting on work nobody else refs anymore —
+    // the finally below aborts the shared work once refs hits 0.
+    return await raceWithAbortSignal(promise, signal);
+  } finally {
+    entry.refs -= 1;
+    if (entry.refs === 0) entry.controller.abort();
   }
-  window.dispatchEvent(
-    new CustomEvent(METADATA_UPDATED_EVENT, { detail: { fileId } }),
-  );
 }

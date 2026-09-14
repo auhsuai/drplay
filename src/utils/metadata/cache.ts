@@ -184,8 +184,11 @@ export function cacheTrackMetadata(
 }
 
 function canPersistFullPicture(entry: CachedMetadata): boolean {
+  // The full bytes have their own format (a PNG/WebP original full can sit
+  // behind a re-encoded JPEG thumb): gate on the FULL format, falling back to
+  // pictureFormat only for rows written before pictureFullFormat existed.
   return (
-    entry.pictureFormat === JPEG_MIME &&
+    (entry.pictureFullFormat ?? entry.pictureFormat) === JPEG_MIME &&
     entry.pictureDataFull !== null &&
     entry.pictureDataFull.byteLength <= FULL_PERSIST_MAX_BYTES
   );
@@ -273,7 +276,7 @@ export function clearAllMetadataCache(): void {
  * left behind by user A would be served to user B. Metadata is re-fetchable
  * cache data, so instead of a schema migration this wipes EVERYTHING: the mem
  * layers (via clearAllMetadataCache semantics) + the persisted localStorage
- * LRU list + all metadataCache rows in IndexedDB (bulk delete). Best-effort:
+ * LRU list + all metadataCache rows in IndexedDB (Table.clear). Best-effort:
  * individual failures are logged and never reject — logout must proceed.
  */
 export async function wipePersistedMetadataCache(): Promise<void> {
@@ -290,11 +293,12 @@ export async function wipePersistedMetadataCache(): Promise<void> {
   }
 
   try {
-    const keys = await db.metadataCache.toCollection().primaryKeys();
-    await db.metadataCache.bulkDelete(keys);
+    // Dexie's canonical "delete every row in this store" — no intermediate
+    // primary-key array to materialize before a selective bulkDelete.
+    await db.metadataCache.clear();
   } catch (e: unknown) {
     // Logged, not rethrown: fire-and-forget callers treat resolution as "wipe
-    // finished", and a failed bulk delete is recoverable (rows are cache).
+    // finished", and a failed clear is recoverable (rows are cache).
     logMeta(
       "error",
       `metadata-idb-wipe-failed: ${classifyMetaError(e).message}`,

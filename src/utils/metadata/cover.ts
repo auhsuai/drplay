@@ -79,6 +79,10 @@ export async function processCovers(
           }
           if (fullOutcome.ok) {
             entry.pictureDataFull = fullOutcome.result.data;
+            // Each variant compresses independently: record the FULL format
+            // too, or the persist gate and the blob MIME would judge these
+            // bytes by the (possibly re-encoded JPEG) thumb format.
+            entry.pictureFullFormat = fullOutcome.result.format;
             setFullPictureCache(fileId, fullOutcome.result.data);
             if (fullOutcome.result.format === JPEG_MIME) {
               // S4: push the compressed full variant to the Rust disk cache

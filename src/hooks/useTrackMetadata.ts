@@ -115,13 +115,23 @@ export function useTrackMetadata({
         // Seed offline (2026-08-10): disk entries (coverOnDisk) have no bytes
         // — render the drplay:// GET URL instead (Rust disk + moka cache),
         // asking for the FULL variant when bytes exist, the thumb otherwise.
-        const coverBytes = metadata.pictureDataFull ?? metadata.pictureData;
+        const fullBytes = metadata.pictureDataFull;
+        const coverBytes = fullBytes ?? metadata.pictureData;
         let nextCoverUrl: string | null;
         let nextHookBlobUrl: string | null = null;
         if (metadata.coverOnDisk) {
           nextCoverUrl = buildCoverUrl(fileId, !metadata.pictureDataFull);
         } else if (coverBytes) {
-          nextCoverUrl = buildCoverBlobUrl(coverBytes, metadata.pictureFormat);
+          // The blob MIME must follow the bytes actually rendered: the full
+          // variant carries its own format (a PNG/WebP original can sit behind
+          // a re-encoded JPEG thumb), while the thumb fallback keeps the
+          // thumb format.
+          nextCoverUrl = buildCoverBlobUrl(
+            coverBytes,
+            fullBytes
+              ? (metadata.pictureFullFormat ?? metadata.pictureFormat)
+              : metadata.pictureFormat,
+          );
           nextHookBlobUrl = nextCoverUrl;
         } else {
           nextCoverUrl = null;

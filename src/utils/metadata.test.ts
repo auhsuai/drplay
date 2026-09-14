@@ -812,6 +812,183 @@ describe("getTrackMetadata inflight window (slow pipeline keeps the dedup entry)
   });
 });
 
+describe("getTrackMetadata inflight abort isolation (B09-1)", () => {
+  const fresh = () => import("./metadata");
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  // Range fetch that serves the whole fixture once released and rejects with
+  // an AbortError the moment the signal it was handed aborts — the exact
+  // contract of a real fetch. The single head request covers the whole small
+  // MP3 fixture, so one gated request is enough for the parse.
+  function makeAbortAwareFetch(fixture: Uint8Array) {
+    let releaseGate!: () => void;
+    const gate = new Promise<{
+      status: number;
+      ok: boolean;
+      arrayBuffer: () => Promise<ArrayBuffer>;
+    }>((resolveGate) => {
+      releaseGate = () => {
+        resolveGate({
+          status: 206,
+          ok: true,
+          arrayBuffer: () => Promise.resolve(fixture.slice().buffer),
+        });
+      };
+    });
+    let aborted = 0;
+    const fetchMock = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Promise((resolve, reject) => {
+        const abort = () => {
+          aborted += 1;
+          reject(new DOMException("This operation was aborted", "AbortError"));
+        };
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+        gate.then(resolve, reject);
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return {
+      fetchMock,
+      release: () => {
+        releaseGate();
+      },
+      abortedCount: () => aborted,
+    };
+  }
+
+  it("creator abort leaves the shared pipeline running: the joiner still receives the REAL entry", async () => {
+    const fixture = buildMp3Fixture("Join Title", "Join Artist", "Join Album");
+    const { fetchMock, release } = makeAbortAwareFetch(fixture);
+    const { getTrackMetadata } = await fresh();
+
+    const controller = new AbortController();
+    const creator = getTrackMetadata(
+      "dedup-abort-join",
+      "tok",
+      fixture.length,
+      "join.mp3",
+      controller.signal,
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // A second consumer (TrackInfo/NowPlaying/SongCard) mounts while the first
+    // pipeline is still in flight, then the first consumer unmounts (abort).
+    const joiner = getTrackMetadata(
+      "dedup-abort-join",
+      "tok",
+      fixture.length,
+      "join.mp3",
+    );
+    controller.abort();
+    // The creator's refcount drop lands in a microtask — let it land before
+    // releasing the gate so the joiner's ref is the only one left.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+
+    const joined = await joiner;
+    expect(joined.v).toBe(REAL_METADATA_VERSION);
+    expect(joined.title).toBe("Join Title");
+    expect(joined.artist).toBe("Join Artist");
+    await expect(creator).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("last-caller abort aborts the shared work and caches no placeholder", async () => {
+    const fixture = buildMp3Fixture("Last Title", "Last Artist", "Last Album");
+    const { fetchMock, abortedCount } = makeAbortAwareFetch(fixture);
+    const { getTrackMetadata, metadataCache: memCache } = await fresh();
+
+    const controller = new AbortController();
+    const p = getTrackMetadata(
+      "dedup-last-abort",
+      "tok",
+      fixture.length,
+      "last.mp3",
+      controller.signal,
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    controller.abort();
+    await expect(p).rejects.toMatchObject({ name: "AbortError" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // No caller is left: the shared work must have been aborted...
+    expect(abortedCount()).toBeGreaterThan(0);
+    // ...and the abort placeholder must not have been cached anywhere.
+    expect(memCache.has("dedup-last-abort")).toBe(false);
+    expect(memoryStore.has("metadata_dedup-last-abort")).toBe(false);
+  });
+
+  it("does not write the cache when the consumer aborts before the pipeline finishes (B09-5)", async () => {
+    const fixture = buildMp3WithPicture(
+      "Late Song",
+      "Late Artist",
+      "Late Album",
+      makeJpeg(),
+    );
+    makeFetchMock(fixture);
+    // Gate the cover stage: all network work is done and the pipeline is
+    // suspended BEFORE cacheTrackMetadata — the exact window where a logout
+    // wipe bumps the generation and a late write would resurrect a row.
+    let releaseCovers!: () => void;
+    const coversGate = new Promise<void>((resolve) => {
+      releaseCovers = resolve;
+    });
+    vi.mocked(compressCoverVariants).mockImplementation(
+      async (_data, _fmt, variants) => {
+        await coversGate;
+        return variants.map((v) => ({
+          ok: true as const,
+          result: {
+            data:
+              v.maxSize >= FULL_MAX_SIZE
+                ? new Uint8Array([9, 8, 7])
+                : new Uint8Array([1, 2, 3]),
+            format: "image/jpeg",
+            keptOriginal: false,
+          },
+        }));
+      },
+    );
+
+    const { getTrackMetadata, metadataCache: memCache } = await fresh();
+    const controller = new AbortController();
+    const p = getTrackMetadata(
+      "pic-late-abort",
+      "tok",
+      2048,
+      "pic.mp3",
+      controller.signal,
+    );
+    await vi.waitFor(() => {
+      expect(vi.mocked(compressCoverVariants)).toHaveBeenCalledTimes(1);
+    });
+
+    controller.abort();
+    // Let the abort land (refcount drop + shared-work abort) before the cover
+    // gate opens; the aborting caller is dropped either way.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseCovers();
+    await p.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(memCache.has("pic-late-abort")).toBe(false);
+    expect(memoryStore.has("metadata_pic-late-abort")).toBe(false);
+  });
+});
+
 describe("getTrackMetadata real metadata fetch", () => {
   const fresh = () => import("./metadata");
 
@@ -1266,8 +1443,9 @@ describe("getTrackMetadata per-file network cooldown", () => {
       expect(abortedFetchCalls).toBeGreaterThan(0);
     });
     controller.abort();
-    const r1 = await r1Promise;
-    expect(r1.v).toBe(V_PLACEHOLDER);
+    // B09-1: the aborting caller escapes immediately via raceWithAbortSignal
+    // instead of waiting for the shared work's placeholder.
+    await expect(r1Promise).rejects.toMatchObject({ name: "AbortError" });
 
     // Immediate re-mount with a FRESH controller (every real re-mount creates
     // its own AbortController — see useTrackMetadata): Drive is healthy, so
@@ -1289,6 +1467,62 @@ describe("getTrackMetadata per-file network cooldown", () => {
     expect(okCalls.length).toBeGreaterThan(0);
     expect(r2.v).toBe(8);
     expect(r2.title).toBe("Abort Recovery");
+  });
+
+  it("a deliberate abort logs NO metadata-fetch-failed noise (B09-3)", async () => {
+    const { getTrackMetadata } = await import("./metadata");
+    // A fetch that stays pending until the caller signal aborts (scroll
+    // unmount) — then rejects with AbortError exactly like a real browser
+    // fetch would through the merged timeout signal.
+    let fetchCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        fetchCalls += 1;
+        const signal = init?.signal;
+        return new Promise<never>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(
+              new DOMException("This operation was aborted", "AbortError"),
+            );
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(
+                new DOMException("This operation was aborted", "AbortError"),
+              );
+            },
+            { once: true },
+          );
+        });
+      }),
+    );
+
+    const controller = new AbortController();
+    const p = getTrackMetadata(
+      "cd-abort-silent",
+      "tok",
+      2048,
+      "cd.mp3",
+      controller.signal,
+    );
+    await vi.waitFor(() => {
+      expect(fetchCalls).toBeGreaterThan(0);
+    });
+    controller.abort();
+    // The aborting caller is dropped either way — the observable under test
+    // is the error log below (deliberate aborts are not failures).
+    await p.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const fetchFailedLogs = vi
+      .mocked(captureError)
+      .mock.calls.filter(([args]) =>
+        args.message.includes("metadata-fetch-failed"),
+      );
+    expect(fetchFailedLogs).toHaveLength(0);
   });
 
   it("a REAL network failure still pins the cooldown (no immediate re-fetch)", async () => {
@@ -1502,6 +1736,48 @@ describe("cover extraction + full picture LRU", () => {
     expect(r.pictureDataFull).toEqual(new Uint8Array([9, 8, 7]));
     expect(stored?.data.pictureFormat).toBe("image/png");
     expect(stored?.data.pictureDataFull).toBeNull();
+  });
+
+  it("keeps a mixed-format full variant (JPEG thumb, PNG full) out of IDB", async () => {
+    const { getTrackMetadata } = await fresh();
+    makeFetchMock(
+      buildMp3WithPicture(
+        "Mixed Full",
+        "Mixed Full Artist",
+        "Mixed Full Album",
+        makeJpeg(),
+      ),
+    );
+    vi.mocked(compressCoverVariants).mockResolvedValue([
+      {
+        ok: true as const,
+        result: {
+          data: new Uint8Array([1, 2, 3]),
+          format: "image/jpeg",
+          keptOriginal: false,
+        },
+      },
+      {
+        ok: true as const,
+        result: {
+          data: new Uint8Array([9, 8, 7]),
+          format: "image/png",
+          keptOriginal: true,
+        },
+      },
+    ]);
+
+    const r = await getTrackMetadata("pic-mixed-full", "tok", 2048, "pic.mp3");
+    const row = memoryStore.get("metadata_pic-mixed-full");
+    const stored = row?.entry as { data: CachedMetadata } | undefined;
+    // The persist gate must judge the FULL format, not the thumb's JPEG: PNG
+    // bytes violate the JPEG-only persist contract and stay out of IDB (a row
+    // whose thumb happens to be JPEG must not smuggle them in).
+    expect(stored?.data.pictureDataFull).toBeNull();
+    // The full bytes stay available in memory + the LRU, with their own
+    // format recorded for the consumer blob MIME.
+    expect(r.pictureDataFull).toEqual(new Uint8Array([9, 8, 7]));
+    expect(r.pictureFullFormat).toBe("image/png");
   });
 
   it("IDB hit with a persisted full variant seeds the memory LRU and returns the merged full", async () => {

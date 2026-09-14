@@ -264,6 +264,27 @@ describe("useTrackMetadata cover blob URL", () => {
     );
   });
 
+  it("uses pictureFullFormat for the full bytes when it differs from the thumb format", async () => {
+    mockedFetch.mockResolvedValue(
+      makeMetadata({
+        pictureData: new Uint8Array([1]),
+        pictureDataFull: new Uint8Array([1, 2, 3]),
+        pictureFormat: "image/jpeg",
+        pictureFullFormat: "image/png",
+      }),
+    );
+    const { result } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(result.current.coverUrl).toBe("blob:mock-cover");
+    });
+    // The full bytes are PNG here while the persisted thumb is JPEG — the
+    // blob MIME must follow the bytes actually rendered, not the thumb.
+    expect(mockedBuildCover).toHaveBeenCalledWith(
+      new Uint8Array([1, 2, 3]),
+      "image/png",
+    );
+  });
+
   it("keeps coverUrl null when there are no picture bytes (icon path)", async () => {
     const { result, onMetadata } = renderTrackMetadata();
     await waitFor(() => {

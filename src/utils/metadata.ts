@@ -16,4 +16,4 @@ export {
   metadataCache,
   wipePersistedMetadataCache,
 } from "./metadata/cache";
-export { getTrackMetadata, updateTrackDuration } from "./metadata/api";
+export { getTrackMetadata } from "./metadata/api";
