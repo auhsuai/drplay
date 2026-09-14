@@ -5,8 +5,9 @@ import { usePlayer, PLAYER_STOP_EVENT } from "./usePlayer";
 import { usePlayerStore } from "../store/playerStore";
 import type { Track } from "../types";
 import { showErrorToast } from "../utils/simpleToast";
-import { metadataCache } from "../utils/metadata";
+import { metadataCache, getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
+import { getValidToken } from "../utils/apiClient";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -458,5 +459,64 @@ describe("usePlayer pre-play streamUnplayable gate (P1)", () => {
     expect(usePlayerStore.getState().currentTrack?.id).toBe("gate-f");
     expect(usePlayerStore.getState().isPlaying).toBe(true);
     expect(vi.mocked(showErrorToast)).not.toHaveBeenCalled();
+  });
+});
+
+describe("usePlayer resume path — no streamUrl, paused (B14-1/B14-2)", () => {
+  const resumeTrack = (id: string): Track => ({
+    ...makeTrack(id),
+    streamUrl: "",
+  });
+
+  it("B14-2: token resolve → commit NGAY (URL + triggerReload + isPlaying), không chờ metadata", async () => {
+    installSessionMock();
+    vi.mocked(getTrackMetadata).mockReturnValueOnce(
+      new Promise<never>(() => {}),
+    );
+    usePlayerStore.setState({
+      currentTrack: resumeTrack("resume-1"),
+      isPlaying: false,
+    });
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      void result.current.handleTogglePlay();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const state = usePlayerStore.getState();
+    expect(state.currentTrack?.streamUrl).toBe("/drive-stream/resume-1");
+    expect(state.isPlaying).toBe(true);
+    expect(state.loadNonce).toBe(1);
+  });
+
+  it("B14-1: abort giữa token (STOP) → KHÔNG commit URL/triggerReload/isPlaying", async () => {
+    installSessionMock();
+    let resolveToken: ((token: string) => void) | undefined;
+    vi.mocked(getValidToken).mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        resolveToken = resolve;
+      }),
+    );
+    usePlayerStore.setState({
+      currentTrack: resumeTrack("resume-2"),
+      isPlaying: false,
+    });
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    act(() => {
+      void result.current.handleTogglePlay();
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(PLAYER_STOP_EVENT));
+      resolveToken?.("fresh-token");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const state = usePlayerStore.getState();
+    expect(state.currentTrack).toBeNull();
+    expect(state.isPlaying).toBe(false);
+    expect(state.loadNonce).toBe(0);
   });
 });

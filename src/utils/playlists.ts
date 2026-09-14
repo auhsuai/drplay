@@ -148,7 +148,7 @@ export async function updatePlaylist(
 export async function addTrackToPlaylist(
   playlistId: string,
   track: Track,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await db.transaction("rw", db.playlists, async () => {
       const playlist = await db.playlists.get(playlistId);
@@ -163,6 +163,7 @@ export async function addTrackToPlaylist(
         }
       }
     });
+    return true;
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
     await captureError({
@@ -171,6 +172,7 @@ export async function addTrackToPlaylist(
       message: `add-track-failed: ${name}: ${message}`,
     });
     showErrorToast(i18n.t("playlist.add_track_error"));
+    return false;
   }
 }
 

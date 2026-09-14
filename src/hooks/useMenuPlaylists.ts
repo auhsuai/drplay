@@ -1,14 +1,18 @@
 import { useState, useEffect } from "react";
 import type { Playlist } from "../utils/playlists";
 import { getPlaylists, addTrackToPlaylist } from "../utils/playlists";
-import { showErrorToast } from "../utils/simpleToast";
-import { captureError } from "../utils/errorLog";
 import type { Track } from "../types";
 import type { TFunction } from "i18next";
 
 const SUBMENU_WIDTH = 270;
 
-export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
+export function useMenuPlaylists(
+  isMenuOpen: boolean,
+  // Kept in the public signature for MoreMenu's call site; the hook itself no
+  // longer needs it (addTrackToPlaylist owns its failure feedback, B14-3).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _t: TFunction,
+) {
   const [showPlaylistsSubmenu, setShowPlaylistsSubmenu] = useState(false);
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState("");
   const [playlistCurrentPage, setPlaylistCurrentPage] = useState(1);
@@ -33,18 +37,10 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
   useEffect(() => {
     let ignore = false;
     if (isMenuOpen) {
-      getPlaylists()
-        .then((data) => {
-          if (!ignore) setPlaylists(data);
-        })
-        .catch(
-          (err: unknown) =>
-            void captureError({
-              level: "error",
-              source: "useMenuPlaylists",
-              message: `Failed to load playlists: ${err instanceof Error ? err.message : String(err)}`,
-            }),
-        );
+      // getPlaylists never rejects (it catches, logs and returns []).
+      void getPlaylists().then((data) => {
+        if (!ignore) setPlaylists(data);
+      });
     }
     return () => {
       ignore = true;
@@ -60,18 +56,10 @@ export function useMenuPlaylists(isMenuOpen: boolean, t: TFunction) {
   ) => {
     e.stopPropagation();
     if (track) {
-      try {
-        await addTrackToPlaylist(playlistId, track);
-        setIsOpen(false);
-        onClose?.();
-      } catch (err: unknown) {
-        void captureError({
-          level: "error",
-          source: "useMenuPlaylists",
-          message: `Failed to add track to playlist: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        showErrorToast(t("menu.add_to_playlist_error"));
-      }
+      const ok = await addTrackToPlaylist(playlistId, track);
+      if (!ok) return;
+      setIsOpen(false);
+      onClose?.();
     }
   };
 

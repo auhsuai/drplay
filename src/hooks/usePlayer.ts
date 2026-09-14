@@ -2,7 +2,6 @@ import { useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import type { Track } from "../types";
-import { getTrackMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
 import {
   getPrefetchedStreamUrl,
@@ -149,22 +148,14 @@ export const usePlayer = (accessToken: string | null) => {
         setIsDownloading(true);
         try {
           const freshToken = await getValidToken(false, signal);
+
+          // guard (UTP-1 parity): the LEAD token-refresh branch does not race
+          // the signal, so an aborted attempt resumes here — never commit it.
+          if (signal.aborted) return;
+
           if (!freshToken) {
             setIsDownloading(false);
             return;
-          }
-          try {
-            await getTrackMetadata(
-              currentTrack.id,
-              freshToken,
-              currentTrack.size,
-              currentTrack.originalName,
-              signal,
-            );
-          } catch (e: unknown) {
-            if (!isAbortError(e)) {
-              void logUsePlayer("warn", `bitrate-resume-fail: ${errMsg(e)}`);
-            }
           }
 
           const url = buildStreamUrl(

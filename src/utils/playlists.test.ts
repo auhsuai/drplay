@@ -156,9 +156,11 @@ describe("playlists (Dexie-backed)", () => {
   it("addTrackToPlaylist appends a track and dedupes", async () => {
     setUser(EMAIL_A);
     const p = nonNull(await createPlaylist("Liked"), "playlist");
+    const okFirst = await addTrackToPlaylist(p.id, track("1"));
     await addTrackToPlaylist(p.id, track("1"));
-    await addTrackToPlaylist(p.id, track("1"));
-    await addTrackToPlaylist(p.id, track("2"));
+    const okSecond = await addTrackToPlaylist(p.id, track("2"));
+    expect(okFirst).toBe(true);
+    expect(okSecond).toBe(true);
 
     const fetched = nonNull(await getPlaylistById(p.id), "playlist");
     expect(fetched.tracks).toHaveLength(2);
@@ -306,8 +308,9 @@ describe("playlists (Dexie-backed)", () => {
       .spyOn(store, "transaction")
       .mockRejectedValueOnce(new Error("boom"));
 
-    await addTrackToPlaylist(p.id, track("1"));
+    const ok = await addTrackToPlaylist(p.id, track("1"));
 
+    expect(ok).toBe(false);
     expect(showErrorToastMock).toHaveBeenCalledTimes(1);
     expect(showErrorToastMock).toHaveBeenCalledWith("playlist.add_track_error");
     txnSpy.mockRestore();
