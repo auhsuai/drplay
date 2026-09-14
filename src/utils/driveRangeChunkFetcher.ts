@@ -5,7 +5,7 @@
 // "driveRangeTokenizer" so existing error-log entries and test assertions
 // keep matching; driveRangeTokenizer re-exports the public constants so
 // consumer imports keep resolving the exact same names as before.
-import { createSemaphore, sleep } from "./asyncLimit";
+import { createSemaphore } from "./asyncLimit";
 import {
   isDriveCircuitOpen,
   recordDriveFailure,
@@ -16,7 +16,7 @@ import {
   RangeNotSupportedError,
 } from "./driveRangeErrors";
 import { captureError } from "./errorLog";
-import { backoffDelay, mergeWithTimeoutSignal } from "./retryDelay";
+import { backoffDelay, mergeWithTimeoutSignal, sleep } from "./retryDelay";
 import { DRIVE_STREAM_PREFIX } from "./streamPrefetcher";
 
 export const CONCURRENCY = 3; // max app-wide concurrent range fetches
@@ -159,7 +159,18 @@ export class RangeChunkFetcher {
             !(this.callerSignal?.aborted ?? false) &&
             !isDriveCircuitOpen()
           ) {
-            await sleep(backoffDelay(attempt));
+            // The sleep is signal-cancellable: an abort mid-backoff rejects
+            // at once (sleep only rejects on abort), so exit through the
+            // same RangeFetchNetworkError shape the pre-sleep guard throws
+            // instead of parking the full backoff before the doomed retry.
+            try {
+              await sleep(backoffDelay(attempt), this.callerSignal);
+            } catch {
+              throw new RangeFetchNetworkError(
+                "timeout",
+                `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+              );
+            }
             continue;
           }
           throw new RangeFetchNetworkError(
@@ -219,21 +230,22 @@ export class RangeChunkFetcher {
           if (isDriveCircuitOpen()) {
             this.throwCircuitOpen(chunkStart, chunkEnd);
           }
-          // Mirror the timeout branch's caller-abort handling: never sleep
-          // into a cancelled caller's backoff (a Retry-After can park this
-          // loop for up to 32s) just to fire one doomed attempt afterwards —
-          // exit now through the same RangeFetchNetworkError path that branch
-          // throws when the CALLER aborted.
-          if (!(this.callerSignal?.aborted ?? false)) {
+          // Mirror the timeout branch's caller-abort handling: the backoff
+          // sleep is signal-cancellable (a Retry-After can park this loop for
+          // up to 32s), so an abort mid-sleep exits immediately through the
+          // same RangeFetchNetworkError path the pre-sleep guard threw.
+          try {
             await sleep(
               backoffDelay(attempt, response.headers.get("Retry-After")),
+              this.callerSignal,
             );
-            continue;
+          } catch {
+            throw new RangeFetchNetworkError(
+              "timeout",
+              `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+            );
           }
-          throw new RangeFetchNetworkError(
-            "timeout",
-            `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
-          );
+          continue;
         }
         // A retry budget exhausted on 429/5xx is still a TRANSIENT throttle
         // failure (RFC 9110 §15.5.5: 429/503 signal a temporary condition).

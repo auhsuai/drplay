@@ -12,6 +12,7 @@ import {
   isDriveCircuitOpen,
   resetDriveCircuitBreakerForTests,
 } from "./driveRangeTokenizer";
+import { AlignedChunkCache, MAX_CACHED_CHUNKS } from "./driveRangeChunkCache";
 import * as errorLogModule from "./errorLog";
 
 type FetchCall = { url: string; range: string | null };
@@ -456,6 +457,59 @@ describe("DriveRangeTokenizer", () => {
     // The 500 was a REAL failure: it still feeds the breaker, but one
     // failure alone must not open the circuit.
     expect(isDriveCircuitOpen()).toBe(false);
+  });
+
+  // The pre-sleep guard only handles an abort that already happened; an abort
+  // WHILE parked in the Retry-After backoff must exit just as fast — the
+  // sleep is signal-cancellable, so the caller is never held up to 32s.
+  it("caller abort mid-429-backoff-sleep rejects immediately with the same exit shape", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const mock = vi.fn(() =>
+      Promise.resolve({
+        status: 429,
+        ok: false,
+        headers: new Headers({ "Retry-After": "32" }),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      }),
+    );
+    vi.stubGlobal("fetch", mock);
+    const tz = new DriveRangeTokenizer("f1", 1000, {
+      abortSignal: controller.signal,
+    });
+
+    let settled = false;
+    const guarded = tz.readRange(0, 8).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    // Let the 429 land and the 32s backoff sleep start, then cancel mid-sleep.
+    await vi.advanceTimersByTimeAsync(10);
+    expect(settled).toBe(false); // parked in the backoff, not settled yet
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    // Captured BEFORE any big advance: the abort must have settled the read
+    // already (old behavior parks the full 32s and only settles after it).
+    const settledOnAbort = settled;
+    // Flush the (now-cleared) old sleep timer too so a parked promise settles
+    // instead of hanging the test; the new code has nothing left to flush.
+    await vi.advanceTimersByTimeAsync(32_000);
+    const err = await guarded;
+    expect(settledOnAbort).toBe(true);
+    // Same error path the pre-sleep abort guard uses.
+    expect(err).toBeInstanceOf(RangeFetchNetworkError);
+    expect(err).toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "timeout",
+      message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+    });
+    expect(mock).toHaveBeenCalledTimes(1); // abort mid-backoff: no second attempt
   });
 
   it("throws SizeUnknownError when size is 0 or negative", () => {
@@ -921,5 +975,39 @@ describe("DriveRangeTokenizer", () => {
       expect(isDriveCircuitOpen()).toBe(true);
       expect(mock).toHaveBeenCalledTimes(3);
     });
+  });
+});
+
+describe("AlignedChunkCache (set ownership + recency)", () => {
+  it("set() on an existing key refreshes its recency so it is not evicted first", () => {
+    const cache = new AlignedChunkCache();
+    const fullChunk = new Uint8Array(65_536); // owns its buffer -> stored as-is
+    for (let k = 0; k < MAX_CACHED_CHUNKS; k += 1) cache.set(k, fullChunk);
+    // Re-seed existing key 0 (the prefetchRange/prefetchHead re-set path): it
+    // must move to the most-recent end, not stay at the eviction head.
+    cache.set(0, fullChunk);
+    cache.set(MAX_CACHED_CHUNKS, fullChunk); // one over the bound -> evict one
+    cache.evict();
+    expect(cache.peek(0)).toBeDefined(); // refreshed key survived
+    expect(cache.peek(1)).toBeUndefined(); // the true LRU (key 1) was evicted
+  });
+
+  it("set() copies a subarray view so the cache never pins the parent buffer", () => {
+    const cache = new AlignedChunkCache();
+    const parent = new Uint8Array(1024);
+    const view = parent.subarray(32, 96);
+    view[0] = 7;
+    cache.set(0, view);
+    const stored = cache.peek(0);
+    // Owned copy: same bytes, zero offset, own buffer — the parent (and the
+    // rest of its multi-byte region) is not retained.
+    expect(stored).not.toBe(view);
+    expect(Array.from(stored ?? [])).toEqual(Array.from(view));
+    expect(stored?.byteOffset).toBe(0);
+    expect(stored?.buffer).not.toBe(parent.buffer);
+    expect(stored?.buffer.byteLength).toBe(view.byteLength);
+    // A later parent mutation must not leak into the cached copy.
+    parent[32] = 99;
+    expect(stored?.[0]).toBe(7);
   });
 });

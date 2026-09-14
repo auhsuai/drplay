@@ -373,6 +373,21 @@ describe("scanTailForMoov", () => {
     expect(found?.moovSize).toBe(moovSize);
   });
 
+  it("finds a moov box at an arbitrary (non-4-byte-aligned) offset", () => {
+    // An mdat payload has an arbitrary length, so the moov box after it can
+    // start at ANY byte offset — an aligned stride would miss this one
+    // (tail offset 21, file offset 199921).
+    const tailSize = 100;
+    const moovFileOffset = 199_921;
+    const moovSize = 40;
+    const tail = new Uint8Array(tailSize);
+    tail.set(box(moovSize, "moov"), moovFileOffset - (200_000 - tailSize));
+    const found = scanTailForMoov(tail, 200_000);
+    expect(found).not.toBeNull();
+    expect(found?.moovOffset).toBe(moovFileOffset);
+    expect(found?.moovSize).toBe(moovSize);
+  });
+
   it("rejects a moov whose size extends beyond the file size", () => {
     const tail = new Uint8Array(64);
     // moov at tail offset 8 (file offset = tailStart+8), size claims 2000 > remaining file

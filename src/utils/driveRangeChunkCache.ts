@@ -28,8 +28,21 @@ export class AlignedChunkCache {
     return cached;
   }
 
+  /**
+   * Store a chunk. A subarray view keeps its parent ArrayBuffer alive, so
+   * anything that does not own its buffer is copied — otherwise one 64KB
+   * entry could pin the whole multi-MB region it was sliced from, blowing
+   * the LRU's byte bound. Re-setting an existing key refreshes its recency
+   * (delete+set, mirror of get) so the just-seeded entry is not the next
+   * eviction victim.
+   */
   set(chunkStart: number, data: Uint8Array): void {
-    this.chunks.set(chunkStart, data);
+    const owned =
+      data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+        ? data
+        : data.slice();
+    this.chunks.delete(chunkStart);
+    this.chunks.set(chunkStart, owned);
   }
 
   /** Drop entries from the least-recently-used end beyond the LRU bound. */

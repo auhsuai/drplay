@@ -417,13 +417,18 @@ export interface MoovTailScan {
 }
 
 // Cap the scan so a pathological tail (e.g. a huge file whose tail is all
-// binary noise) cannot burn unbounded CPU: 1MB tail / 4-byte stride.
-const TAIL_SCAN_MAX_PROBES = 262_144;
+// binary noise) cannot burn unbounded CPU: at most 1MiB of the tail is
+// probed, byte-wise (box offsets are arbitrary — see scanTailForMoov).
+const TAIL_SCAN_MAX_BYTES = 1_048_576;
 
 /**
- * Search the tail of an MP4 file for a 'moov' box header at 4-byte aligned
- * offsets. Scans backwards from the end of the file so the REAL moov (the one
- * nearest EOF) wins over stale 'moov' byte patterns inside mdat payloads.
+ * Search the tail of an MP4 file for a 'moov' box header, byte-wise. Box
+ * offsets are NOT 4-byte aligned: an ISO-BMFF box header is preceded by a
+ * box of arbitrary (payload-determined) size, so an aligned stride misses
+ * real moov headers (the box is only 8 bytes before its payload, which can
+ * start anywhere). Scans backwards from the end of the file so the REAL moov
+ * (the one nearest EOF) wins over stale 'moov' byte patterns inside mdat
+ * payloads.
  * @param tailBuffer The last TAIL_BYTES of the file.
  * @param fileSize Total file size (needed to compute absolute offsets and
  * validate that the declared box size fits inside the file).
@@ -435,8 +440,8 @@ export function scanTailForMoov(
 ): MoovTailScan | null {
   const tailStart = fileSize - tailBuffer.length;
   const lastProbe = Math.max(0, tailBuffer.length - 8);
-  const maxI = Math.min(lastProbe, TAIL_SCAN_MAX_PROBES * 4);
-  for (let i = maxI; i >= 0; i -= 4) {
+  const maxI = Math.min(lastProbe, TAIL_SCAN_MAX_BYTES);
+  for (let i = maxI; i >= 0; i -= 1) {
     if (!fourCC(tailBuffer, i + 4, "moov")) continue;
     const absOffset = tailStart + i;
     const header = readBoxHeader(tailBuffer, i, tailBuffer.length);
