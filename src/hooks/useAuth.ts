@@ -10,7 +10,10 @@ import {
 } from "../utils/proSyncManager";
 import { useProSyncPoller } from "./useProSyncPoller";
 import { isAbortError } from "./player/utils";
-import { invalidateCurrentSession } from "../utils/sessionGuard";
+import {
+  getCurrentSessionId,
+  invalidateCurrentSession,
+} from "../utils/sessionGuard";
 import {
   revokeGoogleToken,
   stopProactiveRefresh,
@@ -351,11 +354,13 @@ export const useAuth = (onLogoutExt?: () => void) => {
   // token-updated the moment a refresh succeeds — including the window
   // between login completing and the gated effect's first commit. A
   // listener that mounts only after login would miss that event and leave
-  // the store/props on the stale token (race R1). Safe to be unconditional:
-  // apiClient only dispatches token-updated after its session guard passes,
-  // so no stale post-logout event can arrive.
+  // the store/props on the stale token (race R1).
   useEffect(() => {
     const handleTokenUpdated = (e: Event) => {
+      // Logout teardown spans awaits (keyring read up to 5s/revoke), and a
+      // refresh already past its own session check can land inside that
+      // window — the event must not resurrect a token after logout started.
+      if (isLoggingOutRef.current) return;
       const detail = (e as CustomEvent<{ token?: unknown } | null>).detail;
       const token = detail?.token;
       if (typeof token === "string") {
@@ -423,6 +428,11 @@ export const useAuth = (onLogoutExt?: () => void) => {
     if (isLoggedIn && accessToken) {
       const controller = new AbortController();
       const signal = controller.signal;
+      // Session generation captured at effect start: abort only cancels an
+      // unsettled fetch, so a response that already settled must be dropped
+      // when a logout invalidated the session in the meantime (no post-logout
+      // profile / USER_EMAIL_KEY write for the account that just left).
+      const mySessionId = getCurrentSessionId();
       void (async () => {
         for (let attempt = 1; attempt <= PROFILE_FETCH_RETRY_MAX; attempt++) {
           try {
@@ -436,6 +446,9 @@ export const useAuth = (onLogoutExt?: () => void) => {
               );
             const data = (await res.json()) as Record<string, unknown> | null;
             if (data && typeof data.email === "string") {
+              // Logout started while the request was in flight -> drop the
+              // continuation (abort cannot cancel an already-settled fetch).
+              if (mySessionId !== getCurrentSessionId()) return;
               setUserProfile({
                 name: typeof data.name === "string" ? data.name : "",
                 email: data.email,

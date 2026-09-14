@@ -1,5 +1,5 @@
 ﻿// @vitest-environment jsdom
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -42,6 +42,10 @@ const authState = vi.hoisted(() => ({
   setAccessToken: vi.fn(),
   setUserProfile: vi.fn(),
 }));
+
+// Session-generation counter shared by the mocked sessionGuard pair: logout
+// increments it, so tests can drive real "session changed" behavior.
+const sessionGuardState = vi.hoisted(() => ({ id: 0 }));
 
 // Logout DB-teardown mocks (hoisted so the vi.mock factories below can close
 // over them; direct method references like db.syncState.delete would trip
@@ -90,7 +94,10 @@ vi.mock("../utils/proSyncManager", () => ({
 }));
 
 vi.mock("../utils/sessionGuard", () => ({
-  invalidateCurrentSession: vi.fn(),
+  invalidateCurrentSession: vi.fn(() => {
+    sessionGuardState.id += 1;
+  }),
+  getCurrentSessionId: vi.fn(() => sessionGuardState.id),
 }));
 
 vi.mock("../utils/apiClient", () => ({
@@ -163,6 +170,10 @@ const FAKE_TIMERS_TOFAKE = [
   "Date",
 ] as const;
 
+const flushMicrotasks = async (): Promise<void> => {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
@@ -232,6 +243,107 @@ describe("useAuth token-expired listener removed (B5)", () => {
     expect(mockedListen.mock.calls.map((call) => call[0])).not.toContain(
       "token-expired",
     );
+  });
+});
+
+describe("useAuth post-logout continuation guards (B11)", () => {
+  beforeEach(() => {
+    // RTL auto-cleanup is disabled in this repo: unmount every hook left
+    // mounted by earlier suites so stale token-updated listeners cannot
+    // pollute the dispatch assertions below.
+    cleanup();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    authState.isLoggedIn = false;
+    authState.accessToken = null;
+    authState.setUserProfile.mockClear();
+    sessionGuardState.id = 0;
+  });
+
+  it("B11-2: ignores token-updated while a logout is still in flight (no token resurrection)", async () => {
+    // Hold logout inside readRefreshToken so isLoggingOutRef stays true for
+    // the whole window (real logout awaits the keyring up to seconds).
+    let resolveRead: (v: string | null) => void = () => {};
+    mockedReadRefreshToken.mockImplementationOnce(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() => useAuth());
+
+    let logoutPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      logoutPromise = result.current.handleLogout();
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("token-updated", { detail: { token: "resurrected" } }),
+      );
+    });
+
+    // A refresh that lands mid-teardown must NOT write the token back into
+    // the store or the worker (it would re-arm the proactive timer and can
+    // trigger a second logout once the refresh token is gone).
+    expect(authState.setAccessToken).not.toHaveBeenCalled();
+    expect(mockedUpdateWorkerToken).not.toHaveBeenCalled();
+
+    resolveRead(null);
+    await act(async () => {
+      await logoutPromise;
+    });
+  });
+
+  it("B11-3: drops the profile continuation when logout invalidates the session mid-fetch", async () => {
+    sessionGuardState.id = 0;
+    mockedInvalidateCurrentSession.mockImplementation(() => {
+      sessionGuardState.id += 1;
+    });
+    authState.isLoggedIn = true;
+    authState.accessToken = "tok-123";
+    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
+
+    // Profile fetch stays pending across the whole logout.
+    let resolveProfile: (r: Response) => void = () => {};
+    mockedFetchWithAuth.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveProfile = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() => useAuth());
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.handleLogout();
+    });
+
+    // From here on the settled profile response must not apply anything.
+    authState.setUserProfile.mockClear();
+    const changedListener = vi.fn();
+    window.addEventListener("user-changed", changedListener);
+    try {
+      await act(async () => {
+        resolveProfile({
+          ok: true,
+          json: () => Promise.resolve({ email: "stale@example.com" }),
+        } as unknown as Response);
+        await flushMicrotasks();
+      });
+
+      // Abort only cancels an unsettled fetch; the already-settled response
+      // must be dropped by the session re-check (getCurrentSessionId moved on).
+      expect(authState.setUserProfile).not.toHaveBeenCalled();
+      expect(localStorage.getItem(USER_EMAIL_KEY)).toBeNull();
+      expect(changedListener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("user-changed", changedListener);
+    }
   });
 });
 

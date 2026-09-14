@@ -10,9 +10,15 @@ import {
 } from "../utils/driveApi";
 import { stopPlaybackIfTrack } from "../utils/stopPlayback";
 import { showErrorToast } from "../utils/simpleToast";
+import { createSemaphore } from "../utils/asyncLimit";
 import { t } from "i18next";
 import { captureError } from "../utils/errorLog";
 import { getCurrentUserEmail } from "../utils/storageKeys";
+
+// Bulk Drive ops are I/O-bound (~200-400ms per item) and driveFetch already
+// retries 429/5xx with backoff — 5 in-flight requests per batch keeps large
+// selections from taking minutes while staying polite to the rate limiter.
+const BULK_CONCURRENCY = 5;
 
 // Shared pre-flight for bulk delete/move: snapshot the selection. Kept as a
 // function so both bulk handlers share one call shape.
@@ -124,29 +130,46 @@ export function useDriveBulkOps({
     const deletedIds: string[] = [];
     const failedIds: string[] = [];
     try {
-      for (const id of itemsToDelete) {
+      const semaphore = createSemaphore(BULK_CONCURRENCY);
+      await Promise.all(
+        itemsToDelete.map((id) =>
+          semaphore.run(async () => {
+            try {
+              await deleteFile(token, id);
+              deletedIds.push(id);
+              // If this file is the track currently playing, stop it right
+              // away — never keep playing audio that no longer exists. Only
+              // after a successful Drive delete (a failed delete falls into
+              // catch).
+              stopPlaybackIfTrack(id);
+            } catch (e: unknown) {
+              failedIds.push(id);
+              void captureError({
+                level: "error",
+                source: "useDriveBulkOps",
+                message: `bulk-delete failed for fileId=${id}: ${e instanceof Error ? e.message : String(e)}`,
+              });
+            }
+          }),
+        ),
+      );
+      if (deletedIds.length > 0) {
+        // Local mirror write is INDEPENDENT teardown: a Dexie failure must
+        // not skip the queue eviction below — the Drive delete already
+        // succeeded for every id in deletedIds.
         try {
-          await deleteFile(token, id);
-          deletedIds.push(id);
-          // If this file is the track currently playing, stop it right away —
-          // never keep playing audio that no longer exists. Only after a
-          // successful Drive delete (a failed delete falls into catch).
-          stopPlaybackIfTrack(id);
+          // Compound PK (schema v10): delete by [userEmail, id] pairs.
+          const ownerEmail = getCurrentUserEmail();
+          await db.files.bulkDelete(
+            deletedIds.map((id) => [ownerEmail, id] as [string, string]),
+          );
         } catch (e: unknown) {
-          failedIds.push(id);
           void captureError({
             level: "error",
             source: "useDriveBulkOps",
-            message: `bulk-delete failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
+            message: `local-mirror-delete-failed count=${String(deletedIds.length)}: ${e instanceof Error ? e.message : String(e)}`,
           });
         }
-      }
-      if (deletedIds.length > 0) {
-        // Compound PK (schema v10): delete by [userEmail, id] pairs.
-        const ownerEmail = getCurrentUserEmail();
-        await db.files.bulkDelete(
-          deletedIds.map((id) => [ownerEmail, id] as [string, string]),
-        );
         if (onRemoveItem)
           deletedIds.forEach((id) => {
             onRemoveItem(id);
@@ -186,29 +209,44 @@ export function useDriveBulkOps({
     const movedIds: string[] = [];
     const failedIds: string[] = [];
     try {
-      for (const id of itemsToMove) {
-        try {
-          await moveFile(token, id, currentFolderId, destinationFolderId);
-          movedIds.push(id);
-        } catch (e: unknown) {
-          failedIds.push(id);
-          void captureError({
-            level: "error",
-            source: "useDriveBulkOps",
-            message: `bulk-move failed for item ${id}: ${e instanceof Error ? e.message : String(e)}`,
-          });
-        }
-      }
-      // Single transaction for the whole batch (vs. one update() per item);
-      // missing keys are skipped without throwing, same as update(). Keys are
-      // compound [userEmail, id] pairs (schema v10).
-      const ownerEmail = getCurrentUserEmail();
-      await db.files.bulkUpdate(
-        movedIds.map((id) => ({
-          key: [ownerEmail, id] as [string, string],
-          changes: { parentId: destinationFolderId },
-        })),
+      const semaphore = createSemaphore(BULK_CONCURRENCY);
+      await Promise.all(
+        itemsToMove.map((id) =>
+          semaphore.run(async () => {
+            try {
+              await moveFile(token, id, currentFolderId, destinationFolderId);
+              movedIds.push(id);
+            } catch (e: unknown) {
+              failedIds.push(id);
+              void captureError({
+                level: "error",
+                source: "useDriveBulkOps",
+                message: `bulk-move failed for fileId=${id}: ${e instanceof Error ? e.message : String(e)}`,
+              });
+            }
+          }),
+        ),
       );
+      // Local mirror write is INDEPENDENT teardown: a Dexie failure must not
+      // skip the queue eviction below — the Drive move already succeeded for
+      // every id in movedIds. Single transaction for the whole batch (vs. one
+      // update() per item); missing keys are skipped without throwing, same
+      // as update(). Keys are compound [userEmail, id] pairs (schema v10).
+      try {
+        const ownerEmail = getCurrentUserEmail();
+        await db.files.bulkUpdate(
+          movedIds.map((id) => ({
+            key: [ownerEmail, id] as [string, string],
+            changes: { parentId: destinationFolderId },
+          })),
+        );
+      } catch (e: unknown) {
+        void captureError({
+          level: "error",
+          source: "useDriveBulkOps",
+          message: `local-mirror-move-failed count=${String(movedIds.length)}: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
       if (onRemoveItem && movedIds.length > 0)
         movedIds.forEach((id) => {
           onRemoveItem(id);
