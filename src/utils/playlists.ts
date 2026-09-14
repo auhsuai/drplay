@@ -123,6 +123,10 @@ export async function updatePlaylist(
         id,
         userEmail: existing.userEmail,
       };
+      // Legacy rows written before `tracks` existed lack it at runtime (see
+      // getPlaylistTracks) — normalize here so the put below heals the stored
+      // row and the post-commit clone can never dereference undefined.
+      updated.tracks = [...(getPlaylistTracks(updated) ?? [])];
       await db.playlists.put(updated);
       window.dispatchEvent(new CustomEvent("playlists-updated"));
       // Return a clone — objects touched inside a transaction zone must not
@@ -149,9 +153,12 @@ export async function addTrackToPlaylist(
     await db.transaction("rw", db.playlists, async () => {
       const playlist = await db.playlists.get(playlistId);
       if (playlist) {
-        if (!playlist.tracks.some((t) => t.id === track.id)) {
-          playlist.tracks.push(track);
-          await db.playlists.put(playlist);
+        const tracks = getPlaylistTracks(playlist) ?? [];
+        if (!tracks.some((t) => t.id === track.id)) {
+          tracks.push(track);
+          // put replaces the whole row, so the legacy row is healed with
+          // `tracks` on write.
+          await db.playlists.put({ ...playlist, tracks });
           window.dispatchEvent(new CustomEvent("playlists-updated"));
         }
       }
@@ -175,8 +182,12 @@ export async function removeTrackFromPlaylist(
     await db.transaction("rw", db.playlists, async () => {
       const playlist = await db.playlists.get(playlistId);
       if (playlist) {
-        playlist.tracks = playlist.tracks.filter((t) => t.id !== trackId);
-        await db.playlists.put(playlist);
+        const tracks = (getPlaylistTracks(playlist) ?? []).filter(
+          (t) => t.id !== trackId,
+        );
+        // put replaces the whole row, so the legacy row is healed with
+        // `tracks` on write.
+        await db.playlists.put({ ...playlist, tracks });
         window.dispatchEvent(new CustomEvent("playlists-updated"));
       }
     });

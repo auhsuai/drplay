@@ -1,7 +1,7 @@
 // Sidebar open/closed persistence. Extracted from App.tsx so the
 // localStorage contract (default-open on first launch, tolerate corrupt
 // values) is testable without mounting the whole lazy-loaded app tree.
-import { captureError } from "./errorLog";
+import { safeLocalStorageGet, safeLocalStorageSet } from "./storageKeys";
 
 // Same drplay_* naming family as the LS_* keys in App.tsx.
 export const LS_SIDEBAR_OPEN = "drplay_sidebar_open";
@@ -12,30 +12,22 @@ export const LS_SIDEBAR_OPEN = "drplay_sidebar_open";
 // blocked by policy — see MDN Window.localStorage), so the read is guarded:
 // on failure we fall back to open (true), matching the default-open contract.
 export function loadSidebarOpenState(): boolean {
-  try {
-    return localStorage.getItem(LS_SIDEBAR_OPEN) !== "false";
-  } catch (err) {
-    // fire-and-forget: logging must not throw in this sync path (captureError
-    // never rejects — it swallows failures internally).
-    void captureError({
-      level: "warn",
-      source: "sidebarState",
-      message: `sidebar-open-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-    });
-    return true;
-  }
+  // safeLocalStorageGet returns null on failure (storage blocked) — null is
+  // not the literal 'false', so the default-open contract is preserved.
+  return (
+    safeLocalStorageGet(
+      LS_SIDEBAR_OPEN,
+      "sidebar-open-read",
+      "sidebarState",
+    ) !== "false"
+  );
 }
 
 export function saveSidebarOpenState(open: boolean): void {
-  try {
-    localStorage.setItem(LS_SIDEBAR_OPEN, String(open));
-  } catch (err) {
-    // fire-and-forget: logging must not throw in this sync path (captureError
-    // never rejects — it swallows failures internally).
-    void captureError({
-      level: "warn",
-      source: "sidebarState",
-      message: `sidebar-open-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-    });
-  }
+  safeLocalStorageSet(
+    LS_SIDEBAR_OPEN,
+    String(open),
+    "sidebar-open-write",
+    "sidebarState",
+  );
 }

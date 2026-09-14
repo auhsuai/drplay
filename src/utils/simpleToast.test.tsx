@@ -22,6 +22,7 @@ describe("simpleToast", () => {
     const el = document.querySelector(".app-toast--error");
     expect(el).not.toBeNull();
     expect(el?.className).toBe("app-toast app-toast--error");
+    expect(el?.getAttribute("role")).toBe("alert");
     expect(el?.textContent).toBe("boom");
     expect(document.querySelector(".app-toast--success")).toBeNull();
   });
@@ -32,6 +33,7 @@ describe("simpleToast", () => {
     const el = document.querySelector(".app-toast--success");
     expect(el).not.toBeNull();
     expect(el?.className).toBe("app-toast app-toast--success");
+    expect(el?.getAttribute("role")).toBe("status");
     expect(el?.textContent).toBe("ok");
     expect(document.querySelector(".app-toast--error")).toBeNull();
   });

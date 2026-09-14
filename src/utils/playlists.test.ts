@@ -329,3 +329,55 @@ describe("playlists (Dexie-backed)", () => {
     txnSpy.mockRestore();
   });
 });
+
+// Regression (B08-1): rows written before `tracks` existed lack it at runtime
+// (see getPlaylistTracks in playlists.ts), so the mutation paths must
+// normalize — and heal the stored row — instead of throwing a TypeError that
+// the catch turns into a permanent "operation failed" toast.
+describe("playlists legacy rows missing `tracks`", () => {
+  const LEGACY_ID = "legacy-1";
+
+  function seedLegacyRow(): void {
+    setUser(EMAIL_A);
+    // The Playlist interface claims tracks is always present; the cast is the
+    // only way to seed the legacy runtime shape this regression targets.
+    store.put({
+      id: LEGACY_ID,
+      userEmail: EMAIL_A,
+      name: "Legacy",
+      createdAt: 1,
+    } as unknown as PlaylistRow);
+  }
+
+  it("addTrackToPlaylist adds the track, heals the stored row and shows no error toast", async () => {
+    seedLegacyRow();
+
+    await addTrackToPlaylist(LEGACY_ID, track("1"));
+    await addTrackToPlaylist(LEGACY_ID, track("1"));
+
+    expect(showErrorToastMock).not.toHaveBeenCalled();
+    expect(store.get(LEGACY_ID)?.tracks.map((t) => t.id)).toEqual(["1"]);
+  });
+
+  it("removeTrackFromPlaylist heals the stored row and shows no error toast", async () => {
+    seedLegacyRow();
+
+    await removeTrackFromPlaylist(LEGACY_ID, "1");
+
+    expect(showErrorToastMock).not.toHaveBeenCalled();
+    expect(store.get(LEGACY_ID)?.tracks).toEqual([]);
+  });
+
+  it("updatePlaylist heals the stored row and returns normalized tracks (no error toast)", async () => {
+    seedLegacyRow();
+
+    const updated = await updatePlaylist(LEGACY_ID, { name: "Renamed" });
+
+    expect(showErrorToastMock).not.toHaveBeenCalled();
+    expect(updated).not.toBeNull();
+    expect(updated?.name).toBe("Renamed");
+    expect(updated?.tracks).toEqual([]);
+    expect(store.get(LEGACY_ID)?.name).toBe("Renamed");
+    expect(store.get(LEGACY_ID)?.tracks).toEqual([]);
+  });
+});

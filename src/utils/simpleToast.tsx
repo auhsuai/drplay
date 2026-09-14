@@ -50,8 +50,12 @@ function showToast(
 
   const toastEl = document.createElement("div");
   toastEl.className = `app-toast app-toast--${variant}`;
-  toastEl.textContent = message;
+  // ARIA live region (WCAG 4.1.3): errors announce assertively, successes
+  // politely. The empty region must be in the DOM BEFORE its content changes,
+  // otherwise screen readers do not announce the mutation.
+  toastEl.setAttribute("role", variant === "error" ? "alert" : "status");
   root.appendChild(toastEl);
+  toastEl.textContent = message;
   activeToastEl = toastEl;
 
   const removeToast = () => {
