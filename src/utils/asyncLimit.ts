@@ -3,7 +3,6 @@
  * network work (range fetches, cover POSTs):
  * - createSemaphore(maxConcurrent): runs at most `maxConcurrent` tasks at a
  *   time, draining queued tasks FIFO as slots free up.
- * - sleep(ms): promise-based delay for retry backoff.
  */
 
 export interface Semaphore {
@@ -66,9 +65,4 @@ export function createSemaphore(maxConcurrent: number): Semaphore {
       return active;
     },
   };
-}
-
-/** Resolves after `ms` milliseconds (setTimeout-based). */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

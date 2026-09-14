@@ -7,6 +7,7 @@ import {
   raceWithAbortSignal,
 } from "./apiClientShared";
 import { getValidToken } from "./tokenRefresh";
+import { mergeWithTimeoutSignal } from "./retryDelay";
 
 export interface FetchWithAuthOptions extends RequestInit {
   // Caller-overridable request timeout (ms) for long-running operations such
@@ -14,18 +15,8 @@ export interface FetchWithAuthOptions extends RequestInit {
   timeoutMs?: number;
 }
 
-// Merge the caller's signal (e.g. a component-unmount cancel) with a fresh
-// per-attempt timeout signal via AbortSignal.any so neither wins, falling back
-// to the timeout alone on runtimes lacking AbortSignal.any.
-const mergeCallerSignal = (
-  callerSignal: AbortSignal | null | undefined,
-  timeoutMs: number,
-): AbortSignal => {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  return callerSignal && typeof AbortSignal.any === "function"
-    ? AbortSignal.any([callerSignal, timeoutSignal])
-    : timeoutSignal;
-};
+// The caller's signal (e.g. a component-unmount cancel) is merged with a fresh
+// per-attempt timeout signal so neither wins (see retryDelay.mergeWithTimeoutSignal).
 
 /**
  * Fetch with the current access token attached. Every call is bounded by a
@@ -75,7 +66,7 @@ export const fetchWithAuth = async (
   const requestOptions: RequestInit = {
     ...fetchOptions,
     headers,
-    signal: mergeCallerSignal(options.signal, effectiveTimeoutMs),
+    signal: mergeWithTimeoutSignal(options.signal, effectiveTimeoutMs),
   };
 
   // Main request (timeout-bounded). Network/timeout here reject naturally so
@@ -122,7 +113,7 @@ export const fetchWithAuth = async (
         return await fetch(url, {
           ...fetchOptions,
           headers: retryHeaders,
-          signal: mergeCallerSignal(options.signal, effectiveTimeoutMs),
+          signal: mergeWithTimeoutSignal(options.signal, effectiveTimeoutMs),
         });
       } catch (err: unknown) {
         // Retry failed: classify and throw a clear, typed error. We do NOT

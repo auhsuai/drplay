@@ -1,9 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSemaphore, sleep } from "./asyncLimit";
-
-afterEach(() => {
-  vi.useRealTimers();
-});
+import { describe, expect, it } from "vitest";
+import { createSemaphore } from "./asyncLimit";
 
 describe("createSemaphore", () => {
   it("never runs more than maxConcurrent tasks at once", async () => {
@@ -98,20 +94,5 @@ describe("createSemaphore", () => {
   it("rejects maxConcurrent below 1", () => {
     expect(() => createSemaphore(0)).toThrow(TypeError);
     expect(() => createSemaphore(-1)).toThrow(TypeError);
-  });
-});
-
-describe("sleep", () => {
-  it("resolves only after the requested delay (fake timers)", async () => {
-    vi.useFakeTimers();
-    const done = vi.fn();
-    const waited = sleep(1_000).then(done);
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(done).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await waited;
-    expect(done).toHaveBeenCalledTimes(1);
   });
 });
