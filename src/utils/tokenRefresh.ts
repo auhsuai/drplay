@@ -189,6 +189,15 @@ export const getValidToken = async (
   const isExpired = Date.now() - issueTime > TOKEN_EXPIRY_MS;
 
   if (isExpired || !token || forceRefresh) {
+    // Single-flight fast path, BEFORE reading the refresh token: a follower
+    // joining a registered flight must not touch the keyring — its own read
+    // can fail or time out and would otherwise dispatch a bogus 'auth-logout'
+    // while the in-flight refresh is about to succeed.
+    const registeredFlight = refreshPromise;
+    if (registeredFlight) {
+      return raceWithAbortSignal(registeredFlight, signal);
+    }
+
     const refreshToken = await readRefreshToken();
     if (!refreshToken) {
       window.dispatchEvent(new CustomEvent("auth-logout"));
@@ -197,6 +206,9 @@ export const getValidToken = async (
 
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
+    // Second check: another caller may have registered a flight while this
+    // caller was reading the keyring, and two callers that raced into this
+    // function in the same tick both saw an empty fast path.
     if (refreshPromise) {
       // Another caller already has a refresh in flight: share the same
       // promise. Success delivers the same token (or "" when the session
@@ -270,12 +282,14 @@ export const getValidToken = async (
         "apiClient",
       );
       if (tokenData.refresh_token) {
-        // Fire-and-forget: the access token is already valid, so persisting
-        // the rotated refresh token must not delay the refresh flow.
-        // writeRefreshToken never rejects (keyring failure → localStorage
-        // fallback with a logged warning), so the credential is never lost
-        // and the next read still finds it.
-        void writeRefreshToken(tokenData.refresh_token);
+        // Awaited so the rotated credential is durable BEFORE this refresh
+        // promise resolves: exiting in the window between Google invalidating
+        // the old token and the write completing would lose the new token
+        // (next start: invalid_grant → forced re-auth). writeRefreshToken
+        // never rejects (keyring failure → localStorage fallback) and is
+        // bounded by KEYRING_TIMEOUT_MS (5s), so this delays the flow only
+        // while the vault is stalling.
+        await writeRefreshToken(tokenData.refresh_token);
       }
 
       scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_IN_SEC);

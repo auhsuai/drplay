@@ -13,6 +13,11 @@ export const DB_NAV_STATE_KEY = "drplay_nav_state";
 export const ACCESS_TOKEN_KEY = "drplay_access_token";
 export const REFRESH_TOKEN_KEY = "drplay_refresh_token";
 export const TOKEN_TIME_KEY = "drplay_token_time";
+// Marker: "1" while the localStorage refresh-token copy is NEWER than the
+// keyring copy (set when a keyring write fails after a rotation). A restart
+// must serve the fallback before consulting the stale vault value — see
+// refreshTokenStore.readRefreshToken.
+export const REFRESH_TOKEN_NEWER_KEY = "drplay_refresh_token_newer";
 
 export function getCurrentUserEmail(): string {
   try {
@@ -57,6 +62,22 @@ export function safeLocalStorageSet(
 ): void {
   try {
     localStorage.setItem(key, value);
+  } catch (err) {
+    void captureError({
+      level: "warn",
+      source,
+      message: localStorageFailureMessage(label, err),
+    });
+  }
+}
+
+export function safeLocalStorageRemove(
+  key: string,
+  label: string,
+  source: string = "useDrive",
+): void {
+  try {
+    localStorage.removeItem(key);
   } catch (err) {
     void captureError({
       level: "warn",

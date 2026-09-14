@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { captureError } from "./errorLog";
-import { REFRESH_TOKEN_KEY } from "./storageKeys";
+import {
+  REFRESH_TOKEN_KEY,
+  REFRESH_TOKEN_NEWER_KEY,
+  safeLocalStorageGet,
+  safeLocalStorageRemove,
+  safeLocalStorageSet,
+} from "./storageKeys";
 import { withTimeout } from "./apiClientShared";
 
 // Tauri v2 invoke does not accept an AbortSignal (tauri issue #8351 is still
@@ -69,8 +75,12 @@ export async function revokeGoogleToken(token: string): Promise<void> {
  *    only by a FAILED keyring write holding the rotated token, and cleared to
  *    null by every successful keyring write (see writeRefreshToken). A stale
  *    keyring value must therefore never win over a non-null memory value.
- * 2. OS credential vault (keyring) — the standing source of truth.
- * 3. Legacy localStorage copy (degraded fallback after keyring failures).
+ * 2. Marked localStorage fallback — when the durable-fallback marker is set
+ *    (the last keyring write failed after a rotation), the localStorage copy
+ *    is newer than the vault value and must win, restarts included.
+ * 3. OS credential vault (keyring) — the standing source of truth.
+ * 4. Unmarked legacy localStorage copy (degraded fallback after keyring
+ *    failures).
  * A keyring failure is non-fatal (warn + fallback), so a vault hiccup can
  * never sign the user out.
  * @returns The refresh token, or null when no store has one.
@@ -84,6 +94,31 @@ export const readRefreshToken = async (): Promise<string | null> => {
   const memoryToken: string | null = inMemoryRefreshToken;
   if (memoryToken !== null) {
     return memoryToken;
+  }
+  // Durable-fallback precedence: the marker means the localStorage copy was
+  // written by a FAILED keyring write and is NEWER than the vault value, so
+  // it must win even after a restart (memory gone). If the copy is gone the
+  // marker is stale — drop it and continue with the normal order below.
+  if (
+    safeLocalStorageGet(
+      REFRESH_TOKEN_NEWER_KEY,
+      "refresh-token-newer-marker-read",
+      "apiClient",
+    ) === "1"
+  ) {
+    const durableToken = safeLocalStorageGet(
+      REFRESH_TOKEN_KEY,
+      "refresh-token-localstorage-read",
+      "apiClient",
+    );
+    if (durableToken) {
+      return durableToken;
+    }
+    safeLocalStorageRemove(
+      REFRESH_TOKEN_NEWER_KEY,
+      "refresh-token-newer-marker-clear",
+      "apiClient",
+    );
   }
   try {
     const keyringToken = await withTimeout(
@@ -105,7 +140,11 @@ export const readRefreshToken = async (): Promise<string | null> => {
   // Migration path: users who logged in before the keyring existed still have
   // their token here; the next successful write migrates it to the keyring
   // and removes this copy (see writeRefreshToken).
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
+  return safeLocalStorageGet(
+    REFRESH_TOKEN_KEY,
+    "refresh-token-localstorage-read",
+    "apiClient",
+  );
 };
 
 /**
@@ -124,12 +163,17 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
     );
     // Success: the keyring is now the single source of truth — drop any
     // legacy localStorage copy and stale in-memory fallback so the credential
-    // never exists in two places. The clear is wrapped separately: a
-    // localStorage failure here must NOT escape into the keyring-failure
-    // catch below (the vault write already succeeded) nor skip the
-    // in-memory cleanup.
+    // never exists in two places (the durable-fallback marker goes with the
+    // copy it points to). The clear is wrapped separately: a localStorage
+    // failure here must NOT escape into the keyring-failure catch below (the
+    // vault write already succeeded) nor skip the in-memory cleanup.
     try {
       localStorage.removeItem(REFRESH_TOKEN_KEY);
+      safeLocalStorageRemove(
+        REFRESH_TOKEN_NEWER_KEY,
+        "refresh-token-newer-marker-clear",
+        "apiClient",
+      );
     } catch (storageErr: unknown) {
       await captureError({
         level: "warn",
@@ -151,6 +195,15 @@ export const writeRefreshToken = async (token: string): Promise<void> => {
     inMemoryRefreshToken = token;
     try {
       localStorage.setItem(REFRESH_TOKEN_KEY, token);
+      // Mark the durable fallback as NEWER than the vault so a later restart
+      // (memory gone) still serves this token instead of the stale keyring
+      // one. Only set after the copy is durably written.
+      safeLocalStorageSet(
+        REFRESH_TOKEN_NEWER_KEY,
+        "1",
+        "refresh-token-newer-marker-persist",
+        "apiClient",
+      );
     } catch (storageErr: unknown) {
       // localStorage unavailable (quota/private mode): nothing left to do —
       // log, never throw (the caller is fire-and-forget and the access token
@@ -185,10 +238,16 @@ export const deleteRefreshToken = async (): Promise<void> => {
     });
   }
   // Purge the in-memory copy too: after a logout intent the token must not
-  // survive in any store readRefreshToken consults, memory included.
+  // survive in any store readRefreshToken consults, memory included. The
+  // durable-fallback marker is dropped with the copy it points to.
   inMemoryRefreshToken = null;
   try {
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    safeLocalStorageRemove(
+      REFRESH_TOKEN_NEWER_KEY,
+      "refresh-token-newer-marker-clear",
+      "apiClient",
+    );
   } catch {
     // localStorage unavailable (privacy mode / quota): the keyring delete
     // already ran; there is no second store to clear. Never throw — the

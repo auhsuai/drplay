@@ -16,6 +16,7 @@ import { getCurrentSessionId } from "./sessionGuard";
 import {
   ACCESS_TOKEN_KEY,
   REFRESH_TOKEN_KEY,
+  REFRESH_TOKEN_NEWER_KEY,
   TOKEN_TIME_KEY,
 } from "./storageKeys";
 
@@ -721,6 +722,84 @@ describe("M1b keyring-backed refresh token storage", () => {
   });
 });
 
+// Cross-restart credential precedence: when a rotation's keyring write fails,
+// the rotated token lives in localStorage and the marker REFRESH_TOKEN_NEWER_KEY
+// records that this copy is NEWER than the vault value. After a restart
+// (memory gone) the fallback must win over the stale keyring token — using the
+// stale one would fail with invalid_grant and sign the user out.
+describe("refresh token durable fallback newer than the keyring (B01-2)", () => {
+  it("serves the localStorage fallback over a stale keyring token after a restart (marker set)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt-new");
+    storage.setItem(REFRESH_TOKEN_NEWER_KEY, "1");
+    mockInvoke({ get_refresh_token: "rt-old" });
+
+    await expect(readRefreshToken()).resolves.toBe("rt-new");
+  });
+
+  it("clears the marker and falls back to the keyring when the localStorage copy is gone", async () => {
+    storage.setItem(REFRESH_TOKEN_NEWER_KEY, "1");
+    mockInvoke({ get_refresh_token: "rt-keyring" });
+
+    await expect(readRefreshToken()).resolves.toBe("rt-keyring");
+    expect(storage.getItem(REFRESH_TOKEN_NEWER_KEY)).toBeNull();
+  });
+
+  it("clears the marker after a successful keyring write (the vault is the source of truth again)", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt-fallback");
+    storage.setItem(REFRESH_TOKEN_NEWER_KEY, "1");
+    mockInvoke({ set_refresh_token: undefined });
+
+    await writeRefreshToken("rt-fresh");
+
+    expect(storage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    expect(storage.getItem(REFRESH_TOKEN_NEWER_KEY)).toBeNull();
+  });
+});
+
+// Storage-failure resilience for the LAST raw localStorage read: a keyring
+// read failure followed by a SecurityError from localStorage.getItem must
+// degrade getValidToken to null (no token available) instead of rejecting
+// with a raw DOMException — storage trouble is never an auth failure.
+describe("refresh token storage failure resilience (B01-3)", () => {
+  it("degrades to null instead of throwing raw when the keyring read fails and localStorage getItem throws SecurityError", async () => {
+    mockInvoke({
+      get_refresh_token: () =>
+        Promise.reject(new Error("credential vault unavailable")),
+    });
+    vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+
+    await expect(getValidToken(true)).resolves.toBeNull();
+  });
+});
+
+// Rotation durability: the rotated refresh token must be persisted BEFORE the
+// refresh promise resolves, otherwise an app exit in the window between
+// Google invalidating the old token and the write completing loses the new
+// credential (next start: invalid_grant → forced re-auth).
+describe("rotated refresh token persistence ordering (B01-4)", () => {
+  it("awaits writeRefreshToken before getValidToken resolves", async () => {
+    storage.setItem(REFRESH_TOKEN_KEY, "rt");
+    let keyringWriteSettled = false;
+    mockInvoke({
+      get_refresh_token: "rt",
+      refresh_google_token: {
+        access_token: "acc",
+        refresh_token: "rt-new",
+        expires_in: 3600,
+      },
+      set_refresh_token: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        keyringWriteSettled = true;
+      },
+    });
+
+    await expect(getValidToken(true)).resolves.toBe("acc");
+    expect(keyringWriteSettled).toBe(true);
+  });
+});
+
 // Spec-guards for the single-flight refresh upgrade: every one of these
 // asserts the CURRENT (pre-upgrade) behavior, so they must pass on both the
 // subscriber-array implementation and the shared-promise implementation.
@@ -759,6 +838,43 @@ describe("getValidToken single-flight refresh", () => {
     await expect(lead).resolves.toBe("shared-token");
     await expect(follower).resolves.toBe("shared-token");
     expect(refreshCallCount()).toBe(1);
+  });
+
+  it("a follower joins the in-flight refresh BEFORE its own keyring read (vault failure cannot dispatch a bogus auth-logout)", async () => {
+    let keyringShouldFail = false;
+    let releaseRefresh!: (value: unknown) => void;
+    mockInvoke({
+      get_refresh_token: () =>
+        keyringShouldFail
+          ? Promise.reject(new Error("credential vault unavailable"))
+          : Promise.resolve("rt"),
+      refresh_google_token: () =>
+        new Promise((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    });
+
+    const lead = getValidToken(true);
+    await vi.waitFor(() => {
+      expect(refreshCallCount()).toBe(1);
+    });
+
+    // The vault goes down while the refresh is in flight. Before the fix the
+    // follower read the keyring FIRST: the failed read degraded to an empty
+    // fallback and dispatched 'auth-logout' even though the lead was about to
+    // deliver a valid token.
+    keyringShouldFail = true;
+    const follower = getValidToken(true);
+
+    releaseRefresh({ access_token: "shared-token", expires_in: 3600 });
+
+    await expect(lead).resolves.toBe("shared-token");
+    await expect(follower).resolves.toBe("shared-token");
+    expect(refreshCallCount()).toBe(1);
+    const authLogoutCalls = dispatchEventMock().mock.calls.filter(
+      ([e]) => (e as Event).type === "auth-logout",
+    );
+    expect(authLogoutCalls).toHaveLength(0);
   });
 
   it("a follower whose caller signal aborts mid-flight rejects AbortError immediately while the shared flight continues", async () => {
