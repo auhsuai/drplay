@@ -276,7 +276,7 @@ function PlayerBarImpl({
             aria-expanded={isQueueOpen}
             className={`p-2 rounded-full transition-all active:scale-[0.92] shrink-0 ${
               isQueueOpen
-                ? "text-brand-primary bg-brand-primary/10"
+                ? "text-brand-text bg-brand-primary/10"
                 : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"
             }`}
           >

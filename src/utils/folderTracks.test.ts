@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FOLDER_MIME } from "./driveTypes";
 import type { DriveFileItem } from "./driveTypes";
-import { collectFolderTracks, MAX_ADD_TO_QUEUE_TRACKS } from "./folderTracks";
+import {
+  collectFolderTracks,
+  MAX_ADD_TO_QUEUE_TRACKS,
+  MAX_WALKED_FOLDERS,
+} from "./folderTracks";
 
 const listFolderAudioFilesMock = vi.hoisted(() => vi.fn());
 
@@ -156,6 +160,25 @@ describe("collectFolderTracks", () => {
     );
   });
 
+  it("caps the folder walk at MAX_WALKED_FOLDERS on a folder-only tree", async () => {
+    // Each listing returns one fresh subfolder, so the tree is effectively
+    // infinite. Bound the mock like the cycle test: a buggy walk must fail
+    // with a clear rejection instead of starving the event loop.
+    let listing = 0;
+    listFolderAudioFilesMock.mockImplementation(() => {
+      listing++;
+      if (listing > MAX_WALKED_FOLDERS + 5) {
+        return Promise.reject(new Error("walk never terminated"));
+      }
+      return Promise.resolve([folder(`dir-${String(listing)}`, "Dir")]);
+    });
+
+    const result = await collectFolderTracks("tok", "root", "Root");
+
+    expect(result).toEqual({ tracks: [], truncated: true });
+    expect(listing).toBe(MAX_WALKED_FOLDERS);
+  });
+
   it("rejects with AbortError before listing when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -210,5 +233,54 @@ describe("collectFolderTracks", () => {
     const { tracks } = await collectFolderTracks("tok", "root", "Root");
 
     expect(tracks.map((t) => t.id)).toEqual(["m1"]);
+  });
+
+  it("drops a non-numeric size string instead of NaN", async () => {
+    entriesByFolder({
+      root: [audio({ id: "bad", name: "bad.mp3", size: "not-a-number" })],
+    });
+
+    const { tracks } = await collectFolderTracks("tok", "root", "Root");
+
+    expect(tracks[0]?.size).toBeUndefined();
+  });
+
+  it("terminates on a folder cycle (A -> B -> A) instead of walking forever", async () => {
+    // Bound the mock so a buggy walk fails this test with a clear rejection
+    // instead of starving the event loop (an unbounded loop of instantly
+    // resolved listings never yields to the test timeout).
+    let listing = 0;
+    const map: Record<string, DriveFileItem[]> = {
+      root: [folder("A", "Folder A")],
+      A: [folder("B", "Folder B")],
+      B: [folder("A", "Folder A")],
+    };
+    listFolderAudioFilesMock.mockImplementation(
+      (_token: string, folderId: string) => {
+        listing++;
+        if (listing > 5) {
+          return Promise.reject(new Error("walk never terminated"));
+        }
+        return Promise.resolve(map[folderId] ?? []);
+      },
+    );
+
+    await expect(collectFolderTracks("tok", "root", "Root")).resolves.toEqual({
+      tracks: [],
+      truncated: false,
+    });
+    expect(listing).toBe(3);
+  });
+
+  it("walks a repeated folder id only once (no duplicate tracks)", async () => {
+    entriesByFolder({
+      root: [folder("dup", "Dup"), folder("dup", "Dup")],
+      dup: [audio({ id: "d1", name: "dup-song.mp3" })],
+    });
+
+    const { tracks } = await collectFolderTracks("tok", "root", "Root");
+
+    expect(tracks.map((t) => t.id)).toEqual(["d1"]);
+    expect(listFolderAudioFilesMock).toHaveBeenCalledTimes(2);
   });
 });

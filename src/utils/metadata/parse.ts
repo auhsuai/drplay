@@ -29,7 +29,17 @@ export async function readCachedEntry(
           // cards render sharp immediately. The mem entry still stays
           // full-free — the LRU is the single owner of full bytes (the seeded
           // value is re-attached by mergeFullPicture below).
-          setFullPictureCache(fileId, cachedData.pictureDataFull);
+          // A corrupt row (isCacheEntry guards only the envelope) must not
+          // poison the LRU: a non-Uint8Array value has no byteLength (NaN
+          // byte accounting) and an empty array renders a 0-byte cover
+          // instead of falling back to the thumb — seed only real bytes,
+          // then drop the field either way.
+          if (
+            cachedData.pictureDataFull instanceof Uint8Array &&
+            cachedData.pictureDataFull.byteLength > 0
+          ) {
+            setFullPictureCache(fileId, cachedData.pictureDataFull);
+          }
           cachedData = { ...cachedData, pictureDataFull: null };
         }
         setMetadataCache(fileId, cachedData);
@@ -75,11 +85,12 @@ export async function readCachedEntry(
  * fall through to the IDB/network pipeline — a corrupt or stale file must
  * never hard-fail a card.
  *
- * Required: v === REAL_METADATA_VERSION (8), title is a non-empty string,
- * duration is a finite number. pictureData/pictureDataFull are forced to
- * null (disk entries carry no embedded bytes — the cover renders through the
- * drplay:// GET from the Rust cover cache) and coverOnDisk is set to true.
- * Extended fields are optional and type-checked individually; an invalid
+ * Required: v === REAL_METADATA_VERSION (8), title is a non-empty string
+ * (whitespace-only rejected), duration is a finite number.
+ * pictureData/pictureDataFull are forced to null (disk entries carry no
+ * embedded bytes — the cover renders through the drplay:// GET from the Rust
+ * cover cache) and coverOnDisk is set to true. Extended fields are optional,
+ * type-checked individually and dropped when outside their domain; an invalid
  * optional field is dropped, not fatal.
  */
 function pickString(
@@ -100,6 +111,20 @@ function pickFinite(
     : undefined;
 }
 
+/**
+ * pickFinite + a domain predicate: a finite number outside its valid range
+ * (or fractional where an integer is required) is dropped like a wrong type —
+ * optional fields are best-effort, never fatal.
+ */
+function pickNumber(
+  obj: Record<string, unknown>,
+  key: string,
+  valid: (value: number) => boolean,
+): number | undefined {
+  const value = pickFinite(obj, key);
+  return value !== undefined && valid(value) ? value : undefined;
+}
+
 export function parseDiskMetadata(
   raw: string | null | undefined,
 ): CachedMetadata | null {
@@ -114,7 +139,7 @@ export function parseDiskMetadata(
   const obj = parsed as Record<string, unknown>;
   if (obj.v !== REAL_METADATA_VERSION) return null;
   const title = pickString(obj, "title");
-  if (title === undefined || title.length === 0) return null;
+  if (title === undefined || title.trim().length === 0) return null;
   const duration = pickFinite(obj, "duration");
   if (duration === undefined) return null;
   const entry: CachedMetadata = {
@@ -133,23 +158,27 @@ export function parseDiskMetadata(
   };
   const pictureFormat = pickString(obj, "pictureFormat");
   if (pictureFormat !== undefined) entry.pictureFormat = pictureFormat;
-  const bitrate = pickFinite(obj, "bitrate");
+  const bitrate = pickNumber(obj, "bitrate", (n) => n > 0);
   if (bitrate !== undefined) entry.bitrate = bitrate;
-  const size = pickFinite(obj, "size");
+  const size = pickNumber(obj, "size", (n) => n > 0);
   if (size !== undefined) entry.size = size;
   const genre = pickString(obj, "genre");
   if (genre !== undefined) entry.genre = genre;
-  const year = pickFinite(obj, "year");
+  const year = pickNumber(obj, "year", Number.isInteger);
   if (year !== undefined) entry.year = year;
-  const trackNumber = pickFinite(obj, "trackNumber");
+  const trackNumber = pickNumber(obj, "trackNumber", Number.isInteger);
   if (trackNumber !== undefined) entry.trackNumber = trackNumber;
   const albumArtist = pickString(obj, "albumArtist");
   if (albumArtist !== undefined) entry.albumArtist = albumArtist;
-  const sampleRate = pickFinite(obj, "sampleRate");
+  const sampleRate = pickNumber(obj, "sampleRate", (n) => n > 0);
   if (sampleRate !== undefined) entry.sampleRate = sampleRate;
-  const bitDepth = pickFinite(obj, "bitDepth");
+  const bitDepth = pickNumber(obj, "bitDepth", (n) => n > 0);
   if (bitDepth !== undefined) entry.bitDepth = bitDepth;
-  const channels = pickFinite(obj, "channels");
+  const channels = pickNumber(
+    obj,
+    "channels",
+    (n) => n > 0 && Number.isInteger(n),
+  );
   if (channels !== undefined) entry.channels = channels;
   if (typeof obj.streamUnplayable === "boolean") {
     entry.streamUnplayable = obj.streamUnplayable;

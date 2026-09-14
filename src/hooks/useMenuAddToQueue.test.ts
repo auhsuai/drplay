@@ -162,7 +162,7 @@ describe("useMenuAddToQueue", () => {
     expect(showSuccessToastMock).not.toHaveBeenCalled();
   });
 
-  it("reports truncation after a successful capped append", async () => {
+  it("reports truncation as a single merged toast after a capped append", async () => {
     collectFolderTracksMock.mockResolvedValue(
       collected([makeTrack("a")], true),
     );
@@ -180,8 +180,14 @@ describe("useMenuAddToQueue", () => {
     await act(async () => {});
 
     expect(appendTracksToQueueMock).toHaveBeenCalledTimes(1);
-    expect(showSuccessToastMock).toHaveBeenCalledWith("queue.added_toast#1");
-    expect(showErrorToastMock).toHaveBeenCalledWith("queue.add_truncated#1000");
+    // simpleToast shows at most ONE toast: a separate success toast would be
+    // wiped by the truncation toast in the same tick, so both infos (added
+    // count + cap reason) are merged into a single toast.
+    expect(showSuccessToastMock).not.toHaveBeenCalled();
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith(
+      "queue.added_toast#1. queue.add_truncated#1000",
+    );
   });
 
   it("stays silent on abort: no toasts, no error log", async () => {

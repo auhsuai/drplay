@@ -19,6 +19,7 @@ export function FolderSearchInput({
         ref={inputRef}
         type="text"
         placeholder={t("search_placeholder")}
+        aria-label={t("search_placeholder")}
         value={value}
         onChange={(e) => {
           onChange(e.target.value);

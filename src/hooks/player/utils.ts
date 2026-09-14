@@ -46,6 +46,18 @@ export function sameTrack(a: Track, b: Track): boolean {
 }
 
 /**
+ * Identity key for one exact queue entry (selection keys, view keys, bulk
+ * removal): the per-entry queueItemId, falling back to the Drive id for
+ * legacy persisted entries. Same falsy contract as sameTrack /
+ * ensureQueueItemId — an empty-string queueItemId counts as missing, never
+ * as a valid shared key. Not interchangeable with sameTrack: mixed
+ * presence of queueItemId compares differently.
+ */
+export function trackKey(track: Track): string {
+  return track.queueItemId ? track.queueItemId : track.id;
+}
+
+/**
  * Guarantee per-entry queue identity: a track that already carries a
  * queueItemId is returned as-is, otherwise a clone with a fresh UUID. The id
  * survives reordering (shuffle) so removal/multi-select can address one exact

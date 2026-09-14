@@ -34,6 +34,7 @@ export function SelectionToolbar({
     <div className="flex items-center gap-3 animate-in fade-in slide-in-from-right-4 duration-300">
       <button
         onClick={onToggleSelectAll}
+        aria-label={t("drive.select_all")}
         className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
       >
         {selectedCount === totalCount ? (
@@ -46,6 +47,7 @@ export function SelectionToolbar({
 
       <button
         onClick={onBulkMoveClick}
+        aria-label={t("drive.bulk_move")}
         disabled={selectedCount === 0 || isBulkOperating}
         className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
       >
@@ -55,6 +57,7 @@ export function SelectionToolbar({
 
       <button
         onClick={onBulkDeleteClick}
+        aria-label={t("drive.delete")}
         disabled={selectedCount === 0 || isBulkOperating}
         className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
       >

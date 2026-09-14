@@ -177,7 +177,7 @@ export function TopNavigationBar({
                   onClick={() => {
                     onBreadcrumbClick(folder.id, folder.name, index);
                   }}
-                  className="text-gray-500 dark:text-gray-400 hover:text-brand-primary transition-colors truncate max-w-[150px]"
+                  className="text-gray-500 dark:text-gray-400 hover:text-brand-text transition-colors truncate max-w-[150px]"
                   title={displayFolderName(folder.name)}
                 >
                   {displayFolderName(folder.name)}
@@ -208,6 +208,7 @@ export function TopNavigationBar({
               ref={searchInputRef}
               type="text"
               placeholder={t("search_placeholder")}
+              aria-label={t("search_placeholder")}
               value={searchQuery}
               onChange={(e) => {
                 onSearchChange(e.target.value);

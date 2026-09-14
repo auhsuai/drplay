@@ -202,7 +202,7 @@ export function ErrorLogSection() {
 
   return (
     <div ref={containerRef} className="flex flex-col gap-2 mt-6 mb-8">
-      <h2 className="text-sm font-bold text-brand-primary uppercase tracking-wider mb-2">
+      <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
         {t("settings.error_log_title")}
       </h2>
 
@@ -212,7 +212,7 @@ export function ErrorLogSection() {
             onClick={() => {
               setSelectedDate(null);
             }}
-            className="text-sm font-semibold text-gray-800 dark:text-gray-200 hover:text-brand-primary transition-colors py-2.5"
+            className="text-sm font-semibold text-gray-800 dark:text-gray-200 hover:text-brand-text transition-colors py-2.5"
           >
             ← {t("settings.error_log_back")}
           </button>

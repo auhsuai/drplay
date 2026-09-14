@@ -9,9 +9,23 @@
 // repeated hang. Unlike the app-wide circuit breaker (fail-fast after a
 // throttle threshold), this is per-file: one slow file does not block the
 // rest. forceNetwork bypasses the cooldown (manual retry via RefreshCw).
-// Entries are pruned lazily on read; only recently-failed files are ever in
-// the map, so it stays tiny and needs no timer.
+// Entries are pruned lazily on read and swept on every write (see
+// setNetworkCooldown), so the map cannot grow past the files that failed
+// inside the current TTL window.
 export const networkCooldownUntil = new Map<string, number>();
+
+/**
+ * Pins (or refreshes) the cooldown for one fileId. Sweeps every already-expired
+ * entry first: a file that failed once and is never re-read has no lazy prune
+ * on read, so without this its entry would stay until the app-wide cache clear.
+ */
+export function setNetworkCooldown(fileId: string, until: number): void {
+  const now = Date.now();
+  for (const [key, expiry] of networkCooldownUntil) {
+    if (expiry <= now) networkCooldownUntil.delete(key);
+  }
+  networkCooldownUntil.set(fileId, until);
+}
 
 /**
  * Drops every per-file network cooldown. Called by clearAllMetadataCache so a

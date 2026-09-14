@@ -70,7 +70,8 @@ async function prepareMp3Tokenizer(
   // body) — an unusually large tag (e.g. a 25MB cover) blows the default
   // 20MB fetch budget and nukes the whole entry. Raise the budget for the
   // tag region (capped at TAG_BUDGET_MAX); rare files only. The new
-  // tokenizer re-fetches the head region — one extra request, accepted.
+  // tokenizer starts with an EMPTY chunk cache, so prefetchHead below
+  // restores the head in ONE request (was: ~24 chunked re-reads).
   // Large files keep the CLAMPED size here: a tag bigger than HEAD_BYTES
   // fails its parse (placeholder) instead of ever opening a full-size
   // tokenizer (too rare to spend a tail-capable fetch on).
@@ -81,21 +82,36 @@ async function prepareMp3Tokenizer(
       budgetBytes: Math.min(tagBudgetNeeded, TAG_BUDGET_MAX),
       ...(signal ? { abortSignal: signal } : {}),
     });
+    // Re-seed the head chunk cache the fresh tokenizer lost: the parser
+    // would otherwise re-read [0, HEAD_TAG_FETCH_BYTES) as ~24 separate
+    // 64KB chunk requests. The budget accounting is identical to those
+    // chunked reads (cache hits cost nothing, so each byte is charged
+    // once). Best-effort: on failure the parse re-reads the region
+    // chunked exactly as before.
+    try {
+      await tokenizer.prefetchHead(Math.min(HEAD_TAG_FETCH_BYTES, parseSize));
+    } catch (e: unknown) {
+      void logMetaWarn(
+        `tag-head-reseed-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+      );
+    }
   }
   // Metadata-load latency: a tag extending past the blind head fetch was
   // read chunk-by-chunk (64KB per request) — a 600KB tag alone cost ~9
   // range requests, a 25MB tag ~400, all queued behind the app-wide
-  // CONCURRENCY-3 semaphore. Prefetch ONLY the part past the blind head
-  // (which already cached [0, HEAD_TAG_FETCH_BYTES)) so no byte is
-  // re-fetched: HEAD_TAG_FETCH_BYTES is 64KB-aligned, so the range starts
-  // exactly at the boundary. Best-effort: on budget or network failure
-  // the prefetch is skipped and the parse re-reads the region chunked
-  // exactly as before (the raised-budget retry / skipCovers fallbacks
-  // are untouched). For LARGE files parseSize is clamped to HEAD_BYTES,
-  // so prefetchEnd < HEAD_TAG_FETCH_BYTES → this never fires (byte
-  // pattern identical to the pre-slice clamp; a tag that cannot fit the
-  // clamped head keeps failing its parse into the placeholder — behavior
-  // unchanged).
+  // CONCURRENCY-3 semaphore. Prefetch ONLY the part past the blind head:
+  // HEAD_TAG_FETCH_BYTES is 64KB-aligned, so the range starts exactly at
+  // the boundary and no byte is re-fetched on the default tokenizer (the
+  // raised-budget branch above restores the head cache via prefetchHead).
+  // Best-effort: on budget or network failure the prefetch is skipped and
+  // the parse re-reads the region chunked exactly as before (the
+  // raised-budget retry / skipCovers fallbacks are untouched); a region
+  // exceeding the 128-chunk LRU is a silent no-op in prefetchRange, so the
+  // parse reads it chunked — never a new failure mode. For LARGE files
+  // parseSize is clamped to HEAD_BYTES, so prefetchEnd <
+  // HEAD_TAG_FETCH_BYTES → this never fires (byte pattern identical to
+  // the pre-slice clamp; a tag that cannot fit the clamped head keeps
+  // failing its parse into the placeholder — behavior unchanged).
   if (tagSize > 0) {
     const prefetchEnd = Math.min(tagBudgetNeeded, parseSize);
     if (prefetchEnd > HEAD_TAG_FETCH_BYTES) {
@@ -168,7 +184,7 @@ async function prefetchAndScanM4aTail(
     const tail = await tokenizer.readRange(tailStart, size);
     if (scanTailForMoov(tail, size) === null) {
       await logMetaWarn(
-        `m4a-tail-scan: no moov box found at the end of file (fileId=${fileId}, size=${String(size)})`,
+        `m4a-tail-scan: no moov header within the last ${String(TAIL_BYTES)} bytes (fileId=${fileId}, size=${String(size)})`,
       );
     }
   } catch (e: unknown) {

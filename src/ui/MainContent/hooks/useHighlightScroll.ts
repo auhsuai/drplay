@@ -28,6 +28,13 @@ export function useHighlightScroll({
   currentPage: number;
   setCurrentPage: Dispatch<SetStateAction<number>>;
 }): void {
+  // Consume-once latch for highlight scrolling: the ts of the last locate we
+  // actually scrolled to. Data churn (search refreshes, Dexie writes)
+  // keeps re-creating filteredItems while the SAME highlight is active — the
+  // effect re-runs on every new identity but must not re-yank the viewport:
+  // one locate = one scroll.
+  const lastScrolledTsRef = useRef<number | null>(null);
+
   // Scroll to top on folder change — unless a LIVE locate highlight belongs
   // to the destination folder itself (the highlight effect will land on the
   // row anyway). The highlight carries the folderId it was produced for, so a
@@ -38,6 +45,15 @@ export function useHighlightScroll({
   useEffect(() => {
     if (mainRef.current) {
       const isFolderChange = currentFolderId !== prevFolderRef.current;
+      if (isFolderChange) {
+        // Re-entering a folder inside the 5s highlight window restarts the
+        // locate for it: drop the consume-once latch so a still-live
+        // highlight whose row lives in the destination scrolls again instead
+        // of leaving the viewport stuck at the previous folder's offset
+        // (the suppression below means neither scroll-top nor row-scroll
+        // would run otherwise).
+        lastScrolledTsRef.current = null;
+      }
       const isLiveHighlightForDestination =
         highlightedFileId != null &&
         highlightedFileId.folderId === currentFolderId;
@@ -47,13 +63,6 @@ export function useHighlightScroll({
       prevFolderRef.current = currentFolderId;
     }
   }, [currentFolderId, highlightedFileId, mainRef]);
-
-  // Consume-once latch for highlight scrolling: the ts of the last locate we
-  // actually scrolled to. Data churn (search refreshes, Dexie writes)
-  // keeps re-creating filteredItems while the SAME highlight is active — the
-  // effect re-runs on every new identity but must not re-yank the viewport:
-  // one locate = one scroll.
-  const lastScrolledTsRef = useRef<number | null>(null);
 
   // Handle highlight scrolling — consume-once per locate (keyed by ts). The
   // latch is written ONLY where a scrollToIndex actually executes, never at
@@ -69,9 +78,9 @@ export function useHighlightScroll({
     );
     if (index === -1) return;
     const scrollToHighlightedRow = () => {
-      virtualizedListRef.current?.scrollToIndex(index % ITEMS_PER_PAGE, {
-        align: "center",
-      });
+      const list = virtualizedListRef.current;
+      if (!list) return;
+      list.scrollToIndex(index % ITEMS_PER_PAGE, { align: "center" });
       lastScrolledTsRef.current = highlightedFileId.ts;
     };
     const targetPage = Math.floor(index / ITEMS_PER_PAGE) + 1;

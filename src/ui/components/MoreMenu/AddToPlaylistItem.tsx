@@ -46,7 +46,7 @@ export function AddToPlaylistItem({
         <div className="relative">
           <button
             onClick={handleToggleSubmenu}
-            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-brand-primary rounded-md transition-all flex items-center justify-between group mb-1"
+            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-brand-text rounded-md transition-all flex items-center justify-between group mb-1"
           >
             <div className="flex items-center gap-2">
               <Music className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />

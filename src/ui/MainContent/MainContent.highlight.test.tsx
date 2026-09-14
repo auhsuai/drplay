@@ -403,4 +403,54 @@ describe("MainContent scroll-to-top folder-awareness (B3 fix 2026-08-23)", () =>
     expect(scrollTopSpy).toHaveBeenCalledTimes(1);
     expect(scrollTopSpy).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
   });
+
+  it("UHS-1 fix: re-entry into the destination folder inside the highlight window scrolls the row again (latch is per folder visit)", () => {
+    scrollToIndexSpy.mockClear();
+    const highlight = { id: "id1", ts: 1000, folderId: "folder-z" };
+
+    const { rerender } = render(
+      <MainContent
+        {...baseProps}
+        currentFolderId="folder-z"
+        highlightedFileId={highlight}
+      />,
+    );
+    // Locate lands in folder-z: one scroll, latch consumed.
+    expect(scrollToIndexSpy).toHaveBeenCalledTimes(1);
+
+    // Leave folder-z within the 5s window: the highlight no longer matches
+    // the destination, so the ordinary scroll-to-top runs. folder-y's listing
+    // does not contain the located item (Drive ids are unique), so the reset
+    // latch must not fire a row scroll in the wrong folder.
+    const otherFolderItems = makeItems(3).map((item, i) => ({
+      ...item,
+      id: `other${String(i)}`,
+    }));
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(otherFolderItems));
+    rerender(
+      <MainContent
+        {...baseProps}
+        currentFolderId="folder-y"
+        highlightedFileId={highlight}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(scrollTopSpy).toHaveBeenCalledTimes(1);
+    expect(scrollToIndexSpy).toHaveBeenCalledTimes(1);
+
+    // Come back: the live destination highlight keeps scroll-top suppressed
+    // AND the folder-change latch reset lets the row scroll run again,
+    // instead of the viewport staying stuck at folder-y's offset.
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+    rerender(
+      <MainContent
+        {...baseProps}
+        currentFolderId="folder-z"
+        highlightedFileId={highlight}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(scrollTopSpy).toHaveBeenCalledTimes(1);
+    expect(scrollToIndexSpy).toHaveBeenCalledTimes(2);
+  });
 });

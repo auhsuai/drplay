@@ -171,6 +171,7 @@ export function FullRecentView({
               <input
                 type="text"
                 placeholder={t("search_placeholder")}
+                aria-label={t("search_placeholder")}
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);

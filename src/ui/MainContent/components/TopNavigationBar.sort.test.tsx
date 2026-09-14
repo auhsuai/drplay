@@ -146,4 +146,9 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
     render(<TopNavigationBar {...makeProps({ token: null })} />);
     expect(screen.queryByTitle("Toggle order")).toBeNull();
   });
+
+  it("names the search input for assistive tech", () => {
+    render(<TopNavigationBar {...makeProps()} />);
+    expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
+  });
 });

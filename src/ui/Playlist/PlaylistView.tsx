@@ -345,7 +345,7 @@ export function PlaylistView({
                     }`}
                   >
                     <div
-                      className={`w-8 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-primary hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
+                      className={`w-8 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-text hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
                     >
                       {currentTrack?.id === track.id ? (
                         <Music className="w-4 h-4 mx-auto" />
@@ -357,22 +357,22 @@ export function PlaylistView({
                       className={`w-8 text-center items-center justify-center ${currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
                     >
                       <Play
-                        className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white"}`}
+                        className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white"}`}
                         fill="currentColor"
                       />
                     </div>
 
                     <div
-                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gray-200 dark:bg-gray-800"}`}
+                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-text" : "bg-gray-200 dark:bg-gray-800"}`}
                     >
                       <Music
-                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-400"}`}
+                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-400"}`}
                       />
                     </div>
 
                     <div className="flex-1 min-w-0 flex flex-col justify-center">
                       <h4
-                        className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white group-hover:text-brand-primary"}`}
+                        className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white group-hover:text-brand-text"}`}
                       >
                         {track.title}
                       </h4>

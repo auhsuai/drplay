@@ -88,11 +88,20 @@ export function useMenuAddToQueue(t: TFunction): {
           return;
         }
         appendTracksToQueue(tracks);
-        showSuccessToast(t("queue.added_toast", { count: tracks.length }));
         if (truncated) {
-          showErrorToast(
-            t("queue.add_truncated", { count: MAX_ADD_TO_QUEUE_TRACKS }),
-          );
+          // simpleToast shows at most ONE toast: a new toast replaces the
+          // previous one in the same tick, so a separate success toast would
+          // be wiped before it ever renders. Merge the confirmation (how many
+          // were added) and the cap notice into a single toast instead.
+          const addedMessage = t("queue.added_toast", {
+            count: tracks.length,
+          });
+          const cappedMessage = t("queue.add_truncated", {
+            count: MAX_ADD_TO_QUEUE_TRACKS,
+          });
+          showErrorToast(`${addedMessage}. ${cappedMessage}`);
+        } else {
+          showSuccessToast(t("queue.added_toast", { count: tracks.length }));
         }
       } catch (err: unknown) {
         if (isAbortError(err)) return;

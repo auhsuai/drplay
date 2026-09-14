@@ -57,6 +57,7 @@ vi.mock("./components/SongCard", () => ({
 
 vi.mock("../FolderSelection/FolderSelectionScreen", () => ({
   FolderSelectionScreen: () => null,
+  MOVE_PICKER_OPEN_ATTR: "data-move-picker-open",
 }));
 
 function makeItems(n: number): DriveItem[] {
@@ -188,5 +189,95 @@ describe("MainContent Escape exits selection mode (slice A)", () => {
     expect(explorer.setSearchQuery).not.toHaveBeenCalledWith("");
     expect(explorer.setIsSelectionMode).not.toHaveBeenCalled();
     expect(explorer.setSelectedIds).not.toHaveBeenCalled();
+  });
+});
+
+describe("MainContent keyboard overlay guards (UMK-1/2/4 fix 2026-09-14)", () => {
+  beforeEach(() => {
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  });
+
+  // Opens the real BulkDeleteConfirmModal through the real toolbar button: it
+  // owns no Escape handler of its own, so it is the cleanest way to pin that
+  // the background keyboard handler stands down while it is open.
+  function renderWithBulkDeleteModalOpen() {
+    const explorer = makeExplorerState(makeItems(3));
+    explorer.isSelectionMode = true;
+    explorer.selectedIds = new Set(["id0", "id1"]);
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    fireEvent.click(screen.getByText("drive.delete"));
+    expect(screen.getByText("drive.bulk_delete_title")).toBeTruthy();
+    return explorer;
+  }
+
+  it("UMK-1: Escape while the bulk-delete confirm is open does not exit selection behind the modal", () => {
+    const explorer = renderWithBulkDeleteModalOpen();
+    expect(document.activeElement?.tagName).not.toBe("INPUT");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(explorer.setSelectedIds).not.toHaveBeenCalled();
+    expect(explorer.setIsSelectionMode).not.toHaveBeenCalled();
+  });
+
+  it("Esc trong bulk-delete modal: modal đóng + focus về nút Delete + selection giữ nguyên", () => {
+    const explorer = makeExplorerState(makeItems(3));
+    explorer.isSelectionMode = true;
+    explorer.selectedIds = new Set(["id0", "id1"]);
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    const deleteButton = screen.getByRole("button", { name: "drive.delete" });
+    deleteButton.focus();
+    fireEvent.click(deleteButton);
+    expect(screen.getByText("drive.bulk_delete_title")).toBeTruthy();
+
+    // Focus inside the modal, so the APG focus-return is actually exercised
+    // (not a focus already sitting on the invoker).
+    const cancelButton = screen.getByText("menu.cancel");
+    cancelButton.focus();
+    expect(document.activeElement).toBe(cancelButton);
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    expect(screen.queryByText("drive.bulk_delete_title")).toBeNull();
+    expect(document.activeElement).toBe(deleteButton);
+    expect(explorer.setSelectedIds).not.toHaveBeenCalled();
+    expect(explorer.setIsSelectionMode).not.toHaveBeenCalled();
+  });
+
+  it("UMK-2: Ctrl+F matches the upper-case key reported under CapsLock/Shift", () => {
+    render(<MainContent {...baseProps} />);
+    const searchInput = screen.getByPlaceholderText("search_placeholder");
+
+    fireEvent.keyDown(window, { key: "F", ctrlKey: true });
+
+    expect(document.activeElement).toBe(searchInput);
+  });
+
+  it("UMK-4: Ctrl+F while the modal is open does not pull focus to the background search input", () => {
+    render(<MainContent {...baseProps} />);
+    const searchInput = screen.getByPlaceholderText("search_placeholder");
+    // New Folder modal (search input still present in the background, so the
+    // focus-steal is observable).
+    fireEvent.click(screen.getByText("drive.new_folder"));
+    const nameInput = screen.getByPlaceholderText(
+      "drive.folder_name_placeholder",
+    );
+    nameInput.focus();
+    expect(document.activeElement).toBe(nameInput);
+
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+
+    expect(document.activeElement).toBe(nameInput);
+    expect(document.activeElement).not.toBe(searchInput);
   });
 });

@@ -253,6 +253,11 @@ describe("FullRecentView sort UI", () => {
     expect(screen.getAllByText("Date").length).toBeGreaterThan(0);
   });
 
+  it("names the search input for assistive tech", () => {
+    renderRecent([makeTrack("a", "Alpha")]);
+    expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
+  });
+
   it("shows exactly 3 sort options in the menu (A-Z / Date / Size)", async () => {
     renderRecent([makeTrack("a", "Alpha")]);
     await openSortMenu();

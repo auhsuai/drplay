@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { X, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -17,6 +18,45 @@ export function BulkDeleteConfirmModal({
   selectedCount,
 }: BulkDeleteConfirmModalProps) {
   const { t } = useTranslation();
+
+  // Escape closes the confirm (unless a bulk operation is in flight). Window
+  // CAPTURE so the press cannot reach the layers behind the modal — the
+  // drawer / selection shortcuts — and stopPropagation runs even while busy:
+  // a modal owns the key, outer layers must stay inert (APG dialog-modal).
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (!isOperating) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [isOpen, isOperating, onClose]);
+
+  // APG dialog-modal focus return: remember the invoker (the toolbar Delete
+  // button) while open, restore it on close/unmount. Cleanup covers both the
+  // isOpen edge and a full unmount. Skip body/html (nothing useful to
+  // restore) and detached nodes (invoker gone → leave focus alone, per APG).
+  useEffect(() => {
+    if (!isOpen) return;
+    const invoker =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    return () => {
+      if (
+        invoker &&
+        invoker !== document.body &&
+        invoker !== document.documentElement &&
+        invoker.isConnected
+      ) {
+        invoker.focus();
+      }
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

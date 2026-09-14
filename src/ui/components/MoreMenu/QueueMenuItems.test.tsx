@@ -122,4 +122,16 @@ describe("QueueMenuItems", () => {
     expect(props.setIsOpen).toHaveBeenCalledWith(false);
     expect(onRemoveFolderFromQueue).toHaveBeenCalledTimes(1);
   });
+
+  it("folder branch thiếu onRemoveFolderFromQueue → KHÔNG render Remove Folder (chỉ Navigate)", () => {
+    renderItems({
+      track: undefined,
+      queueFolder: { id: "f1", name: "Album F1" },
+    });
+
+    expect(screen.getByRole("button", { name: "menu.navigate" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "queue.remove_folder" }),
+    ).toBeNull();
+  });
 });

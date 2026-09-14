@@ -1,4 +1,5 @@
 import { LoaderCircle, Ellipsis } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface MoreMenuTriggerProps {
   isOpen: boolean;
@@ -15,6 +16,8 @@ export function MoreMenuTrigger({
   onToggle,
   onMeasure,
 }: MoreMenuTriggerProps) {
+  const { t } = useTranslation();
+
   return (
     <button
       onClick={(e) => {
@@ -27,12 +30,13 @@ export function MoreMenuTrigger({
         }
       }}
       disabled={isDownloadingFile}
+      aria-label={t("common.more_actions")}
       aria-haspopup="menu"
       aria-expanded={isMenuOpen}
       className={`relative p-2 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/40 ${isDownloadingFile ? "cursor-default opacity-50" : "text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]"}`}
     >
       {isDownloadingFile ? (
-        <LoaderCircle className="w-5 h-5 animate-spin text-brand-primary" />
+        <LoaderCircle className="w-5 h-5 animate-spin text-brand-text" />
       ) : (
         <Ellipsis className="w-5 h-5" />
       )}

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -16,23 +17,20 @@ import { QueueSearchInput } from "./QueueSearchInput";
 import { QueueSelectionToolbar } from "./QueueSelectionToolbar";
 import { useQueueSelection } from "./useQueueSelection";
 import type { QueueSelection } from "./useQueueSelection";
-
-// Vietnamese users type unaccented ("co" for "Có"): strip diacritics via NFD
-// and lowercase both sides of the comparison.
-function normalizeForSearch(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase();
-}
+import { normalizeText } from "../../utils/normalizeText";
 
 function filterQueue(queue: Track[], query: string): Track[] {
-  const needle = normalizeForSearch(query.trim());
+  const needle = normalizeText(query.trim());
   if (!needle) return queue;
   return queue.filter((track) =>
-    normalizeForSearch(`${track.title} ${track.artist}`).includes(needle),
+    normalizeText(
+      `${track.title} ${track.artist} ${track.folderGroupName ?? ""}`,
+    ).includes(needle),
   );
 }
+
+// WCAG 4.1.3: announcing on every keystroke is noise — settle before speaking.
+const SEARCH_STATUS_DEBOUNCE_MS = 400;
 
 export interface QueuePanelProps {
   open: boolean;
@@ -63,7 +61,59 @@ export function QueuePanel({
   );
   const [query, setQuery] = useState("");
   const [openFolderId, setOpenFolderId] = useState<string | null>(null);
-  const selection = useQueueSelection(playbackQueue, currentTrack);
+
+  // The open folder must still have members in the queue (bulk removal can
+  // empty it): a stale id degrades to the root view during render — no
+  // setState round-trip, no render loop.
+  const effectiveFolderId =
+    openFolderId !== null &&
+    playbackQueue.some((track) => track.folderGroupId === openFolderId)
+      ? openFolderId
+      : null;
+
+  // Once the open folder has no members left the view degrades to root; clear
+  // the stale id during render too, or re-adding the same folder later would
+  // silently drill back in without a click (same adjust-during-render rule).
+  if (openFolderId !== null && effectiveFolderId === null) {
+    setOpenFolderId(null);
+  }
+
+  const filteredTracks = useMemo(
+    () => filterQueue(playbackQueue, query),
+    [playbackQueue, query],
+  );
+
+  const viewItems = useMemo(
+    () => buildQueueView(filteredTracks, effectiveFolderId, currentTrack),
+    [filteredTracks, effectiveFolderId, currentTrack],
+  );
+
+  // WCAG 4.1.3 search-results status: the sr-only live region lives in
+  // QueuePanelDialog; an empty query announces nothing (the region stays
+  // mounted so it exists before its content ever changes). Clearing is
+  // adjusted during render (same pattern as the stale-folder reset below) —
+  // the effect must not setState synchronously.
+  const [searchStatusText, setSearchStatusText] = useState("");
+  if (query.trim() === "" && searchStatusText !== "") {
+    setSearchStatusText("");
+  }
+  useEffect(() => {
+    if (!query.trim()) return;
+    const timeout = setTimeout(() => {
+      setSearchStatusText(
+        filteredTracks.length > 0
+          ? t("queue.search_results_count", { count: filteredTracks.length })
+          : t("queue.no_results"),
+      );
+    }, SEARCH_STATUS_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [query, filteredTracks.length, t]);
+
+  // viewItems feeds the hook: select-all is scoped to what the panel renders
+  // (WYSIWYG) — see useQueueSelection.
+  const selection = useQueueSelection(playbackQueue, currentTrack, viewItems);
 
   // Reset transient UI on every reopen — adjusted during render (React
   // "adjusting state during render" pattern) so no setState runs inside an
@@ -84,24 +134,23 @@ export function QueuePanel({
     }
   }
 
-  // The open folder must still have members in the queue (bulk removal can
-  // empty it): a stale id degrades to the root view during render — no
-  // setState round-trip, no render loop.
-  const effectiveFolderId =
-    openFolderId !== null &&
-    playbackQueue.some((track) => track.folderGroupId === openFolderId)
-      ? openFolderId
-      : null;
-
-  const viewItems = useMemo(
-    () =>
-      buildQueueView(
-        filterQueue(playbackQueue, query),
-        effectiveFolderId,
-        currentTrack,
-      ),
-    [playbackQueue, query, effectiveFolderId, currentTrack],
-  );
+  // QST-2: leaving selection mode unmounts the bulk toolbar; without this,
+  // focus falls to <body> and Tab restarts from the top of the document.
+  // Hand focus back to the selection toggle (wrapper ref, QueueControls).
+  // The tracker resets while the panel is closed so the reopen-time selection
+  // reset above cannot steal focus from the player bar.
+  const selectionControlsRef = useRef<HTMLDivElement>(null);
+  const wasInSelectionMode = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      wasInSelectionMode.current = false;
+      return;
+    }
+    if (!selection.selectionMode && wasInSelectionMode.current) {
+      selectionControlsRef.current?.querySelector("button")?.focus();
+    }
+    wasInSelectionMode.current = selection.selectionMode;
+  }, [open, selection.selectionMode]);
 
   const openFolderName =
     effectiveFolderId === null
@@ -207,11 +256,13 @@ export function QueuePanel({
         <QueuePanelDialog
           onClose={onClose}
           selection={selection}
+          selectionControlsRef={selectionControlsRef}
           query={query}
           onQueryChange={setQuery}
           items={viewItems}
           currentTrack={currentTrack}
           openFolderName={openFolderName}
+          searchStatusText={searchStatusText}
           emptyKey={
             playbackQueue.length === 0 ? "queue.empty" : "queue.no_results"
           }
@@ -233,11 +284,13 @@ export function QueuePanel({
 interface QueuePanelDialogProps {
   onClose: () => void;
   selection: QueueSelection;
+  selectionControlsRef: RefObject<HTMLDivElement | null>;
   query: string;
   onQueryChange: (value: string) => void;
   items: QueueViewItem[];
   currentTrack: Track | null;
   openFolderName: string | null;
+  searchStatusText: string;
   emptyKey: "queue.empty" | "queue.no_results";
   onSelectTrack: (track: Track) => void;
   onRemoveFromQueue: (key: string) => void;
@@ -250,11 +303,13 @@ interface QueuePanelDialogProps {
 function QueuePanelDialog({
   onClose,
   selection,
+  selectionControlsRef,
   query,
   onQueryChange,
   items,
   currentTrack,
   openFolderName,
+  searchStatusText,
   emptyKey,
   onSelectTrack,
   onRemoveFromQueue,
@@ -282,10 +337,26 @@ function QueuePanelDialog({
 
       <div className="flex flex-row items-center gap-2">
         <QueueSearchInput value={query} onChange={onQueryChange} />
-        <QueueControls
-          selectionMode={selection.selectionMode}
-          onToggleSelectionMode={selection.toggleSelectionMode}
-        />
+        {/* Wrapper ref target for QST-2: QueuePanel focuses the toggle inside
+            when the bulk toolbar unmounts (single button in here). */}
+        <div ref={selectionControlsRef}>
+          <QueueControls
+            selectionMode={selection.selectionMode}
+            onToggleSelectionMode={selection.toggleSelectionMode}
+          />
+        </div>
+      </div>
+
+      {/* WCAG 4.1.3 status message (ARIA22): the search-result count, kept
+          mounted and empty until a query settles. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="queue-search-status"
+        className="sr-only"
+      >
+        {searchStatusText}
       </div>
 
       {selection.selectionMode && (

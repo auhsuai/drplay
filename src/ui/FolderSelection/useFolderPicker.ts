@@ -254,13 +254,8 @@ export function useFolderPicker({
           searchInputRef.current?.focus();
         }
       }
-      if (
-        e.key === "Escape" &&
-        document.activeElement === searchInputRef.current
-      ) {
-        searchInputRef.current?.blur();
-        setSearchQuery("");
-      }
+      // Escape lives in FolderSelectionScreen (single owner; QP-3 cluster) —
+      // the old branch here double-handled the same press.
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {

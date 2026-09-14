@@ -62,7 +62,7 @@ export function TrashItemRow({
           </div>
         )}
         <div
-          className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : "bg-brand-primary/10 text-brand-primary"}`}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : "bg-brand-primary/10 text-brand-text"}`}
         >
           {isFolder ? (
             <Folder className="w-5 h-5" fill="currentColor" />

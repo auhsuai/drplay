@@ -8,7 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Profiler } from "react";
+import { Profiler, useState } from "react";
 import { FolderSelectionScreen } from "./FolderSelectionScreen";
 import en from "../../locales/en/translation.json";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
@@ -727,5 +727,92 @@ describe("FolderSelectionScreen debug skeleton trigger", () => {
     expect(() => {
       dispatchSkeleton();
     }).not.toThrow();
+  });
+});
+
+describe("FolderSelectionScreen Escape close (QP-3 / Esc-close 2026-09-14)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Unmounts the picker on cancel, so close-side effects (focus return) are
+  // observable instead of being overwritten by the still-mounted screen.
+  function PickerHost({ onCancel }: { onCancel: () => void }) {
+    const [open, setOpen] = useState(true);
+    if (!open) return null;
+    return (
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        onCancel={() => {
+          setOpen(false);
+          onCancel();
+        }}
+        initialFolderId="folderB"
+        initialFolderHistory={[{ id: "root", name: "My Drive" }]}
+      />
+    );
+  }
+
+  it("Esc trong search có text → clear + blur, picker vẫn mở (staged, parity QSI-1)", async () => {
+    const onCancel = vi.fn();
+    render(<PickerHost onCancel={onCancel} />);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    const input = screen.getByPlaceholderText("Search...");
+    fireEvent.change(input, { target: { value: "abc" } });
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect((input as HTMLInputElement).value).toBe("");
+    expect(document.activeElement).not.toBe(input);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText("Search...")).not.toBeNull();
+  });
+
+  it("Esc khi search trống → đóng picker (onCancel 1 lần)", async () => {
+    const onCancel = vi.fn();
+    render(<PickerHost onCancel={onCancel} />);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(screen.queryByPlaceholderText("Search...")).toBeNull();
+  });
+
+  it("Esc đóng picker → focus trả về element đã focus lúc mount (APG focus-return)", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const onCancel = vi.fn();
+    render(<PickerHost onCancel={onCancel} />);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
   });
 });

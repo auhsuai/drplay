@@ -17,7 +17,8 @@
     "unknown": "Không xác định",
     "coming_soon": "Sắp ra mắt",
     "profile_alt": "Hồ sơ",
-    "cover_alt": "Ảnh bìa"
+    "cover_alt": "Ảnh bìa",
+    "more_actions": "Thao tác khác"
   },
   "sidebar": {
     "home": "Trang chủ",
@@ -140,6 +141,9 @@
     "search_placeholder": "Tìm trong hàng đợi",
     "empty": "Hàng đợi trống",
     "no_results": "Không tìm thấy bài hát phù hợp",
+    "search_results_count": "{{count}} kết quả",
+    "search_results_count_one": "{{count}} kết quả",
+    "search_results_count_other": "{{count}} kết quả",
     "select_multiple": "Chọn nhiều",
     "select_all": "Chọn tất cả",
     "unselect_all": "Bỏ chọn tất cả",

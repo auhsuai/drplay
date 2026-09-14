@@ -25,7 +25,7 @@ export function FolderBreadcrumb({
                 onBreadcrumbClick(index);
               }
             }}
-            className="cursor-pointer text-gray-500 dark:text-gray-400 hover:text-brand-primary transition-colors"
+            className="cursor-pointer text-gray-500 dark:text-gray-400 hover:text-brand-text transition-colors"
           >
             {item.name}
           </span>

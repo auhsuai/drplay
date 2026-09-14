@@ -238,6 +238,34 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
     // While loading, the empty-state branch must never be reachable.
     expect(screen.queryByText("drive.no_audio")).toBeNull();
   });
+
+  it("recomputes the skeleton row count on window resize (useSyncExternalStore subscription)", () => {
+    const originalHeight = window.innerHeight;
+    const setInnerHeight = (value: number): void => {
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value,
+      });
+    };
+    try {
+      setInnerHeight(768);
+      render(<MainContent {...baseProps} isLoading={true} />);
+      expect(screen.getAllByTestId("skeleton-row")).toHaveLength(
+        Math.max(4, Math.ceil((768 - 140) / 72)),
+      );
+
+      act(() => {
+        setInnerHeight(400);
+        fireEvent.resize(window);
+      });
+
+      expect(screen.getAllByTestId("skeleton-row")).toHaveLength(
+        Math.max(4, Math.ceil((400 - 140) / 72)),
+      );
+    } finally {
+      setInnerHeight(originalHeight);
+    }
+  });
 });
 
 describe("MainContent debug triggers (DEV only)", () => {

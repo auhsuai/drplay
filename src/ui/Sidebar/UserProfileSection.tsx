@@ -40,7 +40,7 @@ export function UserProfileSection({
           {userProfile ? (
             avatarFailed ? (
               <div className="w-10 h-10 rounded-full bg-brand-primary/20 flex items-center justify-center">
-                <span className="text-brand-primary font-bold">
+                <span className="text-brand-text font-bold">
                   {userProfile.name.charAt(0).toUpperCase()}
                 </span>
               </div>

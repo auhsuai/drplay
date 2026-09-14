@@ -40,7 +40,7 @@ import {
   makePlaceholder,
   stripExtension,
 } from "./pipelineHelpers";
-import { networkCooldownUntil } from "./cooldown";
+import { networkCooldownUntil, setNetworkCooldown } from "./cooldown";
 import { readCachedEntry } from "./parse";
 export { parseDiskMetadata } from "./parse";
 import {
@@ -340,10 +340,7 @@ async function getTrackMetadataImpl(
     // gated by the per-file cooldown so the re-fetch does not re-hang the
     // card while Drive is still slow.
     if (e instanceof RangeFetchNetworkError) {
-      networkCooldownUntil.set(
-        fileId,
-        Date.now() + METADATA_NETWORK_COOLDOWN_MS,
-      );
+      setNetworkCooldown(fileId, Date.now() + METADATA_NETWORK_COOLDOWN_MS);
     } else {
       setMetadataCache(fileId, placeholder);
     }

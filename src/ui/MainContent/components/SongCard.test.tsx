@@ -767,11 +767,11 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
       <SongCard {...baseProps} item={makeItem()} isPlaying />,
     );
     expect(container.querySelector("h3")?.className).toContain(
-      "text-brand-primary!",
+      "text-brand-text!",
     );
     const iconBox = container.querySelector(".lucide-music")?.parentElement;
     expect(iconBox?.className).toContain("bg-brand-primary/10!");
-    expect(iconBox?.className).toContain("text-brand-primary!");
+    expect(iconBox?.className).toContain("text-brand-text!");
   });
 
   it("idle card keeps the original bg/hover unchanged", () => {

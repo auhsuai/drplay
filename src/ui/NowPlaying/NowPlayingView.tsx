@@ -64,7 +64,7 @@ export const NowPlayingView = memo(function NowPlayingView({
           <ChevronDown className="w-6 h-6" />
         </button>
         <div className="w-48 h-48 rounded-2xl bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center mb-6">
-          <Music className="w-24 h-24 text-brand-primary/40 dark:text-[#34A853]/50 drop-shadow-sm" />
+          <Music className="w-24 h-24 text-brand-text/40 dark:text-[#34A853]/50 drop-shadow-sm" />
         </div>
         <h2 className="text-xl font-bold text-gray-500 dark:text-gray-400">
           {t("player.no_track")}
@@ -128,7 +128,7 @@ export const NowPlayingView = memo(function NowPlayingView({
                 />
               ) : (
                 <>
-                  <Music className="w-20 h-20 text-brand-primary/40 drop-shadow-sm" />
+                  <Music className="w-20 h-20 text-brand-text/40 drop-shadow-sm" />
                 </>
               )}
             </div>

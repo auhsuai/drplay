@@ -37,6 +37,10 @@ export function useMoreMenuEvents({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Layer order (QP-3): the menu is the innermost overlay on this path,
+        // so the press stops here — the drawer's window listener must not see
+        // it. document-bubble stop blocks the later window-bubble listeners.
+        e.stopPropagation();
         closeMenu();
       }
     };

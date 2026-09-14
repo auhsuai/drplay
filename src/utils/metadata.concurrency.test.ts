@@ -15,7 +15,7 @@ import { db } from "../db/db";
 import type { MetadataCacheRow } from "../db/db";
 // Same module instance as ./metadata (the barrel re-exports it) — imported
 // directly because setFullPictureCache is not part of the public barrel.
-import { setFullPictureCache } from "./metadata/cache";
+import { getCacheEntry, setFullPictureCache } from "./metadata/cache";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -329,9 +329,48 @@ describe("lruKeys + cache invalidation hardening", () => {
       entry: { version: 2, data: "garbage", ts: Date.now() },
     });
 
-    const { getCacheEntry } = await import("./metadata/cache");
     expect(await getCacheEntry("metadata_corrupt-data")).toBeUndefined();
     expect(await getCacheEntry("metadata_corrupt-str")).toBeUndefined();
+  });
+
+  it("getCacheEntry treats a malformed pictureDataFull (non-bytes or empty) as a miss", async () => {
+    localStorage.removeItem(METADATA_LRU_KEY);
+    clearAllMetadataCache();
+    vi.mocked(invoke).mockReset();
+
+    memoryStore.set("metadata_bad-full-type", {
+      key: "metadata_bad-full-type",
+      entry: {
+        version: 2,
+        data: makeRealEntry({
+          pictureDataFull: { byteLength: "nope" } as unknown as Uint8Array,
+        }),
+        ts: Date.now(),
+      },
+    });
+    memoryStore.set("metadata_bad-full-empty", {
+      key: "metadata_bad-full-empty",
+      entry: {
+        version: 2,
+        data: makeRealEntry({ pictureDataFull: new Uint8Array(0) }),
+        ts: Date.now(),
+      },
+    });
+    // Control row: real bytes must still be a hit (no over-rejection).
+    memoryStore.set("metadata_good-full", {
+      key: "metadata_good-full",
+      entry: {
+        version: 2,
+        data: makeRealEntry({ pictureDataFull: new Uint8Array([1, 2, 3]) }),
+        ts: Date.now(),
+      },
+    });
+
+    expect(await getCacheEntry("metadata_bad-full-type")).toBeUndefined();
+    expect(await getCacheEntry("metadata_bad-full-empty")).toBeUndefined();
+    expect((await getCacheEntry("metadata_good-full"))?.data.title).toBe(
+      "Real Title",
+    );
   });
 
   it("loads corrupt lruKeys JSON (non-array) from localStorage without crashing", async () => {

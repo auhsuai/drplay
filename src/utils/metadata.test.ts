@@ -1338,6 +1338,27 @@ describe("getTrackMetadata per-file network cooldown", () => {
     await getTrackMetadata("cd-clear", "tok", 2048, "cd.mp3");
     expect(calls.length).toBeGreaterThan(callsAfterFail);
   });
+
+  it("setNetworkCooldown sweeps expired entries on write (a never-re-read fileId cannot leak forever)", async () => {
+    vi.useFakeTimers();
+    const { getTrackMetadata } = await import("./metadata");
+    const { networkCooldownUntil } = await import("./metadata/cooldown");
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+
+    // First file fails once and is NEVER re-read afterwards, so the lazy
+    // prune on read never runs for it.
+    await getTrackMetadata("sweep-old", "tok", 2048, "sweep.mp3");
+    expect(networkCooldownUntil.has("sweep-old")).toBe(true);
+
+    // Its cooldown expires while the file stays unread.
+    await vi.advanceTimersByTimeAsync(METADATA_NETWORK_COOLDOWN_MS + 1);
+
+    // A later failure for a DIFFERENT file must sweep the expired entry.
+    await getTrackMetadata("sweep-new", "tok", 2048, "sweep.mp3");
+    expect(networkCooldownUntil.has("sweep-old")).toBe(false);
+    expect(networkCooldownUntil.has("sweep-new")).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+  });
 });
 
 describe("cover extraction + full picture LRU", () => {
@@ -1508,6 +1529,51 @@ describe("cover extraction + full picture LRU", () => {
     expect(getFullPictureData("pic-idb-seed")).toEqual(fullBytes);
     // The mem entry itself stays full-free (LRU is the single owner).
     expect(memCache.get("pic-idb-seed")?.pictureDataFull).toBeNull();
+  });
+
+  it("a corrupt IDB full-picture value rejects the whole row (miss, no LRU poisoning)", async () => {
+    putCacheRow(
+      "metadata_pic-idb-corrupt",
+      makeRealEntry({
+        pictureData: new Uint8Array([1, 2, 3]),
+        pictureFormat: "image/jpeg",
+        // Truthy but not bytes — a row written by a broken or foreign build.
+        // isCacheEntry rejects it: consuming it would poison the LRU byte
+        // budget (NaN) and never fall back to the thumb.
+        pictureDataFull: { byteLength: "nope" } as unknown as Uint8Array,
+      }),
+    );
+    const mod = await fresh();
+    const { getTrackMetadata, getFullPictureData } = mod;
+    const { mock } = makeFetchMock(buildMp3Fixture("X", "Y", "Z"));
+
+    const r = await getTrackMetadata("pic-idb-corrupt", "tok", 2048, "pic.mp3");
+    // The malformed row is a MISS: the pipeline refetches from the network,
+    // and the garbage reaches neither the entry nor the LRU.
+    expect(mock).toHaveBeenCalled();
+    expect(r.pictureDataFull).toBeNull();
+    expect(getFullPictureData("pic-idb-corrupt")).toBeNull();
+  });
+
+  it("an empty IDB full-picture array rejects the whole row (miss, no 0-byte cover)", async () => {
+    putCacheRow(
+      "metadata_pic-idb-empty",
+      makeRealEntry({
+        pictureData: new Uint8Array([1, 2, 3]),
+        pictureFormat: "image/jpeg",
+        pictureDataFull: new Uint8Array(0),
+      }),
+    );
+    const mod = await fresh();
+    const { getTrackMetadata, getFullPictureData } = mod;
+    const { mock } = makeFetchMock(buildMp3Fixture("X", "Y", "Z"));
+
+    const r = await getTrackMetadata("pic-idb-empty", "tok", 2048, "pic.mp3");
+    // A 0-byte full variant would render an empty blob (still non-null, so
+    // the UI would NOT fall back to the thumb) — the row is rejected instead.
+    expect(mock).toHaveBeenCalled();
+    expect(r.pictureDataFull).toBeNull();
+    expect(getFullPictureData("pic-idb-empty")).toBeNull();
   });
 
   it("skips a picture larger than COVER_MAX_BYTES with a warning but keeps the v:8 text entry", async () => {
@@ -2680,10 +2746,15 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     expect(r.v).toBe(8);
     expect(r.title).toBe("Big Tag Song");
     expect(tokenizerConstructions).toHaveLength(2);
+    // The raised-budget tokenizer starts on an EMPTY chunk cache — the head
+    // is restored by ONE prefetchHead request (calls[1]) instead of the ~24
+    // 64KB chunked re-reads it would otherwise trigger (calls[1] would be
+    // bytes=0-65535 before that reseed existed).
+    expect(calls[1]?.range).toBe(`bytes=0-${String(HEAD_TAG_FETCH_BYTES - 1)}`);
     // A 25MB region cannot survive the 128-chunk LRU — seeding it would
     // double-spend the raised budget (evicted chunks re-fetched), so the
-    // prefetch is skipped and the parse reads chunked within the raised
-    // budget, exactly as before prefetchRange existed.
+    // remainder prefetch is skipped and the parse reads it chunked within
+    // the raised budget (the head itself comes from the reseed above).
     expect(calls.length).toBeGreaterThan(100);
   });
 
@@ -3173,6 +3244,11 @@ describe("parseDiskMetadata validation contract", () => {
     expect(parseDiskMetadata(diskRaw({ title: 42 }))).toBeNull();
   });
 
+  it("returns null when title is whitespace-only", () => {
+    expect(parseDiskMetadata(diskRaw({ title: "   " }))).toBeNull();
+    expect(parseDiskMetadata(diskRaw({ title: "\t\n" }))).toBeNull();
+  });
+
   it("returns null when duration is missing or not a finite number", () => {
     expect(parseDiskMetadata(diskRaw({ duration: undefined }))).toBeNull();
     expect(parseDiskMetadata(diskRaw({ duration: null }))).toBeNull();
@@ -3236,6 +3312,29 @@ describe("parseDiskMetadata validation contract", () => {
     expect(entry?.channels).toBeUndefined();
     expect(entry?.title).toBe("Disk Title");
     expect(entry?.duration).toBe(180.5);
+  });
+
+  it("drops out-of-domain optional numbers instead of failing", () => {
+    const entry = parseDiskMetadata(
+      diskRaw({
+        bitrate: -5,
+        size: -1,
+        year: 1999.5,
+        trackNumber: 0.5,
+        sampleRate: -44100,
+        bitDepth: -16,
+        channels: -2,
+      }),
+    );
+    expect(entry?.title).toBe("Disk Title");
+    expect(entry?.duration).toBe(180.5);
+    expect(entry?.bitrate).toBeUndefined();
+    expect(entry?.size).toBeUndefined();
+    expect(entry?.year).toBeUndefined();
+    expect(entry?.trackNumber).toBeUndefined();
+    expect(entry?.sampleRate).toBeUndefined();
+    expect(entry?.bitDepth).toBeUndefined();
+    expect(entry?.channels).toBeUndefined();
   });
 
   it("keeps valid optional fields", () => {

@@ -28,7 +28,7 @@ function ErrorIcon({
           type === "access_denied"
         ? FileWarning
         : WifiOff;
-  return <Icon className={`${className} text-brand-primary`} />;
+  return <Icon className={`${className} text-brand-text`} />;
 }
 
 export function ErrorToast({ errorInfo, errorText }: ErrorToastProps) {

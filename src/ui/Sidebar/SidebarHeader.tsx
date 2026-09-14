@@ -23,7 +23,7 @@ export function SidebarHeader({
       }}
     >
       <h1
-        className="text-xl font-bold flex items-center text-brand-primary w-full"
+        className="text-xl font-bold flex items-center text-brand-text w-full"
         title="DrPlay"
       >
         <HardDrive className="w-6 h-6 shrink-0" />

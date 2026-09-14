@@ -118,18 +118,21 @@ export async function getCacheEntry(
 // Shape guard for a cached row: a row whose version happens to match but whose
 // payload is garbage (e.g. data: {} or a string from a partial write) is a
 // MISS, not a hit — parity with parseDiskMetadata, which validates the full
-// entry before trusting it.
+// entry before trusting it. The optional full-picture bytes are validated
+// too: a truthy non-Uint8Array (NaN byte accounting in the LRU budget) or an
+// empty array (a 0-byte cover the UI cannot fall back from) makes the whole
+// row corrupt, so the caller refetches instead of consuming it.
 function isCacheEntry(u: unknown): u is CacheEntry {
   if (typeof u !== "object" || u === null) return false;
   const entry = u as Record<string, unknown>;
   const data = entry.data;
-  return (
-    typeof entry.version === "number" &&
-    typeof data === "object" &&
-    data !== null &&
-    typeof (data as Record<string, unknown>).v === "number" &&
-    typeof entry.ts === "number"
-  );
+  if (typeof data !== "object" || data === null) return false;
+  const meta = data as Record<string, unknown>;
+  if (typeof entry.version !== "number") return false;
+  if (typeof meta.v !== "number") return false;
+  if (typeof entry.ts !== "number") return false;
+  const full = meta.pictureDataFull;
+  return full === null || (full instanceof Uint8Array && full.byteLength > 0);
 }
 
 export async function putCacheEntry(

@@ -20,15 +20,20 @@ export function DeleteConfirmDialog({
   t,
 }: DeleteConfirmDialogProps) {
   // Escape cancels the dialog (same guard as backdrop click/Cancel:
-  // ignored while a delete is in flight).
+  // ignored while a delete is in flight). Window CAPTURE: the innermost
+  // overlay swallows the press before the document (menu) and window (drawer)
+  // listeners run — including while busy (APG dialog-modal); capture on
+  // window still fires for window-dispatched events, so existing tests hold.
   useEffect(() => {
     if (!show) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isDeleting) onClose();
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (!isDeleting) onClose();
     };
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [show, onClose, isDeleting]);
 

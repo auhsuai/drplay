@@ -4,6 +4,16 @@
 @theme {
   --color-brand-primary: #4285f4;
   --color-brand-hover: #3367d6;
+  --color-brand-text: #1967d2;
+}
+
+/* Text tone of the brand blue (WCAG AA on light surfaces: #1967d2 is the
+   lightest brand-adjacent tone that clears 4.5:1 on every queue surface).
+   Dark theme needs a lighter tone; this rule is deliberately unlayered so it
+   wins over Tailwind v4's @layer theme (same trick as :is(.dark body) below).
+   Fill/icon usage keeps --color-brand-primary. */
+.dark {
+  --color-brand-text: #8ab4f8;
 }
 
 @custom-variant dark (&:where(.dark, .dark *));

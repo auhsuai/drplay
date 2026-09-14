@@ -1101,7 +1101,7 @@ describe("PlayerBar favorite (heart) button", () => {
     const btn = await screen.findByRole("button", {
       name: "Remove from favorites",
     });
-    expect(btn.className).toContain("text-brand-primary");
+    expect(btn.className).toContain("text-brand-text");
   });
 
   it("calls addFavorite and flips to liked on click when not liked", async () => {

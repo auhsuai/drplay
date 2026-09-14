@@ -96,4 +96,9 @@ describe("PlaylistsSubmenu search filter", () => {
     expect(screen.getByRole("button", { name: "Party Mix" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Workout" })).toBeTruthy();
   });
+
+  it("names the search box for assistive tech", () => {
+    renderSubmenu([], "");
+    expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
+  });
 });

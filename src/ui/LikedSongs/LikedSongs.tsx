@@ -216,7 +216,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                       }`}
                     >
                       <div
-                        className={`w-12 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-primary hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
+                        className={`w-12 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-text hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
                       >
                         {currentTrack?.id === track.id ? (
                           <Music className="w-4 h-4 mx-auto" />
@@ -228,20 +228,20 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                         className={`w-12 text-center items-center justify-center ${currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
                       >
                         <Play
-                          className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white"}`}
+                          className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white"}`}
                           fill="currentColor"
                         />
                       </div>
 
                       <div
-                        className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-primary" : "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 text-brand-primary"}`}
+                        className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-text" : "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 text-brand-text"}`}
                       >
                         <Music className="w-5 h-5 opacity-80" />
                       </div>
 
                       <div className="flex-1 min-w-0 flex flex-col justify-center">
                         <h4
-                          className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-primary" : "text-gray-900 dark:text-white group-hover:text-brand-primary"}`}
+                          className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white group-hover:text-brand-text"}`}
                         >
                           {track.title}
                         </h4>
@@ -255,7 +255,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                           onClick={(e) => {
                             void handleUnlike(e, track.id);
                           }}
-                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all text-brand-primary hover:scale-110"
+                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all text-brand-text hover:scale-110"
                           title={t("menu.remove_from_liked")}
                         >
                           <Heart className="w-4 h-4" fill="currentColor" />

@@ -1,9 +1,9 @@
 import { SquareCheckBig } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-const ACTIVE_CLASS = "text-brand-primary hover:bg-brand-primary/10";
+const ACTIVE_CLASS = "text-brand-text hover:bg-brand-primary/10";
 const IDLE_CLASS =
-  "text-gray-500 hover:text-brand-primary hover:bg-brand-primary/10";
+  "text-gray-500 hover:text-brand-text hover:bg-brand-primary/10";
 
 export interface QueueControlsProps {
   selectionMode: boolean;

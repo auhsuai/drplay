@@ -99,7 +99,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-white/10 dark:bg-black/30 backdrop-blur-2xl">
       <div className="w-full max-w-md p-8 bg-white/70 dark:bg-[#202124]/60 backdrop-blur-3xl rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.4)] text-center">
         <div className="flex justify-center mb-6">
-          <div className="w-16 h-16 bg-brand-primary/10 rounded-2xl flex items-center justify-center text-brand-primary">
+          <div className="w-16 h-16 bg-brand-primary/10 rounded-2xl flex items-center justify-center text-brand-text">
             <HardDrive className="w-8 h-8" />
           </div>
         </div>
@@ -120,7 +120,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           className="w-full flex items-center justify-center gap-3 bg-white text-gray-700 font-medium py-3 px-4 rounded-lg shadow-[0_1px_3px_rgba(0,0,0,0.1)] hover:shadow-[0_2px_6px_rgba(0,0,0,0.15)] hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-4 focus:ring-brand-primary/30 active:scale-[0.98] transition-all duration-200 disabled:opacity-70 disabled:cursor-not-allowed"
         >
           {isLoading ? (
-            <LoaderCircle className="w-6 h-6 animate-spin text-brand-primary" />
+            <LoaderCircle className="w-6 h-6 animate-spin text-brand-text" />
           ) : (
             <>
               {/* Google G Logo SVG */}
@@ -159,7 +159,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             <button
               type="button"
               onClick={handleCancel}
-              className="text-brand-primary underline cursor-pointer hover:text-blue-600 transition-colors"
+              className="text-brand-text underline cursor-pointer hover:text-blue-600 transition-colors"
             >
               {t("login.cancel_here")}
             </button>

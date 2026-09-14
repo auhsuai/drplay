@@ -146,10 +146,12 @@ export function QueueRow({
 
   // SongCard title parity (no flash state in the queue): brand when current,
   // brand on hover.
-  const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isCurrent ? "text-brand-primary!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-primary`;
+  const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isCurrent ? "text-brand-text!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-text`;
 
   const content = (
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events -- QR-2: keyboard activation is owned by the QueueList listbox (aria-activedescendant + Enter/Space -> activate); the card is not an independent control or tab stop. Mouse-only click here.
     <div
+      onClick={isCurrent ? undefined : onActivate}
       className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 w-full ${
         isCurrent
           ? "bg-gray-100 dark:bg-[#2a2b2f] shadow-sm"
@@ -165,7 +167,7 @@ export function QueueRow({
       )}
 
       <div
-        className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isCurrent ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}
+        className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-text ${isCurrent ? "bg-brand-primary/10! text-brand-text!" : "text-gray-400"}`}
       >
         {coverUrl ? (
           <img
@@ -187,7 +189,9 @@ export function QueueRow({
         )}
       </div>
 
-      <div className="overflow-hidden flex-1 flex flex-col justify-center">
+      <div
+        className={`overflow-hidden flex-1 flex flex-col justify-center ${selectionMode ? "" : "mr-11"}`}
+      >
         <h3 className={titleClass}>{track.title}</h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           <div className="flex items-center truncate">
@@ -209,18 +213,20 @@ export function QueueRow({
           </div>
         </div>
       </div>
+    </div>
+  );
 
-      {!selectionMode && (
-        <div className="ml-2 shrink-0">
-          <MoreMenu
-            variant="queue"
-            track={track}
-            disableRemoveFromQueue={isCurrent}
-            onRemoveFromQueue={onRemoveFromQueue}
-            onRemoveFolderFromQueue={onRemoveFolderFromQueue}
-          />
-        </div>
-      )}
+  // Menu lives outside the card (sibling, QueueFolderRow parity): the card is
+  // the only click/activation target, the trigger is not nested inside it.
+  const menu = !selectionMode && (
+    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+      <MoreMenu
+        variant="queue"
+        track={track}
+        disableRemoveFromQueue={isCurrent}
+        onRemoveFromQueue={onRemoveFromQueue}
+        onRemoveFolderFromQueue={onRemoveFolderFromQueue}
+      />
     </div>
   );
 
@@ -228,11 +234,13 @@ export function QueueRow({
     return (
       <div
         data-testid="queue-row"
+        role="gridcell"
         aria-current="true"
-        className="group w-full rounded-xl cursor-default"
+        className="group relative w-full rounded-xl cursor-default"
         style={{ height: QUEUE_ROW_HEIGHT }}
       >
         {content}
+        {menu}
       </div>
     );
   }
@@ -240,21 +248,12 @@ export function QueueRow({
   return (
     <div
       data-testid="queue-row"
-      role="button"
-      tabIndex={0}
-      onClick={onActivate}
-      onKeyDown={(e) => {
-        // Keys pressed inside the row menu must not activate the row.
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onActivate();
-        }
-      }}
-      className="group w-full rounded-xl cursor-pointer"
+      role="gridcell"
+      className="group relative w-full rounded-xl cursor-pointer"
       style={{ height: QUEUE_ROW_HEIGHT }}
     >
       {content}
+      {menu}
     </div>
   );
 }

@@ -213,9 +213,11 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
    * mid-chunk — peekBuffer indexes chunk-relative). A trailing partial chunk
    * is cached only when it ends at EOF (no bytes exist beyond it); elsewhere
    * it is left uncached so a later read past the region refetches instead of
-   * silently truncating. Throws BudgetExceededError when the region would
-   * exceed the per-file budget (same contract as prefetchHead); the caller
-   * falls back to chunked reads on any failure.
+   * silently truncating. A region whose covering chunks are already cached is
+   * served straight from the LRU without a request (the m4a tail prefetch
+   * runs after the parser read the same tail). Throws BudgetExceededError
+   * when the region would exceed the per-file budget (same contract as
+   * prefetchHead); the caller falls back to chunked reads on any failure.
    */
   async prefetchRange(
     start: number,
@@ -229,6 +231,27 @@ export class DriveRangeTokenizer extends AbstractTokenizer {
     const firstChunk = alignedChunkStart(fetchStart);
     const lastChunk = alignedChunkStart(fetchEnd - 1);
     const chunkCount = (lastChunk - firstChunk) / RANGE_CHUNK + 1;
+    // Fully-cached region: serve it from the LRU without a request. The m4a
+    // tail prefetch runs AFTER the parser read the same tail chunks, and
+    // re-fetching them pulled up to TAIL_BYTES (1MB) over the network twice.
+    // Coverage mirrors the seed rule below: every chunk must hold the bytes
+    // this range needs, so a short mid-file entry (not a legal cache state,
+    // but cheap to rule out) falls through to a real fetch instead of
+    // returning truncated data.
+    let fullyCached = true;
+    for (
+      let chunkStart = firstChunk;
+      chunkStart <= lastChunk;
+      chunkStart += RANGE_CHUNK
+    ) {
+      const cached = this.chunkCache.peek(chunkStart);
+      const neededEnd = Math.min(chunkStart + RANGE_CHUNK, fetchEnd);
+      if (!cached || chunkStart + cached.length < neededEnd) {
+        fullyCached = false;
+        break;
+      }
+    }
+    if (fullyCached) return this.readRange(fetchStart, fetchEnd);
     // The LRU holds MAX_CACHED_CHUNKS chunks; seeding more than it can keep
     // is self-defeating: every evicted chunk is re-fetched by the parse,
     // double-spending the fetch budget (a 25MB tag prefetch + re-fetch of

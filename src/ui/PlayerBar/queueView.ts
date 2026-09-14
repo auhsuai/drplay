@@ -1,5 +1,5 @@
 import type { Track } from "../../types";
-import { sameTrack } from "../../hooks/player/utils";
+import { sameTrack, trackKey } from "../../hooks/player/utils";
 
 /**
  * One row of the Play Queue: either a real queue track or a collapsed folder
@@ -15,8 +15,6 @@ export type QueueViewItem =
       count: number;
       containsCurrent: boolean;
     };
-
-const trackKey = (track: Track): string => track.queueItemId ?? track.id;
 
 const folderKey = (folderId: string): string => `folder:${folderId}`;
 
@@ -46,7 +44,7 @@ export function buildQueueView(
   const currentFolders = new Set<string>();
   for (const track of tracks) {
     const folderId = track.folderGroupId;
-    if (folderId === undefined) continue;
+    if (!folderId) continue;
     counts.set(folderId, (counts.get(folderId) ?? 0) + 1);
     if (currentTrack !== null && sameTrack(track, currentTrack)) {
       currentFolders.add(folderId);
@@ -57,7 +55,7 @@ export function buildQueueView(
   const items: QueueViewItem[] = [];
   for (const track of tracks) {
     const folderId = track.folderGroupId;
-    if (folderId === undefined) {
+    if (!folderId) {
       items.push({ kind: "track", key: trackKey(track), track });
       continue;
     }

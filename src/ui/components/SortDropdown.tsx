@@ -179,7 +179,7 @@ export function SortDropdown({
                   onSortChange?.(newOpt);
                   setShowSortMenu(false);
                 }}
-                className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-brand-primary dark:hover:text-brand-primary ${baseSortOption === opt.id ? "text-brand-primary font-medium" : "text-gray-700 dark:text-gray-300"}`}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-brand-text dark:hover:text-brand-text ${baseSortOption === opt.id ? "text-brand-text font-medium" : "text-gray-700 dark:text-gray-300"}`}
               >
                 {opt.label}
                 {baseSortOption === opt.id && <Check className="w-4 h-4" />}

@@ -13,7 +13,7 @@ import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchTrackInServiceWorker } from "../../utils/swPrefetch";
 import { isAbortError, resolveNextTrack } from "./utils";
 import { onceAfterFirstAudio } from "./deferOnce";
-import { errMsg, logUsePlayer } from "./usePlayerLifecycle";
+import { errMsg, logUsePlayer, PLAYER_STOP_EVENT } from "./usePlayerLifecycle";
 import type { QueueDriveItem } from "./usePlayerQueue";
 import type { TabKey } from "../../utils/driveConstants";
 import { usePlayerStore } from "../../store/playerStore";
@@ -63,12 +63,18 @@ export function usePlayerTrackPlayback(
     return ctrl.signal;
   };
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const handleStop = () => {
       abortControllerRef.current?.abort();
-    },
-    [],
-  );
+    };
+    window.addEventListener(PLAYER_STOP_EVENT, handleStop);
+    return () => {
+      window.removeEventListener(PLAYER_STOP_EVENT, handleStop);
+      abortControllerRef.current?.abort();
+      // The spinner's owner is gone; a later attempt will set its own state.
+      setIsDownloading(false);
+    };
+  }, [setIsDownloading]);
 
   const handlePlayTrack = useCallback(
     async (
@@ -150,8 +156,13 @@ export function usePlayerTrackPlayback(
           },
         );
 
+        // guard UTP-1: the LEAD token-refresh branch does not race the signal,
+        // so an aborted attempt resumes here — never commit it.
+        if (signal.aborted) return;
+
         if (!freshToken) {
           setIsDownloading(false);
+          showErrorToast(t("player.playback_failed"));
           return;
         }
 

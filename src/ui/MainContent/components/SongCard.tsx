@@ -104,7 +104,7 @@ export const SongCard = React.memo(
       x: number;
       y: number;
     } | null>(null);
-    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isFlashOn || isPlaying ? "text-brand-primary!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-primary`;
+    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isFlashOn || isPlaying ? "text-brand-text!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-text`;
 
     const handleCardActivate = () => {
       if (isSelectionMode) {
@@ -161,14 +161,14 @@ export const SongCard = React.memo(
             {isSelectionMode && (
               <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
                 {isSelected ? (
-                  <SquareCheckBig className="w-5 h-5 text-brand-primary" />
+                  <SquareCheckBig className="w-5 h-5 text-brand-text" />
                 ) : (
                   <Square className="w-5 h-5 text-gray-400 dark:text-gray-500 group-hover:text-gray-500 dark:group-hover:text-gray-400" />
                 )}
               </div>
             )}
             <div
-              className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-primary ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-primary!" : "text-gray-400"}`}`}
+              className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-text ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-text!" : "text-gray-400"}`}`}
             >
               {coverUrl && !item.isFolder ? (
                 <img

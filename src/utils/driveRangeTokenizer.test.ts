@@ -632,6 +632,33 @@ describe("DriveRangeTokenizer", () => {
       expect(vf.calls).toHaveLength(1);
     });
 
+    it("serves a fully cached region without a second request (MPF-2)", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      // Ends on a chunk boundary: chunk 0 is fully covered and cached (a
+      // region ending mid-chunk below EOF is intentionally never cacheable).
+      const first = await tz.prefetchRange(100, 65_536);
+      expect(vf.calls).toHaveLength(1);
+      const second = await tz.prefetchRange(100, 65_536);
+      // The region is already cached: an m4a tail prefetch that runs after the
+      // parser read the same bytes must not pull them over the network again.
+      expect(vf.calls).toHaveLength(1);
+      expect(Array.from(second)).toEqual(Array.from(first));
+    });
+
+    it("a tail already read by the parser is not re-fetched by prefetchRange (m4a tail scenario)", async () => {
+      const vf = installVirtualFile(200_000, (i) => i % 256);
+      const tz = new DriveRangeTokenizer("f1", 200_000);
+      // Parser read: chunk 131072 (full) + chunk 196608 (EOF-partial).
+      await tz.readRange(131_072, 200_000);
+      expect(vf.calls).toHaveLength(2);
+      const data = await tz.prefetchRange(131_072, 200_000);
+      expect(vf.calls).toHaveLength(2);
+      expect(data).toHaveLength(200_000 - 131_072);
+      expect(data[0]).toBe(131_072 % 256);
+      expect(data[68_927]).toBe(199_999 % 256);
+    });
+
     it("throws BudgetExceededError when the fetch would exceed the per-file budget", async () => {
       installVirtualFile(300_000, (i) => i % 256);
       const tz = new DriveRangeTokenizer("f1", 300_000, {

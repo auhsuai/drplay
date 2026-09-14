@@ -6,6 +6,7 @@ import {
   classifyPlayerError,
   ensureQueueItemId,
   sameTrack,
+  trackKey,
 } from "../hooks/player/utils";
 import { usePlayerStore } from "./playerStore";
 
@@ -58,13 +59,8 @@ export function removeTracksFromQueue(itemIds: readonly string[]): number {
   const state = usePlayerStore.getState();
   const { currentTrack } = state;
 
-  const isTargeted = (track: Track): boolean =>
-    track.queueItemId !== undefined
-      ? ids.has(track.queueItemId)
-      : ids.has(track.id);
-
   const keep = (track: Track): boolean =>
-    !isTargeted(track) ||
+    !ids.has(trackKey(track)) ||
     (currentTrack !== null && sameTrack(track, currentTrack));
 
   const nextOriginalQueue = state.originalQueue.filter(keep);
@@ -98,7 +94,7 @@ export function removeTracksByFolderFromQueue(folderId: string): number {
         track.folderGroupId === folderId || track.parentId === folderId,
     )
     .filter((track) => currentTrack === null || !sameTrack(track, currentTrack))
-    .map((track) => track.queueItemId ?? track.id);
+    .map((track) => trackKey(track));
 
   return removeTracksFromQueue(ids);
 }

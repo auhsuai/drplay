@@ -162,6 +162,56 @@ export function FolderSelectionScreen({
     allowEscapeRoot,
   ]);
 
+  // Escape closes the picker (first-run setup gates have no onCancel: the
+  // press is swallowed anyway — nothing behind the overlay may react).
+  // Window CAPTURE: the picker is the innermost overlay, so it must swallow
+  // the press before the drawer (window bubble) and menu (document bubble)
+  // layers. Staged like the queue search (QSI-1): a press inside a non-empty
+  // search field only clears it and keeps the picker open; every other
+  // press cancels. This is the single source of truth for Esc inside the
+  // picker — the duplicate branch in useFolderPicker was removed.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (
+        document.activeElement === searchInputRef.current &&
+        searchQuery.trim() !== ""
+      ) {
+        searchInputRef.current?.blur();
+        setSearchQuery("");
+        return;
+      }
+      onCancel?.();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [onCancel, searchQuery, setSearchQuery, searchInputRef]);
+
+  // APG dialog-modal focus return: restore the invoker (row ⋯ trigger or the
+  // toolbar bulk-move button) when the picker unmounts. The per-row path
+  // opens from a menu item whose unmount already moved focus to body, so this
+  // restores nothing there — MoreMenu's onCancel re-focuses its trigger;
+  // the bulk path keeps the toolbar button mounted, so it is restored here.
+  useEffect(() => {
+    const invoker =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    return () => {
+      if (
+        invoker &&
+        invoker !== document.body &&
+        invoker !== document.documentElement &&
+        invoker.isConnected
+      ) {
+        invoker.focus();
+      }
+    };
+  }, []);
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
@@ -176,7 +226,7 @@ export function FolderSelectionScreen({
         <div className="px-6 py-5 flex items-center justify-between shrink-0">
           <div>
             <h1 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-              <HardDrive className="text-brand-primary w-6 h-6" />
+              <HardDrive className="text-brand-text w-6 h-6" />
               {title || t("folder_selection.select_root")}
             </h1>
             <p className="text-xs text-gray-500 mt-1">

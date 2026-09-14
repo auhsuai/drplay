@@ -17,7 +17,8 @@
     "unknown": "Unknown",
     "coming_soon": "Coming soon",
     "profile_alt": "Profile",
-    "cover_alt": "Cover"
+    "cover_alt": "Cover",
+    "more_actions": "More actions"
   },
   "sidebar": {
     "home": "Home",
@@ -140,6 +141,9 @@
     "search_placeholder": "Search in queue",
     "empty": "The queue is empty",
     "no_results": "No matching songs",
+    "search_results_count": "{{count}} results",
+    "search_results_count_one": "{{count}} result",
+    "search_results_count_other": "{{count}} results",
     "select_multiple": "Select multiple",
     "select_all": "Select all",
     "unselect_all": "Unselect all",

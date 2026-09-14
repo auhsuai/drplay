@@ -178,7 +178,7 @@ export function StorageQuotaCard({
                   <span
                     data-testid="storage-quota-usage"
                     className={
-                      isOverThreshold ? "text-red-500" : "text-brand-primary"
+                      isOverThreshold ? "text-red-500" : "text-brand-text"
                     }
                   >
                     {formatBytes(quota.usageInDrive)}

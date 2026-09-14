@@ -126,6 +126,18 @@ afterEach(() => {
 });
 
 describe("MoreMenu recent variant", () => {
+  it("names the trigger button for assistive tech", () => {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
+    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
+  });
+
   it("shows exactly 4 curated items (Delete / Download Song / Add to Playlist / Locate File) and no Select Multiple or Move to", () => {
     render(
       <MoreMenu

@@ -71,7 +71,7 @@ export function DefaultMenuItems({
               onSelectMultiple?.();
             }}
             className={MENU_ITEM_BASE_CLASS}
-            iconClassName="w-4 h-4 text-gray-400 group-hover:text-brand-primary"
+            iconClassName="w-4 h-4 text-gray-400 group-hover:text-brand-text"
             truncateLabel={false}
           />
           <MoreMenuItem
@@ -92,7 +92,7 @@ export function DefaultMenuItems({
             iconClassName={
               isAddingToQueue
                 ? "w-4 h-4 animate-spin"
-                : "w-4 h-4 text-gray-400 group-hover:text-brand-primary"
+                : "w-4 h-4 text-gray-400 group-hover:text-brand-text"
             }
             truncateLabel={false}
           />

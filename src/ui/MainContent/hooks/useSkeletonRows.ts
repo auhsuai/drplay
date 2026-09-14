@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 // Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar)
 // — the file-list container sizes itself to fill the viewport below it
@@ -22,18 +22,17 @@ const calcSkeletonRows = () =>
     ),
   );
 
+// Recompute the skeleton row count on resize so the loading state keeps
+// filling the list area after a window size change. Module-level subscribe/
+// getSnapshot pair (React useSyncExternalStore pattern) — calcSkeletonRows is
+// deterministic, so the snapshot is Object.is-stable between resizes.
+const subscribeResize = (callback: () => void): (() => void) => {
+  window.addEventListener("resize", callback);
+  return () => {
+    window.removeEventListener("resize", callback);
+  };
+};
+
 export function useSkeletonRows(): number {
-  // Recompute the skeleton row count on resize so the loading state keeps
-  // filling the list area after a window size change.
-  const [skeletonRows, setSkeletonRows] = useState(calcSkeletonRows);
-  useEffect(() => {
-    const onResize = () => {
-      setSkeletonRows(calcSkeletonRows());
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
-  return skeletonRows;
+  return useSyncExternalStore(subscribeResize, calcSkeletonRows);
 }

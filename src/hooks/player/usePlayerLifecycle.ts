@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   start as keepAwakeStart,
   stop as keepAwakeStop,
@@ -41,18 +41,31 @@ export function usePlayerLifecycle({
   resetBrokenTracks,
 }: PlayerLifecycleDeps): void {
   // Keep system awake
+  const keepAwakeChainRef = useRef<Promise<void>>(Promise.resolve());
+
   useEffect(() => {
-    if (isPlaying) {
-      keepAwakeStart({ display: false, idle: false, sleep: true }).catch(
+    // The plugin has no id/handle and does not order its promises, so start
+    // and stop are chained here: a stop enqueued after a slow start can never
+    // overtake it. The cleanup releases the wake-lock on unmount/toggle.
+    const enqueue = (op: () => Promise<unknown>, failMsg: string): void => {
+      keepAwakeChainRef.current = keepAwakeChainRef.current.then(op).then(
+        () => undefined,
         (e: unknown) => {
-          void logUsePlayer("warn", `keep-awake-failed: ${errMsg(e)}`);
+          void logUsePlayer("warn", `${failMsg}: ${errMsg(e)}`);
         },
       );
+    };
+    if (isPlaying) {
+      enqueue(
+        () => keepAwakeStart({ display: false, idle: false, sleep: true }),
+        "keep-awake-failed",
+      );
     } else {
-      keepAwakeStop().catch((e: unknown) => {
-        void logUsePlayer("warn", `keep-awake-release-failed: ${errMsg(e)}`);
-      });
+      enqueue(() => keepAwakeStop(), "keep-awake-release-failed");
     }
+    return () => {
+      enqueue(() => keepAwakeStop(), "keep-awake-release-failed");
+    };
   }, [isPlaying]);
 
   // Persist playMode

@@ -101,7 +101,7 @@ export function AppShell({
                   aria-label={t("loading")}
                   className="flex-1 flex items-center justify-center"
                 >
-                  <LoaderCircle className="animate-spin h-10 w-10 text-brand-primary stroke-[1.5]" />
+                  <LoaderCircle className="animate-spin h-10 w-10 text-brand-text stroke-[1.5]" />
                 </div>
               }
             >

@@ -73,7 +73,7 @@ export function NowPlayingControls({
         <div className="relative group flex items-center">
           <button
             onClick={onTogglePlayMode}
-            className={`p-2 rounded-full transition-all active:scale-[0.92] ${playMode !== "normal" ? "text-brand-primary hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
+            className={`p-2 rounded-full transition-all active:scale-[0.92] ${playMode !== "normal" ? "text-brand-text hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
           >
             {playMode === "shuffle" && <Shuffle className="w-5 h-5" />}
             {playMode === "repeat-all" && <Repeat className="w-5 h-5" />}

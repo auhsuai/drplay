@@ -29,15 +29,21 @@ export function DownloadDialog({
   }, [show]);
 
   // Escape cancels the dialog (same guard as X/Cancel: ignored while a
-  // download is in flight).
+  // download is in flight). Window CAPTURE: as the innermost overlay the
+  // dialog must swallow the press before the document (menu) and window
+  // (drawer) listeners run — including while busy, so no layer behind a modal
+  // reacts to Esc (APG dialog-modal). Capture on window also fires for events
+  // dispatched on window itself, so existing window-target tests stay valid.
   useEffect(() => {
     if (!show) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isDownloadingFile) onClose();
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (!isDownloadingFile) onClose();
     };
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [show, onClose, isDownloadingFile]);
 

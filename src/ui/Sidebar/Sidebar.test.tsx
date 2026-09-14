@@ -285,7 +285,7 @@ describe("Sidebar storage quota", () => {
     expect(quotaLimitTextClass()).toContain("text-gray-500");
     expect(quotaLimitTextClass()).toContain("dark:text-gray-400");
     expect(quotaLimitTextClass()).not.toContain("text-red-500");
-    expect(quotaLimitTextClass()).not.toContain("text-brand-primary");
+    expect(quotaLimitTextClass()).not.toContain("text-brand-text");
   });
 
   it("fills a single blue bar (usage width) with blue text when usage is at or under the 80% threshold", async () => {
@@ -304,12 +304,12 @@ describe("Sidebar storage quota", () => {
     expect(blue.className).toContain("rounded-full");
     expect(blue.className).not.toContain("rounded-l-full");
     expect(screen.queryByTestId("storage-quota-bar-red")).toBeNull();
-    expect(quotaTextClass()).toContain("text-brand-primary");
+    expect(quotaTextClass()).toContain("text-brand-text");
     expect(quotaTextClass()).not.toContain("text-red-500");
     // Limit half is always neutral gray, regardless of usage state.
     expect(quotaLimitTextClass()).toContain("text-gray-500");
     expect(quotaLimitTextClass()).toContain("dark:text-gray-400");
-    expect(quotaLimitTextClass()).not.toContain("text-brand-primary");
+    expect(quotaLimitTextClass()).not.toContain("text-brand-text");
     expect(quotaLimitTextClass()).not.toContain("text-red-500");
   });
 
@@ -332,11 +332,11 @@ describe("Sidebar storage quota", () => {
     expect(red.className).toContain("bg-red-500");
     expect(red.className).toContain("rounded-r-full");
     expect(quotaTextClass()).toContain("text-red-500");
-    expect(quotaTextClass()).not.toContain("text-brand-primary");
+    expect(quotaTextClass()).not.toContain("text-brand-text");
     // Limit half is always neutral gray, regardless of usage state.
     expect(quotaLimitTextClass()).toContain("text-gray-500");
     expect(quotaLimitTextClass()).toContain("dark:text-gray-400");
-    expect(quotaLimitTextClass()).not.toContain("text-brand-primary");
+    expect(quotaLimitTextClass()).not.toContain("text-brand-text");
     expect(quotaLimitTextClass()).not.toContain("text-red-500");
   });
 
@@ -352,12 +352,12 @@ describe("Sidebar storage quota", () => {
     expect(bar.className).toContain("bg-brand-primary");
     expect(bar.className).toContain("rounded-full");
     expect(screen.queryByTestId("storage-quota-bar-red")).toBeNull();
-    expect(quotaTextClass()).toContain("text-brand-primary");
+    expect(quotaTextClass()).toContain("text-brand-text");
     expect(quotaTextClass()).not.toContain("text-red-500");
     // Limit half is always neutral gray, regardless of usage state.
     expect(quotaLimitTextClass()).toContain("text-gray-500");
     expect(quotaLimitTextClass()).toContain("dark:text-gray-400");
-    expect(quotaLimitTextClass()).not.toContain("text-brand-primary");
+    expect(quotaLimitTextClass()).not.toContain("text-brand-text");
     expect(quotaLimitTextClass()).not.toContain("text-red-500");
   });
 
@@ -511,7 +511,7 @@ describe("Sidebar storage quota", () => {
     expect(blue.style.width).toBe("40%");
     expect(blue.className).toContain("bg-brand-primary");
     expect(screen.queryByTestId("storage-quota-bar-red")).toBeNull();
-    expect(quotaTextClass()).toContain("text-brand-primary");
+    expect(quotaTextClass()).toContain("text-brand-text");
   });
 
   it("debug QUOTA over 80% renders the red excess segment with red usage text", () => {
@@ -654,7 +654,7 @@ describe("Sidebar avatar fallback", () => {
     fireEvent.error(img);
     expect(screen.queryByAltText("Profile")).toBeNull();
     const letter = screen.getByText("A");
-    expect(letter.className).toContain("text-brand-primary");
+    expect(letter.className).toContain("text-brand-text");
     const letterParent = letter.parentElement;
     expect(letterParent).not.toBeNull();
     if (letterParent) {

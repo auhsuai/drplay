@@ -6,7 +6,7 @@ export interface QueueSearchInputProps {
   onChange: (value: string) => void;
 }
 
-/** Search box filtering the queue by title/artist (accent-insensitive). */
+/** Search box filtering the queue by title/artist/folder name (accent-insensitive). */
 export function QueueSearchInput({ value, onChange }: QueueSearchInputProps) {
   const { t } = useTranslation();
   const placeholder = t("queue.search_placeholder");
@@ -19,6 +19,12 @@ export function QueueSearchInput({ value, onChange }: QueueSearchInputProps) {
         value={value}
         onChange={(e) => {
           onChange(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && value.trim() !== "") {
+            onChange("");
+            e.stopPropagation();
+          }
         }}
         placeholder={placeholder}
         aria-label={placeholder}

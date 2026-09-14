@@ -35,7 +35,25 @@ export function useMainContentKeyboard({
 }): void {
   // Keyboard shortcuts
   const handleKeyDown = (e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    // Overlay guard: any dialog/screen stacked above this view owns the
+    // keyboard (APG modal pattern — the background is inert). Escape must not
+    // exit selection behind a modal, Ctrl+F must not pull focus to the
+    // background search input, and Backspace must not navigate behind the
+    // overlay. Predicate: modal flags, the NowPlaying overlay, the
+    // folder-move picker (its state lives in per-row MoreMenu and is
+    // invisible here, so it flags the body) and any portalled context menu.
+    if (
+      showNewFolderModal ||
+      showBulkMoveScreen ||
+      showBulkDeleteConfirm ||
+      isNowPlayingOpen ||
+      document.body.hasAttribute(MOVE_PICKER_OPEN_ATTR) ||
+      document.querySelector('[role="menu"]') !== null
+    )
+      return;
+    // key is normalized to lower case: with CapsLock or Shift held the
+    // browser reports "F" for the F key (MDN KeyboardEvent.key).
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
       e.preventDefault();
       if (document.activeElement === searchInputRef.current) {
         searchInputRef.current?.blur();
@@ -65,24 +83,14 @@ export function useMainContentKeyboard({
     }
     // Backspace navigates back one folder (slice B). It never clears search,
     // exits selection, or closes modals — that is Esc's job (above). Guard
-    // order: editable focus first (Backspace deletes text there), then
-    // modifier chords, then any overlay stacked above this view. The move
-    // picker owns the press via its body attribute flag (its state lives in
-    // per-row MoreMenu and is invisible here); context menus render only as
-    // a portalled [role="menu"] while open. No stopImmediatePropagation:
-    // each layer stands down on its own guard instead of depending on
-    // listener registration order.
+    // order: the overlay guard at the top of this handler already stood down
+    // for stacked overlays; then editable focus (Backspace deletes text
+    // there), then modifier chords. No stopImmediatePropagation: each layer
+    // stands down on its own guard instead of depending on listener
+    // registration order.
     if (e.key === "Backspace") {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (isEditableTarget(document.activeElement)) return;
-      if (showNewFolderModal || showBulkMoveScreen || showBulkDeleteConfirm)
-        return;
-      if (isNowPlayingOpen) return;
-      if (
-        document.body.hasAttribute(MOVE_PICKER_OPEN_ATTR) ||
-        document.querySelector('[role="menu"]') !== null
-      )
-        return;
       if (!hasHistory) return;
       onBack();
     }
@@ -98,20 +106,5 @@ export function useMainContentKeyboard({
     showBulkMoveScreen,
     showBulkDeleteConfirm,
     isNowPlayingOpen,
-  ]);
-
-  // Enable selection mode from events
-  const handleEnableSelection = (e: Event) => {
-    // detail is typed | null because a CustomEvent constructed without the
-    // detail option defaults to null at runtime.
-    const customEvent = e as CustomEvent<{ id?: string } | null>;
-    if (customEvent.detail?.id) {
-      setIsSelectionMode(true);
-      setSelectedIds(new Set([customEvent.detail.id]));
-    }
-  };
-  useEventListener("enable-selection-mode", handleEnableSelection, [
-    setIsSelectionMode,
-    setSelectedIds,
   ]);
 }

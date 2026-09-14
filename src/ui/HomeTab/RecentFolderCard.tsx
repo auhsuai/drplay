@@ -32,7 +32,7 @@ export function RecentFolderCard({
         <Folder className="w-6 h-6" fill="currentColor" />
       </div>
       <div className="overflow-hidden flex-1 flex flex-col justify-center">
-        <h3 className="font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 text-gray-800 dark:text-gray-200 group-hover:text-brand-primary">
+        <h3 className="font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 text-gray-800 dark:text-gray-200 group-hover:text-brand-text">
           {folder.name}
         </h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">

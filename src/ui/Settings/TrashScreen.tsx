@@ -223,7 +223,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
               <svg
-                className="w-5 h-5 text-brand-primary"
+                className="w-5 h-5 text-brand-text"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -278,7 +278,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
           ) : (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between px-1 py-3 mb-2">
-                <div className="flex items-center gap-2 text-sm text-brand-primary font-medium">
+                <div className="flex items-center gap-2 text-sm text-brand-text font-medium">
                   <TriangleAlert className="w-5 h-5 shrink-0" />
                   <p>{t("settings.trash_warning")}</p>
                 </div>

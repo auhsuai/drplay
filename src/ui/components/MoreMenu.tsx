@@ -373,6 +373,15 @@ export function MoreMenu({
             }}
             onCancel={() => {
               setShowMoveScreen(false);
+              // APG focus return for the per-row path: the picker opened from
+              // a menu item whose unmount left focus on body, so the
+              // FolderSelectionScreen restore is a no-op here — put focus
+              // back on this row's ⋯ trigger.
+              menuRef.current
+                ?.querySelector<HTMLButtonElement>(
+                  'button[aria-haspopup="menu"]',
+                )
+                ?.focus();
             }}
             initialFolderId={currentFolderId || ROOT_FOLDER_ID}
             initialFolderName={currentFolderName}

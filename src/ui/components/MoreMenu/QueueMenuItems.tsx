@@ -48,16 +48,18 @@ export function QueueMenuItems({
           className={MENU_ITEM_BASE_CLASS}
         />
 
-        <MoreMenuItem
-          icon={FolderMinus}
-          label={t("queue.remove_folder")}
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsOpen(false);
-            onRemoveFolderFromQueue?.();
-          }}
-          className={MENU_ITEM_BASE_CLASS}
-        />
+        {onRemoveFolderFromQueue && (
+          <MoreMenuItem
+            icon={FolderMinus}
+            label={t("queue.remove_folder")}
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsOpen(false);
+              onRemoveFolderFromQueue();
+            }}
+            className={MENU_ITEM_BASE_CLASS}
+          />
+        )}
       </>
     );
   }
