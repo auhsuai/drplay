@@ -122,7 +122,8 @@ export function useMenuDownload(t: TFunction) {
         signal,
       });
 
-      if (!response.ok) throw new Error("Fetch failed");
+      if (!response.ok)
+        throw new Error(`Fetch failed: HTTP ${String(response.status)}`);
 
       const bytes = new Uint8Array(await response.arrayBuffer());
       const dir = await getEffectiveDownloadPath();
@@ -200,7 +201,7 @@ export function useMenuDownload(t: TFunction) {
       void captureError({
         level: "error",
         source: "useMenuDownload",
-        message: `Download failed: ${errName || String(err)}`,
+        message: `Download failed: ${String(err)}`,
       });
       setDownloadMessage(t("menu.download_failed"));
     } finally {

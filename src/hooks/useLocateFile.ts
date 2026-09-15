@@ -51,7 +51,6 @@ export function useLocateFile(
     ts: number;
     folderId: string;
   } | null>(null);
-  const pendingEnsuredFileId = useRef<string | null>(null);
   const locateInFlightRef = useRef(false);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -252,7 +251,6 @@ export function useLocateFile(
         if (!stillMounted()) return;
 
         setFolderHistory(newHistory);
-        pendingEnsuredFileId.current = fileId;
         setCurrentFolderId(parentId);
         setCurrentFolderName(folderName);
         setHighlightedFileId({
@@ -283,10 +281,6 @@ export function useLocateFile(
       mounted = false;
       abortController.abort();
       window.removeEventListener(EVENT_LOCATE_FILE, handleLocateListener);
-      if (highlightTimerRef.current !== null) {
-        clearTimeout(highlightTimerRef.current);
-        highlightTimerRef.current = null;
-      }
     };
   }, [
     accessToken,
@@ -299,5 +293,17 @@ export function useLocateFile(
     t,
   ]);
 
-  return { highlightedFileId, pendingEnsuredFileId };
+  // Unmount-only: the highlight auto-clear timer must survive the deps-change
+  // cleanup above (navigation commits a new currentFolderId right after
+  // scheduleHighlightClear, and clearing it there would strand the highlight).
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  return { highlightedFileId };
 }

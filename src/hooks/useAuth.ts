@@ -36,6 +36,7 @@ import {
 import { captureError } from "../utils/errorLog";
 import { sleep } from "../utils/retryDelay";
 import { PLAYER_STOP_EVENT } from "./usePlayer";
+import { classifyError } from "./useDriveShared";
 import {
   USER_EMAIL_KEY,
   ACCESS_TOKEN_KEY,
@@ -76,9 +77,6 @@ const PROFILE_FETCH_RETRY_BASE_MS = 2000;
 // legacy-migrated rows.
 const isValidLogoutWipeEmail = (email: string): boolean =>
   email.trim().length > 0 && email !== DEFAULT_USER_EMAIL;
-
-const classifyError = (e: unknown): string =>
-  e instanceof Error ? e.message : `[non-Error thrown] ${String(e)}`;
 
 const logAuth = (level: "warn" | "error", message: string): Promise<void> =>
   captureError({ level, source: AUTH_MODULE, message });

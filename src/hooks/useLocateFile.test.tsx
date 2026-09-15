@@ -154,7 +154,6 @@ describe("useLocateFile — behavior contract", () => {
     expect(history).toEqual([{ id: "root", name: "My Drive" }]);
     expect(history.some((entry) => entry.id === "elsewhere")).toBe(false);
     expect(result.current.highlightedFileId?.id).toBe("fa");
-    expect(result.current.pendingEnsuredFileId.current).toBe("fa");
     expect(setters.setIsLoadingTracks.mock.calls).toEqual([[true], [false]]);
   });
 
@@ -328,6 +327,40 @@ describe("useLocateFile — regressions", () => {
         vi.advanceTimersByTime(6000);
       });
     }).not.toThrow();
+  });
+
+  it("B13-1: keeps the auto-clear timer when currentFolderId changes after locate navigation", async () => {
+    seedDb({
+      fna: { id: "fna", name: "File NA", parentId: "parent-na" },
+      "parent-na": { id: "parent-na", name: "Parent NA", parentId: "root" },
+    });
+    mockedFetch.mockResolvedValue(apiResp({ parents: ["parent-na"] }));
+    const utils = renderHook(
+      ({ token, folder }: { token: string | null; folder: string }) =>
+        useLocateFile(
+          token,
+          folder,
+          setters.setCurrentFolderId,
+          setters.setCurrentFolderName,
+          setters.setFolderHistory,
+          setters.setActiveTab,
+          setters.setIsLoadingTracks,
+        ),
+      { initialProps: { token: TOKEN, folder: "elsewhere" } },
+    );
+    unmountHook = utils.unmount;
+
+    await locateAndWait({ fileId: "fna" });
+    expect(utils.result.current.highlightedFileId?.id).toBe("fna");
+
+    // Simulate the real store commit: navigation finished, so the consumer
+    // re-renders the hook with the destination folder as currentFolderId.
+    utils.rerender({ token: TOKEN, folder: "parent-na" });
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(utils.result.current.highlightedFileId).toBeNull();
   });
 });
 
