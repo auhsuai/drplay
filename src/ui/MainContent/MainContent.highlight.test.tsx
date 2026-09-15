@@ -8,9 +8,9 @@ import {
   afterEach,
   type Mock,
 } from "vitest";
-import { render, cleanup, act } from "@testing-library/react";
+import { render, cleanup, act, fireEvent } from "@testing-library/react";
 import { MainContent } from "./MainContent";
-import type { DriveItem } from "../../types";
+import type { DriveItem, Track } from "../../types";
 
 // Phase B fix (2026-08-23): the highlight-scroll effect had no consume-once
 // latch keyed by highlightedFileId.ts, so every new filteredItems identity
@@ -62,11 +62,48 @@ vi.mock("../../hooks/useDriveExplorer", () => ({
   ITEMS_PER_PAGE: 5,
 }));
 
-vi.mock("./components/SongCard", () => ({
-  SongCard: vi.fn(({ item }: { item: DriveItem }) => (
-    <div data-testid="song-card" data-item-id={item.id} />
-  )),
-}));
+// The REAL SongCard is React.memo-wrapped with a comparator that only compares
+// item identity fields and IGNORES every callback prop (SongCard.tsx:258-273).
+// The stale-`onPlay` bug (P2-03-1) only reproduces across exactly that memo
+// boundary: a data churn that leaves the item fields equal makes the card bail
+// out of re-rendering and keep its previous render's callback closure. This
+// stub mirrors the comparator's item-field part (callbacks deliberately not
+// compared) while staying free of the real card's Dexie/metadata/MoreMenu
+// dependencies. The stub was previously a plain vi.fn wrapper, which could
+// never bail out — hence no test crossed the memo boundary before.
+vi.mock("./components/SongCard", async () => {
+  const React = await import("react");
+  const StubSongCard = React.memo(
+    function StubSongCard({
+      item,
+      onPlay,
+    }: {
+      item: DriveItem;
+      onPlay: (track: Track) => void;
+    }) {
+      return (
+        <button
+          type="button"
+          data-testid="song-card"
+          data-item-id={item.id}
+          onClick={() => {
+            if (!item.trackInfo) return;
+            onPlay(item.trackInfo);
+          }}
+        />
+      );
+    },
+    (prev, next) =>
+      prev.item.id === next.item.id &&
+      prev.item.title === next.item.title &&
+      prev.item.isFolder === next.item.isFolder &&
+      prev.item.parentId === next.item.parentId &&
+      prev.item.trackInfo?.id === next.item.trackInfo?.id &&
+      prev.item.trackInfo?.queueItemId === next.item.trackInfo?.queueItemId &&
+      prev.item.size === next.item.size,
+  );
+  return { SongCard: StubSongCard };
+});
 
 vi.mock("../FolderSelection/FolderSelectionScreen", () => ({
   FolderSelectionScreen: () => <div data-testid="folder-screen-stub" />,
@@ -452,5 +489,68 @@ describe("MainContent scroll-to-top folder-awareness (B3 fix 2026-08-23)", () =>
     );
     expect(scrollTopSpy).toHaveBeenCalledTimes(1);
     expect(scrollToIndexSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// P2-03-1: `handlePlay` used to close over `explorer.filteredItems` while the
+// virtualized rows are memoized — after a Dexie write / delta sync re-emitted
+// the listing, an already-mounted card bailed out of re-rendering (item fields
+// unchanged), kept the PREVIOUS handlePlay closure and handed the player a
+// stale queue snapshot (missing the newly added track). The fix keeps the
+// handler identity stable (useCallback []) and reads the latest listing from a
+// ref updated on every commit, so the click always builds the queue from the
+// CURRENT filteredItems.
+describe("MainContent play-context freshness (P2-03-1 fix)", () => {
+  const highlight = { id: "missing", ts: 9000, folderId: "root" };
+
+  beforeEach(() => {
+    virtualizerMock.mockImplementation(({ count }: { count: number }) => ({
+      getVirtualItems: () =>
+        Array.from({ length: count }, (_, i) => ({
+          index: i,
+          key: i,
+          size: 92,
+          start: i * 92,
+        })),
+      getTotalSize: () => count * 92,
+      measureElement: vi.fn(),
+      scrollToIndex: scrollToIndexSpy,
+      containerRef: { current: document.createElement("div") },
+    }));
+    useDriveExplorerMock.mockReturnValue(makeExplorerState(makeItems(3)));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("clicking a memo-bailed card after data churn builds the queue from the LATEST filteredItems (contains the new track)", () => {
+    const playMock = baseProps.onPlay as Mock;
+    playMock.mockClear();
+
+    const { container, rerender } = render(
+      <MainContent {...baseProps} highlightedFileId={highlight} />,
+    );
+
+    // Data churn: same folder, same 3 cards plus a NEW track id3. The listing
+    // is a brand-new array identity (like a real Dexie liveQuery re-emit), the
+    // item objects keep their fields — so every mounted card memo-bails and
+    // keeps its previous render's onPlay closure.
+    simulateDataChurn(rerender, highlight, 4);
+
+    const card = container.querySelector('[data-item-id="id1"]');
+    if (card === null) throw new Error("card id1 was not rendered");
+    fireEvent.click(card);
+
+    expect(playMock).toHaveBeenCalledTimes(1);
+    const [trackArg, queueArg] = playMock.mock.calls[0] as [Track, Track[]];
+    expect(trackArg).toMatchObject({ id: "id1" });
+    expect(queueArg.map((track) => track.id)).toEqual([
+      "id0",
+      "id1",
+      "id2",
+      "id3",
+    ]);
   });
 });

@@ -134,15 +134,29 @@ export const MainContent = React.memo(function MainContent({
     clearPrefetchedStreams();
   }, [currentFolderId]);
 
-  const handlePlay = useCallback(
-    (t: Track) => {
-      const queue = explorer.filteredItems
+  // Latest-ref pattern: card rows are memoized and SongCard's comparator
+  // deliberately ignores callback props (SongCard.tsx:258-273), so a mounted
+  // card keeps the callback from its last render. Keeping handlePlay identity
+  // stable (deps []) and reading the listing through a ref updated on every
+  // commit means the queue is built from the CURRENT filteredItems at click
+  // time instead of a stale closure snapshot (Dexie writes / delta sync
+  // re-emit filteredItems as a new array without changing the mounted cards).
+  const playContextRef = useRef({
+    filteredItems: explorer.filteredItems,
+    onPlay,
+  });
+  useEffect(() => {
+    playContextRef.current = { filteredItems: explorer.filteredItems, onPlay };
+  });
+  const handlePlay = useCallback((t: Track) => {
+    const { filteredItems, onPlay: play } = playContextRef.current;
+    play(
+      t,
+      filteredItems
         .filter((f) => !f.isFolder && f.trackInfo)
-        .map((f) => f.trackInfo as Track);
-      onPlay(t, queue);
-    },
-    [explorer.filteredItems, onPlay],
-  );
+        .map((f) => f.trackInfo as Track),
+    );
+  }, []);
 
   const handleBulkMoveClick = useCallback(() => {
     setShowBulkMoveScreen(true);
