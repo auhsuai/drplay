@@ -55,7 +55,12 @@ export function FolderGrid({
         filteredFolders.length === 0 &&
         apiSearchResults.length === 0 &&
         !isSearchingApi ? (
-        <EmptyState icon={Search} label={t("drive.no_folders")} />
+        // Search-empty ≠ folder-empty: "No folders here." implied the folder
+        // is empty, but it may be full of folders that simply do not match.
+        <EmptyState
+          icon={Search}
+          label={t("folder_selection.no_matching_folders")}
+        />
       ) : searchQuery.trim() &&
         (apiSearchResults.length > 0 || isSearchingApi) ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">

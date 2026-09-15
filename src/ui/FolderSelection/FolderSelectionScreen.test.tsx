@@ -42,6 +42,7 @@ vi.mock("lucide-react", () => {
     "Check",
     "Search",
     "LoaderCircle",
+    "X",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
@@ -588,7 +589,8 @@ describe("FolderSelectionScreen API search gating", () => {
     });
 
     expect(mocks.driveApi.searchFolders).not.toHaveBeenCalled();
-    expect(screen.getByText("No folders here.")).not.toBeNull();
+    expect(screen.getByText("No matching folders found.")).not.toBeNull();
+    expect(screen.queryByText("No folders here.")).toBeNull();
   });
 });
 
@@ -814,5 +816,279 @@ describe("FolderSelectionScreen Escape close (QP-3 / Esc-close 2026-09-14)", () 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
+  });
+});
+
+const DIALOG_FOCUSABLE_SELECTOR =
+  'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+describe("FolderSelectionScreen APG dialog semantics (P2-10-1)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('exposes role="dialog" aria-modal="true" aria-labelledby pointing to the visible title', () => {
+    renderScreen();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.getAttribute("aria-labelledby")).toBe(
+      "folder-selection-title",
+    );
+    const title = document.getElementById("folder-selection-title");
+    expect(title).not.toBeNull();
+    if (title) expect(dialog.contains(title)).toBe(true);
+  });
+
+  it("moves focus into the dialog on mount and restores the invoker on unmount", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    // try/finally: a failing assertion must not leak the detached trigger
+    // into the shared jsdom body (it would shadow the picker's back button
+    // for later tests querying getAllByRole("button")).
+    try {
+      trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+
+      const { unmount } = renderScreen();
+
+      expect(document.activeElement).toBe(screen.getByRole("dialog"));
+
+      unmount();
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+    }
+  });
+
+  it("traps Tab: from the dialog container focus wraps to the first focusable control", () => {
+    renderScreen();
+    const dialog = screen.getByRole("dialog");
+    expect(document.activeElement).toBe(dialog);
+
+    fireEvent.keyDown(dialog, { key: "Tab" });
+
+    const focusables = dialog.querySelectorAll<HTMLElement>(
+      DIALOG_FOCUSABLE_SELECTOR,
+    );
+    expect(document.activeElement).toBe(focusables[0]);
+  });
+
+  it("traps Tab: from the last focusable control focus wraps back to the first", () => {
+    renderScreen();
+    const dialog = screen.getByRole("dialog");
+    const focusables = dialog.querySelectorAll<HTMLElement>(
+      DIALOG_FOCUSABLE_SELECTOR,
+    );
+    const last = focusables[focusables.length - 1];
+    if (!last) throw new Error("expected at least one focusable control");
+    last.focus();
+
+    fireEvent.keyDown(last, { key: "Tab" });
+
+    expect(document.activeElement).toBe(focusables[0]);
+  });
+
+  it("traps Shift+Tab: from the first focusable control focus wraps to the last", () => {
+    renderScreen();
+    const dialog = screen.getByRole("dialog");
+    const focusables = dialog.querySelectorAll<HTMLElement>(
+      DIALOG_FOCUSABLE_SELECTOR,
+    );
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (!first || !last) throw new Error("expected focusable controls");
+    first.focus();
+
+    fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+
+    expect(document.activeElement).toBe(last);
+  });
+});
+
+describe("FolderSelectionScreen search spinner race (P2-10-3)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    searchDeferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    installSearchFoldersMock();
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("an aborted search resolving during the token wait must not clear the newer search's spinner", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([]);
+      await Promise.resolve();
+    });
+
+    // Park every subsequent search at `await getValidToken()` — the token
+    // refresh window where the abort of the older search has no effect yet.
+    let resolveToken: (value: string) => void = () => {
+      throw new Error("token deferred not armed");
+    };
+    const tokenPromise = new Promise<string>((resolve) => {
+      resolveToken = resolve;
+    });
+    mocks.getValidToken.mockReturnValue(tokenPromise);
+
+    // Search A ("ab") starts and waits for the token.
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "ab" },
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+
+    // Query change aborts A while it still waits for the token; search B
+    // ("abc") starts and waits for the SAME token promise.
+    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+      target: { value: "abc" },
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+
+    // Token refresh resolves: the stale search must bail out on its aborted
+    // signal instead of running to its finally and clearing the spinner.
+    await act(async () => {
+      resolveToken("fresh-token");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Simulate the network abort landing for any stale (already-aborted) call.
+    await act(async () => {
+      for (const call of searchDeferredCalls) {
+        if (call.signal?.aborted) {
+          call.reject(
+            new DOMException("The operation was aborted", "AbortError"),
+          );
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // B is still in flight: the spinner must stay on, the stale search must
+    // not have fired a Drive request and the abort path must not toast.
+    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+    expect(mocks.driveApi.searchFolders).toHaveBeenCalledTimes(1);
+    expect(mocks.driveApi.searchFolders.mock.calls[0]?.[1]).toContain(
+      "name contains 'abc'",
+    );
+    expect(mocks.showErrorToast).not.toHaveBeenCalled();
+  });
+});
+
+describe("FolderSelectionScreen parent-walk guard (P2-10-4)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("an unusable parent id does not strand the picker in loading (Back + open still work)", async () => {
+    mocks.driveApi.getFileParents.mockResolvedValue([undefined]);
+
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId="folderB"
+        initialFolderHistory={[]}
+        appRootFolder="other-root"
+      />,
+    );
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Folder 1");
+
+    // Empty history → Back walks to the Drive parent (the patched branch).
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(mocks.driveApi.getFileParents).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
+    expect(screen.getByText("Folder 1")).not.toBeNull();
+
+    // The picker is not frozen: opening a folder still starts a fetch.
+    fireEvent.click(screen.getByRole("button", { name: /Folder 1/ }));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
+  });
+});
+
+describe("FolderSelectionScreen search clear button (P2-10-8)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders an accessible clear button while a query is typed; clicking it empties the input", async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([]);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+
+    const input = screen.getByPlaceholderText("Search...");
+    fireEvent.change(input, { target: { value: "abc" } });
+
+    const clear = screen.getByRole("button", { name: "Clear search" });
+    fireEvent.click(clear);
+
+    expect((input as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
   });
 });

@@ -43,6 +43,7 @@
     "cancel": "Hủy",
     "select_music_folder": "Chọn thư mục chứa nhạc chính của bạn",
     "from_subfolders": "Từ thư mục con",
+    "no_matching_folders": "Không tìm thấy thư mục phù hợp.",
     "searching_deeper": "Đang tìm sâu hơn...",
     "search_error": "Không thể tìm kiếm thư mục. Vui lòng thử lại.",
     "folders_error": "Không thể tải thư mục. Vui lòng thử lại.",

@@ -22,6 +22,7 @@ vi.mock("lucide-react", () => {
     Check: Stub,
     Search: Stub,
     LoaderCircle: Stub,
+    X: Stub,
   };
 });
 

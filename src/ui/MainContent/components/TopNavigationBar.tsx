@@ -1,12 +1,9 @@
-import React, { useEffect, useRef } from "react";
+import React from "react";
 import { ArrowLeft, X, Search, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortDropdown } from "../../components/SortDropdown";
 import { MY_DRIVE_TAB } from "../../../utils/driveConstants";
-import { captureError } from "../../../utils/errorLog";
-
-const TOP_NAVIGATION_BAR_MODULE = "TopNavigationBar";
-const DRAG_THRESHOLD_PX = 5;
+import { useHorizontalScroll } from "../../../hooks/useHorizontalScroll";
 
 interface TopNavigationBarProps {
   isSelectionMode: boolean;
@@ -47,88 +44,10 @@ export function TopNavigationBar({
 }: TopNavigationBarProps) {
   const { t } = useTranslation();
 
-  const breadcrumbRef = useRef<HTMLDivElement | null>(null);
-  const dragStartRef = useRef<{
-    startX: number;
-    startScrollLeft: number;
-  } | null>(null);
-  const isDraggingRef = useRef(false);
-
-  useEffect(() => {
-    if (isSelectionMode) return;
-    const el = breadcrumbRef.current;
-    if (!el) return;
-
-    // Why: overflow-x-auto only scrolls from wheel deltaX (trackpad); a mouse
-    // wheel emits deltaY, so the breadcrumb never scrolls horizontally with a
-    // mouse. React 19 attaches wheel passively at the root where
-    // preventDefault would be ignored, hence a native non-passive listener.
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      el.scrollLeft += e.deltaY + e.deltaX;
-    };
-
-    // Why: capture only starts once the pointer actually moves beyond
-    // DRAG_THRESHOLD_PX. Capturing on pointerdown would retarget pointerup
-    // (and the subsequent click) to this container, so a plain click on a
-    // breadcrumb button would never fire onBreadcrumbClick.
-    const onPointerDown = (e: PointerEvent) => {
-      dragStartRef.current = {
-        startX: e.clientX,
-        startScrollLeft: el.scrollLeft,
-      };
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      const drag = dragStartRef.current;
-      if (!drag) return;
-      if (!isDraggingRef.current) {
-        if (Math.abs(e.clientX - drag.startX) <= DRAG_THRESHOLD_PX) return;
-        isDraggingRef.current = true;
-        try {
-          el.setPointerCapture(e.pointerId);
-        } catch (err) {
-          void captureError({
-            level: "warn",
-            source: TOP_NAVIGATION_BAR_MODULE,
-            message: `set-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      }
-      el.scrollLeft = drag.startScrollLeft - (e.clientX - drag.startX);
-    };
-
-    const endDrag = (e: PointerEvent) => {
-      if (isDraggingRef.current) {
-        isDraggingRef.current = false;
-        try {
-          if (el.hasPointerCapture(e.pointerId)) {
-            el.releasePointerCapture(e.pointerId);
-          }
-        } catch (err) {
-          void captureError({
-            level: "warn",
-            source: TOP_NAVIGATION_BAR_MODULE,
-            message: `release-pointer-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      }
-      dragStartRef.current = null;
-    };
-
-    el.addEventListener("wheel", onWheel, { passive: false });
-    el.addEventListener("pointerdown", onPointerDown);
-    el.addEventListener("pointermove", onPointerMove);
-    el.addEventListener("pointerup", endDrag);
-    el.addEventListener("pointercancel", endDrag);
-    return () => {
-      el.removeEventListener("wheel", onWheel);
-      el.removeEventListener("pointerdown", onPointerDown);
-      el.removeEventListener("pointermove", onPointerMove);
-      el.removeEventListener("pointerup", endDrag);
-      el.removeEventListener("pointercancel", endDrag);
-    };
-  }, [isSelectionMode]);
+  // Wheel + drag horizontal scroll — shared with the picker breadcrumb
+  // (useHorizontalScroll). Disabled while the selection bar replaces the
+  // breadcrumb (no container to attach to).
+  const breadcrumbRef = useHorizontalScroll(!isSelectionMode);
 
   // Why: the breadcrumb stores the raw root-folder label (MY_DRIVE_TAB) from
   // the Drive state; translate it for display so the breadcrumb matches the

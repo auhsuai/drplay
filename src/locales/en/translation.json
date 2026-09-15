@@ -43,6 +43,7 @@
     "cancel": "Cancel",
     "select_music_folder": "Select your main music folder",
     "from_subfolders": "From subfolders",
+    "no_matching_folders": "No matching folders found.",
     "searching_deeper": "Searching deeper...",
     "search_error": "Couldn't search folders. Try again.",
     "folders_error": "Couldn't load folders. Try again.",

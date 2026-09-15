@@ -1,4 +1,5 @@
 import React from "react";
+import { useHorizontalScroll } from "../../hooks/useHorizontalScroll";
 
 export function FolderBreadcrumb({
   folderHistory,
@@ -9,26 +10,24 @@ export function FolderBreadcrumb({
   currentFolderName: string;
   onBreadcrumbClick: (index: number) => void;
 }) {
+  const scrollRef = useHorizontalScroll();
+
   return (
-    <div className="flex items-center text-sm font-medium overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0 mr-2">
+    <div
+      ref={scrollRef}
+      className="flex items-center text-sm font-medium overflow-x-auto whitespace-nowrap hide-scrollbar flex-1 min-w-0 mr-2"
+    >
       {folderHistory.map((item, index) => (
         <React.Fragment key={index}>
-          <span
-            role="button"
-            tabIndex={0}
+          <button
+            type="button"
             onClick={() => {
               onBreadcrumbClick(index);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onBreadcrumbClick(index);
-              }
             }}
             className="cursor-pointer text-gray-500 dark:text-gray-400 hover:text-brand-text transition-colors"
           >
             {item.name}
-          </span>
+          </button>
           <span className="mx-2 text-gray-400 dark:text-gray-600">/</span>
         </React.Fragment>
       ))}

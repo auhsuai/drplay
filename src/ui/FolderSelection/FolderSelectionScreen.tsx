@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, HardDrive, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
@@ -63,6 +63,8 @@ export function FolderSelectionScreen({
   // as the FOLDERS_EMPTY trigger above. onDebugEvent no-ops in production
   // builds; the listener never runs there.
   const [debugForceLoading, setDebugForceLoading] = useState(false);
+
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return onDebugEvent(DEBUG_EVENTS.SKELETON, (detail) => {
@@ -190,16 +192,20 @@ export function FolderSelectionScreen({
     };
   }, [onCancel, searchQuery, setSearchQuery, searchInputRef]);
 
-  // APG dialog-modal focus return: restore the invoker (row ⋯ trigger or the
-  // toolbar bulk-move button) when the picker unmounts. The per-row path
-  // opens from a menu item whose unmount already moved focus to body, so this
-  // restores nothing there — MoreMenu's onCancel re-focuses its trigger;
-  // the bulk path keeps the toolbar button mounted, so it is restored here.
+  // APG dialog-modal (WAI-ARIA): focus moves into the dialog on open and
+  // returns to the invoker (row ⋯ trigger or the toolbar bulk-move button)
+  // when the picker unmounts. Deliberately ONE effect: splitting the
+  // snapshot into a second effect would let it observe the dialog itself as
+  // the invoker (TrashScreen trap). The per-row path opens from a menu item
+  // whose unmount already moved focus to body, so this restores nothing
+  // there — MoreMenu's onCancel re-focuses its trigger; the bulk path keeps
+  // the toolbar button mounted, so it is restored here.
   useEffect(() => {
     const invoker =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+    dialogRef.current?.focus();
     return () => {
       if (
         invoker &&
@@ -212,6 +218,41 @@ export function FolderSelectionScreen({
     };
   }, []);
 
+  // APG dialog-modal focus containment: Tab/Shift+Tab must not reach the UI
+  // behind the overlay (mirrors ImageCropperModal). Focusables are queried at
+  // keydown time because the folder grid re-renders while navigating — a
+  // cached list would go stale. Grid cards carry tabIndex=0, so the
+  // [tabindex] clause keeps them in the cycle; the dialog container itself
+  // (tabIndex -1) is excluded and treated as a boundary.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusables = dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (!first || !last) return;
+      const active = document.activeElement;
+      const insideDialog = dialog.contains(active);
+      if (e.shiftKey) {
+        if (!insideDialog || active === first || active === dialog) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (!insideDialog || active === last || active === dialog) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
@@ -221,11 +262,21 @@ export function FolderSelectionScreen({
         if (e.target === e.currentTarget && onCancel) onCancel();
       }}
     >
-      <div className="bg-white dark:bg-[#121212] w-full max-w-3xl h-[75vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="folder-selection-title"
+        tabIndex={-1}
+        className="bg-white dark:bg-[#121212] w-full max-w-3xl h-[75vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+      >
         {/* Header */}
         <div className="px-6 py-5 flex items-center justify-between shrink-0">
           <div>
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+            <h1
+              id="folder-selection-title"
+              className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3"
+            >
               <HardDrive className="text-brand-text w-6 h-6" />
               {title || t("folder_selection.select_root")}
             </h1>

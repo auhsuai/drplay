@@ -185,6 +185,10 @@ export function useFolderPicker({
         // when no token is available). Rejection is caught below like any
         // other search failure.
         const freshToken = (await getValidToken()) || token;
+        // The abort can land while this call was parked on the token refresh
+        // (controller.signal does not stop an await) — bail out before hitting
+        // Drive and before any state write, mirroring fetchFolders.
+        if (isAborted(controller)) return;
         const files = await searchFolders(freshToken, q, controller.signal);
         // Overlap filtering lives in visibleApiResults (single source of
         // truth, recomputed against the current local listing at render).
@@ -200,7 +204,12 @@ export function useFolderPicker({
           showErrorToast(t("folder_selection.search_error"));
         }
       } finally {
-        setIsSearchingApi(false);
+        // Identity guard (same as fetchFolders): a superseded call must not
+        // clear the spinner of the newer search still in flight — that flashed
+        // the empty state mid-search while the debounce raced the token wait.
+        if (apiSearchAbortRef.current === controller) {
+          setIsSearchingApi(false);
+        }
       }
     },
     // currentFolderId left the deps when overlap filtering moved to the
@@ -306,7 +315,15 @@ export function useFolderPicker({
         setCurrentFolderName(t("drive.my_drive"));
       } else if (parents.length > 0) {
         const fetchedParentId = parents[0];
-        if (fetchedParentId === undefined) return;
+        if (fetchedParentId === undefined) {
+          // Unreachable through parseParentsList today (it filters non-strings
+          // out), but the early return must not strand isLoading=true with no
+          // follow-up fetch: that froze the picker on its skeleton and blocked
+          // handleOpenFolder for good.
+          isLoadingRef.current = false;
+          setIsLoading(false);
+          return;
+        }
         setCurrentFolderId(fetchedParentId);
         if (fetchedParentId === ROOT_FOLDER_ID) {
           setCurrentFolderName(t("drive.my_drive"));
