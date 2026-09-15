@@ -173,6 +173,8 @@ describe("useSearchWorker", () => {
       type: "query",
       query: "abc",
       requestId: 1,
+      // Owner rides on every query frame so the worker can scope its index.
+      userEmail: "default",
     });
     view.unmount();
   });
@@ -354,6 +356,7 @@ describe("useSearchWorker", () => {
         requestId: 1,
         query: "anything",
         limit: 10,
+        userEmail: "default",
       });
 
       await flush(250);
@@ -386,5 +389,18 @@ describe("useSearchWorker", () => {
       expect(WorkerCtor).toHaveBeenCalledTimes(2);
       executor.terminate();
     });
+  });
+
+  it("21. inline path indexes only the active account's rows (cross-account isolation)", async () => {
+    await db.files.bulkPut([
+      makeFile("mine", "My Song.mp3"),
+      { ...makeFile("theirs", "Other Song.mp3"), userEmail: "other@x" },
+    ]);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+      initialProps: { q: "song" },
+    });
+    await flush(250);
+    expect(view.result.current.hits.map((h) => h.id)).toEqual(["mine"]);
+    view.unmount();
   });
 });

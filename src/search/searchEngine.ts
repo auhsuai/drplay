@@ -1,12 +1,11 @@
 import MiniSearch from "minisearch";
 import { normalizeText } from "../utils/normalizeText";
+import { METADATA_KEY_PREFIX } from "../utils/metadata/constants";
+import type { CachedMetadata } from "../utils/metadata/types";
 import {
-  METADATA_KEY_PREFIX,
-  V_PLACEHOLDER,
-  type CachedMetadata,
-} from "../utils/metadata";
-import { CACHE_VERSION } from "../utils/metadata/constants";
-import { stripExtension } from "../utils/metadata/pipelineHelpers";
+  isRealCacheEntry,
+  stripExtension,
+} from "../utils/metadata/pipelineHelpers";
 import type { DriveFile, MetadataCacheRow } from "../db/db";
 
 // Pure functions over MiniSearch (v7), Vietnamese-aware via the shared
@@ -44,29 +43,6 @@ const TITLE_BOOST = 2;
 const ARTIST_BOOST = 1.5;
 // Fractional fuzziness: max edit distance = 20% of the term length.
 const FUZZY = 0.2;
-// Only metadataCache entries with this entry.version are candidates
-// (constants.ts CACHE_VERSION, shared with cache.ts).
-
-interface MetadataCacheEntryShape {
-  version: number;
-  data: CachedMetadata;
-}
-
-// Defensive narrowing of the `unknown` metadataCache entry (db.ts:
-// MetadataCacheRow.entry). Malformed rows (non-object, wrong version, missing
-// data.v, v >= placeholder) are skipped — never thrown on.
-function isRealCacheEntry(entry: unknown): entry is MetadataCacheEntryShape {
-  if (typeof entry !== "object" || entry === null) return false;
-  if (!("version" in entry)) return false;
-  if (entry.version !== CACHE_VERSION) return false;
-  if (!("data" in entry)) return false;
-  const data = entry.data;
-  if (typeof data !== "object" || data === null) return false;
-  if (!("v" in data)) return false;
-  // v:9 placeholders (metadata.ts V_PLACEHOLDER) are NOT real metadata and
-  // must never be indexed/searchable (plan Global Constraints).
-  return typeof data.v === "number" && data.v < V_PLACEHOLDER;
-}
 
 // Strips the metadata_ key prefix (metadata.ts:6) so the map keys are fileIds
 // matching DriveFile.id. Keys without the prefix are used verbatim.

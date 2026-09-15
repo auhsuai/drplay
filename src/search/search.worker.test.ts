@@ -23,7 +23,7 @@ const META_VERSION = 2;
 function makeFile(
   id: string,
   name: string,
-  opts: { isFolder?: boolean; mimeType?: string } = {},
+  opts: { isFolder?: boolean; mimeType?: string; userEmail?: string } = {},
 ): DriveFile {
   return {
     id,
@@ -32,7 +32,7 @@ function makeFile(
     parentId: ROOT_ID,
     trashed: false,
     isFolder: opts.isFolder ?? false,
-    userEmail: "default", // compound PK part (schema v10)
+    userEmail: opts.userEmail ?? "default", // compound PK part (schema v10)
   };
 }
 
@@ -123,7 +123,13 @@ describe("search.worker", () => {
       ],
     });
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 42, query: "doi", limit: 10 },
+      {
+        type: "query",
+        requestId: 42,
+        query: "doi",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     expect(deps.buildSpy).toHaveBeenCalledTimes(1);
@@ -136,7 +142,13 @@ describe("search.worker", () => {
     // Real metadata flows through the worker pipeline too (fixture mirrors
     // searchEngine.test.ts): query by the metadata title.
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 43, query: "noi buon", limit: 10 },
+      {
+        type: "query",
+        requestId: 43,
+        query: "noi buon",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     const r2 = deps.posts[1];
@@ -151,11 +163,23 @@ describe("search.worker", () => {
   it("3. second query without invalidate does NOT rebuild (build spy count stays 1)", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 1, query: "anh", limit: 10 },
+      {
+        type: "query",
+        requestId: 1,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 2, query: "anh", limit: 10 },
+      {
+        type: "query",
+        requestId: 2,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     expect(deps.buildSpy).toHaveBeenCalledTimes(1);
@@ -165,12 +189,24 @@ describe("search.worker", () => {
   it("4. invalidate marks stale: next query rebuilds again (build count = 2)", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 1, query: "anh", limit: 10 },
+      {
+        type: "query",
+        requestId: 1,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     await handleSearchWorkerMessage({ type: "invalidate" }, deps);
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 2, query: "anh", limit: 10 },
+      {
+        type: "query",
+        requestId: 2,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     expect(deps.buildSpy).toHaveBeenCalledTimes(2);
@@ -182,11 +218,23 @@ describe("search.worker", () => {
   it("5. empty or whitespace-only query posts [] without rebuilding", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 5, query: "", limit: 10 },
+      {
+        type: "query",
+        requestId: 5,
+        query: "",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 6, query: "   ", limit: 10 },
+      {
+        type: "query",
+        requestId: 6,
+        query: "   ",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     expect(deps.buildSpy).not.toHaveBeenCalled();
@@ -204,7 +252,13 @@ describe("search.worker", () => {
     });
     await expect(
       handleSearchWorkerMessage(
-        { type: "query", requestId: 7, query: "anh", limit: 10 },
+        {
+          type: "query",
+          requestId: 7,
+          query: "anh",
+          limit: 10,
+          userEmail: "default",
+        },
         deps,
       ),
     ).resolves.toBeUndefined();
@@ -216,7 +270,13 @@ describe("search.worker", () => {
     // After a failed rebuild the index stays stale: the next query retries
     // the rebuild instead of serving a broken index.
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 8, query: "anh", limit: 10 },
+      {
+        type: "query",
+        requestId: 8,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     expect(deps.buildSpy).toHaveBeenCalledTimes(2);
@@ -231,7 +291,13 @@ describe("search.worker", () => {
     });
     await expect(
       handleSearchWorkerMessage(
-        { type: "query", requestId: 9, query: "anh", limit: 10 },
+        {
+          type: "query",
+          requestId: 9,
+          query: "anh",
+          limit: 10,
+          userEmail: "default",
+        },
         deps,
       ),
     ).resolves.toBeUndefined();
@@ -247,11 +313,23 @@ describe("search.worker", () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     await Promise.all([
       handleSearchWorkerMessage(
-        { type: "query", requestId: 1, query: "anh", limit: 10 },
+        {
+          type: "query",
+          requestId: 1,
+          query: "anh",
+          limit: 10,
+          userEmail: "default",
+        },
         deps,
       ),
       handleSearchWorkerMessage(
-        { type: "query", requestId: 2, query: "anh", limit: 10 },
+        {
+          type: "query",
+          requestId: 2,
+          query: "anh",
+          limit: 10,
+          userEmail: "default",
+        },
         deps,
       ),
     ]);
@@ -296,7 +374,13 @@ describe("search.worker", () => {
     // First query kicks off the rebuild; everything before the DB await runs
     // synchronously, so the rebuild is already in-flight after this call.
     const firstQuery = handleSearchWorkerMessage(
-      { type: "query", requestId: 10, query: "anh", limit: 10 },
+      {
+        type: "query",
+        requestId: 10,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     await handleSearchWorkerMessage({ type: "invalidate" }, deps);
@@ -312,11 +396,79 @@ describe("search.worker", () => {
 
     // The next query rebuilds with fresh data and leaves the index usable.
     await handleSearchWorkerMessage(
-      { type: "query", requestId: 11, query: "anh", limit: 10 },
+      {
+        type: "query",
+        requestId: 11,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
       deps,
     );
     expect(deps.buildSpy).toHaveBeenCalledTimes(1);
     expect(searchWorkerState.stale).toBe(false);
     expect(deps.posts[deps.posts.length - 1]?.type).toBe("results");
+  });
+
+  it("11. rebuilds scoped to the query frame's userEmail (cross-account rows never indexed)", async () => {
+    const deps = makeDeps({
+      files: [
+        makeFile("mine", "My Song.mp3", { userEmail: "me@x" }),
+        makeFile("theirs", "Other Song.mp3", { userEmail: "other@x" }),
+      ],
+    });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 11,
+        query: "song",
+        limit: 10,
+        userEmail: "me@x",
+      },
+      deps,
+    );
+    // The rebuild received ONLY the owner's rows...
+    const buildArgs = deps.buildSpy.mock.calls[0];
+    expect((buildArgs?.[0] as DriveFile[]).map((f) => f.id)).toEqual(["mine"]);
+    // ...so the other account's file is unreachable through the index.
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["mine"]);
+  });
+
+  it("12. an owner change drops the stale index and rebuilds scoped to the new owner", async () => {
+    const deps = makeDeps({
+      files: [
+        makeFile("mine", "My Song.mp3", { userEmail: "me@x" }),
+        makeFile("theirs", "Other Song.mp3", { userEmail: "other@x" }),
+      ],
+    });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 12,
+        query: "song",
+        limit: 10,
+        userEmail: "me@x",
+      },
+      deps,
+    );
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["mine"]);
+
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 13,
+        query: "song",
+        limit: 10,
+        userEmail: "other@x",
+      },
+      deps,
+    );
+    // Owner switch forces a rebuild (call 2) with only the new owner's rows.
+    expect(deps.buildSpy).toHaveBeenCalledTimes(2);
+    const secondArgs = deps.buildSpy.mock.calls[1];
+    expect((secondArgs?.[0] as DriveFile[]).map((f) => f.id)).toEqual([
+      "theirs",
+    ]);
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["theirs"]);
   });
 });

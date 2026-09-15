@@ -3,8 +3,8 @@ import { db } from "../db/db";
 import type { Track } from "../types";
 import { ROOT_FOLDER_ID } from "./driveConstants";
 import { captureError } from "./errorLog";
-import { METADATA_KEY_PREFIX, V_PLACEHOLDER } from "./metadata";
-import { CACHE_VERSION } from "./metadata/constants";
+import { METADATA_KEY_PREFIX } from "./metadata";
+import { isRealCacheEntry } from "./metadata/pipelineHelpers";
 import { getCurrentUserEmail } from "./storageKeys";
 
 const RECENT_CAP = 1000;
@@ -235,22 +235,11 @@ export async function getRandomDiscoveries(): Promise<Track[]> {
       // A row can vanish between the key scan and this get — skip it.
       const row = await db.metadataCache.get(key);
       if (!row) continue;
-      // Envelope parity with searchEngine.isRealCacheEntry / cache.isCacheEntry:
-      // one corrupt row (null entry/data, stale version, non-number v) must be
-      // skipped, never thrown on — a throw here discards every valid row too.
-      const entry = row.entry as
-        { version?: unknown; data?: { v?: unknown } | null } | null | undefined;
-      if (
-        entry === null ||
-        typeof entry !== "object" ||
-        entry.version !== CACHE_VERSION ||
-        typeof entry.data !== "object" ||
-        entry.data === null ||
-        typeof entry.data.v !== "number" ||
-        entry.data.v >= V_PLACEHOLDER
-      ) {
-        continue;
-      }
+      // One corrupt row (null entry/data, stale version, non-number v, v:9
+      // placeholder) must be skipped, never thrown on — a throw here discards
+      // every valid row too. Shared predicate with the search index
+      // (pipelineHelpers.isRealCacheEntry) so the rule cannot drift again.
+      if (!isRealCacheEntry(row.entry)) continue;
       tracks.push({
         id: key.replace(METADATA_KEY_PREFIX, ""),
         title: "Audio Track",

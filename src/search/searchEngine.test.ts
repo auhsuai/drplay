@@ -168,6 +168,45 @@ describe("searchEngine", () => {
     expect(queryIndex(index, "02 xyz", 10).map((h) => h.id)).toContain("f3");
   });
 
+  it("5b. loadRealMetadata skips malformed envelopes (null/corrupt/stale/placeholder)", () => {
+    const rows: MetadataCacheRow[] = [
+      { key: "metadata_null_entry", entry: null },
+      { key: "metadata_scalar_entry", entry: "garbage" },
+      { key: "metadata_no_version", entry: { data: makeRealMeta("x", "y") } },
+      {
+        key: "metadata_stale_version",
+        entry: { version: 1, data: makeRealMeta("x", "y"), ts: 0 },
+      },
+      {
+        key: "metadata_null_data",
+        entry: { version: META_VERSION, data: null, ts: 0 },
+      },
+      {
+        key: "metadata_nonnum_v",
+        entry: { version: META_VERSION, data: { v: "8" }, ts: 0 },
+      },
+      {
+        key: "metadata_placeholder",
+        entry: {
+          version: META_VERSION,
+          data: makePlaceholderMeta("ph.mp3"),
+          ts: 0,
+        },
+      },
+      {
+        key: "metadata_ok",
+        entry: {
+          version: META_VERSION,
+          data: makeRealMeta("Real", "Artist"),
+          ts: 0,
+        },
+      },
+    ];
+    const real = loadRealMetadata(rows);
+    expect([...real.keys()]).toEqual(["ok"]);
+    expect(real.get("ok")?.title).toBe("Real");
+  });
+
   it("6. matches folders by name, returning both files and folders", () => {
     const index = buildIndex([
       makeFile("fol", "Nhạc Việt", {

@@ -21,17 +21,21 @@ export async function performFullSync(ownerEmail: string) {
   let startToken = "";
 
   // Start-page token with the shared 401 → refresh → same-URL retry loop.
-  // When the budget is exhausted the response is still 401 (SYNC_ERROR
-  // already posted by refreshTokenAndRetry) — abort the pass without
-  // touching stored state. A non-ok non-401 response falls through to the
-  // pagination below with startToken empty (the tail then skips the save).
+  // The caller owns the terminal signal (B18-4): a 401 that survives the
+  // refresh/retry flow — budget exhausted or refresh failed — aborts the pass
+  // with SYNC_ERROR below without touching stored state. A non-ok non-401
+  // response falls through to the pagination below with startToken empty (the
+  // tail then skips the save).
   try {
     const tokenRes = await fetchDriveWithAuthRetry(
       START_PAGE_TOKEN_KEY,
       "full-sync/startPageToken",
       new URL(DRIVE_START_PAGE_TOKEN_URL),
     );
-    if (tokenRes.status === 401) return;
+    if (tokenRes.status === 401) {
+      self.postMessage({ type: "SYNC_ERROR" });
+      return;
+    }
     if (tokenRes.ok) {
       const tokenData = await parseDriveJson<{ startPageToken: string }>(
         START_PAGE_TOKEN_KEY,
@@ -47,6 +51,9 @@ export async function performFullSync(ownerEmail: string) {
       err,
       "error",
     );
+    // Network/parse failure before any page was fetched: report exactly one
+    // honest terminal signal (the pass cannot proceed past the token phase).
+    self.postMessage({ type: "SYNC_ERROR" });
     return;
   }
 

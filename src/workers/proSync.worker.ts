@@ -9,7 +9,6 @@ import { delay, fetchDrive, isTransientStatus } from "./driveFetch";
 import {
   isValidDriveFile,
   partitionValidFiles,
-  toDriveFileRow,
   toUpsertableFileRow,
 } from "./driveMapping";
 
@@ -72,12 +71,7 @@ export async function handleWorkerMessage(e: MessageEvent): Promise<void> {
   await runSync(token, userEmail);
 }
 
-export {
-  toDriveFileRow,
-  toUpsertableFileRow,
-  isValidDriveFile,
-  partitionValidFiles,
-};
+export { toUpsertableFileRow, isValidDriveFile, partitionValidFiles };
 export { refreshTokenAndRetry };
 export { delay, isTransientStatus, fetchDrive };
 export type { SyncRetryState, RefreshTokenRetryDeps };

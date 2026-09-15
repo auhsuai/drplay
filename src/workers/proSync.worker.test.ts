@@ -10,10 +10,10 @@ import {
   isValidDriveFile,
   partitionValidFiles,
   refreshTokenAndRetry,
-  toDriveFileRow,
 } from "./proSync.worker";
 import type { SyncRetryState } from "./proSync.worker";
 import { syncRetryDeps } from "./tokenRefresh";
+import { syncRetry } from "./syncState";
 import { DEFAULT_USER_EMAIL } from "../utils/storageKeys";
 
 // Wire owner used by every pre-existing sync fixture: schema v10 requires a
@@ -104,127 +104,6 @@ describe("partitionValidFiles", () => {
   });
 });
 
-describe("toDriveFileRow", () => {
-  it("maps a folder to a row with isFolder=true and the folder MIME type", () => {
-    const row = toDriveFileRow(
-      {
-        id: "folder1",
-        name: "My Folder",
-        mimeType: "application/vnd.google-apps.folder",
-        parents: ["parent1"],
-        size: "1024",
-        modifiedTime: "2026-01-01T00:00:00.000Z",
-      },
-      true,
-    );
-    expect(row.isFolder).toBe(true);
-    expect(row.mimeType).toBe("application/vnd.google-apps.folder");
-  });
-
-  it("maps a regular audio file to a row with isFolder=false", () => {
-    const row = toDriveFileRow(
-      {
-        id: "file1",
-        name: "song.mp3",
-        mimeType: "audio/mpeg",
-        parents: ["parent1"],
-        size: "2048",
-        modifiedTime: "2026-01-02T00:00:00.000Z",
-      },
-      false,
-    );
-    expect(row.isFolder).toBe(false);
-    expect(row.mimeType).toBe("audio/mpeg");
-  });
-
-  it('falls back to parentId "root" when parents is missing or empty', () => {
-    const noParents = toDriveFileRow(
-      { id: "a", name: "a.mp3", mimeType: "audio/mpeg" },
-      false,
-    );
-    expect(noParents.parentId).toBe("root");
-
-    const emptyParents = toDriveFileRow(
-      { id: "b", name: "b.mp3", mimeType: "audio/mpeg", parents: [] },
-      false,
-    );
-    expect(emptyParents.parentId).toBe("root");
-  });
-
-  it("uses the first parent as parentId when parents is present", () => {
-    const row = toDriveFileRow(
-      { id: "c", name: "c.mp3", mimeType: "audio/mpeg", parents: ["p1", "p2"] },
-      false,
-    );
-    expect(row.parentId).toBe("p1");
-  });
-
-  it("converts size via toSize and keeps modifiedTime/trashed as-is", () => {
-    const row = toDriveFileRow(
-      {
-        id: "d",
-        name: "d.mp3",
-        mimeType: "audio/mpeg",
-        parents: ["p1"],
-        size: "1048576",
-        modifiedTime: "2026-01-03T00:00:00.000Z",
-      },
-      false,
-    );
-    expect(row.size).toBe(1048576);
-    expect(row.modifiedTime).toBe("2026-01-03T00:00:00.000Z");
-    expect(row.trashed).toBe(false);
-  });
-
-  it("normalizes an empty/invalid size to undefined", () => {
-    expect(
-      toDriveFileRow(
-        { id: "e", name: "e.mp3", mimeType: "audio/mpeg", size: "" },
-        false,
-      ).size,
-    ).toBeUndefined();
-    expect(
-      toDriveFileRow({ id: "f", name: "f.mp3", mimeType: "audio/mpeg" }, false)
-        .size,
-    ).toBeUndefined();
-    expect(
-      toDriveFileRow(
-        {
-          id: "g",
-          name: "g.mp3",
-          mimeType: "audio/mpeg",
-          size: "not-a-number",
-        },
-        false,
-      ).size,
-    ).toBeUndefined();
-  });
-
-  it("produces the exact DB row shape used by full-sync and delta-sync", () => {
-    const row = toDriveFileRow(
-      {
-        id: "h",
-        name: "h.flac",
-        mimeType: "audio/flac",
-        parents: ["p9"],
-        size: "42",
-        modifiedTime: "2026-01-04T00:00:00.000Z",
-      },
-      false,
-    );
-    expect(row).toEqual({
-      id: "h",
-      name: "h.flac",
-      mimeType: "audio/flac",
-      parentId: "p9",
-      size: 42,
-      modifiedTime: "2026-01-04T00:00:00.000Z",
-      trashed: false,
-      isFolder: false,
-    });
-  });
-});
-
 describe("refreshTokenAndRetry", () => {
   function makeState(count: number, max: number): SyncRetryState {
     return { count, max };
@@ -245,7 +124,7 @@ describe("refreshTokenAndRetry", () => {
     return { deps, sent, waitCalls: () => waitCalls };
   }
 
-  it("gives up when count is already at max: returns false and posts SYNC_ERROR, no TOKEN_EXPIRED, no wait", async () => {
+  it("gives up when count is already at max: returns false, posts NOTHING (caller owns the terminal signal), no wait", async () => {
     const state = makeState(3, 3);
     const { deps, sent, waitCalls } = makeDeps(true);
 
@@ -256,7 +135,9 @@ describe("refreshTokenAndRetry", () => {
     );
 
     expect(result).toBe(false);
-    expect(sent).toEqual([{ type: "SYNC_ERROR" }]);
+    // B18-4: the shared 401 helper must never post a terminal signal — the
+    // caller decides (posting here double-signaled budget-exhausted failures).
+    expect(sent).toEqual([]);
     expect(waitCalls()).toBe(0);
     expect(state.count).toBe(3);
   });
@@ -1222,6 +1103,144 @@ describe("worker releases its 401 wait when the main thread cannot refresh", () 
     expect(posted).toContainEqual({ type: "SYNC_ERROR" });
     expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+  });
+});
+
+// B18-4: every failed pass must end with EXACTLY ONE terminal signal, owned
+// by the CALLER (fullSync/deltaSync), never by the shared 401 helper. Before
+// this fix the budget-exhausted path double-posted SYNC_ERROR (helper + files
+// loop) while the startPageToken exits posted ZERO.
+describe("terminal signals: exactly one SYNC_ERROR per failed pass", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    syncRetry.count = 0;
+    await resetSyncTables();
+  });
+
+  function countSyncErrors(posted: Array<{ type: string }>): number {
+    return posted.filter((m) => m.type === "SYNC_ERROR").length;
+  }
+
+  it("start-pageToken 401 whose refresh fails posts exactly one SYNC_ERROR", async () => {
+    await resetSyncTables();
+    syncRetry.count = 0;
+    const posted = stubSelfWithRefreshFailedReply();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-start401", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(countSyncErrors(posted)).toBe(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+  });
+
+  it("start-pageToken network failure (fetch rejects) posts exactly one SYNC_ERROR", async () => {
+    await resetSyncTables();
+    syncRetry.count = 0;
+    const posted = stubSelfWithRefreshFailedReply();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-net-down", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(countSyncErrors(posted)).toBe(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+  });
+
+  it("budget-exhausted 401 at the files loop posts exactly one SYNC_ERROR (no double signal)", async () => {
+    await resetSyncTables();
+    syncRetry.count = 3; // budget already exhausted (sticky across passes)
+    const posted = stubSelfWithRefreshFailedReply();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-x" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValue(new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-budget", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(countSyncErrors(posted)).toBe(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+  });
+});
+
+// B18-5: a successful token refresh is NOT enough — a token that Drive keeps
+// rejecting must not loop forever. The shared budget resets to 0 on every
+// successful refresh, so the per-call ceiling (MAX_AUTH_RETRIES_PER_CALL = 3)
+// is what bounds the 401 → refresh → retry sequence.
+describe("bounded 401 auth retries per call", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    syncRetry.count = 0;
+    await resetSyncTables();
+  });
+
+  it("stops refreshing at the ceiling even when the NEXT response would succeed (bound is per call)", async () => {
+    await resetSyncTables();
+    syncRetry.count = 0;
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ startPageToken: "start-late" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-401-bound", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    // 1 initial attempt + 3 bounded auth retries, then give up honestly —
+    // the unbounded loop used to keep refreshing until the 200 arrived.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(posted.filter((m) => m.type === "SYNC_ERROR")).toHaveLength(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
+  });
+
+  it("gives up on an always-401 Drive even though every refresh succeeds", async () => {
+    await resetSyncTables();
+    syncRetry.count = 0;
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-401-loop", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(posted.filter((m) => m.type === "SYNC_ERROR")).toHaveLength(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
   });
 });
 

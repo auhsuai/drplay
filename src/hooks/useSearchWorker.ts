@@ -119,20 +119,12 @@ function createWorkerExecutor(): SearchExecutor {
 
 function createInlineExecutor(): SearchExecutor {
   const listeners = new Set<(r: SearchWorkerResponse) => void>();
-  // Main-thread boundary scoping (schema v10): the index only sees the active
-  // account's rows here. The real worker path reads all rows for now — it has
-  // no email channel until a later step wires one through the message
-  // protocol (see performRebuild in search.worker.ts).
+  // Scoping (schema v10): the owner email travels on every query frame and
+  // performRebuild filters there — ONE filter point shared with the real
+  // worker path (no separate main-thread filter).
   const deps: SearchWorkerDeps = {
     db: {
-      files: {
-        toArray: async () => {
-          const owner = getCurrentUserEmail();
-          return (await db.files.toArray()).filter(
-            (row) => row.userEmail === owner,
-          );
-        },
-      },
+      files: db.files,
       metadataCache: db.metadataCache,
     },
     build: buildSearchIndex,
@@ -271,6 +263,9 @@ export function useSearchWorker(
         requestId: latestRequestIdRef.current,
         query,
         limit,
+        // Read at post time: a login/logout between debounce ticks lands on
+        // the next frame instead of being pinned to a stale executor.
+        userEmail: getCurrentUserEmail(),
       });
     }, DEBOUNCE_MS);
   }, [query, limit]);

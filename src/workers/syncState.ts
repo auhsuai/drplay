@@ -7,6 +7,7 @@ import { fetchDrive } from "./driveFetch";
 import { refreshTokenAndRetry, syncRetryDeps } from "./tokenRefresh";
 import type { DriveFile as DriveFileItem } from "./driveMapping";
 import { toUpsertableFileRow } from "./driveMapping";
+import { logWorkerError } from "./workerError";
 
 // Dexie syncState key holding the Drive changes start-page token.
 export const START_PAGE_TOKEN_KEY = "startPageToken";
@@ -43,25 +44,57 @@ export function getCurrentToken(): string | null {
 const MAX_SYNC_RETRIES = 3;
 export const syncRetry = { count: 0, max: MAX_SYNC_RETRIES };
 
+// Hard per-call ceiling for the 401 → refresh → retry sequence. The shared
+// budget above resets to 0 on every successful refresh, so a token Drive keeps
+// rejecting (wrong scope/account, session revoked server-side) would loop
+// forever without this cap (AGENTS.md Luật 4 — no unbounded retries).
+const MAX_AUTH_RETRIES_PER_CALL = 3;
+
 // One Drive fetch with the shared 401 → TOKEN_EXPIRED → same-URL retry loop.
 // Used by all three fetch sites (full-sync startPageToken, full-sync files,
 // delta-sync changes). The retry re-issues the IDENTICAL URL: Drive rejects
 // the 401 request without advancing its page cursor, so the same pageToken is
 // correct, and each refetch reads the current token — a mid-run rotation
 // therefore retries with the fresh token. Resolves with the last response:
-// when the refresh budget is exhausted the response is still 401 and the
-// caller's normal non-ok handling reports the failure exactly once.
+// when the refresh budget is exhausted (or the per-call ceiling is hit) the
+// response is still 401 and the caller's normal non-ok handling reports the
+// failure exactly once.
 export async function fetchDriveWithAuthRetry(
   fetchCtx: string,
   retryCtx: string,
   url: URL,
 ): Promise<Response> {
   let res = await fetchDrive(fetchCtx, currentToken as string, url);
-  while (!res.ok && res.status === 401) {
+  let authAttempts = 0;
+  while (
+    !res.ok &&
+    res.status === 401 &&
+    authAttempts < MAX_AUTH_RETRIES_PER_CALL
+  ) {
+    authAttempts += 1;
     if (!(await refreshTokenAndRetry(syncRetry, syncRetryDeps, retryCtx))) {
       break;
     }
     res = await fetchDrive(fetchCtx, currentToken as string, url);
+  }
+  if (
+    !res.ok &&
+    res.status === 401 &&
+    authAttempts >= MAX_AUTH_RETRIES_PER_CALL
+  ) {
+    // Never silent: the caller will report SYNC_ERROR, but the ceiling itself
+    // (refresh succeeded yet Drive keeps rejecting) deserves its own line.
+    logWorkerError(
+      "proSync/" + retryCtx,
+      {
+        kind: "auth",
+        status: 401,
+        reason: "max-auth-attempts-per-call",
+        authAttempts,
+      },
+      new Error("token refresh succeeded but Drive keeps rejecting the token"),
+      "warn",
+    );
   }
   return res;
 }

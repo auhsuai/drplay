@@ -12,7 +12,13 @@ import type { SearchDoc, SearchHit } from "./searchEngine";
 export type SearchWorkerRequest =
   | { type: "init" }
   | { type: "invalidate" }
-  | { type: "query"; requestId: number; query: string; limit: number };
+  | {
+      type: "query";
+      requestId: number;
+      query: string;
+      limit: number;
+      userEmail: string;
+    };
 
 export type SearchWorkerResponse =
   | { type: "ready" }
@@ -53,12 +59,19 @@ export const searchWorkerState: SearchWorkerState = createSearchWorkerState();
 // snapshot predates the invalidation and must not publish a stale index.
 let rebuildGeneration = 0;
 
+// The account the current index was built for. The worker realm has no
+// localStorage, so the owner rides on every query frame (same pattern as the
+// sync worker's "userEmail on the wire frame"); a change forces a rebuild
+// scoped to the new owner before anything is served.
+let activeOwnerEmail: string | null = null;
+
 // Test seam: wipes the module-level index state between test cases.
 export function resetSearchWorkerState(): void {
   searchWorkerState.index = null;
   searchWorkerState.stale = true;
   searchWorkerState.rebuildPromise = null;
   rebuildGeneration = 0;
+  activeOwnerEmail = null;
 }
 
 export function isSearchWorkerRequest(
@@ -73,11 +86,13 @@ export function isSearchWorkerRequest(
       requestId?: unknown;
       query?: unknown;
       limit?: unknown;
+      userEmail?: unknown;
     };
     return (
       typeof req.requestId === "number" &&
       typeof req.query === "string" &&
-      typeof req.limit === "number"
+      typeof req.limit === "number" &&
+      typeof req.userEmail === "string"
     );
   }
   return false;
@@ -115,14 +130,12 @@ function errorMessage(prefix: string, err: unknown): string {
 // Reads the full library + real metadata and builds a fresh index. Only the
 // rebuild path touches the DB, so idle workers cost nothing.
 //
-// Per-user scoping (schema v10): this read stays UNSCOPED for now because the
-// real worker realm has no channel carrying the active account's email (the
-// wire protocol only passes query/invalidate/init, and workers have no
-// localStorage). Scoping happens at the main-thread boundary instead
-// (createInlineExecutor in useSearchWorker.ts); wiring the email through the
-// message protocol would follow the sync-worker email work. Until then a
-// multi-account local mirror would be indexed across owners — accepted for
-// this step, same as the sync worker stamping rows with the default sentinel.
+// Per-user scoping (schema v10): the DB read stays whole-table, but the index
+// only ever sees the ACTIVE owner's rows — the email rides on every query
+// frame (activeOwnerEmail above) because the worker realm has no localStorage.
+// This is the single filter point shared by the real worker and the inline
+// executor; the metadataCache is intentionally NOT scoped (its keys are
+// globally unique fileIds and rows carry no userEmail).
 async function performRebuild(deps: SearchWorkerDeps): Promise<void> {
   const generation = rebuildGeneration;
   const [files, metaRows] = await Promise.all([
@@ -131,11 +144,16 @@ async function performRebuild(deps: SearchWorkerDeps): Promise<void> {
   ]);
   const realMeta = loadRealMetadata(metaRows);
   if (generation !== rebuildGeneration) {
-    // An invalidate landed while the DB reads were in flight: this snapshot is
-    // already stale, so don't publish it — the next query rebuilds fresh.
+    // An invalidate (or an owner switch) landed while the DB reads were in
+    // flight: this snapshot is already stale, so don't publish it — the next
+    // query rebuilds fresh.
     return;
   }
-  searchWorkerState.index = deps.build(files, realMeta);
+  const ownerRows =
+    activeOwnerEmail === null
+      ? files
+      : files.filter((f) => f.userEmail === activeOwnerEmail);
+  searchWorkerState.index = deps.build(ownerRows, realMeta);
   searchWorkerState.stale = false;
 }
 
@@ -208,6 +226,15 @@ export async function handleSearchWorkerMessage(
       rebuildGeneration++;
       return;
     case "query":
+      if (msg.userEmail !== activeOwnerEmail) {
+        // Account switch: the current index belongs to the previous owner, so
+        // it must not serve this (or any) query. Force a fresh scoped rebuild
+        // and abort any in-flight rebuild that would publish the old owner's
+        // snapshot (same generation guard as invalidate).
+        activeOwnerEmail = msg.userEmail;
+        searchWorkerState.stale = true;
+        rebuildGeneration++;
+      }
       await handleQuery(msg, deps);
       return;
   }

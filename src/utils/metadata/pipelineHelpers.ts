@@ -2,6 +2,7 @@ import { findMpegDataStart, type AudioFormat } from "../audioFormat";
 import { captureError } from "../errorLog";
 import { stripAudioExtension } from "../pathUtils";
 import {
+  CACHE_VERSION,
   DURATION_TAG_SCAN_BYTES,
   META_MODULE,
   UNKNOWN_ARTIST,
@@ -18,6 +19,30 @@ export const logMetaWarn = (message: string, kind?: string): Promise<void> =>
   });
 
 const stripExtension = (name: string): string => stripAudioExtension(name);
+
+// A persisted metadataCache entry that carries REAL parsed metadata (shared
+// single source of truth for searchEngine.loadRealMetadata and
+// history.getRandomDiscoveries — the two copies used to drift).
+export interface RealCacheEntry {
+  version: number;
+  data: CachedMetadata;
+}
+
+// Defensive narrowing of the `unknown` metadataCache entry (db.ts:
+// MetadataCacheRow.entry). Malformed rows (non-object, wrong version, missing
+// data.v, v >= placeholder) are skipped — never thrown on. NOT the same rule as
+// cache.ts isCacheEntry, which MUST keep accepting v:9 placeholders as hits.
+export function isRealCacheEntry(entry: unknown): entry is RealCacheEntry {
+  if (typeof entry !== "object" || entry === null) return false;
+  if (!("version" in entry) || entry.version !== CACHE_VERSION) return false;
+  if (!("data" in entry)) return false;
+  const data = entry.data;
+  if (typeof data !== "object" || data === null) return false;
+  if (!("v" in data) || typeof data.v !== "number") return false;
+  // v:9 placeholders (constants.ts V_PLACEHOLDER) are NOT real metadata and
+  // must never be indexed/searchable (plan Global Constraints).
+  return data.v < V_PLACEHOLDER;
+}
 
 /**
  * True when the head carries an embedded duration tag music-metadata actually

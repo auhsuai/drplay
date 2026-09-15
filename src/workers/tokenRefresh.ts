@@ -54,6 +54,11 @@ export interface RefreshTokenRetryDeps {
 // false when it must give up (retries exhausted) or the refresh failed, and
 // the caller decides whether to return/break. Extracted so the retry-count
 // logic lives in one place instead of being copy-pasted three times.
+//
+// The terminal SYNC_ERROR is owned by the CALLER (fullSync/deltaSync exit
+// paths), never by this helper: posting here would double-signal the caller's
+// own honest exit when the budget is exhausted, and hide exits that never
+// reach the caller's guard otherwise.
 export async function refreshTokenAndRetry(
   state: SyncRetryState,
   deps: RefreshTokenRetryDeps,
@@ -66,7 +71,6 @@ export async function refreshTokenAndRetry(
       new Error("token refresh retries exhausted"),
       "error",
     );
-    deps.postMessage({ type: "SYNC_ERROR" });
     return false;
   }
   state.count += 1;
