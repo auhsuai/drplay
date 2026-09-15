@@ -137,7 +137,12 @@
     "add_favorite": "Add to favorites",
     "remove_favorite": "Remove from favorites",
     "exception_toast": "An exception occurred. Open Developer Tools (Ctrl+Shift+I) for details.",
-    "playback_failed": "Couldn't start playback. Try another track."
+    "playback_failed": "Couldn't start playback. Try another track.",
+    "prev": "Previous track",
+    "next": "Next track",
+    "play": "Play",
+    "pause": "Pause",
+    "play_mode": "Playback mode"
   },
   "queue": {
     "title": "Play Queue",

@@ -8,6 +8,8 @@ import {
   Shuffle,
   LoaderCircle,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { PlayMode } from "../../../types";
 
 interface NowPlayingControlsProps {
   isPlaying: boolean;
@@ -19,7 +21,7 @@ interface NowPlayingControlsProps {
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
-  playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
+  playMode: PlayMode;
   onTogglePlayMode: () => void;
 }
 
@@ -33,6 +35,8 @@ export function NowPlayingControls({
   playMode,
   onTogglePlayMode,
 }: NowPlayingControlsProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="w-full flex items-center justify-center mb-4">
       {/* Left spacer for perfect centering */}
@@ -41,6 +45,7 @@ export function NowPlayingControls({
       <div className="flex items-center gap-6 px-6">
         <button
           onClick={onPrevTrack}
+          aria-label={t("player.prev")}
           className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92]"
         >
           <SkipBack className="w-5 h-5" />
@@ -49,6 +54,7 @@ export function NowPlayingControls({
         <button
           onClick={onTogglePlay}
           disabled={isDownloading}
+          aria-label={isPlaying ? t("player.pause") : t("player.play")}
           className="w-10 h-10 flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90"
         >
           {isDownloading || (isBuffering && isPlaying) ? (
@@ -62,6 +68,7 @@ export function NowPlayingControls({
 
         <button
           onClick={onNextTrack}
+          aria-label={t("player.next")}
           className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92]"
         >
           <SkipForward className="w-5 h-5" />
@@ -73,6 +80,7 @@ export function NowPlayingControls({
         <div className="relative group flex items-center">
           <button
             onClick={onTogglePlayMode}
+            aria-label={t("player.play_mode")}
             className={`p-2 rounded-full transition-all active:scale-[0.92] ${playMode !== "normal" ? "text-brand-text hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
           >
             {playMode === "shuffle" && <Shuffle className="w-5 h-5" />}

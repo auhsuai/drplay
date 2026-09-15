@@ -1,5 +1,5 @@
 import { NowPlayingView } from "./NowPlaying/NowPlayingView";
-import type { Track } from "../types";
+import type { PlayMode, Track } from "../types";
 
 interface NowPlayingOverlayProps {
   isOpen: boolean;
@@ -8,7 +8,7 @@ interface NowPlayingOverlayProps {
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
-  playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
+  playMode: PlayMode;
   onTogglePlayMode: () => void;
   onBack: () => void;
   token: string | null;
@@ -28,6 +28,8 @@ export function NowPlayingOverlay({
 }: NowPlayingOverlayProps) {
   return (
     <div
+      aria-hidden={!isOpen}
+      inert={!isOpen}
       className={`fixed inset-0 z-[9999] bg-white dark:bg-[#121212] flex flex-col transition-transform duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] ${
         isOpen ? "translate-y-0" : "translate-y-full pointer-events-none"
       }`}

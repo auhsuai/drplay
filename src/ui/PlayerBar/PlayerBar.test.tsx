@@ -2286,3 +2286,23 @@ describe("PlayerBar volume drag + mute (P2-01-3, P2-01-4)", () => {
     removeSpy.mockRestore();
   });
 });
+
+describe("TransportControls accessible names (P2-01-7 + P2-12-1 parity)", () => {
+  it("labels the four icon-only transport buttons when idle", () => {
+    renderPlayer({ isPlaying: false });
+
+    expect(screen.getByRole("button", { name: en.player.prev })).toBeTruthy();
+    expect(screen.getByRole("button", { name: en.player.next })).toBeTruthy();
+    expect(screen.getByRole("button", { name: en.player.play })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: en.player.play_mode }),
+    ).toBeTruthy();
+  });
+
+  it("swaps the play button name to Pause while playing", () => {
+    renderPlayer({ isPlaying: true });
+
+    expect(screen.queryByRole("button", { name: en.player.play })).toBeNull();
+    expect(screen.getByRole("button", { name: en.player.pause })).toBeTruthy();
+  });
+});

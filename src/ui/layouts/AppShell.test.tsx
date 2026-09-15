@@ -120,3 +120,27 @@ describe("AppShell queue drawer", () => {
     expect(mocks.playerProps.value?.isQueueOpen).toBe(false);
   });
 });
+
+describe("AppShell PlayerBar a11y khi NowPlaying mở (P2-13a-1)", () => {
+  function playerWrapper(): HTMLElement {
+    return screen.getByTestId("player-bar-stub").parentElement as HTMLElement;
+  }
+
+  it("isNowPlayingOpen=true → wrapper aria-hidden + inert (vẫn mount cho transition)", () => {
+    render(<AppShell {...baseProps()} isNowPlayingOpen />);
+
+    const wrapper = playerWrapper();
+    expect(wrapper.getAttribute("aria-hidden")).toBe("true");
+    expect(wrapper.hasAttribute("inert")).toBe(true);
+    // Still mounted: the 700ms collapse animation needs the node present.
+    expect(screen.getByTestId("player-bar-stub")).toBeTruthy();
+  });
+
+  it("isNowPlayingOpen=false → wrapper tương tác bình thường, không inert", () => {
+    render(<AppShell {...baseProps()} />);
+
+    const wrapper = playerWrapper();
+    expect(wrapper.getAttribute("aria-hidden")).toBe("false");
+    expect(wrapper.hasAttribute("inert")).toBe(false);
+  });
+});

@@ -137,7 +137,12 @@
     "add_favorite": "Thêm vào yêu thích",
     "remove_favorite": "Bỏ khỏi yêu thích",
     "exception_toast": "Đã xảy ra lỗi. Mở Developer Tools (Ctrl+Shift+I) để xem chi tiết.",
-    "playback_failed": "Không thể phát bài này. Vui lòng thử bài khác."
+    "playback_failed": "Không thể phát bài này. Vui lòng thử bài khác.",
+    "prev": "Bài trước",
+    "next": "Bài tiếp theo",
+    "play": "Phát",
+    "pause": "Tạm dừng",
+    "play_mode": "Chế độ phát"
   },
   "queue": {
     "title": "Hàng đợi phát",

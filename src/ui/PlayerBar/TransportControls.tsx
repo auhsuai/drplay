@@ -9,6 +9,7 @@ import {
   SkipBack,
   SkipForward,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { PlayMode, Track } from "../../types";
 
 export interface TransportControlsProps {
@@ -38,12 +39,15 @@ export function TransportControls({
   onNextTrack,
   onTogglePlayMode,
 }: TransportControlsProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex w-full mb-1 items-center justify-center gap-3 sm:gap-6">
       <button
         onClick={() => {
           onPrevTrack();
         }}
+        aria-label={t("player.prev")}
         className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
         disabled={!currentTrack}
       >
@@ -52,6 +56,7 @@ export function TransportControls({
 
       <button
         onClick={hasError ? onRetry : onTogglePlay}
+        aria-label={isPlaying ? t("player.pause") : t("player.play")}
         className={`w-10 h-10 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-brand-primary hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
         disabled={!currentTrack || isDownloading}
       >
@@ -70,6 +75,7 @@ export function TransportControls({
         onClick={() => {
           onNextTrack(false);
         }}
+        aria-label={t("player.next")}
         className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
         disabled={!currentTrack}
       >
@@ -79,6 +85,7 @@ export function TransportControls({
       <div className="relative group flex items-center shrink-0">
         <button
           onClick={onTogglePlayMode}
+          aria-label={t("player.play_mode")}
           className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== "normal" ? "text-brand-text hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
           disabled={!currentTrack}
         >

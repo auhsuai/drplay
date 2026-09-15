@@ -1,7 +1,29 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, screen } from "@testing-library/react";
+import en from "../../../locales/en/translation.json";
 import { NowPlayingControls } from "./NowPlayingControls";
+
+vi.mock("react-i18next", () => {
+  // Resolve keys against the real en resources so assertions read the
+  // shipped copy instead of hard-coded fallbacks.
+  const resolveKey = (key: string): string | undefined => {
+    let acc: unknown = en;
+    for (const part of key.split(".")) {
+      if (typeof acc === "object" && acc !== null) {
+        acc = (acc as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    return typeof acc === "string" ? acc : undefined;
+  };
+  return {
+    useTranslation: () => ({
+      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+    }),
+  };
+});
 
 function baseProps(
   over: Partial<Parameters<typeof NowPlayingControls>[0]> = {},
@@ -81,5 +103,29 @@ describe("NowPlayingControls play-button state matrix", () => {
     expect(container.querySelector(".lucide-play")).not.toBeNull();
     expect(container.querySelector(".animate-spin")).toBeNull();
     expect(getPlayButton(container).disabled).toBe(false);
+  });
+});
+
+describe("NowPlayingControls accessible names (P2-12-1)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("labels all four icon-only transport buttons when idle", () => {
+    render(<NowPlayingControls {...baseProps()} />);
+
+    expect(screen.getByRole("button", { name: en.player.prev })).toBeTruthy();
+    expect(screen.getByRole("button", { name: en.player.next })).toBeTruthy();
+    expect(screen.getByRole("button", { name: en.player.play })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: en.player.play_mode }),
+    ).toBeTruthy();
+  });
+
+  it("swaps the play button name to Pause while playing", () => {
+    render(<NowPlayingControls {...baseProps({ isPlaying: true })} />);
+
+    expect(screen.queryByRole("button", { name: en.player.play })).toBeNull();
+    expect(screen.getByRole("button", { name: en.player.pause })).toBeTruthy();
   });
 });

@@ -118,6 +118,8 @@ export function AppShell({
         </div>
 
         <div
+          aria-hidden={isNowPlayingOpen}
+          inert={isNowPlayingOpen}
           className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? "h-0 overflow-hidden pointer-events-none opacity-0" : ""}`}
         >
           <PlayerBar

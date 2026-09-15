@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import type { Track } from "../../types";
+import type { PlayMode, Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
@@ -14,7 +14,7 @@ interface NowPlayingViewProps {
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
-  playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
+  playMode: PlayMode;
   onTogglePlayMode: () => void;
   onBack: () => void;
   isOpen: boolean;
@@ -59,6 +59,7 @@ export const NowPlayingView = memo(function NowPlayingView({
       <main className="flex-1 bg-gray-100 dark:bg-[#121212] overflow-hidden flex flex-col items-center justify-center transition-colors duration-300 relative">
         <button
           onClick={onBack}
+          aria-label={t("common.close")}
           className="absolute top-8 left-8 p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95 z-50"
         >
           <ChevronDown className="w-6 h-6" />
@@ -99,6 +100,7 @@ export const NowPlayingView = memo(function NowPlayingView({
       <div className="absolute top-6 left-6 z-50">
         <button
           onClick={onBack}
+          aria-label={t("common.close")}
           className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
         >
           <ChevronDown className="w-6 h-6" />
