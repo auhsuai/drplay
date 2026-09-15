@@ -209,15 +209,18 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
   });
 
   /**
-   * Boots through both listeners and leaves mpv_spawn in flight. The pending
-   * playTrack promise is returned inside an object — returning it directly
-   * from an async helper would adopt it and deadlock the await here.
+   * Boots through all three listeners (mpv-property -> mpv-event ->
+   * stream-proxy-error) and leaves mpv_spawn in flight. The pending playTrack
+   * promise is returned inside an object — returning it directly from an
+   * async helper would adopt it and deadlock the await here.
    */
   async function startUntilSpawnPending(): Promise<{ play: Promise<void> }> {
     const play = ctrl.playTrack(trackA);
-    resolveNextListen();
+    resolveNextListen(); // mpv-property handle attached
     await flushMicrotasks();
-    resolveNextListen();
+    resolveNextListen(); // mpv-event handle attached
+    await flushMicrotasks();
+    resolveNextListen(); // stream-proxy-error handle attached
     await flushMicrotasks();
     expect(spawnGates).toHaveLength(1);
     return { play };
@@ -241,6 +244,7 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     // (a) every handle created by the stale attempt was detached — no leak
     expect(liveListeners("mpv-property")).toBe(0);
     expect(liveListeners("mpv-event")).toBe(0);
+    expect(liveListeners("stream-proxy-error")).toBe(0);
     // (b) no stale mpv commands: no volume re-apply, no loadfile
     expect(
       mpvCommands().some(
@@ -270,6 +274,31 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
 
     expect(liveListeners("mpv-property")).toBe(0);
     expect(liveListeners("mpv-event")).toBe(0);
+    expect(liveListeners("stream-proxy-error")).toBe(0);
+    expect(mpvCommands().some((cmd) => cmd[0] === "loadfile")).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it("C1c: release() while the third listen() (stream-proxy-error) is pending — all late handles detached", async () => {
+    const play = ctrl.playTrack(trackA);
+    resolveNextListen(); // mpv-property handle attached, epoch still current
+    await flushMicrotasks();
+    resolveNextListen(); // mpv-event handle attached, epoch still current
+    await flushMicrotasks();
+    expect(listenCalls).toHaveLength(3); // stream-proxy-error listen now in flight
+
+    ctrl.release(); // race: teardown while the last listener is unresolved
+
+    resolveNextListen(); // stream-proxy-error handle arrives AFTER release
+    await flushMicrotasks();
+    // The epoch check right after the third attach aborts before mpv_spawn —
+    // the stale attempt must not even reach the spawn command.
+    expect(spawnGates).toHaveLength(0);
+    await expect(play).resolves.toBeUndefined();
+
+    expect(liveListeners("mpv-property")).toBe(0);
+    expect(liveListeners("mpv-event")).toBe(0);
+    expect(liveListeners("stream-proxy-error")).toBe(0);
     expect(mpvCommands().some((cmd) => cmd[0] === "loadfile")).toBe(false);
     expect(errors).toEqual([]);
   });
@@ -281,14 +310,18 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     await play;
     expect(liveListeners("mpv-property")).toBe(0);
     expect(liveListeners("mpv-event")).toBe(0);
+    expect(liveListeners("stream-proxy-error")).toBe(0);
 
     tauriMocks.invoke.mockClear();
     const next = ctrl.playTrack(trackB);
     // fresh boot re-registers the property listener (stale attempt left none)
-    expect(listenCalls).toHaveLength(3);
+    expect(listenCalls).toHaveLength(4);
     resolveNextListen();
     await flushMicrotasks();
-    expect(listenCalls).toHaveLength(4);
+    expect(listenCalls).toHaveLength(5);
+    resolveNextListen();
+    await flushMicrotasks();
+    expect(listenCalls).toHaveLength(6);
     resolveNextListen();
     await flushMicrotasks();
     expect(spawnGates).toHaveLength(1); // a real respawn, not a stale `started`
@@ -298,8 +331,10 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     expect(listenCalls.map((c) => c.name)).toEqual([
       "mpv-property",
       "mpv-event",
+      "stream-proxy-error",
       "mpv-property",
       "mpv-event",
+      "stream-proxy-error",
     ]);
     expect(commandNames().filter((n) => n === "mpv_spawn")).toHaveLength(1);
     expect(mpvCommands()).toContainEqual(["set_property", "volume", "100"]);
@@ -310,6 +345,7 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     ]);
     expect(liveListeners("mpv-property")).toBe(1);
     expect(liveListeners("mpv-event")).toBe(1);
+    expect(liveListeners("stream-proxy-error")).toBe(1);
   });
 
   it("C3: two concurrent playTrack before started — one listener set, one spawn (dedupe)", async () => {
@@ -323,13 +359,17 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     expect(listenCalls).toHaveLength(2);
     resolveNextListen();
     await flushMicrotasks();
+    expect(listenCalls).toHaveLength(3);
+    resolveNextListen();
+    await flushMicrotasks();
     expect(spawnGates).toHaveLength(1);
     resolveNextSpawn();
     await Promise.all([first, second]);
 
-    expect(listenCalls).toHaveLength(2); // exactly one registration per event
+    expect(listenCalls).toHaveLength(3); // exactly one registration per event
     expect(liveListeners("mpv-property")).toBe(1);
     expect(liveListeners("mpv-event")).toBe(1);
+    expect(liveListeners("stream-proxy-error")).toBe(1);
     expect(commandNames().filter((n) => n === "mpv_spawn")).toHaveLength(1);
     expect(errors).toEqual([]);
   });
