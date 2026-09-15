@@ -158,15 +158,15 @@ describe("FullRecentView title prop", () => {
 describe("FullRecentView menu delete flow", () => {
   it("shows the 3-dot menu on each recent track card (hideMenu removed)", () => {
     renderRecent([makeTrack("t1", "Alpha"), makeTrack("t2", "Beta")]);
-    const triggers = document.querySelectorAll('[aria-haspopup="menu"]');
+    // By accessible name: the view also renders the sort dropdown trigger,
+    // which carries aria-haspopup="menu" as well.
+    const triggers = screen.getAllByRole("button", { name: "More actions" });
     expect(triggers.length).toBe(2);
   });
 
   it("recent menu shows exactly the curated items (no Select Multiple / Move to)", () => {
     renderRecent([makeTrack("t1", "Alpha")]);
-    const trigger = document.querySelector(
-      '[aria-haspopup="menu"]',
-    ) as HTMLButtonElement;
+    const trigger = screen.getByRole("button", { name: "More actions" });
     fireEvent.click(trigger);
     const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
     const names = Array.from(menu.querySelectorAll("button")).map(
@@ -201,9 +201,9 @@ describe("FullRecentView menu delete flow", () => {
     expect(screen.getByText("Alpha")).toBeTruthy();
     expect(screen.getByText("Beta")).toBeTruthy();
 
-    const trigger = document.querySelector(
-      '[aria-haspopup="menu"]',
-    ) as HTMLButtonElement;
+    const trigger = screen.getAllByRole("button", {
+      name: "More actions",
+    })[0] as HTMLButtonElement;
     fireEvent.click(trigger);
     const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
     fireEvent.click(

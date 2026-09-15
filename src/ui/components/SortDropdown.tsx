@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -53,48 +53,64 @@ export function SortDropdown({
   const currentSortLabel =
     options.find((opt) => opt.id === baseSortOption)?.label || label;
 
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const pendingFocusRef = useRef<"first" | "last">("first");
+
+  const getMenuItems = useCallback((): HTMLElement[] => {
+    const root = menuRef.current;
+    if (!root) return [];
+    return Array.from(
+      root.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+    );
+  }, []);
+
+  const focusMenuItemAt = useCallback(
+    (index: number): void => {
+      const items = getMenuItems();
+      if (items.length === 0) return;
+      const target = items[(index + items.length) % items.length];
+      // Roving tabindex: exactly one item stays in the tab order.
+      items.forEach((item) => {
+        item.tabIndex = item === target ? 0 : -1;
+      });
+      target?.focus();
+    },
+    [getMenuItems],
+  );
+
+  // APG: focus moves to the first item whenever the menu opens — trigger
+  // click or the optional trigger ArrowDown/ArrowUp.
+  useEffect(() => {
+    if (!showSortMenu) return;
+    const position = pendingFocusRef.current;
+    pendingFocusRef.current = "first";
+    focusMenuItemAt(position === "last" ? -1 : 0);
+  }, [showSortMenu, focusMenuItemAt]);
+
+  const closeMenu = useCallback((restoreFocus: boolean): void => {
+    setShowSortMenu(false);
+    if (restoreFocus) triggerRef.current?.focus();
+  }, []);
+
   return (
     <div className="relative">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={showSortMenu}
-        aria-label={t("sort.menu")}
-        onClick={() => {
-          setShowSortMenu(!showSortMenu);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setShowSortMenu(!showSortMenu);
-          }
-        }}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm [&:active:not(:has(.arrow-btn:active))]:scale-95 cursor-pointer select-none"
-      >
-        <div
-          role="button"
-          tabIndex={0}
-          className="arrow-btn p-1 -ml-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center"
-          onClick={(e) => {
-            e.stopPropagation();
+      {/* Split control (APG menu button + axe nested-interactive): the arrow
+          toggle is its own real <button>, never a focusable control nested
+          inside the menu trigger. */}
+      <div className="flex items-center bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-all shadow-sm [&:active:not(:has(.arrow-btn:active))]:scale-95 select-none">
+        <button
+          type="button"
+          title={t("sort.toggle_order")}
+          aria-label={t("sort.toggle_order")}
+          onClick={() => {
             if (sortOption.endsWith(" desc")) {
               onSortChange?.(sortOption.replace(" desc", ""));
             } else {
               onSortChange?.(sortOption + " desc");
             }
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              e.stopPropagation();
-              if (sortOption.endsWith(" desc")) {
-                onSortChange?.(sortOption.replace(" desc", ""));
-              } else {
-                onSortChange?.(sortOption + " desc");
-              }
-            }
-          }}
-          title={t("sort.toggle_order")}
+          className="arrow-btn ml-1.5 p-1 rounded-md hover:bg-gray-200 dark:hover:bg-[#2e2f34] transition-transform active:scale-75 flex items-center justify-center cursor-pointer"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -141,21 +157,39 @@ export function SortDropdown({
               <path d="M17 20V4" />
             </g>
           </svg>
-        </div>
-        <div className="hidden sm:grid text-center pr-1">
-          <span className="col-start-1 row-start-1 visible place-self-center">
-            {currentSortLabel}
-          </span>
-          {options.map((opt) => (
-            <span
-              key={opt.id}
-              className="col-start-1 row-start-1 invisible pointer-events-none select-none"
-              aria-hidden="true"
-            >
-              {opt.label}
+        </button>
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={showSortMenu}
+          aria-label={t("sort.menu")}
+          onClick={() => {
+            setShowSortMenu(!showSortMenu);
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+            e.preventDefault();
+            pendingFocusRef.current = e.key === "ArrowUp" ? "last" : "first";
+            setShowSortMenu(true);
+          }}
+          className="flex items-center pl-1.5 pr-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none rounded-lg"
+        >
+          <div className="hidden sm:grid text-center pr-1">
+            <span className="col-start-1 row-start-1 visible place-self-center">
+              {currentSortLabel}
             </span>
-          ))}
-        </div>
+            {options.map((opt) => (
+              <span
+                key={opt.id}
+                className="col-start-1 row-start-1 invisible pointer-events-none select-none"
+                aria-hidden="true"
+              >
+                {opt.label}
+              </span>
+            ))}
+          </div>
+        </button>
       </div>
 
       {showSortMenu && (
@@ -168,16 +202,51 @@ export function SortDropdown({
             }}
           ></div>
           <div
+            ref={menuRef}
             data-testid="sort-menu"
+            role="menu"
+            aria-label={t("sort.menu")}
+            tabIndex={-1}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                closeMenu(true);
+                return;
+              }
+              if (
+                e.key !== "ArrowDown" &&
+                e.key !== "ArrowUp" &&
+                e.key !== "Home" &&
+                e.key !== "End"
+              ) {
+                return;
+              }
+              e.preventDefault();
+              const items = getMenuItems();
+              if (items.length === 0) return;
+              const current = items.indexOf(e.target as HTMLElement);
+              if (e.key === "ArrowDown") {
+                focusMenuItemAt(current < 0 ? 0 : current + 1);
+              } else if (e.key === "ArrowUp") {
+                focusMenuItemAt(current < 0 ? items.length - 1 : current - 1);
+              } else if (e.key === "Home") {
+                focusMenuItemAt(0);
+              } else {
+                focusMenuItemAt(items.length - 1);
+              }
+            }}
             className="absolute right-0 mt-2 min-w-full w-max bg-white dark:bg-[#1a1b1e] rounded-xl shadow-lg p-1.5 flex flex-col gap-0.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
           >
             {options.map((opt) => (
               <button
                 key={opt.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={baseSortOption === opt.id}
                 onClick={() => {
                   const newOpt = opt.defaultDesc ? `${opt.id} desc` : opt.id;
                   onSortChange?.(newOpt);
-                  setShowSortMenu(false);
+                  closeMenu(true);
                 }}
                 className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm transition-colors rounded-md hover:bg-gray-50 dark:hover:bg-[#25262a] hover:text-brand-text dark:hover:text-brand-text ${baseSortOption === opt.id ? "text-brand-text font-medium" : "text-gray-700 dark:text-gray-300"}`}
               >

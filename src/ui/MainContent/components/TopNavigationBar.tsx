@@ -67,6 +67,7 @@ export function TopNavigationBar({
         <div className="flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-left-4 duration-300 flex-1 min-w-0">
           <button
             onClick={onClearSelection}
+            aria-label={t("common.exit_selection")}
             className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors mr-2 shrink-0"
           >
             <X className="w-5 h-5 text-gray-700 dark:text-gray-300" />

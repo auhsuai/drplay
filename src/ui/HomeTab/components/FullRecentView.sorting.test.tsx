@@ -234,13 +234,12 @@ describe("FullRecentView sort UI", () => {
 
   const openSortMenu = async () => {
     const user = userEvent.setup();
-    const arrow = screen.getByTitle("Toggle order");
-    await user.click(arrow.parentElement as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Sort options" }));
   };
 
   const clickSortOption = async (label: string) => {
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: label }));
+    await user.click(screen.getByRole("menuitemradio", { name: label }));
   };
 
   it("renders cards in newest-first input order by default with Date label", () => {
@@ -313,7 +312,7 @@ describe("FullRecentView sort UI", () => {
     const arrow = screen.getByTitle("Toggle order");
     await user.click(arrow);
     expect(cardOrder()).toEqual(["old", "mid", "new"]);
-    expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "A-Z" })).toBeNull();
     await user.click(arrow);
     expect(cardOrder()).toEqual(["new", "mid", "old"]);
   });

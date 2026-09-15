@@ -21,7 +21,8 @@
     "more_actions": "More actions",
     "close": "Close",
     "clear_search": "Clear search",
-    "back": "Back"
+    "back": "Back",
+    "exit_selection": "Exit selection mode"
   },
   "sidebar": {
     "home": "Home",

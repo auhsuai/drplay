@@ -238,7 +238,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                         <button
                           onClick={(e) => {
                             void handleUnlike(e, track.id);

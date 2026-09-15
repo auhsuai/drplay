@@ -342,9 +342,15 @@ describe("MoreMenu default variant add-to-queue item", () => {
       <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
     );
     openTrigger();
-    expect(
-      within(menuEl()).getByRole("menuitem", { name: "Add to queue" }),
-    ).toBeTruthy();
+    const addToQueue = within(menuEl()).getByRole("menuitem", {
+      name: "Add to queue",
+    });
+    expect(addToQueue).toBeTruthy();
+    // a11y-2: MoreMenuItem owns the disabled styling; the caller's dead
+    // `disabled:` variant classes (never matched without the native attribute)
+    // must not come back.
+    expect(addToQueue.className).not.toContain("disabled:opacity-50");
+    expect(addToQueue.className).not.toContain("disabled:cursor-not-allowed");
   });
 
   it("hides Add to queue when token is missing", () => {

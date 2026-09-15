@@ -74,8 +74,7 @@ function makeProps(overrides: Partial<TopNavProps> = {}): TopNavProps {
 }
 
 const openSortMenu = () => {
-  const arrow = screen.getByTitle("Toggle order");
-  fireEvent.click(arrow.parentElement as HTMLElement);
+  fireEvent.click(screen.getByRole("button", { name: "Sort options" }));
 };
 
 describe("TopNavigationBar sort dropdown (contract guard)", () => {
@@ -109,7 +108,7 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
   it('clicking Date sets "modifiedTime desc"', () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Date" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Date" }));
     expect(onSortChange).toHaveBeenCalledWith("modifiedTime desc");
   });
 
@@ -118,14 +117,14 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
       <TopNavigationBar {...makeProps({ sortOption: "modifiedTime desc" })} />,
     );
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "A-Z" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "A-Z" }));
     expect(onSortChange).toHaveBeenCalledWith("name");
   });
 
   it('clicking Size sets "size"', () => {
     render(<TopNavigationBar {...makeProps()} />);
     openSortMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Size" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Size" }));
     expect(onSortChange).toHaveBeenCalledWith("size");
   });
 
@@ -133,7 +132,7 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
     render(<TopNavigationBar {...makeProps()} />);
     fireEvent.click(screen.getByTitle("Toggle order"));
     expect(onSortChange).toHaveBeenCalledWith("name desc");
-    expect(screen.queryByRole("button", { name: "A-Z" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "A-Z" })).toBeNull();
   });
 
   it('arrow toggle removes " desc" when already descending', () => {
@@ -173,5 +172,103 @@ describe("TopNavigationBar accessible names (P2-03-3 + P2-11 twins)", () => {
   it("back button has an accessible name", () => {
     render(<TopNavigationBar {...makeProps({ hasHistory: true })} />);
     expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+  });
+
+  it("exit selection button has an accessible name and clears the selection", () => {
+    const onClearSelection = vi.fn();
+    render(
+      <TopNavigationBar
+        {...makeProps({
+          isSelectionMode: true,
+          selectedCount: 2,
+          onClearSelection,
+        })}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Exit selection mode" }),
+    );
+    expect(onClearSelection).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TopNavigationBar sort dropdown APG (P2-13a-8)", () => {
+  afterEach(() => {
+    cleanup();
+    onSortChange.mockReset();
+  });
+
+  it("trigger announces a menu and opening places focus on the first option", () => {
+    render(<TopNavigationBar {...makeProps()} />);
+    const trigger = screen.getByRole("button", { name: "Sort options" });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+
+    fireEvent.click(trigger);
+    expect(document.activeElement).toBe(
+      screen.getByRole("menuitemradio", { name: "A-Z" }),
+    );
+  });
+
+  it("marks only the active option as checked", () => {
+    render(
+      <TopNavigationBar {...makeProps({ sortOption: "modifiedTime desc" })} />,
+    );
+    openSortMenu();
+
+    expect(
+      screen.getByRole("menuitemradio", { name: "Date", checked: true }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("menuitemradio", { name: "A-Z", checked: false }),
+    ).toBeTruthy();
+  });
+
+  it("Escape closes the menu and returns focus to the trigger", () => {
+    render(<TopNavigationBar {...makeProps()} />);
+    openSortMenu();
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, {
+      key: "Escape",
+    });
+
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Sort options" }),
+    );
+  });
+
+  it("ArrowDown roves focus through the options and wraps around", () => {
+    render(<TopNavigationBar {...makeProps()} />);
+    openSortMenu();
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, {
+      key: "ArrowDown",
+    });
+    expect(document.activeElement).toBe(
+      screen.getByRole("menuitemradio", { name: "Date" }),
+    );
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, {
+      key: "ArrowDown",
+    });
+    fireEvent.keyDown(document.activeElement as HTMLElement, {
+      key: "ArrowDown",
+    });
+    expect(document.activeElement).toBe(
+      screen.getByRole("menuitemradio", { name: "A-Z" }),
+    );
+  });
+
+  it("selecting an option closes the menu and returns focus to the trigger", () => {
+    render(<TopNavigationBar {...makeProps()} />);
+    openSortMenu();
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Size" }));
+
+    expect(screen.queryByTestId("sort-menu")).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Sort options" }),
+    );
   });
 });

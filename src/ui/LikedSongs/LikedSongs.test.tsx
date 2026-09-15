@@ -169,3 +169,23 @@ describe("LikedSongs load error handling (P2-13a-10)", () => {
     );
   });
 });
+
+// P2-13a-7: the row controls are hidden until hover; keyboard focus inside the
+// row must reveal them too (group-focus-within), otherwise focus is invisible.
+describe("LikedSongs hover-reveal controls (P2-13a-7)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("reveals the row controls when focus is within the row", async () => {
+    mocks.getFavorites.mockResolvedValue([TRACK]);
+    renderView();
+    await screen.findByText("Liked Track 1");
+
+    const unlike = screen.getByTitle("Remove from Liked Songs");
+    expect(unlike.parentElement?.className).toContain(
+      "group-focus-within:opacity-100",
+    );
+  });
+});

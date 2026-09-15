@@ -88,7 +88,7 @@ export function DefaultMenuItems({
               );
             }}
             disabled={isAddingToQueue === true}
-            className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+            className={MENU_ITEM_BASE_CLASS}
             iconClassName={
               isAddingToQueue
                 ? "w-4 h-4 animate-spin"

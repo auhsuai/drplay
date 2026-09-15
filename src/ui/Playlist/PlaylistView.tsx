@@ -402,7 +402,7 @@ export function PlaylistView({
                       onClick={(e) => {
                         void handleRemove(e, track.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all text-gray-400 hover:text-red-500"
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all text-gray-400 hover:text-red-500"
                       title={t("remove_from_playlist")}
                     >
                       <X className="w-4 h-4" />

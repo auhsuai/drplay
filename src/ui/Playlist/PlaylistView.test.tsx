@@ -222,3 +222,21 @@ describe("PlaylistView header + row semantics (P2-13a-3/-4/-9)", () => {
     expect(screen.queryByText("Couldn't load playlist. Try again.")).toBeNull();
   });
 });
+
+// P2-13a-7: the row remove button is hidden until hover; keyboard focus must
+// reveal it (focus:), otherwise focus is invisible.
+describe("PlaylistView hover-reveal remove control (P2-13a-7)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("reveals the row remove button when it receives focus", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    renderView();
+    await screen.findByText("Track 1");
+
+    const remove = screen.getByTitle("Remove from Playlist");
+    expect(remove.className).toContain("focus:opacity-100");
+  });
+});
