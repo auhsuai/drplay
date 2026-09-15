@@ -65,8 +65,11 @@ impl Drop for ImportGuard {
 }
 
 /// Unpacks a user-picked seed.zip into `<app_cache_dir>/metadata` + the covers
-/// root. Rejects the WHOLE import on any unsafe/invalid entry (safety over
-/// tolerance); entries that are merely oversized are skipped and counted.
+/// root. Every entry name is validated in an upfront pass BEFORE any file is
+/// written, so a single unsafe/invalid entry rejects the whole import with
+/// nothing on disk; entries that are merely oversized are skipped and counted.
+/// Only name/layout validation is upfront — an IO error while writing (disk
+/// full, permission) can still leave a partial import.
 #[tauri::command]
 pub async fn import_metadata_seed(zip_path: String) -> Result<ImportStats, String> {
     if IMPORT_IN_PROGRESS.swap(true, Ordering::SeqCst) {
@@ -82,13 +85,20 @@ pub async fn import_metadata_seed(zip_path: String) -> Result<ImportStats, Strin
         .ok_or_else(|| "covers root not initialized".to_string())?;
     // The zip IO is CPU/disk-bound — run off the async runtime so the IPC
     // handler never blocks on a large archive.
-    tauri::async_runtime::spawn_blocking(move || {
+    let stats = tauri::async_runtime::spawn_blocking(move || {
         let file = std::fs::File::open(&zip_path)
             .map_err(|e| format!("failed to open seed zip: {e}"))?;
         import_seed(file, &metadata_root, &covers_root)
     })
     .await
-    .map_err(|e| format!("import task failed: {e}"))?
+    .map_err(|e| format!("import task failed: {e}"))??;
+    // The import just wrote covers to the SAME disk the drplay:// GET reads,
+    // but ids fetched before the import may hold a cached NoCover marker
+    // (TTL 1h) → without this they would keep returning 204 after the import.
+    if stats.cover_count > 0 {
+        cover::invalidate_all_covers();
+    }
+    Ok(stats)
 }
 
 /// Reads one imported metadata JSON back to the frontend (disk-first). `None`
@@ -173,13 +183,16 @@ fn classify_seed_entry(name: &str) -> Result<SeedEntryKind, String> {
 /// the same root the cover GET handler reads from, so covers land exactly
 /// where drplay:// serves them.
 ///
-/// Two-layer entry validation, both reject the WHOLE import:
-/// 1. zip-slip guard: `enclosed_name()` rejects NULL bytes, absolute paths
-///    and `..`-escapes; names must also be valid UTF-8 (the reader lossily
-///    decodes anything else).
-/// 2. layout whitelist: only `metadata/{fileId}.json` (validated fileId) and
-///    `covers/{t|f}/{s1}/{s2}/{fileId}.jpg` (s1/s2 must match shard_pair)
-///    are accepted.
+/// Two-pass import:
+/// 1. Pass 1 validates EVERY entry name before writing anything — zip-slip
+///    guard (`enclosed_name()` rejects NULL bytes, absolute paths and
+///    `..`-escapes; names must be valid UTF-8) + layout whitelist (only
+///    `metadata/{fileId}.json` with a validated fileId and
+///    `covers/{t|f}/{s1}/{s2}/{fileId}.jpg` with s1/s2 matching shard_pair).
+///    Any violation rejects the WHOLE import with zero files written.
+/// 2. Pass 2 reads + writes the pre-validated entries. IO failures here
+///    (disk full, permission) can still leave a partial import on disk —
+///    validation is upfront, not an atomic multi-file commit.
 /// Pure directory entries are skipped silently (Python's zipfile emits them).
 /// Oversized entries (metadata > 1 MiB, cover > 20 MiB) are SKIPPED and
 /// counted, never fatal — a decompression bomb cannot balloon memory because
@@ -191,13 +204,12 @@ pub fn import_seed<R: Read + Seek>(
 ) -> Result<ImportStats, String> {
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|e| format!("failed to open zip archive: {e}"))?;
-    let mut stats = ImportStats {
-        metadata_count: 0,
-        cover_count: 0,
-        skipped: 0,
-    };
+
+    // Pass 1 — validate every entry name upfront (no body reads, no writes).
+    // Storing the classified kind keeps pass 2 free of re-validation.
+    let mut planned: Vec<(usize, String, SeedEntryKind)> = Vec::with_capacity(archive.len());
     for index in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(index)
             .map_err(|e| format!("failed to read zip entry #{index}: {e}"))?;
         // Directory entries (name ends with '/') carry no content — the Colab
@@ -222,6 +234,19 @@ pub fn import_seed<R: Read + Seek>(
         // Zip-slip guard #2: exact-layout whitelist + fileId charset + shard
         // dirs must match. Rejects the whole import on any violation.
         let kind = classify_seed_entry(&name)?;
+        planned.push((index, name, kind));
+    }
+
+    // Pass 2 — read + write the validated entries.
+    let mut stats = ImportStats {
+        metadata_count: 0,
+        cover_count: 0,
+        skipped: 0,
+    };
+    for (index, name, kind) in planned {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|e| format!("failed to read zip entry #{index}: {e}"))?;
         let limit = match kind {
             SeedEntryKind::Metadata(_) => METADATA_MAX_BYTES,
             SeedEntryKind::Cover { .. } => COVER_MAX_BYTES,
@@ -408,6 +433,30 @@ mod tests {
                 "unexpected error message: {err}"
             );
         }
+        let _ = std::fs::remove_dir_all(&meta_root);
+        let _ = std::fs::remove_dir_all(&covers_root);
+    }
+
+    #[test]
+    fn import_rejects_whole_zip_when_a_later_entry_is_invalid() {
+        let meta_root = temp_dir("upfront_meta");
+        let covers_root = temp_dir("upfront_covers");
+        // Valid entry first, layout-invalid entry second: upfront validation
+        // must reject the zip BEFORE the valid entry lands on disk.
+        let zip = make_zip(&[
+            ("metadata/AbCdEf123456.json", META_JSON),
+            ("metadata/a/b.json", META_JSON),
+        ]);
+        let err = import_seed(std::io::Cursor::new(zip), &meta_root, &covers_root)
+            .expect_err("an invalid entry must reject the whole import");
+        assert!(
+            err.contains("unexpected zip entry layout"),
+            "unexpected error message: {err}"
+        );
+        assert!(
+            !meta_root.join("AbCdEf123456.json").exists(),
+            "the valid entry preceding the invalid one must NOT be written (upfront validation)"
+        );
         let _ = std::fs::remove_dir_all(&meta_root);
         let _ = std::fs::remove_dir_all(&covers_root);
     }

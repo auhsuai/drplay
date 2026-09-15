@@ -11,6 +11,19 @@ pub fn update_minimize_to_tray(minimize: bool) {
     MINIMIZE_TO_TRAY.store(minimize, Ordering::SeqCst);
 }
 
+/// Brings the main window back from the tray. `unminimize()` (SW_RESTORE)
+/// must run BEFORE `show()`: `show()` is SW_SHOW and does not restore a
+/// minimized window, and tao's `set_focus()` no-ops while the window is
+/// minimized. Both tray entry points share this path.
+fn restore_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        crate::memory::apply_window_activity(&window, crate::memory::WindowActivityEvent::ShownFromTray);
+    }
+}
+
 pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let show_i = MenuItem::with_id(app, "show", "Show DrPlay", true, None::<&str>)?;
@@ -37,11 +50,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 app.exit(0);
             }
             "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    crate::memory::apply_window_activity(&window, crate::memory::WindowActivityEvent::ShownFromTray);
-                }
+                restore_main_window(app);
             }
             _ => {}
         })
@@ -53,11 +62,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             } = event
             {
                 let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    crate::memory::apply_window_activity(&window, crate::memory::WindowActivityEvent::ShownFromTray);
-                }
+                restore_main_window(app);
             }
         })
         .build(app)?;

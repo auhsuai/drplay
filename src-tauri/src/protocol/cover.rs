@@ -134,6 +134,15 @@ pub static COVER_CACHE: LazyLock<Cache<String, (String, Bytes)>> = LazyLock::new
         .build()
 });
 
+/// Invalidates every in-RAM cover cache entry, including cached NoCover
+/// markers. Called by `seed.rs` after an import wrote covers to the same disk
+/// this module reads: ids fetched before the import may hold a NoCover marker
+/// (TTL 1h) which would otherwise keep serving a stale 204. Re-warming is
+/// cheap — the next GET re-reads from disk.
+pub(crate) fn invalidate_all_covers() {
+    COVER_CACHE.invalidate_all();
+}
+
 type CoverResult = Result<(String, Bytes, &'static str), CoverError>;
 
 static IN_FLIGHT: LazyLock<std::sync::Mutex<HashMap<String, Vec<oneshot::Sender<CoverResult>>>>> =
@@ -746,6 +755,23 @@ mod tests {
         let b = cache.get(&"b".to_string()).await;
         let present = a.is_some() as u32 + b.is_some() as u32;
         assert!(present <= 1, "byte cap must evict down to <=1 entry, got {}", present);
+    }
+
+    #[tokio::test]
+    async fn invalidate_all_covers_clears_nocover_marker() {
+        let key = cover_cache_key("r05_probe", true);
+        COVER_CACHE
+            .insert(key.clone(), (COVER_NOCOVER_ETAG.to_string(), Bytes::new()))
+            .await;
+        assert!(
+            COVER_CACHE.get(&key).await.is_some(),
+            "fixture: NoCover marker must be cached"
+        );
+        invalidate_all_covers();
+        assert!(
+            COVER_CACHE.get(&key).await.is_none(),
+            "NoCover marker must be gone after a seed import invalidates the cache"
+        );
     }
 
     #[tokio::test]

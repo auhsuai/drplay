@@ -138,6 +138,20 @@ fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivit
     }
 }
 
+/// Log file size cap before the plugin rotates (KeepOne: only the newest file
+/// survives) — bounded log dir by design.
+const LOG_MAX_FILE_SIZE_BYTES: u128 = 5 * 1024 * 1024;
+
+/// Default log level; overridable at runtime via `DRPLAY_LOG_LEVEL` (an
+/// invalid value falls back to Info). Before R05-6 the app had no logger at
+/// all, so every `log::*` call site was silently dropped.
+fn log_level_from_env() -> log::LevelFilter {
+    std::env::var("DRPLAY_LOG_LEVEL")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(log::LevelFilter::Info)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_result = protocol::register(tauri::Builder::default())
@@ -146,6 +160,22 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_keepawake::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                // File target: OS log dir (Windows:
+                // %LOCALAPPDATA%/<bundle id>/logs/drplay.log) + stdout so dev
+                // runs still see records in the terminal.
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("drplay".to_string()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                ])
+                .max_file_size(LOG_MAX_FILE_SIZE_BYTES)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .level(log_level_from_env())
+                .build(),
+        )
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
 

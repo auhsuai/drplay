@@ -24,6 +24,10 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
+# File + stdout logger (R05-6): the app previously had no logger at all, so
+# every `log::*` call site was a no-op and release (windows_subsystem =
+# "windows") had zero diagnostics. Rotation keeps the log dir bounded.
+tauri-plugin-log = "2"
 tauri-plugin-keepawake = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -79,6 +83,15 @@ rand = "0.8.5"
 # zip 2.x (resolves 2.6.1, 2025-04-04) provides ZipArchive::by_index +
 # ZipFile::enclosed_name — the safe-path (zip-slip) check the import relies on.
 zip = "2"
+
+# tao 0.35.3 holds the `window_state` mutex across an ITaskbarList COM call in
+# the TaskbarCreated handler (upstream issue #1263) — reentrant window handling
+# can then deadlock the main thread permanently (explorer restart / resume from
+# sleep). PR #1264 fixes it; this rev is the merge commit on `dev`, whose
+# Cargo.toml still declares tao 0.35.3 (satisfies tauri-runtime-wry's
+# `tao = "^0.35.0"`). Remove once a released tauri-runtime-wry pulls tao >= 0.36.
+[patch.crates-io]
+tao = { git = "https://github.com/tauri-apps/tao", rev = "f7f8173dc85287b2a18aceb9c47533097b8c123f" }
 
 [profile.release]
 lto = true

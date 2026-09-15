@@ -1,7 +1,10 @@
-// Downloads the latest mpv Windows build (x86_64) from zhongfly/mpv-winbuild
+// Downloads the PINNED mpv Windows build (x86_64) from zhongfly/mpv-winbuild
 // into src-tauri/bin/mpv-x86_64-pc-windows-msvc.exe — the exact path Tauri
 // expects for `bundle.externalBin: ["bin/mpv"]` (tauri-build strips the
 // target-triple suffix and stages the exe next to the app binary).
+//
+// The release tag and the archive SHA-256 are pinned together, so the same
+// commit bundles the same engine on every machine (no floating `latest`).
 //
 // Usage: node scripts/fetch-mpv.mjs [--force]
 // Requires: Node >= 18, Windows (tar.exe cannot read 7z/LZMA, so we use the
@@ -9,8 +12,9 @@
 //
 // tauri-build FAILS the build when the sidecar binary is missing, so run this
 // once after a fresh clone (skipped automatically when the exe already exists
-// unless --force is passed).
+// unless --force is passed). npm script: `npm run fetch-mpv`.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -23,8 +27,13 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MPV_WINBUILD_RELEASES_URL =
-  "https://api.github.com/repos/zhongfly/mpv-winbuild/releases/latest";
+const MPV_WINBUILD_TAG = "2026-09-10-7e4cb538a3";
+const MPV_WINBUILD_RELEASES_URL = `https://api.github.com/repos/zhongfly/mpv-winbuild/releases/tags/${MPV_WINBUILD_TAG}`;
+// SHA-256 of mpv-x86_64-20260910-git-7e4cb538a3.7z in that release — matches
+// both the local sidecar (mpv v0.41.0-1042-g7e4cb538a, built Sep 10 2026) and
+// the asset digest GitHub reports. Bump tag + hash together when upgrading.
+const MPV_ASSET_SHA256 =
+  "d572ae23b1792819069ea6b1bcd8311f7cb7b1ea32a2b216c9a9dc07d002468b";
 const SEVENZIP_URL = "https://www.7-zip.org/a/7zr.exe";
 // zhongfly ships several variants per release; we want the plain x86_64 build
 // (no -v3 / -debug / -dev / -lgpl / -aarch64).
@@ -127,7 +136,8 @@ try {
   const sevenZipPath = join(workDir, "7zr.exe");
   curl(SEVENZIP_URL, sevenZipPath, HTTP_TIMEOUT_SECS);
 
-  // 3. Archive, with exact-size integrity check against the release metadata
+  // 3. Archive: exact-size check against the release metadata, then the
+  // pinned SHA-256 (plus the API's own digest when present).
   const archivePath = join(workDir, asset.name);
   curl(asset.browser_download_url, archivePath, DOWNLOAD_MAX_TIME_SECS);
   const downloadedBytes = statSync(archivePath).size;
@@ -137,6 +147,22 @@ try {
       `size mismatch: got ${downloadedBytes} bytes, expected ${asset.size}`,
     );
   }
+  const actualSha = createHash("sha256")
+    .update(readFileSync(archivePath))
+    .digest("hex");
+  if (asset.digest && asset.digest !== `sha256:${actualSha}`) {
+    fail(
+      "download",
+      `GitHub asset digest ${asset.digest} does not match the downloaded file (sha256:${actualSha})`,
+    );
+  }
+  if (actualSha !== MPV_ASSET_SHA256) {
+    fail(
+      "download",
+      `SHA-256 mismatch for ${asset.name}: got ${actualSha}, expected ${MPV_ASSET_SHA256}`,
+    );
+  }
+  console.log(`[fetch-mpv] sha256 verified: ${actualSha}`);
 
   // 4. Extract only mpv.exe
   const extractDir = join(workDir, "out");
