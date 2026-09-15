@@ -87,7 +87,8 @@
     "bulk_delete_desc_other": "Xóa {{count}} mục đã chọn? Các mục này sẽ được chuyển vào Thùng rác Google Drive.",
     "folder_name_invalid": "Tên thư mục chứa ký tự không hợp lệ",
     "sort": "Sắp xếp",
-    "unknown_folder": "Thư mục không xác định"
+    "unknown_folder": "Thư mục không xác định",
+    "song_list": "Danh sách bài hát"
   },
   "liked_songs": {
     "title": "Bài hát đã thích",

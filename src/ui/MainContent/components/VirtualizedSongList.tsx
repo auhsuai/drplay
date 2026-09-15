@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { useVirtualizer, type ScrollToOptions } from "@tanstack/react-virtual";
 import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
@@ -8,6 +9,12 @@ import { SongCard } from "./SongCard";
 // Must match the real rendered height or the virtualizer miscalculates scroll
 // offsets and scrollToIndex jumps to the wrong position.
 const ROW_ESTIMATED_SIZE_PX = 92;
+
+// PageUp/PageDown step. No viewport height is available here; 10 rows is a
+// screenful, same step QueueList uses.
+const PAGE_STEP = 10;
+
+const rowId = (index: number): string => `song-row-${String(index)}`;
 
 export type VirtualizedSongListHandle = {
   scrollToIndex: (index: number, options?: ScrollToOptions) => void;
@@ -37,7 +44,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   items: DriveItem[];
   scrollElementRef: React.RefObject<HTMLElement | null>;
   onPlay: (track: Track) => void;
-  onOpenFolder: (id: string, name: string) => void;
+  onOpenFolder: (id: string, name: string, parentId?: string) => void;
   token: string | null;
   currentFolderId: string;
   currentFolderName: string;
@@ -55,6 +62,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   onBulkDeleteClick: () => void;
   ref?: React.Ref<VirtualizedSongListHandle>;
 }) {
+  const { t } = useTranslation();
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElementRef.current,
@@ -72,6 +80,29 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   }));
 
   const virtualItems = rowVirtualizer.getVirtualItems();
+
+  // ARIA composite widget (APG layout grid): the container owns the keyboard
+  // and keeps `aria-activedescendant` on the active row. Rows outside the
+  // render window have no DOM node, so arrow navigation goes through the
+  // virtualizer (scrollToIndex) instead of real focus — this is what makes
+  // every row keyboard-reachable without dropping virtualization.
+  const [activeIndex, setActiveIndex] = React.useState(-1);
+  const [containerFocused, setContainerFocused] = React.useState(false);
+
+  const playingIndex = isPlaying
+    ? items.findIndex((item) => item.trackInfo?.id === isPlaying)
+    : -1;
+
+  // Items change (search filter, navigation, data churn) while an index is
+  // active — an out-of-range index simply has no active row.
+  const effectiveActiveIndex =
+    activeIndex >= 0 && activeIndex < items.length ? activeIndex : -1;
+
+  // Visible active-row marker while the grid owns the keyboard focus.
+  const rowClassName = (index: number): string =>
+    containerFocused && effectiveActiveIndex === index
+      ? "pb-3 rounded-xl ring-2 ring-inset ring-brand-primary/50"
+      : "pb-3";
 
   const handleToggleSelection = React.useCallback(
     (id: string) => {
@@ -93,9 +124,125 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
     [setIsSelectionMode, setSelectedIds],
   );
 
+  // Keyboard activation mirrors SongCard's click exactly: selection mode
+  // toggles, folder opens (parentId rides along for search folder hits),
+  // track plays through the same onPlay handler the click path uses.
+  const activate = (index: number) => {
+    const item = items[index];
+    if (!item) return;
+    if (isSelectionMode) {
+      handleToggleSelection(item.id);
+      return;
+    }
+    if (item.isFolder) {
+      if (item.parentId !== undefined) {
+        onOpenFolder(item.id, item.title, item.parentId);
+      } else {
+        onOpenFolder(item.id, item.title);
+      }
+      return;
+    }
+    const track = item.trackInfo;
+    if (!track) return;
+    onPlay(track);
+  };
+
+  const moveTo = (index: number) => {
+    setActiveIndex(index);
+    rowVirtualizer.scrollToIndex(index, { align: "auto" });
+  };
+
+  const moveActive = (next: number) => {
+    if (items.length === 0) return;
+    moveTo(Math.max(0, Math.min(items.length - 1, next)));
+  };
+
+  // ArrowUp/ArrowDown wrap around the ends (keyboard model for this list).
+  const moveActiveWrapped = (delta: 1 | -1) => {
+    if (items.length === 0) return;
+    moveTo(
+      effectiveActiveIndex < 0
+        ? delta > 0
+          ? 0
+          : items.length - 1
+        : (effectiveActiveIndex + delta + items.length) % items.length,
+    );
+  };
+
+  const onListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    // Inner controls (MoreMenu trigger, selection checkbox) own their keys.
+    if (target !== e.currentTarget && target.closest("button, input")) return;
+
+    if (e.key === "Enter" || e.key === " ") {
+      // A focused card activates itself (bubbled keys must not double-fire).
+      if (target !== e.currentTarget || effectiveActiveIndex < 0) return;
+      e.preventDefault();
+      activate(effectiveActiveIndex);
+      return;
+    }
+
+    const base =
+      effectiveActiveIndex >= 0 ? effectiveActiveIndex : playingIndex;
+    switch (e.key) {
+      case "ArrowDown":
+        moveActiveWrapped(1);
+        break;
+      case "ArrowUp":
+        moveActiveWrapped(-1);
+        break;
+      case "PageDown":
+        moveActive(base + PAGE_STEP);
+        break;
+      case "PageUp":
+        moveActive(base - PAGE_STEP);
+        break;
+      case "Home":
+        moveActive(0);
+        break;
+      case "End":
+        moveActive(items.length - 1);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    // Keys pressed on a card hand focus back to the grid owner: the
+    // activedescendant model only announces while the grid has focus.
+    e.currentTarget.focus();
+  };
+
   return (
     <div
       ref={rowVirtualizer.containerRef}
+      role="grid"
+      aria-label={t("drive.song_list")}
+      aria-rowcount={items.length}
+      aria-colcount={1}
+      aria-multiselectable={isSelectionMode || undefined}
+      tabIndex={0}
+      aria-activedescendant={
+        effectiveActiveIndex >= 0 ? rowId(effectiveActiveIndex) : undefined
+      }
+      onKeyDown={onListKeyDown}
+      onFocus={(e) => {
+        if (e.target !== e.currentTarget) return;
+        setContainerFocused(true);
+        // First focus lands on the playing row (or the top); focus returning
+        // mid-navigation keeps the existing active row.
+        setActiveIndex((prev) =>
+          prev >= 0 && prev < items.length
+            ? prev
+            : playingIndex >= 0
+              ? playingIndex
+              : items.length > 0
+                ? 0
+                : -1,
+        );
+      }}
+      onBlur={(e) => {
+        if (e.target === e.currentTarget) setContainerFocused(false);
+      }}
       style={{
         position: "relative",
         width: "100%",
@@ -113,7 +260,18 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
             key={virtualRow.key}
             ref={rowVirtualizer.measureElement}
             data-index={virtualRow.index}
-            className="pb-3"
+            id={rowId(virtualRow.index)}
+            role="row"
+            aria-rowindex={virtualRow.index + 1}
+            aria-selected={
+              isSelectionMode
+                ? selectedIds.has(item.id)
+                : !!isPlaying && item.trackInfo?.id === isPlaying
+            }
+            onFocus={() => {
+              setActiveIndex(virtualRow.index);
+            }}
+            className={rowClassName(virtualRow.index)}
             style={{
               position: "absolute",
               top: 0,
@@ -121,30 +279,32 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
               width: "100%",
             }}
           >
-            <SongCard
-              item={item}
-              onPlay={onPlay}
-              onOpenFolder={onOpenFolder}
-              token={token}
-              currentFolderId={currentFolderId}
-              currentFolderName={currentFolderName}
-              folderHistory={folderHistory}
-              isHighlighted={item.id === highlightedFileId?.id}
-              highlightTrigger={
-                item.id === highlightedFileId?.id
-                  ? highlightedFileId.ts
-                  : undefined
-              }
-              isPlaying={!!isPlaying && item.trackInfo?.id === isPlaying}
-              onRefresh={onRefresh}
-              onRemoveItem={onRemoveItem}
-              isSelectionMode={isSelectionMode}
-              isSelected={selectedIds.has(item.id)}
-              onToggleSelection={handleToggleSelection}
-              onEnableSelectionMode={handleEnableSelectionMode}
-              onBulkMoveClick={onBulkMoveClick}
-              onBulkDeleteClick={onBulkDeleteClick}
-            />
+            <div role="gridcell">
+              <SongCard
+                item={item}
+                onPlay={onPlay}
+                onOpenFolder={onOpenFolder}
+                token={token}
+                currentFolderId={currentFolderId}
+                currentFolderName={currentFolderName}
+                folderHistory={folderHistory}
+                isHighlighted={item.id === highlightedFileId?.id}
+                highlightTrigger={
+                  item.id === highlightedFileId?.id
+                    ? highlightedFileId.ts
+                    : undefined
+                }
+                isPlaying={!!isPlaying && item.trackInfo?.id === isPlaying}
+                onRefresh={onRefresh}
+                onRemoveItem={onRemoveItem}
+                isSelectionMode={isSelectionMode}
+                isSelected={selectedIds.has(item.id)}
+                onToggleSelection={handleToggleSelection}
+                onEnableSelectionMode={handleEnableSelectionMode}
+                onBulkMoveClick={onBulkMoveClick}
+                onBulkDeleteClick={onBulkDeleteClick}
+              />
+            </div>
           </div>
         );
       })}

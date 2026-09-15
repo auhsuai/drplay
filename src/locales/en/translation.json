@@ -87,7 +87,8 @@
     "bulk_delete_desc_other": "Delete {{count}} selected items? They will be moved to Google Drive Trash.",
     "folder_name_invalid": "Folder name contains invalid characters",
     "sort": "Sort",
-    "unknown_folder": "Unknown Folder"
+    "unknown_folder": "Unknown Folder",
+    "song_list": "Song list"
   },
   "liked_songs": {
     "title": "Liked Songs",
