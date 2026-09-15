@@ -30,8 +30,8 @@ export function TrashItemRow({
   const isFolder = item.mimeType === FOLDER_MIME;
   return (
     <div
-      role="button"
-      tabIndex={0}
+      role={isSelectionMode ? "button" : undefined}
+      tabIndex={isSelectionMode ? 0 : undefined}
       className={`flex items-center justify-between p-3 rounded-xl transition-colors ${
         isSelectionMode ? "cursor-pointer" : ""
       } ${

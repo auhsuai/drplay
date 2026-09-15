@@ -89,6 +89,44 @@ function renderScreen() {
   return render(<TrashScreen token="test-token" onClose={vi.fn()} />);
 }
 
+// Row container lookup that does NOT rely on the row's role: TrashItemRow only
+// publishes role="button" while in selection mode (P2-05-8), so tests outside
+// selection mode must find the container structurally.
+function rowFor(name: string): HTMLElement {
+  const row = screen.getByText(name).closest("div.p-3");
+  if (row === null) throw new Error(`row for ${name} not found`);
+  return row as HTMLElement;
+}
+
+function enterSelectionMode() {
+  const menuBtn = screen
+    .getAllByRole("button")
+    .find((b) => b.className.includes("p-1.5"));
+  if (menuBtn === undefined) throw new Error("menu button not found");
+  act(() => {
+    fireEvent.click(menuBtn);
+  });
+  fireEvent.click(screen.getByText("menu.select_multiple"));
+}
+
+async function renderWithItems(
+  items: Array<{ id: string; name: string; mimeType: string }>,
+  onClose = vi.fn(),
+) {
+  const view = render(<TrashScreen token="test-token" onClose={onClose} />);
+  await waitFor(() => {
+    expect(deferredCalls).toHaveLength(1);
+  });
+  await act(async () => {
+    const call = deferredCalls[0];
+    if (call === undefined) throw new Error("expected deferred call");
+    call.resolve(items);
+    await Promise.resolve();
+  });
+  await screen.findByText(items[0]?.name ?? "");
+  return { onClose, ...view };
+}
+
 describe("TrashScreen skeleton loading", () => {
   beforeEach(() => {
     deferredCalls = [];
@@ -213,35 +251,6 @@ describe("TrashScreen bulk operations", () => {
     vi.restoreAllMocks();
   });
 
-  async function renderWithItems(
-    items: Array<{ id: string; name: string; mimeType: string }>,
-    onClose = vi.fn(),
-  ) {
-    const view = render(<TrashScreen token="test-token" onClose={onClose} />);
-    await waitFor(() => {
-      expect(deferredCalls).toHaveLength(1);
-    });
-    await act(async () => {
-      const call = deferredCalls[0];
-      if (call === undefined) throw new Error("expected deferred call");
-      call.resolve(items);
-      await Promise.resolve();
-    });
-    await screen.findByText(items[0]?.name ?? "");
-    return { onClose, ...view };
-  }
-
-  function enterSelectionMode() {
-    const menuBtn = screen
-      .getAllByRole("button")
-      .find((b) => b.className.includes("p-1.5"));
-    if (menuBtn === undefined) throw new Error("menu button not found");
-    act(() => {
-      fireEvent.click(menuBtn);
-    });
-    fireEvent.click(screen.getByText("menu.select_multiple"));
-  }
-
   it("bulk restore: 1 item fails -> other items still restored + list updates only succeeded", async () => {
     await renderWithItems([
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
@@ -285,6 +294,7 @@ describe("TrashScreen bulk operations", () => {
     fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
     fireEvent.click(screen.getByRole("button", { name: "Track 2" }));
 
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
     mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
       new Error("drive 500"),
@@ -309,6 +319,27 @@ describe("TrashScreen bulk operations", () => {
       .map((call) => call[0].message)
       .join("\n");
     expect(loggedMessages).toContain("bulk-delete-item-failed");
+  });
+
+  it("bulk delete: confirm cancelled -> no delete requests, selection kept (P2-05-3)", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+    enterSelectionMode();
+    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("common.delete"));
+      await Promise.resolve();
+    });
+
+    expect(confirmSpy).toHaveBeenCalledWith("settings.confirm_bulk_delete");
+    expect(mocks.driveApi.permanentlyDeleteFile).not.toHaveBeenCalled();
+    expect(screen.getByText("1 common.selected")).toBeTruthy();
+    expect(screen.getByText("Track 1")).not.toBeNull();
+    expect(screen.getByText("Track 2")).not.toBeNull();
   });
 
   it("empty trash: partial failure -> no onClose + succeeded items removed", async () => {
@@ -360,12 +391,6 @@ describe("TrashScreen per-row restore state (P2-05-7)", () => {
     cleanup();
     vi.restoreAllMocks();
   });
-
-  function rowFor(name: string): HTMLElement {
-    const el = screen.getByText(name).closest("div[role='button']");
-    if (el === null) throw new Error(`row for ${name} not found`);
-    return el as HTMLElement;
-  }
 
   it("keeps row B disabled with its spinner until its own restore settles", async () => {
     render(<TrashScreen token="test-token" onClose={vi.fn()} />);
@@ -576,5 +601,117 @@ describe("TrashScreen debug skeleton trigger", () => {
     expect(() => {
       dispatchSkeleton();
     }).not.toThrow();
+  });
+});
+
+describe("TrashScreen dialog a11y (P2-05-6)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("exposes modal dialog semantics with the title as its accessible name", () => {
+    renderScreen();
+
+    const dialog = screen.getByRole("dialog", { name: "settings.trash" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.getAttribute("aria-labelledby")).toBe("trash-title");
+    expect(document.getElementById("trash-title")?.textContent).toBe(
+      "settings.trash",
+    );
+  });
+
+  it("moves focus to the Close button on open and the button has an accessible name", () => {
+    renderScreen();
+
+    const closeButton = screen.getByRole("button", { name: "common.close" });
+    expect(document.activeElement).toBe(closeButton);
+  });
+
+  it("Escape closes the dialog", () => {
+    const onClose = vi.fn();
+    render(<TrashScreen token="test-token" onClose={onClose} />);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Escape is ignored while a bulk delete is in flight", async () => {
+    const onClose = vi.fn();
+    await renderWithItems(
+      [{ id: "f1", name: "Track 1", mimeType: "audio/mpeg" }],
+      onClose,
+    );
+    enterSelectionMode();
+    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mocks.driveApi.permanentlyDeleteFile.mockImplementation(
+      () => new Promise<never>(() => undefined),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("common.delete"));
+      await Promise.resolve();
+    });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("unmount removes the Escape listener", () => {
+    const onClose = vi.fn();
+    const { unmount } = render(
+      <TrashScreen token="test-token" onClose={onClose} />,
+    );
+
+    unmount();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("TrashItemRow semantics (P2-05-8)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("outside selection mode the row is neither a button nor a tab stop", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+
+    expect(screen.queryByRole("button", { name: "Track 1" })).toBeNull();
+    const row = rowFor("Track 1");
+    expect(row.getAttribute("role")).toBeNull();
+    expect(row.getAttribute("tabindex")).toBeNull();
+  });
+
+  it("in selection mode the row is a keyboard-reachable toggle again", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+    enterSelectionMode();
+
+    const row = screen.getByRole("button", { name: "Track 1" });
+    expect(row.getAttribute("tabindex")).toBe("0");
+
+    fireEvent.click(row);
+    expect(screen.getByText("1 common.selected")).toBeTruthy();
   });
 });

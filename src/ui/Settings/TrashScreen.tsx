@@ -53,6 +53,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   // More menu state
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   // Listener exists only while the menu is open (active flag), matching the
   // previous conditional-add/remove effect exactly.
@@ -63,6 +64,45 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     },
     isMoreMenuOpen,
   );
+
+  // APG dialog-modal (P2-05-6): initial focus moves into the dialog (the Close
+  // button is the first control) and the invoker is remembered so focus returns
+  // on close/unmount. Combined in one effect on purpose: the invoker snapshot
+  // must be taken BEFORE focus moves into the dialog (the two-effect mirror of
+  // BulkDeleteConfirmModal would snapshot the Close button instead).
+  useEffect(() => {
+    const invoker =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    closeButtonRef.current?.focus();
+    return () => {
+      if (
+        invoker &&
+        invoker !== document.body &&
+        invoker !== document.documentElement &&
+        invoker.isConnected
+      ) {
+        invoker.focus();
+      }
+    };
+  }, []);
+
+  // Escape closes the dialog. Window CAPTURE + stopPropagation mirror
+  // BulkDeleteConfirmModal: a modal owns the key, layers behind stay inert.
+  // Ignored while a destructive action is in flight (same guard as the X and
+  // backdrop); cleanup on unmount.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (!isBulkActioning && !isEmptying) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [isBulkActioning, isEmptying, onClose]);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
   // trash empty state by clearing items and dropping the loading flag so the
@@ -178,7 +218,8 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   };
 
   const handleBulkDelete = async () => {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || isBulkActioning) return;
+    if (!window.confirm(t("settings.confirm_bulk_delete"))) return;
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
@@ -227,7 +268,12 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="trash-title"
+        className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+      >
         {/* Header */}
         <div className="px-6 py-5 flex items-center justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
           <div className="flex items-center gap-3">
@@ -248,7 +294,10 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
               </svg>
             </div>
             <div>
-              <h1 className="text-lg font-bold text-gray-900 dark:text-white">
+              <h1
+                id="trash-title"
+                className="text-lg font-bold text-gray-900 dark:text-white"
+              >
                 {t("settings.trash")}
               </h1>
               <p className="text-xs text-gray-500 mt-0.5">
@@ -257,7 +306,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
             </div>
           </div>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
+            aria-label={t("common.close")}
             className="p-2 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-full transition-colors"
           >
             <X className="w-5 h-5" />
