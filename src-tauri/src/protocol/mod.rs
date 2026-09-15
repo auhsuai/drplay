@@ -4,10 +4,6 @@ use bytes::Bytes;
 use tauri::http::{Response, StatusCode};
 use cover::{handle_cover_get, handle_cover_post, CoverError};
 
-pub fn init_access_recorder(log_path: std::path::PathBuf) {
-    cover::init_access_recorder(log_path);
-}
-
 /// Response builder pre-wired with the CORS header every drplay:// response
 /// must carry.
 ///
@@ -105,42 +101,31 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
                 let client_etag = request.headers().get("if-none-match")
                     .and_then(|h| h.to_str().ok().map(|s| s.to_string()));
 
-                let recorder = match cover::ACCESS_RECORDER.get() {
-                    Some(r) => r,
-                    None => {
-                            responder.respond(
-                                cors_response_builder(StatusCode::INTERNAL_SERVER_ERROR)
-                                    .body(b"Access recorder not initialized".to_vec())
-                                    .unwrap_or_else(|e| {
-                                        eprintln!("[protocol] failed to build 500 (access recorder) response: {e}");
-                                        Response::new(Vec::new())
-                                    }),
-                            );
-                        return;
-                    }
-                };
-                let fetch_result = handle_cover_get(
-                    &file_id,
-                    thumb,
-                    recorder,
-                ).await;
+                let fetch_result = handle_cover_get(&file_id, thumb).await;
 
                 match fetch_result {
                     Ok((etag, bytes_val, content_type)) => {
                         if client_etag.as_deref() == Some(etag.as_str()) {
+                            // RFC 9110 §15.4.5: a 304 MUST carry the ETag of
+                            // the 200 it stands in for.
                             responder.respond(
                                 cors_response_builder(StatusCode::NOT_MODIFIED)
-                                .body(Vec::new())
-                                .unwrap_or_else(|e| {
-                                    eprintln!("[protocol] failed to build 304 (not modified) response: {e}");
-                                    Response::new(Vec::new())
-                                })
+                                    .header("ETag", etag)
+                                    .body(Vec::new())
+                                    .unwrap_or_else(|e| {
+                                        eprintln!("[protocol] failed to build 304 (not modified) response: {e}");
+                                        Response::new(Vec::new())
+                                    })
                             );
                         } else {
+                            // Short freshness so the client conditionally
+                            // revalidates (If-None-Match/304) once stale:
+                            // `immutable` froze an overwritten cover for up to
+                            // a year without ever asking the server.
                             responder.respond(
                                 cors_response_builder(StatusCode::OK)
                                     .header("Content-Type", content_type)
-                                    .header("Cache-Control", "public, max-age=31536000, immutable")
+                                    .header("Cache-Control", "public, max-age=60")
                                     .header("ETag", etag)
                                 .body(cover_response_body(bytes_val))
                                 .unwrap_or_else(|e| {

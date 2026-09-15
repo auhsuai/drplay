@@ -121,19 +121,6 @@ fn etag_from_mtime(path: &Path) -> String {
     format!("\"{mtime_nanos}\"")
 }
 
-// Initialized from `lib.rs` `setup` with a log path under `<app_cache_dir>/.thumbnails/`.
-// The cover GET path records each access here; the handler returns HTTP 500 if the
-// recorder has not been initialized, so `init_access_recorder` must run at setup.
-pub static ACCESS_RECORDER: std::sync::OnceLock<std::sync::Mutex<crate::thumbnail::AccessRecorder>> =
-    std::sync::OnceLock::new();
-
-pub fn init_access_recorder(log_path: std::path::PathBuf) {
-    let recorder = crate::thumbnail::AccessRecorder::new(log_path);
-    if ACCESS_RECORDER.set(std::sync::Mutex::new(recorder)).is_err() {
-        eprintln!("[protocol] ACCESS_RECORDER already initialized");
-    }
-}
-
 // In-RAM, bounded, TTL-expiring cover cache. Keyed by `{music_id}_{t|f}` (t = thumb,
 // f = full). The R2 remote backend was removed (2026-08-03), so covers always
 // resolve to the NoCover marker; this cache stores that marker to skip
@@ -167,7 +154,6 @@ impl Drop for InFlightGuard {
 pub async fn handle_cover_get(
     raw_id: &str,
     thumb: bool,
-    recorder: &std::sync::Mutex<crate::thumbnail::AccessRecorder>,
 ) -> Result<(String, Bytes, &'static str), CoverError> {
     let _start = std::time::Instant::now();
 
@@ -184,9 +170,6 @@ pub async fn handle_cover_get(
         if hit.0 == COVER_NOCOVER_ETAG {
             eprintln!("[PERF] handle_cover_get {} source=NOCOVER_CACHE took {:?}", raw_id, _start.elapsed());
             return Err(CoverError::NoCover);
-        }
-        if let Ok(mut r) = recorder.lock() {
-            r.record(raw_id);
         }
         eprintln!("[PERF] handle_cover_get {} source=CACHE_HIT took {:?}", raw_id, _start.elapsed());
         return Ok((hit.0, hit.1, "image/jpeg"));
@@ -241,18 +224,22 @@ pub async fn handle_cover_get(
     // failures (permission etc.) are logged and returned as 500 WITHOUT
     // caching, so the next request retries instead of being stuck.
     let disk_result = match COVERS_ROOT.get() {
-        Some(covers_root) => read_cover_from_disk(covers_root, raw_id, thumb),
+        Some(covers_root) => {
+            // Blocking IO (canonicalize ×2 + fs::read) must not pin a tokio
+            // worker: hand it to the blocking pool. The closure needs owned
+            // data ('static), hence the PathBuf/String clones.
+            let covers_root = covers_root.clone();
+            let raw_id_owned = raw_id.to_string();
+            tauri::async_runtime::spawn_blocking(move || {
+                read_cover_from_disk(&covers_root, &raw_id_owned, thumb)
+            })
+            .await
+            .map_err(|e| CoverError::DiskRead(format!("cover read task failed: {e}")))?
+        }
         None => Err(CoverError::DiskRead("covers root not initialized".into())),
     };
     let result: CoverResult = match disk_result {
         Ok((etag, bytes)) => {
-            // Disk-served covers count as accesses too (same as CACHE_HIT):
-            // keeps the recency access log complete for ids whose covers are
-            // not yet in RAM. Guard is dropped before the .await below
-            // (std::sync::MutexGuard is !Send and must not span await points).
-            if let Ok(mut r) = recorder.lock() {
-                r.record(raw_id);
-            }
             COVER_CACHE
                 .insert(cache_key.clone(), (etag.clone(), bytes.clone()))
                 .await;
@@ -324,7 +311,17 @@ pub struct CacheInfo {
 pub async fn get_cache_info(app: tauri::AppHandle) -> CacheInfo {
     COVER_CACHE.run_pending_tasks().await;
     let covers_dir_bytes = match app.path().app_cache_dir() {
-        Ok(cache_dir) => directory_size(&cache_dir.join(CACHE_ROOT)),
+        Ok(cache_dir) => {
+            // The recursive walk stats every cover file; keep it off the
+            // async worker pool.
+            let covers_dir = cache_dir.join(CACHE_ROOT);
+            tauri::async_runtime::spawn_blocking(move || directory_size(&covers_dir))
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("[protocol] get_cache_info: size walk failed: {e}");
+                    0
+                })
+        }
         Err(_) => 0,
     };
     CacheInfo {
@@ -344,14 +341,19 @@ pub async fn clear_thumbnail_dir(app: tauri::AppHandle) -> Result<(), String> {
         .app_cache_dir()
         .map_err(|e| format!("clear_thumbnail_dir: failed to resolve app cache dir: {e}"))?;
     let covers_dir = cache_dir.join(CACHE_ROOT);
-    // Best-effort GC first (pays down size while clearing), then wipe.
-    let _ = gc_covers(&covers_dir);
-    remove_dir_contents(&covers_dir).map_err(|e| {
-        format!(
-            "clear_thumbnail_dir: failed to clear {}: {e}",
-            covers_dir.display()
-        )
-    })?;
+    // Best-effort GC first (pays down size while clearing), then wipe. Walk +
+    // wipe are blocking IO: run both on the blocking pool.
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = gc_covers(&covers_dir);
+        remove_dir_contents(&covers_dir).map_err(|e| {
+            format!(
+                "clear_thumbnail_dir: failed to clear {}: {e}",
+                covers_dir.display()
+            )
+        })
+    })
+    .await
+    .map_err(|e| format!("clear_thumbnail_dir: cleanup task failed: {e}"))??;
     COVER_CACHE.invalidate_all();
     Ok(())
 }
@@ -477,15 +479,25 @@ fn read_cover_from_disk(
     thumb: bool,
 ) -> Result<(String, Bytes), CoverError> {
     let path = cover_disk_path(covers_root, raw_id, thumb)?;
-    // Root or file missing → NoCover, not an escape: canonicalize() fails on
+    // Only NotFound means NoCover, not an escape: canonicalize() fails on
     // missing paths, so the containment check must come AFTER the existence
-    // probes (a missing file can never "escape" anywhere).
-    let Ok(canon_root) = std::fs::canonicalize(covers_root) else {
-        return Err(CoverError::NoCover);
-    };
-    let Ok(canon_path) = std::fs::canonicalize(&path) else {
-        return Err(CoverError::NoCover);
-    };
+    // probes (a missing file can never "escape" anywhere). Any other IO error
+    // (permission, reparse loop, transient sharing violation) surfaces as
+    // DiskRead so the caller can log + retry instead of caching NoCover.
+    let canon_root = std::fs::canonicalize(covers_root).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => CoverError::NoCover,
+        _ => CoverError::DiskRead(format!(
+            "covers root canonicalize failed for {}: {e}",
+            covers_root.display()
+        )),
+    })?;
+    let canon_path = std::fs::canonicalize(&path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => CoverError::NoCover,
+        _ => CoverError::DiskRead(format!(
+            "cover canonicalize failed for {}: {e}",
+            path.display()
+        )),
+    })?;
     if !is_within_covers_root(&canon_path, &canon_root) {
         return Err(CoverError::DiskRead(format!(
             "cover path escapes cache root: {}",
@@ -538,7 +550,14 @@ fn gc_covers_with_budgets(
         (FULL_SUBDIR, full_budget),
     ] {
         let dir = covers_root.join(CACHE_ROOT).join(subdir);
-        if !dir.is_dir() {
+        // symlink_metadata (lstat) instead of `Path::is_dir()`: the latter
+        // follows reparse points, and walking through a link squatting on a
+        // shard dir would evict/prune files OUTSIDE the covers tree. Same
+        // "never follow symlinks" invariant as `directory_size`.
+        let Ok(dir_meta) = std::fs::symlink_metadata(&dir) else {
+            continue;
+        };
+        if dir_meta.file_type().is_symlink() || !dir_meta.is_dir() {
             continue;
         }
         // Covers live 2 shard levels deep ({s1}/{s2}), so the walk must
@@ -574,6 +593,12 @@ fn collect_cover_files(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // `DirEntry::file_type` never follows the link (lstat semantics), so
+        // a directory link is skipped instead of being counted or recursed.
+        let Ok(file_type) = entry.file_type() else { continue };
+        if file_type.is_symlink() {
+            continue;
+        }
         let Ok(meta) = entry.metadata() else { continue };
         if meta.is_dir() {
             collect_cover_files(&path, out);
@@ -606,7 +631,13 @@ fn prune_empty_subdirs(dir: &Path) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // `Path::is_dir` follows reparse points; only real directories may be
+        // traversed/pruned (never a link's target).
+        let Ok(file_type) = entry.file_type() else { continue };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             prune_empty_subdirs(&path);
             match std::fs::remove_dir(&path) {
                 Ok(()) => {}
@@ -650,10 +681,20 @@ pub async fn handle_cover_post(
     }
     let covers_root = COVERS_ROOT
         .get()
-        .ok_or_else(|| CoverError::DiskWrite("covers root not initialized".into()))?;
-    let etag = write_cover_to_disk(covers_root, raw_id, thumb, body)?;
+        .ok_or_else(|| CoverError::DiskWrite("covers root not initialized".into()))?
+        .clone();
+    // One owned copy serves both the blocking write and the RAM cache insert
+    // (the Bytes clone into the task is a refcount bump, not a memcpy).
+    let payload = Bytes::copy_from_slice(body);
+    let payload_for_write = payload.clone();
+    let raw_id_owned = raw_id.to_string();
+    let etag = tauri::async_runtime::spawn_blocking(move || {
+        write_cover_to_disk(&covers_root, &raw_id_owned, thumb, &payload_for_write)
+    })
+    .await
+    .map_err(|e| CoverError::DiskWrite(format!("cover write task failed: {e}")))??;
     COVER_CACHE
-        .insert(cover_cache_key(raw_id, thumb), (etag, Bytes::copy_from_slice(body)))
+        .insert(cover_cache_key(raw_id, thumb), (etag, payload))
         .await;
     Ok(())
 }
@@ -721,11 +762,8 @@ mod tests {
             (0..MAX_WAITERS_PER_KEY).map(|_| oneshot::channel().0).collect(),
         );
 
-        let recorder = std::sync::Mutex::new(crate::thumbnail::AccessRecorder::new(
-            std::path::PathBuf::new(),
-        ));
         let task = tokio::spawn(async move {
-            handle_cover_get(KEY_ID, false, &recorder).await
+            handle_cover_get(KEY_ID, false).await
         });
 
         // Poll: on the old unbounded code the request pushes a (cap+1)-th
@@ -770,15 +808,10 @@ mod tests {
         // resolves, so every request either waits (up to the cap) or self-serves.
         IN_FLIGHT.lock().unwrap().insert(key.clone(), Vec::new());
 
-        let recorder = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::thumbnail::AccessRecorder::new(std::path::PathBuf::new()),
-        ));
         let handles: Vec<_> = (0..256usize)
             .map(|_| {
-                let recorder = std::sync::Arc::clone(&recorder);
                 tokio::spawn(async move {
-                    handle_cover_get(KEY_ID, false, recorder.as_ref())
-                        .await
+                    handle_cover_get(KEY_ID, false).await
                 })
             })
             .collect();
@@ -1271,5 +1304,95 @@ mod tests {
         let etag2 = write_cover_to_disk(&root, id, true, b"v2").expect("post must succeed");
         assert_ne!(etag1, etag2, "rewritten cover must get a fresh etag");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Creates a directory link (symlink, with an NTFS junction fallback on
+    /// Windows where `symlink_dir` needs a privilege that is often absent) at
+    /// `link` pointing to `target`. Returns false when the platform refuses —
+    /// callers skip, same policy as the existing symlink tests.
+    #[cfg(windows)]
+    fn create_dir_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return true;
+        }
+        std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(windows))]
+    fn create_dir_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+
+    // R03-1: canonicalize can fail for reasons other than a clean miss
+    // (reparse loops, permission denied, transient sharing violations). Only
+    // NotFound means "no cover"; every other IO error must surface as
+    // DiskRead (HTTP 500, logged + retried) instead of being cached as a
+    // 1-hour NoCover marker.
+    #[test]
+    fn s3_canonicalize_loop_error_is_diskread_not_nocover() {
+        let root = s3_temp_root("canon_loop");
+        let shard_dir = root.join("covers").join("t");
+        std::fs::create_dir_all(root.join("covers")).expect("covers dir must be creatable");
+        // A self-referential directory link makes canonicalize fail with a
+        // reparse-loop IO error (FilesystemLoop), NOT NotFound.
+        if !create_dir_link(&shard_dir, &shard_dir) {
+            eprintln!("skipping: cannot create a directory link on this machine");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        let err = read_cover_from_disk(&root, "file_loop", true)
+            .expect_err("a reparse-loop failure must not be reported as NoCover");
+        assert!(
+            matches!(err, CoverError::DiskRead(_)),
+            "non-NotFound canonicalize failure must map to DiskRead, got {err:?}"
+        );
+        let _ = std::fs::remove_dir(&shard_dir);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // R03-2: GC/prune must never follow directory links out of the covers
+    // tree (same "never follow" invariant as `directory_size` and
+    // `remove_dir_contents`). A link squatting on a shard dir is skipped
+    // entirely: nothing behind it is evicted or pruned, however tight the
+    // budget.
+    #[test]
+    fn s3_gc_does_not_follow_dir_links_in_shard_dir() {
+        let root = s3_temp_root("gc_dirlink");
+        let target = temp_dir("gc_dirlink_target");
+        std::fs::write(target.join("keep.jpg"), vec![0x11u8; 4096])
+            .expect("target cover file must be writable");
+        let keep_dir = target.join("keep_dir");
+        std::fs::create_dir_all(&keep_dir).expect("target subdir must be creatable");
+
+        let shard_dir = root.join("covers").join("t");
+        std::fs::create_dir_all(root.join("covers")).expect("covers dir must be creatable");
+        if !create_dir_link(&target, &shard_dir) {
+            eprintln!("skipping: cannot create a directory link on this machine");
+            let _ = std::fs::remove_dir_all(&root);
+            let _ = std::fs::remove_dir_all(&target);
+            return;
+        }
+
+        // A 1-byte budget forces eviction if (and only if) the walk follows
+        // the link and counts the target's files as covers to police.
+        gc_covers_with_budgets(&root, 1, u64::MAX).expect("gc must succeed");
+
+        assert!(
+            target.join("keep.jpg").exists(),
+            "GC must not evict files behind a directory link squatting on a shard dir"
+        );
+        assert!(
+            keep_dir.exists(),
+            "prune must not descend through a directory link into the target"
+        );
+        let _ = std::fs::remove_dir(&shard_dir);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&target);
     }
 }

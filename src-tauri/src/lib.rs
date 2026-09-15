@@ -150,8 +150,6 @@ pub fn run() {
             APP_HANDLE.set(app.handle().clone()).ok();
 
             if let Ok(cache_dir) = app.path().app_cache_dir() {
-                let access_log = cache_dir.join(".thumbnails").join("access_log.json");
-                crate::protocol::init_access_recorder(access_log);
                 // S3: on-disk cover cache root + background GC thread (runs
                 // once now, then every GC_INTERVAL_SECS; detached, never
                 // blocks setup and dies with the process).
