@@ -102,17 +102,21 @@ const logAuth = (level: "warn" | "error", message: string): Promise<void> =>
 export const useAuth = (onLogoutExt?: () => void) => {
   const {
     isLoggedIn,
+    isAuthHydrated,
     accessToken,
     userProfile,
     setIsLoggedIn,
+    setIsAuthHydrated,
     setAccessToken,
     setUserProfile,
   } = useAuthStore(
     useShallow((state) => ({
       isLoggedIn: state.isLoggedIn,
+      isAuthHydrated: state.isAuthHydrated,
       accessToken: state.accessToken,
       userProfile: state.userProfile,
       setIsLoggedIn: state.setIsLoggedIn,
+      setIsAuthHydrated: state.setIsAuthHydrated,
       setAccessToken: state.setAccessToken,
       setUserProfile: state.setUserProfile,
     })),
@@ -158,7 +162,10 @@ export const useAuth = (onLogoutExt?: () => void) => {
           : 0;
       scheduleProactiveRefresh(remainingSec > 0 ? remainingSec : 0);
     }
-  }, [setAccessToken, setIsLoggedIn]);
+    // P2-04-9: hydrate settled — the login gate may now paint its logged-out
+    // state. Set LAST so no earlier step can leave the gate undecided.
+    setIsAuthHydrated(true);
+  }, [setAccessToken, setIsLoggedIn, setIsAuthHydrated]);
 
   const handleLoginSuccess = (tokenData: TokenData | null | undefined) => {
     if (isLoggingOut()) return;
@@ -506,6 +513,7 @@ export const useAuth = (onLogoutExt?: () => void) => {
 
   return {
     isLoggedIn,
+    isAuthHydrated,
     accessToken,
     userProfile,
     handleLoginSuccess,

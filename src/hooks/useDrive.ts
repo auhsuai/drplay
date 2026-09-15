@@ -9,6 +9,7 @@ import { useDriveRootSelector } from "./useDriveRootSelector";
 export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   const {
     appRootFolder,
+    isHydrated,
     setAppRootFolder,
     currentFolderId,
     setCurrentFolderId,
@@ -21,6 +22,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   } = useDriveStore(
     useShallow((state) => ({
       appRootFolder: state.appRootFolder,
+      isHydrated: state.isHydrated,
       setAppRootFolder: state.setAppRootFolder,
       currentFolderId: state.currentFolderId,
       setCurrentFolderId: state.setCurrentFolderId,
@@ -49,6 +51,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
 
   return {
     appRootFolder,
+    isHydrated,
     setAppRootFolder,
     currentFolderId,
     setCurrentFolderId,

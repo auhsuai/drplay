@@ -4,6 +4,12 @@ import type { UserProfile } from "../types";
 interface AuthState {
   /** Whether a session is currently active (token present and not logged out). */
   isLoggedIn: boolean;
+  /**
+   * False until useAuth's hydrate effect has run once. Until then,
+   * isLoggedIn=false only means "not hydrated yet", so gates must not paint
+   * logged-out UI from it.
+   */
+  isAuthHydrated: boolean;
   /** The current Google access token (null when signed out). */
   accessToken: string | null;
   /** The signed-in user's Google profile, or null before the profile fetch lands. */
@@ -14,6 +20,8 @@ interface AuthState {
    * @param isLoggedIn True when a session starts, false on logout.
    */
   setIsLoggedIn: (isLoggedIn: boolean) => void;
+  /** Mark the auth hydrate effect as settled (idempotent). */
+  setIsAuthHydrated: (isAuthHydrated: boolean) => void;
   /** Swap in a new access token (login, refresh, or logout → null). */
   setAccessToken: (token: string | null) => void;
   /** Store (or clear, on logout) the fetched Google profile. */
@@ -27,10 +35,14 @@ interface AuthState {
  */
 export const useAuthStore = create<AuthState>((set) => ({
   isLoggedIn: false,
+  isAuthHydrated: false,
   accessToken: null,
   userProfile: null,
   setIsLoggedIn: (isLoggedIn) => {
     set({ isLoggedIn });
+  },
+  setIsAuthHydrated: (isAuthHydrated) => {
+    set({ isAuthHydrated });
   },
   setAccessToken: (accessToken) => {
     set({ accessToken });

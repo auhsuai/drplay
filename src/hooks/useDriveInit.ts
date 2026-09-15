@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
@@ -57,6 +57,7 @@ export const useDriveInit = ({
     setCurrentFolderName,
     setFolderHistory,
     setSortOption,
+    setIsHydrated,
   } = useDriveStore(
     useShallow((state) => ({
       setAppRootFolder: state.setAppRootFolder,
@@ -64,8 +65,14 @@ export const useDriveInit = ({
       setCurrentFolderName: state.setCurrentFolderName,
       setFolderHistory: state.setFolderHistory,
       setSortOption: state.setSortOption,
+      setIsHydrated: state.setIsHydrated,
     })),
   );
+
+  // P2-04-8: tracks whether the PREVIOUS effect run was for an active login
+  // session, so a logged-out -> logged-in transition can be told apart from a
+  // mid-session re-init (token rotation).
+  const sessionActiveRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,6 +88,17 @@ export const useDriveInit = ({
     if (!isReInit) {
       hydratedRef.current = false;
     }
+
+    // P2-04-8: a NEW login session starts with isHydrated=false so the folder
+    // gate waits for THIS run instead of reading appRootFolder=null (the
+    // initial placeholder) as "no root configured". A mid-session re-init
+    // (token rotation, B12-1) must NOT reset it: the previous root is kept, so
+    // blanking the flag would only risk a gate blink on a no-root screen.
+    const sessionActive = isLoggedIn && accessToken !== null;
+    if (sessionActive && !sessionActiveRef.current) {
+      setIsHydrated(false);
+    }
+    sessionActiveRef.current = sessionActive;
 
     const initApp = async () => {
       // Outer try/finally guarantees hydration always reaches a safe state.
@@ -380,8 +398,11 @@ export const useDriveInit = ({
         // Hydration safety: always flip to true unless the effect was cleaned up
         // (unmount / dependency change). If cancelled, a fresh effect run will
         // re-init with hydratedRef reset to false, so we must NOT hydrate here.
+        // isHydrated rides the same guard: the cancelled run must not claim
+        // the new session is settled before its own verify lands.
         if (!cancelled) {
           hydratedRef.current = true;
+          setIsHydrated(true);
         }
       }
     };
@@ -409,5 +430,6 @@ export const useDriveInit = ({
     setCurrentFolderId,
     setCurrentFolderName,
     setFolderHistory,
+    setIsHydrated,
   ]);
 };

@@ -60,6 +60,7 @@ function App() {
 
   const {
     isLoggedIn,
+    isAuthHydrated,
     accessToken,
     userProfile,
     handleLoginSuccess,
@@ -98,6 +99,7 @@ function App() {
 
   const {
     appRootFolder,
+    isHydrated,
     setAppRootFolder,
     currentFolderId,
     setCurrentFolderId,
@@ -295,6 +297,7 @@ function App() {
       {/* Login Overlay */}
       <LoginGate
         isLoggedIn={isLoggedIn}
+        isAuthHydrated={isAuthHydrated}
         onLogin={(tokens) => {
           handleLoginSuccess({
             access_token: tokens.access_token,
@@ -307,6 +310,7 @@ function App() {
       {/* Folder Selection Overlay */}
       <FolderSelectionGate
         isLoggedIn={isLoggedIn}
+        isHydrated={isHydrated}
         appRootFolder={appRootFolder}
         showFolderSelection={showFolderSelection}
         token={accessToken}

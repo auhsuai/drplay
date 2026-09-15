@@ -15,7 +15,12 @@ import {
 // hoisted above imports) can reach it. authState is MUTABLE so tests can flip
 // login state mid-test (logout -> login session-key contract).
 const mocks = vi.hoisted(() => {
-  const authState = { isLoggedIn: true };
+  const authState = { isLoggedIn: true, isAuthHydrated: true };
+  // Mutable drive values so the gate-hydration tests can flip them between
+  // renders (defaults keep every pre-existing test on the old happy path).
+  const driveState = {
+    value: { appRootFolder: "root" as string | null, isHydrated: true },
+  };
   // Handlers live in a mutable holder so a test can swap them between
   // renders and prove the App-level ref-delegate wrappers reach the
   // LATEST handlers (F1 — PlayerBar memo comparator ignores handlers).
@@ -30,6 +35,7 @@ const mocks = vi.hoisted(() => {
   const lastLogoutExt = { value: null as null | (() => void) };
   return {
     authState,
+    driveState,
     playerHandlers,
     // Latest onLogoutExt callback App registered (captured by the useAuth
     // mock below) so logout-cleanup tests can invoke it directly.
@@ -46,6 +52,7 @@ const mocks = vi.hoisted(() => {
       lastLogoutExt.value = onLogoutExt ?? null;
       return {
         isLoggedIn: authState.isLoggedIn,
+        isAuthHydrated: authState.isAuthHydrated,
         // Mirrors real useAuth: logout clears the access token, login restores it.
         accessToken: authState.isLoggedIn ? "tok" : null,
         userProfile: {
@@ -58,7 +65,8 @@ const mocks = vi.hoisted(() => {
       };
     }),
     useDrive: vi.fn(() => ({
-      appRootFolder: "root",
+      appRootFolder: driveState.value.appRootFolder,
+      isHydrated: driveState.value.isHydrated,
       setAppRootFolder: vi.fn(),
       currentFolderId: "root",
       setCurrentFolderId: vi.fn(),
@@ -140,10 +148,12 @@ vi.mock("./ui/PlayerBar/PlayerBar", () => ({ PlayerBar: () => null }));
 // itself is covered by QueuePanel.test.tsx + AppShell.test.tsx.
 vi.mock("./ui/PlayerBar/QueuePanel", () => ({ QueuePanel: () => null }));
 vi.mock("./ui/FolderSelection/FolderSelectionScreen", () => ({
-  FolderSelectionScreen: () => null,
+  FolderSelectionScreen: () => <div data-testid="folder-picker-stub" />,
 }));
 vi.mock("./ui/Settings/TrashScreen", () => ({ TrashScreen: () => null }));
-vi.mock("./ui/Login/LoginScreen", () => ({ LoginScreen: () => null }));
+vi.mock("./ui/Login/LoginScreen", () => ({
+  LoginScreen: () => <div data-testid="login-screen-stub" />,
+}));
 vi.mock("./ui/MainContent/MainContent", () => ({
   MainContent: () => <div data-testid="main-content" />,
 }));
@@ -426,5 +436,49 @@ describe("App debug skeleton trigger (DEV only)", () => {
         );
       });
     }).not.toThrow();
+  });
+});
+
+// P2-04-8/P2-04-9: App must thread the hydration flags through to the gates,
+// so neither overlay paints before its store hydrate has settled.
+describe("Gate hydration wiring (P2-04-8/P2-04-9)", () => {
+  afterEach(() => {
+    cleanup();
+    mocks.driveState.value.appRootFolder = "root";
+    mocks.driveState.value.isHydrated = true;
+    mocks.authState.isAuthHydrated = true;
+    mocks.authState.isLoggedIn = true;
+  });
+
+  it("P2-04-8: folder picker stays hidden while drive is hydrating, appears once it settles with no root", async () => {
+    mocks.driveState.value.appRootFolder = null;
+    mocks.driveState.value.isHydrated = false;
+    const { rerender } = render(<App />);
+
+    expect(screen.queryByTestId("folder-picker-stub")).toBeNull();
+
+    mocks.driveState.value.isHydrated = true;
+    await act(async () => {
+      rerender(<App />);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("folder-picker-stub")).toBeTruthy();
+  });
+
+  it("P2-04-9: login overlay stays hidden until auth hydration settles", async () => {
+    mocks.authState.isLoggedIn = false;
+    mocks.authState.isAuthHydrated = false;
+    const { rerender } = render(<App />);
+
+    expect(screen.queryByTestId("login-screen-stub")).toBeNull();
+
+    mocks.authState.isAuthHydrated = true;
+    await act(async () => {
+      rerender(<App />);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("login-screen-stub")).toBeTruthy();
   });
 });

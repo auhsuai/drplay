@@ -36,11 +36,13 @@ import {
 
 const authState = vi.hoisted(() => ({
   isLoggedIn: false,
+  isAuthHydrated: false,
   accessToken: null as string | null,
   userProfile: null,
   setIsLoggedIn: vi.fn(),
   setAccessToken: vi.fn(),
   setUserProfile: vi.fn(),
+  setIsAuthHydrated: vi.fn(),
 }));
 
 // Session-generation counter shared by the mocked sessionGuard pair: logout
@@ -847,5 +849,27 @@ describe("useAuth profile fetch retry (cold-start resilience)", () => {
         c.message.includes("Failed to fetch user profile"),
       ),
     ).toBe(false);
+  });
+});
+
+// P2-04-9: the login overlay must wait for the hydrate effect instead of
+// treating the store's initial isLoggedIn=false as "signed out".
+describe("useAuth auth-hydration flag (P2-04-9)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("flips isAuthHydrated true after hydrating a saved token", () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
+
+    renderHook(() => useAuth());
+
+    expect(authState.setIsAuthHydrated).toHaveBeenCalledWith(true);
+  });
+
+  it("flips isAuthHydrated true even when no token is stored (logged-out start)", () => {
+    renderHook(() => useAuth());
+
+    expect(authState.setIsAuthHydrated).toHaveBeenCalledWith(true);
   });
 });
