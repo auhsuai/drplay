@@ -88,6 +88,11 @@ export function CreditsSection() {
         setTimeout(() => {
           setCopiedIndex(null);
         }, 2000);
+      } else {
+        // copyToClipboard reports failure as `false` (never throws), so the
+        // catch below can't surface it — without this branch the click was
+        // silently ignored.
+        showErrorToast(t("settings.error_log_copy_error"));
       }
     } catch (err) {
       void captureError({

@@ -79,9 +79,12 @@ vi.mock("../../utils/cache", () => ({
 }));
 
 const getEffectiveDownloadPath = vi.fn<() => Promise<string>>();
+const setCustomDownloadPath = vi.fn();
 vi.mock("../../utils/downloadPath", () => ({
   getEffectiveDownloadPath: () => getEffectiveDownloadPath(),
-  setCustomDownloadPath: vi.fn(),
+  setCustomDownloadPath: (path: string) => {
+    setCustomDownloadPath(path);
+  },
 }));
 
 // SettingsTab routes download-path load failures into captureError — mock it
@@ -169,6 +172,83 @@ describe("SettingsTab download path display", () => {
     const el = document.querySelector('p[title=""]');
     expect(el).not.toBeNull();
     expect(el?.textContent).toBe("");
+  });
+});
+
+describe("SettingsTab download path picker", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    vi.mocked(open).mockReset();
+    getEffectiveDownloadPath.mockReset();
+    getEffectiveDownloadPath.mockResolvedValue("");
+    setCustomDownloadPath.mockReset();
+    showErrorToast.mockReset();
+    captureErrorMocks.captureError.mockReset();
+  });
+
+  it("ignores a second click while the folder dialog is still open", async () => {
+    let resolveOpen: (value: string | null) => void = () => {};
+    vi.mocked(open).mockImplementation(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    render(<SettingsTab {...baseProps} />);
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Change Path",
+    });
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await act(async () => {});
+    expect(vi.mocked(open)).toHaveBeenCalledTimes(1);
+    // The button is disabled while the native dialog is open.
+    expect(button.disabled).toBe(true);
+
+    await act(async () => {
+      resolveOpen(null);
+      await Promise.resolve();
+    });
+    expect(vi.mocked(open)).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(false);
+    expect(showErrorToast).not.toHaveBeenCalled();
+    expect(setCustomDownloadPath).not.toHaveBeenCalled();
+  });
+
+  it("writes the picked path and shows it once the dialog resolves", async () => {
+    vi.mocked(open).mockResolvedValue("C:\\NewMusic");
+    render(<SettingsTab {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "Change Path" }));
+    await waitFor(() => {
+      expect(setCustomDownloadPath).toHaveBeenCalledWith("C:\\NewMusic");
+    });
+    expect(await screen.findByTitle("C:\\NewMusic")).toBeTruthy();
+  });
+
+  it("logs and toasts when the folder dialog fails", async () => {
+    vi.mocked(open).mockRejectedValue(new Error("dialog exploded"));
+    render(<SettingsTab {...baseProps} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Change Path" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(captureErrorMocks.captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "SettingsTab",
+        message: expect.stringContaining(
+          "open-download-folder-dialog-failed",
+        ) as unknown as string,
+      }),
+    );
+    expect(showErrorToast).toHaveBeenCalledWith(
+      "Couldn't select folder. Try again.",
+    );
   });
 });
 

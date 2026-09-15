@@ -157,6 +157,9 @@ export function ErrorLogSection() {
 
   const handleClear = async () => {
     if (busy) return;
+    // Clearing wipes the whole journal with no undo — ask first (parity with
+    // TrashScreen.handleEmptyTrash).
+    if (!window.confirm(t("settings.confirm_clear_logs"))) return;
     setBusy(true);
     try {
       await clearErrorLogs();

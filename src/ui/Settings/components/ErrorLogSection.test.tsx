@@ -1,5 +1,13 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  type MockInstance,
+} from "vitest";
 import {
   render,
   screen,
@@ -28,6 +36,7 @@ void i18n.use(initReactI18next).init({
           error_log_stack: "Stack trace",
           error_log_copy_error: "Could not copy to clipboard.",
           error_log_clear_error: "Failed to clear logs.",
+          confirm_clear_logs: "Clear all error logs? This can't be undone.",
           error_log_by_date: "Errors by day",
           error_log_back: "Back",
           error_log_count: "{{count}} errors",
@@ -114,9 +123,16 @@ function makeEntries(): ErrorLogEntry[] {
   ];
 }
 
+// jsdom's window.confirm is unimplemented (returns undefined → falsy), so the
+// destructive Clear action must be stubbed explicitly: default true keeps the
+// existing "clear empties the list" case on the happy path, and tests that
+// need the cancel path flip it to false.
+let confirmSpy: MockInstance<(message?: string) => boolean>;
+
 beforeEach(() => {
   vi.clearAllMocks();
   useLiveQueryMock.mockReturnValue([]);
+  confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -125,6 +141,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  confirmSpy.mockRestore();
 });
 
 describe("ErrorLogSection", () => {
@@ -218,11 +235,15 @@ describe("ErrorLogSection", () => {
   it("clear button calls clearErrorLogs and empties the list", async () => {
     useLiveQueryMock.mockReturnValue(makeEntries());
     clearErrorLogsMock.mockResolvedValue(undefined);
+    confirmSpy.mockReturnValue(true);
     const { rerender } = render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
     await screen.findByText((c) => c.startsWith("boom"));
     fireEvent.click(screen.getByRole("button", { name: /Clear/i }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Clear all error logs? This can't be undone.",
+    );
     expect(clearErrorLogsMock).toHaveBeenCalledTimes(1);
     // After clearErrorLogs() the Dexie table changed; the live query re-runs
     // with [] — simulate that subscription push like the real hook would.
@@ -233,6 +254,24 @@ describe("ErrorLogSection", () => {
     expect(
       await screen.findByText(/No errors have been recorded yet/i),
     ).toBeTruthy();
+  });
+
+  it("clear button keeps the logs when the confirmation is cancelled", async () => {
+    useLiveQueryMock.mockReturnValue(makeEntries());
+    confirmSpy.mockReturnValue(false);
+    render(<ErrorLogSection />);
+    await screen.findByText(KEY_A);
+    fireEvent.click(screen.getByText(KEY_A));
+    await screen.findByText("boom day A");
+
+    fireEvent.click(screen.getByRole("button", { name: /Clear/i }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Clear all error logs? This can't be undone.",
+    );
+    expect(clearErrorLogsMock).not.toHaveBeenCalled();
+    // The day-detail view (and its entries) is untouched.
+    expect(screen.getByText("boom day A")).toBeTruthy();
   });
 
   it("renders a newly captured log without remounting (live table update)", async () => {

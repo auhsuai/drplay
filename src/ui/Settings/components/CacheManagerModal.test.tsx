@@ -256,4 +256,32 @@ describe("CacheManagerModal", () => {
     fireEvent.click(screen.getByTestId("cache-manager-overlay"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("exposes the visible title as the dialog's accessible name", async () => {
+    renderOpen();
+    await screen.findByText("Metadata cache");
+    expect(
+      screen.getByRole("dialog", { name: "Clear App Cache" }),
+    ).toBeTruthy();
+  });
+
+  it("moves focus to Cancel on open and restores it to the invoker on close", async () => {
+    // Stand-in for the Settings button that opens the modal.
+    const invoker = document.createElement("button");
+    document.body.appendChild(invoker);
+    invoker.focus();
+    const onClose = vi.fn();
+    try {
+      const { rerender } = renderOpen(onClose);
+      await screen.findByText("Metadata cache");
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Cancel" }),
+      );
+
+      rerender(<CacheManagerModal open={false} onClose={onClose} />);
+      expect(document.activeElement).toBe(invoker);
+    } finally {
+      invoker.remove();
+    }
+  });
 });

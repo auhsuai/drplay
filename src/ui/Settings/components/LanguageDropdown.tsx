@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LANGUAGE_KEY } from "../../../utils/storageKeys";
@@ -9,6 +9,7 @@ export function LanguageDropdown() {
   const { t, i18n } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useClickOutside(
     menuRef,
@@ -17,6 +18,21 @@ export function LanguageDropdown() {
     },
     isOpen,
   );
+
+  // Escape closes the menu and returns focus to the trigger (disclosure
+  // pattern: the trigger owns the open state).
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
 
   const languages = [
     { code: "en", label: t("settings.english") },
@@ -43,6 +59,8 @@ export function LanguageDropdown() {
   return (
     <div className="relative" ref={menuRef}>
       <button
+        ref={triggerRef}
+        aria-expanded={isOpen}
         onClick={() => {
           setIsOpen(!isOpen);
         }}

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ThemeType } from "../../../hooks/useTheme";
@@ -14,6 +14,7 @@ export function ThemeDropdown({
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useClickOutside(
     menuRef,
@@ -22,6 +23,21 @@ export function ThemeDropdown({
     },
     isOpen,
   );
+
+  // Escape closes the menu and returns focus to the trigger (disclosure
+  // pattern: the trigger owns the open state).
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
 
   const themes: { code: ThemeType; label: string }[] = [
     { code: "light", label: t("settings.light_mode") },
@@ -40,6 +56,8 @@ export function ThemeDropdown({
   return (
     <div className="relative" ref={menuRef}>
       <button
+        ref={triggerRef}
+        aria-expanded={isOpen}
         onClick={() => {
           setIsOpen(!isOpen);
         }}

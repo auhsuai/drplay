@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, LoaderCircle, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -100,6 +100,35 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
     };
   }, [open, onClose, clearing]);
 
+  // APG dialog-modal focus return: remember the invoker (the Settings button)
+  // while open, restore it on close/unmount. Skips body/html and detached
+  // nodes (invoker gone → leave focus alone).
+  useEffect(() => {
+    if (!open) return;
+    const invoker =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    return () => {
+      if (
+        invoker &&
+        invoker !== document.body &&
+        invoker !== document.documentElement &&
+        invoker.isConnected
+      ) {
+        invoker.focus();
+      }
+    };
+  }, [open]);
+
+  // APG dialog-modal: initial focus moves to the least destructive control
+  // (Cancel, never Clear). Declared AFTER the invoker snapshot effect so the
+  // snapshot still sees the real invoker instead of the Cancel button.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (open) cancelRef.current?.focus();
+  }, [open]);
+
   if (!open) return null;
 
   const toggleCategory = (id: CacheCategoryId) => {
@@ -147,11 +176,15 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby="cache-manager-title"
         data-testid="cache-manager-modal"
         className="bg-white dark:bg-[#202124] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5"
       >
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          <h3
+            id="cache-manager-title"
+            className="text-lg font-bold text-gray-900 dark:text-white"
+          >
             {t("settings.clear_cache")}
           </h3>
           <button
@@ -213,6 +246,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
 
         <div className="flex items-center justify-end gap-3 mt-2">
           <button
+            ref={cancelRef}
             onClick={onClose}
             disabled={clearing}
             className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"

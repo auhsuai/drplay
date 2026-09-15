@@ -21,12 +21,16 @@ vi.mock("react-i18next", () => ({
 }));
 
 // Never touch the real Tauri bridge in a unit test.
-const openUrl = vi.fn<(url: string) => Promise<void>>().mockResolvedValue(undefined);
+const openUrl = vi
+  .fn<(url: string) => Promise<void>>()
+  .mockResolvedValue(undefined);
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: (url: string) => openUrl(url),
 }));
 
-const copyToClipboard = vi.fn<(text: string) => Promise<boolean>>().mockResolvedValue(true);
+const copyToClipboard = vi
+  .fn<(text: string) => Promise<boolean>>()
+  .mockResolvedValue(true);
 vi.mock("../../../utils/copyToClipboard", () => ({
   copyToClipboard: (text: string) => copyToClipboard(text),
 }));
@@ -133,6 +137,23 @@ describe("CreditsSection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("toasts an error and never claims Copied when the clipboard write fails", async () => {
+    copyToClipboard.mockResolvedValueOnce(false);
+    render(<CreditsSection />);
+    const firstCopy = screen.getAllByTitle("settings.copy")[0];
+    if (firstCopy === undefined) throw new Error("expected copy button");
+    await act(async () => {
+      fireEvent.click(firstCopy);
+      await Promise.resolve();
+    });
+    expect(copyToClipboard).toHaveBeenCalledWith("@nguyen_tan_an");
+    expect(showErrorToast).toHaveBeenCalledWith(
+      "settings.error_log_copy_error",
+    );
+    expect(screen.queryByText("settings.copied")).toBeNull();
+    expect(screen.getByText("@nguyen_tan_an")).toBeTruthy();
   });
 
   it("renders each contact with static name, open-link button and copy button", () => {

@@ -40,7 +40,8 @@ export function SettingsTab({
 }: SettingsTabProps) {
   const { t } = useTranslation();
   const [showCacheManager, setShowCacheManager] = useState(false);
-  const { downloadPath, handlePickDownloadPath } = useDownloadPathSetting();
+  const { downloadPath, isPicking, handlePickDownloadPath } =
+    useDownloadPathSetting();
   const { importingSeed, handleImportSeed } = useSeedImport();
 
   return (
@@ -164,7 +165,8 @@ export function SettingsTab({
                   onClick={() => {
                     void handlePickDownloadPath();
                   }}
-                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                  disabled={isPicking}
+                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <FolderOpen className="w-4 h-4" />
                   {t("settings.change_path")}
