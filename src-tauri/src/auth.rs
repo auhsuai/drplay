@@ -1,5 +1,4 @@
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::{async_http_client, http_client};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
     RedirectUrl, Scope, TokenResponse, TokenUrl, RefreshToken
@@ -22,12 +21,10 @@ pub async fn login_google_native() -> Result<Value, String> {
         let port = server.server_addr().to_ip().ok_or("server address has no IP")?.port();
         let redirect_uri = format!("http://127.0.0.1:{}", port);
 
-        let client = BasicClient::new(
-            client_id,
-            Some(client_secret),
-            auth_url,
-            Some(token_url),
-        )
+        let client = BasicClient::new(client_id)
+            .set_client_secret(client_secret)
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
             .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).map_err(|e| format!("invalid RedirectUrl: {e:?}"))?);
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -103,10 +100,16 @@ pub async fn login_google_native() -> Result<Value, String> {
                         .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).map_err(|e| format!("invalid Content-Type header: {e:?}"))?);
                     let _ = request.respond(response);
 
+                    let http_client = reqwest::blocking::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .timeout(std::time::Duration::from_secs(30))
+                        .build()
+                        .map_err(|e| format!("failed to build oauth2 HTTP client: {e}"))?;
+
                     let token_result = client
                         .exchange_code(AuthorizationCode::new(code.into_owned()))
                         .set_pkce_verifier(pkce_verifier)
-                        .request(http_client);
+                        .request(&http_client);
 
                     match token_result {
                         Ok(token) => {
@@ -143,16 +146,20 @@ pub async fn refresh_google_token(refresh_token: String) -> Result<Value, String
     let client_secret = ClientSecret::new(creds["installed"]["client_secret"].as_str().ok_or("Missing client_secret in wa_credential.json")?.to_string());
     let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
 
-    let client = BasicClient::new(
-        client_id,
-        Some(client_secret),
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
-        Some(token_url),
-    );
+    let client = BasicClient::new(client_id)
+        .set_client_secret(client_secret)
+        .set_auth_uri(AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap())
+        .set_token_uri(token_url);
+
+    let http_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|e| format!("failed to build oauth2 HTTP client: {e}"))?;
 
     let token_result = client
         .exchange_refresh_token(&RefreshToken::new(refresh_token))
-        .request_async(async_http_client)
+        .request_async(&http_client)
         .await
         .map_err(|e| format!("Failed to refresh token: {:?}", e))?;
 
