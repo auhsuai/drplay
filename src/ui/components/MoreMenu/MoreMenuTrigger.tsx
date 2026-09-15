@@ -7,6 +7,8 @@ interface MoreMenuTriggerProps {
   isDownloadingFile: boolean;
   onToggle: () => void;
   onMeasure: (rect: DOMRect) => void;
+  // APG optional: ArrowDown/ArrowUp open the menu and focus first/last item.
+  onArrowOpen?: ((position: "first" | "last") => void) | undefined;
 }
 
 export function MoreMenuTrigger({
@@ -15,6 +17,7 @@ export function MoreMenuTrigger({
   isDownloadingFile,
   onToggle,
   onMeasure,
+  onArrowOpen,
 }: MoreMenuTriggerProps) {
   const { t } = useTranslation();
 
@@ -28,6 +31,13 @@ export function MoreMenuTrigger({
           }
           onToggle();
         }
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+        if (isDownloadingFile || isOpen) return;
+        e.preventDefault();
+        onMeasure(e.currentTarget.getBoundingClientRect());
+        onArrowOpen?.(e.key === "ArrowDown" ? "first" : "last");
       }}
       disabled={isDownloadingFile}
       aria-label={t("common.more_actions")}

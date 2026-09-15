@@ -44,7 +44,7 @@ describe("QueueMenuItems", () => {
     const props = renderItems({ onRemoveFromQueue });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "queue.remove_from_queue" }),
+      screen.getByRole("menuitem", { name: "queue.remove_from_queue" }),
     );
 
     expect(props.setIsOpen).toHaveBeenCalledWith(false);
@@ -55,7 +55,7 @@ describe("QueueMenuItems", () => {
     const onRemoveFromQueue = vi.fn();
     renderItems({ onRemoveFromQueue, disableRemoveFromQueue: true });
 
-    const btn = screen.getByRole("button", {
+    const btn = screen.getByRole("menuitem", {
       name: "queue.remove_from_queue",
     });
     expect(btn).toBeDisabled();
@@ -70,7 +70,7 @@ describe("QueueMenuItems", () => {
     const withFolder = renderItems({ onRemoveFolderFromQueue });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "queue.remove_folder" }),
+      screen.getByRole("menuitem", { name: "queue.remove_folder" }),
     );
     expect(withFolder.setIsOpen).toHaveBeenCalledWith(false);
     expect(onRemoveFolderFromQueue).toHaveBeenCalledTimes(1);
@@ -78,7 +78,7 @@ describe("QueueMenuItems", () => {
     cleanup();
     renderItems();
     expect(
-      screen.queryByRole("button", { name: "queue.remove_folder" }),
+      screen.queryByRole("menuitem", { name: "queue.remove_folder" }),
     ).toBeNull();
   });
 
@@ -86,7 +86,9 @@ describe("QueueMenuItems", () => {
     const props = renderItems();
     const { track } = props;
 
-    fireEvent.click(screen.getByRole("button", { name: "menu.download_song" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "menu.download_song" }),
+    );
     expect(props.handleDownloadClick).toHaveBeenCalledTimes(1);
     expect(props.handleDownloadClick).toHaveBeenCalledWith(
       expect.anything(),
@@ -94,7 +96,7 @@ describe("QueueMenuItems", () => {
       props.setIsOpen,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "menu.navigate" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "menu.navigate" }));
     expect(props.handleNavigateClick).toHaveBeenCalledTimes(1);
   });
 
@@ -107,17 +109,17 @@ describe("QueueMenuItems", () => {
     });
 
     expect(
-      screen.queryByRole("button", { name: "menu.download_song" }),
+      screen.queryByRole("menuitem", { name: "menu.download_song" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "queue.remove_from_queue" }),
+      screen.queryByRole("menuitem", { name: "queue.remove_from_queue" }),
     ).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "menu.navigate" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "menu.navigate" }));
     expect(props.handleNavigateClick).toHaveBeenCalledTimes(1);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "queue.remove_folder" }),
+      screen.getByRole("menuitem", { name: "queue.remove_folder" }),
     );
     expect(props.setIsOpen).toHaveBeenCalledWith(false);
     expect(onRemoveFolderFromQueue).toHaveBeenCalledTimes(1);
@@ -129,9 +131,11 @@ describe("QueueMenuItems", () => {
       queueFolder: { id: "f1", name: "Album F1" },
     });
 
-    expect(screen.getByRole("button", { name: "menu.navigate" })).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "queue.remove_folder" }),
+      screen.getByRole("menuitem", { name: "menu.navigate" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "queue.remove_folder" }),
     ).toBeNull();
   });
 });

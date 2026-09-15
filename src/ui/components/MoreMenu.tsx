@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
@@ -89,6 +89,7 @@ export function MoreMenu({
   const [openUpwards, setOpenUpwards] = useState(true);
 
   const isMenuOpen = isOpen || forceOpen;
+  const pendingFocusRef = useRef<"first" | "last">("first");
   // Why: 'recent' is a third curated mode for the Recent Files view (Delete +
   // Download Song + Add to Playlist + Navigate). isPlayerBarMode stays as the
   // legacy switch so PlayerBar does not need to change its call site.
@@ -150,6 +151,46 @@ export function MoreMenu({
     dropdownRef,
     setShowPlaylistsSubmenu,
   });
+
+  // Keyboard support for the portal menu (APG menu button): the items are
+  // rendered by several child components, so the roving set is queried from
+  // the dropdown at event time (same approach as the dialog focus
+  // containment in ImageCropperModal) instead of threading a prop through
+  // every item caller. Only role="menuitem" entries participate, so the
+  // playlists search input keeps its own arrow-key behavior.
+  const getEnabledMenuItems = useCallback((): HTMLElement[] => {
+    const root = dropdownRef.current;
+    if (!root) return [];
+    return Array.from(
+      root.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ).filter((item) => !item.hasAttribute("disabled"));
+  }, []);
+
+  const focusMenuItemAt = useCallback((index: number): void => {
+    const root = dropdownRef.current;
+    if (!root) return;
+    const items = Array.from(
+      root.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    );
+    const enabled = items.filter((item) => !item.hasAttribute("disabled"));
+    if (enabled.length === 0) return;
+    const target = enabled[(index + enabled.length) % enabled.length];
+    // Keep exactly one tabIndex=0 in the menu: disabled entries are pulled
+    // out of the roving set even though they keep their DOM position.
+    items.forEach((item) => {
+      item.tabIndex = item === target ? 0 : -1;
+    });
+    target?.focus();
+  }, []);
+
+  // APG: focus moves to the first item whenever the menu opens — trigger
+  // click, optional trigger ArrowDown/Up, or the SongCard context menu.
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const position = pendingFocusRef.current;
+    pendingFocusRef.current = "first";
+    focusMenuItemAt(position === "last" ? -1 : 0);
+  }, [isMenuOpen, focusMenuItemAt]);
 
   useEffect(() => {
     onOpenChange?.(isOpen);
@@ -285,6 +326,10 @@ export function MoreMenu({
           setButtonRect(rect);
           setOpenUpwards(shouldOpenUpwards(rect));
         }}
+        onArrowOpen={(position) => {
+          pendingFocusRef.current = position;
+          setIsOpen(true);
+        }}
       />
 
       {isMenuOpen &&
@@ -292,6 +337,7 @@ export function MoreMenu({
           <div
             ref={dropdownRef}
             role="menu"
+            aria-label={t("common.more_actions")}
             tabIndex={-1}
             className={`fixed z-[9999] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none ${anchorPoint ? "" : openUpwards ? "origin-bottom-right" : "origin-top-right"}`}
             style={getContextMenuStyle({
@@ -308,6 +354,31 @@ export function MoreMenu({
                 setIsOpen(false);
                 setShowPlaylistsSubmenu(false);
                 onClose?.();
+                return;
+              }
+              if (
+                e.key !== "ArrowDown" &&
+                e.key !== "ArrowUp" &&
+                e.key !== "Home" &&
+                e.key !== "End"
+              ) {
+                return;
+              }
+              // Arrow keys belong to the text cursor while typing in the
+              // playlists search box — never to roving focus.
+              if ((e.target as HTMLElement).closest("input, textarea")) return;
+              e.preventDefault();
+              const items = getEnabledMenuItems();
+              if (items.length === 0) return;
+              const current = items.indexOf(e.target as HTMLElement);
+              if (e.key === "ArrowDown") {
+                focusMenuItemAt(current < 0 ? 0 : current + 1);
+              } else if (e.key === "ArrowUp") {
+                focusMenuItemAt(current < 0 ? items.length - 1 : current - 1);
+              } else if (e.key === "Home") {
+                focusMenuItemAt(0);
+              } else {
+                focusMenuItemAt(items.length - 1);
               }
             }}
             onContextMenu={(e) => {

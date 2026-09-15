@@ -498,7 +498,7 @@ describe("QueuePanel content", () => {
 
     fireEvent.click(within(rowFor("Song t1")).getByRole("button"));
     fireEvent.click(
-      screen.getByRole("button", { name: en.menu.download_song }),
+      screen.getByRole("menuitem", { name: en.menu.download_song }),
     );
     expect(screen.getByText(en.menu.download_title)).not.toBeNull();
 
@@ -781,7 +781,7 @@ describe("QueuePanel folder drill-down", () => {
     const menu = document.body.querySelector('[role="menu"]');
     expect(menu).not.toBeNull();
     return within(menu as HTMLElement)
-      .getAllByRole("button")
+      .getAllByRole("menuitem")
       .map((b) => b.textContent?.trim() ?? "");
   }
 
@@ -802,13 +802,24 @@ describe("QueuePanel folder drill-down", () => {
     ]);
   });
 
+  it("mở menu folder → focus vào menuitem đầu tiên (P2-08-1)", () => {
+    seedFolderQueue();
+    renderPanel();
+
+    openFolderMenu();
+
+    const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
+    const items = within(menu).getAllByRole("menuitem");
+    expect(document.activeElement).toBe(items[0]);
+  });
+
   it("click Remove Folder from Queue → cả group rời queue, ở lại root, không drill-down", () => {
     seedFolderQueue();
     renderPanel();
 
     openFolderMenu();
     fireEvent.click(
-      screen.getByRole("button", { name: en.queue.remove_folder }),
+      screen.getByRole("menuitem", { name: en.queue.remove_folder }),
     );
 
     const state = usePlayerStore.getState();
@@ -829,7 +840,7 @@ describe("QueuePanel folder drill-down", () => {
       renderPanel();
 
       openFolderMenu();
-      fireEvent.click(screen.getByRole("button", { name: en.menu.navigate }));
+      fireEvent.click(screen.getByRole("menuitem", { name: en.menu.navigate }));
 
       expect(spy).toHaveBeenCalledTimes(1);
       const [event] = spy.mock.calls[0] as [CustomEvent];
@@ -863,8 +874,11 @@ describe("QueuePanel folder drill-down", () => {
       en.menu.download_song,
       en.menu.navigate,
       en.queue.remove_from_queue,
-      en.menu.add_to_playlist,
     ]);
+    // Add to Playlist is the submenu toggle (plain button until P2-09).
+    expect(
+      screen.getByRole("button", { name: en.menu.add_to_playlist }),
+    ).toBeTruthy();
   });
 });
 

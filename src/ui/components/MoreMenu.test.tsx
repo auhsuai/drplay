@@ -9,6 +9,7 @@ import {
   within,
   act,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MoreMenu } from "./MoreMenu";
 import { getContextMenuStyle } from "./MoreMenu/menuPositioning";
 import en from "../../locales/en/translation.json";
@@ -94,17 +95,21 @@ function menuEl(): HTMLElement {
   return menu as HTMLElement;
 }
 
-function openTrigger(): void {
-  const trigger = document.querySelector(
+function triggerEl(): HTMLButtonElement {
+  const trigger = document.querySelector<HTMLButtonElement>(
     '[aria-haspopup="menu"]',
-  ) as HTMLButtonElement;
+  );
   expect(trigger).not.toBeNull();
-  fireEvent.click(trigger);
+  return trigger as HTMLButtonElement;
 }
 
-function menuButtonNames(): string[] {
+function openTrigger(): void {
+  fireEvent.click(triggerEl());
+}
+
+function menuItemNames(): string[] {
   return within(menuEl())
-    .getAllByRole("button")
+    .getAllByRole("menuitem")
     .map((b) => b.textContent?.trim() ?? "");
 }
 
@@ -148,17 +153,23 @@ describe("MoreMenu recent variant", () => {
       />,
     );
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
+    expect(menuItemNames().sort()).toEqual([
       "Delete",
       "Download Song",
       "Locate File",
     ]);
+    // Add to Playlist is still a plain toggle button (P2-09 gives it
+    // role="menuitem" + aria-haspopup), so it is asserted separately.
     expect(
-      within(menuEl()).queryByRole("button", { name: "Select multiple items" }),
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    ).toBeTruthy();
+    expect(
+      within(menuEl()).queryByRole("menuitem", {
+        name: "Select multiple items",
+      }),
     ).toBeNull();
     expect(
-      within(menuEl()).queryByRole("button", { name: "Move to..." }),
+      within(menuEl()).queryByRole("menuitem", { name: "Move to..." }),
     ).toBeNull();
   });
 
@@ -171,21 +182,19 @@ describe("MoreMenu recent variant", () => {
       />,
     );
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
-    ]);
+    expect(menuItemNames().sort()).toEqual(["Download Song", "Locate File"]);
+    expect(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    ).toBeTruthy();
   });
 
   it("hides Delete when driveItem is missing (track-only render) but keeps track-based items", () => {
     render(<MoreMenu variant="recent" track={makeTrack()} token="tok" />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
-    ]);
+    expect(menuItemNames().sort()).toEqual(["Download Song", "Locate File"]);
+    expect(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    ).toBeTruthy();
   });
 
   it("dispatches the locate-file CustomEvent with fileId/parentId/parentName on Locate File", () => {
@@ -203,7 +212,7 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Locate File" }),
+      within(menuEl()).getByRole("menuitem", { name: "Locate File" }),
     );
     expect(spy).toHaveBeenCalledTimes(1);
     const firstCall = spy.mock.calls[0];
@@ -237,7 +246,7 @@ describe("MoreMenu recent variant", () => {
       />,
     );
     openTrigger();
-    fireEvent.click(within(menuEl()).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(menuEl()).getByRole("menuitem", { name: "Delete" }));
     expect(screen.getByText("Move to Trash?")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -267,7 +276,7 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Download Song" }),
+      within(menuEl()).getByRole("menuitem", { name: "Download Song" }),
     );
     expect(screen.getByText("File name")).toBeTruthy();
   });
@@ -295,14 +304,16 @@ describe("MoreMenu default variant regression (file list)", () => {
       <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
     );
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
+    expect(menuItemNames().sort()).toEqual([
       "Add to queue",
       "Delete",
       "Download Song",
       "Move to...",
       "Select multiple items",
     ]);
+    expect(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    ).toBeTruthy();
   });
 
   it('keeps the original items even when variant is explicitly "default"', () => {
@@ -315,14 +326,16 @@ describe("MoreMenu default variant regression (file list)", () => {
       />,
     );
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
+    expect(menuItemNames().sort()).toEqual([
       "Add to queue",
       "Delete",
       "Download Song",
       "Move to...",
       "Select multiple items",
     ]);
+    expect(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    ).toBeTruthy();
   });
 });
 
@@ -333,7 +346,7 @@ describe("MoreMenu default variant add-to-queue item", () => {
     );
     openTrigger();
     expect(
-      within(menuEl()).getByRole("button", { name: "Add to queue" }),
+      within(menuEl()).getByRole("menuitem", { name: "Add to queue" }),
     ).toBeTruthy();
   });
 
@@ -341,7 +354,7 @@ describe("MoreMenu default variant add-to-queue item", () => {
     render(<MoreMenu track={makeTrack()} driveItem={makeDriveItem()} />);
     openTrigger();
     expect(
-      within(menuEl()).queryByRole("button", { name: "Add to queue" }),
+      within(menuEl()).queryByRole("menuitem", { name: "Add to queue" }),
     ).toBeNull();
   });
 });
@@ -350,16 +363,17 @@ describe("MoreMenu playerbar variant regression", () => {
   it("keeps the original 2 track items (Download Song / Locate File) plus shared Add to Playlist, no Delete", () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    expect(menuButtonNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
-    ]);
+    expect(menuItemNames().sort()).toEqual(["Download Song", "Locate File"]);
     expect(
-      within(menuEl()).queryByRole("button", { name: "Delete" }),
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    ).toBeTruthy();
+    expect(
+      within(menuEl()).queryByRole("menuitem", { name: "Delete" }),
     ).toBeNull();
     expect(
-      within(menuEl()).queryByRole("button", { name: "Select multiple items" }),
+      within(menuEl()).queryByRole("menuitem", {
+        name: "Select multiple items",
+      }),
     ).toBeNull();
   });
 
@@ -369,7 +383,7 @@ describe("MoreMenu playerbar variant regression", () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Locate File" }),
+      within(menuEl()).getByRole("menuitem", { name: "Locate File" }),
     );
     const firstCall = spy.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected event dispatch");
@@ -385,6 +399,175 @@ describe("MoreMenu playerbar variant regression", () => {
       parentId: "parent-1",
       parentName: "Folder One",
     });
+  });
+});
+
+describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
+  function renderRecent(): void {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
+  }
+
+  function menuItems(): HTMLElement[] {
+    return within(menuEl()).getAllByRole("menuitem");
+  }
+
+  function pressOnActive(key: string): void {
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key });
+  }
+
+  it("names the menu container and exposes items as buttons with role=menuitem", () => {
+    renderRecent();
+    openTrigger();
+    expect(screen.getByRole("menu", { name: "More actions" })).toBe(menuEl());
+    expect(
+      within(menuEl())
+        .getByRole("menuitem", { name: "Delete" })
+        .getAttribute("type"),
+    ).toBe("button");
+  });
+
+  it("focuses the first enabled menuitem when opened from the trigger", () => {
+    renderRecent();
+    openTrigger();
+    expect(menuItems()[0]).toBe(document.activeElement);
+    expect(document.activeElement?.textContent?.trim()).toBe("Delete");
+  });
+
+  it("focuses the first enabled menuitem when opened as an anchor context menu", () => {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        forceOpen
+        anchorPoint={{ x: 40, y: 40 }}
+      />,
+    );
+    expect(menuItems()[0]).toBe(document.activeElement);
+  });
+
+  it("keeps tabIndex=0 on the active item only (roving tabindex)", () => {
+    renderRecent();
+    openTrigger();
+    const items = menuItems();
+    expect(items[0]?.tabIndex).toBe(0);
+    expect(items[1]?.tabIndex).toBe(-1);
+    expect(items[2]?.tabIndex).toBe(-1);
+
+    pressOnActive("ArrowDown");
+
+    expect(items[0]?.tabIndex).toBe(-1);
+    expect(items[1]?.tabIndex).toBe(0);
+  });
+
+  it("ArrowDown/ArrowUp wrap around the enabled items", () => {
+    renderRecent();
+    openTrigger();
+    const items = menuItems();
+
+    pressOnActive("ArrowDown");
+    expect(document.activeElement).toBe(items[1]);
+    pressOnActive("ArrowDown");
+    expect(document.activeElement).toBe(items[2]);
+    pressOnActive("ArrowDown"); // last -> first
+    expect(document.activeElement).toBe(items[0]);
+    pressOnActive("ArrowUp"); // first -> last
+    expect(document.activeElement).toBe(items[2]);
+  });
+
+  it("Home/End jump to the first/last enabled item", () => {
+    renderRecent();
+    openTrigger();
+    const items = menuItems();
+
+    pressOnActive("End");
+    expect(document.activeElement).toBe(items[2]);
+    pressOnActive("Home");
+    expect(document.activeElement).toBe(items[0]);
+  });
+
+  it("roving skips disabled items (queue variant)", () => {
+    render(
+      <MoreMenu
+        variant="queue"
+        track={makeTrack()}
+        disableRemoveFromQueue
+        onRemoveFromQueue={() => {}}
+        onRemoveFolderFromQueue={() => {}}
+      />,
+    );
+    openTrigger();
+    const items = menuItems();
+    expect(items.map((item) => item.textContent?.trim())).toEqual([
+      "Download Song",
+      "Locate File",
+      "Remove from Queue",
+      "Remove Folder from Queue",
+    ]);
+    expect(items[2]?.tabIndex).toBe(-1);
+
+    pressOnActive("ArrowDown"); // -> Locate File
+    pressOnActive("ArrowDown"); // skips the disabled entry
+    expect(document.activeElement).toBe(items[3]);
+  });
+
+  it("ArrowDown/ArrowUp on the trigger open the menu and focus first/last item", () => {
+    renderRecent();
+    const trigger = triggerEl();
+
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(menuItems()[0]).toBe(document.activeElement);
+
+    pressOnActive("Escape");
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+
+    fireEvent.keyDown(trigger, { key: "ArrowUp" });
+    const items = menuItems();
+    expect(document.activeElement).toBe(items[items.length - 1]);
+  });
+
+  it("Enter on the focused item activates it (native button)", async () => {
+    const user = userEvent.setup();
+    renderRecent();
+    openTrigger();
+    expect(document.activeElement).toBe(menuItems()[0]);
+
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByText("Move to Trash?")).toBeTruthy();
+  });
+
+  it("Space on the focused item activates it (native button)", async () => {
+    const user = userEvent.setup();
+    renderRecent();
+    openTrigger();
+    pressOnActive("ArrowDown"); // Download Song
+
+    await user.keyboard(" ");
+
+    expect(screen.getByText("File name")).toBeTruthy();
+  });
+
+  it("does not hijack arrow keys while typing in the playlists search input", () => {
+    renderRecent();
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+    );
+    const input = screen.getByRole("textbox", { name: "Search..." });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    expect(document.activeElement).toBe(input);
   });
 });
 

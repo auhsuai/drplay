@@ -23,6 +23,8 @@ export function MoreMenuItem({
 }: MoreMenuItemProps) {
   return (
     <button
+      type="button"
+      role="menuitem"
       onClick={onClick}
       className={className}
       disabled={disabled}
