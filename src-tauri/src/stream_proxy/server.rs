@@ -30,9 +30,17 @@ use super::TokenSource;
 
 /// Notified exactly once per failed file request with the fileId and a status:
 /// a synthesized 502/504, the real upstream status for a non-2xx pass-through,
-/// or `IDLE_ABORT_STATUS` when the upstream body stalls and the response is
-/// aborted. Never fired for 405/404-path/400 (not file failures).
+/// `BODY_ERROR_STATUS` when the upstream body fails mid-stream (the client has
+/// already received its headers), or `IDLE_ABORT_STATUS` when the upstream body
+/// stalls and the response is aborted. Never fired for 405/404-path/400 (not
+/// file failures).
 pub(crate) type ErrorSink = Arc<dyn Fn(String, u16) + Send + Sync>;
+
+/// Status reported to the error sink when the upstream body errors mid-stream
+/// (connection reset / early EOF after 200/206 already went on the wire): the
+/// response is truncated, same class of client-visible failure as the idle
+/// abort, so it is reported as a synthesized 502.
+const BODY_ERROR_STATUS: u16 = 502;
 
 /// Status reported to the error sink when the upstream body goes idle
 /// mid-stream and the response is aborted. The client has already received
@@ -248,9 +256,19 @@ where
             return Poll::Ready(None);
         }
         match this.inner.poll_next_unpin(cx) {
-            Poll::Ready(Some(item)) => {
+            Poll::Ready(Some(Err(body_error))) => {
+                // A mid-stream body error (reset/truncation) is terminal for
+                // this response: the client keeps an incomplete body. Report it
+                // like the idle abort — same `notified` dedupe, so a non-2xx
+                // that already reported its real status stays single-shot.
+                if !this.notified.swap(true, Ordering::SeqCst) {
+                    (this.sink)(this.file_id.clone(), BODY_ERROR_STATUS);
+                }
+                Poll::Ready(Some(Err(body_error)))
+            }
+            Poll::Ready(Some(Ok(frame))) => {
                 this.deadline.as_mut().reset(Instant::now() + this.idle_timeout);
-                Poll::Ready(Some(item))
+                Poll::Ready(Some(Ok(frame)))
             }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => {
@@ -515,7 +533,7 @@ mod spike_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
@@ -633,6 +651,28 @@ mod tests {
             });
         }
         (port, recorded)
+    }
+
+    /// A one-shot upstream that sends the response head + a partial body and
+    /// then drops the socket: the body truncates mid-stream, never reaching
+    /// the Content-Length it declared (ECONNRESET / early EOF). Unlike
+    /// `StallingBody`, the connection does not stay open — the proxy's inner
+    /// stream sees a real body error, not an idle gap.
+    fn spawn_truncating_fixture(declared_length: usize, first_bytes: &[u8]) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("truncating fixture must bind");
+        let port = listener.local_addr().expect("truncating fixture address").port();
+        let first_bytes = first_bytes.to_vec();
+        std::thread::spawn(move || {
+            let Ok((mut socket, _)) = listener.accept() else { return };
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request);
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {declared_length}\r\n\r\n");
+            let _ = socket.write_all(head.as_bytes());
+            let _ = socket.write_all(&first_bytes);
+            let _ = socket.flush();
+            // Dropping the socket here truncates the body mid-stream.
+        });
+        port
     }
 
     struct StubTokens {
@@ -847,6 +887,36 @@ mod tests {
             *events.lock().unwrap(),
             vec![("idle-file".to_string(), 499u16)],
             "exactly one idle-abort event, status 499 (IDLE_ABORT_STATUS)"
+        );
+    }
+
+    /// R04a F1: a body error mid-stream (not an idle stall) must reach the
+    /// sink exactly once with 502 — the documented contract covers every
+    /// failed file request, and the client must still see the body abort.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn body_error_mid_stream_emits_single_502_event() {
+        const FIRST_BYTES: usize = 512;
+        const DECLARED_LENGTH: usize = 4096;
+        let upstream_port = spawn_truncating_fixture(DECLARED_LENGTH, &[0u8; FIRST_BYTES]);
+        let tokens = StubTokens::new("stale-token-a", &[]);
+        let (port, events) = start_proxy(
+            format!("http://127.0.0.1:{upstream_port}"),
+            tokens,
+            IDLE_TIMEOUT,
+            IDLE_TIMEOUT,
+        )
+        .await;
+
+        let response = get(port, "truncated-file", None).await;
+        assert_eq!(response.status(), 200, "the upstream head was already mirrored");
+        let body = tokio::time::timeout(CLIENT_TIMEOUT, response.bytes())
+            .await
+            .expect("client read must terminate after the upstream truncation");
+        assert!(body.is_err(), "a truncated body must surface as a read error");
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![("truncated-file".to_string(), 502u16)],
+            "exactly one 502 event for the mid-stream body error"
         );
     }
 

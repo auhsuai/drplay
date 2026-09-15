@@ -796,7 +796,10 @@ describe("MpvAudioController — release lifecycle", () => {
     expect(commandNames()).toEqual(["mpv_shutdown"]);
     fireProperty("time-pos", 5);
     fireMpvEvent("end-file", "eof");
-    // The stream-proxy-error listener dies with the engine too.
+    // The stream-proxy-error listener dies with the engine too: noteProxyError
+    // emits nothing, so the assertions below cannot observe it — check the
+    // registered handlers directly instead.
+    expect(tauriListeners.get("stream-proxy-error") ?? []).toEqual([]);
     fireTauri("stream-proxy-error", { fileId: "A", status: 503 });
     expect(timeupdate).not.toHaveBeenCalled();
     expect(ended).not.toHaveBeenCalled();

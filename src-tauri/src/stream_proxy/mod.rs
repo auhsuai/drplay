@@ -133,7 +133,9 @@ impl TokenSource for DriveTokenSource {
             }
             // The OS credential vault is blocking (Windows Credential
             // Manager), so it runs on a blocking thread like auth.rs does: a
-            // stalled vault must not park this worker while it holds the lock.
+            // stalled vault must not occupy an executor thread. The refresh
+            // task still awaits this JoinHandle while holding `refresh_lock`,
+            // so a hung vault does serialize the other refresh callers.
             let stored = match &self.vault_read {
                 Some(read) => {
                     let read = Arc::clone(read);
@@ -153,9 +155,10 @@ impl TokenSource for DriveTokenSource {
                 Some(mint) => mint(refresh_token),
                 None => Box::pin(auth::refresh_google_token(refresh_token)),
             };
-            // The oauth2 client behind `refresh_google_token` sets no timeout
-            // (auth.rs), so a hung token endpoint would hold `refresh_lock` —
-            // and every other proxy request — forever.
+            // Defense in depth: auth.rs already builds the refresh client with
+            // a 12s timeout, so `minted` normally settles first; this outer
+            // deadline bounds the `refresh_lock` hold even if that inner
+            // timeout is ever removed or misconfigured.
             let payload = tokio::time::timeout(self.refresh_timeout, minted)
                 .await
                 .map_err(|_elapsed| format!("token refresh timed out after {:?}", self.refresh_timeout))??;
@@ -187,7 +190,9 @@ impl TokenSource for DriveTokenSource {
                 *guard = Some(access_token.clone());
             }
             // Publish the mint before the lock is released, so a deduping
-            // caller that reads a newer generation always finds the token.
+            // caller that reads a newer generation normally finds the token.
+            // If the cached write above was skipped (poisoned mutex), such a
+            // caller just mints again — same as no dedup, never a wrong token.
             self.generation.fetch_add(1, Ordering::SeqCst);
             Ok(access_token)
         })

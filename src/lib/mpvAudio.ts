@@ -52,11 +52,7 @@ export class MpvAudioController {
   /** Latest `stream-proxy-error` for the current stream (R05) — state only,
    *  never a display channel: mpv's end-file is the single place an error
    *  surfaces (the two events describe the same failure — dedupe). */
-  private lastProxyError: {
-    fileId: string;
-    status: number;
-    at: number;
-  } | null = null;
+  private lastProxyError: { fileId: string; status: number } | null = null;
   private lastTrack: Track | null = null;
   private currentTrackId: string | null = null;
   private playbackFinished = true;
@@ -265,7 +261,7 @@ export class MpvAudioController {
       this.logWarn("stream-proxy-error payload malformed (skipped)");
       return;
     }
-    this.lastProxyError = { fileId, status, at: Date.now() };
+    this.lastProxyError = { fileId, status };
   }
 
   /** The proxy status usable for THIS stream only — a stale event (other
