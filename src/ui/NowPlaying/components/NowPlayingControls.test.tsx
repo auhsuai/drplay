@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, screen } from "@testing-library/react";
+import { render, cleanup, fireEvent, screen } from "@testing-library/react";
 import en from "../../../locales/en/translation.json";
 import { NowPlayingControls } from "./NowPlayingControls";
 
@@ -32,7 +32,9 @@ function baseProps(
     isPlaying: false,
     isBuffering: false,
     isDownloading: false,
+    hasError: false,
     onTogglePlay: vi.fn(),
+    onRetry: vi.fn(),
     onNextTrack: vi.fn(),
     onPrevTrack: vi.fn(),
     playMode: "normal" as const,
@@ -127,5 +129,53 @@ describe("NowPlayingControls accessible names (P2-12-1)", () => {
 
     expect(screen.queryByRole("button", { name: en.player.play })).toBeNull();
     expect(screen.getByRole("button", { name: en.player.pause })).toBeTruthy();
+  });
+});
+
+describe("NowPlayingControls error surface (P2-12-6 parity with TransportControls)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows the retry affordance (RefreshCw) and NO spinner while hasError", () => {
+    const { container } = render(
+      <NowPlayingControls
+        {...baseProps({ hasError: true, isPlaying: true, isBuffering: true })}
+      />,
+    );
+
+    expect(container.querySelector(".lucide-refresh-cw")).not.toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.querySelector(".lucide-pause")).toBeNull();
+    expect(getPlayButton(container).disabled).toBe(false);
+  });
+
+  it("clicking the center button while hasError calls onRetry, not onTogglePlay", () => {
+    const onRetry = vi.fn();
+    const onTogglePlay = vi.fn();
+    const { container } = render(
+      <NowPlayingControls
+        {...baseProps({ hasError: true, onRetry, onTogglePlay })}
+      />,
+    );
+
+    fireEvent.click(getPlayButton(container));
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onTogglePlay).not.toHaveBeenCalled();
+  });
+
+  it("without an error the center button still toggles play", () => {
+    const onRetry = vi.fn();
+    const onTogglePlay = vi.fn();
+    const { container } = render(
+      <NowPlayingControls {...baseProps({ onRetry, onTogglePlay })} />,
+    );
+
+    expect(container.querySelector(".lucide-refresh-cw")).toBeNull();
+    fireEvent.click(getPlayButton(container));
+
+    expect(onTogglePlay).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
   });
 });

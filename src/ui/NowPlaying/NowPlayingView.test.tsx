@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
 import en from "../../locales/en/translation.json";
@@ -24,14 +24,39 @@ vi.mock("react-i18next", () => {
   };
 });
 
-vi.mock("../../lib/AudioController", () => ({
-  AudioController: { getInstance: () => ({ on: () => () => {} }) },
+const audioMock = vi.hoisted(() => ({
+  on: vi.fn(() => () => {}),
+  playTrack: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("../../store/playerStore", () => ({
-  usePlayerStore: (selector: (s: { isDownloading: boolean }) => unknown) =>
-    selector({ isDownloading: false }),
+vi.mock("../../lib/AudioController", () => ({
+  AudioController: { getInstance: () => audioMock },
 }));
+
+// Controllable stand-in for the shared player store: the view reads
+// isDownloading + errorInfo from it, and retryCurrentTrack (P2-12-6) resolves
+// the current track through getState().
+const storeState = vi.hoisted(() => ({
+  isDownloading: false,
+  errorInfo: null as { code: string; message: string } | null,
+  currentTrack: null as {
+    id: string;
+    title: string;
+    artist: string;
+    streamUrl: string;
+    restoreTime?: number;
+  } | null,
+}));
+
+vi.mock("../../store/playerStore", () => {
+  const usePlayerStore = (selector: (s: typeof storeState) => unknown) =>
+    selector(storeState);
+  return {
+    usePlayerStore: Object.assign(usePlayerStore, {
+      getState: () => storeState,
+    }),
+  };
+});
 
 vi.mock("./hooks/useNowPlayingMetadata", () => ({
   useNowPlayingMetadata: () => ({
@@ -85,5 +110,55 @@ describe("NowPlayingView back-button accessible name (P2-12-3)", () => {
     render(<NowPlayingView {...baseProps()} currentTrack={makeTrack()} />);
 
     expect(screen.getByRole("button", { name: en.common.close })).toBeTruthy();
+  });
+});
+
+describe("NowPlayingView full-screen error surface (P2-12-6)", () => {
+  afterEach(() => {
+    storeState.errorInfo = null;
+    storeState.currentTrack = null;
+    storeState.isDownloading = false;
+    audioMock.playTrack.mockClear();
+    cleanup();
+  });
+
+  it("renders the error banner INSIDE the overlay (same source as PlayerBar, not hidden behind z-[9999])", () => {
+    storeState.errorInfo = {
+      code: "network_interrupted",
+      message: "Mạng không ổn định, đang thử lại...",
+    };
+    render(<NowPlayingView {...baseProps()} currentTrack={makeTrack()} />);
+
+    expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
+  });
+
+  it("hasError → center button is the retry affordance (RefreshCw, no spinner); click replays the current track", () => {
+    const track = makeTrack();
+    storeState.errorInfo = {
+      code: "format_error",
+      message: "File lỗi định dạng, đang bỏ qua...",
+    };
+    storeState.currentTrack = track;
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={track} />,
+    );
+
+    expect(container.querySelector(".lucide-refresh-cw")).not.toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+
+    const center = container.querySelector<HTMLButtonElement>(
+      "button.bg-brand-primary",
+    );
+    if (!center) throw new Error("center button not found");
+    fireEvent.click(center);
+
+    expect(audioMock.playTrack).toHaveBeenCalledWith(track, track.restoreTime);
+  });
+
+  it("no error → no banner and the center button stays Play", () => {
+    render(<NowPlayingView {...baseProps()} currentTrack={makeTrack()} />);
+
+    expect(screen.queryByText(en.player.network_interrupted)).toBeNull();
+    expect(screen.queryByText(en.player.format_error)).toBeNull();
   });
 });

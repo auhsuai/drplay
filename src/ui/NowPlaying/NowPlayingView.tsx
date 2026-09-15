@@ -4,9 +4,11 @@ import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
+import { retryCurrentTrack } from "../../utils/playerError";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { SeekBar } from "../components/SeekBar";
+import { ErrorToast } from "../PlayerBar/ErrorToast";
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -40,6 +42,12 @@ export const NowPlayingView = memo(function NowPlayingView({
   // the "preparing to play" intent window (token fetch → stream URL →
   // loadfile) where the buffering event has not fired yet.
   const isDownloading = usePlayerStore((state) => state.isDownloading);
+
+  // Shared error surface (P2-12-6): PlayerBar publishes the error + storm
+  // banner here, and the full-screen view renders the same banner inline +
+  // the retry affordance — without duplicating the audio error subscription
+  // or the storm guard (those stay single-owner in PlayerBar/playerError).
+  const errorInfo = usePlayerStore((state) => state.errorInfo);
 
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
@@ -96,6 +104,12 @@ export const NowPlayingView = memo(function NowPlayingView({
             }
       }
     >
+      {/* Error surface (P2-12-6): the PlayerBar toast is portaled into
+          #content-area at z-50, i.e. BEHIND this z-[9999] overlay — the
+          full-screen view renders the same banner inline so the error state
+          stays visible (and the center button below becomes the retry). */}
+      <ErrorToast errorInfo={errorInfo} inline />
+
       {/* Back Button */}
       <div className="absolute top-6 left-6 z-50">
         <button
@@ -153,6 +167,8 @@ export const NowPlayingView = memo(function NowPlayingView({
                 isPlaying={isPlaying}
                 isBuffering={isBuffering}
                 isDownloading={isDownloading}
+                hasError={errorInfo !== null}
+                onRetry={retryCurrentTrack}
                 onTogglePlay={onTogglePlay}
                 onNextTrack={onNextTrack}
                 onPrevTrack={onPrevTrack}

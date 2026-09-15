@@ -19,6 +19,7 @@ import { useAuthStore } from "../../store/authStore";
 import * as errorLog from "../../utils/errorLog";
 import { FAVORITES_UPDATED_EVENT } from "../../utils/favorites";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
+import { resetAdvanceGuard } from "../../utils/playerError";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -231,6 +232,11 @@ beforeEach(() => {
   isFavorite.mockResolvedValue(false);
   addFavorite.mockResolvedValue(undefined);
   removeFavorite.mockResolvedValue(undefined);
+  // The error surface (playerStore.errorInfo) and the storm guard
+  // (utils/playerError) are app-wide state now — reset both between tests so
+  // an error/storm from one test can never leak into the next.
+  usePlayerStore.setState({ errorInfo: null });
+  resetAdvanceGuard();
 });
 
 afterEach(() => {
@@ -644,6 +650,39 @@ describe("PlayerBar error banner recovery", () => {
     unmount();
 
     expect(fakeController._handlers["play"] ?? []).toHaveLength(0);
+  });
+});
+
+describe("PlayerBar error surface shared with the full-screen view (P2-12-6)", () => {
+  it("publishes an audio error to the shared player store (the source NowPlaying reads)", () => {
+    renderPlayer();
+    expect(usePlayerStore.getState().errorInfo).toBeNull();
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "Mạng không ổn định, đang thử lại...",
+        code: "network_interrupted",
+      });
+    });
+
+    expect(usePlayerStore.getState().errorInfo).toEqual({
+      message: "Mạng không ổn định, đang thử lại...",
+      code: "network_interrupted",
+    });
+  });
+
+  it("reads the shared store error back into the banner (debug/store writes surface identically)", () => {
+    renderPlayer();
+    expect(screen.queryByText(en.player.format_error)).toBeNull();
+
+    act(() => {
+      usePlayerStore.getState().setErrorInfo({
+        code: "format_error",
+        message: "File lỗi định dạng, đang bỏ qua...",
+      });
+    });
+
+    expect(screen.getByText(en.player.format_error)).toBeTruthy();
   });
 });
 

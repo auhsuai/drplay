@@ -7,6 +7,7 @@ import {
   Repeat1,
   Shuffle,
   LoaderCircle,
+  RefreshCw,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { PlayMode } from "../../../types";
@@ -18,6 +19,12 @@ interface NowPlayingControlsProps {
   // click and the actual loadfile — the button must show the spinner and
   // reject re-clicks instead of flashing ▲/⏸.
   isDownloading: boolean;
+  // Same error/retry contract as TransportControls (parity): hasError turns
+  // the center button into the RefreshCw retry affordance and gates the
+  // buffering spinner off, so the full-screen surface cannot silently drop
+  // the error the PlayerBar shows.
+  hasError: boolean;
+  onRetry: () => void;
   onTogglePlay: () => void;
   onNextTrack: () => void;
   onPrevTrack: () => void;
@@ -29,6 +36,8 @@ export function NowPlayingControls({
   isPlaying,
   isBuffering,
   isDownloading,
+  hasError,
+  onRetry,
   onTogglePlay,
   onNextTrack,
   onPrevTrack,
@@ -52,13 +61,15 @@ export function NowPlayingControls({
         </button>
 
         <button
-          onClick={onTogglePlay}
+          onClick={hasError ? onRetry : onTogglePlay}
           disabled={isDownloading}
           aria-label={isPlaying ? t("player.pause") : t("player.play")}
           className="w-10 h-10 flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90"
         >
-          {isDownloading || (isBuffering && isPlaying) ? (
+          {isDownloading || (isBuffering && isPlaying && !hasError) ? (
             <LoaderCircle className="w-5 h-5 animate-spin [transform-box:view-box] origin-center" />
+          ) : hasError ? (
+            <RefreshCw className="w-5 h-5" />
           ) : isPlaying ? (
             <Pause className="w-5 h-5" />
           ) : (

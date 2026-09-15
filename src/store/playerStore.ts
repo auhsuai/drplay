@@ -1,6 +1,19 @@
 import { create } from "zustand";
 import type { Track, PlayMode } from "../types";
 
+/**
+ * The current playback error surface shown by BOTH transport surfaces
+ * (PlayerBar's toast and the full-screen NowPlaying view — P2-12-6). Owned by
+ * the store because PlayerBar is no longer the only consumer: the full-screen
+ * view sits above the PlayerBar toast (z-[9999] overlay vs z-50 portal), so it
+ * renders the same banner inline from this shared source instead of a second
+ * subscription.
+ */
+export interface PlayerErrorInfo {
+  code: string;
+  message: string;
+}
+
 interface PlayerState {
   /** The track the player is (about to be) loaded with; null = nothing loaded. */
   currentTrack: Track | null;
@@ -26,12 +39,24 @@ interface PlayerState {
   brokenTrackIds: string[];
 
   /**
+   * Playback error of the current track (or the storm banner), shown by both
+   * transport surfaces. Cleared when the track id changes, when playback
+   * recovers, and by an explicit null.
+   */
+  errorInfo: PlayerErrorInfo | null;
+
+  /**
    * Set the current track, or update it from its previous value. Used on
    * track selection and when the next/previous button advances the queue.
+   * A track-id change also clears the error surface: an error belongs to the
+   * track it happened on, and the next track must not inherit its banner
+   * (replaces PlayerBar's render-phase reset now that the banner is shared).
    */
   setCurrentTrack: (
     track: Track | null | ((prev: Track | null) => Track | null),
   ) => void;
+  /** Publish/clear the shared playback error surface (null = no error). */
+  setErrorInfo: (info: PlayerErrorInfo | null) => void;
   /** Replay the current source: bumps loadNonce to remount the audio element. */
   triggerReload: () => void;
   /** Mark audio as playing/paused (mirrors the actual media element state). */
@@ -71,12 +96,20 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   originalQueue: [],
   playbackQueue: [],
   brokenTrackIds: [],
+  errorInfo: null,
 
   setCurrentTrack: (track) => {
-    set((state) => ({
-      currentTrack:
-        typeof track === "function" ? track(state.currentTrack) : track,
-    }));
+    set((state) => {
+      const currentTrack =
+        typeof track === "function" ? track(state.currentTrack) : track;
+      if (currentTrack?.id !== state.currentTrack?.id) {
+        return { currentTrack, errorInfo: null };
+      }
+      return { currentTrack };
+    });
+  },
+  setErrorInfo: (errorInfo) => {
+    set({ errorInfo });
   },
   triggerReload: () => {
     set((state) => ({ loadNonce: state.loadNonce + 1 }));

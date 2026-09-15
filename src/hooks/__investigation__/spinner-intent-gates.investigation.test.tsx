@@ -16,7 +16,7 @@
  *
  * Gates under test (exact component expressions):
  *   TransportControls.tsx:58  isDownloading || (isBuffering && isPlaying && !hasError)
- *   NowPlayingControls.tsx:54 isDownloading || (isBuffering && isPlaying)
+ *   NowPlayingControls.tsx:65 isDownloading || (isBuffering && isPlaying && !hasError)
  */
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -145,6 +145,8 @@ function nowPlayingSpins(props: {
       isPlaying={props.isPlaying}
       isBuffering={props.isBuffering}
       isDownloading={props.isDownloading}
+      hasError={false}
+      onRetry={() => undefined}
       onTogglePlay={() => undefined}
       onNextTrack={() => undefined}
       onPrevTrack={() => undefined}
@@ -155,7 +157,7 @@ function nowPlayingSpins(props: {
   return container.querySelector(".animate-spin") !== null;
 }
 
-/** Exact NowPlayingControls.tsx:54 gate over runtime values. */
+/** Exact NowPlayingControls.tsx:69 gate over runtime values (hasError=false). */
 function spinnerGate(
   isDownloading: boolean,
   isBuffering: boolean,
@@ -222,7 +224,7 @@ describe("spinner intent gates investigation — hook/UI (S2 + S3)", () => {
 
     const s = usePlayerStore.getState();
     expect(s.isDownloading).toBe(false); // hook exit at first-audio (unchanged)
-    // Exact TransportControls.tsx:58 / NowPlayingControls.tsx:54 gate:
+    // Exact TransportControls.tsx:58 / NowPlayingControls.tsx:69 gate:
     const spinnerVisible = spinnerGate(
       s.isDownloading,
       engineBuffering,

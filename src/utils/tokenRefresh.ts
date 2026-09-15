@@ -18,6 +18,7 @@ import {
 } from "./apiClientShared";
 import {
   REFRESH_TIMEOUT_MS,
+  deleteRefreshToken,
   readRefreshToken,
   writeRefreshToken,
 } from "./refreshTokenStore";
@@ -290,6 +291,17 @@ export const getValidToken = async (
         // bounded by KEYRING_TIMEOUT_MS (5s), so this delays the flow only
         // while the vault is stalling.
         await writeRefreshToken(tokenData.refresh_token);
+      }
+
+      // Re-check the session AFTER the awaited keyring write (B11 CROSS-FILE
+      // #1): a logout can start while the write is in flight, in which case
+      // the credential just written is residue on a signed-out machine and
+      // broadcasting/re-arming for the dead session would resurrect it. Drop
+      // the token and report the session change ("") like the pre-write check
+      // above; deleteRefreshToken never rejects and is keyring-bounded.
+      if (mySessionId !== getCurrentSessionId()) {
+        await deleteRefreshToken();
+        return "";
       }
 
       scheduleProactiveRefresh(tokenData.expires_in || DEFAULT_EXPIRES_IN_SEC);
