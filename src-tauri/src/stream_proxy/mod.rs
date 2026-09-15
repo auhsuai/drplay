@@ -14,6 +14,7 @@ mod server;
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -56,16 +57,43 @@ pub(crate) trait TokenSource: Send + Sync + 'static {
 /// `auth::refresh_google_token`, and caches the latest access token in memory
 /// (the frontend keeps its own copy in localStorage; the proxy never sees it).
 ///
-/// `refresh` is single-flight: concurrent workers hitting an expired token at
-/// the same moment serialize instead of stampeding the token endpoint.
+/// `refresh` is single-flight and stampede-proof: concurrent workers hitting
+/// an expired token at the same moment serialize on `refresh_lock`, and a
+/// `force=true` caller whose 401 predates a concurrent mint reuses that
+/// freshly minted token instead of calling the token endpoint again.
 struct DriveTokenSource {
     cached: Mutex<Option<String>>,
     refresh_lock: AsyncMutex<()>,
+    /// Bumped after every successful mint (R04-6); a `force=true` caller
+    /// compares it against the value observed at its 401 to reuse a token a
+    /// concurrent worker minted while it waited for the lock.
+    generation: AtomicU64,
+    /// Deadline for one token-endpoint call; defaults to
+    /// `UPSTREAM_HEADERS_TIMEOUT` and is shrunk by tests.
+    refresh_timeout: std::time::Duration,
+    /// Test seams (production: `None`): replace the OS-vault read and the
+    /// token-endpoint call so tests run without the keyring or the network.
+    vault_read: Option<VaultRead>,
+    mint: Option<MintFn>,
 }
+
+/// One token-endpoint call, as the JSON payload `auth.rs` returns it.
+type MintFuture = Pin<Box<dyn Future<Output = Result<serde_json::Value, String>> + Send>>;
+/// Test seam for the token-endpoint call.
+type MintFn = Arc<dyn Fn(String) -> MintFuture + Send + Sync>;
+/// Test seam for the OS-vault read.
+type VaultRead = Arc<dyn Fn() -> Result<Option<String>, String> + Send + Sync>;
 
 impl Default for DriveTokenSource {
     fn default() -> Self {
-        Self { cached: Mutex::new(None), refresh_lock: AsyncMutex::new(()) }
+        Self {
+            cached: Mutex::new(None),
+            refresh_lock: AsyncMutex::new(()),
+            generation: AtomicU64::new(0),
+            refresh_timeout: UPSTREAM_HEADERS_TIMEOUT,
+            vault_read: None,
+            mint: None,
+        }
     }
 }
 
@@ -78,6 +106,10 @@ impl TokenSource for DriveTokenSource {
         -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
     {
         Box::pin(async move {
+            // Observation point for the 401 stampede: callers invoke
+            // `refresh(true)` the moment they see a 401, so a generation read
+            // here predates any mint this caller could be racing with.
+            let observed = self.generation.load(Ordering::SeqCst);
             if !force {
                 if let Some(token) = self.current() {
                     return Ok(token);
@@ -89,25 +121,74 @@ impl TokenSource for DriveTokenSource {
                     // Another worker refreshed while we waited for the lock.
                     return Ok(token);
                 }
+            } else if self.generation.load(Ordering::SeqCst) > observed {
+                // Another worker minted and cached a token after this caller
+                // observed its 401, so that 401 cannot have been caused by the
+                // new token: reuse it instead of minting again. A token that
+                // really was rejected still ends the request at the retry-once
+                // 502 cap, so no rejection can loop here.
+                if let Some(token) = self.current() {
+                    return Ok(token);
+                }
             }
-            let refresh_token = crate::token_store::get_refresh_token()?
-                .ok_or_else(|| "not signed in: no refresh token stored".to_string())?;
-            let payload = auth::refresh_google_token(refresh_token).await?;
+            // The OS credential vault is blocking (Windows Credential
+            // Manager), so it runs on a blocking thread like auth.rs does: a
+            // stalled vault must not park this worker while it holds the lock.
+            let stored = match &self.vault_read {
+                Some(read) => {
+                    let read = Arc::clone(read);
+                    tauri::async_runtime::spawn_blocking(move || read()).await
+                }
+                None => tauri::async_runtime::spawn_blocking(crate::token_store::get_refresh_token).await,
+            };
+            let refresh_token = match stored {
+                Ok(Ok(Some(token))) => token,
+                Ok(Ok(None)) => return Err("not signed in: no refresh token stored".to_string()),
+                Ok(Err(vault_error)) => return Err(vault_error),
+                Err(join_error) => {
+                    return Err(format!("reading the refresh token from the OS vault failed: {join_error}"))
+                }
+            };
+            let minted: MintFuture = match &self.mint {
+                Some(mint) => mint(refresh_token),
+                None => Box::pin(auth::refresh_google_token(refresh_token)),
+            };
+            // The oauth2 client behind `refresh_google_token` sets no timeout
+            // (auth.rs), so a hung token endpoint would hold `refresh_lock` —
+            // and every other proxy request — forever.
+            let payload = tokio::time::timeout(self.refresh_timeout, minted)
+                .await
+                .map_err(|_elapsed| format!("token refresh timed out after {:?}", self.refresh_timeout))??;
             let access_token = payload["access_token"]
                 .as_str()
                 .ok_or_else(|| "token refresh response is missing access_token".to_string())?
                 .to_string();
             // Google may rotate the refresh token; persist the rotation so the
             // next cold start keeps working. Failure is non-fatal (the old
-            // token usually remains valid) but is logged.
+            // token usually remains valid) but is logged. The vault write is
+            // blocking too, so it also runs on a blocking thread.
             if let Some(rotated) = payload["refresh_token"].as_str() {
-                if let Err(store_error) = crate::token_store::set_refresh_token(rotated.to_string()) {
-                    log::warn!("[stream-proxy] failed to persist rotated refresh token: {store_error}");
+                let rotated = rotated.to_string();
+                let stored = tauri::async_runtime::spawn_blocking(move || {
+                    crate::token_store::set_refresh_token(rotated)
+                })
+                .await;
+                match stored {
+                    Ok(Ok(())) => {}
+                    Ok(Err(store_error)) => {
+                        log::warn!("[stream-proxy] failed to persist rotated refresh token: {store_error}");
+                    }
+                    Err(join_error) => {
+                        log::warn!("[stream-proxy] persisting the rotated refresh token failed: {join_error}");
+                    }
                 }
             }
             if let Ok(mut guard) = self.cached.lock() {
                 *guard = Some(access_token.clone());
             }
+            // Publish the mint before the lock is released, so a deduping
+            // caller that reads a newer generation always finds the token.
+            self.generation.fetch_add(1, Ordering::SeqCst);
             Ok(access_token)
         })
     }
@@ -628,5 +709,87 @@ mod tests {
         let response = get(port, "after-idle", None).await;
         assert_eq!(response.status(), 200);
         assert_eq!(response.bytes().await.unwrap(), b"recycled-ok".as_slice());
+    }
+
+    /// R04-5/R04-6/R04-7: a `DriveTokenSource` wired to stubs instead of the
+    /// OS keyring and the token endpoint, so the refresh paths run
+    /// deterministically inside a test. Returns the number of mint calls.
+    fn stub_source(
+        refresh_timeout: Duration,
+        mint_delay: Duration,
+    ) -> (Arc<DriveTokenSource>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let minted = Arc::clone(&calls);
+        let mint: MintFn = Arc::new(move |_refresh_token: String| {
+            let call = minted.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                tokio::time::sleep(mint_delay).await;
+                Ok(serde_json::json!({ "access_token": format!("fresh-{call}") }))
+            })
+        });
+        let vault_read: VaultRead = Arc::new(|| Ok(Some("stub-refresh-token".to_string())));
+        let source = Arc::new(DriveTokenSource {
+            cached: Mutex::new(None),
+            refresh_lock: AsyncMutex::new(()),
+            generation: AtomicU64::new(0),
+            refresh_timeout,
+            vault_read: Some(vault_read),
+            mint: Some(mint),
+        });
+        (source, calls)
+    }
+
+    /// R04-7: a token endpoint that outlives `refresh_timeout` must end the
+    /// refresh with a timeout error and free the lock for the next caller.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn refresh_times_out_and_releases_the_lock() {
+        let (source, calls) = stub_source(Duration::from_millis(100), Duration::from_secs(1));
+        let started = Instant::now();
+
+        let first = Arc::clone(&source).refresh(true).await;
+        assert!(first.is_err(), "a hung mint must time out, got: {first:?}");
+        assert!(first.unwrap_err().contains("timed out"), "the error must name the timeout");
+
+        // The lock must be free again: the next caller hits its own timeout
+        // promptly instead of queueing behind the first (hung) mint.
+        let second = Arc::clone(&source).refresh(true).await;
+        assert!(second.is_err(), "the second caller must fail fast too");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "both callers must return at the deadline, took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "each timed-out call is a fresh attempt");
+        assert!(source.current().is_none(), "a timed-out mint must not populate the cache");
+    }
+
+    /// R04-6: two callers whose 401s both predate the first mint completing
+    /// share one token-endpoint call; the second reuses the minted token.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_401_refresh_mints_once_and_shares_the_token() {
+        let (source, calls) = stub_source(Duration::from_secs(5), Duration::from_millis(200));
+
+        let (first, second) = tokio::join!(
+            Arc::clone(&source).refresh(true),
+            Arc::clone(&source).refresh(true),
+        );
+
+        assert_eq!(first.expect("first refresh must succeed"), "fresh-0");
+        assert_eq!(second.expect("second refresh must reuse the fresh token"), "fresh-0");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the stampede must collapse to one mint");
+    }
+
+    /// R04-6 guard: a 401 observed AFTER a completed mint is a real second
+    /// rejection; the next `force=true` refresh must mint again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sequential_401_after_a_completed_mint_mints_again() {
+        let (source, calls) = stub_source(Duration::from_secs(5), Duration::from_millis(10));
+
+        let first = Arc::clone(&source).refresh(true).await.expect("first mint");
+        let second = Arc::clone(&source).refresh(true).await.expect("second mint");
+
+        assert_eq!(first, "fresh-0");
+        assert_eq!(second, "fresh-1");
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "a later 401 must mint again");
     }
 }
