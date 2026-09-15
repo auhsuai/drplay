@@ -10,6 +10,7 @@ import {
   act,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { MoreMenu } from "./MoreMenu";
 import { getContextMenuStyle } from "./MoreMenu/menuPositioning";
 import en from "../../locales/en/translation.json";
@@ -154,15 +155,11 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
+      "Add to Playlist",
       "Delete",
       "Download Song",
       "Locate File",
     ]);
-    // Add to Playlist is still a plain toggle button (P2-09 gives it
-    // role="menuitem" + aria-haspopup), so it is asserted separately.
-    expect(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    ).toBeTruthy();
     expect(
       within(menuEl()).queryByRole("menuitem", {
         name: "Select multiple items",
@@ -182,19 +179,21 @@ describe("MoreMenu recent variant", () => {
       />,
     );
     openTrigger();
-    expect(menuItemNames().sort()).toEqual(["Download Song", "Locate File"]);
-    expect(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    ).toBeTruthy();
+    expect(menuItemNames().sort()).toEqual([
+      "Add to Playlist",
+      "Download Song",
+      "Locate File",
+    ]);
   });
 
   it("hides Delete when driveItem is missing (track-only render) but keeps track-based items", () => {
     render(<MoreMenu variant="recent" track={makeTrack()} token="tok" />);
     openTrigger();
-    expect(menuItemNames().sort()).toEqual(["Download Song", "Locate File"]);
-    expect(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    ).toBeTruthy();
+    expect(menuItemNames().sort()).toEqual([
+      "Add to Playlist",
+      "Download Song",
+      "Locate File",
+    ]);
   });
 
   it("dispatches the locate-file CustomEvent with fileId/parentId/parentName on Locate File", () => {
@@ -292,7 +291,7 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+      within(menuEl()).getByRole("menuitem", { name: "Add to Playlist" }),
     );
     expect(screen.getByText("Playlists")).toBeTruthy();
   });
@@ -305,15 +304,13 @@ describe("MoreMenu default variant regression (file list)", () => {
     );
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
+      "Add to Playlist",
       "Add to queue",
       "Delete",
       "Download Song",
       "Move to...",
       "Select multiple items",
     ]);
-    expect(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    ).toBeTruthy();
   });
 
   it('keeps the original items even when variant is explicitly "default"', () => {
@@ -327,15 +324,13 @@ describe("MoreMenu default variant regression (file list)", () => {
     );
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
+      "Add to Playlist",
       "Add to queue",
       "Delete",
       "Download Song",
       "Move to...",
       "Select multiple items",
     ]);
-    expect(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    ).toBeTruthy();
   });
 });
 
@@ -363,10 +358,11 @@ describe("MoreMenu playerbar variant regression", () => {
   it("keeps the original 2 track items (Download Song / Locate File) plus shared Add to Playlist, no Delete", () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
-    expect(menuItemNames().sort()).toEqual(["Download Song", "Locate File"]);
-    expect(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
-    ).toBeTruthy();
+    expect(menuItemNames().sort()).toEqual([
+      "Add to Playlist",
+      "Download Song",
+      "Locate File",
+    ]);
     expect(
       within(menuEl()).queryByRole("menuitem", { name: "Delete" }),
     ).toBeNull();
@@ -477,10 +473,12 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     expect(document.activeElement).toBe(items[1]);
     pressOnActive("ArrowDown");
     expect(document.activeElement).toBe(items[2]);
+    pressOnActive("ArrowDown");
+    expect(document.activeElement).toBe(items[3]); // Add to Playlist (last)
     pressOnActive("ArrowDown"); // last -> first
     expect(document.activeElement).toBe(items[0]);
     pressOnActive("ArrowUp"); // first -> last
-    expect(document.activeElement).toBe(items[2]);
+    expect(document.activeElement).toBe(items[3]);
   });
 
   it("Home/End jump to the first/last enabled item", () => {
@@ -489,7 +487,7 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     const items = menuItems();
 
     pressOnActive("End");
-    expect(document.activeElement).toBe(items[2]);
+    expect(document.activeElement).toBe(items[3]);
     pressOnActive("Home");
     expect(document.activeElement).toBe(items[0]);
   });
@@ -511,6 +509,7 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
       "Locate File",
       "Remove from Queue",
       "Remove Folder from Queue",
+      "Add to Playlist",
     ]);
     expect(items[2]?.tabIndex).toBe(-1);
 
@@ -560,7 +559,7 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     renderRecent();
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("button", { name: "Add to Playlist" }),
+      within(menuEl()).getByRole("menuitem", { name: "Add to Playlist" }),
     );
     const input = screen.getByRole("textbox", { name: "Search..." });
     input.focus();
@@ -568,6 +567,151 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
 
     expect(document.activeElement).toBe(input);
+  });
+});
+
+describe("MoreMenu close-path focus return + resize + Esc submenu (P2-08b)", () => {
+  function renderRecent(): void {
+    render(
+      <MoreMenu
+        variant="recent"
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+      />,
+    );
+  }
+
+  function menuItems(): HTMLElement[] {
+    return within(menuEl()).getAllByRole("menuitem");
+  }
+
+  function toggleItem(): HTMLElement {
+    return within(menuEl()).getByRole("menuitem", { name: "Add to Playlist" });
+  }
+
+  function menuClosed(): boolean {
+    return document.body.querySelector('[role="menu"]') === null;
+  }
+
+  it("returns focus to the trigger when Escape closes the menu (item handler)", () => {
+    renderRecent();
+    openTrigger();
+    expect(document.activeElement).toBe(menuItems()[0]);
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
+
+    expect(menuClosed()).toBe(true);
+    expect(document.activeElement).toBe(triggerEl());
+  });
+
+  it("returns focus to the trigger when Escape is dispatched on document", () => {
+    renderRecent();
+    openTrigger();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(menuClosed()).toBe(true);
+    expect(document.activeElement).toBe(triggerEl());
+  });
+
+  it("returns focus to the trigger on an outside mousedown while focus sits in the dropdown", () => {
+    renderRecent();
+    openTrigger();
+    expect(document.activeElement).toBe(menuItems()[0]);
+
+    fireEvent.mouseDown(document.body);
+
+    expect(menuClosed()).toBe(true);
+    expect(document.activeElement).toBe(triggerEl());
+  });
+
+  it("does not steal focus on an outside mousedown when another control owns it", () => {
+    renderRecent();
+    openTrigger();
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    fireEvent.mouseDown(outside);
+
+    expect(menuClosed()).toBe(true);
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
+  it("closes the menu on window resize (stale-rect policy)", () => {
+    renderRecent();
+    openTrigger();
+    expect(menuClosed()).toBe(false);
+
+    fireEvent(window, new Event("resize"));
+
+    expect(menuClosed()).toBe(true);
+  });
+
+  it("Escape closes the playlists submenu first and returns focus to its toggle, then closes the menu", () => {
+    renderRecent();
+    openTrigger();
+    const toggle = toggleItem();
+    fireEvent.click(toggle);
+    const input = screen.getByRole("textbox", { name: "Search..." });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByText("Playlists")).toBeNull();
+    expect(menuClosed()).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+
+    fireEvent.keyDown(toggle, { key: "Escape" });
+
+    expect(menuClosed()).toBe(true);
+    expect(document.activeElement).toBe(triggerEl());
+  });
+
+  it("does not return focus when the menu was opened as an anchor context menu", () => {
+    const onClose = vi.fn();
+    function AnchorHarness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <MoreMenu
+          variant="recent"
+          track={makeTrack()}
+          driveItem={makeDriveItem()}
+          token="tok"
+          forceOpen={open}
+          anchorPoint={{ x: 40, y: 40 }}
+          onClose={() => {
+            setOpen(false);
+            onClose();
+          }}
+        />
+      );
+    }
+    render(<AnchorHarness />);
+    const first = menuItems()[0];
+    expect(document.activeElement).toBe(first);
+
+    fireEvent.keyDown(first as HTMLElement, { key: "Escape" });
+
+    expect(menuClosed()).toBe(true);
+    expect(onClose).toHaveBeenCalled();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("marks the Add to Playlist toggle as a menuitem exposing haspopup + expanded", () => {
+    renderRecent();
+    openTrigger();
+    const toggle = toggleItem();
+    expect(toggle.getAttribute("aria-haspopup")).toBe("menu");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 });
 

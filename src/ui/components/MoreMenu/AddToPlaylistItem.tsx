@@ -45,6 +45,10 @@ export function AddToPlaylistItem({
       {track && (
         <div className="relative">
           <button
+            type="button"
+            role="menuitem"
+            aria-haspopup="menu"
+            aria-expanded={showPlaylistsSubmenu}
             onClick={handleToggleSubmenu}
             className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#33343a] hover:text-brand-text rounded-md transition-all flex items-center justify-between group mb-1"
           >

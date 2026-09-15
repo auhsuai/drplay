@@ -143,13 +143,16 @@ export function MoreMenu({
     setIsOpen,
   });
 
-  useMoreMenuEvents({
+  const { closeMenu } = useMoreMenuEvents({
     isMenuOpen,
     setIsOpen,
     onClose,
     menuRef,
     dropdownRef,
     setShowPlaylistsSubmenu,
+    // APG focus return only for menus opened from the trigger; the
+    // anchor/context-menu path (SongCard right-click) keeps its own focus.
+    restoreFocus: !forceOpen && !anchorPoint,
   });
 
   // Keyboard support for the portal menu (APG menu button): the items are
@@ -351,9 +354,20 @@ export function MoreMenu({
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.stopPropagation();
-                setIsOpen(false);
-                setShowPlaylistsSubmenu(false);
-                onClose?.();
+                if (showPlaylistsSubmenu) {
+                  // APG submenu-first order (P2-08-6): the first Escape closes
+                  // only the submenu and returns focus to its parent menuitem;
+                  // the next Escape closes the menu (closeMenu restores the
+                  // trigger focus per P2-08-3).
+                  setShowPlaylistsSubmenu(false);
+                  dropdownRef.current
+                    ?.querySelector<HTMLElement>(
+                      '[role="menuitem"][aria-haspopup="menu"]',
+                    )
+                    ?.focus();
+                  return;
+                }
+                closeMenu();
                 return;
               }
               if (

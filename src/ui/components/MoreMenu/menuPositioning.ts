@@ -65,8 +65,9 @@ export function getContextMenuStyle({
   if (buttonRect) {
     const style: CSSProperties = {};
     // Right-aligned to the trigger as before, but pinned flush-left when the
-    // trigger sits closer than one menu width to the left viewport edge
-    // (also covers a stale rect after resize/rotation while the menu is open).
+    // trigger sits closer than one menu width to the left viewport edge. The
+    // placement is computed once when the menu opens; an open menu closes on
+    // window resize instead of tracking the new viewport.
     const hStart = fitStart(
       buttonRect.right - MENU_WIDTH_PX,
       MENU_WIDTH_PX,

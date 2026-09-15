@@ -874,10 +874,11 @@ describe("QueuePanel folder drill-down", () => {
       en.menu.download_song,
       en.menu.navigate,
       en.queue.remove_from_queue,
+      en.menu.add_to_playlist,
     ]);
-    // Add to Playlist is the submenu toggle (plain button until P2-09).
+    // Add to Playlist is the submenu toggle: a parent menuitem since P2-09a-1.
     expect(
-      screen.getByRole("button", { name: en.menu.add_to_playlist }),
+      screen.getByRole("menuitem", { name: en.menu.add_to_playlist }),
     ).toBeTruthy();
   });
 });
