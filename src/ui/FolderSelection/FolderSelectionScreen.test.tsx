@@ -1092,3 +1092,147 @@ describe("FolderSelectionScreen search clear button (P2-10-8)", () => {
     expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
   });
 });
+
+type NavFrame = { skeleton: boolean; staleFolderCard: boolean };
+
+describe("FolderSelectionScreen navigation loading transition (P2-10-5)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Same Profiler probe as the RC-B flash test above: onRender fires
+  // synchronously after every commit, so each entry is one committed frame
+  // in order — the entry at the reset index is the FIRST frame the user sees
+  // after the click.
+  function renderWithFrameProbe() {
+    const frames: NavFrame[] = [];
+    render(
+      <Profiler
+        id="nav-loading-probe"
+        onRender={() => {
+          frames.push({
+            skeleton:
+              document.querySelector('[data-testid="skeleton-row"]') !== null,
+            staleFolderCard: (document.body.textContent ?? "").includes(
+              "Folder 1",
+            ),
+          });
+        }}
+      >
+        <FolderSelectionScreen
+          token="test-token"
+          onSelectFolder={vi.fn()}
+          initialFolderId="folderB"
+          initialFolderHistory={[{ id: "root", name: "My Drive" }]}
+        />
+      </Profiler>,
+    );
+    return frames;
+  }
+
+  async function loadFolderOne() {
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "f1", name: "Folder 1" }]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Folder 1");
+  }
+
+  it("breadcrumb click commits the skeleton first, never the previous folder's card (P2-10-5)", async () => {
+    const frames = renderWithFrameProbe();
+    await loadFolderOne();
+    expect(document.querySelector('[data-testid="skeleton-row"]')).toBeNull();
+
+    const before = frames.length;
+    fireEvent.click(screen.getByRole("button", { name: "My Drive" }));
+
+    const firstFrame = frames[before];
+    expect(firstFrame).toBeDefined();
+    expect(firstFrame?.skeleton).toBe(true);
+    expect(firstFrame?.staleFolderCard).toBe(false);
+  });
+
+  it("Back-pop commits the skeleton first, never the previous folder's card (P2-10-5)", async () => {
+    const frames = renderWithFrameProbe();
+    await loadFolderOne();
+    expect(document.querySelector('[data-testid="skeleton-row"]')).toBeNull();
+
+    const before = frames.length;
+    fireEvent.click(backButton());
+
+    const firstFrame = frames[before];
+    expect(firstFrame).toBeDefined();
+    expect(firstFrame?.skeleton).toBe(true);
+    expect(firstFrame?.staleFolderCard).toBe(false);
+  });
+});
+
+describe("FolderSelectionScreen parent-walk token/abort parity (P2-10-6)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("Back parent-walk passes the refreshed token and an abort signal to both Drive calls (parity with fetchFolders/search)", async () => {
+    mocks.getValidToken.mockResolvedValue("fresh-token");
+    mocks.driveApi.getFileParents.mockResolvedValue(["parentX"]);
+    mocks.driveApi.getFileName.mockResolvedValue("Parent X");
+
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId="folderB"
+        initialFolderHistory={[]}
+        appRootFolder="other-root"
+      />,
+    );
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve([]);
+      await Promise.resolve();
+    });
+
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(mocks.driveApi.getFileParents).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(mocks.driveApi.getFileName).toHaveBeenCalled();
+    });
+
+    expect(mocks.driveApi.getFileParents).toHaveBeenCalledWith(
+      "fresh-token",
+      "folderB",
+      expect.anything(),
+    );
+    expect(mocks.driveApi.getFileName).toHaveBeenCalledWith(
+      "fresh-token",
+      "parentX",
+      expect.anything(),
+    );
+  });
+});
