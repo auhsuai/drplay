@@ -470,8 +470,20 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     return events.filter((e) => e.name === name).map((e) => e.payload);
   }
 
-  it("end-file error with a transport cause -> network_interrupted, no auto-advance", () => {
-    fireMpvEvent("end-file", "error", "Connection reset by peer");
+  function fireProxyError(fileId: string, status: number): void {
+    fireTauri("stream-proxy-error", { fileId, status });
+  }
+
+  it("the engine subscribes to stream-proxy-error on start (R04 event contract)", () => {
+    expect(tauriMocks.listen).toHaveBeenCalledWith(
+      "stream-proxy-error",
+      expect.any(Function),
+    );
+  });
+
+  it("end-file error with proxy 503 -> network_interrupted, no ended, no broken mark", () => {
+    fireProxyError("A", 503);
+    fireMpvEvent("end-file", "error", "loading failed");
 
     expect(emitted("error")).toEqual([
       expect.objectContaining({ code: "network_interrupted" }),
@@ -480,8 +492,38 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
-  it("end-file error with a 4xx (Drive locked/quota) keeps format_error + ended (storm guard)", () => {
-    fireMpvEvent("end-file", "error", "HTTP error 403 Forbidden");
+  it("proxy 429 (rate limit) -> network_interrupted (retryable)", () => {
+    fireProxyError("A", 429);
+    fireMpvEvent("end-file", "error", "unrecognized file format");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "network_interrupted" }),
+    ]);
+    expect(emitted("ended")).toEqual([]);
+  });
+
+  it("proxy 499 (idle-abort mid-stream) -> network_interrupted, no ended", () => {
+    fireProxyError("A", 499);
+    fireMpvEvent("end-file", "error", "something happened");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "network_interrupted" }),
+    ]);
+    expect(emitted("ended")).toEqual([]);
+  });
+
+  it("proxy 403 (Drive locked/quota) keeps format_error + ended (storm guard)", () => {
+    fireProxyError("A", 403);
+    fireMpvEvent("end-file", "error", "loading failed");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "format_error" }),
+    ]);
+    expect(emitted("ended")).toEqual([undefined]);
+  });
+
+  it("no proxy event + mpv's short string falls back to the format default (parity)", () => {
+    fireMpvEvent("end-file", "error", "loading failed");
 
     expect(emitted("error")).toEqual([
       expect.objectContaining({ code: "format_error" }),
@@ -491,6 +533,43 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
 
   it("end-file error without the error field stays format_error (payload parity)", () => {
     fireMpvEvent("end-file", "error");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "format_error" }),
+    ]);
+    expect(emitted("ended")).toEqual([undefined]);
+  });
+
+  it("no proxy data: a transport keyword in mpv's string still routes to network (weak fallback)", () => {
+    fireMpvEvent("end-file", "error", "Connection reset by peer");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "network_interrupted" }),
+    ]);
+    expect(emitted("ended")).toEqual([]);
+  });
+
+  it("a proxy event alone never surfaces an error (end-file is the single display channel)", () => {
+    fireProxyError("A", 503);
+
+    expect(emitted("error")).toEqual([]);
+    expect(emitted("ended")).toEqual([]);
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
+  });
+
+  it("a proxy event for another fileId never steers classification", () => {
+    fireProxyError("B", 503);
+    fireMpvEvent("end-file", "error", "loading failed");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "format_error" }),
+    ]);
+  });
+
+  it("switching tracks drops the old track's proxy error (no leak into the new stream)", async () => {
+    fireProxyError("A", 503);
+    await ctrl.playTrack(trackB);
+    fireMpvEvent("end-file", "error", "loading failed");
 
     expect(emitted("error")).toEqual([
       expect.objectContaining({ code: "format_error" }),
@@ -717,6 +796,8 @@ describe("MpvAudioController — release lifecycle", () => {
     expect(commandNames()).toEqual(["mpv_shutdown"]);
     fireProperty("time-pos", 5);
     fireMpvEvent("end-file", "eof");
+    // The stream-proxy-error listener dies with the engine too.
+    fireTauri("stream-proxy-error", { fileId: "A", status: 503 });
     expect(timeupdate).not.toHaveBeenCalled();
     expect(ended).not.toHaveBeenCalled();
   });

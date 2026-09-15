@@ -5,7 +5,10 @@
  * contract fixed by Tasks 1+2 (src-tauri/src/mpv/mod.rs, stream_proxy/mod.rs):
  * commands `mpv_spawn` / `mpv_command` / `mpv_shutdown` / `stream_proxy_start`,
  * events `mpv-property` {name,data} + `mpv-event` {event,reason,error}
- * (`error`/`file_error` from mpv; `ipc-closed` when the pipe ends).
+ * (`error`/`file_error` from mpv; `ipc-closed` when the pipe ends) +
+ * `stream-proxy-error` {fileId,status} (R04: the real status the local
+ * stream proxy returned for a failing request; consumed by mpvAudio.ts as
+ * the primary error-kind source — see classifyEndFileError).
  */
 
 import { captureError } from "../utils/errorLog";
@@ -21,6 +24,7 @@ export const TAURI_COMMANDS = {
 export const TAURI_EVENTS = {
   property: "mpv-property",
   event: "mpv-event",
+  streamProxyError: "stream-proxy-error",
 } as const;
 
 export const MPV_PROPERTIES = {
@@ -399,17 +403,38 @@ export function toTimeRanges(ranges: MpvRange[]): TimeRanges {
 export type EndFileErrorKind = "format" | "network";
 
 /**
- * Classify mpv's end-file error string (R02-1), explicitly documented:
- * - null/empty → "format" (100% parity with the pre-existing behavior);
- * - HTTP 4xx / forbidden / not found → "format" (Drive locked/quota keep the
- *   storm-guard semantics: broken mark + capped retry loop);
- * - transport failures (connection/reset/timeout/network/broken pipe/...) →
- *   "network" (retryable, never marks the track broken);
- * - anything else → "format" (safe default).
+ * Retryable proxy statuses besides 5xx (R04): 408 request timeout,
+ * 429 rate limit, 499 = proxy-synthesized idle-abort of a stalled body.
+ */
+const PROXY_RETRYABLE_STATUSES: readonly number[] = [408, 429, 499];
+
+/**
+ * Classify an end-file error (R05 — proxy status is the PRIMARY source).
+ * Why: mpv's `file_error` is only mpv_error_string() output — short strings
+ * like "loading failed" / "unrecognized file format" / "something happened"
+ * that carry no HTTP detail (R04 audit proved the old regex premise wrong).
+ * The local stream proxy reports the real status via `stream-proxy-error`.
+ *
+ * Priority:
+ * - `proxyStatus` present (the current stream's proxy error event):
+ *   - 5xx or 408/429/499 → "network" (retryable, never marks broken);
+ *   - any other 4xx → "format" (Drive locked/quota: storm-guard semantics);
+ *   - values outside 4xx/5xx are not proxy error statuses → fall through.
+ * - no usable proxy status → weak fallback on mpv's raw string:
+ *   - null/empty → "format" (100% parity with the pre-existing behavior);
+ *   - HTTP 4xx / forbidden / not found → "format";
+ *   - transport keywords (connection/reset/timeout/network/...) → "network";
+ *   - anything else → "format" (safe default).
  */
 export function classifyEndFileError(
   raw: string | null | undefined,
+  proxyStatus?: number | null,
 ): EndFileErrorKind {
+  if (typeof proxyStatus === "number") {
+    if (proxyStatus >= 500 && proxyStatus < 600) return "network";
+    if (PROXY_RETRYABLE_STATUSES.includes(proxyStatus)) return "network";
+    if (proxyStatus >= 400 && proxyStatus < 500) return "format";
+  }
   if (raw === null || raw === undefined || raw.trim() === "") return "format";
   if (/(http error 4\d\d|forbidden|not found)/i.test(raw)) return "format";
   if (

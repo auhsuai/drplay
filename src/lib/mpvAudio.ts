@@ -6,12 +6,15 @@ import { usePlayerStore } from "../store/playerStore";
 import type { BufferedSource } from "../utils/bufferedRange";
 import type { AudioEventMap, AudioEventHandler } from "./audioNativeEvents";
 import {
+  asNumber,
+  asString,
   BufferingTracker,
   classifyEndFileError,
   describeError,
   dispatchMpvEvent,
   dispatchPropertyEvent,
   freshThrottleClocks,
+  isRecord,
   MPV_BOOL,
   MPV_COMMANDS,
   MPV_PROPERTY_ARGS,
@@ -46,6 +49,14 @@ export class MpvAudioController {
   /** Shared in-flight spawn attempt — concurrent playTrack calls join it. */
   private startPromise: Promise<boolean> | null = null;
   private proxyPort: number | null = null;
+  /** Latest `stream-proxy-error` for the current stream (R05) — state only,
+   *  never a display channel: mpv's end-file is the single place an error
+   *  surfaces (the two events describe the same failure — dedupe). */
+  private lastProxyError: {
+    fileId: string;
+    status: number;
+    at: number;
+  } | null = null;
   private lastTrack: Track | null = null;
   private currentTrackId: string | null = null;
   private playbackFinished = true;
@@ -156,7 +167,8 @@ export class MpvAudioController {
         this.emit("ended", undefined);
         return;
       }
-      if (classifyEndFileError(mpvError) === "network") {
+      const proxyStatus = this.proxyStatusForCurrentStream();
+      if (classifyEndFileError(mpvError, proxyStatus) === "network") {
         // Why (R02-1): a transport failure is retryable — do NOT mark the
         // track broken and do NOT auto-advance (same surface as a failed
         // command), unlike the terminal format_error path below.
@@ -241,6 +253,29 @@ export class MpvAudioController {
     });
   }
 
+  /** Record one `stream-proxy-error` payload (R05): status memory only. */
+  private noteProxyError(payload: unknown): void {
+    if (!isRecord(payload)) {
+      this.logWarn("stream-proxy-error payload malformed (skipped)");
+      return;
+    }
+    const fileId = asString(payload["fileId"]);
+    const status = asNumber(payload["status"]);
+    if (fileId === null || status === null) {
+      this.logWarn("stream-proxy-error payload malformed (skipped)");
+      return;
+    }
+    this.lastProxyError = { fileId, status, at: Date.now() };
+  }
+
+  /** The proxy status usable for THIS stream only — a stale event (other
+   *  fileId, previous stream) must never steer end-file classification. */
+  private proxyStatusForCurrentStream(): number | null {
+    const error = this.lastProxyError;
+    if (error === null || error.fileId !== this.currentTrackId) return null;
+    return error.status;
+  }
+
   private emitEndFileError(): void {
     this.logError("mpv end-file reason=error (track failed to play)");
     this.emit("error", {
@@ -300,6 +335,12 @@ export class MpvAudioController {
         }),
       );
       if (this.isStale(epoch)) return this.disposeStaleStart(attached);
+      attached.push(
+        await listen(TAURI_EVENTS.streamProxyError, (event) => {
+          this.noteProxyError(event.payload);
+        }),
+      );
+      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
       await invoke(TAURI_COMMANDS.mpvSpawn);
       if (this.isStale(epoch)) return this.disposeStaleStart(attached);
     } catch (e: unknown) {
@@ -346,6 +387,9 @@ export class MpvAudioController {
     this.lastTrack = track;
     this.currentTrackId = track.id;
     this.playbackFinished = false;
+    // A new stream resets the proxy-error signal: an event from the previous
+    // track must never classify THIS track's end-file (R05).
+    this.lastProxyError = null;
     // mpv resets the playhead on loadfile replace — report 0 immediately (plan 2.3 race rule).
     this.currentTime = 0;
     this.duration = 0;
@@ -505,6 +549,7 @@ export class MpvAudioController {
     this.unlistenFns = [];
     this.started = false;
     this.proxyPort = null;
+    this.lastProxyError = null;
     this.lastTrack = null;
     this.currentTrackId = null;
     this.playbackFinished = true;

@@ -433,14 +433,12 @@ describe("watchdog constants", () => {
 describe("dispatchMpvEvent routing (R02-1 / R02-2)", () => {
   it("end-file error carries mpv's error string to onEndFile", () => {
     const cb = makeCb();
+    // Realistic mpv string: mpv_error_string() output, not ffmpeg detail.
     dispatchMpvEvent(
-      { event: "end-file", reason: "error", error: "Connection reset by peer" },
+      { event: "end-file", reason: "error", error: "loading failed" },
       cb,
     );
-    expect(cb.onEndFile).toHaveBeenCalledWith(
-      "error",
-      "Connection reset by peer",
-    );
+    expect(cb.onEndFile).toHaveBeenCalledWith("error", "loading failed");
   });
 
   it("end-file error without an error field passes null", () => {
@@ -469,40 +467,46 @@ describe("dispatchMpvEvent routing (R02-1 / R02-2)", () => {
   });
 });
 
-describe("classifyEndFileError (R02-1 rules)", () => {
-  it("null/empty input keeps the legacy format path (payload parity)", () => {
+describe("classifyEndFileError (R05: proxy status is the primary source)", () => {
+  it("proxy 5xx is a retryable network failure — mpv's string cannot overrule it", () => {
+    expect(classifyEndFileError("loading failed", 503)).toBe("network");
+    expect(classifyEndFileError("unrecognized file format", 502)).toBe(
+      "network",
+    );
+    expect(classifyEndFileError(null, 504)).toBe("network");
+  });
+
+  it("proxy 408/429/499 (timeout / rate limit / idle-abort) are retryable network", () => {
+    expect(classifyEndFileError("loading failed", 408)).toBe("network");
+    expect(classifyEndFileError("something happened", 429)).toBe("network");
+    expect(classifyEndFileError(null, 499)).toBe("network");
+  });
+
+  it("proxy 4xx (locked/quota/forbidden/not found) stays format (storm guard)", () => {
+    expect(classifyEndFileError("loading failed", 403)).toBe("format");
+    expect(classifyEndFileError("unrecognized file format", 404)).toBe(
+      "format",
+    );
+    expect(classifyEndFileError(null, 410)).toBe("format");
+    expect(classifyEndFileError("something happened", 400)).toBe("format");
+  });
+
+  it("no proxy data: mpv's real short strings keep the format default (100% parity)", () => {
     expect(classifyEndFileError(null)).toBe("format");
     expect(classifyEndFileError(undefined)).toBe("format");
     expect(classifyEndFileError("")).toBe("format");
     expect(classifyEndFileError("   ")).toBe("format");
-  });
-
-  it("HTTP 4xx / forbidden / not found stay format (Drive locked/quota storm guard)", () => {
-    expect(classifyEndFileError("HTTP error 403 Forbidden")).toBe("format");
-    expect(classifyEndFileError("HTTP error 404 Not Found")).toBe("format");
-    expect(classifyEndFileError("Forbidden")).toBe("format");
-    expect(classifyEndFileError("file not found")).toBe("format");
-  });
-
-  it("transport failures classify as network (retryable, never broken)", () => {
-    for (const raw of [
-      "Connection reset by peer",
-      "Connection refused",
-      "connection timed out",
-      "timeout",
-      "network unreachable",
-      "No route to host",
-      "broken pipe",
-      "I/O error",
-    ]) {
-      expect(classifyEndFileError(raw), raw).toBe("network");
-    }
-  });
-
-  it("unknown error strings fall back to format (safe default)", () => {
-    expect(classifyEndFileError("Could not open codec.")).toBe("format");
-    expect(classifyEndFileError("Failed to recognize file format.")).toBe(
+    expect(classifyEndFileError("loading failed")).toBe("format");
+    expect(classifyEndFileError("unrecognized file format")).toBe("format");
+    expect(classifyEndFileError("something happened", null)).toBe("format");
+    expect(classifyEndFileError("Could not open codec.", undefined)).toBe(
       "format",
     );
+  });
+
+  it("no proxy data: the transport regex stays as a weak fallback only", () => {
+    expect(classifyEndFileError("Connection reset by peer")).toBe("network");
+    expect(classifyEndFileError("connection timed out")).toBe("network");
+    expect(classifyEndFileError("http error 403")).toBe("format");
   });
 });
