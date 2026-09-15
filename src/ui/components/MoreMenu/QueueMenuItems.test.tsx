@@ -39,30 +39,45 @@ afterEach(() => {
 });
 
 describe("QueueMenuItems", () => {
-  it("remove enabled → click gọi onRemoveFromQueue + setIsOpen(false)", () => {
+  it("remove enabled → click gọi onRemoveFromQueue + setIsOpen(false), không có aria-disabled", () => {
     const onRemoveFromQueue = vi.fn();
     const props = renderItems({ onRemoveFromQueue });
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "queue.remove_from_queue" }),
-    );
+    const btn = screen.getByRole("menuitem", {
+      name: "queue.remove_from_queue",
+    });
+    expect(btn).not.toHaveAttribute("aria-disabled");
+
+    fireEvent.click(btn);
 
     expect(props.setIsOpen).toHaveBeenCalledWith(false);
     expect(onRemoveFromQueue).toHaveBeenCalledTimes(1);
   });
 
-  it("disableRemoveFromQueue → disabled, click không gọi callback, có title hint", () => {
+  it("disableRemoveFromQueue → aria-disabled + visual class, click không gọi callback, có title hint", () => {
     const onRemoveFromQueue = vi.fn();
-    renderItems({ onRemoveFromQueue, disableRemoveFromQueue: true });
+    const props = renderItems({
+      onRemoveFromQueue,
+      disableRemoveFromQueue: true,
+    });
 
     const btn = screen.getByRole("menuitem", {
       name: "queue.remove_from_queue",
     });
-    expect(btn).toBeDisabled();
+    // APG: disabled menuitem stays focusable and is announced via
+    // aria-disabled instead of the native attribute.
+    expect(btn).toHaveAttribute("aria-disabled", "true");
+    expect(btn.hasAttribute("disabled")).toBe(false);
     expect(btn.title).toBe("queue.current_cannot_remove");
+    // P2-08-5: the item styles its own disabled state (aria-disabled does
+    // not trigger the `disabled:` pseudo-class).
+    const classes = btn.className.split(/\s+/);
+    expect(classes).toContain("opacity-50");
+    expect(classes).toContain("cursor-not-allowed");
 
     fireEvent.click(btn);
     expect(onRemoveFromQueue).not.toHaveBeenCalled();
+    expect(props.setIsOpen).not.toHaveBeenCalled();
   });
 
   it("có onRemoveFolderFromQueue → item folder render + click gọi; không truyền → KHÔNG render", () => {

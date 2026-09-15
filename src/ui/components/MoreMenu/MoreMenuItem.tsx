@@ -25,9 +25,14 @@ export function MoreMenuItem({
     <button
       type="button"
       role="menuitem"
-      onClick={onClick}
-      className={className}
-      disabled={disabled}
+      onClick={(e) => {
+        // APG: disabled menu items stay focusable and announced via
+        // aria-disabled, but must not activate.
+        if (disabled) return;
+        onClick(e);
+      }}
+      className={`${className}${disabled ? " opacity-50 cursor-not-allowed" : ""}`}
+      aria-disabled={disabled || undefined}
       title={title}
     >
       <Icon className={iconClassName} />

@@ -514,6 +514,10 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
       "Add to Playlist",
     ]);
     expect(items[2]?.tabIndex).toBe(-1);
+    // P2-08-5: disable is now announced (aria-disabled) instead of the
+    // native attribute, which would hide the item from keyboard/SR.
+    expect(items[2]?.getAttribute("aria-disabled")).toBe("true");
+    expect(items[2]?.hasAttribute("disabled")).toBe(false);
 
     pressOnActive("ArrowDown"); // -> Locate File
     pressOnActive("ArrowDown"); // skips the disabled entry

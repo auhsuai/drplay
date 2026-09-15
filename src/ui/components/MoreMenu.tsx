@@ -166,7 +166,7 @@ export function MoreMenu({
     if (!root) return [];
     return Array.from(
       root.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-    ).filter((item) => !item.hasAttribute("disabled"));
+    ).filter((item) => item.getAttribute("aria-disabled") !== "true");
   }, []);
 
   const focusMenuItemAt = useCallback((index: number): void => {
@@ -175,11 +175,13 @@ export function MoreMenu({
     const items = Array.from(
       root.querySelectorAll<HTMLElement>('[role="menuitem"]'),
     );
-    const enabled = items.filter((item) => !item.hasAttribute("disabled"));
+    const enabled = items.filter(
+      (item) => item.getAttribute("aria-disabled") !== "true",
+    );
     if (enabled.length === 0) return;
     const target = enabled[(index + enabled.length) % enabled.length];
-    // Keep exactly one tabIndex=0 in the menu: disabled entries are pulled
-    // out of the roving set even though they keep their DOM position.
+    // Keep exactly one tabIndex=0 in the menu: aria-disabled entries are
+    // pulled out of the roving set even though they keep their DOM position.
     items.forEach((item) => {
       item.tabIndex = item === target ? 0 : -1;
     });

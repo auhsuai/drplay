@@ -32,7 +32,7 @@ export function PlayerBarMenuItems({
             onClick={(e) => {
               handleDownloadClick(e, track, setIsOpen);
             }}
-            className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+            className={MENU_ITEM_BASE_CLASS}
           />
 
           <MoreMenuItem

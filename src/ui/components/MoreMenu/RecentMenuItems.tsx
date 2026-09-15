@@ -56,7 +56,7 @@ export function RecentMenuItems({
               handleDownloadClick(e, track, setIsOpen);
               onClose?.();
             }}
-            className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+            className={MENU_ITEM_BASE_CLASS}
           />
 
           <MoreMenuItem
