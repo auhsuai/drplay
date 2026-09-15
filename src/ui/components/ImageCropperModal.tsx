@@ -36,7 +36,37 @@ export function ImageCropperModal({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isProcessing) onClose();
+      if (e.key === "Escape") {
+        if (!isProcessing) onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      // Focus containment (WAI-ARIA APG modal dialog): Tab/Shift+Tab must not
+      // reach the background. The focusable set is queried at keydown time
+      // because the footer buttons become disabled while isProcessing (a
+      // cached list would try to focus disabled elements).
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusables = dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (!first || !last) return;
+      const active = document.activeElement;
+      // The container itself (tabIndex={-1}) holds the initial focus; it is
+      // not in `focusables`, so treat it (and a focus that somehow escaped)
+      // as a boundary and wrap to the matching end.
+      const insideDialog = dialog.contains(active);
+      if (e.shiftKey) {
+        if (!insideDialog || active === first || active === dialog) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (!insideDialog || active === last || active === dialog) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -165,37 +195,59 @@ export function ImageCropperModal({
   );
 }
 
-function getCroppedImg(imageSrc: string, pixelCrop: Area): Promise<string> {
+function createImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.src = imageSrc;
+    // Handlers are attached BEFORE src: an already-cached image can fire
+    // load/error as soon as src is assigned, and a raw Event rejection logs
+    // as "[object Event]".
     image.onload = () => {
-      const canvas = document.createElement("canvas");
-      // Encode as 512x512 resolution for optimal quality vs storage space
-      const targetSize = 512;
-      canvas.width = targetSize;
-      canvas.height = targetSize;
-      const ctx = canvas.getContext("2d");
-
-      if (!ctx) {
-        reject(new Error("canvas-2d-context-unavailable"));
-        return;
-      }
-
-      ctx.drawImage(
-        image,
-        pixelCrop.x,
-        pixelCrop.y,
-        pixelCrop.width,
-        pixelCrop.height,
-        0,
-        0,
-        targetSize,
-        targetSize,
-      );
-
-      resolve(canvas.toDataURL("image/jpeg", 0.8));
+      resolve(image);
     };
-    image.onerror = reject;
+    image.onerror = () => {
+      reject(new Error("crop-image-load-failed"));
+    };
+    image.src = url;
   });
+}
+
+async function getCroppedImg(
+  imageSrc: string,
+  pixelCrop: Area,
+): Promise<string> {
+  const image = await createImage(imageSrc);
+  // The draw runs in the async body, NOT inside a bare onload callback: a
+  // throw here rejects the returned promise. Throwing inside onload used to
+  // leave the promise pending forever, stranding handleSave on await and
+  // locking the modal (isProcessing never reset, nothing could close it).
+  try {
+    const canvas = document.createElement("canvas");
+    // Encode as 512x512 resolution for optimal quality vs storage space
+    const targetSize = 512;
+    canvas.width = targetSize;
+    canvas.height = targetSize;
+    const ctx = canvas.getContext("2d");
+
+    if (!ctx) {
+      throw new Error("canvas-2d-context-unavailable");
+    }
+
+    ctx.drawImage(
+      image,
+      pixelCrop.x,
+      pixelCrop.y,
+      pixelCrop.width,
+      pixelCrop.height,
+      0,
+      0,
+      targetSize,
+      targetSize,
+    );
+
+    return canvas.toDataURL("image/jpeg", 0.8);
+  } catch (err) {
+    throw new Error(
+      `crop-draw-failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }

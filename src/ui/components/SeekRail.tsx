@@ -37,12 +37,13 @@ export function SeekRail({
   return (
     <div
       ref={progressBarRef}
-      role="progressbar"
+      role="slider"
+      tabIndex={0}
       aria-label={t("now_playing.progress")}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className="flex-1 h-1.5 bg-gray-300 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center"
+      className="flex-1 h-1.5 bg-gray-300 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center before:absolute before:inset-x-0 before:-inset-y-[9px] before:content-['']"
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerMove={onPointerMove}

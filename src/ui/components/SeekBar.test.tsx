@@ -450,18 +450,19 @@ describe("SeekBar buffer bar", () => {
   });
 });
 
-describe("SeekBar a11y progressbar", () => {
-  it('exposes the progress bar with role="progressbar" and a bounded ARIA value range', () => {
+describe("SeekBar a11y slider", () => {
+  it('exposes the rail as role="slider" with a bounded ARIA value range and Tab focusability', () => {
     renderSeekBar();
-    const bar = screen.getByRole("progressbar");
+    const bar = screen.getByRole("slider");
     expect(bar.getAttribute("aria-valuemin")).toBe("0");
     expect(bar.getAttribute("aria-valuemax")).toBe("100");
     expect(bar.getAttribute("aria-valuenow")).toBe("0");
+    expect(bar.tabIndex).toBe(0);
   });
 
-  it("gives the progressbar an accessible name", () => {
+  it("gives the slider an accessible name", () => {
     renderSeekBar();
-    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe(
+    expect(screen.getByRole("slider").getAttribute("aria-label")).toBe(
       "Playback progress",
     );
   });
@@ -474,7 +475,7 @@ describe("SeekBar a11y progressbar", () => {
         fakeController._emit("durationchange", { duration: 240 });
       });
 
-      const bar = screen.getByRole("progressbar");
+      const bar = screen.getByRole("slider");
       const rect = {
         left: 0,
         right: 200,
@@ -504,6 +505,75 @@ describe("SeekBar a11y progressbar", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("syncs aria-valuetext with the formatted playhead time at the same fill write-point", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 65, duration: 240 });
+    });
+
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    expect(rail.getAttribute("role")).toBe("slider");
+    expect(rail.getAttribute("aria-valuetext")).toBe("1:05");
+  });
+});
+
+describe("SeekBar progress clamp (P2-02-1)", () => {
+  it("BUG regression: an overrunning interpolated clock cannot push fill/thumb/aria value past 100", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 105, duration: 100 });
+    });
+
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    expect(screen.getByTestId("progress-fill").style.width).toBe("100%");
+    expect(screen.getByTestId("seek-thumb").style.left).toBe("100%");
+    expect(rail.getAttribute("aria-valuenow")).toBe("100");
+  });
+});
+
+describe("SeekBar rail hit area + degenerate geometry", () => {
+  it("BUG regression: a zero-width rail is inert — no degenerate draw, no seek on release", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const rect = {
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue(rect);
+
+    act(() => {
+      fireEvent.pointerDown(rail, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 150, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).not.toHaveBeenCalled();
+    expect(screen.getByTestId("progress-fill").style.width).toBe("0%");
+  });
+
+  it("expands the interactive hit area to ~24px via a rail pseudo-element while the visible track stays 6px", () => {
+    renderSeekBar();
+    const rail = screen.getByRole("slider");
+    expect(rail.className).toContain("h-1.5");
+    expect(rail.className).toContain("before:content-['']");
+    expect(rail.className).toContain("before:-inset-y-[9px]");
   });
 });
 
@@ -719,7 +789,7 @@ describe("SeekBar interleaved layout (time spans on both sides of the bar)", () 
       fakeController._emit("durationchange", { duration: 240 });
     });
 
-    const bar = screen.getByRole("progressbar");
+    const bar = screen.getByRole("slider");
     // The bar's siblings within the flex row are the two time spans — the
     // start clock on the left, the end duration on the right. This asserts
     // DOM ORDER, which text queries can't: the split regression stacked both
@@ -779,7 +849,7 @@ describe("SeekBar progress fill clipper + rail-anchored thumb (needle fix v2)", 
     renderSeekBar();
 
     const thumb = screen.getByTestId("seek-thumb");
-    const rail = screen.getByRole("progressbar");
+    const rail = screen.getByRole("slider");
     expect(thumb.parentElement).toBe(rail);
   });
 

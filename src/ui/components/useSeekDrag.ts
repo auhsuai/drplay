@@ -106,12 +106,19 @@ export function useSeekDrag({
 
     const bounds = progressBarRef.current.getBoundingClientRect();
     const updateTime = (clientX: number) => {
+      // Degenerate geometry (layout not finished / broken assets): dividing by
+      // bounds.width would yield Infinity or NaN -> seek(duration)/seek(NaN).
+      // Sibling guard: useSeekHover.ts checks the same thing on hover.
+      if (bounds.width <= 0) return playheadRef.current;
       const percent = clamp01((clientX - bounds.left) / bounds.width);
       const newTime = percent * (durationRef.current || duration);
+      // Write the playhead BEFORE the fill so the single write-point's
+      // aria-valuetext (formatTime(playheadRef.current)) matches the width it
+      // is written with — including on the drag path.
+      playheadRef.current = newTime;
       if (progressFillRef.current) setFillWidth(percent * 100);
       if (currentTimeTextRef.current)
         currentTimeTextRef.current.textContent = formatTime(newTime);
-      playheadRef.current = newTime;
       return newTime;
     };
 
@@ -206,7 +213,12 @@ export function useSeekDrag({
       const promiseSeekAudio = audio as unknown as {
         seek: (time: number) => Promise<void> | undefined;
       };
-      const seekResult = promiseSeekAudio.seek(updateTime(upEvent.clientX));
+      // A degenerate-width session (see updateTime guard) must not commit a
+      // no-op-but-real seek round-trip to the engine either.
+      const seekResult =
+        bounds.width > 0
+          ? promiseSeekAudio.seek(updateTime(upEvent.clientX))
+          : undefined;
       // A promise-returning engine (e.g. native audio bridges) rethrows after
       // reporting, so a bare fire-and-forget surfaces as an unhandled
       // rejection and strands fill/thumb/text at the failed target. Desktop

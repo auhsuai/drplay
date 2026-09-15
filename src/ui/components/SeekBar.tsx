@@ -68,11 +68,20 @@ export function SeekBar({
   // clipper — never cut at 0%/100%.
   const setFillWidth = (percent: number): void => {
     if (!progressFillRef.current) return;
-    progressFillRef.current.style.width = `${String(percent)}%`;
-    if (thumbRef.current) thumbRef.current.style.left = `${String(percent)}%`;
+    // Clamp at the single write-point: the throttled timeupdate can carry a
+    // currentTime past the duration (TimeInterpolator keeps counting through
+    // the bridge push-gap; a VBR durationchange can also shrink under it), so
+    // width/thumb/aria-valuenow must never leave the 0..100 range.
+    const p = clamp(percent, 0, 100);
+    progressFillRef.current.style.width = `${String(p)}%`;
+    if (thumbRef.current) thumbRef.current.style.left = `${String(p)}%`;
     progressBarRef.current?.setAttribute(
       "aria-valuenow",
-      String(Math.round(percent)),
+      String(Math.round(p)),
+    );
+    progressBarRef.current?.setAttribute(
+      "aria-valuetext",
+      formatTime(playheadRef.current),
     );
   };
 
