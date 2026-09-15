@@ -182,6 +182,17 @@ function PlayerBarImpl({
         }
         resetAdvanceGuard();
       }
+      // Repeat-one parity: the mpv engine has no loop property and
+      // resolveNextTrack never returns the current track for this mode, so the
+      // ended handler must replay the same track itself (playbackFinished is
+      // true after EOF, so playTrack falls through to a loadfile replace from
+      // 0 instead of the same-track no-op). Read the store, not the props: the
+      // subscription is memoized and must not close over a stale track/mode.
+      const { playMode, currentTrack: cur } = usePlayerStore.getState();
+      if (playMode === "repeat-one" && cur) {
+        void audio.playTrack(cur, 0);
+        return;
+      }
       onNextTrack(true);
     });
 

@@ -1087,6 +1087,47 @@ describe("PlayerBar auto-advance storm guard (Fix I — queue cháy hết im l�
   });
 });
 
+describe("PlayerBar repeat-one ended replay (B16-3)", () => {
+  afterEach(() => {
+    usePlayerStore.setState({
+      currentTrack: null,
+      playMode: "normal",
+      isPlaying: false,
+    });
+  });
+
+  it("B16-3: ended + repeat-one → replay cùng track từ 0, KHÔNG next", () => {
+    const cur = makeTrack();
+    usePlayerStore.setState({ currentTrack: cur, playMode: "repeat-one" });
+    const onNext = vi.fn();
+    fakeController.playTrack.mockClear();
+    renderPlayer({ onNextTrack: onNext });
+
+    act(() => {
+      fakeController._emit("ended");
+    });
+
+    expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
+    expect(fakeController.playTrack).toHaveBeenCalledWith(cur, 0);
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it("B16-3 regression: ended + mode thường → onNextTrack(true), không replay", () => {
+    const cur = makeTrack();
+    usePlayerStore.setState({ currentTrack: cur, playMode: "normal" });
+    const onNext = vi.fn();
+    fakeController.playTrack.mockClear();
+    renderPlayer({ onNextTrack: onNext });
+
+    act(() => {
+      fakeController._emit("ended");
+    });
+
+    expect(onNext).toHaveBeenCalledWith(true);
+    expect(fakeController.playTrack).not.toHaveBeenCalled();
+  });
+});
+
 describe("PlayerBar favorite (heart) button", () => {
   it("checks favorite status for the current track and renders the heart button (not liked)", async () => {
     renderPlayer();

@@ -337,6 +337,21 @@ describe("handleSetPlayMode", () => {
     expect(setPlaybackQueue).not.toHaveBeenCalled();
     expect(setPlayMode).toHaveBeenCalledWith("shuffle");
   });
+
+  it("B16-2: rời shuffle khi originalQueue rỗng → giữ nguyên playbackQueue (không xoá sạch)", () => {
+    const { result, setPlaybackQueue, setPlayMode } = setup(
+      "shuffle",
+      [],
+      null,
+    );
+
+    act(() => {
+      result.current.handleSetPlayMode("normal");
+    });
+
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).toHaveBeenCalledWith("normal");
+  });
 });
 
 describe("shuffleQueueWithCurrent", () => {
@@ -488,6 +503,22 @@ describe("updateQueueContext", () => {
       SESSION_CLEANUP_KEYS.queueKv,
       [],
     );
+    expect(setPlaybackQueue.mock.calls[0]?.[0] as Track[]).toHaveLength(1);
+  });
+
+  it("B16-1: solo play không có context → clear luôn originalQueue (không hồi sinh queue cũ khi toggle shuffle)", () => {
+    const { result, setOriginalQueue, setPlaybackQueue } = setup("normal");
+
+    act(() => {
+      result.current.updateQueueContext(
+        makeTrack("t5"),
+        undefined,
+        undefined,
+        "Settings",
+      );
+    });
+
+    expect(setOriginalQueue).toHaveBeenCalledWith([]);
     expect(setPlaybackQueue.mock.calls[0]?.[0] as Track[]).toHaveLength(1);
   });
 });

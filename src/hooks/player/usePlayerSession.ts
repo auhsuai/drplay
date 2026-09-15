@@ -107,21 +107,39 @@ export function usePlayerSession(
               : undefined),
           };
 
+          // Elements from the kv cast are unvalidated: one null/number/{} entry
+          // would throw inside shuffleQueueWithCurrent (sameTrack derefs
+          // queueItemId) and kill the whole restore, or crash QueuePanel on
+          // render in the normal branch. Drop invalid entries before use.
+          const validQueue: Track[] = Array.isArray(savedQueue)
+            ? savedQueue.filter(
+                (t: unknown): t is Track =>
+                  typeof t === "object" &&
+                  t !== null &&
+                  typeof (t as { id?: unknown }).id === "string",
+              )
+            : [];
           if (
-            savedQueue &&
             Array.isArray(savedQueue) &&
-            savedQueue.length > 0
+            validQueue.length !== savedQueue.length
           ) {
-            setOriginalQueue(savedQueue);
+            void captureError({
+              level: "warn",
+              source: PLAYER_SESSION_MODULE,
+              message: `session-queue-dropped-invalid: ${String(savedQueue.length - validQueue.length)}`,
+            });
+          }
+          if (validQueue.length > 0) {
+            setOriginalQueue(validQueue);
             if (savedPlayMode === "shuffle") {
               setPlaybackQueue(
-                shuffleQueueWithCurrent(savedQueue, restoredTrack, {
+                shuffleQueueWithCurrent(validQueue, restoredTrack, {
                   ...restoredTrack,
                   queueItemId: crypto.randomUUID(),
                 }),
               );
             } else {
-              setPlaybackQueue([...savedQueue]);
+              setPlaybackQueue([...validQueue]);
             }
           } else {
             setPlaybackQueue([restoredTrack]);

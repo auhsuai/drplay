@@ -391,3 +391,113 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
     );
   });
 });
+
+describe("usePlayerSession queue element validation (B16-4)", () => {
+  it("K: queue [null] + shuffle → drop invalid, không crash, restore track hợp lệ vẫn chạy", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 5, duration: 100 }),
+    );
+    mockedGet.mockImplementation((key: string) => {
+      if (key === QUEUE_STORAGE_KEY) return Promise.resolve([null]);
+      if (key === PLAYMODE_STORAGE_KEY) return Promise.resolve("shuffle");
+      return Promise.resolve(undefined);
+    });
+
+    const {
+      setCurrentTrack,
+      setOriginalQueue,
+      setPlaybackQueue,
+      setPlayMode,
+      triggerReload,
+    } = makeHook();
+    await flushMicrotasks();
+
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "usePlayerSession",
+        message: "session-queue-dropped-invalid: 1",
+      }),
+    );
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    const restored = setCurrentTrack.mock.calls[0]?.[0] as Track;
+    expect(restored.id).toBe("t1");
+    const playback = setPlaybackQueue.mock.calls[0]?.[0] as Track[];
+    expect(playback).toHaveLength(1);
+    expect(playback[0]).toBe(restored);
+    expect(setPlayMode).toHaveBeenCalledWith("shuffle");
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([42, "rubbish", {}])(
+    "L: queue [%j] không phải object có id string → drop + không set originalQueue",
+    async (rubbish) => {
+      localStorage.setItem(
+        SESSION_STORAGE_KEY,
+        JSON.stringify({
+          track: makeTrack("t1", "q1"),
+          time: 5,
+          duration: 100,
+        }),
+      );
+      mockedGet.mockImplementation((key: string) => {
+        if (key === QUEUE_STORAGE_KEY) return Promise.resolve([rubbish]);
+        return Promise.resolve(undefined);
+      });
+
+      const {
+        setCurrentTrack,
+        setOriginalQueue,
+        setPlaybackQueue,
+        triggerReload,
+      } = makeHook();
+      await flushMicrotasks();
+
+      expect(mockedCaptureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          source: "usePlayerSession",
+          message: "session-queue-dropped-invalid: 1",
+        }),
+      );
+      expect(setOriginalQueue).not.toHaveBeenCalled();
+      const restored = setCurrentTrack.mock.calls[0]?.[0] as Track;
+      expect(restored.id).toBe("t1");
+      const playback = setPlaybackQueue.mock.calls[0]?.[0] as Track[];
+      expect(playback).toHaveLength(1);
+      expect(playback[0]).toBe(restored);
+      expect(triggerReload).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("M: queue [rác, track hợp lệ] → filter giữ nguyên reference track hợp lệ", async () => {
+    const valid = makeTrack("t2", "q2");
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 5, duration: 100 }),
+    );
+    mockedGet.mockImplementation((key: string) => {
+      if (key === QUEUE_STORAGE_KEY) return Promise.resolve([null, valid]);
+      return Promise.resolve(undefined);
+    });
+
+    const { setOriginalQueue, setPlaybackQueue, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "usePlayerSession",
+        message: "session-queue-dropped-invalid: 1",
+      }),
+    );
+    const original = setOriginalQueue.mock.calls[0]?.[0] as Track[];
+    expect(original).toHaveLength(1);
+    expect(original[0]).toBe(valid);
+    const playback = setPlaybackQueue.mock.calls[0]?.[0] as Track[];
+    expect(playback).toHaveLength(1);
+    expect(playback[0]).toBe(valid);
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});

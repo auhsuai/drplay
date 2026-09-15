@@ -146,8 +146,11 @@ export function usePlayerQueue(
             shuffleQueueWithCurrent(queue, track, ensureQueueItemId(track)),
           );
         }
-      } else if (playMode === "shuffle") {
-        // Leaving shuffle: restore the user's original order.
+      } else if (playMode === "shuffle" && queue.length > 0) {
+        // Leaving shuffle: restore the user's original order. Without a
+        // non-empty original queue there is nothing to restore — rebuilding
+        // from [] would wipe the playback queue (e.g. a solo-play queue in
+        // shuffle mode), killing auto-advance when the current track ends.
         setPlaybackQueue([...queue]);
       }
 
@@ -209,6 +212,10 @@ export function usePlayerQueue(
         }
       } else {
         targetTrack = ensureQueueItemId(targetTrack);
+        // No context to rebuild from: the in-memory original queue must be
+        // cleared too, or a later shuffle toggle / queue edit would resurrect
+        // the previous queue (memory ≠ the just-persisted empty queue).
+        setOriginalQueue([]);
         setPlaybackQueue([targetTrack]);
         persistQueue([]);
       }
