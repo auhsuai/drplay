@@ -7,7 +7,15 @@ interface DownloadToastProps {
 
 export function DownloadToast({ message }: DownloadToastProps) {
   return createPortal(
-    <div className="absolute bottom-20 left-0 z-[9999] animate-in slide-in-from-left-5 fade-in duration-300 w-full max-w-[90vw] md:max-w-md pointer-events-none">
+    <div
+      // ARIA live region (WCAG 4.1.3): screen readers announce the download
+      // completion/failure. role=status implies aria-live=polite; both are
+      // spelled out to match QueuePanel/simpleToast.
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className="absolute bottom-20 left-0 z-[9999] animate-in slide-in-from-left-5 fade-in duration-300 w-full max-w-[90vw] md:max-w-md pointer-events-none"
+    >
       <div className="bg-white dark:bg-[#2a2b2f] text-gray-900 dark:text-white rounded-full px-5 py-3 flex items-center gap-3">
         <Check className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0" />
         <p className="text-sm font-medium truncate" title={message}>

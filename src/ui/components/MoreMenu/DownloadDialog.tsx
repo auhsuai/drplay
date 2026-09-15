@@ -21,11 +21,29 @@ export function DownloadDialog({
   t,
 }: DownloadDialogProps) {
   // Focus the file-name field when the dialog opens (replaces the autoFocus
-  // prop, which jsx-a11y/no-autofocus rejects). Hooks stay above the early
-  // return so they always run in the same order.
+  // prop, which jsx-a11y/no-autofocus rejects), and remember the invoker so
+  // focus returns on close/unmount (APG dialog-modal). Deliberately ONE
+  // effect with hooks above the early return: the invoker snapshot must be
+  // taken BEFORE focus moves into the dialog — a separate mirror effect would
+  // observe the file-name input as the invoker (TrashScreen trap).
   const nameInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (show) nameInputRef.current?.focus();
+    if (!show) return;
+    const invoker =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    nameInputRef.current?.focus();
+    return () => {
+      if (
+        invoker &&
+        invoker !== document.body &&
+        invoker !== document.documentElement &&
+        invoker.isConnected
+      ) {
+        invoker.focus();
+      }
+    };
   }, [show]);
 
   // Escape cancels the dialog (same guard as X/Cancel: ignored while a
@@ -57,9 +75,17 @@ export function DownloadDialog({
         e.stopPropagation();
       }}
     >
-      <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="download-title"
+        className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
+      >
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          <h3
+            id="download-title"
+            className="text-lg font-bold text-gray-900 dark:text-white"
+          >
             {t("menu.download_title")}
           </h3>
           <button
@@ -74,10 +100,14 @@ export function DownloadDialog({
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label
+            htmlFor="download-file-name"
+            className="text-sm font-medium text-gray-700 dark:text-gray-300"
+          >
             {t("menu.file_name")}
           </label>
           <input
+            id="download-file-name"
             ref={nameInputRef}
             type="text"
             value={downloadFileName}

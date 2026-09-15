@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { LoaderCircle, Trash2 } from "lucide-react";
 import type { DriveItem } from "../../../types";
 
@@ -37,6 +37,32 @@ export function DeleteConfirmDialog({
     };
   }, [show, onClose, isDeleting]);
 
+  // APG dialog-modal: initial focus moves to the least destructive control
+  // (Cancel, never Delete) and the invoker is remembered so focus returns on
+  // close/unmount. Deliberately ONE effect: snapshotting the invoker in a
+  // separate effect would observe the Cancel button as the invoker
+  // (TrashScreen trap). The menu item that opens the dialog unmounts with the
+  // menu, so its restore is a no-op there (per APG).
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!show) return;
+    const invoker =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    cancelRef.current?.focus();
+    return () => {
+      if (
+        invoker &&
+        invoker !== document.body &&
+        invoker !== document.documentElement &&
+        invoker.isConnected
+      ) {
+        invoker.focus();
+      }
+    };
+  }, [show]);
+
   if (!show) return null;
 
   return (
@@ -48,9 +74,17 @@ export function DeleteConfirmDialog({
         if (e.target === e.currentTarget && !isDeleting) onClose();
       }}
     >
-      <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-confirm-title"
+        className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
+      >
         <div className="flex flex-col gap-2">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          <h3
+            id="delete-confirm-title"
+            className="text-lg font-bold text-gray-900 dark:text-white"
+          >
             {t("drive.confirm_delete")}
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -59,6 +93,7 @@ export function DeleteConfirmDialog({
         </div>
         <div className="flex items-center justify-end gap-3 mt-2">
           <button
+            ref={cancelRef}
             onClick={onClose}
             disabled={isDeleting}
             className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"

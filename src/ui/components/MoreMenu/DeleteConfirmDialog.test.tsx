@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/react";
+import { render, fireEvent, cleanup, screen } from "@testing-library/react";
 import type { TFunction } from "i18next";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 
@@ -64,5 +64,57 @@ describe("DeleteConfirmDialog Escape-to-cancel (slice A)", () => {
     unmount();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("DeleteConfirmDialog dialog semantics + focus (P2-09b-3/-4)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("exposes role=dialog, aria-modal and a labelled-by title", () => {
+    render(<DeleteConfirmDialog {...baseProps()} />);
+
+    const dialog = screen.getByRole("dialog", {
+      name: "drive.confirm_delete",
+    });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.getAttribute("aria-labelledby")).toBe("delete-confirm-title");
+  });
+
+  it("moves initial focus to Cancel (never the destructive control)", () => {
+    render(<DeleteConfirmDialog {...baseProps()} />);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "menu.cancel" }),
+    );
+  });
+
+  it("returns focus to the invoker when it closes", () => {
+    const invoker = document.createElement("button");
+    document.body.appendChild(invoker);
+    invoker.focus();
+
+    const { rerender } = render(<DeleteConfirmDialog {...baseProps()} />);
+    expect(document.activeElement).not.toBe(invoker);
+
+    rerender(<DeleteConfirmDialog {...baseProps({ show: false })} />);
+
+    expect(document.activeElement).toBe(invoker);
+    invoker.remove();
+  });
+
+  it("leaves focus alone when the invoker was unmounted (menu-item path)", () => {
+    const invoker = document.createElement("button");
+    document.body.appendChild(invoker);
+    invoker.focus();
+
+    const { rerender } = render(<DeleteConfirmDialog {...baseProps()} />);
+    // The menu item that opened the dialog unmounts when the menu closes.
+    invoker.remove();
+
+    rerender(<DeleteConfirmDialog {...baseProps({ show: false })} />);
+
+    expect(document.activeElement).toBe(document.body);
   });
 });

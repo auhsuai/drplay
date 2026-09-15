@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   render,
+  renderHook,
   screen,
   fireEvent,
   cleanup,
@@ -12,6 +13,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { MoreMenu } from "./MoreMenu";
+import { useMenuMove } from "./MoreMenu/useMenuMove";
 import { getContextMenuStyle } from "./MoreMenu/menuPositioning";
 import en from "../../locales/en/translation.json";
 import type { Track } from "../../types";
@@ -747,6 +749,17 @@ describe("MoreMenu debug download toast trigger", () => {
     expect(screen.queryByText("Downloaded: first.mp3")).toBeNull();
   });
 
+  it("announces the toast through a polite live region (role=status)", () => {
+    render(<MoreMenu track={makeTrack()} token="tok" />);
+
+    dispatchDownloadToast("Downloaded: live-region.mp3");
+
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("Downloaded: live-region.mp3");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.getAttribute("aria-atomic")).toBe("true");
+  });
+
   it("unmount -> dispatching DOWNLOAD_TOAST is a no-op (listener cleaned up)", () => {
     const { unmount } = render(<MoreMenu track={makeTrack()} token="tok" />);
     unmount();
@@ -754,6 +767,93 @@ describe("MoreMenu debug download toast trigger", () => {
     expect(() => {
       dispatchDownloadToast("Downloaded: debug-test.mp3");
     }).not.toThrow();
+  });
+});
+
+describe("useMenuMove error-path split (P2-09b-9) + missing-context guard (P2-09b-10)", () => {
+  function renderMoveHook(
+    over: Partial<Parameters<typeof useMenuMove>[0]> = {},
+  ) {
+    return renderHook(() =>
+      useMenuMove({
+        driveItem: makeDriveItem(),
+        token: "tok",
+        currentFolderId: "parent-1",
+        setIsOpen: vi.fn(),
+        ...over,
+      }),
+    );
+  }
+
+  it("still removes the row and skips the move_error toast when only the Dexie mirror fails", async () => {
+    mocks.driveApi.moveFile.mockResolvedValue(undefined);
+    mocks.db.files.update.mockRejectedValue(new Error("dexie closed"));
+    const onRemoveItem = vi.fn();
+    const onRefresh = vi.fn();
+    const { result } = renderMoveHook({ onRemoveItem, onRefresh });
+
+    await act(async () => {
+      await result.current.handleMove("folder-9");
+    });
+
+    expect(mocks.driveApi.moveFile).toHaveBeenCalledWith(
+      "tok",
+      "track-1",
+      "parent-1",
+      "folder-9",
+    );
+    expect(onRemoveItem).toHaveBeenCalledWith("track-1");
+    expect(mocks.showErrorToast).not.toHaveBeenCalled();
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(mocks.captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        message: expect.stringContaining(
+          "local-mirror-move-failed",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("reports move_error + refreshes and skips the row removal when the Drive move fails", async () => {
+    mocks.driveApi.moveFile.mockRejectedValue(new Error("drive 500"));
+    const onRemoveItem = vi.fn();
+    const onRefresh = vi.fn();
+    const { result } = renderMoveHook({ onRemoveItem, onRefresh });
+
+    await act(async () => {
+      await result.current.handleMove("folder-9");
+    });
+
+    expect(mocks.showErrorToast).toHaveBeenCalledTimes(1);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(onRemoveItem).not.toHaveBeenCalled();
+    expect(mocks.captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        message: expect.stringContaining("move-failed") as unknown as string,
+      }),
+    );
+  });
+
+  it("logs a warn and closes the picker instead of returning silently when context is missing", async () => {
+    const { result } = renderMoveHook({ currentFolderId: undefined });
+    act(() => {
+      result.current.setShowMoveScreen(true);
+    });
+
+    await act(async () => {
+      await result.current.handleMove("folder-9");
+    });
+
+    expect(mocks.driveApi.moveFile).not.toHaveBeenCalled();
+    expect(mocks.captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("move-skipped") as unknown as string,
+      }),
+    );
+    expect(result.current.showMoveScreen).toBe(false);
   });
 });
 

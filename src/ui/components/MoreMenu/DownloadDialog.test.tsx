@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/react";
+import { render, fireEvent, cleanup, screen } from "@testing-library/react";
 import type { TFunction } from "i18next";
 import { DownloadDialog } from "./DownloadDialog";
 
@@ -61,5 +61,51 @@ describe("DownloadDialog Escape-to-cancel (slice A)", () => {
     unmount();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("DownloadDialog dialog semantics + focus (P2-09b-5/-6/-7)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("exposes role=dialog, aria-modal and a labelled-by title", () => {
+    render(<DownloadDialog {...baseProps()} />);
+
+    const dialog = screen.getByRole("dialog", {
+      name: "menu.download_title",
+    });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.getAttribute("aria-labelledby")).toBe("download-title");
+  });
+
+  it("associates the label with the file-name input (getByLabelText)", () => {
+    render(<DownloadDialog {...baseProps()} />);
+
+    const input = screen.getByLabelText("menu.file_name");
+    expect(input.tagName).toBe("INPUT");
+    expect(input.id).toBe("download-file-name");
+  });
+
+  it("focuses the file-name input on open (existing behavior preserved)", () => {
+    render(<DownloadDialog {...baseProps()} />);
+
+    expect(document.activeElement).toBe(
+      screen.getByLabelText("menu.file_name"),
+    );
+  });
+
+  it("returns focus to the invoker when it closes", () => {
+    const invoker = document.createElement("button");
+    document.body.appendChild(invoker);
+    invoker.focus();
+
+    const { rerender } = render(<DownloadDialog {...baseProps()} />);
+    expect(document.activeElement).not.toBe(invoker);
+
+    rerender(<DownloadDialog {...baseProps({ show: false })} />);
+
+    expect(document.activeElement).toBe(invoker);
+    invoker.remove();
   });
 });

@@ -36,7 +36,18 @@ export function useMenuMove({
 
   // -- Move logic --
   const handleMove = async (newParentId: string) => {
-    if (!driveItem || !token || !currentFolderId) return;
+    if (!driveItem || !token || !currentFolderId) {
+      // Latent defensive path (today's callers always pass currentFolderId):
+      // never leave a dead "Choose folder" button — log the reason and close
+      // the picker instead of returning silently.
+      void captureError({
+        level: "warn",
+        source: MORE_MENU_MODULE,
+        message: "move-skipped: missing driveItem/token/currentFolderId",
+      });
+      setShowMoveScreen(false);
+      return;
+    }
     if (newParentId === currentFolderId) {
       setShowMoveScreen(false);
       setIsOpen(false);
@@ -53,11 +64,23 @@ export function useMenuMove({
 
     try {
       await moveFile(token, itemId, oldParentId, newParentId);
-      // Compound PK (schema v10): [userEmail, id].
-      await db.files.update([getCurrentUserEmail(), itemId], {
-        parentId: newParentId,
-      });
       if (onRemoveItem) onRemoveItem(itemId);
+      // Local mirror write is INDEPENDENT teardown: the Drive move already
+      // succeeded, so a Dexie failure must not surface as a move error (nor
+      // skip the row removal above) — same split as useDriveBulkOps
+      // (bulk-move). Missing keys are skipped without throwing.
+      try {
+        // Compound PK (schema v10): [userEmail, id].
+        await db.files.update([getCurrentUserEmail(), itemId], {
+          parentId: newParentId,
+        });
+      } catch (e) {
+        void captureError({
+          level: "error",
+          source: MORE_MENU_MODULE,
+          message: `local-mirror-move-failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
     } catch (e) {
       void captureError({
         level: "error",
