@@ -206,7 +206,11 @@ fn stream_response(context: &ProxyContext, file_id: &str, upstream: reqwest::Res
     }
     let frames = upstream.bytes_stream().map(|chunk| match chunk {
         Ok(bytes) => Ok(Frame::data(bytes)),
-        Err(body_error) => Err(io::Error::other(format!("upstream body error: {body_error}"))),
+        // reqwest attaches the request URL to stream errors (Display ends with
+        // "for url (...)") — redact before the text reaches any log.
+        Err(body_error) => Err(io::Error::other(
+            redact_urls(format!("upstream body error: {body_error}")),
+        )),
     });
     let body = StreamBody::new(IdleTimeoutStream::new(
         frames,
@@ -313,6 +317,39 @@ fn is_valid_file_id(file_id: &str) -> bool {
         && file_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Strips the query string from every `http(s)://…` URL in a message so a
+/// signed upstream URL (its query carries credential-like params such as
+/// Drive's `Signature`/`Expires`) can never reach the log or a response body.
+/// Each URL keeps its scheme, authority and path; its query becomes
+/// `?<redacted>`. Text without a URL passes through unchanged.
+fn redact_urls(message: String) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message.as_str();
+    while let Some((index, scheme)) = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| rest.find(scheme).map(|index| (index, *scheme)))
+        .min_by_key(|(index, _)| *index)
+    {
+        out.push_str(&rest[..index]);
+        // The URL ends at whitespace or ')': reqwest wraps it as
+        // "error sending request for url (https://…)".
+        let tail = &rest[index + scheme.len()..];
+        let end = tail.find(|c: char| c.is_whitespace() || c == ')').unwrap_or(tail.len());
+        out.push_str(scheme);
+        let url = &tail[..end];
+        match url.find('?') {
+            Some(query_start) => {
+                out.push_str(&url[..query_start]);
+                out.push_str("?<redacted>");
+            }
+            None => out.push_str(url),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 async fn fetch_upstream(
     context: &ProxyContext,
     mut url: url::Url,
@@ -340,7 +377,9 @@ async fn fetch_upstream(
             }
             let sent = match tokio::time::timeout(context.headers_timeout, request.send()).await {
                 Err(_elapsed) => return Err((504, format!("upstream did not respond within {:?}", context.headers_timeout))),
-                Ok(Err(send_error)) => return Err((502, format!("upstream request failed: {send_error}"))),
+                Ok(Err(send_error)) => {
+                    return Err((502, redact_urls(format!("upstream request failed: {send_error}"))))
+                }
                 Ok(Ok(sent)) => sent,
             };
             if !is_retryable_status(sent.status()) || attempt >= MAX_STATUS_RETRIES {
@@ -948,6 +987,30 @@ mod tests {
         assert_eq!(second.len(), 1, "the redirect hop must reach the second fixture");
         assert_eq!(second[0].authorization, None, "a hop to another origin must never carry the Bearer token");
         assert_eq!(second[0].range.as_deref(), Some("bytes=0-9"), "Range stays forwarded on the hop");
+    }
+
+    /// D1 (R05 fix-review F1): reqwest's Display appends " for url (...)" to
+    /// send/body errors — on a redirect hop that URL is a signed
+    /// googleusercontent URL whose query is credential-like. The redactor must
+    /// keep origin+path, replace the query with `?<redacted>`, and leave
+    /// URL-free text untouched.
+    #[test]
+    fn redact_urls_strips_query_keeps_origin_and_path() {
+        assert_eq!(
+            redact_urls("upstream request failed: error sending request for url (https://x.googleusercontent.com/download/abc?Signature=SECRET&Expires=123)".to_string()),
+            "upstream request failed: error sending request for url (https://x.googleusercontent.com/download/abc?<redacted>)"
+        );
+        // Every URL in the message is redacted, both schemes, whitespace-delimited.
+        assert_eq!(
+            redact_urls("a https://h1/p?x=1 b http://h2/q?y=2 c".to_string()),
+            "a https://h1/p?<redacted> b http://h2/q?<redacted> c"
+        );
+        // No query → untouched; no URL → identity.
+        assert_eq!(
+            redact_urls("plain https://host/a/b failure".to_string()),
+            "plain https://host/a/b failure"
+        );
+        assert_eq!(redact_urls("no url here".to_string()), "no url here");
     }
 
     /// R04-3 (production semantics, plain unit): with an https base the guard

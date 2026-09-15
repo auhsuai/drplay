@@ -85,20 +85,22 @@ pub async fn import_metadata_seed(zip_path: String) -> Result<ImportStats, Strin
         .ok_or_else(|| "covers root not initialized".to_string())?;
     // The zip IO is CPU/disk-bound — run off the async runtime so the IPC
     // handler never blocks on a large archive.
-    let stats = tauri::async_runtime::spawn_blocking(move || {
+    let import_result = tauri::async_runtime::spawn_blocking(move || {
         let file = std::fs::File::open(&zip_path)
             .map_err(|e| format!("failed to open seed zip: {e}"))?;
         import_seed(file, &metadata_root, &covers_root)
     })
     .await
-    .map_err(|e| format!("import task failed: {e}"))??;
-    // The import just wrote covers to the SAME disk the drplay:// GET reads,
-    // but ids fetched before the import may hold a cached NoCover marker
-    // (TTL 1h) → without this they would keep returning 204 after the import.
-    if stats.cover_count > 0 {
-        cover::invalidate_all_covers();
-    }
-    Ok(stats)
+    .map_err(|e| format!("import task failed: {e}"));
+    // The import wrote covers to the SAME disk the drplay:// GET reads, but ids
+    // fetched before the import may hold a cached NoCover marker (TTL 1h) —
+    // without this they would keep returning 204 after the import. Invalidate
+    // on EVERY outcome, not just success: a failed import may already have
+    // written part of the covers (partial pass 2) and those must not stay
+    // hidden behind a stale marker. Cheap no-op when nothing was written —
+    // the cache re-warms from disk on the next GET.
+    cover::invalidate_all_covers();
+    import_result?
 }
 
 /// Reads one imported metadata JSON back to the frontend (disk-first). `None`
@@ -573,6 +575,43 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&meta_root);
         let _ = std::fs::remove_dir_all(&covers_root);
+    }
+
+    /// F3 (R05 fix-review): a FAILED import can still have written some covers
+    /// before failing (partial pass 2, see `import_seed` docs), so the cover
+    /// cache must be invalidated on EVERY outcome — not only on Ok. This drives
+    /// the command with a non-zip file (fails at open/parse) and asserts the
+    /// pre-seeded marker is gone afterwards.
+    #[tokio::test]
+    async fn failed_import_still_invalidates_cover_cache() {
+        init_metadata_root(temp_dir("fail_import_meta"));
+        cover::init_covers_root(temp_dir("fail_import_covers"));
+        let probe_key = format!("seed_failed_import_probe_{}", std::process::id());
+        // Any cached entry stands in for the NoCover marker (same cache, same
+        // invalidate path) — the assertion is "cache cleared", not the sentinel.
+        cover::COVER_CACHE
+            .insert(probe_key.clone(), ("probe".to_string(), bytes::Bytes::new()))
+            .await;
+        assert!(
+            cover::COVER_CACHE.get(&probe_key).await.is_some(),
+            "fixture: probe marker must be cached"
+        );
+
+        let fixture_dir = temp_dir("fail_import_zip");
+        let bad_zip = fixture_dir.join("not_a_zip.zip");
+        std::fs::write(&bad_zip, b"definitely not a zip archive").expect("fixture file");
+        let err = import_metadata_seed(bad_zip.to_string_lossy().into_owned())
+            .await
+            .expect_err("a non-zip file must fail the import");
+        assert!(
+            err.contains("failed to open zip archive"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            cover::COVER_CACHE.get(&probe_key).await.is_none(),
+            "the cover cache must be invalidated even when the import fails (partial writes are possible)"
+        );
+        let _ = std::fs::remove_dir_all(&fixture_dir);
     }
 
     #[test]
