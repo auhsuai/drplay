@@ -29,6 +29,13 @@ export function useKeyboardShortcuts({
       )
         return;
 
+      // Auto-repeat must not spam a discrete transport toggle (holding space
+      // would flicker play/pause, holding n/p would skip through the queue,
+      // s would spin the play mode). Placed BEFORE the Ctrl+Q branch so a held
+      // Ctrl+Q cannot spam the queue toggle; the seek/volume arrows
+      // deliberately keep repeat (see useSeekKeyboard).
+      if (e.repeat) return;
+
       // Ctrl+Q (Cmd+Q on mac) toggles the queue panel. Alt is excluded so
       // AltGr-adjacent layouts cannot trip it; the plain keys below keep
       // their modifier-free behavior.
@@ -41,6 +48,12 @@ export function useKeyboardShortcuts({
         onToggleQueue();
         return;
       }
+
+      // Any other Ctrl/Meta/Alt chord belongs to the app/webview, not the
+      // player (Ctrl+S save, Ctrl+N/P navigation, Ctrl+Space IME...) — same
+      // rule as useSeekKeyboard / useNowPlayingShortcuts. Must sit AFTER the
+      // Ctrl+Q branch above so the queue shortcut keeps working.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       switch (e.key) {
         case "n":

@@ -115,6 +115,7 @@ const { fakeController } = vi.hoisted(() => {
     pause: vi.fn(),
     setVolume: vi.fn(),
     toggleMute: vi.fn(),
+    isMuted: vi.fn(() => false),
     _handlers: {} as Record<string, Handler[]>,
     _emit(event: string, payload?: unknown) {
       for (const h of fakeController._handlers[event] ?? []) h(payload);
@@ -220,6 +221,10 @@ beforeEach(() => {
   installFakeOn();
   setBuffered([]);
   fakeController._handlers = {};
+  fakeController.setVolume.mockClear();
+  fakeController.toggleMute.mockReset();
+  fakeController.isMuted.mockReset();
+  fakeController.isMuted.mockImplementation(() => false);
   isFavorite.mockClear();
   addFavorite.mockClear();
   removeFavorite.mockClear();
@@ -2035,5 +2040,249 @@ describe("PlayerBar queue toggle (nút List + Ctrl+Q)", () => {
         .getByRole("button", { name: en.queue.open })
         .getAttribute("aria-expanded"),
     ).toBe("true");
+  });
+});
+
+describe("PlayerBar keyboard chord + repeat guards (P2-01-1, P2-01-2)", () => {
+  function renderWithSpies() {
+    const onNext = vi.fn();
+    const onPrev = vi.fn();
+    const onTogglePlay = vi.fn();
+    const onTogglePlayMode = vi.fn();
+    const onToggleQueue = vi.fn();
+    renderPlayer({
+      onNextTrack: onNext,
+      onPrevTrack: onPrev,
+      onTogglePlay,
+      onTogglePlayMode,
+      onToggleQueue,
+    });
+    return { onNext, onPrev, onTogglePlay, onTogglePlayMode, onToggleQueue };
+  }
+
+  function pressKey(key: string, init: KeyboardEventInit = {}) {
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, ...init }));
+    });
+  }
+
+  const chordCases: Array<[string, KeyboardEventInit]> = [
+    ["n", { ctrlKey: true }],
+    ["n", { metaKey: true }],
+    ["n", { altKey: true }],
+    ["p", { ctrlKey: true }],
+    ["p", { metaKey: true }],
+    ["s", { ctrlKey: true }],
+    ["s", { metaKey: true }],
+    ["s", { altKey: true }],
+    [" ", { ctrlKey: true }],
+    [" ", { metaKey: true }],
+    [" ", { altKey: true }],
+  ];
+
+  it.each(chordCases)(
+    "ignores %s with a modifier chord %o (chord belongs to the app/webview)",
+    (key, init) => {
+      const spies = renderWithSpies();
+
+      pressKey(key, init);
+
+      expect(spies.onNext).not.toHaveBeenCalled();
+      expect(spies.onPrev).not.toHaveBeenCalled();
+      expect(spies.onTogglePlay).not.toHaveBeenCalled();
+      expect(spies.onTogglePlayMode).not.toHaveBeenCalled();
+      expect(spies.onToggleQueue).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores Ctrl+S without stealing the native shortcut (no preventDefault)", () => {
+    renderWithSpies();
+    const event = new KeyboardEvent("keydown", {
+      key: "s",
+      ctrlKey: true,
+      cancelable: true,
+    });
+    const preventSpy = vi.spyOn(event, "preventDefault");
+
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(preventSpy).not.toHaveBeenCalled();
+  });
+
+  it("still toggles the queue on Ctrl+Q (chord guard sits AFTER the Ctrl+Q branch)", () => {
+    const { onToggleQueue } = renderWithSpies();
+
+    pressKey("q", { ctrlKey: true });
+
+    expect(onToggleQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a repeated Space keydown (e.repeat) — no play/pause spam", () => {
+    const { onTogglePlay } = renderWithSpies();
+
+    pressKey(" ", { repeat: true });
+
+    expect(onTogglePlay).not.toHaveBeenCalled();
+  });
+
+  it("ignores a repeated n keydown (e.repeat) — no skip spam", () => {
+    const { onNext } = renderWithSpies();
+
+    pressKey("n", { repeat: true });
+
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it("ignores a repeated Ctrl+Q keydown (repeat guard sits BEFORE the Ctrl+Q branch)", () => {
+    const { onToggleQueue } = renderWithSpies();
+
+    pressKey("q", { ctrlKey: true, repeat: true });
+
+    expect(onToggleQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("PlayerBar volume drag + mute (P2-01-3, P2-01-4)", () => {
+  function volumeBar() {
+    const bar = screen.getByTestId("volume-bar");
+    const rect = {
+      left: 0,
+      right: 200,
+      top: 0,
+      bottom: 10,
+      width: 200,
+      height: 10,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    } as DOMRect;
+    vi.spyOn(bar, "getBoundingClientRect").mockReturnValue(rect);
+    return bar;
+  }
+
+  it("BUG regression: dragging while muted unmutes the engine (toggleMute) and applies the volume", () => {
+    renderPlayer();
+    fakeController.toggleMute.mockReturnValue(true);
+    act(() => {
+      fireEvent.keyDown(window, { key: "m" });
+    });
+    expect(fakeController.toggleMute).toHaveBeenCalledTimes(1);
+
+    fakeController.isMuted.mockReturnValue(true);
+    const bar = volumeBar();
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+
+    expect(fakeController.toggleMute).toHaveBeenCalledTimes(2);
+    expect(fakeController.setVolume).toHaveBeenLastCalledWith(0.25);
+  });
+
+  it("BUG regression: the unmute toggle fires once per drag (idempotent across moves)", () => {
+    renderPlayer();
+    fakeController.isMuted.mockReturnValue(true);
+    const bar = volumeBar();
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    expect(fakeController.toggleMute).toHaveBeenCalledTimes(1);
+
+    // Engine is now unmuted — later moves in the same drag must not toggle again.
+    fakeController.isMuted.mockReturnValue(false);
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.toggleMute).toHaveBeenCalledTimes(1);
+    expect(fakeController.setVolume).toHaveBeenLastCalledWith(0.5);
+  });
+
+  it("dragging to 0 while muted does NOT unmute", () => {
+    renderPlayer();
+    fakeController.isMuted.mockReturnValue(true);
+    const bar = volumeBar();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 0, pointerId: 1 });
+    });
+
+    expect(fakeController.toggleMute).not.toHaveBeenCalled();
+    expect(fakeController.setVolume).toHaveBeenLastCalledWith(0);
+  });
+
+  it("a foreign pointer cannot drive the drag (owner pointerId only)", () => {
+    renderPlayer();
+    const bar = volumeBar();
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    expect(fakeController.setVolume).toHaveBeenLastCalledWith(0.25);
+
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 150, pointerId: 2 });
+    });
+    expect(fakeController.setVolume).toHaveBeenLastCalledWith(0.25);
+
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fakeController.setVolume).toHaveBeenLastCalledWith(0.5);
+  });
+
+  it("BUG regression: pointercancel ends the drag (no stuck active state, no leaked listeners)", () => {
+    renderPlayer();
+    const bar = volumeBar();
+    const fill = bar.firstElementChild as HTMLElement;
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    expect(fill.className).toContain("!bg-brand-primary");
+
+    act(() => {
+      fireEvent.pointerCancel(window, { clientX: 100, pointerId: 1 });
+    });
+    expect(fill.className).not.toContain("!bg-brand-primary");
+
+    const calls = fakeController.setVolume.mock.calls.length;
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 150, pointerId: 1 });
+      fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
+    });
+    expect(fakeController.setVolume.mock.calls.length).toBe(calls);
+  });
+
+  it("BUG regression: unmounting mid-drag removes the volume drag's window listeners (no leak)", () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    const { unmount } = renderPlayer();
+    const bar = volumeBar();
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+
+    // Identity of the listeners VolumeSlider registered on pointerdown — the
+    // SeekBar's own unmount cleanup removes ITS listeners too, so asserting a
+    // bare removeEventListener call would pass without the volume fix.
+    const volumeMoveListener = addSpy.mock.calls.find(
+      ([type]) => type === "pointermove",
+    )?.[1];
+    const volumeFinishListener = addSpy.mock.calls.find(
+      ([type]) => type === "pointerup",
+    )?.[1];
+    expect(volumeMoveListener).toBeTruthy();
+
+    removeSpy.mockClear();
+    unmount();
+
+    expect(removeSpy).toHaveBeenCalledWith("pointermove", volumeMoveListener);
+    expect(removeSpy).toHaveBeenCalledWith("pointerup", volumeFinishListener);
+    expect(removeSpy).toHaveBeenCalledWith(
+      "pointercancel",
+      volumeFinishListener,
+    );
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 });

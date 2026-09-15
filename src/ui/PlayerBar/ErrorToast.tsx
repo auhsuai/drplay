@@ -1,4 +1,4 @@
-import { CloudOff, FileWarning, WifiOff } from "lucide-react";
+import { FileWarning, WifiOff } from "lucide-react";
 import { createPortal } from "react-dom";
 
 interface ErrorInfo {
@@ -18,16 +18,7 @@ function ErrorIcon({
   type: string;
   className?: string;
 }) {
-  const Icon =
-    type === "rate_limited" ||
-    type === "drive_quota_exceeded" ||
-    type === "download_quota"
-      ? CloudOff
-      : type === "file_deleted" ||
-          type === "format_error" ||
-          type === "access_denied"
-        ? FileWarning
-        : WifiOff;
+  const Icon = type === "format_error" ? FileWarning : WifiOff;
   return <Icon className={`${className} text-brand-text`} />;
 }
 

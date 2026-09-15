@@ -18,14 +18,30 @@ export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
   const [isMuted, setIsMuted] = useState(false);
   const [isVolumeActive, setIsVolumeActive] = useState(false);
   const volumeBarRef = useRef<HTMLDivElement>(null);
+  // Window drag handlers are mirrored into refs so the unmount cleanup below
+  // can remove them even mid-drag (same contract as useSeekDrag).
+  const dragMoveRef = useRef<(e: PointerEvent) => void>(() => {});
+  const dragFinishRef = useRef<(e: PointerEvent) => void>(() => {});
 
   const toggleMute = useCallback(() => {
     setIsMuted(AudioController.getInstance().toggleMute());
   }, []);
 
+  useEffect(
+    () => () => {
+      window.removeEventListener("pointermove", dragMoveRef.current);
+      window.removeEventListener("pointerup", dragFinishRef.current);
+      window.removeEventListener("pointercancel", dragFinishRef.current);
+    },
+    [],
+  );
+
   const handleVolumePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!volumeBarRef.current) return;
     const bounds = volumeBarRef.current.getBoundingClientRect();
+    // Single-owner drag: the window listeners receive every pointer's events,
+    // so a second finger must not be able to drive (or end) this drag.
+    const ownerPointerId = e.pointerId;
 
     const updateVol = (clientX: number) => {
       const percent = Math.max(
@@ -33,23 +49,38 @@ export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
         Math.min(1, (clientX - bounds.left) / bounds.width),
       );
       setVolume(percent);
+      // Engine is the source of truth for mute: setting a non-zero level while
+      // muted must unmute the engine too, or the UI shows audio while playback
+      // stays silent. isMuted() flips after the toggle, so later moves in the
+      // same drag do not toggle again.
+      if (percent > 0 && audio.isMuted()) audio.toggleMute();
       audio.setVolume(percent);
       if (percent > 0) setIsMuted(false);
       setIsVolumeActive(true);
     };
 
     updateVol(e.clientX);
-    const onMove = (moveEvent: PointerEvent) => {
-      updateVol(moveEvent.clientX);
-    };
-    const onUp = () => {
+
+    let sessionDone = false;
+    const endSession = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== ownerPointerId) return;
+      if (sessionDone) return;
+      sessionDone = true;
       setIsVolumeActive(false);
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointerup", endSession);
+      window.removeEventListener("pointercancel", endSession);
+    };
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== ownerPointerId) return;
+      updateVol(moveEvent.clientX);
     };
 
+    dragMoveRef.current = onMove;
+    dragFinishRef.current = endSession;
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointerup", endSession);
+    window.addEventListener("pointercancel", endSession);
   };
 
   // ArrowUp/Down nudge the volume, m/M toggles mute. Owned here (not the
@@ -113,6 +144,7 @@ export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
       />
       <div
         ref={volumeBarRef}
+        data-testid="volume-bar"
         className="hidden xl:flex w-16 sm:w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center"
         onPointerDown={handleVolumePointerDown}
       >

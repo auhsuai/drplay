@@ -9,7 +9,7 @@ import {
   SkipBack,
   SkipForward,
 } from "lucide-react";
-import type { Track } from "../../types";
+import type { PlayMode, Track } from "../../types";
 
 export interface TransportControlsProps {
   currentTrack: Track | null;
@@ -18,7 +18,7 @@ export interface TransportControlsProps {
   isDownloading: boolean;
   hasError: boolean;
   onRetry: () => void;
-  playMode: "normal" | "shuffle" | "repeat-all" | "repeat-one";
+  playMode: PlayMode;
   onTogglePlay: () => void;
   onPrevTrack: () => void;
   onNextTrack: (isAutoSkip?: boolean) => void;
