@@ -7,14 +7,14 @@ describe("debugEvents", () => {
     vi.restoreAllMocks();
   });
 
-  it("dispatches a CustomEvent with the exact RATE_LIMIT event name", () => {
+  it("dispatches a CustomEvent with the exact event name", () => {
     const spy = vi.spyOn(window, "dispatchEvent");
 
-    dispatchDebugEvent(DEBUG_EVENTS.RATE_LIMIT, undefined);
+    dispatchDebugEvent(DEBUG_EVENTS.LIKED_EMPTY, undefined);
 
     expect(spy).toHaveBeenCalledTimes(1);
     const event = spy.mock.calls[0]?.[0] as CustomEvent;
-    expect(event.type).toBe(DEBUG_EVENTS.RATE_LIMIT);
+    expect(event.type).toBe(DEBUG_EVENTS.LIKED_EMPTY);
   });
 
   it("wraps the detail object for PLAYER_ERROR unchanged", () => {

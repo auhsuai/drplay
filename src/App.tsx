@@ -4,7 +4,6 @@ import { LoginGate } from "./ui/LoginGate";
 import { FolderSelectionGate } from "./ui/FolderSelectionGate";
 import { TrashGate } from "./ui/TrashGate";
 import { NowPlayingOverlay } from "./ui/NowPlayingOverlay";
-import { RateLimitGate } from "./ui/RateLimitGate";
 import { captureError } from "./utils/errorLog";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
 import { useShallow } from "zustand/react/shallow";
@@ -29,7 +28,6 @@ import { useTheme } from "./hooks/useTheme";
 import { useServiceWorker } from "./hooks/useServiceWorker";
 import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
 import { useDriveStore } from "./store/driveStore";
-import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
 
@@ -52,19 +50,6 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabKey>(TABS.home);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
-  const [showRateLimitModal, setShowRateLimitModal] = useState(false);
-
-  // Listen to Tauri events (Quota Exceeded, Repair Thumbnail)
-  useTauriEvents(setShowRateLimitModal);
-
-  // DEV-only debug trigger (Ctrl+Shift+D panel): same setShowRateLimitModal
-  // path as the Tauri event, so the modal opens exactly like a real quota
-  // failure. The helper no-ops in production builds.
-  useEffect(() => {
-    return onDebugEvent(DEBUG_EVENTS.RATE_LIMIT, () => {
-      setShowRateLimitModal(true);
-    });
-  }, [setShowRateLimitModal]);
 
   // setAppRootFolder is produced by useDrive() BELOW, while the logout cleanup
   // callback above runs at logout time. A ref bridges the TDZ (the callback
@@ -426,18 +411,6 @@ function App() {
           setIsNowPlayingOpen(false);
         }}
         token={accessToken}
-      />
-
-      <RateLimitGate
-        isOpen={showRateLimitModal}
-        onClose={() => {
-          setShowRateLimitModal(false);
-        }}
-        onOk={() => {
-          setShowRateLimitModal(false);
-          handleTabChange(TABS.home);
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        }}
       />
     </div>
   );

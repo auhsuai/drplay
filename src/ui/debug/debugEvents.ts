@@ -1,5 +1,4 @@
 export const DEBUG_EVENTS = {
-  RATE_LIMIT: "drplay:debug:rate-limit",
   PLAYER_ERROR: "drplay:debug:player-error",
   QUOTA: "drplay:debug:quota",
   PLAYLIST_EMPTY: "drplay:debug:playlist-empty",
@@ -14,7 +13,6 @@ export const DEBUG_EVENTS = {
 } as const;
 
 export interface DebugEventMap {
-  [DEBUG_EVENTS.RATE_LIMIT]: undefined;
   [DEBUG_EVENTS.PLAYER_ERROR]: { code: string; message: string };
   [DEBUG_EVENTS.QUOTA]: { usageInDrive: number; limit: number | null };
   [DEBUG_EVENTS.PLAYLIST_EMPTY]: undefined;
@@ -41,8 +39,8 @@ export function dispatchDebugEvent<K extends keyof DebugEventMap>(
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-// DEV-only subscribe helper shared by every debug listener (App rate-limit,
-// PlayerBar player-error, ...). Guards itself with import.meta.env.DEV: in a
+// DEV-only subscribe helper shared by every debug listener (PlayerBar
+// player-error, sidebar quota, ...). Guards itself with import.meta.env.DEV: in a
 // production build it is a no-op that never touches window, so the shipped
 // app carries zero listener overhead. Returns the unsubscribe function for
 // effect cleanup (a plain window event listener — no error paths, no try/catch).

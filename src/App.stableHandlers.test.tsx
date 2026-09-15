@@ -100,7 +100,6 @@ vi.mock("./hooks/useServiceWorker", () => ({ useServiceWorker: vi.fn() }));
 vi.mock("./hooks/useAppGlobalEvents", () => ({
   useAppGlobalEvents: vi.fn(),
 }));
-vi.mock("./hooks/useTauriEvents", () => ({ useTauriEvents: vi.fn() }));
 vi.mock("./hooks/useLocateFile", () => ({
   useLocateFile: () => ({ highlightedFileId: null }),
 }));
@@ -124,9 +123,6 @@ vi.mock("./ui/FolderSelection/FolderSelectionScreen", () => ({
   FolderSelectionScreen: () => null,
 }));
 vi.mock("./ui/Settings/TrashScreen", () => ({ TrashScreen: () => null }));
-vi.mock("./ui/components/RateLimitModal", () => ({
-  RateLimitModal: () => null,
-}));
 vi.mock("./ui/Login/LoginScreen", () => ({ LoginScreen: () => null }));
 vi.mock("./ui/MainContent/MainContent", () => ({
   MainContent: () => null,

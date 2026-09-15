@@ -275,8 +275,6 @@
   },
   "search_placeholder": "Search...",
   "loading": "Loading...",
-  "rate_limit_title": "Take a break",
-  "rate_limit_greeting": "You've been very active today. Playback will resume shortly.",
   "cancel": "Cancel",
   "ok": "OK",
   "cache": {

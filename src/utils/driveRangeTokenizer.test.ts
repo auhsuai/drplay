@@ -23,10 +23,14 @@ function urlName(url: RequestInfo | URL): string {
   return "(Request)";
 }
 
+// A status entry is either a plain status code or a code + JSON error body
+// (403 rate-limit responses need a body for driveHttp.isRateLimit403Response).
+type StatusSpec = number | { status: number; body?: unknown };
+
 function installVirtualFile(
   size: number,
   byteAt: (i: number) => number,
-  statuses?: Array<number>,
+  statuses?: Array<StatusSpec>,
 ) {
   const calls: FetchCall[] = [];
   let active = 0;
@@ -38,17 +42,25 @@ function installVirtualFile(
     const headers = new Headers(init?.headers);
     const range = headers.get("Range");
     calls.push({ url: urlName(_url), range });
-    const status =
+    const spec =
       statuses && statuses.length > 0
         ? (statuses[Math.min(statusCursor++, statuses.length - 1)] ?? 206)
         : 206;
+    const status = typeof spec === "number" ? spec : spec.status;
     if (status !== 206) {
       active -= 1;
+      // The responder mirrors a real Response's clone().json() surface so the
+      // 403 rate-limit detector can read the body off a clone (the original
+      // object is never consumed).
+      const jsonBody = typeof spec === "number" ? undefined : spec.body;
+      const json = () => Promise.resolve(jsonBody);
       return {
         status,
         ok: status >= 200 && status < 300,
         headers: new Headers(),
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        json,
+        clone: () => ({ status, json }),
       };
     }
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? "");
@@ -367,6 +379,57 @@ describe("DriveRangeTokenizer", () => {
     const tz = new DriveRangeTokenizer("f1", 1000);
     await tz.readRange(0, 8);
     expect(vf.calls).toHaveLength(3);
+  });
+
+  // Google Drive handle-errors: a 403 whose body reports a usage-limit reason
+  // (userRateLimitExceeded / rateLimitExceeded) is the same throttle signal as
+  // a 429 — driveHttp.isRateLimit403Response is the shared detector.
+  const RATE_LIMIT_403_BODY = {
+    error: { errors: [{ reason: "userRateLimitExceeded" }] },
+  };
+
+  it("retries a rate-limit 403 like a 429 and succeeds on the next attempt", async () => {
+    vi.useFakeTimers();
+    const vf = installVirtualFile(1000, (i) => i % 256, [
+      { status: 403, body: RATE_LIMIT_403_BODY },
+      206,
+    ]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    const data = await settleWithTimers(tz.readRange(0, 8));
+    expect(data).toHaveLength(8);
+    expect(vf.calls).toHaveLength(2); // retried once, unlike a plain 403
+  });
+
+  it("gives up on repeated rate-limit 403s with the transient throttled error", async () => {
+    vi.useFakeTimers();
+    const rateLimit403 = { status: 403, body: RATE_LIMIT_403_BODY };
+    const vf = installVirtualFile(1000, (i) => i % 256, [
+      rateLimit403,
+      rateLimit403,
+      rateLimit403,
+    ]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    const err = await settleWithTimers(tz.readRange(0, 8));
+    expect(err).toBeInstanceOf(RangeFetchNetworkError);
+    expect(err).toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "network",
+    });
+    expect(vf.calls).toHaveLength(3); // all attempts spent before giving up
+    // Same breaker feed as 429/5xx: 3 exhausted attempts open the circuit.
+    expect(isDriveCircuitOpen()).toBe(true);
+  });
+
+  it("keeps a non-rate-limit 403 deterministic (RangeNotSupportedError, no retry)", async () => {
+    const vf = installVirtualFile(1000, (i) => i % 256, [
+      { status: 403, body: { error: { errors: [{ reason: "forbidden" }] } } },
+    ]);
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+      RangeNotSupportedError,
+    );
+    expect(vf.calls).toHaveLength(1);
+    expect(isDriveCircuitOpen()).toBe(false);
   });
 
   // FLIPPED deliberately per the android contract (2a2d909/e839613): retry

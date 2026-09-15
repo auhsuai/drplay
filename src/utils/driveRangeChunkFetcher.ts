@@ -6,6 +6,7 @@
 // keep matching; driveRangeTokenizer re-exports the public constants so
 // consumer imports keep resolving the exact same names as before.
 import { createSemaphore } from "./asyncLimit";
+import { isRateLimit403Response } from "./driveHttp";
 import {
   isDriveCircuitOpen,
   recordDriveFailure,
@@ -220,13 +221,22 @@ export class RangeChunkFetcher {
         }
         return new Uint8Array(body);
       }
-      if (response.status === 429 || response.status >= 500) {
-        // Every 429/5xx attempt feeds the breaker — including the final
-        // exhausted one (the old guard skipped it, undercounting 2/3).
+      // Google handle-errors: a 403 whose body reports a Drive usage-limit
+      // reason is the same throttle condition as a 429 — driveHttp's
+      // isRateLimit403Response is the shared detector (it reads a clone, so
+      // the response body stays untouched). Any other 403 (permissions…) is
+      // NOT throttling and keeps falling through to the deterministic
+      // RangeNotSupportedError below: no retry, no breaker feed.
+      const rateLimited403 =
+        response.status === 403 && (await isRateLimit403Response(response));
+      if (rateLimited403 || response.status === 429 || response.status >= 500) {
+        // Every throttled attempt (429/5xx, rate-limit 403) feeds the breaker
+        // — including the final exhausted one (the old guard skipped it,
+        // undercounting 2/3).
         recordDriveFailure();
         if (attempt < MAX_RETRIES) {
-          // 429/5xx are the throttle signal itself — once they trip the
-          // circuit, do not keep retrying into the cooldown.
+          // These statuses are the throttle signal itself — once they trip
+          // the circuit, do not keep retrying into the cooldown.
           if (isDriveCircuitOpen()) {
             this.throwCircuitOpen(chunkStart, chunkEnd);
           }
@@ -249,6 +259,9 @@ export class RangeChunkFetcher {
         }
         // A retry budget exhausted on 429/5xx is still a TRANSIENT throttle
         // failure (RFC 9110 §15.5.5: 429/503 signal a temporary condition).
+        // Drive's 403 rate-limit reasons (userRateLimitExceeded /
+        // rateLimitExceeded) report the same overload and are handled here
+        // identically.
         // The old RangeNotSupportedError here made fetchPipeline cache the
         // placeholder permanently after a throttle storm; RangeFetchNetworkError
         // keeps the next mount re-fetching instead of pinning v:9.
