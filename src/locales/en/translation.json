@@ -280,6 +280,9 @@
     "menu": "Sort options",
     "toggle_order": "Toggle order"
   },
+  "pagination": {
+    "page": "Page"
+  },
   "error": {
     "title": "Something went wrong",
     "description": "The app hit an unexpected error. Reload the page.",

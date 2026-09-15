@@ -276,6 +276,9 @@
     "menu": "Tùy chọn sắp xếp",
     "toggle_order": "Đổi thứ tự"
   },
+  "pagination": {
+    "page": "Trang"
+  },
   "error": {
     "title": "Đã xảy ra lỗi",
     "description": "Ứng dụng gặp lỗi không mong muốn. Vui lòng tải lại trang.",

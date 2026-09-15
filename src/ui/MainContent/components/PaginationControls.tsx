@@ -56,19 +56,10 @@ export function PaginationControls({
           )}
 
           <div
-            role="button"
-            tabIndex={0}
+            role="presentation"
             className={`flex items-center text-sm font-medium text-gray-900 dark:text-white tracking-wider text-center drop-shadow-md transition-colors ${!isEditingPage ? "cursor-pointer hover:text-brand-text" : ""}`}
             onClick={() => {
               if (!isEditingPage) {
-                setIsEditingPage(true);
-                setPageInputValue(currentPage.toString());
-                setTimeout(() => pageInputRef.current?.focus(), 0);
-              }
-            }}
-            onKeyDown={(e) => {
-              if ((e.key === "Enter" || e.key === " ") && !isEditingPage) {
-                e.preventDefault();
                 setIsEditingPage(true);
                 setPageInputValue(currentPage.toString());
                 setTimeout(() => pageInputRef.current?.focus(), 0);
@@ -80,10 +71,23 @@ export function PaginationControls({
               type="text"
               readOnly={!isEditingPage}
               value={isEditingPage ? pageInputValue : currentPage}
+              aria-label={t("pagination.page")}
               onChange={(e) => {
                 if (isEditingPage) setPageInputValue(e.target.value);
               }}
               onKeyDown={(e) => {
+                // Not editing: the input is the only control (the wrapper is a
+                // presentational hit area), so Enter/Space starts editing —
+                // the keys the div used to own.
+                if (!isEditingPage) {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setIsEditingPage(true);
+                    setPageInputValue(currentPage.toString());
+                    setTimeout(() => pageInputRef.current?.focus(), 0);
+                  }
+                  return;
+                }
                 if (e.key === "Enter") {
                   const newPage = parseInt(pageInputValue.trim(), 10);
                   if (
@@ -118,7 +122,7 @@ export function PaginationControls({
                   setIsEditingPage(false);
                 }
               }}
-              className={`text-right bg-transparent outline-none p-0 m-0 text-inherit font-inherit ${!isEditingPage ? "cursor-pointer pointer-events-none" : ""}`}
+              className={`text-right bg-transparent outline-none p-0 m-0 text-inherit font-inherit ${!isEditingPage ? "cursor-pointer" : ""}`}
               style={{
                 width: `${String(Math.max(1, (isEditingPage ? pageInputValue : currentPage.toString()).length))}ch`,
                 caretColor: isEditingPage ? "inherit" : "transparent",

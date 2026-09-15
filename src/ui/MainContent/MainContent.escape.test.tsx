@@ -204,9 +204,10 @@ describe("MainContent keyboard overlay guards (UMK-1/2/4 fix 2026-09-14)", () =>
     }
   });
 
-  // Opens the real BulkDeleteConfirmModal through the real toolbar button: it
-  // owns no Escape handler of its own, so it is the cleanest way to pin that
-  // the background keyboard handler stands down while it is open.
+  // Opens the real BulkDeleteConfirmModal through the real toolbar button so
+  // the background keyboard handler stands down for a real overlay: it owns
+  // an Escape handler (capture) AND the background handler bails on its own
+  // overlay guard (useMainContentKeyboard's showBulkDeleteConfirm flag).
   function renderWithBulkDeleteModalOpen() {
     const explorer = makeExplorerState(makeItems(3));
     explorer.isSelectionMode = true;

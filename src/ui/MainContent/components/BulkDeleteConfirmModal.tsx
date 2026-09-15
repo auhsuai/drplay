@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { X, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -58,6 +58,14 @@ export function BulkDeleteConfirmModal({
     };
   }, [isOpen]);
 
+  // APG dialog-modal: initial focus moves to the least destructive control
+  // (Cancel, never Delete). Declared AFTER the invoker snapshot effect so the
+  // snapshot still sees the real invoker instead of the Cancel button.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (isOpen) cancelRef.current?.focus();
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -69,14 +77,23 @@ export function BulkDeleteConfirmModal({
         if (e.target === e.currentTarget && !isOperating) onClose();
       }}
     >
-      <div className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bulk-delete-title"
+        className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
+      >
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          <h3
+            id="bulk-delete-title"
+            className="text-lg font-bold text-gray-900 dark:text-white"
+          >
             {t("drive.bulk_delete_title")}
           </h3>
           <button
             onClick={onClose}
             disabled={isOperating}
+            aria-label={t("common.close")}
             className="text-gray-400 hover:text-gray-900 dark:hover:text-white p-1 rounded-full transition-colors disabled:opacity-50"
           >
             <X className="w-5 h-5" />
@@ -89,6 +106,7 @@ export function BulkDeleteConfirmModal({
 
         <div className="flex items-center justify-end gap-3 mt-2">
           <button
+            ref={cancelRef}
             onClick={onClose}
             disabled={isOperating}
             className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
