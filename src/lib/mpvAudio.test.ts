@@ -388,13 +388,19 @@ describe("MpvAudioController — mpv-event mapping", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
-  it("end-file reason=error -> error(format_error), NO ended (plan 2.3 contract)", () => {
+  it("end-file reason=error -> error(format_error) then ended, once each and in order (old web-engine parity)", () => {
+    const order: string[] = [];
+    ctrl.on("error", () => order.push("error"));
+    ctrl.on("ended", () => order.push("ended"));
+
     fireMpvEvent("end-file", "error");
+
     expect(error).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledWith(
       expect.objectContaining({ code: "format_error" }),
     );
-    expect(ended).not.toHaveBeenCalled();
+    expect(ended).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["error", "ended"]);
   });
 
   it("playTrack(track, 120) applies the deferred seek when file-loaded arrives — once", async () => {
@@ -532,6 +538,23 @@ describe("MpvAudioController — transport", () => {
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({ level: "warn", source: "MpvAudioController" }),
     );
+  });
+
+  it("seek after end-file (playbackFinished) is dropped: warn only, no command, no spinner armed", async () => {
+    await ctrl.playTrack(trackA);
+    fireMpvEvent("end-file", "eof");
+    tauriMocks.invoke.mockClear();
+    vi.mocked(captureError).mockClear();
+
+    ctrl.seek(30);
+
+    expect(mpvCommands()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", source: "MpvAudioController" }),
+    );
+    const message = vi.mocked(captureError).mock.calls[0]?.[0]?.message ?? "";
+    expect(message).toContain("seek dropped");
   });
 
   it("togglePlay: no track is a no-op; paused resumes; playing pauses", async () => {

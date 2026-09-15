@@ -180,6 +180,26 @@ describe("TimePosWatchdog (mpv issue #13695 backfill)", () => {
     wd.stop();
   });
 
+  it("stop() during an in-flight poll drops the late result (generation guard, no forward)", async () => {
+    let resolvePoll!: (value: unknown) => void;
+    getTimePos.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePoll = resolve;
+      }),
+    );
+    const wd = makeWatchdog();
+    wd.start();
+
+    await vi.advanceTimersByTimeAsync(2 * WATCHDOG_INTERVAL_MS);
+    expect(getTimePos).toHaveBeenCalledTimes(1); // poll awaiting the IPC reply
+
+    wd.stop(); // teardown while the poll is in flight
+    resolvePoll(42);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onTimeUpdate).not.toHaveBeenCalled();
+  });
+
   it("start() while already running does not stack a second interval", async () => {
     const wd = makeWatchdog();
     wd.start();

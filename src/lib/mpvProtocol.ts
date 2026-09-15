@@ -277,6 +277,8 @@ export class TimePosWatchdog {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTickAt = 0;
   private polling = false;
+  /** Bumped by stop(): an in-flight poll compares it after its await. */
+  private generation = 0;
   private readonly isPlaying: () => boolean;
   private readonly getTimePos: () => Promise<unknown>;
   private readonly onTimeUpdate: (time: number) => void;
@@ -298,6 +300,9 @@ export class TimePosWatchdog {
     this.timer = setInterval(() => void this.poll(), WATCHDOG_INTERVAL_MS);
   }
   stop(): void {
+    // Why: clearing the interval cannot cancel a poll already awaiting the
+    // IPC reply — the bump is what invalidates that continuation.
+    this.generation += 1;
     clearTimeout(this.timer ?? undefined);
     this.timer = null;
   }
@@ -309,8 +314,12 @@ export class TimePosWatchdog {
     if (this.polling || Date.now() - this.lastTickAt <= WATCHDOG_STALE_MS)
       return;
     this.polling = true;
+    const gen = this.generation;
     try {
       const raw = await this.getTimePos();
+      // Stale round: stop() ran mid-flight (release/pause/self-heal) — this
+      // time-pos describes a dead engine and must not resurrect state.
+      if (gen !== this.generation) return;
       const time = asNumber(raw);
       if (time === null)
         warnThrottled(`time-pos nil-drop: ${truncateRaw(raw)}`);

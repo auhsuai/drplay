@@ -33,6 +33,7 @@ vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
 import { captureError } from "../utils/errorLog";
+import { WATCHDOG_INTERVAL_MS } from "./mpvProtocol";
 
 const PROXY_PORT = 51234;
 const PROXY_URL_PREFIX = "http://127.0.0.1:51234/stream/";
@@ -142,6 +143,12 @@ const liveListeners = (name: string): number =>
 
 async function flushMicrotasks(times = 20): Promise<void> {
   for (let i = 0; i < times; i++) await Promise.resolve();
+}
+
+function fireProperty(name: string, data: unknown): void {
+  for (const handler of tauriListeners.get("mpv-property") ?? []) {
+    handler({ payload: { name, data } });
+  }
 }
 
 function commandNames(): string[] {
@@ -353,6 +360,35 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
     expect(errors).toEqual([]);
+  });
+
+  it("C6: release() while a watchdog poll is in flight — late poll result cannot emit first-audio/timeupdate", async () => {
+    await bootEngine();
+    const firstAudio = vi.fn();
+    const timeupdate = vi.fn();
+    ctrl.on("first-audio", firstAudio);
+    ctrl.on("timeupdate", timeupdate);
+
+    const pollGate = deferred<unknown>();
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "mpv_get_property") return pollGate.promise;
+      return Promise.resolve(undefined);
+    });
+
+    storeMocks.isPlaying = true; // mirror the store flip pause=false performs
+    fireProperty("pause", false); // arms the watchdog + interpolator
+    await vi.advanceTimersByTimeAsync(2 * WATCHDOG_INTERVAL_MS);
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("mpv_get_property", {
+      prop: "time-pos",
+    });
+
+    ctrl.release(); // race: teardown while the poll awaits its IPC reply
+    pollGate.resolve(90);
+    await flushMicrotasks();
+
+    expect(firstAudio).not.toHaveBeenCalled();
+    expect(timeupdate).not.toHaveBeenCalled();
+    expect(ctrl.getCurrentTime()).toBe(0);
   });
 
   it("C5b: loadfile rejection after release() stays silent (no playbackFailure emit)", async () => {

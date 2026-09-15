@@ -227,7 +227,10 @@ export class MpvAudioController {
       message: "File lỗi định dạng, đang bỏ qua...",
       code: "format_error",
     });
-    // Plan 2.3: error does NOT emit `ended` — PlayerBar marks it broken from the code.
+    // Why: parity with the old web engine (git 71bc085^: error THEN ended) —
+    // `ended` is what drives auto-advance. PlayerBar marks the track broken on
+    // the error and its storm guard caps the retry loop, so the queue moves on.
+    this.emit("ended", undefined);
   }
 
   private async sendCommand(cmd: string[]): Promise<void> {
@@ -430,8 +433,10 @@ export class MpvAudioController {
   }
 
   public seek(time: number): void {
-    if (!this.currentTrackId) {
-      this.logWarn(`seek dropped: no track loaded, requested=${String(time)}s`);
+    // Symmetric with pause(): after end-file there is no live track — a seek
+    // would hit an idle mpv, reject, and arm a dead spinner window.
+    if (!this.currentTrackId || this.playbackFinished) {
+      this.logWarn(`seek dropped: no active track, requested=${String(time)}s`);
       return;
     }
     this.sendSeek(time);
