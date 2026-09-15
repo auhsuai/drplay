@@ -4,6 +4,7 @@ import "./i18n";
 import App from "./App";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { captureError, initLogger } from "./utils/errorLog";
+import { applyStoredTheme } from "./hooks/useTheme";
 
 initLogger();
 
@@ -79,6 +80,15 @@ registerGlobalErrorHandlers();
 // tests / SSR) does not crash the module — global error handlers above still
 // register regardless.
 if (typeof document !== "undefined") {
+  // FOUC guard: apply the persisted theme class BEFORE React's first commit.
+  // The hook's useLayoutEffect runs only after commit, and lazy
+  // chunks/Suspense can postpone that commit long enough to paint the light
+  // App.css background. The widened guard covers bare-DOM test envs
+  // (errorCapture.test.ts stubs document without documentElement) even though
+  // the DOM types mark documentElement non-nullable.
+  if ((document as { documentElement?: unknown }).documentElement) {
+    applyStoredTheme();
+  }
   const rootEl = document.getElementById("root");
   if (rootEl) {
     ReactDOM.createRoot(rootEl).render(

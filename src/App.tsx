@@ -33,18 +33,18 @@ import { useTauriEvents } from "./hooks/useTauriEvents";
 import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
 
-import type { Track, UserProfile, TabKey } from "./types";
-export type { Track, UserProfile };
+import type { Track, TabKey } from "./types";
 
 import {
   DB_NAV_STATE_KEY,
   LS_CURRENT_FOLDER_ID,
   LS_CURRENT_FOLDER_NAME,
   LS_FOLDER_HISTORY,
-  LS_MINIMIZE_TO_TRAY,
   LS_ROOT_FOLDER,
   loadMinimizeToTrayState,
+  saveMinimizeToTrayState,
 } from "./appUiState";
+import { safeLocalStorageRemove } from "./utils/storageKeys";
 
 export { loadMinimizeToTrayState };
 
@@ -80,19 +80,13 @@ function App() {
     handleLoginSuccess,
     handleLogout,
   } = useAuth(() => {
-    try {
-      localStorage.removeItem(LS_ROOT_FOLDER);
-      localStorage.removeItem(LS_CURRENT_FOLDER_ID);
-      localStorage.removeItem(LS_CURRENT_FOLDER_NAME);
-      localStorage.removeItem(LS_FOLDER_HISTORY);
-    } catch (err) {
-      void captureError({
-        level: "warn",
-        source: "App",
-        message: `logout-cleanup-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-        kind: "localstorage-cleanup-failed",
-      });
-    }
+    // Each key goes through the SSOT helper independently: a blocked storage
+    // (SecurityError) on one key must not skip the cleanup of the other three
+    // (partial cleanup would leak the previous account's folder state).
+    safeLocalStorageRemove(LS_ROOT_FOLDER, "logout-cleanup", "App");
+    safeLocalStorageRemove(LS_CURRENT_FOLDER_ID, "logout-cleanup", "App");
+    safeLocalStorageRemove(LS_CURRENT_FOLDER_NAME, "logout-cleanup", "App");
+    safeLocalStorageRemove(LS_FOLDER_HISTORY, "logout-cleanup", "App");
     db.syncState.delete(DB_NAV_STATE_KEY).catch(
       (e: unknown) =>
         void captureError({
@@ -282,15 +276,7 @@ function App() {
   }, [setAppRootFolder]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(LS_MINIMIZE_TO_TRAY, String(minimizeToTray));
-    } catch (err) {
-      void captureError({
-        level: "warn",
-        source: "App",
-        message: `tray-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-      });
-    }
+    saveMinimizeToTrayState(minimizeToTray);
     invoke("update_minimize_to_tray", { minimize: minimizeToTray }).catch(
       (e: unknown) =>
         void captureError({

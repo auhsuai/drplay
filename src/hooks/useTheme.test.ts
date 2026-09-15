@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useTheme } from "./useTheme";
+import { applyStoredTheme, useTheme } from "./useTheme";
 
 // NOTE (B15-6): the FOUC itself (class applied before the first paint) is a
 // timing property that jsdom cannot observe — these tests are the behavioral
@@ -145,6 +145,43 @@ describe("useTheme class application (B15-6 behavioral guard)", () => {
     localStorage.setItem("drplay_theme", "neon");
     const { result } = renderHook(() => useTheme());
     expect(result.current.theme).toBe("system");
+    expect(document.documentElement.classList.contains("light")).toBe(true);
+  });
+});
+
+// B20-3: applyStoredTheme is the pre-mount bootstrap entry point used by
+// main.tsx BEFORE createRoot — it must share the hook's read/resolve logic
+// (same contract: dark | system+matchMedia | invalid/throwing -> system).
+describe("applyStoredTheme (pre-mount FOUC bootstrap)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("applies the stored dark class and returns the stored theme", () => {
+    localStorage.setItem("drplay_theme", "dark");
+
+    expect(applyStoredTheme()).toBe("dark");
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(document.documentElement.classList.contains("light")).toBe(false);
+  });
+
+  it("resolves system through matchMedia and returns 'system'", () => {
+    installMatchMedia(true);
+
+    expect(applyStoredTheme()).toBe("system");
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+  });
+
+  it("falls back to system for an invalid value and for a throwing getItem", () => {
+    installMatchMedia(false);
+    localStorage.setItem("drplay_theme", "neon");
+    expect(applyStoredTheme()).toBe("system");
+    expect(document.documentElement.classList.contains("light")).toBe(true);
+
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    expect(applyStoredTheme()).toBe("system");
     expect(document.documentElement.classList.contains("light")).toBe(true);
   });
 });

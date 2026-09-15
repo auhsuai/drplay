@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { loadMinimizeToTrayState } from "./App";
 import { TABS } from "./utils/driveConstants";
 import { DEBUG_EVENTS } from "./ui/debug/debugEvents";
+import {
+  LS_CURRENT_FOLDER_ID,
+  LS_CURRENT_FOLDER_NAME,
+  LS_FOLDER_HISTORY,
+  LS_ROOT_FOLDER,
+} from "./appUiState";
 
 // Shared state for App-level mocks: hoisted so vi.mock factories (which are
 // hoisted above imports) can reach it. authState is MUTABLE so tests can flip
@@ -21,9 +27,13 @@ const mocks = vi.hoisted(() => {
       handleTogglePlayMode: vi.fn(),
     },
   };
+  const lastLogoutExt = { value: null as null | (() => void) };
   return {
     authState,
     playerHandlers,
+    // Latest onLogoutExt callback App registered (captured by the useAuth
+    // mock below) so logout-cleanup tests can invoke it directly.
+    lastLogoutExt,
     // Counts HomeTab mounts made with a non-null token ("session mounts").
     // The token-null remount that fires on logout is the intended data wipe
     // and is deliberately NOT counted — see the keep-alive describe below.
@@ -32,18 +42,21 @@ const mocks = vi.hoisted(() => {
       value: null as null | { onTabChange: (tab: unknown) => void },
     },
     invoke: vi.fn(() => Promise.resolve(undefined)),
-    useAuth: vi.fn(() => ({
-      isLoggedIn: authState.isLoggedIn,
-      // Mirrors real useAuth: logout clears the access token, login restores it.
-      accessToken: authState.isLoggedIn ? "tok" : null,
-      userProfile: {
-        name: "Test User",
-        email: "test@example.com",
-        picture: "",
-      },
-      handleLoginSuccess: vi.fn(),
-      handleLogout: vi.fn(),
-    })),
+    useAuth: vi.fn((onLogoutExt?: () => void) => {
+      lastLogoutExt.value = onLogoutExt ?? null;
+      return {
+        isLoggedIn: authState.isLoggedIn,
+        // Mirrors real useAuth: logout clears the access token, login restores it.
+        accessToken: authState.isLoggedIn ? "tok" : null,
+        userProfile: {
+          name: "Test User",
+          email: "test@example.com",
+          picture: "",
+        },
+        handleLoginSuccess: vi.fn(),
+        handleLogout: vi.fn(),
+      };
+    }),
     useDrive: vi.fn(() => ({
       appRootFolder: "root",
       setAppRootFolder: vi.fn(),
@@ -212,6 +225,43 @@ describe("loadMinimizeToTrayState", () => {
     });
 
     expect(loadMinimizeToTrayState()).toBe(true);
+  });
+});
+
+// B20-2 regression: onLogoutExt used to run 4 removeItem calls inside ONE try
+// block — the first SecurityError aborted the remaining 3, so the next account
+// could inherit stale folder state. Each key now goes through the SSOT helper
+// independently: one blocked key must not skip the other three.
+describe("onLogoutExt folder-state cleanup (B20-2)", () => {
+  beforeEach(() => {
+    mocks.lastLogoutExt.value = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("attempts all 4 nav-key removals even when the first removeItem throws", () => {
+    render(<App />);
+    const onLogoutExt = mocks.lastLogoutExt.value;
+    if (onLogoutExt === null)
+      throw new Error("expected App to register an onLogoutExt callback");
+
+    const removeSpy = vi
+      .spyOn(Storage.prototype, "removeItem")
+      .mockImplementationOnce(() => {
+        throw new DOMException("blocked", "SecurityError");
+      });
+
+    act(() => {
+      onLogoutExt();
+    });
+
+    expect(removeSpy).toHaveBeenCalledWith(LS_ROOT_FOLDER);
+    expect(removeSpy).toHaveBeenCalledWith(LS_CURRENT_FOLDER_ID);
+    expect(removeSpy).toHaveBeenCalledWith(LS_CURRENT_FOLDER_NAME);
+    expect(removeSpy).toHaveBeenCalledWith(LS_FOLDER_HISTORY);
   });
 });
 
