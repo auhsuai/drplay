@@ -22,8 +22,8 @@ type SongCardMeta = {
 /**
  * SongCard-specific adapter over the shared useTrackMetadata lifecycle:
  * keeps the card-facing API (meta + coverUrl + clearCover) and the card-only
- * behaviors — isFolder guard, 150ms debounce, metadata-updated re-fetch and
- * the per-field setMeta equality check.
+ * behaviors — isFolder guard, 150ms debounce and the per-field setMeta
+ * equality check.
  */
 export function useSongCardMetadata({
   item,
@@ -99,7 +99,6 @@ export function useSongCardMetadata({
     originalName: item.trackInfo?.originalName,
     enabled: !item.isFolder && !!token,
     debounceMs: TRACK_METADATA_DEBOUNCE_MS,
-    listenMetadataUpdated: true,
     imgRef,
     onMetadata,
     onError,

@@ -3,7 +3,6 @@ import type { RefObject } from "react";
 import { isAbortError } from "./player/utils";
 import { getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
-import { METADATA_UPDATED_EVENT } from "../utils/metadata/constants";
 import {
   buildCoverBlobUrl,
   buildCoverUrl,
@@ -28,8 +27,6 @@ export interface TrackMetadataOptions {
   enabled?: boolean;
   /** Debounce window in ms; 0 (default) fetches immediately. */
   debounceMs?: number;
-  /** Re-fetch when the matching metadata-updated event fires (SongCard only). */
-  listenMetadataUpdated?: boolean;
   /** Extra dependency: re-fetch when it changes (consumer-specific values the fetch args cannot express). */
   refreshKey?: unknown;
   /** The <img> the cover renders into; its src is cleared on cleanup. Captured at setup so the cleanup never reads the (possibly stale) ref (react-hooks/exhaustive-deps ref-cleanup rule). */
@@ -53,10 +50,9 @@ export interface TrackMetadataOptions {
 
 /**
  * Shared track-metadata fetch lifecycle: AbortController + optional debounce
- * + optional metadata-updated listener + cover blob URL + abort-silent error
- * handling + cleanup (abort, timer, img src, listener). Extracted from the
- * 4 consumers that each duplicated this machinery (useSongCardMetadata,
- * PremiumCard, TrackInfo, useNowPlayingMetadata).
+ * + cover blob URL + abort-silent error handling + cleanup (abort, timer,
+ * img src). Extracted from the 4 consumers that each duplicated this machinery
+ * (useSongCardMetadata, PremiumCard, TrackInfo, useNowPlayingMetadata).
  */
 export function useTrackMetadata({
   fileId,
@@ -65,7 +61,6 @@ export function useTrackMetadata({
   originalName,
   enabled = true,
   debounceMs = 0,
-  listenMetadataUpdated = false,
   refreshKey,
   imgRef,
   onMetadata,
@@ -167,25 +162,6 @@ export function useTrackMetadata({
       void fetchMetadata();
     }
 
-    let removeMetadataListener: (() => void) | undefined;
-    if (listenMetadataUpdated) {
-      const handleMetadataUpdated = (e: Event) => {
-        // detail is typed | null because a CustomEvent constructed without
-        // the detail option defaults to null at runtime.
-        const customEvent = e as CustomEvent<{ fileId?: string } | null>;
-        if (customEvent.detail?.fileId === fileId) {
-          void fetchMetadata();
-        }
-      };
-      window.addEventListener(METADATA_UPDATED_EVENT, handleMetadataUpdated);
-      removeMetadataListener = () => {
-        window.removeEventListener(
-          METADATA_UPDATED_EVENT,
-          handleMetadataUpdated,
-        );
-      };
-    }
-
     return () => {
       isMounted = false;
       if (timerId !== undefined) clearTimeout(timerId);
@@ -197,7 +173,6 @@ export function useTrackMetadata({
         revokeCoverBlobUrl(hookBlobUrlRef.current);
         hookBlobUrlRef.current = null;
       }
-      removeMetadataListener?.();
       onCleanup?.();
     };
   }, [
@@ -207,7 +182,6 @@ export function useTrackMetadata({
     size,
     originalName,
     debounceMs,
-    listenMetadataUpdated,
     refreshKey,
     imgRef,
     onMetadata,

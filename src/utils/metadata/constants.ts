@@ -4,7 +4,6 @@ export const METADATA_LRU_KEY = "__drplay_metadata_lru";
 export const METADATA_KEY_PREFIX = "metadata_";
 export const UNKNOWN_ARTIST = "Unknown Artist";
 export const FALLBACK_AUDIO_FILENAME = "audio.mp3";
-export const METADATA_UPDATED_EVENT = "metadata-updated";
 export const V_PLACEHOLDER = 9;
 // Real parsed entries carry v=8: searchEngine.isRealCacheEntry accepts any
 // data.v < V_PLACEHOLDER, so real metadata becomes searchable while v:9

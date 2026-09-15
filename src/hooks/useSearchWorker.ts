@@ -31,36 +31,81 @@ export interface SearchExecutor {
   terminate: () => void;
 }
 
+const WORKER_CRASHED_MESSAGE = "worker-crashed";
+
+// `new Worker` can throw synchronously (WHATWG HTML: SyntaxError on a bad URL,
+// SecurityError on a blocked script) — log and let the caller fall back to the
+// inline executor instead of breaking the whole hook effect.
+function createWorkerInstance(): Worker | null {
+  try {
+    return new Worker(new URL("../search/search.worker.ts", import.meta.url), {
+      type: "module",
+    });
+  } catch (e: unknown) {
+    void captureError({
+      level: "error",
+      source: "searchWorker",
+      message: `worker-create-failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+    return null;
+  }
+}
+
 function createWorkerExecutor(): SearchExecutor {
-  const worker = new Worker(
-    new URL("../search/search.worker.ts", import.meta.url),
-    { type: "module" },
-  );
   const listeners = new Set<(r: SearchWorkerResponse) => void>();
-  worker.onmessage = (e: MessageEvent) => {
-    // typeof-narrow first: MessageEvent.data is `any`; the guard keeps the
-    // listener loop strict-typed.
-    if (typeof e.data !== "object" || e.data === null) return;
-    if (!isSearchWorkerResponse(e.data)) return;
-    for (const listener of listeners) listener(e.data);
+  // A crashed/terminated worker has its port message queue emptied (WHATWG
+  // HTML "terminate a worker"), so every later postMessage would vanish
+  // silently — `dead` forces a recreate on the next post instead.
+  let dead = false;
+
+  const bind = (worker: Worker): void => {
+    worker.onmessage = (e: MessageEvent) => {
+      // typeof-narrow first: MessageEvent.data is `any`; the guard keeps the
+      // listener loop strict-typed.
+      if (typeof e.data !== "object" || e.data === null) return;
+      if (!isSearchWorkerResponse(e.data)) return;
+      for (const listener of listeners) listener(e.data);
+    };
+    worker.onerror = (e: ErrorEvent) => {
+      // A crashed worker must not crash the UI: mark it dead, log at error
+      // level and surface a synthetic error so the UI can react — without
+      // this the search would just hang forever on a dead worker.
+      dead = true;
+      void captureError({
+        level: "error",
+        source: "searchWorker",
+        message: `worker-error: ${e.message}`,
+      });
+      for (const listener of listeners)
+        listener({ type: "error", message: WORKER_CRASHED_MESSAGE });
+    };
+    worker.onmessageerror = () => {
+      void captureError({
+        level: "warn",
+        source: "searchWorker",
+        message: "worker-messageerror: malformed message from worker",
+      });
+    };
   };
-  worker.onerror = (e: ErrorEvent) => {
-    // A crashed worker must not crash the UI: log and keep last-good hits.
-    void captureError({
-      level: "warn",
-      source: "searchWorker",
-      message: `worker-error: ${e.message}`,
-    });
-  };
-  worker.onmessageerror = () => {
-    void captureError({
-      level: "warn",
-      source: "searchWorker",
-      message: "worker-messageerror: malformed message from worker",
-    });
-  };
+
+  const initialWorker = createWorkerInstance();
+  if (initialWorker === null) return createInlineExecutor();
+  let worker: Worker = initialWorker;
+  bind(worker);
+
   return {
     post: (msg) => {
+      if (dead) {
+        // Recreate lazily on the next post: the fresh worker rebuilds its
+        // index on the first query. One attempt per post bounds the
+        // crash -> recreate -> crash cycle (a failing create is logged and
+        // leaves dead=true, dropping that post).
+        const recreated = createWorkerInstance();
+        if (recreated === null) return;
+        worker = recreated;
+        dead = false;
+        bind(worker);
+      }
       worker.postMessage(msg);
     },
     onResponse: (listener) => {

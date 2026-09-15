@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { getValidToken } from "../utils/apiClient";
 import { captureError } from "../utils/errorLog";
-import { ACCESS_TOKEN_KEY } from "../utils/storageKeys";
+import { ACCESS_TOKEN_KEY, safeLocalStorageGet } from "../utils/storageKeys";
 
 const SW_SCOPE = "/sw.js";
 const MSG_UPDATE_TOKEN = "UPDATE_TOKEN";
@@ -38,82 +38,117 @@ function safePost(
 // persists state to a file), so "migrating" there would not improve security —
 // any future hardening should go through the OS keychain/DPAPI/Stronghold.
 export function useServiceWorker(token?: string | null) {
+  // The lifecycle effect below is MOUNT-ONLY ([]): register() resolves to the
+  // SAME registration object on every call (W3C SW spec object map), so a
+  // token-refresh re-run used to stack updatefound listeners on one EventTarget.
+  // The token is read through a ref instead, so every push still carries the
+  // LATEST token (never the closure value captured when the effect mounted).
+  const tokenRef = useRef(token);
   useEffect(() => {
-    const getToken = () => token ?? localStorage.getItem(ACCESS_TOKEN_KEY);
+    tokenRef.current = token;
+  }, [token]);
 
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register(SW_SCOPE)
-        .then((reg) => {
-          const t = getToken();
-          if (t) {
-            // The just-registered worker may still be installing; navigator.serviceWorker.ready
-            // resolves only once the registration has an ACTIVE worker (MDN
-            // ServiceWorkerContainer.ready), so this postMessage never hits a
-            // non-active worker and cannot throw a mislabeled "registration failed".
-            navigator.serviceWorker.ready
-              .then((readyReg) => {
-                safePost(readyReg.active, {
-                  type: MSG_UPDATE_TOKEN,
-                  token: t,
-                });
-              })
-              .catch((err: unknown) => {
-                void captureError({
-                  level: "warn",
-                  source: "useServiceWorker",
-                  message: `SW ready failed: ${err instanceof Error ? err.message : String(err)}`,
-                });
-              });
-          }
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
 
-          reg.addEventListener("updatefound", () => {
-            const newWorker = reg.installing;
-            const currentToken = getToken();
-            if (newWorker && currentToken) {
-              newWorker.addEventListener("statechange", () => {
-                if (newWorker.state === "activated") {
-                  const freshToken = getToken();
-                  if (freshToken) {
-                    safePost(newWorker, {
-                      type: MSG_UPDATE_TOKEN,
-                      token: freshToken,
-                    });
-                  }
-                }
-              });
-            }
-          });
-        })
-        .catch((err: unknown) => {
-          void captureError({
-            level: "error",
-            source: "useServiceWorker",
-            message: `SW Registration failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        });
+    // localStorage can throw (SecurityError in privacy modes) — the guarded
+    // read logs `sw-access-token-read-failed` and yields null (no push), same
+    // semantics as the previous `token ?? localStorage.getItem` fallback.
+    const getToken = () =>
+      tokenRef.current ??
+      safeLocalStorageGet(
+        ACCESS_TOKEN_KEY,
+        "sw-access-token-read",
+        "useServiceWorker",
+      );
 
-      const handleControllerChange = () => {
+    let reg: ServiceWorkerRegistration | null = null;
+    let onUpdateFound: (() => void) | null = null;
+    let cancelled = false;
+
+    navigator.serviceWorker
+      .register(SW_SCOPE)
+      .then((registration) => {
+        // Unmount may win the race against register(): attaching here would
+        // leak the listener because cleanup already ran.
+        if (cancelled) return;
+        reg = registration;
+
         const t = getToken();
-        if (t && navigator.serviceWorker.controller) {
-          safePost(navigator.serviceWorker.controller, {
-            type: MSG_UPDATE_TOKEN,
-            token: t,
-          });
+        if (t) {
+          // The just-registered worker may still be installing; navigator.serviceWorker.ready
+          // resolves only once the registration has an ACTIVE worker (MDN
+          // ServiceWorkerContainer.ready), so this postMessage never hits a
+          // non-active worker and cannot throw a mislabeled "registration failed".
+          navigator.serviceWorker.ready
+            .then((readyReg) => {
+              safePost(readyReg.active, {
+                type: MSG_UPDATE_TOKEN,
+                token: t,
+              });
+            })
+            .catch((err: unknown) => {
+              void captureError({
+                level: "warn",
+                source: "useServiceWorker",
+                message: `SW ready failed: ${err instanceof Error ? err.message : String(err)}`,
+              });
+            });
         }
-      };
-      navigator.serviceWorker.addEventListener(
+
+        onUpdateFound = () => {
+          const newWorker = registration.installing;
+          const currentToken = getToken();
+          if (newWorker && currentToken) {
+            newWorker.addEventListener("statechange", () => {
+              if (newWorker.state === "activated") {
+                const freshToken = getToken();
+                if (freshToken) {
+                  safePost(newWorker, {
+                    type: MSG_UPDATE_TOKEN,
+                    token: freshToken,
+                  });
+                }
+              }
+            });
+          }
+        };
+        registration.addEventListener("updatefound", onUpdateFound);
+      })
+      .catch((err: unknown) => {
+        void captureError({
+          level: "error",
+          source: "useServiceWorker",
+          message: `SW Registration failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      });
+
+    const handleControllerChange = () => {
+      const t = getToken();
+      if (t && navigator.serviceWorker.controller) {
+        safePost(navigator.serviceWorker.controller, {
+          type: MSG_UPDATE_TOKEN,
+          token: t,
+        });
+      }
+    };
+    navigator.serviceWorker.addEventListener(
+      "controllerchange",
+      handleControllerChange,
+    );
+    return () => {
+      cancelled = true;
+      // reg stays null while register() is still in flight — nothing to remove
+      // (the cancelled flag above prevents the late attach).
+      if (reg !== null && onUpdateFound !== null) {
+        reg.removeEventListener("updatefound", onUpdateFound);
+      }
+      navigator.serviceWorker.removeEventListener(
         "controllerchange",
         handleControllerChange,
       );
-      return () => {
-        navigator.serviceWorker.removeEventListener(
-          "controllerchange",
-          handleControllerChange,
-        );
-      };
-    }
-  }, [token]);
+    };
+  }, []);
 
   // Push the current access token to the SW whenever it changes (login,
   // refresh, restore, logout). The SW holds the token in its own memory and

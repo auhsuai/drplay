@@ -98,6 +98,36 @@ function respond(fake: FakeExecutor, response: SearchWorkerResponse): void {
   listener(response);
 }
 
+// jsdom has no Worker: install a constructor stand-in so the REAL
+// createWorkerExecutor path (not the inline fallback) can be driven directly.
+interface FakeWorkerInstance {
+  onmessage: ((e: MessageEvent) => void) | null;
+  onerror: ((e: ErrorEvent) => void) | null;
+  onmessageerror: (() => void) | null;
+  postMessage: ReturnType<typeof vi.fn>;
+  terminate: ReturnType<typeof vi.fn>;
+}
+
+function installFakeWorker(): {
+  instances: FakeWorkerInstance[];
+  WorkerCtor: ReturnType<typeof vi.fn>;
+} {
+  const instances: FakeWorkerInstance[] = [];
+  const WorkerCtor = vi.fn(function () {
+    const instance: FakeWorkerInstance = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage: vi.fn(),
+      terminate: vi.fn(),
+    };
+    instances.push(instance);
+    return instance;
+  });
+  vi.stubGlobal("Worker", WorkerCtor);
+  return { instances, WorkerCtor };
+}
+
 // Advances faked timers and then flushes leftover microtasks (Dexie chains
 // that settle on real setImmediate) so inline-path state updates land inside
 // act.
@@ -121,6 +151,7 @@ describe("useSearchWorker", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("10. debounces: rapid query changes collapse to the last one only", async () => {
@@ -264,5 +295,96 @@ describe("useSearchWorker", () => {
       expect.objectContaining({ level: "warn", source: "useSearchWorker" }),
     );
     view.unmount();
+  });
+
+  describe("createWorkerExecutor resilience (B15-4)", () => {
+    it("17. surfaces a synthetic error response and logs at error level when the worker crashes", () => {
+      const { instances } = installFakeWorker();
+      const executor = createSearchExecutor();
+      const responses: SearchWorkerResponse[] = [];
+      executor.onResponse((r) => responses.push(r));
+
+      instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+
+      expect(responses).toEqual([{ type: "error", message: "worker-crashed" }]);
+      expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "error",
+          source: "searchWorker",
+          message: expect.stringContaining(
+            "worker-error: boom",
+          ) as unknown as string,
+        }),
+      );
+      executor.terminate();
+    });
+
+    it("18. post() after a crash recreates the worker (rebound handlers) and routes the message to the fresh instance", () => {
+      const { instances, WorkerCtor } = installFakeWorker();
+      const executor = createSearchExecutor();
+
+      instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+      executor.post({ type: "init" });
+
+      expect(WorkerCtor).toHaveBeenCalledTimes(2);
+      expect(instances).toHaveLength(2);
+      expect(instances[1]?.postMessage).toHaveBeenCalledWith({ type: "init" });
+
+      // The fresh instance must be rebound: its responses still reach the
+      // listener registered BEFORE the crash.
+      const responses: SearchWorkerResponse[] = [];
+      executor.onResponse((r) => responses.push(r));
+      instances[1]?.onmessage?.({ data: { type: "ready" } } as MessageEvent);
+      expect(responses).toEqual([{ type: "ready" }]);
+
+      executor.terminate();
+    });
+
+    it("19. falls back to the inline executor when `new Worker` throws synchronously", async () => {
+      const WorkerCtor = vi.fn(() => {
+        throw new DOMException("bad url", "SyntaxError");
+      });
+      vi.stubGlobal("Worker", WorkerCtor);
+
+      const executor = createSearchExecutor();
+      const responses: SearchWorkerResponse[] = [];
+      executor.onResponse((r) => responses.push(r));
+      executor.post({
+        type: "query",
+        requestId: 1,
+        query: "anything",
+        limit: 10,
+      });
+
+      await flush(250);
+      expect(responses).toEqual([{ type: "results", requestId: 1, hits: [] }]);
+      expect(WorkerCtor).toHaveBeenCalledTimes(1);
+      executor.terminate();
+    });
+
+    it("20. a failing recreate is logged and the post is dropped instead of crash-looping", () => {
+      const { instances, WorkerCtor } = installFakeWorker();
+      const executor = createSearchExecutor();
+      WorkerCtor.mockImplementation(() => {
+        throw new DOMException("bad url", "SyntaxError");
+      });
+      instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+
+      expect(() => {
+        executor.post({ type: "init" });
+      }).not.toThrow();
+      expect(instances[0]?.postMessage).not.toHaveBeenCalled();
+      expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "error",
+          source: "searchWorker",
+          message: expect.stringContaining(
+            "worker-create-failed",
+          ) as unknown as string,
+        }),
+      );
+      expect(WorkerCtor).toHaveBeenCalledTimes(2);
+      executor.terminate();
+    });
   });
 });

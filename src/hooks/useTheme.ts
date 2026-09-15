@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useLayoutEffect } from "react";
 import { captureError } from "../utils/errorLog";
 
 export type ThemeType = "light" | "dark" | "system";
@@ -19,8 +19,11 @@ export const useTheme = () => {
     }
   });
 
-  // Apply Theme
-  useEffect(() => {
+  // Apply Theme. useLayoutEffect (not useEffect): the class must land before
+  // the first paint or dark-mode users see a white flash (App.css defaults to
+  // #ffffff until .dark is set). React docs: useLayoutEffect "fires before the
+  // browser repaints"; useEffect "can result in visual flickering".
+  useLayoutEffect(() => {
     const applyTheme = () => {
       const root = window.document.documentElement;
       const systemPrefersDark = window.matchMedia(

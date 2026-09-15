@@ -175,58 +175,6 @@ describe("useTrackMetadata debounce", () => {
   });
 });
 
-describe("useTrackMetadata metadata-updated listener", () => {
-  it("re-fetches on metadata-updated for the matching fileId", async () => {
-    renderTrackMetadata({ listenMetadataUpdated: true });
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-    window.dispatchEvent(
-      new CustomEvent("metadata-updated", { detail: { fileId: "file-1" } }),
-    );
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it("ignores metadata-updated for a different fileId", async () => {
-    renderTrackMetadata({ listenMetadataUpdated: true });
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-    window.dispatchEvent(
-      new CustomEvent("metadata-updated", { detail: { fileId: "other" } }),
-    );
-    await flushMicrotasks();
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not listen for metadata-updated by default", async () => {
-    renderTrackMetadata();
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-    window.dispatchEvent(
-      new CustomEvent("metadata-updated", { detail: { fileId: "file-1" } }),
-    );
-    await flushMicrotasks();
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("removes the metadata-updated listener on unmount", async () => {
-    const { unmount } = renderTrackMetadata({ listenMetadataUpdated: true });
-    await waitFor(() => {
-      expect(mockedFetch).toHaveBeenCalledTimes(1);
-    });
-    unmount();
-    window.dispatchEvent(
-      new CustomEvent("metadata-updated", { detail: { fileId: "file-1" } }),
-    );
-    await flushMicrotasks();
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("useTrackMetadata cover blob URL", () => {
   it("builds the cover from pictureDataFull (full preferred) and sets coverUrl", async () => {
     mockedFetch.mockResolvedValue(
@@ -333,14 +281,24 @@ describe("useTrackMetadata cover blob URL", () => {
     mockedFetch.mockResolvedValue(
       makeMetadata({ pictureData: new Uint8Array([1]) }),
     );
-    const { result } = renderTrackMetadata({ listenMetadataUpdated: true });
+    const onMetadata = vi.fn();
+    const onError = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ refreshKey }: { refreshKey: number }) =>
+        useTrackMetadata({
+          fileId: "file-1",
+          token: "tok",
+          refreshKey,
+          onMetadata,
+          onError,
+        }),
+      { initialProps: { refreshKey: 1 } },
+    );
     await waitFor(() => {
       expect(result.current.coverUrl).toBe("blob:cover-1");
     });
 
-    window.dispatchEvent(
-      new CustomEvent("metadata-updated", { detail: { fileId: "file-1" } }),
-    );
+    rerender({ refreshKey: 2 });
     await waitFor(() => {
       expect(result.current.coverUrl).toBe("blob:cover-2");
     });

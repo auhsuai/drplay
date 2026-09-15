@@ -143,29 +143,6 @@ describe("SongCard metadata fetch", () => {
     expect(onPlay).not.toHaveBeenCalled();
   });
 
-  it("metadata-updated event for this fileId triggers a re-fetch that updates the title", async () => {
-    mockedFetch.mockResolvedValue({
-      title: "Updated Title",
-      artist: "Updated Artist",
-      pictureData: null,
-      pictureFormat: undefined,
-    } as never);
-    render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByText("Updated Title");
-    mockedFetch.mockClear();
-    mockedFetch.mockResolvedValue({
-      title: "Re-fetched Title",
-      artist: "Re-fetched Artist",
-      pictureData: null,
-      pictureFormat: undefined,
-    } as never);
-    window.dispatchEvent(
-      new CustomEvent("metadata-updated", { detail: { fileId: "track-1" } }),
-    );
-    await screen.findByText("Re-fetched Title");
-    expect(mockedFetch).toHaveBeenCalledTimes(1);
-  });
-
   it("re-renders on same-id item change (trackInfo.queueItemId) so click uses fresh track (stale-prop fix)", () => {
     const onPlay = vi.fn();
     const { rerender, container } = render(

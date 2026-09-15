@@ -12,6 +12,13 @@ const mockedCaptureError = vi.mocked(captureError);
 
 type Listener = EventListenerOrEventListenerObject;
 
+interface MockRegistration {
+  active: ServiceWorker | null;
+  installing: ServiceWorker | null;
+  addEventListener: ReturnType<typeof vi.fn>;
+  removeEventListener: ReturnType<typeof vi.fn>;
+}
+
 interface MockServiceWorker {
   register: ReturnType<typeof vi.fn>;
   controller: ServiceWorker | null;
@@ -20,6 +27,8 @@ interface MockServiceWorker {
   removeEventListener: ReturnType<typeof vi.fn>;
   listeners: Set<Listener>;
   worker: { postMessage: ReturnType<typeof vi.fn> };
+  registration: MockRegistration;
+  regListeners: Set<Listener>;
 }
 
 // jsdom does not implement navigator.serviceWorker — install an observable
@@ -30,9 +39,22 @@ interface MockServiceWorker {
 // ServiceWorkerContainer.ready contract.
 function installServiceWorkerMock(): MockServiceWorker {
   const listeners = new Set<Listener>();
+  const regListeners = new Set<Listener>();
   const worker = { postMessage: vi.fn() };
+  // Registration-level listener set: observable identity-based EventTarget
+  // stand-in so updatefound leaks show up as leftover Set entries.
+  const registration: MockRegistration = {
+    active: null,
+    installing: null,
+    addEventListener: vi.fn((_type: string, handler: Listener) => {
+      regListeners.add(handler);
+    }),
+    removeEventListener: vi.fn((_type: string, handler: Listener) => {
+      regListeners.delete(handler);
+    }),
+  };
   const sw = {
-    register: vi.fn().mockResolvedValue({ active: null }),
+    register: vi.fn().mockResolvedValue(registration),
     controller: null,
     ready: Promise.resolve({ active: worker as unknown as ServiceWorker }),
     addEventListener: vi.fn((_type: string, handler: Listener) => {
@@ -43,6 +65,8 @@ function installServiceWorkerMock(): MockServiceWorker {
     }),
     listeners,
     worker,
+    registration,
+    regListeners,
   };
   Object.defineProperty(navigator, "serviceWorker", {
     configurable: true,
@@ -222,5 +246,154 @@ describe("useServiceWorker token watcher (login/refresh/logout push)", () => {
         ) as unknown as string,
       }),
     );
+  });
+});
+
+describe("useServiceWorker updatefound listener lifecycle (B15-2)", () => {
+  it("registers exactly ONE updatefound listener across 3 token changes", async () => {
+    const sw = installServiceWorkerMock();
+
+    const initialProps: { token: string | null } = { token: "tok-A" };
+    const { rerender } = renderHook(
+      (props: { token: string | null }) => {
+        useServiceWorker(props.token);
+      },
+      { initialProps },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    rerender({ token: "tok-B" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    rerender({ token: "tok-C" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The lifecycle effect is mount-only: a token refresh must not re-register
+    // (register() returns the SAME registration object per SW spec).
+    expect(sw.register).toHaveBeenCalledTimes(1);
+    const updateFoundCalls = sw.registration.addEventListener.mock.calls.filter(
+      (call) => call[0] === "updatefound",
+    );
+    expect(updateFoundCalls).toHaveLength(1);
+    expect(sw.regListeners.size).toBe(1);
+  });
+
+  it("removes the updatefound listener (same reference) on unmount", async () => {
+    const sw = installServiceWorkerMock();
+    const { unmount } = renderHook(() => {
+      useServiceWorker();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const added = sw.registration.addEventListener.mock.calls.find(
+      (call) => call[0] === "updatefound",
+    );
+    if (added === undefined) throw new Error("expected updatefound listener");
+    const handler = added[1] as Listener;
+
+    unmount();
+
+    expect(sw.registration.removeEventListener).toHaveBeenCalledWith(
+      "updatefound",
+      handler,
+    );
+    expect(sw.regListeners.size).toBe(0);
+  });
+
+  it("pushes the LATEST token when a SW update activates (ref, not the mount-time closure)", async () => {
+    const sw = installServiceWorkerMock();
+    const initialProps: { token: string | null } = { token: "tok-A" };
+    const { rerender } = renderHook(
+      (props: { token: string | null }) => {
+        useServiceWorker(props.token);
+      },
+      { initialProps },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    rerender({ token: "tok-C" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const added = sw.registration.addEventListener.mock.calls.find(
+      (call) => call[0] === "updatefound",
+    );
+    if (added === undefined) throw new Error("expected updatefound listener");
+    const onUpdateFound = added[1] as () => void;
+
+    let onStateChange: (() => void) | null = null;
+    const newWorker = {
+      state: "installing",
+      postMessage: vi.fn(),
+      addEventListener: vi.fn((_type: string, handler: () => void) => {
+        onStateChange = handler;
+      }),
+    };
+    sw.registration.installing = newWorker as unknown as ServiceWorker;
+
+    act(() => {
+      onUpdateFound();
+    });
+    act(() => {
+      newWorker.state = "activated";
+      onStateChange?.();
+    });
+
+    expect(newWorker.postMessage).toHaveBeenCalledWith({
+      type: "UPDATE_TOKEN",
+      token: "tok-C",
+    });
+  });
+});
+
+describe("useServiceWorker token read resilience (B15-5)", () => {
+  it("logs sw-access-token-read-failed and never throws when localStorage.getItem throws", async () => {
+    const sw = installServiceWorkerMock();
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new DOMException("storage denied", "SecurityError");
+      });
+
+    const { unmount } = renderHook(() => {
+      useServiceWorker(null);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "useServiceWorker",
+        message: expect.stringContaining(
+          "sw-access-token-read-failed:SecurityError",
+        ) as unknown as string,
+      }),
+    );
+
+    // controllerchange handler path: same guarded read (raw getItem would
+    // throw uncaught inside the event listener).
+    const controllerChange = sw.addEventListener.mock.calls.find(
+      (call) => call[0] === "controllerchange",
+    );
+    if (controllerChange === undefined)
+      throw new Error("expected controllerchange listener");
+    const handler = controllerChange[1] as () => void;
+    expect(() => {
+      handler();
+    }).not.toThrow();
+
+    getItemSpy.mockRestore();
+    unmount();
   });
 });
